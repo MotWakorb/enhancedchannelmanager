@@ -46,6 +46,21 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [legacySavedBusy, setLegacySavedBusy] = useState(false);
   const [dbasSavedTarget, setDbasSavedTarget] = useState<string | null>(null);
 
+  /**
+   * Surface what the artifact could NOT carry (bead
+   * enhancedchannelmanager-gi4zn). A standard backup carries no ECM account
+   * credentials, so a restore can succeed and still leave nobody able to log
+   * in until first-run setup runs. The success toast counts restored files and
+   * so can never say that; these come from the server, read off the live
+   * post-restore instance. `?? []` because a backend predating the field omits
+   * it entirely.
+   */
+  const announceRestoreNotices = useCallback((result: api.RestoreResult) => {
+    for (const notice of result.notices ?? []) {
+      notifications.warning(notice, 'Account Setup Required');
+    }
+  }, [notifications]);
+
   const loadSavedBackups = useCallback(async () => {
     setLoadingSaved(true);
     try {
@@ -166,6 +181,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       const result = await api.restoreBackup(file);
       setRestoreResult(result);
       notifications.success(`Restored ${result.restored_files.length} files from backup`);
+      announceRestoreNotices(result);
 
       setTimeout(() => {
         window.location.reload();
@@ -183,6 +199,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
     try {
       const result = await api.restoreSavedBackup(restoringLegacySaved);
       notifications.success(`Restored ${result.restored_files.length} files from ${restoringLegacySaved}`);
+      announceRestoreNotices(result);
       setRestoringLegacySaved(null);
       setTimeout(() => {
         window.location.reload();
@@ -526,6 +543,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
               <strong>Files restored:</strong> {restoreResult.restored_files.length}<br />
               Reloading page...
             </div>
+            {(restoreResult.notices ?? []).map((notice) => (
+              <div className="warning-message" key={notice} role="status">
+                <span className="material-icons" aria-hidden="true">warning</span>
+                {notice}
+              </div>
+            ))}
           </div>
         )}
       </div>

@@ -233,10 +233,19 @@ def register(mcp: FastMCP):
             if isinstance(result, dict):
                 restored = result.get("restored_files", [])
                 version = result.get("backup_version", "unknown")
+                # What the artifact could NOT carry (bead
+                # enhancedchannelmanager-gi4zn). A standard (non-encrypted)
+                # backup carries no ECM account credentials, so a restore can
+                # report success and still leave nobody able to log in until
+                # first-run setup runs. The file count says nothing about that;
+                # the server reads these off the live post-restore instance.
+                # `or []` because a backend predating the field omits it.
+                notices = result.get("notices") or []
                 return (
                     f"Restored {filename} (backup version {version}): "
                     f"{len(restored)} file(s) restored — {', '.join(restored)}. "
                     "ECM state was overwritten from the backup."
+                    + ("" if not notices else " " + " ".join(notices))
                 )
             return f"Restored {filename}."
         except Exception as e:

@@ -1,4 +1,4 @@
-"""The STANDARD DBAS artifact carries no third-party identity or credential.
+"""The STANDARD DBAS artifact carries no identity or credential of any kind.
 
 Bead ``enhancedchannelmanager-gi4zn``. PO decision 2026-08-05: the standard
 (non-encrypted, default) backup is FULLY redacted.
@@ -7,7 +7,11 @@ THE PROPERTY THESE TESTS PIN
 ----------------------------
 
     A standard DBAS artifact contains no value that identifies or authenticates
-    against a THIRD-PARTY service.
+    against a THIRD-PARTY service, AND no credential material of the operator's
+    OWN — hashes included.
+
+    Redaction FAILS CLOSED: if any part of the scrub cannot run or cannot parse
+    its input, the affected data does not ship.
 
 Not "the username field on an M3U account is redacted" — that is one example of
 the property. The drill (``~/ecm/backup-restore-runs/2026-08-05-run3``, finding
@@ -18,6 +22,24 @@ not reproductions"). So the assertions below are written against the whole
 artifact: every seeded identity/credential sentinel is scanned for across EVERY
 decompressed member, including ``journal.db``, rather than against the two YAML
 keys the drill happened to read.
+
+The second clause was added on 2026-08-17 after an external security review
+built a standard artifact and read the operator's own bcrypt admin hash, their
+session and reset-token hashes, their administering IP and user agent, and their
+OIDC subject and identifier straight out of the archived ``journal.db``. The
+first clause alone did not cover the admin hash — it is the operator's own
+credential, not a third party's — and the PO ruled it in scope anyway, because
+the entire purpose of a redacted artifact is being safe to share. The third
+clause was added at the same time: the scrubber's three error paths each shipped
+the RAW database or the RAW row.
+
+AVAILABILITY IS PART OF THE PROPERTY
+------------------------------------
+
+A restored instance nobody can log into is a worse outcome than the leak. See
+``routers.backup._AUTH_IDENTITY_TABLES`` for why the account rows are DELETED
+rather than masked, and the RESTORE BEHAVIOUR section at the foot of this file
+for the two destination states and what the operator re-establishes in each.
 
 WHY A USERNAME IS A CREDENTIAL HERE
 -----------------------------------
@@ -45,7 +67,9 @@ WHAT MUST STILL SURVIVE, AND WHY EACH EXCEPTION IS NARROW
 import asyncio
 import json
 import sqlite3
+import sys
 import zipfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -95,6 +119,66 @@ M3U_URL_WITH_QUERY_CREDS = (
 EPG_URL_WITH_USERINFO = (
     "http://" + _URL_LEFT_HALF + ":" + _URL_RIGHT_HALF + "@epg.example.test/guide.xml"
 )
+
+# --- The operator's OWN credential material, and their third-party identity ---
+#
+# Findings A-1 / A-2 of the external security review, reproduced by building a
+# standard artifact and reading these straight out of the archived ``journal.db``
+# with sqlite3. A-1 is the operator's own credential rather than a third party's,
+# and the PO ruled it in scope on 2026-08-17 for the reason the whole bead
+# exists: the point of a redacted artifact is that it is safe to SHARE, and an
+# offline-crackable bcrypt hash of the admin password is the single worst thing
+# in the archive to hand to a support ticket.
+#
+# The hash keeps a real bcrypt PREFIX because the shape is load-bearing here —
+# ``$2b$12$`` is what makes the value recognisable as crackable material to any
+# scanner or reader — while the body is an obvious marker, never a real digest.
+ADMIN_USERNAME = "local-admin"
+ADMIN_EMAIL = "local-admin@operator.example"
+ADMIN_PASSWORD_HASH = "$2b$12$" + "OFFLINECRACKMARKERQQQ901"
+REFRESH_TOKEN_HASH = "<session-refresh-material-QQQ903>"
+PRIOR_REFRESH_TOKEN_HASH = "<session-prior-refresh-material-QQQ904>"
+RESET_TOKEN_HASH = "<account-recovery-material-QQQ906>"
+SESSION_IP_ADDRESS = "203.0.113.77"  # TEST-NET-3, RFC 5737
+SESSION_USER_AGENT = "SupportBrowser/1"
+# A-2: the ECM admin correlated to an identity at a third-party IdP.
+OIDC_EXTERNAL_ID = "<oidc-subject-QQQ902>"
+OIDC_IDENTIFIER = "operator@thirdparty.example"
+
+ALL_OPERATOR_ACCOUNT_VALUES = (
+    ADMIN_USERNAME,
+    ADMIN_EMAIL,
+    ADMIN_PASSWORD_HASH,
+    REFRESH_TOKEN_HASH,
+    PRIOR_REFRESH_TOKEN_HASH,
+    RESET_TOKEN_HASH,
+    SESSION_IP_ADDRESS,
+    SESSION_USER_AGENT,
+    OIDC_EXTERNAL_ID,
+    OIDC_IDENTIFIER,
+)
+
+# --- Finding A-3: the redactor used to fail OPEN --------------------------
+#
+# A row whose ``config`` cannot be parsed, and one that parses to a JSON scalar
+# rather than an object. Neither can be shown to be credential-free, and both
+# used to ship byte-for-byte while VALID rows in the same database were correctly
+# redacted.
+#
+# Angle-bracket placeholders per docs/pytest_conventions.md -> "Credential
+# Fixtures in Security Tests": nothing about these values' shape is
+# load-bearing (the test only needs a marker it can scan the archive for), and
+# `KeywordDetector` has no word boundary, so BOTH the `SECRET` in these names
+# and the `word` half of the split `pass`/`word` below make a bare literal a
+# scan candidate. A value starting with `<` never becomes one.
+_TRUNCATED_SECRET = "<smtp-relay-secret-QQQ905>"
+TRUNCATED_ALERT_CONFIG = '{"pass' + 'word":"' + _TRUNCATED_SECRET + '"'  # no closing brace
+NON_OBJECT_ALERT_SECRET = "<bare-scalar-marker-QQQ907>"
+
+# The alert-method credential the DESTINATION instance already holds, which a
+# fail-closed whole-blob sentinel must not destroy on restore. Same placeholder
+# convention: `"password": "<...>"` is not a scan candidate, a bare word is.
+DESTINATION_SMTP_SECRET = "<destination-smtp-relay-secret-QQQ909>"
 
 # Everything a STANDARD artifact must not carry, in one tuple so a newly seeded
 # value cannot be silently omitted from the whole-archive scan.
@@ -163,9 +247,75 @@ def _mock_engine():
     return eng
 
 
+def _create_auth_schema(path):
+    """Create the four real auth tables in a SQLite file.
+
+    The schema comes from ``models`` rather than from hand-written DDL so the
+    fixture cannot drift from the columns the producer actually has to purge.
+    """
+    from sqlalchemy import create_engine
+
+    from models import Base, PasswordResetToken, User, UserIdentity, UserSession
+
+    engine = create_engine("sqlite:///%s" % path)
+    Base.metadata.create_all(
+        engine,
+        tables=[
+            User.__table__,
+            UserSession.__table__,
+            UserIdentity.__table__,
+            PasswordResetToken.__table__,
+        ],
+    )
+    engine.dispose()
+
+
+def _seed_auth_tables(path):
+    """Auth schema plus the exact rows the external reviewer pulled out of a
+    built standard artifact (findings A-1 and A-2)."""
+    _create_auth_schema(path)
+
+    now = "2026-08-17 00:00:00"
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, email, password_hash, auth_provider, "
+            "display_name, is_active, is_admin, created_at, updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (1, ADMIN_USERNAME, ADMIN_EMAIL, ADMIN_PASSWORD_HASH, "local",
+             "Local Admin", 1, 1, now, now),
+        )
+        conn.execute(
+            "INSERT INTO user_sessions (id, user_id, refresh_token_hash, "
+            "prior_refresh_token_hash, ip_address, user_agent, expires_at, "
+            "created_at, last_used_at, is_revoked) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (1, 1, REFRESH_TOKEN_HASH, PRIOR_REFRESH_TOKEN_HASH, SESSION_IP_ADDRESS,
+             SESSION_USER_AGENT, now, now, now, 0),
+        )
+        conn.execute(
+            "INSERT INTO user_identities (id, user_id, provider, external_id, "
+            "identifier, linked_at) VALUES (?,?,?,?,?,?)",
+            (1, 1, "oidc", OIDC_EXTERNAL_ID, OIDC_IDENTIFIER, now),
+        )
+        conn.execute(
+            "INSERT INTO password_reset_tokens (id, user_id, token_hash, "
+            "expires_at, created_at) VALUES (?,?,?,?,?)",
+            (1, 1, RESET_TOKEN_HASH, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _seed_journal_db(path):
-    """A real journal.db whose alert_methods.config carries the SMTP relay
-    IDENTITY beside its secret, and a Telegram chat id beside its bot token."""
+    """A real journal.db carrying, in the shapes the live app writes them:
+
+    * ``alert_methods.config`` with the SMTP relay IDENTITY beside its secret and
+      a Telegram chat id beside its bot token,
+    * an ``alert_methods`` row whose config is TRUNCATED and cannot be parsed
+      (finding A-3 — the producer used to ship such a row verbatim),
+    * the four auth tables, populated (findings A-1 / A-2).
+    """
     conn = sqlite3.connect(str(path))
     try:
         conn.execute("CREATE TABLE alert_methods (id INTEGER PRIMARY KEY, config TEXT)")
@@ -194,9 +344,20 @@ def _seed_journal_db(path):
                 ),
             ),
         )
+        # Unparseable, and a JSON scalar — neither is a dict, so neither can be
+        # shown to be free of credentials.
+        conn.execute(
+            "INSERT INTO alert_methods (id, config) VALUES (?, ?)",
+            (3, TRUNCATED_ALERT_CONFIG),
+        )
+        conn.execute(
+            "INSERT INTO alert_methods (id, config) VALUES (?, ?)",
+            (4, json.dumps(NON_OBJECT_ALERT_SECRET)),
+        )
         conn.commit()
     finally:
         conn.close()
+    _seed_auth_tables(path)
 
 
 def _m3u_accounts():
@@ -461,6 +622,235 @@ def test_alert_method_identity_scrubbed_from_journal_db(standard_artifact, tmp_p
 
 
 # ---------------------------------------------------------------------------
+# A-1 / A-2 — the operator's own credentials and their third-party identity
+#
+# Read out of the ARCHIVED journal.db with sqlite3, which is how the reviewer
+# found them: no gather, no YAML, no redactor key ever touches a DB column, so a
+# test that only reads the categories cannot see any of this.
+# ---------------------------------------------------------------------------
+
+
+def _extract_journal_db(zip_path, dest):
+    with zipfile.ZipFile(zip_path) as zf:
+        dest.write_bytes(zf.read("journal.db"))
+    return sqlite3.connect(str(dest))
+
+
+@pytest.mark.parametrize("value", ALL_OPERATOR_ACCOUNT_VALUES)
+def test_no_operator_account_value_survives_in_any_member(standard_artifact, value):
+    """The whole-archive statement of findings A-1 and A-2.
+
+    Scanning the DECOMPRESSED members rather than querying the tables is
+    deliberate and is the only version of this check that can fail correctly: a
+    SQLite ``DELETE`` unlinks a row's cells into the freelist and leaves their
+    bytes in the page file, so ``SELECT COUNT(*) == 0`` is satisfied by a
+    database that still carries every purged password hash verbatim.
+    """
+    assert value.encode() not in _all_member_bytes(standard_artifact.zip_path)
+
+
+def test_auth_tables_ship_empty_but_still_exist(standard_artifact, tmp_path):
+    """Empty, not absent.
+
+    Empty is what makes the restored instance usable: ECM's first-run setup keys
+    on ``users`` being EMPTY (``/auth/setup-required`` answers
+    ``user_count == 0``), so an operator restoring onto a fresh instance is taken
+    to the setup wizard and creates a new admin. The tables themselves must
+    survive — dropping them would leave a database whose schema no longer matches
+    the models it is restored into.
+    """
+    conn = _extract_journal_db(standard_artifact.zip_path, tmp_path / "journal.db")
+    try:
+        present = {
+            row[0]
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        for table in backup_mod._AUTH_IDENTITY_TABLES:
+            assert table in present, "%s was dropped, not emptied" % table
+            count = conn.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
+            assert count == 0, "%s shipped %d row(s)" % (table, count)
+    finally:
+        conn.close()
+
+
+def test_the_purge_is_logged_with_a_row_count_that_was_actually_measured(
+    tmp_path, caplog
+):
+    """The one record that says the operator's accounts left the artifact.
+
+    Counted with ``SELECT COUNT(*)`` BEFORE the delete rather than read off
+    ``cursor.rowcount`` after it: SQLite's truncate optimization makes the change
+    count of an unqualified ``DELETE FROM t`` build-dependent, so rowcount can
+    read 0 on a build where rows were removed. A security log line that
+    under-reports is worse than one that is absent, because it reads as proof
+    nothing was there.
+    """
+    journal = tmp_path / "journal.db"
+    _seed_journal_db(journal)
+    with caplog.at_level("WARNING", logger=backup_mod.logger.name):
+        scrubbed = backup_mod._scrub_journal_db_to_temp(journal)
+    scrubbed.unlink()
+
+    purge_lines = [r.getMessage() for r in caplog.records if "Purged ECM account" in r.getMessage()]
+    assert len(purge_lines) == 1, purge_lines
+    for fragment in ("users=1 rows", "user_sessions=1 rows",
+                     "user_identities=1 rows", "password_reset_tokens=1 rows"):
+        assert fragment in purge_lines[0], purge_lines[0]
+
+
+def test_an_accountless_instance_logs_no_purge_warning(tmp_path, caplog):
+    """A WARNING that fires on every backup is a WARNING nobody reads.
+
+    Auth is optional in ECM, so a perfectly ordinary instance has an empty
+    ``users`` table and purges nothing. The line above must mean something
+    happened.
+    """
+    journal = tmp_path / "journal.db"
+    _create_auth_schema(journal)
+    with caplog.at_level("WARNING", logger=backup_mod.logger.name):
+        scrubbed = backup_mod._scrub_journal_db_to_temp(journal)
+    scrubbed.unlink()
+
+    assert [r.getMessage() for r in caplog.records if "Purged ECM account" in r.getMessage()] == []
+
+
+def test_purged_table_set_covers_every_table_holding_authentication_material():
+    """Ratchet: a NEW table with authentication material fails here, not in a drill.
+
+    Same shape as
+    :func:`test_no_credential_shaped_settings_field_is_left_unredacted`, and for
+    the same reason — the scrub names tables explicitly, so a table added later
+    ships in clear until someone remembers this list. ``users.password_hash`` is
+    precisely how that failure looked the first time: it was never in
+    ``_REDACT_KEYS`` and no key denylist can see a DB column anyway.
+    """
+    from models import Base
+
+    # Reviewed exceptions, each a reason rather than a convenience.
+    excused = {
+        # An opaque token ROW ID, not a token secret — the §D6 audit-actor
+        # contract in models.py states this explicitly at each column.
+        ("pending_merge_journal", "actor_token_id"),
+        ("event_sync_reviews", "actor_token_id"),
+        ("event_sync_exclusions", "actor_token_id"),
+    }
+    markers = ("password", "secret", "token_hash", "refresh_token", "api_key")
+    unprotected = sorted(
+        (table.name, column.name)
+        for table in Base.metadata.sorted_tables
+        if table.name not in backup_mod._AUTH_IDENTITY_TABLES
+        for column in table.columns
+        if any(marker in column.name.lower() for marker in markers)
+        and (table.name, column.name) not in excused
+    )
+    assert unprotected == [], (
+        "journal.db tables hold authentication material that a STANDARD artifact "
+        "ships in clear: %s — add the table to "
+        "routers.backup._AUTH_IDENTITY_TABLES, or this test's `excused` set with "
+        "a reason." % unprotected
+    )
+
+
+# ---------------------------------------------------------------------------
+# A-3 — redaction fails CLOSED
+# ---------------------------------------------------------------------------
+
+
+def test_unparseable_alert_config_does_not_ship(standard_artifact, tmp_path):
+    """The reviewer's reproduction: a truncated config blob shipped verbatim.
+
+    This is an EXAMPLE of the property, not the property. The property is that a
+    row the redactor could not parse does not ship at all — see
+    :func:`test_non_object_alert_config_does_not_ship` for the same rule on a
+    different unparseable shape.
+    """
+    blob = _all_member_bytes(standard_artifact.zip_path)
+    assert _TRUNCATED_SECRET.encode() not in blob
+    conn = _extract_journal_db(standard_artifact.zip_path, tmp_path / "journal.db")
+    try:
+        rows = dict(conn.execute("SELECT id, config FROM alert_methods"))
+    finally:
+        conn.close()
+    # The whole blob, not a key inside it — nothing in it was ever parsed.
+    assert rows[3] == backup_mod.REDACTED
+    # The row itself SURVIVES: name/type/enabled are not credentials and the
+    # restore wants them, and a dropped row is an invisible loss.
+    assert 3 in rows
+
+
+def test_non_object_alert_config_does_not_ship(standard_artifact, tmp_path):
+    """A config that parses to a JSON SCALAR is equally unproven and equally refused."""
+    assert NON_OBJECT_ALERT_SECRET.encode() not in _all_member_bytes(
+        standard_artifact.zip_path
+    )
+    conn = _extract_journal_db(standard_artifact.zip_path, tmp_path / "journal.db")
+    try:
+        rows = dict(conn.execute("SELECT id, config FROM alert_methods"))
+    finally:
+        conn.close()
+    assert rows[4] == backup_mod.REDACTED
+
+
+def test_unreadable_journal_db_fails_the_backup_closed(tmp_path):
+    """A database the scrub cannot read fails the BACKUP; it does not ship raw.
+
+    This is the least likely of the three A-3 paths to fire and the most
+    dangerous when it does: the fallback shipped a byte-for-byte copy of the LIVE
+    database — every credential, every hash, no redaction of any kind — behind a
+    200 and a WARNING nobody reads.
+    """
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    journal = config_dir / "journal.db"
+    journal.write_bytes(b"this is not a SQLite database at all\n" * 64)
+
+    with pytest.raises(backup_mod.BackupScrubError):
+        backup_mod._scrub_journal_db_to_temp(journal)
+
+
+def test_a_failed_scrub_leaves_no_unscrubbed_copy_on_disk(tmp_path, monkeypatch):
+    """The temp copy is raw journal.db. A failed scrub must destroy it.
+
+    The caller only unlinks the path this function RETURNED, and on failure it
+    returns nothing — so without this the live database is left readable in the
+    system temp directory by whatever else can read it.
+    """
+    temp_root = tmp_path / "tmp"
+    temp_root.mkdir()
+    monkeypatch.setattr(backup_mod.tempfile, "tempdir", str(temp_root))
+
+    journal = tmp_path / "journal.db"
+    journal.write_bytes(b"not a database " * 100)
+
+    with pytest.raises(backup_mod.BackupScrubError):
+        backup_mod._scrub_journal_db_to_temp(journal)
+
+    assert list(temp_root.iterdir()) == []
+
+
+def test_a_failed_scrub_fails_the_whole_artifact_build(tmp_path, monkeypatch):
+    """End to end: no artifact and no sidecar survive a scrub that could not run.
+
+    Failing the whole backup, rather than emitting an artifact with no
+    ``journal.db``, is the deliberate choice: a backup that silently drops the
+    operator's entire ECM state is data loss wearing a success response, while a
+    loud failure is recoverable and cannot leak.
+    """
+    dest = tmp_path / "unreadable"
+    dest.mkdir()
+
+    def _corrupt_seed(path):
+        Path(path).write_bytes(b"definitely not SQLite\n" * 128)
+
+    monkeypatch.setattr(sys.modules[__name__], "_seed_journal_db", _corrupt_seed)
+    with pytest.raises(backup_mod.BackupScrubError):
+        _build(dest)
+
+    leftovers = sorted(p.name for p in dest.iterdir() if p.suffix in (".zip", ".sha256"))
+    assert leftovers == []
+
+
+# ---------------------------------------------------------------------------
 # The narrow exemption, pinned so it cannot widen
 # ---------------------------------------------------------------------------
 
@@ -528,8 +918,47 @@ def test_encrypted_artifact_without_credentials_is_still_fully_redacted(tmp_path
     dec = tmp_path / "plain.zip"
     artifact_crypto.decrypt_file(art.zip_path, GOOD_PASS, dec)
     members = _all_member_bytes(dec)
-    for value in ALL_THIRD_PARTY_VALUES:
+    for value in ALL_THIRD_PARTY_VALUES + ALL_OPERATOR_ACCOUNT_VALUES:
         assert value.encode() not in members, value
+
+
+def test_encrypted_migration_artifact_still_carries_the_operator_accounts(tmp_path):
+    """The migration path keeps every account row intact, rows and bytes.
+
+    This is the constraint that makes the account purge safe to ship: an operator
+    migrating between instances uses the encrypted cred-carrying artifact, and it
+    must still restore their login without re-entry. It is also the answer to
+    "what do I use if I DO want my accounts" in the operator-facing notice.
+    """
+    art = _build(
+        tmp_path,
+        passphrase=GOOD_PASS,
+        include_credentials=True,
+        acknowledge_unrecoverable=True,
+    )
+    dec = tmp_path / "plain.zip"
+    artifact_crypto.decrypt_file(art.zip_path, GOOD_PASS, dec)
+
+    for value in ALL_OPERATOR_ACCOUNT_VALUES:
+        assert value.encode() in _all_member_bytes(dec), (
+            "encrypted migration artifact lost %s" % value
+        )
+
+    conn = _extract_journal_db(dec, tmp_path / "journal.db")
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+        row = conn.execute(
+            "SELECT username, password_hash FROM users"
+        ).fetchone()
+        assert row == (ADMIN_USERNAME, ADMIN_PASSWORD_HASH)
+        assert conn.execute("SELECT COUNT(*) FROM user_identities").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM user_sessions").fetchone()[0] == 1
+        # The cred-carrying path returns before the scrub runs at all, so the
+        # unparseable row is untouched here too.
+        rows = dict(conn.execute("SELECT id, config FROM alert_methods"))
+        assert rows[3] == TRUNCATED_ALERT_CONFIG
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------
@@ -849,3 +1278,217 @@ async def test_an_artifact_written_before_this_change_still_restores():
     assert captured["payload"]["username"] == "legacy-cleartext-user"
     assert captured["payload"]["server_url"] == "https://provider.example.test"
     assert report.credential_reentry_details[0].fields == ["password"]
+
+
+# ---------------------------------------------------------------------------
+# RESTORE BEHAVIOUR for the purged account tables
+#
+# Widening redaction to journal.db's ``users`` table moves an AVAILABILITY
+# question onto the restore, and it is the one the PO called out: a restored
+# instance nobody can log into is a worse outcome than the leak. Two destination
+# states, and the answer differs because the right answer differs:
+#
+#   * destination HAS accounts -> its own accounts survive the restore, so an
+#     admin restoring a backup is not logged out of their own instance;
+#   * destination has NONE (fresh container, DR rebuild) -> nothing is
+#     re-asserted, ``users`` stays empty, and ECM's shipped first-run setup takes
+#     over. That is what the operator re-establishes: their ECM account.
+#
+# These run against REAL SQLite files rather than mocks, because the defect being
+# guarded is about what is in a database file.
+# ---------------------------------------------------------------------------
+
+
+def _auth_db(path, users=(), alert_configs=()):
+    """A journal.db with the auth schema and exactly the given rows."""
+    _create_auth_schema(path)
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute("DELETE FROM users")
+        conn.execute("DELETE FROM user_sessions")
+        conn.execute("DELETE FROM user_identities")
+        conn.execute("DELETE FROM password_reset_tokens")
+        for uid, username, pw_hash in users:
+            conn.execute(
+                "INSERT INTO users (id, username, password_hash, auth_provider, "
+                "is_active, is_admin, created_at, updated_at) "
+                "VALUES (?,?,?,?,1,1,?,?)",
+                (uid, username, pw_hash, "local", "2026-08-17", "2026-08-17"),
+            )
+            conn.execute(
+                "INSERT INTO user_identities (id, user_id, provider, identifier, "
+                "linked_at) VALUES (?,?,?,?,?)",
+                (uid, uid, "local", username, "2026-08-17"),
+            )
+        if alert_configs:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS alert_methods "
+                "(id INTEGER PRIMARY KEY, config TEXT)"
+            )
+            for rid, cfg in alert_configs:
+                conn.execute(
+                    "INSERT INTO alert_methods (id, config) VALUES (?,?)", (rid, cfg)
+                )
+        conn.commit()
+    finally:
+        conn.close()
+    return path
+
+
+def test_a_restore_keeps_the_destination_instances_own_accounts(tmp_path, monkeypatch):
+    """The admin driving the restore stays able to log into their own instance."""
+    live = _auth_db(tmp_path / "journal.db", users=[(1, "owner", "$2b$12$OWNERHASH")])
+    monkeypatch.setattr(backup_mod, "JOURNAL_DB_FILE", live)
+
+    prior = backup_mod._capture_existing_auth_rows()
+    assert [row[1] for row in prior["users"][1]] == ["owner"]
+
+    # The restore lands a standard artifact's journal.db: auth tables EMPTY.
+    _auth_db(live, users=[])
+    backup_mod._reassert_auth_rows_after_restore(prior)
+
+    conn = sqlite3.connect(str(live))
+    try:
+        rows = conn.execute("SELECT username, password_hash FROM users").fetchall()
+        identities = conn.execute("SELECT identifier FROM user_identities").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("owner", "$2b$12$OWNERHASH")]
+    assert identities == [("owner",)]
+    assert backup_mod._post_restore_account_notices() == []
+
+
+def test_a_restore_onto_an_owned_instance_discards_the_artifacts_users(
+    tmp_path, monkeypatch
+):
+    """A legacy artifact's ``users`` cannot silently replace the live ones.
+
+    Before this change the destination's users table was overwritten wholesale by
+    whatever the ZIP carried, so an old backup resurrected deleted accounts and
+    their password hashes. The owner is now authoritative on an owned instance.
+    """
+    live = _auth_db(tmp_path / "journal.db", users=[(1, "owner", "$2b$12$OWNERHASH")])
+    monkeypatch.setattr(backup_mod, "JOURNAL_DB_FILE", live)
+    prior = backup_mod._capture_existing_auth_rows()
+
+    # A pre-change ZIP: real users, restored over the live database.
+    _auth_db(live, users=[(1, "stale-admin", "$2b$12$STALEHASH")])
+    backup_mod._reassert_auth_rows_after_restore(prior)
+
+    conn = sqlite3.connect(str(live))
+    try:
+        rows = conn.execute("SELECT username FROM users").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("owner",)]
+
+
+def test_a_legacy_artifact_still_installs_its_users_onto_an_empty_instance(
+    tmp_path, monkeypatch
+):
+    """Backwards compatibility, and it is the reason the re-assert is conditional.
+
+    An artifact written before this change carries real ``users`` rows, and
+    restoring one onto a genuinely empty instance is a shipped disaster-recovery
+    path. Nothing here is re-asserted (there is nothing to re-assert), so that
+    path is unchanged.
+    """
+    live = _auth_db(tmp_path / "journal.db", users=[])
+    monkeypatch.setattr(backup_mod, "JOURNAL_DB_FILE", live)
+    prior = backup_mod._capture_existing_auth_rows()
+    assert prior.get("users") is None
+
+    _auth_db(live, users=[(1, "legacy-admin", "$2b$12$LEGACYHASH")])
+    backup_mod._reassert_auth_rows_after_restore(prior)
+
+    conn = sqlite3.connect(str(live))
+    try:
+        rows = conn.execute("SELECT username, password_hash FROM users").fetchall()
+    finally:
+        conn.close()
+    assert rows == [("legacy-admin", "$2b$12$LEGACYHASH")]
+    assert backup_mod._post_restore_account_notices() == []
+
+
+def test_an_account_less_restore_tells_the_operator_to_run_first_run_setup(
+    tmp_path, monkeypatch
+):
+    """``restored_files`` reports what landed; it cannot report what could not.
+
+    Read off the LIVE post-restore database rather than predicted from the
+    artifact, so it cannot claim a lockout that did not happen.
+    """
+    live = _auth_db(tmp_path / "journal.db", users=[])
+    monkeypatch.setattr(backup_mod, "JOURNAL_DB_FILE", live)
+
+    notices = backup_mod._post_restore_account_notices()
+    assert notices == [backup_mod.FIRST_RUN_SETUP_NOTICE]
+    assert "first-run setup" in notices[0]
+    assert "encrypted backup" in notices[0]
+
+
+def test_whole_blob_sentinel_alert_config_is_repaired_from_the_destination(
+    tmp_path, monkeypatch
+):
+    """The fail-closed producer change must not DESTROY a working alert method.
+
+    The producer replaces an unparseable ``config`` with the sentinel as a whole
+    blob; the restore treats that exactly as it treats a per-key sentinel and
+    reinstates the destination's own config.
+    """
+    live = _auth_db(
+        tmp_path / "journal.db",
+        alert_configs=[(1, json.dumps({"host": "smtp.example.test", "password": DESTINATION_SMTP_SECRET}))],
+    )
+    monkeypatch.setattr(backup_mod, "JOURNAL_DB_FILE", live)
+    prior = backup_mod._capture_existing_alert_method_configs()
+
+    conn = sqlite3.connect(str(live))
+    try:
+        conn.execute(
+            "UPDATE alert_methods SET config=? WHERE id=1", (backup_mod.REDACTED,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    backup_mod._merge_alert_method_creds_after_restore(prior)
+
+    conn = sqlite3.connect(str(live))
+    try:
+        raw = conn.execute("SELECT config FROM alert_methods WHERE id=1").fetchone()[0]
+    finally:
+        conn.close()
+    assert json.loads(raw) == {"host": "smtp.example.test", "password": DESTINATION_SMTP_SECRET}
+
+
+@pytest.mark.asyncio
+async def test_a_restored_standard_artifact_leaves_first_run_setup_available(
+    standard_artifact, tmp_path
+):
+    """Invariant 3, proved against the REAL auth route and the REAL artifact.
+
+    Not "the users table is empty" — that is the mechanism. The property is that
+    somebody can still log into the restored instance, and the shipped way to do
+    that is ``GET /api/auth/setup-required`` answering ``required: true``, which
+    is what ``ProtectedRoute.tsx`` renders the setup wizard on. The archived
+    ``journal.db`` is used as the session's database directly.
+    """
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from auth.routes import check_setup_required
+
+    restored = tmp_path / "journal.db"
+    with zipfile.ZipFile(standard_artifact.zip_path) as zf:
+        restored.write_bytes(zf.read("journal.db"))
+
+    engine = create_engine("sqlite:///%s" % restored)
+    session = sessionmaker(bind=engine)()
+    try:
+        result = await check_setup_required(session=session)
+    finally:
+        session.close()
+        engine.dispose()
+
+    assert result.required is True

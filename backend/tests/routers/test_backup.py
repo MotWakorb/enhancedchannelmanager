@@ -7,6 +7,7 @@ Mocks: get_settings(), get_engine(), close_db(), init_db(), clear_settings_cache
 """
 import io
 import json
+import sqlite3
 import zipfile
 
 import pytest
@@ -25,6 +26,21 @@ from models import (
     TagGroup,
     Tag,
 )
+
+
+def _write_empty_journal_db(path):
+    """A REAL, empty SQLite database at ``path``.
+
+    The magic-byte stub these tests used to write is not a database — sqlite3
+    opens it and then fails on the first query. That was invisible while the
+    journal.db scrub failed OPEN and shipped the raw copy; it fails the backup
+    now (bead …-gi4zn, finding A-3), and a live instance always has a real
+    database here, so the faithful fixture is the one that matches production.
+
+    ``_make_backup_zip`` below keeps the magic-byte stub on purpose: that is a
+    ZIP MEMBER, and ``_validate_backup_zip`` checks exactly those bytes.
+    """
+    sqlite3.connect(str(path)).close()
 
 
 def _make_backup_zip(
@@ -78,7 +94,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{"url": "http://test:9191"}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_conn = MagicMock()
@@ -115,7 +131,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{"url": "test"}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         # Create logo directory with a file
         logos_dir = tmp_path / "uploads" / "logos"
@@ -144,7 +160,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_conn = MagicMock()
@@ -165,7 +181,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_engine.connect.side_effect = Exception("WAL error")
@@ -197,7 +213,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         # Mock the engine.connect() chain so the PRAGMA returns (1, 0, 0).
         mock_engine = MagicMock()

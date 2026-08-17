@@ -4156,6 +4156,15 @@ export interface RestoreResult {
   backup_version: string;
   backup_date: string;
   restored_files: string[];
+  /**
+   * What the artifact could NOT carry, read off the live post-restore instance
+   * (bead enhancedchannelmanager-gi4zn). A standard (non-encrypted) backup
+   * carries no ECM account credentials, so restoring one onto an instance with
+   * no accounts leaves first-run setup required. `restored_files` reports what
+   * landed and structurally cannot report that. Optional: a backend predating
+   * the field omits it, and every caller must tolerate that.
+   */
+  notices?: string[];
 }
 
 export async function restoreBackup(file: File): Promise<RestoreResult> {

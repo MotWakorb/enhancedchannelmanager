@@ -144,6 +144,48 @@ class TestRestoreBackup:
         assert "ok" in _text(result).lower() or "restored" in _text(result).lower()
 
     @pytest.mark.asyncio
+    async def test_surfaces_the_first_run_setup_notice(self):
+        """bead enhancedchannelmanager-gi4zn: a standard (non-encrypted) backup
+        carries no ECM account credentials, so a restore onto an instance with
+        no accounts succeeds and still leaves nobody able to log in until
+        first-run setup runs. The file count cannot say that; the server's
+        `notices` can, and they are worthless if the tool drops them."""
+        mcp = _register_system()
+        notice = (
+            "This instance has no ECM user account. Create your admin account "
+            "through first-run setup."
+        )
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.return_value = {
+            "status": "ok",
+            "backup_version": "0.18.1-0112",
+            "restored_files": ["settings.json", "journal.db"],
+            "notices": [notice],
+        }
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "restore_backup", {"filename": "ecm-backup-2026-05-24_120000.zip"}
+            )
+        assert notice in _text(result)
+
+    @pytest.mark.asyncio
+    async def test_omits_notices_when_the_backend_returns_none(self):
+        """A backend predating the field omits `notices` entirely, and the tool
+        must not render an empty trailer or raise on it."""
+        mcp = _register_system()
+        mock_client = AsyncMock()
+        mock_client.call_endpoint.return_value = {
+            "status": "ok",
+            "backup_version": "0.17.3-0001",
+            "restored_files": ["settings.json"],
+        }
+        with patch("tools.system.get_ecm_client", return_value=mock_client):
+            result = await mcp.call_tool(
+                "restore_backup", {"filename": "ecm-backup-2026-05-24_120000.zip"}
+            )
+        assert _text(result).rstrip().endswith("ECM state was overwritten from the backup.")
+
+    @pytest.mark.asyncio
     async def test_surfaces_validation_error(self):
         """A backend 400 (bad filename) is surfaced to the caller, not hidden."""
         mcp = _register_system()

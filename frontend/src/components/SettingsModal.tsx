@@ -203,6 +203,14 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
     try {
       const result = await api.restoreBackupInitial(file);
       notifications.success(`Restored ${result.restored_files.length} files from backup`);
+      // What the artifact could NOT carry (bead enhancedchannelmanager-gi4zn).
+      // This is the disaster-recovery path, a fresh instance with no accounts,
+      // so a standard (non-encrypted) artifact always lands here needing
+      // first-run setup, and the file count alone never says so. `?? []`
+      // because a backend predating the field omits it.
+      for (const notice of result.notices ?? []) {
+        notifications.warning(notice, 'Account Setup Required');
+      }
       onSaved();
       onClose();
     } catch (err) {

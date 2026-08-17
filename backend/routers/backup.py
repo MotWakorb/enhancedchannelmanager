@@ -230,6 +230,78 @@ _ALERT_METHOD_PROTECTED_KEYS = tuple(
     dict.fromkeys(_ALERT_METHOD_CREDENTIAL_KEYS + _ALERT_METHOD_IDENTITY_KEYS)
 )
 
+# journal.db tables holding ECM's OWN authentication and identity state, emptied
+# out of the standard artifact (bead …-gi4zn, external security review findings
+# A-1 / A-2). Until this landed, the scrub visited ``alert_methods`` and nothing
+# else, so a standard artifact — the DEFAULT artifact, the one an operator
+# attaches to a support ticket — handed over, read straight out of the archived
+# ``journal.db`` with sqlite3:
+#
+#   * ``users.password_hash``   — the operator's own bcrypt admin hash, which is
+#     offline-crackable at the attacker's leisure. ``password_hash`` was never in
+#     :data:`_REDACT_KEYS` and no key denylist covers a DB COLUMN anyway.
+#   * ``users.username`` / ``email`` — the account names to crack it against.
+#   * ``user_sessions.refresh_token_hash`` / ``prior_refresh_token_hash`` — live
+#     session material; ``ip_address`` / ``user_agent`` — forensic metadata about
+#     where and with what the operator administers the instance.
+#   * ``password_reset_tokens.token_hash`` — an account-recovery credential.
+#   * ``user_identities.provider`` / ``external_id`` / ``identifier`` — the ECM
+#     admin correlated to their OIDC / SAML / LDAP identity at a THIRD-PARTY IdP.
+#     That is third-party identity, squarely inside this bead's own property, and
+#     the sixth instance of the protected-secret-beside-unprotected-identity
+#     asymmetry the rest of this bead removed.
+#
+# THE ROWS ARE DELETED, NOT MASKED, and that is a deliberate availability
+# decision rather than a maximalist one. ECM's first-run setup keys on
+# ``session.query(User).count() == 0`` (``auth/routes.py`` -> ``/auth/setup-
+# required`` and ``/auth/setup``, surfaced by ``ProtectedRoute.tsx``). A users
+# table left populated but stripped of usable ``password_hash`` values is
+# therefore the ONE state that is both unauthenticatable AND ineligible for the
+# setup wizard — a restored instance nobody can log into, which is a worse
+# outcome than the leak. Empty, the shipped first-run path takes over and the
+# operator creates a new admin. What the operator re-establishes on a
+# fresh-instance restore is exactly: their ECM account(s). Everything else in the
+# artifact restores unchanged.
+#
+# The DESTINATION's own accounts are never collateral: a restore into an instance
+# that already has users re-asserts them over the artifact
+# (:func:`_capture_existing_auth_rows` / :func:`_reassert_auth_rows_after_restore`),
+# so an admin restoring a backup is not logged out of their own instance.
+#
+# The ENCRYPTED cred-carrying artifact (``include_credentials``) is unaffected —
+# it returns before the scrub runs at all — so a migration still carries the
+# operator's accounts and restores login without re-entry.
+#
+# Order is DELETE order: dependents before ``users``. SQLite does not enforce the
+# FKs unless ``PRAGMA foreign_keys`` is on, but ordering it correctly means the
+# purge does not depend on that pragma being off.
+_AUTH_IDENTITY_TABLES: tuple[str, ...] = (
+    "user_sessions",
+    "password_reset_tokens",
+    "user_identities",
+    "users",
+)
+
+
+class BackupScrubError(RuntimeError):
+    """The journal.db scrub could not run to completion, so nothing ships.
+
+    Bead …-gi4zn, external security review finding A-3: every failure path in
+    :func:`_scrub_journal_db_to_temp` used to fail OPEN — an unopenable database,
+    an unreadable table and an unparseable ``alert_methods.config`` row each fell
+    back to shipping the RAW bytes. The reviewer seeded a truncated config blob
+    and read its SMTP secret straight out of the built artifact while valid rows
+    in the same database were correctly redacted.
+
+    A redactor that cannot redact must not ship. Raising fails the whole backup
+    rather than emitting a journal.db-less artifact, because a backup that
+    silently drops the operator's entire ECM state is data loss wearing a success
+    response; a loud failure is recoverable and cannot leak.
+    ``build_backup_artifact`` already unlinks its partial ZIP and sidecar on any
+    exception, and :func:`_create_backup_zip`'s caller turns this into a 500.
+    """
+
+
 # SINGLE shared credential-key denylist for the DBAS artifact (0i2vt.7, ADR-012
 # D1 redact-by-default). Used by the NON-BYPASSABLE deep redactor
 # (_redact_credentials_deep) that runs over EVERY category — including
@@ -508,80 +580,213 @@ def _build_manifest(files: list[str]) -> dict:
 
 
 def _scrub_journal_db_to_temp(src: Path, include_credentials: bool = False) -> Path:
-    """Copy journal.db to a temp file and redact credential-class keys in
-    alert_methods.config rows. Returns the temp file path; caller must unlink.
+    """Copy journal.db to a temp file and scrub it. Caller must unlink the path.
 
-    Per bd-l0nhi: PR #163 began storing SMTP password (and other creds) inside
-    alert_methods.config JSON, so the live DB cannot be zipped raw without
-    leaking credentials.
+    Two things are removed, and BOTH are removed or the copy is destroyed and
+    the backup fails (:class:`BackupScrubError` — no fail-open path survives):
 
-    ``include_credentials`` (ADR-012 D12 / u81kh) preserves those
-    alert_methods.config creds (the SMTP password an operator would otherwise
-    re-enter on migration) instead of redacting them. It is only ever True from
-    :func:`build_backup_artifact` when a passphrase is set, so the cleartext-on-
-    disk default copy is always scrubbed. NOTE: any CloudStorageTarget /
-    SyncTarget credential columns in journal.db remain Fernet-ciphertext at rest
-    (ADR-012 D3) regardless of this flag; they are usable on the target only with
-    the same export key, else treated as absent on restore (checklist 19).
+    1. Every row of :data:`_AUTH_IDENTITY_TABLES` — ECM's own authentication
+       material (admin password hashes, refresh-token hashes, reset tokens) and
+       the third-party IdP identities linked to those accounts. See that tuple's
+       comment for the full inventory and for why the rows are DELETED rather
+       than masked.
+    2. The credential- and identity-class keys inside ``alert_methods.config``
+       JSON (bd-l0nhi: PR #163 began storing the SMTP password there, so the live
+       DB cannot be zipped raw). A row whose config does not parse as a JSON
+       OBJECT has its whole ``config`` value replaced with the sentinel — see
+       :func:`_scrub_journal_db_in_place`.
+
+    ``include_credentials`` (ADR-012 D12 / u81kh) is the approved cred-carrying
+    migration path and returns the byte-for-byte copy: that artifact is
+    whole-passphrase-encrypted and its entire value is that a migration restores
+    every credential — including the operator's accounts — without re-entry. It
+    is only ever True from :func:`build_backup_artifact` when a passphrase is
+    set, so the cleartext-on-disk default copy is always scrubbed. NOTE: any
+    CloudStorageTarget / SyncTarget credential columns in journal.db remain
+    Fernet-ciphertext at rest (ADR-012 D3) regardless of this flag; they are
+    usable on the target only with the same export key, else treated as absent on
+    restore (checklist 19).
     """
     fd, tmp_name = tempfile.mkstemp(prefix="ecm-backup-journal-", suffix=".db")
     os.close(fd)
     tmp_path = Path(tmp_name)
     shutil.copyfile(src, tmp_path)
     if include_credentials:
-        # Approved cred-carrying migration path: do NOT scrub alert_methods creds.
+        # Approved cred-carrying migration path: do NOT scrub.
         return tmp_path
 
+    try:
+        _scrub_journal_db_in_place(tmp_path)
+    except BaseException:
+        # This temp is an UNSCRUBBED copy of the live database sitting in the
+        # system temp dir. A failed scrub must not leave it there — the caller
+        # only unlinks paths this function RETURNED, and it is about to receive
+        # an exception instead. BaseException, not Exception: a cancellation or
+        # a KeyboardInterrupt mid-scrub leaves exactly the same file behind.
+        try:
+            tmp_path.unlink()
+        except OSError as e:
+            logger.warning(
+                "[BACKUP] Could not remove the unscrubbed journal.db temp copy "
+                "%s after a failed scrub: %s",
+                tmp_path, e,
+            )
+        raise
+    return tmp_path
+
+
+def _scrub_journal_db_in_place(tmp_path: Path) -> None:
+    """Scrub a temp COPY of journal.db in place, or raise :class:`BackupScrubError`.
+
+    FAILS CLOSED at every step (bead …-gi4zn, review finding A-3). Each of the
+    three ``return tmp_path`` fallbacks this replaced shipped the raw database:
+    an unopenable file, an unreadable table, and an unparseable
+    ``alert_methods.config`` row. The reviewer proved the third by seeding a
+    truncated blob and reading its SMTP secret out of a built artifact while
+    valid rows in the SAME database were correctly redacted.
+
+    The two decisions inside that fail-closed rule:
+
+    * **A row whose ``config`` is not a JSON object loses the whole blob** to the
+      sentinel, rather than being dropped. Dropping the row would delete the
+      operator's alert method outright — its name, type and enabled flag are not
+      credentials and the restore wants them — and it would do so invisibly,
+      since nothing downstream can report a row that is not there. Replacing the
+      blob keeps the row present and visibly needing re-entry, and it cannot ship
+      a byte that was never parsed. The restore side treats a whole-blob
+      sentinel the same way it treats a per-key one (see
+      :func:`_merge_alert_method_creds_after_restore`), so a restore into an
+      instance that still holds the real config repairs it.
+    * **A missing table is not a failure.** A freshly bootstrapped database has
+      no ``alert_methods`` and may predate the auth tables; nothing to scrub is
+      not the same as a scrub that could not run. Failing to LIST the tables IS
+      a failure, because then we do not know what is in there.
+
+    VACUUM at the end is load-bearing, not hygiene: SQLite's ``DELETE`` unlinks
+    cells into the freelist and leaves their bytes in the page file, so a purged
+    password hash is still recoverable with a substring scan of the shipped
+    member. ``PRAGMA secure_delete`` zeroes freed content as it goes and the
+    VACUUM rebuilds the file from live rows only. Pinned by the whole-archive
+    decompressed byte scan in
+    ``tests/routers/test_gi4zn_standard_artifact_full_redaction.py``, which reads
+    the archived bytes rather than the query results and so fails if either is
+    dropped.
+    """
     try:
         conn = sqlite3.connect(str(tmp_path))
     except sqlite3.Error as e:
-        # Source isn't a usable SQLite DB — log and ship the byte-for-byte copy
-        # so the backup doesn't fail outright. The validator will still reject
-        # it on restore if it's truly malformed.
-        logger.warning("[BACKUP] Could not open journal.db for scrub, shipping as-is: %s", e)
-        return tmp_path
+        raise BackupScrubError(
+            "could not open the journal.db copy to scrub it: %s" % e
+        ) from e
 
     try:
         cur = conn.cursor()
-        # alert_methods table may not exist on freshly-bootstrapped DBs.
         try:
-            cur.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='alert_methods'"
-            )
-            if cur.fetchone() is None:
-                return tmp_path
-            cur.execute("SELECT id, config FROM alert_methods")
-            rows = cur.fetchall()
+            # secure_delete BEFORE any DELETE so freed pages are zeroed rather
+            # than merely unlinked.
+            cur.execute("PRAGMA secure_delete = ON")
+            cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            present = {row[0] for row in cur.fetchall()}
         except sqlite3.DatabaseError as e:
-            logger.warning("[BACKUP] alert_methods scrub skipped (DB read failed): %s", e)
-            return tmp_path
+            raise BackupScrubError(
+                "could not list the tables in the journal.db copy: %s" % e
+            ) from e
 
-        for row_id, raw_config in rows:
-            if not raw_config:
+        purged: dict[str, int] = {}
+        for table in _AUTH_IDENTITY_TABLES:
+            if table not in present:
                 continue
             try:
-                cfg = json.loads(raw_config)
-            except (json.JSONDecodeError, TypeError):
-                # Leave malformed rows alone — restore-side will refuse to
-                # parse them anyway, and we don't want to silently rewrite.
-                continue
-            if not isinstance(cfg, dict):
-                continue
-            changed = False
-            for key in _ALERT_METHOD_PROTECTED_KEYS:
-                if key in cfg and cfg[key]:
-                    cfg[key] = REDACTED
-                    changed = True
-            if changed:
-                cur.execute(
-                    "UPDATE alert_methods SET config=? WHERE id=?",
-                    (json.dumps(cfg), row_id),
-                )
-        conn.commit()
-        logger.info("[BACKUP] Scrubbed alert_methods.config in %d rows", len(rows))
+                # COUNT BEFORE DELETE rather than reading ``cur.rowcount``
+                # afterwards. SQLite's truncate optimization makes the change
+                # count of an unqualified ``DELETE FROM t`` build-dependent, so
+                # rowcount can read 0 on a build where rows WERE removed — an
+                # under-report in the security log line below, which is the one
+                # record that says the operator's accounts left the artifact.
+                before = cur.execute(
+                    "SELECT COUNT(*) FROM %s" % table  # noqa: S608 — name from a module-level literal tuple
+                ).fetchone()[0]
+                cur.execute("DELETE FROM %s" % table)  # noqa: S608 — same
+            except sqlite3.DatabaseError as e:
+                raise BackupScrubError(
+                    "could not purge the %s table from the journal.db copy: %s"
+                    % (table, e)
+                ) from e
+            purged[table] = before
+
+        scrubbed_rows = 0
+        if "alert_methods" in present:
+            try:
+                cur.execute("SELECT id, config FROM alert_methods")
+                rows = cur.fetchall()
+            except sqlite3.DatabaseError as e:
+                raise BackupScrubError(
+                    "could not read alert_methods from the journal.db copy: %s" % e
+                ) from e
+
+            for row_id, raw_config in rows:
+                if not raw_config:
+                    continue
+                try:
+                    cfg = json.loads(raw_config)
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    cfg = None
+                if not isinstance(cfg, dict):
+                    # FAIL CLOSED. Nothing here was parsed, so nothing here can
+                    # be shown to be free of credentials.
+                    new_config = REDACTED
+                    logger.warning(
+                        "[BACKUP] alert_methods row id=%s has a config that is "
+                        "not a JSON object; replacing the whole blob with the "
+                        "redaction sentinel rather than shipping it unread",
+                        row_id,
+                    )
+                else:
+                    changed = False
+                    for key in _ALERT_METHOD_PROTECTED_KEYS:
+                        if key in cfg and cfg[key]:
+                            cfg[key] = REDACTED
+                            changed = True
+                    new_config = json.dumps(cfg) if changed else None
+                if new_config is None:
+                    continue
+                try:
+                    cur.execute(
+                        "UPDATE alert_methods SET config=? WHERE id=?",
+                        (new_config, row_id),
+                    )
+                except sqlite3.DatabaseError as e:
+                    raise BackupScrubError(
+                        "could not rewrite alert_methods row id=%s: %s" % (row_id, e)
+                    ) from e
+                scrubbed_rows += 1
+
+        try:
+            conn.commit()
+            # VACUUM cannot run inside a transaction; the commit above closes the
+            # implicit one sqlite3 opened for the DML.
+            cur.execute("VACUUM")
+        except sqlite3.DatabaseError as e:
+            raise BackupScrubError(
+                "could not commit and compact the scrubbed journal.db copy: %s" % e
+            ) from e
+
+        # Only when rows actually left. An instance with no accounts (auth not
+        # enabled, or never set up) purges nothing, and a WARNING that fires on
+        # every backup regardless is a WARNING nobody reads by the time it is
+        # true.
+        if any(purged.values()):
+            logger.warning(
+                "[BACKUP] Purged ECM account and identity state from the "
+                "standard artifact's journal.db (%s). A restore of this artifact "
+                "onto an instance with no accounts leaves first-run setup "
+                "required; the operator re-creates their ECM login. Use an "
+                "encrypted backup with credentials included to migrate accounts.",
+                ", ".join("%s=%d rows" % (t, n) for t, n in sorted(purged.items())),
+            )
+        logger.info("[BACKUP] Scrubbed alert_methods.config in %d rows", scrubbed_rows)
     finally:
         conn.close()
-    return tmp_path
 
 
 def _create_backup_zip() -> io.BytesIO:
@@ -2315,6 +2520,15 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
     credential-class values from the prior snapshot when the restored value
     is the REDACTED sentinel. Match by row id.
 
+    A restored ``config`` that is the sentinel AS A WHOLE (rather than a JSON
+    object with sentinel values inside it) is the producer's fail-closed
+    treatment of a row it could not parse — see
+    :func:`_scrub_journal_db_in_place`. It is merged the same way, wholesale: the
+    destination's own config for that row id is authoritative and is restored
+    intact. Without this branch the fail-closed producer change would DESTROY a
+    working alert method on every restore, which is exactly the round-trip
+    asymmetry :data:`_ALERT_METHOD_PROTECTED_KEYS` exists to prevent.
+
     Backward-compat: legacy non-redacted ZIPs carry no sentinel — every value
     survives the merge unchanged.
     """
@@ -2341,6 +2555,17 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
         merged_count = 0
         for row_id, raw in rows:
             if not raw:
+                continue
+            if raw == REDACTED:
+                # Whole-blob sentinel: the producer could not parse this row and
+                # refused to ship it. Reinstate the destination's own config.
+                prior_cfg = prior.get(row_id)
+                if prior_cfg:
+                    cur.execute(
+                        "UPDATE alert_methods SET config=? WHERE id=?",
+                        (json.dumps(prior_cfg), row_id),
+                    )
+                    merged_count += 1
                 continue
             try:
                 cfg = json.loads(raw)
@@ -2370,6 +2595,171 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
         conn.close()
 
 
+# The operator-facing half of the account purge (bead …-gi4zn, finding A-1).
+# ``restored_files`` alone reports what landed, never what an artifact could not
+# carry, and an operator whose disaster-recovery restore returns 200 and then
+# shows a first-run setup wizard has to guess whether that is correct.
+FIRST_RUN_SETUP_NOTICE = (
+    "This instance has no ECM user account. A standard (non-encrypted) backup "
+    "carries no account credentials by design, so accounts are not restored from "
+    "one — create your admin account through first-run setup. To migrate accounts "
+    "between instances instead, take an encrypted backup with credentials included."
+)
+
+
+def _capture_existing_auth_rows() -> dict[str, tuple[list[str], list[tuple]]]:
+    """Snapshot this instance's OWN account rows before journal.db is replaced.
+
+    Returns ``{table: (column_names, rows)}`` for :data:`_AUTH_IDENTITY_TABLES`.
+
+    A standard artifact carries these tables EMPTY (see that tuple's comment), so
+    without this snapshot a restore would log the admin out of their own live
+    instance and drop them at the setup wizard — an availability regression the
+    redaction fix does not need and must not cause. Paired with
+    :func:`_reassert_auth_rows_after_restore`; same capture-then-merge shape as
+    :func:`_capture_existing_alert_method_configs`.
+
+    Best-effort by design: an unreadable live database yields an empty snapshot,
+    which degrades to the restored artifact's own contents rather than failing the
+    restore. That is the safe direction here — the worst case is the operator
+    running first-run setup, and unlike the PRODUCER side (where an unrunnable
+    scrub means a leak) nothing confidential turns on it.
+    """
+    if not JOURNAL_DB_FILE.exists():
+        return {}
+    out: dict[str, tuple[list[str], list[tuple]]] = {}
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error as e:
+        logger.warning("[BACKUP] Could not open journal.db to capture accounts: %s", e)
+        return {}
+    try:
+        cur = conn.cursor()
+        for table in _AUTH_IDENTITY_TABLES:
+            try:
+                cur.execute("SELECT * FROM %s" % table)  # noqa: S608 — name from a module-level literal tuple
+                rows = cur.fetchall()
+            except sqlite3.DatabaseError as e:
+                # Missing on a pre-auth-schema database; unreadable is logged and
+                # skipped for the same reason the docstring gives.
+                logger.warning(
+                    "[BACKUP] Could not capture %s before restore: %s", table, e
+                )
+                continue
+            if not rows:
+                continue
+            out[table] = ([d[0] for d in cur.description], rows)
+    finally:
+        conn.close()
+    return out
+
+
+def _reassert_auth_rows_after_restore(
+    prior: dict[str, tuple[list[str], list[tuple]]],
+) -> None:
+    """Put this instance's own account rows back over the restored journal.db.
+
+    Runs ONLY when the destination actually had accounts. That condition is what
+    keeps a legacy (pre-…-gi4zn) ZIP's disaster-recovery path intact: restoring
+    an old artifact that still carries ``users`` onto an EMPTY instance installs
+    those users exactly as it always did, because there is nothing here to
+    re-assert. Restoring onto an OWNED instance, by contrast, keeps the owner —
+    which is both the availability guarantee and a tightening, since an artifact's
+    ``users`` table can no longer silently replace the live one.
+
+    Columns are intersected with the restored schema so a snapshot taken on a
+    different ECM version cannot fail the insert on a column that moved.
+    """
+    if not prior.get("users"):
+        return
+    if not JOURNAL_DB_FILE.exists():
+        return
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error as e:
+        logger.warning(
+            "[BACKUP] Could not open the restored journal.db to reinstate "
+            "accounts: %s", e,
+        )
+        return
+    try:
+        cur = conn.cursor()
+        # Reverse of the DELETE order: parents before dependents.
+        for table in reversed(_AUTH_IDENTITY_TABLES):
+            captured = prior.get(table)
+            try:
+                cur.execute("PRAGMA table_info(%s)" % table)
+                dest_columns = [row[1] for row in cur.fetchall()]
+            except sqlite3.DatabaseError as e:
+                logger.warning(
+                    "[BACKUP] Could not inspect restored %s: %s", table, e
+                )
+                continue
+            if not dest_columns:
+                continue
+            try:
+                cur.execute("DELETE FROM %s" % table)  # noqa: S608 — name from a module-level literal tuple
+            except sqlite3.DatabaseError as e:
+                logger.warning(
+                    "[BACKUP] Could not clear restored %s before reinstating "
+                    "this instance's accounts: %s", table, e,
+                )
+                continue
+            if not captured:
+                continue
+            columns, rows = captured
+            shared = [c for c in columns if c in dest_columns]
+            if not shared:
+                continue
+            index = [columns.index(c) for c in shared]
+            statement = "INSERT INTO %s (%s) VALUES (%s)" % (  # noqa: S608 — same
+                table,
+                ", ".join('"%s"' % c for c in shared),
+                ", ".join("?" for _ in shared),
+            )
+            try:
+                cur.executemany(statement, [tuple(r[i] for i in index) for r in rows])
+            except sqlite3.DatabaseError as e:
+                logger.warning(
+                    "[BACKUP] Could not reinstate %d %s row(s) after restore: %s",
+                    len(rows), table, e,
+                )
+        conn.commit()
+        logger.info(
+            "[BACKUP] Reinstated this instance's own account rows over the "
+            "restored journal.db (%d users)", len(prior["users"][1]),
+        )
+    finally:
+        conn.close()
+
+
+def _post_restore_account_notices() -> list[str]:
+    """Notices for the restore response, read off the LIVE post-restore database.
+
+    Derived from the instance's actual state rather than predicted from what the
+    artifact contained, so it cannot claim a lockout that did not happen or miss
+    one that did. Empty in the ordinary case (accounts present).
+    """
+    if not JOURNAL_DB_FILE.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+    except sqlite3.Error:
+        return []
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    except sqlite3.DatabaseError:
+        # No users table at all (pre-auth-schema database) — the setup wizard is
+        # this instance's normal state, not a notice-worthy outcome.
+        return []
+    finally:
+        conn.close()
+    if count:
+        return []
+    logger.warning("[BACKUP] %s", FIRST_RUN_SETUP_NOTICE)
+    return [FIRST_RUN_SETUP_NOTICE]
+
+
 def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     """Restore files from a validated backup zip."""
     restored = []
@@ -2377,6 +2767,10 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     # Capture existing alert_methods.config BEFORE we close/replace the DB so
     # we can merge real creds back where the restored ZIP has REDACTED.
     prior_alert_configs = _capture_existing_alert_method_configs()
+    # Same, for this instance's own account rows: a standard artifact carries
+    # those tables EMPTY (bead …-gi4zn), and a restore must not log the operator
+    # out of the instance they are restoring.
+    prior_auth_rows = _capture_existing_auth_rows()
 
     # Close database before replacing files
     close_db()
@@ -2398,6 +2792,8 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
             # Merge any REDACTED alert_methods.config creds back from the
             # pre-restore snapshot so existing rows aren't degraded.
             _merge_alert_method_creds_after_restore(prior_alert_configs)
+            # Same for this instance's own accounts (bead …-gi4zn).
+            _reassert_auth_rows_after_restore(prior_auth_rows)
 
         # Restore directories — clear existing before writing
         for dir_rel in BACKUP_DIRS:
@@ -2490,6 +2886,9 @@ async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminI
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+        # Additive (bead …-gi4zn): names what a standard artifact could NOT
+        # carry, which restored_files structurally cannot.
+        "notices": _post_restore_account_notices(),
     }
 
 
@@ -2651,6 +3050,8 @@ async def restore_backup_initial(
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+        # The disaster-recovery case this notice exists for (bead …-gi4zn).
+        "notices": _post_restore_account_notices(),
     }
 
 
@@ -4751,6 +5152,7 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdmi
         "backup_version": manifest.get("version", "unknown"),
         "backup_date": manifest.get("created_at", "unknown"),
         "restored_files": restored,
+        "notices": _post_restore_account_notices(),
     }
 
 
