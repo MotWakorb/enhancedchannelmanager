@@ -8,11 +8,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
-- **You can now create a redacted configuration backup directly from Backup & Restore (bead `enhancedchannelmanager-pui76`).** The new **Configuration Backup** card creates the same `.zip` artifact as a scheduled backup and refreshes **Saved Backups** when it finishes. The card states what ECM replaces or removes before you create it: recognized M3U and EPG provider credential fields, credential-bearing URL values, and ECM login accounts. Operator-authored free text may still contain a secret ECM cannot recognize, so inspect the artifact before sharing it. Use **Encrypted Backup (Migration)** with **Include credentials** when the structured credentials and accounts need to travel to another install.
+- **You can now create a redacted configuration backup directly from Backup & Restore (bead `enhancedchannelmanager-pui76`, build 0115).** The new **Configuration Backup** card creates the same `.zip` artifact as a scheduled backup and refreshes **Saved Backups** when it finishes. The card states what ECM replaces or removes before you create it: recognized M3U and EPG provider credential fields, credential-bearing URL values, and ECM login accounts. Operator-authored free text may still contain a secret ECM cannot recognize, so inspect the artifact before sharing it. Use **Encrypted Backup (Migration)** with **Include credentials** when the structured credentials and accounts need to travel to another install.
 
 ### Changed
 
-- **An unscheduled install can no longer silence its only backup reminder forever (bead `enhancedchannelmanager-iij6s`).** Dismissing **Backups are not scheduled yet** now snoozes it for 30 days. The reminder returns while no DBAS backup schedule is enabled, and enabling a schedule ends the reminders. A manual backup does not dismiss the warning because it protects only the point in time when it was created.
+- **An unscheduled install can no longer silence its only backup reminder forever (bead `enhancedchannelmanager-iij6s`, build 0115).** Dismissing **Backups are not scheduled yet** now snoozes it for 30 days. The reminder returns while no DBAS backup schedule is enabled, and enabling a schedule ends the reminders. A manual backup does not dismiss the warning because it protects only the point in time when it was created.
 
 ### Security
 
