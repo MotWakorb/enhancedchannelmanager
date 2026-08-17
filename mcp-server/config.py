@@ -3,9 +3,11 @@
 Reads the MCP API key from the shared /config/settings.json volume
 and ECM connection details from environment variables.
 """
+import ipaddress
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -18,6 +20,64 @@ ECM_URL = os.environ.get("ECM_URL", "http://ecm:6100")
 
 # MCP server port
 MCP_PORT = int(os.environ.get("MCP_PORT", "6101"))
+
+_DEFAULT_MCP_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "[::1]", "ecm-mcp")
+_DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def normalize_mcp_allowed_host(value: str) -> str:
+    """Validate one hostname/IP with no scheme, path, wildcard, or port."""
+    host = value.strip().lower()
+    if not host:
+        raise ValueError("MCP_ALLOWED_HOSTS contains an empty host")
+
+    # Accept bracketed IPv6 literals in the exact form carried by Host.
+    if host.startswith("[") and host.endswith("]"):
+        try:
+            ipaddress.IPv6Address(host[1:-1])
+        except ValueError as exc:
+            raise ValueError(f"Invalid MCP_ALLOWED_HOSTS entry: {value!r}") from exc
+        return host
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        labels = host.rstrip(".").split(".")
+        if (
+            host.endswith(".")
+            or len(host) > 253
+            or not labels
+            or any(_DNS_LABEL.fullmatch(label) is None for label in labels)
+        ):
+            raise ValueError(f"Invalid MCP_ALLOWED_HOSTS entry: {value!r}")
+        return host
+
+    if address.version == 6:
+        raise ValueError(
+            "IPv6 MCP_ALLOWED_HOSTS entries must be bracketed, for example [::1]"
+        )
+    return str(address)
+
+
+def get_mcp_allowed_hosts(raw: str | None = None) -> tuple[str, ...]:
+    """Return safe defaults plus comma-separated operator-configured hosts.
+
+    Entries intentionally omit ports. The server derives exact and any-port
+    variants for the MCP SDK while Starlette validates the hostname itself.
+    A permissive ``*`` is not supported because it disables DNS-rebinding
+    protection rather than configuring it.
+    """
+    configured = os.environ.get("MCP_ALLOWED_HOSTS", "") if raw is None else raw
+    additional = [] if not configured.strip() else configured.split(",")
+    result: list[str] = list(_DEFAULT_MCP_ALLOWED_HOSTS)
+    for item in additional:
+        host = normalize_mcp_allowed_host(item)
+        if host not in result:
+            result.append(host)
+    return tuple(result)
+
+
+MCP_ALLOWED_HOSTS = get_mcp_allowed_hosts()
 
 
 def get_mcp_api_key() -> str:
@@ -88,4 +148,3 @@ def get_mcp_api_key_status() -> tuple[str, str]:
     if not key:
         return "", "field_empty"
     return key, "ok"
-

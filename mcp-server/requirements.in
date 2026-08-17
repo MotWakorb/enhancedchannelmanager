@@ -2,7 +2,10 @@ mcp[cli]>=1.26.0
 httpx>=0.28.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.10.0
-starlette>=0.41.0
+# 1.0.1 fixes CVE-2026-48710 (malformed Host poisoning request.url.path).
+# Keep the floor at the current compatible release so fresh images also carry
+# the later Starlette security fixes covered by the release security gate.
+starlette>=1.6.0
 # PyJWT — retained after the MCP OAuth removal (bd-jir0m). The OAuth Bearer-JWT
 # verifier was deleted, but the auth test-suite mints JWT-shaped tokens with
 # PyJWT to exercise the CD1 no-fail-cascade guard (a JWT-shaped Bearer must be

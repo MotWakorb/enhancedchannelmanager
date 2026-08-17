@@ -58,6 +58,8 @@ services:
     environment:
       - ECM_URL=http://ecm:6100
       - MCP_PORT=6101
+      # Required when clients connect through a LAN hostname or IP.
+      - MCP_ALLOWED_HOSTS=YOUR_ECM_HOST
     depends_on:
       ecm:
         condition: service_healthy
@@ -70,6 +72,13 @@ docker compose -f docker-compose.yml -f docker-compose.mcp.yml up -d
 ```
 
 **Reaching the MCP container from ECM** — ECM's Settings > MCP Integration status badge probes the MCP server's `/health` endpoint. By default it targets `ecm-mcp:6101`, which Docker DNS resolves to the MCP container on the canonical compose network — no extra configuration needed. If you run both containers with `network_mode: host` (host network namespace shared), set `MCP_HOST=localhost` on the ECM service so the probe targets the host loopback instead of the (non-existent on that topology) `ecm-mcp` DNS name.
+
+**Allowed MCP hostnames:** The MCP sidecar accepts `localhost`, loopback IPs,
+and the Compose service name `ecm-mcp` by default. If Claude connects through a
+LAN hostname or IP, set `MCP_ALLOWED_HOSTS` on the `ecm-mcp` service to that
+hostname/IP (comma-separated for more than one), then recreate the container.
+List hostnames/IPs only: no scheme, port, path, or wildcard. Requests carrying
+any other or malformed `Host` value are rejected before MCP routing.
 
 **Reaching ECM from the MCP container** — the symmetric case. The MCP server calls ECM's backend API at its `ECM_URL` (default `http://ecm:6100`, Docker DNS on the canonical compose network). If both containers run with `network_mode: host`, the `ecm` service name has no DNS entry on the shared host network and the backend answers only on the host loopback, so every MCP tool call fails with `All connection attempts failed`. Fix: set `ECM_URL=http://localhost:6100` on the MCP service. See [MCP integration troubleshooting](docs/user_guide/integrations/mcp.md#mcp-tools-fail-with-all-connection-attempts-failed).
 
