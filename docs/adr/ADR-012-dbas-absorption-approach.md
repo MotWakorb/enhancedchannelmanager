@@ -198,3 +198,55 @@ decisions that the PO resolved on 2026-06-16. They extend D1–D9:
 
 These are recorded as PO-accepted. The threat model and the affected child beads (`0i2vt.13`,
 the new passphrase-encryption bead, `0i2vt.7`/restore) are updated to match.
+
+## Amendment, 2026-08-17: "redact by default" means fully redacted (bead `enhancedchannelmanager-gi4zn`)
+
+PO decision, 2026-08-05, implemented 2026-08-17. This does not overturn a decision above; it fixes
+what one of them was taken to mean, after a live drill showed the shipped behaviour was narrower
+than the words.
+
+**Reading note first.** D12 and the threat model both cite "redact-by-default (D1)". D1 as
+recorded in the decision table is the **artifact format** decision and says nothing about
+redaction, so a reader chasing that citation finds nothing. Read those citations as pointing at
+the redact-by-default *posture* the epic carried from the start, now specified here.
+
+**What redact-by-default now means.** A standard (non-encrypted, default) artifact carries no
+value that identifies **or** authenticates against a third-party service, and no ECM
+authentication state. Not "the password field is redacted". The 2026-08-05 drill found an Xtream
+Codes `username` in clear beside a correctly redacted `password`: for that provider the username
+is half the credential pair and the half that names the subscription, so an artifact carrying it
+was not a redacted artifact. Enumerating a real artifact against the corrected rule found five
+more instances of the same protected-beside-unprotected asymmetry, three bearer credentials an
+exact-name denylist had never matched, and (after external review) ECM's own `users` table
+complete with the operator's bcrypt admin hash.
+
+Three consequences for this ADR's decisions:
+
+| Decision | What changes |
+|---|---|
+| **D1 / redact-by-default** | Specified as the property above rather than as a field list. Implemented as three rules in one place: a credential-class key denylist, provider-identity keys (`username`), and a value-level URL credential scrub. Identity redaction is on by default so a new caller fails closed; there is exactly one exemption, `dispatcharr_users`, whose username is the operator's own instance and the natural key its importer creates and collision-checks on. |
+| **D12 / preserve set** | The cred-carrying encrypted artifact is unaffected, and that required a deliberate widening: the provider-identity keys join its **preserve set** (`_REDACT_KEYS` plus `_PROVIDER_IDENTITY_KEYS`), and the URL scrub is off on that path. Half a credential pair is not a credential, so omitting them would have widened redaction into the one artifact D12 exists to leave alone. `password_hash` is in neither the denylist nor the preserve set and is never carried by a category; the encrypted artifact carries the operator's accounts through its byte-for-byte `journal.db` copy instead. |
+| **D3 / at-rest ciphertext** | Unchanged as a storage decision, but `cloud_storage_targets` and `sync_targets` are now dropped from a standard artifact entirely. Fernet ciphertext is still credential material in an artifact whose whole purpose is being safe to share. |
+
+**The `journal.db` scrub is now an allowlist.** Three review rounds each found more tables that
+should not ship, which is the failure mode of any denylist maintained by people who keep
+discovering it is incomplete. Fourteen named tables may ship, each with its reason recorded beside
+the entry; every other table is dropped and the file is `VACUUM`ed. Thirty further model-declared
+tables carry an explicit drop decision, and a test fails when a model declares a table classified
+in neither, so a new table cannot reach production unclassified. Both registries live in the
+source rather than in a doc, because the test reads them.
+
+**The scrub fails closed.** Every error path in it previously fell back to shipping the raw
+database behind a `200`. A backup whose `journal.db` cannot be read now fails outright and writes
+no artifact. This is a deliberate availability-for-confidentiality trade on the producer side
+only; the restore side stays best-effort, because there the worst case is the operator running
+first-run setup.
+
+**Operator-facing effect, and a compatibility constraint.** A standard artifact is now safe to
+attach to a support ticket. Restoring one onto an instance with no ECM accounts lands at first-run
+setup, and restoring onto an instance that has accounts leaves them alone; the restore response
+carries `notices` naming what this instance actually lost. Because `schema_version` did not move,
+nothing refuses a new artifact being restored by an older build, and that combination has three
+gaps that cannot be fixed retroactively. See the compatibility note in
+`docs/security/threat_model_dbas_import.md` §8.5 and the operator-facing version in
+`docs/user_guide/backup-restore/backup-overview.md`.

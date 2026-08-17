@@ -99,12 +99,31 @@ When a backup runs, ECM:
 
 1. Checkpoints the SQLite write-ahead log (`PRAGMA wal_checkpoint(TRUNCATE)`) so `journal.db` is self-contained.
 2. Checks available disk space before writing anything.
-3. Gathers all 12 configuration categories from both ECM's own database and the connected Dispatcharr API, applying credential redaction to every category (non-bypassable).
+3. Gathers all 12 configuration categories from both ECM's own database and the connected Dispatcharr API, applying credential redaction to every category (non-bypassable). In the same pass it reduces its copy of `journal.db` to the fixed list of configuration tables a standard artifact is allowed to carry, dropping every other table and compacting the file. See [What a standard backup does not carry](backup-overview.md#what-a-standard-backup-does-not-carry).
 4. Streams the artifact to a temp file under `/config/`, never buffering the whole artifact in RAM, since logo files can be large.
 5. Writes a SHA-256 sidecar next to the `.zip`.
 6. Optionally uploads to each configured cloud destination and verifies the upload.
 7. Applies the retention policy (prunes old local and cloud copies if a verified-successful backup was produced).
 8. Emits a notification with the result.
+
+---
+
+## If a backup fails while removing sensitive data
+
+Removing your accounts, credentials and history from the artifact's copy of `journal.db` is a required step, not a best-effort one. If ECM cannot open that database, cannot read one of its tables, or cannot rewrite it, **the whole backup fails and no artifact is written**. The task reports a failure and the on-demand download returns an error instead of a file.
+
+This is deliberate and it is the safe direction. Earlier builds fell back to including the database untouched, which produced a normal-looking backup that quietly carried everything the redaction was supposed to remove. A backup that fails is visible; one that silently ships your admin password hash is not.
+
+**What to do:**
+
+1. Check ECM's logs for the failure: `docker logs --since 30m ecm-ecm-1 2>&1 | grep BACKUP`. The message names which table or step failed.
+2. Confirm `/config/journal.db` is present, readable, and not truncated. A restore that was interrupted, a full disk, or a volume mounted read-only are the usual causes.
+3. Confirm free space on the `/config` volume. The scrub works on a temporary copy of the database and needs room for it.
+4. Retry the backup once the cause is cleared.
+
+The temporary unscrubbed copy is deleted on the way out of a failed scrub, so a failure does not leave an unredacted database sitting in the container's temp directory.
+
+If the database itself is damaged, restore the most recent good backup before taking a new one.
 
 ---
 

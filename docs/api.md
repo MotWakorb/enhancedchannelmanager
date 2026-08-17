@@ -1606,6 +1606,14 @@ The Backup & Restore subsystem (v0.18.0, ADR-012) exposes two tiers of endpoints
 
 These endpoints operate on the new-format `.zip` artifacts produced by the `dbas_backup` task. They cover the full 12-category Dispatcharr + ECM configuration.
 
+A **standard** artifact (the default, unencrypted one) is fully redacted: it carries no value that identifies or authenticates against a third-party service, and no ECM authentication state. Three rules run in one place over every category, and all three are needed because none is complete alone:
+
+1. **Credential-class key names** (`_REDACT_KEYS`), matched case-insensitively against dict keys.
+2. **Provider identity keys** (`username`), applied by default so a new caller fails closed. Exactly one category is exempt, `dispatcharr_users`, whose username names the operator's own Dispatcharr instance and is the natural key its importer creates and collision-checks on.
+3. **A value-level URL credential scrub**, catching credentials in a URL's userinfo or query string wherever they appear. A URL carrying no credential is left intact, because the restore needs the address.
+
+The artifact's `journal.db` member additionally carries only an allowlist of configuration tables; every other table is dropped and the file is `VACUUM`ed. The cred-carrying **encrypted** artifact (`include_credentials`, ADR-012 D12) is unaffected by all of this: the identity keys join its preserve set, the URL scrub is off on that path, and its `journal.db` is a byte-for-byte copy. Encryption alone does not carry credentials; `include_credentials` does, and it requires a passphrase.
+
 | Endpoint | Description |
 |-|-|
 | `POST /api/backup/restore-dbas` | Upload and restore a DBAS artifact (streaming, max 2 GiB). Validates integrity, schema version, and decompression-bomb checks before any mutation. Runs a **dry-run by default** (`confirm_apply=false`); pass `confirm_apply=true` to apply. Returns a `RestoreReport` with per-category `created/updated/skipped/failed` counts and `outcome` (`success`, `completed_with_failures`, `partial_failed_rolled_back`, `failed_rollback_incomplete`).  Admin-only when auth is enabled; the MCP service key is refused, since the restore writes ECM's own settings blob wholesale (bead 9kwzp.10).|
@@ -1669,16 +1677,57 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/backup/create` | Download a legacy ZIP backup (settings + journal.db + logos). |
-| `POST /api/backup/restore` | Restore from an uploaded legacy ZIP backup. |
-| `POST /api/backup/restore-initial` | Restore from a legacy backup during first-run setup. Serves an instance that has no user accounts yet, so no credentials are needed there; once the instance holds an operator identity it requires an authenticated human admin, exactly like `POST /api/backup/restore`. |
+| `GET /api/backup/create` | Download a legacy ZIP backup (settings + journal.db + logos). Always fully redacted: there is no encrypted or credential-carrying variant of this format. Returns 500 if the `journal.db` scrub cannot complete (see [Backup failure is fail-closed](#backup-failure-is-fail-closed)). |
+| `POST /api/backup/restore` | Restore from an uploaded legacy ZIP backup. Returns `notices` (see [Restore notices](#restore-notices)). |
+| `POST /api/backup/restore-initial` | Restore from a legacy backup during first-run setup. Serves an instance that has no user accounts yet, so no credentials are needed there; once the instance holds an operator identity it requires an authenticated human admin, exactly like `POST /api/backup/restore`. Returns `notices` (see [Restore notices](#restore-notices)). |
 | `GET /api/backup/export-sections` | List available YAML export sections. |
-| `POST /api/backup/export` | Export selected sections as a YAML file. |
-| `POST /api/backup/import` | Import from a YAML backup file. |
+| `GET /api/backup/export` | Export selected sections as a YAML file. Optional `?sections=` query parameter selects sections; omit for all. Redaction now runs through the same gather as the DBAS artifact, so this export is covered by the same three rules. |
 | `POST /api/backup/validate` | Validate a YAML export file and return section item counts. |
-| `POST /api/backup/restore-yaml` | Restore from a YAML export (selective-section restore). |
+| `POST /api/backup/restore-yaml` | Restore from a YAML export (selective-section restore). Strips the `***REDACTED***` sentinel rather than writing it into a destination credential column, and reports the affected fields for re-entry. |
 | `POST /api/backup/save` | Save a legacy ZIP backup to `/config/backups/`. |
-| `POST /api/backup/restore-saved` | Restore from a saved legacy ZIP backup by filename. |
+| `POST /api/backup/restore-saved` | Restore from a saved legacy ZIP backup by filename. Returns `notices` (see [Restore notices](#restore-notices)). |
+
+#### Restore notices
+
+The three legacy-ZIP restore endpoints above (`/restore`, `/restore-initial`, `/restore-saved`) return an additive `notices: string[]` field alongside `restored_files`. It reports what the artifact could **not** carry, which `restored_files` structurally cannot: that list names what landed.
+
+```json
+{
+  "status": "ok",
+  "backup_version": "0.18.1",
+  "backup_date": "2026-08-17T11:00:00Z",
+  "restored_files": ["settings.json", "journal.db"],
+  "notices": [
+    "This instance has no ECM user account. A standard (non-encrypted) backup carries no account credentials by design, so accounts are not restored from one — create your admin account through first-run setup. To migrate accounts between instances instead, take an encrypted backup with credentials included."
+  ]
+}
+```
+
+Two notice types, both derived from the **live post-restore database** rather than predicted from the artifact, so a notice cannot claim a lockout that did not happen or miss one that did:
+
+| Notice | Emitted when |
+|-|-|
+| First-run setup required | The instance holds no rows in `users` after the restore. Expected when restoring a standard artifact onto an instance that had no accounts. |
+| Re-establish configured surfaces | A table in the re-establish set (`cloud_storage_targets`, `sync_targets`, `m3u_digest_settings`, `event_sync_exclusions`) had rows before the restore and none after. Row counts are compared on both sides of the file swap, so the notice names only what **this** instance lost. |
+
+`notices` is absent from a response served by a build predating it, and is an empty list in the ordinary case. Clients must tolerate both.
+
+Restoring a legacy ZIP no longer replaces the destination's own ECM accounts: `users`, `user_sessions`, `user_identities` and `password_reset_tokens` are snapshotted before `journal.db` is written and reinstated afterwards, including recreating a table the artifact did not ship. An instance that genuinely has no accounts reinstates nothing, which preserves the disaster-recovery path.
+
+The `POST /api/backup/restore-dbas` and `/restore-dbas-saved` endpoints do **not** return `notices` and do not write `journal.db` at all: they restore the YAML categories and ECM's settings blob, so a DBAS restore never touches ECM accounts in either direction.
+
+#### Backup failure is fail-closed
+
+Both backup producers reduce their copy of `journal.db` to an allowlist of tables and redact the surviving cells before any bytes enter the archive. Every failure path in that scrub aborts the backup:
+
+| Path | Behaviour on scrub failure |
+|-|-|
+| `GET /api/backup/create` | `500` with `"Failed to create backup: ..."`. No ZIP is returned. |
+| `dbas_backup` task (`POST /api/backup/restore-dbas` consumes its output) | The task run fails and no artifact or `.sha256` sidecar is written. |
+
+An unopenable database, an unreadable or un-rewritable table, and a `journal.db` that is not a SQLite database at all are all failures rather than fallbacks. Earlier builds fell back to shipping the raw database behind a `200`. A `500` here is the control working, not a broken backup subsystem; the unscrubbed temporary copy is destroyed on the way out.
+
+A row in `alert_methods` whose `config` does not parse as a JSON object loses its whole `config` value to the `***REDACTED***` sentinel rather than shipping unparsed. The restore side merges a whole-value sentinel the same way it merges a per-key one, reinstating the destination's own config for that row, so the fail-closed producer cannot destroy a working alert method.
 
 ### Cloud destination endpoints
 

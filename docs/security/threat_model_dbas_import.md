@@ -508,6 +508,58 @@ is protected solely by the operator's passphrase. See §10 for that path's contr
 - **Residual: redaction-denylist completeness (Low).** A credential-class key not in the denylist ships in plaintext. Mitigated by the shared-list discipline (one place to audit) and the unit test that fails if a known secret leaks; but a *novel* category added without a denylist review is the failure mode. Action: the "add a Dispatcharr category" checklist must include "add its secret keys to `_REDACT_KEYS`".
 - **Residual: Fernet key compromise (Low, for v0.18.0 scope).** If both the encrypted artifact and the Fernet key leak, the carve-out creds are exposed. Out of scope to fix here (no KMS for MVP, ADR-012 D3); the key-bootstrap integrity check (`0i2vt.2`, mode 0600 + ownership) is the compensating control.
 
+### 8.5 Update 2026-08-17: the redaction control as built (bead `enhancedchannelmanager-gi4zn`)
+
+Addendum A above is the design record. This section is the **current** description of the shipped control, and where the two differ this one is authoritative.
+
+The trigger was a live drill (2026-08-05, run 3, finding F4): a standard artifact carried an Xtream Codes account's `username` in clear beside a correctly redacted `password`, in both places it appears. Enumerating a real artifact against the same rule found four more instances of the same protected-beside-unprotected asymmetry and three bearer credentials (`emby_api_key`, `jellyfin_api_key`, `plex_token`) that the exact-name denylist had never matched at all. An external security review of the first fix then found three more findings (A-1 to A-3 below), and a third round replaced the journal.db denylist with an allowlist.
+
+**The property the control now establishes:** a standard artifact carries no value that identifies **or** authenticates against a third-party service, and no ECM authentication state.
+
+#### Three rules, one place
+
+`_redact_credentials_deep` in `backend/routers/backup.py` is the single redaction authority for every category and for the legacy `GET /api/backup/export` YAML. All three rules are needed; none is complete alone.
+
+| # | Rule | Matches on | Why the others do not cover it |
+|---|------|-----------|--------------------------------|
+| 1 | Credential-class key denylist (`_REDACT_KEYS`) | Dict key name, case-insensitive, exact | Cheap and precise, but blind to a key it has not been told about. `emby_api_key` shipped in cleartext for exactly this reason. |
+| 2 | Provider-identity keys (`_PROVIDER_IDENTITY_KEYS`, currently `username`) | Dict key name | Rule 1 is a *secret* list by construction. A username is not a secret, and it is still half a credential pair and the half that names the subscription. |
+| 3 | URL credential value scrub (`_scrub_credential_urls`) | The **value**, wherever a URL appears | No key denylist can see a credential inside `get.php?username=...&password=...` or a `https://user:pass@host/` userinfo, because the key holding it is called `server_url`. |
+
+Rule 2 is **on by default**, so a new caller of the deep redactor fails closed. There is exactly **one** exemption, held as a closed set (`_IDENTITY_EXEMPT_CATEGORIES`) rather than a per-call flag so it is auditable in one place: the `dispatcharr_users` category. Its username names the operator's own Dispatcharr instance rather than a third party, and `dbas.importers.users` creates each account by username and runs its destination-collision check on it, so a sentinel there would delete the restore path rather than protect anything. A test pins the set at exactly that one member so it cannot grow into a general escape hatch.
+
+Rule 3 is deliberately not exhaustive, and the gap is covered elsewhere rather than left open: an Xtream Codes **stream** URL carries its credential in path segments (`/live/<user>/<pass>/<id>.ts`), which no general rule can distinguish from an ordinary path without guessing, and guessing costs the operator a URL the restore needs. That shape is handled at the producer instead, which never emits a stream URL at all (`_STREAM_CREDENTIAL_FIELDS` / `_safe_embedded_stream`, bead `enhancedchannelmanager-7i8rf`).
+
+#### ECM's own authentication state no longer ships (findings A-1, A-2)
+
+Until this bead, the `journal.db` scrub visited `alert_methods` and nothing else, so the **default** artifact carried `users.password_hash` (the operator's own bcrypt admin hash, offline-crackable at leisure), `users.username` and `email` to crack it against, `user_sessions.refresh_token_hash` and `prior_refresh_token_hash`, the `ip_address` and `user_agent` the operator administers from, `password_reset_tokens.token_hash`, and `user_identities.provider` / `external_id` / `identifier` correlating the ECM admin with their OIDC, SAML or LDAP identity at a third-party IdP. The reviewer read these values out of a built artifact with `sqlite3`.
+
+Those tables are now gone from the standard artifact. The rows are **removed rather than masked**, and that is an availability decision: ECM's first-run setup keys on `users` being empty, so a `users` table left populated but stripped of usable hashes is the one state that is both unauthenticatable and ineligible for the setup wizard. `VACUUM` with `secure_delete` is load-bearing rather than hygiene, and was measured: without it a plain delete leaves the purged hash verbatim in the page file.
+
+The restore side compensates so that removal cannot cost availability: the destination's own account rows are snapshotted before `journal.db` is written and reinstated afterwards, recreating the table from the model when the artifact did not ship it. An instance that genuinely has no accounts reinstates nothing, which preserves the disaster-recovery path. A side effect is a tightening: an artifact's `users` table can no longer silently replace a live one.
+
+#### The journal.db scrub is an allowlist, not a denylist
+
+Three review rounds each found more tables that should not ship. That is the same failure shape as rule 1 above, so the direction was inverted. `_STANDARD_ARTIFACT_TABLES` enumerates the **fourteen** tables a standard artifact is allowed to carry, each with its reason recorded beside the entry; every other table is dropped and the file is `VACUUM`ed. A table added to the schema later ships nothing until someone deliberately permits it. A companion registry, `_STANDARD_ARTIFACT_EXCLUDED`, records a reason for each of the **thirty** model-declared tables that are dropped, and a test fails when a model declares a table classified in neither, so a new table cannot reach production unclassified.
+
+The measured cost of the old direction, from a live database: it carried **eight tables that no current model declares at all** (`services`, `health_checks`, `incidents`, `incident_updates`, `maintenance_windows`, `service_alert_rules`, `service_alert_history` from the removed pre-v0.13 health-monitor subsystem, and `popularity_rules`). `services.health_endpoint` is an operator URL and `incidents.created_by` is an account name. No denylist maintained by reading `models.py` could have seen them, because they are not in `models.py`. See `docs/database_migrations.md`, which has described them as orphans since before this bead existed.
+
+Permitted tables are not merely trusted: every string cell of every permitted table goes through the same JSON deep-redaction and URL rules, applied per cell rather than per named column, because a column list is the denylist shape this round removed.
+
+#### The scrub fails closed (finding A-3)
+
+Redaction previously failed **open** on all three of its error paths. An unopenable database and an unreadable table each returned the raw byte-for-byte copy of the live database behind a `200`, and a row whose `alert_methods.config` would not parse was shipped verbatim while valid rows in the same database were correctly redacted. Every path now raises `BackupScrubError` and the whole backup fails; the unscrubbed temporary copy is destroyed on the way out rather than left in the system temp directory. A `config` blob that does not parse as a JSON object loses its whole value to the sentinel: the row survives, because its name and type are not credentials and the restore wants them, but no byte that was never parsed can ship. The restore side merges a whole-value sentinel the same way it merges a per-key one, so the fail-closed producer cannot destroy a working alert method.
+
+#### Effect on the residuals above
+
+- **Redaction-denylist completeness** is now **closed for `journal.db` tables** and **still open for category fields.** Rules 1 and 2 remain key-name matching over the YAML categories, so a novel credential-class field in a new category still ships until someone adds it. Two tests narrow it: one reads the live settings model and fails on a credential-shaped settings field that is not covered, and one requires every model-declared table to carry an explicit keep or drop decision. Neither covers a new Dispatcharr-sourced category field, so the "add a Dispatcharr category" checklist item stands.
+- **Artifact handling after egress** is unchanged in kind but materially smaller in degree. A standard artifact is now safe to attach to a support ticket. The topology-disclosure residual remains: channel and group names, rule definitions, and credential-free provider addresses are still in it, and that is inherent to producing a portable backup at all.
+- The **encrypted cred-carrying** artifact is unaffected by everything above and remains the migration path. The identity keys join its preserve set, the URL scrub is off on that path, and its `journal.db` member is a byte-for-byte copy of the live database, verified by hash. Note that encryption alone does not carry credentials: `include_credentials` does, and it requires a passphrase. That artifact is protected solely by the operator's passphrase and must never be attached to a ticket.
+
+#### Compatibility note for incident response
+
+A standard artifact produced by this control should only be restored by an ECM build that has it, or a newer one. `schema_version` did not move, because the artifact's structure is unchanged, so nothing refuses the combination. Restoring such an artifact with an older build has three known gaps, none retroactively fixable: the destination's own accounts are not preserved (the restoring admin can be signed out of their own instance and dropped at the setup wizard), alert-method `username` and `chat_id` are written in as the literal sentinel, and a whole-value sentinel `config` is left literal so that alert method stops sending until reconfigured. Roll back to a pre-upgrade artifact rather than restoring a newer one onto an older build.
+
 ---
 
 ## 9. Addendum B: Outbound Destinations & SSRF (v0.18.0 cloud upload + v0.18.1 sync)

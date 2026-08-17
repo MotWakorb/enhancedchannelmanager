@@ -13,6 +13,33 @@ Do NOT use `-q`. It suppresses the summary line (`2147 passed in 50s`) when all 
 
 **How to apply:** Use the exact command above. Never vary it. One run, one `tail -1`, done.
 
+## A Fake `journal.db` Must Be a Real SQLite File
+
+Several backup tests used to write a `journal.db` fixture containing only the SQLite magic bytes,
+because the only thing reading it was a header check. That stub is not a database: `sqlite3` opens
+it happily and then fails on the first query. It passed for as long as it did because the backup's
+redaction step failed **open**, so a fixture that could not be queried took the fallback path and
+still produced an artifact.
+
+Redaction now fails closed (bead `enhancedchannelmanager-gi4zn`), so an unqueryable `journal.db`
+fails the whole backup and therefore the test. Write a real, empty SQLite file instead:
+
+```python
+import sqlite3
+
+sqlite3.connect(journal_path).close()
+```
+
+The magic-byte stub is still correct in one place, and the difference is the point.
+`_make_backup_zip` in `backend/tests/routers/test_backup.py` keeps it for the `journal.db` **ZIP
+member**, because `_validate_backup_zip` checks exactly those bytes and never opens the file. The
+source database on disk gets a real one, because the producer queries it.
+
+The general trap, which outlives this one fixture: **a stub built to satisfy the check you know
+about will pass while the thing it stands in for is broken.** A magic-byte file satisfies "starts
+with `SQLite format 3`" and satisfies nothing else. Match the fixture to what the code under test
+does with it, not to the cheapest check it currently passes.
+
 ## Credential Fixtures in Security Tests
 
 A security test that needs a credential-shaped value (a token, a password, a webhook URL) will trip `scripts/check_secrets.py`, the pre-merge secrets ratchet, unless the fixture is built the way `backend/tests/unit/test_check_pii.py` already builds them. That file is the canonical example, and it says so in its own module docstring: fixtures are assembled from repeated or obviously patterned characters, so they carry the right SHAPE for the rule under test without ever resembling a real secret to a human reader or a scanner. It is full of credential shapes (a Telegram bot token, a Discord webhook, hex- and base64-looking values) and appears zero times in `.secrets.baseline`, so this is a proven convention, not a theory.
