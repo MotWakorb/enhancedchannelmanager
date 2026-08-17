@@ -4884,11 +4884,19 @@ export interface AcceptMergeOutcome {
   status: 'merged';
   /**
    * Whether the candidate channel ends the request holding the stream.
-   * `false` when the stream-name lookup matched zero or several streams, was
-   * truncated at its page ceiling, or failed — the decision is recorded and no
-   * upstream write happens. `null` on an idempotent replay, which made no
-   * Dispatcharr call and has no evidence either way
-   * (bead enhancedchannelmanager-i5ic0).
+   *
+   * THREE values, and each needs its own handling — `!== false` is not a test
+   * for success (bead enhancedchannelmanager-i5ic0):
+   *
+   * - `true`  — the channel holds the stream, whether this call PATCHed it or
+   *   it was already there.
+   * - `false` — no upstream write happened. The stream-name lookup matched
+   *   zero or several streams, matched one with no usable id, failed, or was
+   *   truncated at its page ceiling — a truncated search cannot establish
+   *   uniqueness even when exactly one match is visible on the page it saw.
+   * - `null`  — an idempotent replay. It made no Dispatcharr call and has no
+   *   evidence either way; treating it as success reports a certainty nothing
+   *   established.
    */
   dispatcharr_updated: boolean | null;
   /** Operator-actionable prose whenever `dispatcharr_updated` is not `true`. */

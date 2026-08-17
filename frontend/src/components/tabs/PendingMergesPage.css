@@ -343,6 +343,16 @@
   flex-shrink: 0;
 }
 
+/* The replay notice. Same layout as the unapplied notice, informational rather
+   than cautionary colours: nothing is known to be wrong — this request simply
+   obtained no evidence, and an amber warning would read as "something was
+   skipped", which is the claim it exists to avoid making. */
+.pending-merges-unknown {
+  border-color: rgba(59, 130, 246, 0.3);
+  background-color: var(--info-bg);
+  color: var(--info-text);
+}
+
 .pending-merges-unapplied-body {
   display: flex;
   flex-direction: column;
