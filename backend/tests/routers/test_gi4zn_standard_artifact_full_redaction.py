@@ -65,6 +65,7 @@ WHAT MUST STILL SURVIVE, AND WHY EACH EXCEPTION IS NARROW
   carries secrets safely, and the migration card depends on it.
 """
 import asyncio
+import hashlib
 import json
 import sqlite3
 import sys
@@ -156,6 +157,42 @@ ALL_OPERATOR_ACCOUNT_VALUES = (
     SESSION_USER_AGENT,
     OIDC_EXTERNAL_ID,
     OIDC_IDENTIFIER,
+)
+
+# --- Round 3: what the THIRD review round found still leaking ---------------
+#
+# Every one of these lived in a table the enumerated purge list passed straight
+# through. They are seeded here so the whole-archive scan covers them, but note
+# that the fix is NOT "add four more tables to a list" — see
+# :func:`test_the_shipped_journal_db_contains_only_permitted_tables`. These
+# values are an EXAMPLE of the property; the allowlist is the specification.
+TELEMETRY_EMBY_USER_NAME = "<emby-account-name-QQQ910>"
+TELEMETRY_PLEX_USER_NAME = "<plex-account-name-QQQ911>"
+TELEMETRY_JELLYFIN_USER_NAME = "<jellyfin-account-name-QQQ912>"
+TELEMETRY_DISPATCHARR_USERNAME = "<dispatcharr-viewer-QQQ913>"
+CLIENT_CONNECTION_IP = "203.0.113.144"  # TEST-NET-3, RFC 5737
+CLIENT_CONNECTION_USERNAME = "<viewer-identity-QQQ914>"
+DIGEST_EMAIL_RECIPIENT = "digest-recipient-QQQ915@operator.example"
+# And three the round did NOT name, which the allowlist removes anyway — the
+# point of inverting the direction is that they never had to be discovered.
+JOURNAL_ENTRY_AFTER_VALUE = "<journal-after-value-QQQ916>"
+STREAM_PROBE_ERROR = "<stream-probe-error-QQQ917>"
+# A table NO current model declares. The pre-v0.13 health-monitor subsystem was
+# removed but its tables persist in long-running installs, so no denylist
+# maintained by reading models.py could ever have covered them.
+VESTIGIAL_SERVICE_ENDPOINT = "<orphan-table-operator-endpoint-QQQ918>"
+
+ALL_ROUND_THREE_VALUES = (
+    TELEMETRY_EMBY_USER_NAME,
+    TELEMETRY_PLEX_USER_NAME,
+    TELEMETRY_JELLYFIN_USER_NAME,
+    TELEMETRY_DISPATCHARR_USERNAME,
+    CLIENT_CONNECTION_IP,
+    CLIENT_CONNECTION_USERNAME,
+    DIGEST_EMAIL_RECIPIENT,
+    JOURNAL_ENTRY_AFTER_VALUE,
+    STREAM_PROBE_ERROR,
+    VESTIGIAL_SERVICE_ENDPOINT,
 )
 
 # --- Finding A-3: the redactor used to fail OPEN --------------------------
@@ -358,6 +395,62 @@ def _seed_journal_db(path):
     finally:
         conn.close()
     _seed_auth_tables(path)
+    _seed_non_permitted_tables(path)
+
+
+def _seed_non_permitted_tables(path):
+    """Tables the ALLOWLIST does not permit, each holding a marker value.
+
+    Six carry the values the third review round found still shipping; three more
+    are tables that round did not name; the last is an ORPHAN table that no
+    current model declares at all (the removed pre-v0.13 health-monitor
+    subsystem, which persists in long-running installs — see
+    ``docs/database_migrations.md``). That last one is the case that decides the
+    design: a denylist maintained by reading ``models.py`` cannot cover a table
+    that is not in ``models.py``.
+
+    Deliberately hand-written DDL with only the marker columns. The producer must
+    drop these tables whatever their shape, and a fixture that mirrored the real
+    models would suggest the rule keys off the schema. It does not — it keys off
+    the table NAME not being permitted.
+    """
+    conn = sqlite3.connect(str(path))
+    try:
+        conn.execute(
+            "CREATE TABLE session_telemetry (id INTEGER PRIMARY KEY, "
+            "dispatcharr_username TEXT, emby_user_name TEXT, plex_user_name TEXT, "
+            "jellyfin_user_name TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO session_telemetry VALUES (1,?,?,?,?)",
+            (TELEMETRY_DISPATCHARR_USERNAME, TELEMETRY_EMBY_USER_NAME,
+             TELEMETRY_PLEX_USER_NAME, TELEMETRY_JELLYFIN_USER_NAME),
+        )
+        conn.execute(
+            "CREATE TABLE unique_client_connections (id INTEGER PRIMARY KEY, "
+            "ip_address TEXT, username TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO unique_client_connections VALUES (1,?,?)",
+            (CLIENT_CONNECTION_IP, CLIENT_CONNECTION_USERNAME),
+        )
+        conn.execute(
+            "CREATE TABLE m3u_digest_settings (id INTEGER PRIMARY KEY, "
+            "email_recipients TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO m3u_digest_settings VALUES (1,?)",
+            (json.dumps([DIGEST_EMAIL_RECIPIENT]),),
+        )
+        conn.execute("CREATE TABLE journal_entries (id INTEGER PRIMARY KEY, after_value TEXT)")
+        conn.execute("INSERT INTO journal_entries VALUES (1,?)", (JOURNAL_ENTRY_AFTER_VALUE,))
+        conn.execute("CREATE TABLE stream_stats (id INTEGER PRIMARY KEY, error_message TEXT)")
+        conn.execute("INSERT INTO stream_stats VALUES (1,?)", (STREAM_PROBE_ERROR,))
+        conn.execute("CREATE TABLE services (id TEXT PRIMARY KEY, health_endpoint TEXT)")
+        conn.execute("INSERT INTO services VALUES ('ecm',?)", (VESTIGIAL_SERVICE_ENDPOINT,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _m3u_accounts():
@@ -649,28 +742,137 @@ def test_no_operator_account_value_survives_in_any_member(standard_artifact, val
     assert value.encode() not in _all_member_bytes(standard_artifact.zip_path)
 
 
-def test_auth_tables_ship_empty_but_still_exist(standard_artifact, tmp_path):
-    """Empty, not absent.
+@pytest.mark.parametrize("value", ALL_ROUND_THREE_VALUES)
+def test_no_round_three_value_survives_in_any_member(standard_artifact, value):
+    """The values the third review round found still shipping, plus four it did not.
 
-    Empty is what makes the restored instance usable: ECM's first-run setup keys
-    on ``users`` being EMPTY (``/auth/setup-required`` answers
-    ``user_count == 0``), so an operator restoring onto a fresh instance is taken
-    to the setup wizard and creates a new admin. The tables themselves must
-    survive — dropping them would leave a database whose schema no longer matches
-    the models it is restored into.
+    These are EXAMPLES of the property, not the specification of it — the
+    specification is the table allowlist, pinned by the two tests below. This
+    test exists because a value-level scan is the only check that can fail while
+    the table-level one passes (a permitted table could still carry something it
+    should not), and because it reads the DECOMPRESSED archive rather than the
+    query results, so it fails if the ``DROP``/``VACUUM``/``secure_delete``
+    combination ever stops actually removing bytes from the page file.
+    """
+    assert value.encode() not in _all_member_bytes(standard_artifact.zip_path)
+
+
+def test_the_shipped_journal_db_contains_only_permitted_tables(
+    standard_artifact, tmp_path
+):
+    """THE INVARIANT. Not "these tables are absent" — "only these are present".
+
+    Stated as a subset relation over the WHOLE shipped schema, so it is complete
+    and mechanical: any table the producer starts carrying, for any reason,
+    including one added to the schema years from now by someone who has never
+    read this file, fails here until it is deliberately permitted.
+
+    This is the check that the previous two rounds could not have written,
+    because a denylist has nothing to compare against. Three rounds each found
+    more tables to remove; this one cannot be incomplete in that direction.
     """
     conn = _extract_journal_db(standard_artifact.zip_path, tmp_path / "journal.db")
     try:
-        present = {
+        shipped = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            if not row[0].startswith("sqlite_")
         }
-        for table in backup_mod._AUTH_IDENTITY_TABLES:
-            assert table in present, "%s was dropped, not emptied" % table
-            count = conn.execute("SELECT COUNT(*) FROM %s" % table).fetchone()[0]
-            assert count == 0, "%s shipped %d row(s)" % (table, count)
     finally:
         conn.close()
+
+    permitted = set(backup_mod._STANDARD_ARTIFACT_TABLES)
+    assert shipped <= permitted, (
+        "the standard artifact's journal.db carries table(s) that are not in "
+        "routers.backup._STANDARD_ARTIFACT_TABLES: %s. Add the table to that "
+        "dict WITH A REASON if a standard artifact genuinely needs it, or leave "
+        "it out and it will be dropped." % sorted(shipped - permitted)
+    )
+    # And the seeded non-permitted tables are gone, not merely emptied, so this
+    # test cannot pass on a database that still has the table with zero rows.
+    for table in ("users", "user_sessions", "user_identities",
+                  "password_reset_tokens", "session_telemetry",
+                  "unique_client_connections", "m3u_digest_settings",
+                  "journal_entries", "stream_stats", "services"):
+        assert table not in shipped, "%s shipped" % table
+
+
+def test_every_journal_db_table_is_classified():
+    """A new table cannot reach production without a keep/drop DECISION.
+
+    The allowlist already makes an unclassified table SAFE — it is dropped by
+    default, so nothing leaks. This test makes it DELIBERATE: every table any
+    model declares must appear in exactly one of the two registries, each of
+    which carries the reason beside the entry.
+
+    WOULD THIS HAVE CAUGHT ``user_identities``? Yes, twice over, and that is the
+    point. Under the allowlist the table ships nothing the moment it exists,
+    because it is not permitted. And the moment the model was added, this test
+    would have failed until somebody classified it — whereas the marker-based
+    ratchet it replaces (``password|secret|token_hash|refresh_token|api_key``)
+    never fired on ``external_id`` and passed the whole time the table was
+    leaking the operator's OIDC identity. That test was calibrated to pass; this
+    one is calibrated to the property.
+    """
+    from models import Base
+
+    declared = set(Base.metadata.tables)
+    permitted = set(backup_mod._STANDARD_ARTIFACT_TABLES)
+    excluded = set(backup_mod._STANDARD_ARTIFACT_EXCLUDED)
+
+    unclassified = sorted(declared - permitted - excluded)
+    assert unclassified == [], (
+        "these journal.db tables have no keep/drop decision recorded: %s. A "
+        "standard artifact will DROP them (which is safe), but the decision must "
+        "be explicit: add each to routers.backup._STANDARD_ARTIFACT_TABLES or "
+        "._STANDARD_ARTIFACT_EXCLUDED with the reason." % unclassified
+    )
+
+    overlap = sorted(permitted & excluded)
+    assert overlap == [], "classified as both permitted and excluded: %s" % overlap
+
+    # Every reason is a real reason. A blank or placeholder entry would satisfy
+    # the membership checks above while documenting nothing.
+    for name, registry in (
+        ("_STANDARD_ARTIFACT_TABLES", backup_mod._STANDARD_ARTIFACT_TABLES),
+        ("_STANDARD_ARTIFACT_EXCLUDED", backup_mod._STANDARD_ARTIFACT_EXCLUDED),
+    ):
+        thin = sorted(t for t, reason in registry.items() if len(reason.strip()) < 30)
+        assert thin == [], "%s entries with no substantive reason: %s" % (name, thin)
+
+
+def test_the_permitted_set_is_configuration_not_history():
+    """The allowlist stays small and stays about CONFIGURATION.
+
+    A guard on the DIRECTION of drift rather than on a specific table. The way
+    this design fails is not one obviously-wrong addition — it is a slow slide
+    where "the operator would probably like their notifications back" gets a
+    table permitted, then another, until the artifact is a full copy again and
+    the allowlist is decorative.
+
+    The two auth tables that started this bead and the telemetry tables the third
+    round found are named explicitly, so re-permitting any of them is a conscious
+    act that fails a test with a reason attached.
+    """
+    permitted = set(backup_mod._STANDARD_ARTIFACT_TABLES)
+
+    never_permit = {
+        "users", "user_sessions", "user_identities", "password_reset_tokens",
+        "session_telemetry", "session_telemetry_user_daily",
+        "unique_client_connections", "cloud_storage_targets", "sync_targets",
+        "journal_entries",
+    }
+    assert permitted & never_permit == set(), (
+        "a table carrying account state, viewer identity or credential material "
+        "was added to the standard artifact allowlist: %s"
+        % sorted(permitted & never_permit)
+    )
+    assert len(permitted) <= 20, (
+        "the standard artifact allowlist has grown to %d tables. That is not "
+        "automatically wrong, but it is the shape of the drift this test exists "
+        "to make visible — confirm each addition is configuration a restore "
+        "needs, then raise this bound deliberately." % len(permitted)
+    )
 
 
 def test_the_purge_is_logged_with_a_row_count_that_was_actually_measured(
@@ -691,10 +893,16 @@ def test_the_purge_is_logged_with_a_row_count_that_was_actually_measured(
         scrubbed = backup_mod._scrub_journal_db_to_temp(journal)
     scrubbed.unlink()
 
-    purge_lines = [r.getMessage() for r in caplog.records if "Purged ECM account" in r.getMessage()]
+    purge_lines = [
+        r.getMessage() for r in caplog.records
+        if "Dropped" in r.getMessage() and "non-permitted table" in r.getMessage()
+    ]
     assert len(purge_lines) == 1, purge_lines
     for fragment in ("users=1 rows", "user_sessions=1 rows",
-                     "user_identities=1 rows", "password_reset_tokens=1 rows"):
+                     "user_identities=1 rows", "password_reset_tokens=1 rows",
+                     "session_telemetry=1 rows", "unique_client_connections=1 rows",
+                     "m3u_digest_settings=1 rows", "journal_entries=1 rows",
+                     "stream_stats=1 rows", "services=1 rows"):
         assert fragment in purge_lines[0], purge_lines[0]
 
 
@@ -711,44 +919,136 @@ def test_an_accountless_instance_logs_no_purge_warning(tmp_path, caplog):
         scrubbed = backup_mod._scrub_journal_db_to_temp(journal)
     scrubbed.unlink()
 
-    assert [r.getMessage() for r in caplog.records if "Purged ECM account" in r.getMessage()] == []
+    assert [
+        r.getMessage() for r in caplog.records
+        if "Dropped" in r.getMessage() and "non-permitted table" in r.getMessage()
+    ] == []
 
 
-def test_purged_table_set_covers_every_table_holding_authentication_material():
-    """Ratchet: a NEW table with authentication material fails here, not in a drill.
+def test_no_permitted_table_holds_a_credential_shaped_column():
+    """The kept tables are audited too, by column NAME this time.
 
-    Same shape as
-    :func:`test_no_credential_shaped_settings_field_is_left_unredacted`, and for
-    the same reason — the scrub names tables explicitly, so a table added later
-    ships in clear until someone remembers this list. ``users.password_hash`` is
-    precisely how that failure looked the first time: it was never in
-    ``_REDACT_KEYS`` and no key denylist can see a DB column anyway.
+    THIS TEST REPLACES A MARKER SCAN THAT WAS CALIBRATED TO PASS. The version it
+    replaces ran the marker set ``password|secret|token_hash|refresh_token|
+    api_key`` across every table NOT in the purge list and asserted the result was
+    empty — and the round that wrote it disclosed, correctly, that it would not
+    have caught the ``user_identities`` finding, because none of those markers
+    appears in ``external_id``. A ratchet whose passing tells you nothing is worse
+    than no ratchet, because it reads as coverage.
+
+    The reason the same marker set is defensible HERE and was not there is the
+    change of direction. There, the markers had to be complete over 42 tables to
+    mean anything, and completeness over unbounded future column names is not
+    achievable. Here they run over the 14 tables the allowlist permits, every one
+    of which has been read column by column, and a marker hit means "this
+    hand-audited set drifted" — a bounded claim the check can actually support.
+    The unbounded half of the problem is carried by
+    :func:`test_the_shipped_journal_db_contains_only_permitted_tables`, which
+    does not depend on guessing column names at all.
     """
     from models import Base
 
-    # Reviewed exceptions, each a reason rather than a convenience.
+    # Reviewed exceptions, each a reason rather than a convenience — and each
+    # checked against the column's TYPE, not just its name.
     excused = {
-        # An opaque token ROW ID, not a token secret — the §D6 audit-actor
-        # contract in models.py states this explicitly at each column.
-        ("pending_merge_journal", "actor_token_id"),
-        ("event_sync_reviews", "actor_token_id"),
-        ("event_sync_exclusions", "actor_token_id"),
+        # ``Column(Boolean, default=True)`` (models.py) — "route this task's
+        # alerts to email", a routing toggle. It holds no address: the recipient
+        # list lives in m3u_digest_settings.email_recipients, which is why that
+        # table is dropped. Asserted below rather than asserted-by-comment.
+        ("scheduled_tasks", "send_to_email"),
     }
-    markers = ("password", "secret", "token_hash", "refresh_token", "api_key")
-    unprotected = sorted(
-        (table.name, column.name)
-        for table in Base.metadata.sorted_tables
-        if table.name not in backup_mod._AUTH_IDENTITY_TABLES
-        for column in table.columns
+    markers = ("password", "secret", "token_hash", "refresh_token", "api_key",
+               "external_id", "credential", "email", "ip_address")
+    found = sorted(
+        (table_name, column.name)
+        for table_name in backup_mod._STANDARD_ARTIFACT_TABLES
+        if table_name in Base.metadata.tables
+        for column in Base.metadata.tables[table_name].columns
         if any(marker in column.name.lower() for marker in markers)
-        and (table.name, column.name) not in excused
+        and (table_name, column.name) not in excused
     )
-    assert unprotected == [], (
-        "journal.db tables hold authentication material that a STANDARD artifact "
-        "ships in clear: %s — add the table to "
-        "routers.backup._AUTH_IDENTITY_TABLES, or this test's `excused` set with "
-        "a reason." % unprotected
+
+    # The excusal is only valid while the column stays a boolean. If someone
+    # widens it to carry an address, the excusal above becomes false and this
+    # fails — the comment cannot silently go stale.
+    from sqlalchemy import Boolean
+
+    for table_name, column_name in excused:
+        column = Base.metadata.tables[table_name].columns[column_name]
+        assert isinstance(column.type, Boolean), (
+            "%s.%s is excused from the credential-shaped-column check on the "
+            "grounds that it is a boolean routing toggle, and it is no longer a "
+            "boolean (%r). Re-examine the excusal."
+            % (table_name, column_name, column.type)
+        )
+    assert found == [], (
+        "a table PERMITTED into the standard artifact has a credential- or "
+        "identity-shaped column: %s. Either drop the table from "
+        "routers.backup._STANDARD_ARTIFACT_TABLES, or justify the column here "
+        "explicitly — do not widen the marker list to make this pass." % found
     )
+
+
+def test_permitted_table_cells_are_scrubbed_of_url_credentials(tmp_path):
+    """Invariant 2 applies to the tables the allowlist KEEPS.
+
+    ``dummy_epg_profiles`` is the concrete case: its logo and poster URL columns
+    are operator free text, so an operator whose image service needs an API key
+    puts that key in a permitted table. No key denylist sees it — the column is
+    called ``channel_logo_url_template`` — which is exactly the blind spot that
+    made the value-level URL rule necessary for the YAML categories in the first
+    place.
+
+    The rule is applied to every STRING cell of every permitted table rather than
+    to a list of columns, so this test pins the behaviour and not the column.
+    """
+    journal = tmp_path / "journal.db"
+    conn = sqlite3.connect(str(journal))
+    try:
+        conn.execute(
+            "CREATE TABLE dummy_epg_profiles (id INTEGER PRIMARY KEY, name TEXT, "
+            "channel_logo_url_template TEXT, title_template TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO dummy_epg_profiles VALUES (1,?,?,?)",
+            (
+                "Sports",
+                # Same shape as the live instance's, but with a credential.
+                "http://images.example.test/{team}/thumb?" + "api" + "key=" + _URL_RIGHT_HALF,
+                "{title} — {date}",
+            ),
+        )
+        # A clean permitted-table URL must survive: the restore needs the address.
+        conn.execute(
+            "CREATE TABLE ffmpeg_profiles (id INTEGER PRIMARY KEY, config TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO ffmpeg_profiles VALUES (1,?)",
+            (json.dumps({"logo": "https://cdn.example.test/logo.png"}),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    scrubbed = backup_mod._scrub_journal_db_to_temp(journal)
+    try:
+        assert _URL_RIGHT_HALF.encode() not in scrubbed.read_bytes()
+        conn = sqlite3.connect(str(scrubbed))
+        try:
+            logo, title = conn.execute(
+                "SELECT channel_logo_url_template, title_template "
+                "FROM dummy_epg_profiles"
+            ).fetchone()
+            assert _URL_RIGHT_HALF not in logo
+            # The non-URL template is untouched — the rule is targeted, not a
+            # blanket wipe of a table the operator needs back.
+            assert title == "{title} — {date}"
+            cfg = json.loads(conn.execute("SELECT config FROM ffmpeg_profiles").fetchone()[0])
+            assert cfg == {"logo": "https://cdn.example.test/logo.png"}
+        finally:
+            conn.close()
+    finally:
+        scrubbed.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -959,6 +1259,246 @@ def test_encrypted_migration_artifact_still_carries_the_operator_accounts(tmp_pa
         assert rows[3] == TRUNCATED_ALERT_CONFIG
     finally:
         conn.close()
+
+
+def test_encrypted_migration_artifact_carries_every_table_byte_for_byte(tmp_path):
+    """Invariant 5: the allowlist does not touch the encrypted artifact.
+
+    The encrypted cred-carrying artifact is the migration path, so it must carry
+    the WHOLE database — including every table the standard artifact now drops.
+    Asserted two ways, because either alone is a proxy:
+
+    * the shipped ``journal.db`` member is byte-for-byte identical to the live
+      file (SHA-256), which is the strongest possible statement and covers
+      tables nobody thought to name; and
+    * the table SET matches exactly, which is what actually fails readably if a
+      future change starts scrubbing this path.
+
+    ``include_credentials`` returns before the scrub runs at all, so the property
+    is structural rather than a matter of the allowlist happening to permit
+    everything.
+    """
+    source = tmp_path / "journal.db"
+    art = _build(
+        tmp_path,
+        passphrase=GOOD_PASS,
+        include_credentials=True,
+        acknowledge_unrecoverable=True,
+    )
+    dec = tmp_path / "plain.zip"
+    artifact_crypto.decrypt_file(art.zip_path, GOOD_PASS, dec)
+
+    with zipfile.ZipFile(dec) as zf:
+        shipped_bytes = zf.read("journal.db")
+    assert hashlib.sha256(shipped_bytes).hexdigest() == hashlib.sha256(
+        source.read_bytes()
+    ).hexdigest(), "the encrypted artifact's journal.db is not the live database"
+
+    live = sqlite3.connect(str(source))
+    try:
+        live_tables = {
+            r[0] for r in live.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        live.close()
+    conn = _extract_journal_db(dec, tmp_path / "enc-journal.db")
+    try:
+        shipped_tables = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    finally:
+        conn.close()
+    assert shipped_tables == live_tables
+
+    # And it really does include tables the standard artifact drops — otherwise
+    # the equality above could be satisfied by a fixture that seeded none.
+    for table in ("users", "session_telemetry", "unique_client_connections",
+                  "m3u_digest_settings", "journal_entries", "services"):
+        assert table in shipped_tables, "%s missing from the migration path" % table
+
+
+def test_a_dropped_table_heals_empty_on_the_restore_that_recreates_it(tmp_path):
+    """Invariant 3, for EVERY dropped table rather than for a sampled one.
+
+    The allowlist is only safe if ``init_db()``'s ``Base.metadata.create_all``
+    genuinely puts back every table it removed. Asserted over the whole
+    classified exclusion set — completeness over sampling, because a single
+    table that failed to heal would be a restored instance broken in exactly one
+    feature, which is the hardest kind of bug to attribute to a backup.
+
+    The vestigial tables are the deliberate exception and are asserted to STAY
+    gone: no model declares them, so nothing recreates them, and that is correct
+    — they are orphans of removed features (``docs/database_migrations.md``).
+    """
+    from sqlalchemy import create_engine
+
+    import export_models  # noqa: F401 — registers CloudStorageTarget / SyncTarget
+    from models import Base
+
+    live = tmp_path / "journal.db"
+    engine = create_engine("sqlite:///%s" % live)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    # An orphan table of the kind a long-running install carries.
+    conn = sqlite3.connect(str(live))
+    try:
+        conn.execute("CREATE TABLE services (id TEXT PRIMARY KEY, health_endpoint TEXT)")
+        conn.commit()
+    finally:
+        conn.close()
+
+    scrubbed = backup_mod._scrub_journal_db_to_temp(live)
+    try:
+        restored = tmp_path / "restored.db"
+        restored.write_bytes(scrubbed.read_bytes())
+    finally:
+        scrubbed.unlink()
+
+    engine = create_engine("sqlite:///%s" % restored)
+    Base.metadata.create_all(engine)  # what init_db() does on every restore
+    engine.dispose()
+
+    conn = sqlite3.connect(str(restored))
+    try:
+        after = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        excluded = set(backup_mod._STANDARD_ARTIFACT_EXCLUDED)
+        missing = sorted(excluded - after)
+        assert missing == [], (
+            "these tables were dropped from the artifact and NOT recreated by "
+            "create_all, so a restored instance is missing them: %s" % missing
+        )
+        non_empty = sorted(
+            (t, conn.execute('SELECT COUNT(*) FROM "%s"' % t).fetchone()[0])
+            for t in excluded
+            if conn.execute('SELECT COUNT(*) FROM "%s"' % t).fetchone()[0]
+        )
+        assert non_empty == [], non_empty
+        assert "services" not in after, (
+            "an orphan table that no model declares came back, which would mean "
+            "something still recreates it"
+        )
+    finally:
+        conn.close()
+
+
+def test_a_restore_keeps_the_owner_even_though_no_users_table_ships(tmp_path):
+    """The availability guarantee survives the change from DELETE to DROP.
+
+    Round 2 kept the destination's accounts by capturing them before the swap and
+    re-asserting them after. That re-assert reads ``PRAGMA table_info(users)`` and
+    skips the table when it comes back empty — which, once the allowlist DROPS
+    ``users`` instead of emptying it, would have meant the re-assert silently did
+    nothing and an admin restoring a backup was logged out of their own instance
+    and dropped at the setup wizard. Behind a 200.
+
+    That is the exact shape of the failure this bead keeps producing: a fix that
+    is correct for the case it was written against and wrong one layer over. The
+    re-assert now recreates the table from the model when the artifact did not
+    ship it.
+    """
+    from sqlalchemy import create_engine
+
+    from models import Base
+
+    live = tmp_path / "journal.db"
+    engine = create_engine("sqlite:///%s" % live)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    now = "2026-08-17 00:00:00"
+    conn = sqlite3.connect(str(live))
+    try:
+        conn.execute(
+            "INSERT INTO users (id, username, email, password_hash, auth_provider, "
+            "display_name, is_active, is_admin, created_at, updated_at) "
+            "VALUES (1,'owner','owner@example.test',?,'local','Owner',1,1,?,?)",
+            (ADMIN_PASSWORD_HASH, now, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    with patch.object(backup_mod, "JOURNAL_DB_FILE", live):
+        prior = backup_mod._capture_existing_auth_rows()
+        assert len(prior["users"][1]) == 1
+
+        artifact_db = backup_mod._scrub_journal_db_to_temp(live)
+        try:
+            probe = sqlite3.connect(str(artifact_db))
+            try:
+                assert probe.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name='users'"
+                ).fetchone() is None, "the artifact shipped a users table"
+            finally:
+                probe.close()
+            live.write_bytes(artifact_db.read_bytes())  # the wholesale swap
+        finally:
+            artifact_db.unlink()
+
+        backup_mod._reassert_auth_rows_after_restore(prior)
+
+    conn = sqlite3.connect(str(live))
+    try:
+        assert conn.execute("SELECT id, username FROM users").fetchall() == [
+            (1, "owner")
+        ]
+    finally:
+        conn.close()
+
+
+def test_the_restore_names_the_configured_surfaces_this_instance_lost(tmp_path):
+    """Invariant 4: the operator is told what to re-establish, from LIVE state.
+
+    ``restored_files`` reports what landed and structurally cannot report what an
+    artifact could not carry, so an operator whose cloud storage target silently
+    vanished has no signal at all. The notice is derived by comparing the same
+    live counts either side of the swap, which is what keeps it free of noise: an
+    instance that never configured a cloud target is not told to re-establish
+    one, and a notice that cries wolf is one nobody reads by the time it is true.
+    """
+    backup_mod._LAST_RESTORE_CONFIG_LOSSES.clear()
+    backup_mod._LAST_RESTORE_CONFIG_LOSSES.update(
+        {"cloud_storage_targets": 2, "m3u_digest_settings": 1}
+    )
+    live = tmp_path / "journal.db"
+    conn = sqlite3.connect(str(live))
+    try:
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO users VALUES (1)")  # not a lockout
+        conn.commit()
+    finally:
+        conn.close()
+
+    with patch.object(backup_mod, "JOURNAL_DB_FILE", live):
+        notices = backup_mod._post_restore_account_notices()
+
+    assert len(notices) == 1, notices
+    assert "cloud storage target" in notices[0]
+    assert "M3U digest settings" in notices[0]
+    assert "encrypted backup" in notices[0]
+    # Cleared on read: a second call must not repeat a stale notice.
+    with patch.object(backup_mod, "JOURNAL_DB_FILE", live):
+        assert backup_mod._post_restore_account_notices() == []
+
+
+def test_an_instance_that_lost_nothing_gets_no_reestablish_notice(tmp_path):
+    """The no-noise half of the same rule."""
+    backup_mod._LAST_RESTORE_CONFIG_LOSSES.clear()
+    live = tmp_path / "journal.db"
+    conn = sqlite3.connect(str(live))
+    try:
+        conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY)")
+        conn.execute("INSERT INTO users VALUES (1)")
+        conn.commit()
+    finally:
+        conn.close()
+    with patch.object(backup_mod, "JOURNAL_DB_FILE", live):
+        assert backup_mod._post_restore_account_notices() == []
 
 
 # ---------------------------------------------------------------------------
@@ -1471,19 +2011,43 @@ async def test_a_restored_standard_artifact_leaves_first_run_setup_available(
     Not "the users table is empty" — that is the mechanism. The property is that
     somebody can still log into the restored instance, and the shipped way to do
     that is ``GET /api/auth/setup-required`` answering ``required: true``, which
-    is what ``ProtectedRoute.tsx`` renders the setup wizard on. The archived
-    ``journal.db`` is used as the session's database directly.
+    is what ``ProtectedRoute.tsx`` renders the setup wizard on.
+
+    THE ``create_all`` BELOW IS NOT A FUDGE TO MAKE THIS PASS. Round 3 drops the
+    auth tables instead of emptying them, so the artifact genuinely has no
+    ``users`` table, and this test had to start modelling the restore SEQUENCE
+    rather than just the artifact: ``_restore_from_zip`` writes the bytes and
+    then calls ``init_db()``, whose ``Base.metadata.create_all`` recreates every
+    model-declared table before anything can query one
+    (``database.py`` -> ``init_db``; the ordering is
+    ``write_bytes`` -> ``init_db`` -> the endpoint's notices read). Omitting it
+    here would have been the test modelling a sequence the app does not run.
+
+    Both halves are asserted, so this cannot pass on a database that shipped the
+    table after all: absent in the ARTIFACT, present-and-empty after the
+    init_db-equivalent, and the real auth route agreeing.
     """
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
 
     from auth.routes import check_setup_required
+    from models import Base
 
     restored = tmp_path / "journal.db"
     with zipfile.ZipFile(standard_artifact.zip_path) as zf:
         restored.write_bytes(zf.read("journal.db"))
 
+    # The artifact itself carries no account table at all.
+    probe = sqlite3.connect(str(restored))
+    try:
+        assert probe.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='users'"
+        ).fetchone() is None
+    finally:
+        probe.close()
+
     engine = create_engine("sqlite:///%s" % restored)
+    Base.metadata.create_all(engine)  # what init_db() does on every restore
     session = sessionmaker(bind=engine)()
     try:
         result = await check_setup_required(session=session)
