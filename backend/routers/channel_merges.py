@@ -102,7 +102,7 @@ from observability import get_metric
 # The ONE journal writer, which CHECKS both of `journal`'s return values (bead
 # …-kz089 fix round 5, reused here for …-i5ic0). No import cycle —
 # `routers.channels` does not import this module.
-from routers.channels import write_journal_rows
+from routers.channels import flush_journal_rows_on_exit, write_journal_rows
 from services.dedup_matcher import CONFIDENCE_FLOOR, find_candidate, MatchResult
 from services.m3u_dedup_hook import enqueue_pending_merge
 
@@ -202,6 +202,13 @@ class PendingMergeRecord(BaseModel):
     resolved_at: Optional[int] = None
     resolution_source: Optional[str] = None
     trigger_context: str
+    #: Why the LAST accept on this row could not be applied to Dispatcharr, in
+    #: operator-actionable prose; ``None`` when no accept has failed to apply.
+    #: A row with ``status='pending'`` AND this set is a merge the operator
+    #: accepted that ECM could not carry out — it stays in the queue, flagged,
+    #: and retrying it is an ordinary accept (bead
+    #: ``enhancedchannelmanager-i5ic0``, PO decision 2026-08-16).
+    unapplied_reason: Optional[str] = None
 
 
 class PendingMergesListResponse(BaseModel):
@@ -364,13 +371,19 @@ class AcceptOutcome(BaseModel):
     here so the operator's UI / MCP client sees what the decision was
     made against without a second round-trip to the journal.
 
-    ``status`` stays ``'merged'`` because it describes the QUEUE ROW, whose
-    transition is what this endpoint owns and which genuinely happened. Whether
-    DISPATCHARR was updated is a separate fact and used to be unanswerable from
-    this response — the queue row went terminal, the audit row was written and
-    the caller got a ``200`` whether the stream had been added upstream or the
-    name had matched nothing at all (bead ``enhancedchannelmanager-i5ic0``).
-    Three fields carry that fact now:
+    ``status`` describes the QUEUE ROW, and it is no longer always terminal
+    (PO decision 2026-08-16). ``'merged'`` when the merge was applied upstream
+    and the row left the queue; ``'pending'`` when ECM could not apply it, in
+    which case the row STAYS in the queue carrying ``unapplied_reason``, stays
+    counted by the queue badge, and stays retryable — a later accept on that
+    row is a real accept, not an idempotent replay. A consumer that hardcoded
+    ``'merged'`` is reading a claim this response no longer makes.
+
+    Whether DISPATCHARR was updated is a separate fact and used to be
+    unanswerable from this response — the queue row went terminal, the audit
+    row was written and the caller got a ``200`` whether the stream had been
+    added upstream or the name had matched nothing at all (bead
+    ``enhancedchannelmanager-i5ic0``). Three fields carry that fact now:
 
     ``dispatcharr_updated``
         ``True`` when the candidate channel ends this request holding the
@@ -384,10 +397,19 @@ class AcceptOutcome(BaseModel):
         would be the same false claim one branch over.
 
         Three values, so a consumer that tests ``!= False`` has two of them
-        collapsed. Each has its own path in ``PendingMergesPage``.
+        collapsed. Each has its own path in ``PendingMergesPage``. They map
+        one-to-one onto the queue state rather than duplicating it:
+        ``True`` -> ``status='merged'``, ``pending_merges.unapplied_reason``
+        clear; ``False`` -> ``status='pending'``, that column set; ``None`` ->
+        a replay, which only an ALREADY-terminal row can produce. A row
+        deliberately still queued can therefore never answer ``None``, which is
+        what keeps "this request obtained no upstream evidence" and "still
+        queued on purpose" from collapsing into one value.
     ``unapplied_reason``
         Operator-actionable prose for anything other than a clean apply, naming
-        the stream and WHY it could not be resolved. ``None`` when applied.
+        the stream and WHY it could not be resolved. ``None`` when applied. The
+        same text is persisted on the queue row, so the operator sees it on the
+        row itself rather than only in this response.
     ``journal_rows_unwritten``
         Rows of the operator-facing journal this request could not write.
         Always present, so a caller checks a number rather than probing.
@@ -397,7 +419,7 @@ class AcceptOutcome(BaseModel):
     journal_entry_id: int
     source_stream_id: str
     confidence: float
-    status: Literal["merged"] = "merged"
+    status: Literal["merged", "pending"] = "merged"
     dispatcharr_updated: Optional[bool] = True
     unapplied_reason: Optional[str] = None
     journal_rows_unwritten: int = 0
@@ -508,6 +530,7 @@ def _record_to_dict(row: PendingMerge) -> dict:
         "resolved_at": row.resolved_at,
         "resolution_source": row.resolution_source,
         "trigger_context": row.trigger_context,
+        "unapplied_reason": row.unapplied_reason,
     }
 
 
@@ -1279,6 +1302,9 @@ async def accept_pending_merge(
     # `routers/channel_groups.py`: a pending list, an idempotent drain-then-
     # write flush, and a `try/finally`.
     outcome_rows: list[dict] = []
+    # Set by the `except BaseException` below, read by the `finally`: a flush
+    # that raises must never REPLACE an exception already on its way out.
+    unwinding = False
 
     def flush_outcome_rows() -> int:
         """Write what is queued and return how many could NOT be written.
@@ -1338,10 +1364,29 @@ async def accept_pending_merge(
         # Dispatcharr. The commit itself is still after the PATCH, because the
         # queue row must not go terminal for a merge Dispatcharr rejected; that
         # residual window is what the queued `stream_add` row below covers.
+        #
+        # A MERGE ECM COULD NOT APPLY DOES NOT TRANSITION AT ALL (PO decision
+        # 2026-08-16, bead …-i5ic0). The previous shape flipped the row to
+        # `merged` and let it leave the queue carrying its reason — internally
+        # consistent, but the reason then outlived the row where only an
+        # operator who went looking in the journal would ever find it. The row
+        # now stays `pending` with `unapplied_reason` set: still in the list,
+        # still counted by the badge, still holding its §D5 uniqueness slot,
+        # and still retryable. `resolved_at` / `resolution_source` describe a
+        # row that LEFT the queue, so they stay NULL. The operator's DECISION
+        # is still recorded — that is the `merge_confirmed` audit row below,
+        # and §D6's audit-first contract is what makes recording it right even
+        # when ECM cannot act on it.
         now_ms = _now_epoch_ms()
-        row.status = "merged"
-        row.resolved_at = now_ms
-        row.resolution_source = "operator"
+        if unapplied_reason is None:
+            row.status = "merged"
+            row.resolved_at = now_ms
+            row.resolution_source = "operator"
+            # Cleared on the way out, so a retry that resolves leaves no stale
+            # reason behind and reads exactly like a first-time accept.
+            row.unapplied_reason = None
+        else:
+            row.unapplied_reason = unapplied_reason
 
         try:
             entry = _write_journal(
@@ -1444,9 +1489,11 @@ async def accept_pending_merge(
         except Exception:  # pragma: no cover — defensive import guard
             logger.warning("[DEDUP] gauge update failed after accept commit")
         logger.info(
-            "[DEDUP] accept ok: pending_merges.id=%s merged into "
-            "candidate=%s journal_entry_id=%s actor=%s",
-            row.id, row.candidate_channel_id, entry.id, _actor_token_id(user),
+            "[DEDUP] accept ok: pending_merges.id=%s %s candidate=%s "
+            "journal_entry_id=%s actor=%s",
+            row.id,
+            "merged into" if dispatcharr_updated else "NOT applied to",
+            row.candidate_channel_id, entry.id, _actor_token_id(user),
         )
 
         if not dispatcharr_updated:
@@ -1461,13 +1508,17 @@ async def accept_pending_merge(
                 "description": (
                     f"Accepted the pending merge of stream '{row.stream_name}' into "
                     f"channel '{channel_name}', but Dispatcharr was NOT updated: "
-                    f"{unapplied_reason}"
+                    f"{unapplied_reason} The merge stays in Pending Merges, "
+                    "flagged as not applied, and can be retried."
                 ),
                 "after_value": {
                     "channel_id": row.candidate_channel_id,
                     "pending_merge_id": row.id,
                     "stream_name": row.stream_name,
                     "dispatcharr_updated": False,
+                    # The queue state this outcome left behind, recorded beside
+                    # the outcome so the two cannot be read apart later.
+                    "pending_merge_status": "pending",
                 },
             })
 
@@ -1476,10 +1527,22 @@ async def accept_pending_merge(
             journal_entry_id=int(entry.id),
             source_stream_id=source_stream_identifier,
             confidence=row.confidence,
+            # The queue row's real state, not a constant. A merge ECM could not
+            # apply is still queued.
+            status="merged" if dispatcharr_updated else "pending",
             dispatcharr_updated=dispatcharr_updated,
             unapplied_reason=unapplied_reason,
             journal_rows_unwritten=flush_outcome_rows(),
         )
+    except BaseException:
+        # Every way out that is not the return above: the 500s raised in the
+        # clauses inside, a cancellation from a client disconnect or
+        # application shutdown, a `SystemExit`. Nothing to record and no
+        # envelope to return; this clause exists only to tell the `finally`
+        # that something is already on its way out, so the flush there cannot
+        # take its place.
+        unwinding = True
+        raise
     finally:
         # Every exit that is NOT the return above: a 500, a cancellation from
         # application shutdown, a `SystemExit`. `asyncio.CancelledError`
@@ -1488,13 +1551,12 @@ async def accept_pending_merge(
         # has already emptied the queue on the success path, so this writes only
         # what that path never reached, and `write_journal_rows` logs every row
         # it has not resolved before letting a `BaseException` past.
-        unwritten = flush_outcome_rows()
-        if unwritten:
-            logger.error(
-                "[DEDUP] %s journal row(s) for pending_merges.id=%s could not "
-                "be written and this request is not returning a body to carry "
-                "the count; the rows are logged above", unwritten, row.id,
-            )
+        flush_journal_rows_on_exit(
+            flush_outcome_rows,
+            unwinding=unwinding,
+            context=f"pending_merges.id={row.id}",
+            log_tag="DEDUP",
+        )
 
 
 # ---------------------------------------------------------------------------

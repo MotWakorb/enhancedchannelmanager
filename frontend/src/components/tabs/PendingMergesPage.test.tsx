@@ -55,6 +55,7 @@ function makeRecord(overrides: Partial<PendingMergeRecord> = {}): PendingMergeRe
     resolved_at: null,
     resolution_source: null,
     trigger_context: 'm3u_refresh',
+    unapplied_reason: null,
     ...overrides,
   };
 }

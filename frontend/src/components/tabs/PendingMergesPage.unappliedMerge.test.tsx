@@ -8,11 +8,11 @@
  * several streams, or could not establish an answer at all.
  *
  * The backend now answers `dispatcharr_updated: false` with an actionable
- * `unapplied_reason`. Removing the row is still right — its queue state IS
- * terminal and it would not come back from a `status=pending` reload — so the
- * fix is not to keep it, it is to keep the REASON, somewhere the operator will
- * see it after the row is gone. That is the bead's "no way to find the affected
- * merges afterwards", answered in the surface where the decision was made.
+ * `unapplied_reason` — and, since the PO decision of 2026-08-16, it also LEAVES
+ * THE ROW IN THE QUEUE, flagged, so the merge stays in front of the operator
+ * and stays retryable. An earlier round of this fix removed the row and kept
+ * only a page-level notice; the reason outlived the row, but only where an
+ * operator who went looking would find it.
  *
  * What this pins:
  *
@@ -21,7 +21,10 @@
  *  2. An applied merge raises nothing, or the notice carries no information.
  *  3. A bulk run counts unapplied merges separately from failures and from
  *     successes, and every one of them is named.
- *  4. The notice survives the row's removal, which is the whole point.
+ *  4. The row STAYS, badged "Not applied" and carrying its reason, in the
+ *     single-row and the bulk path alike — and a retry that lands removes it.
+ *     Removing it on the unapplied outcome would put the list out of step with
+ *     a `status=pending` reload and take the retry away.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
@@ -57,6 +60,7 @@ function makeRecord(overrides: Partial<PendingMergeRecord> = {}): PendingMergeRe
     resolved_at: null,
     resolution_source: null,
     trigger_context: 'm3u_refresh',
+    unapplied_reason: null,
     ...overrides,
   };
 }
@@ -106,13 +110,18 @@ describe('PendingMergesPage — a merge that was not applied upstream', () => {
 
     const notice = await screen.findByTestId('pending-merges-unapplied');
     expect(notice).toHaveTextContent(NO_MATCH);
-    // Names WHICH merge, since the row it came from is about to disappear.
+    // Names WHICH merge: after a bulk run over a long queue the flagged rows
+    // are not necessarily on screen, so the summary has to identify them.
     expect(notice).toHaveTextContent('ESPN HD');
   });
 
-  it('keeps the notice after the row has left the queue', async () => {
+  it('keeps the row in the queue, flagged and retryable', async () => {
     vi.mocked(api.acceptPendingMerge).mockResolvedValue(
-      outcome({ dispatcharr_updated: false, unapplied_reason: NO_MATCH }),
+      outcome({
+        status: 'pending',
+        dispatcharr_updated: false,
+        unapplied_reason: NO_MATCH,
+      }),
     );
 
     render(<PendingMergesPage />);
@@ -122,14 +131,68 @@ describe('PendingMergesPage — a merge that was not applied upstream', () => {
     await waitFor(() => {
       expect(screen.getByTestId('pending-merges-unapplied')).toBeInTheDocument();
     });
-    // The queue row IS terminal, so it correctly goes — and the notice is the
-    // only remaining in-product signal that anything was skipped.
-    await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /^Merge$/i })).toBeNull();
-    });
+    // The backend left the row in `pending`, so the list has to as well — and
+    // its Merge button is the retry the decision exists to preserve.
+    expect(screen.getByRole('button', { name: /^Merge$/i })).toBeEnabled();
+    expect(screen.getByTestId('pending-merges-row-unapplied')).toHaveTextContent(
+      'Not applied',
+    );
     expect(screen.getByTestId('pending-merges-unapplied')).toHaveTextContent(
       NO_MATCH,
     );
+  });
+
+  it('carries the reason on the row, not only in the page notice', async () => {
+    vi.mocked(api.acceptPendingMerge).mockResolvedValue(
+      outcome({
+        status: 'pending',
+        dispatcharr_updated: false,
+        unapplied_reason: NO_MATCH,
+      }),
+    );
+
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
+
+    await screen.findByTestId('pending-merges-row-unapplied');
+    // Dismissing the page notice must not take the explanation with it — the
+    // notice is a summary of the last action, the row is the record.
+    fireEvent.click(
+      within(screen.getByTestId('pending-merges-unapplied')).getByRole(
+        'button',
+        { name: /^Dismiss$/i },
+      ),
+    );
+    await waitFor(() => {
+      expect(screen.queryByTestId('pending-merges-unapplied')).toBeNull();
+    });
+    expect(screen.getByText(new RegExp(NO_MATCH.slice(0, 40)))).toBeInTheDocument();
+  });
+
+  it('removes the row when a retry finally lands', async () => {
+    vi.mocked(api.acceptPendingMerge)
+      .mockResolvedValueOnce(
+        outcome({
+          status: 'pending',
+          dispatcharr_updated: false,
+          unapplied_reason: NO_MATCH,
+        }),
+      )
+      .mockResolvedValueOnce(outcome());
+
+    render(<PendingMergesPage />);
+    await screen.findByText('ESPN HD');
+    fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
+    await screen.findByTestId('pending-merges-row-unapplied');
+
+    fireEvent.click(screen.getByRole('button', { name: /^Merge$/i }));
+
+    // A retry that applies is an ordinary accept: the row resolves and goes.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /^Merge$/i })).toBeNull();
+    });
+    expect(api.acceptPendingMerge).toHaveBeenCalledTimes(2);
   });
 
   it('shows nothing when the merge really was applied', async () => {
@@ -209,6 +272,18 @@ describe('PendingMergesPage — a merge that was not applied upstream', () => {
     const progress = screen.getByLabelText('Bulk action progress');
     expect(progress).not.toHaveTextContent(/failure/i);
     expect(progress).toHaveTextContent('2 not applied');
+
+    // The two unapplied rows STAY, flagged, and the applied one goes. A bulk
+    // run that dropped them would leave the operator with a count and nothing
+    // to retry — the same rule as the single-row path, deliberately.
+    expect(screen.getAllByTestId('pending-merges-row-unapplied')).toHaveLength(2);
+    // Scoped to the queue list: the page notice names the same streams, and an
+    // unscoped query would pass on the notice alone — which is the state this
+    // assertion exists to rule out.
+    const queue = within(screen.getByRole('list', { name: 'Pending merges' }));
+    expect(queue.getByText('ESPN HD')).toBeInTheDocument();
+    expect(queue.getByText('TNT HD')).toBeInTheDocument();
+    expect(queue.queryByText('CNN HD')).toBeNull();
   });
 });
 

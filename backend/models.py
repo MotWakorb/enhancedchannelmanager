@@ -2982,9 +2982,16 @@ class PendingMerge(Base):
     rationale.
 
     State machine (§D3): ``status`` transitions
-    ``pending → merged`` (operator/auto/MCP accepted the candidate) or
-    ``pending → dismissed`` (operator/auto/MCP rejected). Terminal states
-    are not garbage-collected in v0.17.1 (§D10 retention is deferred).
+    ``pending → merged`` (operator/auto/MCP accepted the candidate AND ECM
+    applied it upstream) or ``pending → dismissed`` (operator/auto/MCP
+    rejected). Terminal states are not garbage-collected in v0.17.1 (§D10
+    retention is deferred).
+
+    An accept ECM could NOT apply upstream does not transition at all: the row
+    stays ``pending`` and carries ``unapplied_reason``, so it remains in front
+    of the operator and remains retryable (bead
+    ``enhancedchannelmanager-i5ic0``, PO decision 2026-08-16 — ADR-008 §D1/§D6
+    amendment pending).
 
     Idempotency invariant (§D5): the partial unique index
     ``uq_pending_merges_active`` prevents duplicate ``pending`` rows for
@@ -3023,6 +3030,19 @@ class PendingMerge(Base):
     # 'operator' / 'auto' / 'bulk_m3u_hook' / 'mcp_tool'; NULL while
     # pending. App-validated enum (no DB CHECK).
     resolution_source = Column(Text, nullable=True)
+    # Why the LAST accept could not be applied to Dispatcharr, in
+    # operator-actionable prose; NULL when no accept has failed to apply
+    # (bead enhancedchannelmanager-i5ic0, PO decision 2026-08-16).
+    #
+    # Orthogonal to ``status``, deliberately (migration 0043 carries the
+    # rationale). ``status`` answers "has this left the queue"; this answers
+    # "did the last accept land upstream". A merge ECM could not apply STAYS
+    # ``pending`` with this set, so it stays in front of the operator, stays
+    # counted by the queue-depth gauge, keeps its ``uq_pending_merges_active``
+    # slot, and stays retryable — the accept path clears the column when a
+    # retry resolves. A fourth ``status`` value would have had to be taught to
+    # every ``status='pending'`` consumer purely to re-derive that.
+    unapplied_reason = Column(Text, nullable=True)
     # Surface that enqueued the row: 'drag_drop' / 'add_stream' /
     # 'm3u_refresh' / 'mcp_tool'. App-validated enum per the BD-C
     # implementation brief (migration 0014 docstring documents the

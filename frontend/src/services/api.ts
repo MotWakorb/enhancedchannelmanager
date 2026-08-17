@@ -4852,6 +4852,17 @@ export interface PendingMergeRecord {
   resolved_at: number | null;
   resolution_source: string | null;
   trigger_context: string;
+  /**
+   * Why the LAST accept on this row could not be applied to Dispatcharr, in
+   * operator-actionable prose; `null` when no accept has failed to apply.
+   *
+   * A `'pending'` row with this set is a merge the operator ALREADY accepted
+   * that ECM could not carry out. It deliberately stays in the queue, flagged,
+   * so the reason is on the row rather than only in the Journal, and accepting
+   * it again is an ordinary retry that clears the flag when it lands (bead
+   * enhancedchannelmanager-i5ic0, PO decision 2026-08-16).
+   */
+  unapplied_reason: string | null;
 }
 
 /** Paginated envelope for `GET /api/channel-merges`. */
@@ -4878,10 +4889,13 @@ export interface AcceptMergeOutcome {
   source_stream_id: string;
   confidence: number;
   /**
-   * The QUEUE ROW's state, which always reaches `merged`. This is NOT a claim
-   * that Dispatcharr was updated — see `dispatcharr_updated`.
+   * The QUEUE ROW's state, which is no longer always terminal. `'merged'` when
+   * the merge applied and the row left the queue; `'pending'` when ECM could
+   * not apply it, in which case the row STAYS queued carrying its
+   * `unapplied_reason` and remains retryable (PO decision 2026-08-16). Never a
+   * claim about Dispatcharr on its own — see `dispatcharr_updated`.
    */
-  status: 'merged';
+  status: 'merged' | 'pending';
   /**
    * Whether the candidate channel ends the request holding the stream.
    *

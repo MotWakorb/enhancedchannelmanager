@@ -289,6 +289,36 @@
   color: var(--success, #4ade80);
 }
 
+/* An accept the operator already made that ECM could not apply upstream. The
+   row is deliberately still queued (bead enhancedchannelmanager-i5ic0, PO
+   decision 2026-08-16), so it needs a mark that separates it from a candidate
+   nobody has acted on. Warning colours, matching the page-level notice — the
+   accept succeeded; the upstream write is what is outstanding. */
+.pending-merges-page .pending-merges-unapplied-badge {
+  background: var(--warning-bg, rgba(245, 158, 11, 0.15));
+  color: var(--warning-text, #fbbf24);
+}
+
+.pending-merges-row-unapplied-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: var(--radius-lg);
+  background-color: var(--warning-bg);
+  color: var(--warning-text, #fbbf24);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+}
+
+.pending-merges-row-unapplied-reason .material-icons {
+  font-size: var(--icon-status);
+  flex-shrink: 0;
+}
+
 .pending-merges-actions {
   display: flex;
   gap: 0.5rem;
