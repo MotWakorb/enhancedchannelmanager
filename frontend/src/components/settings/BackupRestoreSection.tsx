@@ -384,8 +384,10 @@ export function BackupRestoreSection({ isAdmin }: Props) {
             shows. Both now name what actually lands here and what produces
             it. */}
         <p className="backup-card-description">
-          Backups saved on the server, in /config/backups/ — DBAS .zip artifacts and YAML
-          exports alike, however they were produced.
+          Backups saved on the server, in /config/backups/ — YAML exports and .zip artifacts
+          alike, however they were produced. A .zip here is either a DBAS artifact or a
+          pre-v0.18.0 full backup, and a full backup also carries TLS certificates and uploaded
+          files.
         </p>
         {loadingSaved ? (
           <div className="backup-loading">
@@ -456,9 +458,28 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         )}
       </div>
 
-      {/* Separator */}
+      {/* One-click standard DBAS artifact (bead enhancedchannelmanager-pui76).
+          Placed immediately above the encrypted card so the two DBAS producers
+          are adjacent and this card's "use Encrypted Backup below" pointer
+          lands on the next thing the operator sees. */}
+      <ConfigurationBackupCard />
+
+      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
+      <EncryptedBackupCard />
+
+      {/* THE ORDER OF THESE THREE CARDS IS LOAD-BEARING (bead
+          enhancedchannelmanager-pui76, review round 2). "Create Full Backup"
+          used to render ABOVE both DBAS producers, so the first backup control
+          an operator met was the deprecated pre-v0.18.0 one — while this
+          page's own "Which one do I need?" helper recommends DBAS for disaster
+          recovery and reserves the full format for restoring older files. The
+          legacy artifact is also the riskier one to hold: unlike the DBAS
+          artifact it carries TLS private keys and uploaded playlists, so the
+          neighbouring DBAS card's redaction language must not be easy to read
+          across onto it. Both reasons point the same way: the deprecated
+          producer goes last, behind its own divider. */}
       <div className="backup-section-divider">
-        <span>Full System Backup</span>
+        <span>Full System Backup (legacy)</span>
       </div>
 
       {/* Full ZIP Backup */}
@@ -486,15 +507,6 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           </button>
         )}
       </div>
-
-      {/* One-click standard DBAS artifact (bead enhancedchannelmanager-pui76).
-          Placed immediately above the encrypted card so the two DBAS producers
-          are adjacent and this card's "use Encrypted Backup below" pointer
-          lands on the next thing the operator sees. */}
-      <ConfigurationBackupCard />
-
-      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
-      <EncryptedBackupCard />
 
       {/* Cross-Instance Sync — epic i39wu / nnl9s */}
       <SyncTargetsCard />

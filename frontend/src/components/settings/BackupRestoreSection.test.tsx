@@ -169,6 +169,56 @@ describe('BackupRestoreSection', () => {
       });
     });
 
+    // Bead enhancedchannelmanager-pui76, review round 2. The page's own "Which
+    // one do I need?" helper recommends the DBAS format for disaster recovery
+    // and reserves the full backup for restoring pre-v0.18.0 files — while the
+    // deprecated producer rendered first, so it was the first backup control
+    // an operator met. It is also the riskier artifact to hold (TLS private
+    // keys, uploaded playlists), which makes it the last thing that should sit
+    // next to the DBAS cards' redaction language.
+    it('renders the deprecated full-backup producer last, below both DBAS cards (bead pui76)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const configCard = screen.getByTestId('configuration-backup-card');
+      const encryptedHeading = screen.getByRole('heading', { name: 'Encrypted Backup (Migration)' });
+      const fullBackupHeading = screen.getByRole('heading', { name: 'Create Full Backup' });
+
+      for (const dbasCard of [configCard, encryptedHeading]) {
+        expect(
+          dbasCard.compareDocumentPosition(fullBackupHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-pui76, review round 2. `list_saved_backups`
+    // globs ecm-backup-*.zip as well as *.yaml, so a pre-v0.18.0 full backup —
+    // TLS private keys, raw uploads — is listed in this card too. Calling every
+    // .zip here a DBAS artifact tells the operator the riskiest file on the
+    // list is the redacted one.
+    it('does not claim every listed .zip is a DBAS artifact (bead pui76)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const savedCard = screen
+        .getByRole('heading', { name: 'Saved Backups' })
+        .closest('.backup-card') as HTMLElement;
+      const caption = within(savedCard).getByText(/Backups saved on the server/i);
+
+      expect(caption).not.toHaveTextContent(/DBAS \.zip artifacts and YAML/i);
+      // A .zip on this list is one of two formats, and the caption says which
+      // and what the other one carries.
+      expect(caption).toHaveTextContent(/DBAS artifact/i);
+      expect(caption).toHaveTextContent(/full backup/i);
+      expect(caption).toHaveTextContent(/TLS certificates/i);
+
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
     // Bead enhancedchannelmanager-e4iok. The caption called the card YAML-only
     // while the list beneath it renders DBAS .zip artifacts with restore,
     // download and delete actions, and the empty state named a "YAML Backup"

@@ -79,6 +79,35 @@ describe('ConfigurationBackupCard (bead pui76)', () => {
     expect(card).toHaveTextContent(/Include credentials/i);
   });
 
+  // Bead enhancedchannelmanager-pui76, review round 2. The card used to end
+  // "so it is safe to attach to a support ticket or copy to a machine you do
+  // not control". The producer cannot support that: its redaction is
+  // credential-shaped (credential- and identity-named keys, and credentials
+  // inside URL values), while free text passes through untouched — including
+  // the `description` on every auto-creation rule, which the schema itself
+  // calls "user notes about this rule". An operator who typed a support token
+  // or a customer's email there ships it.
+  it('does not tell the operator the artifact is safe to hand to anyone', () => {
+    render(<ConfigurationBackupCard />);
+    const card = screen.getByTestId('configuration-backup-card');
+    expect(card).not.toHaveTextContent(/safe to attach/i);
+    expect(card).not.toHaveTextContent(/safe to (send|share|copy|give|hand|pass)/i);
+    // Not a wording quibble: any absolute disclosure guarantee is the defect.
+    expect(card).not.toHaveTextContent(/machine you do not control/i);
+  });
+
+  it("says the operator's own text travels with the artifact", () => {
+    render(<ConfigurationBackupCard />);
+    const card = screen.getByTestId('configuration-backup-card');
+    // What the producer DOES guarantee is still stated...
+    expect(card).toHaveTextContent(/nothing in it authenticates on your behalf/i);
+    // ...and the judgement it cannot make is handed back, naming the content
+    // that actually travels rather than gesturing at "some data".
+    expect(card).toHaveTextContent(/notes/i);
+    expect(card).toHaveTextContent(/verbatim/i);
+    expect(card).toHaveTextContent(/before sending it to anyone outside your control/i);
+  });
+
   it('produces the artifact in one click, with no encryption parameters', async () => {
     vi.mocked(api.runTask).mockResolvedValue(taskResult());
     render(<ConfigurationBackupCard />);

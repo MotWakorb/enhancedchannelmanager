@@ -17,9 +17,12 @@ import { invalidateServerData } from '../../hooks/useServerDataInvalidation';
  * for disaster recovery.
  *
  * NAMED FOR WHAT IT PRODUCES, not for the action (PO decision D3 on the bead).
- * After bead gi4zn the standard artifact is fully redacted: no provider
+ * After bead gi4zn the standard artifact is credential-redacted: no provider
  * credentials, no provider usernames, no ECM accounts, no journal history or
- * telemetry. A card called "Backup" with a button called "Back Up Now" would
+ * telemetry. Credential-redacted, NOT sanitised — free text the operator typed
+ * is carried through untouched, which is why the description below stops short
+ * of calling the artifact safe to hand to anyone (see the comment on it).
+ * A card called "Backup" with a button called "Back Up Now" would
  * let an operator believe they hold a complete backup and discover otherwise at
  * the worst possible moment — a restore. So the card is named for its contents
  * and states the omission above the button rather than in a doc.
@@ -69,11 +72,27 @@ export function ConfigurationBackupCard() {
         <span className="material-icons">backup</span>
         <h3>Configuration Backup</h3>
       </div>
+      {/* WHAT THIS PARAGRAPH IS ALLOWED TO CLAIM (bead
+          enhancedchannelmanager-pui76, review round 2). It used to end "so it
+          is safe to attach to a support ticket or copy to a machine you do not
+          control" — an absolute the producer does not support. The artifact's
+          redaction is credential-shaped: it replaces credential- and
+          identity-named keys, and credentials carried inside URL values. Free
+          text is not touched, and the artifact carries plenty of it — the
+          `description` on every auto-creation rule is literally "user notes
+          about this rule" (backend/models.py). An operator who put a support
+          token, a customer's email or an internal hostname in a rule note
+          ships it. So the copy states the guarantee it has (no working
+          credentials, no accounts) and hands the disclosure judgement back to
+          the operator, who is the only party who knows what they typed.
+          Redacting the notes instead would destroy legitimate content. */}
       <p className="backup-card-description">
         Save this instance&apos;s configuration to the server as a .zip artifact — the same
         artifact a scheduled backup produces. It appears in Saved Backups above when it finishes.
-        Nothing in it authenticates on your behalf, so it is safe to attach to a support ticket or
-        copy to a machine you do not control.
+        Nothing in it authenticates on your behalf: provider sign-ins and ECM accounts are
+        replaced with placeholders. Everything else you typed travels verbatim — source names,
+        URLs, and the notes on your rules — so check what is in it before sending it to anyone
+        outside your control.
       </p>
       <div className="backup-sensitive-warning">
         <span className="material-icons">info</span>
