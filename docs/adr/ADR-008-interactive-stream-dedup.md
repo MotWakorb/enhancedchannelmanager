@@ -72,6 +72,20 @@ Pagination follows the existing list-endpoint pattern (`page`, `page_size` query
 
 **Response envelope follows the existing ECM flat-outcome pattern.** No top-level `data` wrapper — the `POST /api/channels/merge` endpoint (`backend/routers/channels.py:1961`, established in bd-ct9wl) is the precedent: it returns the merged channel object directly. The `/accept` endpoint mirrors that, returning `{merged_into_channel_id, journal_entry_id, source_stream_id, confidence, ...}` flat. The `/dismiss` endpoint returns `{journal_entry_id, dismissed_at, ...}` flat. The `GET` endpoints return list/object payloads directly.
 
+**Addendum (bead `enhancedchannelmanager-i5ic0`): the accept envelope carries the upstream outcome separately from the queue-row state.** The flat shape above is unchanged; three fields join it, all additive.
+
+| Field | Type | Meaning |
+|-|-|-|
+| `dispatcharr_updated` | bool \| null | Whether the candidate channel ends the request holding the stream |
+| `unapplied_reason` | str \| null | Operator-actionable prose for any outcome other than a clean apply |
+| `journal_rows_unwritten` | int | Operator-journal rows the request could not write. Always present |
+
+`status: "merged"` was, until this addendum, the only outcome field on the envelope, and it describes the **`pending_merges` row's own state machine** (§D3), not Dispatcharr. That transition really happens on every accept the endpoint answers `200` to. The upstream write does not: §D6's audit-first contract deliberately records the operator's decision even when the stream-name lookup resolves nothing, and the response said nothing about the difference. An accept whose lookup matched zero streams therefore returned a body byte-identical to one that added the stream.
+
+`dispatcharr_updated` is **three-valued** because the honest answers are three, not two. `true` when the channel holds the stream (whether this call PATCHed it or it was already there). `false` when no upstream write happened, which includes any lookup whose completeness is unknown: a search truncated at its page ceiling cannot establish uniqueness even with exactly one exact match visible, so it is not conclusive in either direction. `null` on an idempotent replay, which by §D1's own design performs no Dispatcharr call and therefore has no evidence about what the original request did. Guessing `true` there would reintroduce the same false claim one branch over. A consumer testing `!== false` collapses two of the three.
+
+None of this makes the merge safe against concurrent change. Dispatcharr 0.28.x offers **no conditional update**, measured rather than assumed (see `docs/api.md` on `expectedNumber`: the live schema has no `If-Match`, `ETag` or `412`, and neither `Channel` nor `PatchedChannel` carries a version field). `dispatcharr_updated` reports what this request observed. It does not prevent anything.
+
 **Why `/api/channel-merges/*`, not the originally-ratified `/api/dedup/*`** (D4 override, 2026-05-16):
 
 | Driver | Original `/api/dedup/*` | Chosen `/api/channel-merges/*` |
@@ -143,6 +157,25 @@ Fields:
 - `trigger_context` — one of `drag_drop`, `add_stream`, `m3u_refresh`, `mcp_tool`. Distinct from `action_type` (what was decided) and from `actor_token_id` (who decided): this names the **surface** the decision came in through.
 
 The `trigger_context` distinction matters for later analytical questions like "are MCP-agent merges accepted at a higher rate than operator-driven ones?" (the 1v4ht epic's stated motivation for distinguishing AI from operator decisions; complements rather than replaces the per-token attribution above).
+
+#### Addendum (bead `enhancedchannelmanager-i5ic0`): the audit row is now paired with an operator-journal outcome row
+
+The `pending_merge_journal` row above records the **decision**. It is written whatever happens upstream, and that is the audit-first contract working as designed: the operator's `merge_confirmed` is a fact about the operator, and it stays true when the stream-name lookup resolves nothing. The row's `source_channel_id` fallback to the raw `stream_name` is the only trace of that case, and reading it as evidence of a failed apply is an inference, not a record.
+
+An accept now also writes to the **operator-facing `journal_entries` table**, which records the **outcome**:
+
+| Outcome | `journal_entries` row | Written when |
+|-|-|-|
+| Applied, PATCH sent | `stream_add` | The PATCH returns, before the queue-row commit |
+| Applied, stream already on the channel | none | Nothing changed, so there is nothing to trace |
+| Recorded and not applied | `merge_unapplied` | After the decision is committed |
+| Idempotent replay | none | The request made no Dispatcharr call and observed nothing |
+
+**These two substrates cannot logically disagree**, and an external reviewer confirmed that during the fix round: the decision row and the outcome row describe different propositions, so neither can contradict the other. What consumers must understand is precisely that they are different propositions. A `merge_confirmed` audit row is not a statement that Dispatcharr was updated, and the absence of a `merge_unapplied` journal row is not a statement that it was, because the replay path writes neither.
+
+This does not violate the PO decision recorded above that the audit fields cannot land on `journal_entries`. The audit field set stays in `pending_merge_journal` exactly as specified; what `journal_entries` gains is an outcome row in the same category and vocabulary as every other channel mutation, so an operator tracing a channel's history by name (which `docs/user_guide/channels-streams/the-journal.md` tells them to do) finds the merge that did not happen. It has its own action type so those merges are findable by filter rather than by reading every row's prose.
+
+**Timing is load-bearing and is not the same on both rows.** The `stream_add` row is queued the moment the PATCH returns, because from that instant the stream is on the channel whatever fails next, including the queue-row commit. The `merge_unapplied` row is queued only once the decision is committed, because unlike the other it asserts an ECM-side fact ("accepted, and not applied") that is not true of a request whose transition rolled back. Both are flushed on every exit, including cancellation, and the count of any that could not be written is reported as `journal_rows_unwritten` on the response.
 
 ### D7 — MCP tool surface mirrors REST
 
