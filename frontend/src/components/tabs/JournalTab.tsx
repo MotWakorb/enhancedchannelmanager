@@ -66,6 +66,11 @@ function getActionClass(actionType: JournalActionType): string {
  */
 const ACTION_TYPE_LABELS: Record<string, string> = {
   merge_unapplied: 'Merge Not Applied',
+  // Reads as a pair with the entry above, which is the point: both name a
+  // merge that did not fully happen, and an operator scanning the Action
+  // dropdown for merge trouble finds them together. The generic transform
+  // produced "Bulk Merge Incomplete", a phrase no filter or doc ever used.
+  bulk_merge_incomplete: 'Merge Incomplete',
 };
 
 // Format action type for display
@@ -404,6 +409,10 @@ export function JournalTab() {
             {
               value: 'merge_unapplied',
               label: ACTION_TYPE_LABELS.merge_unapplied,
+            },
+            {
+              value: 'bulk_merge_incomplete',
+              label: ACTION_TYPE_LABELS.bulk_merge_incomplete,
             },
           ]}
         />

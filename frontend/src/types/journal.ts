@@ -22,6 +22,16 @@ export type JournalActionType =
    * (bead enhancedchannelmanager-i5ic0).
    */
   | 'merge_unapplied'
+  /**
+   * A bulk-merge group whose streams moved onto the target but whose source
+   * channels are NOT all gone — the deletions that errored and the ones the
+   * request never reached both leave the channel there. Its own action type,
+   * for the same reason as `merge_unapplied`: the groups needing attention are
+   * findable by filter rather than by reading every row's prose.
+   * `after_value.undeleted_ids` names the channels still upstream
+   * (bead enhancedchannelmanager-ftidn).
+   */
+  | 'bulk_merge_incomplete'
   | 'refresh'
   | 'start'
   | 'stop'

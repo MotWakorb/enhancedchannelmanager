@@ -11,14 +11,22 @@
  * The property: for every action type with a hand-written label, the badge
  * rendered for a row of that type reads the SAME string the filter offers.
  * `ACTION_TYPE_LABELS` is what makes that structural — one entry feeds both —
- * so what is pinned here is the rendered output of the only current entry plus
- * the untouched generic path. This is an assertion about `merge_unapplied`,
- * not an enumeration of the dropdown; a second hand-written label would need
- * its own case here.
+ * so what is pinned here is the rendered output of each entry plus the
+ * untouched generic path. Each hand-written label carries its own case: these
+ * are assertions about specific action types, not an enumeration of the
+ * dropdown.
+ *
+ * `bulk_merge_incomplete` joined later and shows why the last case matters.
+ * The backend emits it for a bulk-merge group whose source channels are not
+ * all gone, and `docs/api.md` tells an operator to filter the Journal on the
+ * action type to find the merges that need attention — but it was in neither
+ * the `JournalActionType` union nor `ACTION_TYPE_LABELS`, so it fell through
+ * the generic transform and was absent from the Action dropdown entirely. The
+ * advice named a filter that did not exist.
  */
 import type * as React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { JournalTab } from './JournalTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import * as api from '../../services/api';
@@ -89,6 +97,57 @@ describe('JournalTab — filter labels and row badges agree', () => {
     // generic title-case of the identifier and is what they used to see.
     expect(screen.queryByText('Merge Unapplied')).toBeNull();
   });
+
+  it('renders the bulk_merge_incomplete badge with the label the filter offers', async () => {
+    vi.mocked(api.getJournalEntries).mockResolvedValue(
+      mockResponse([
+        makeEntry({
+          action_type: 'bulk_merge_incomplete',
+          description: "Merged 3 channels into 'BBC One'; 2 source channels remain",
+        }),
+      ]),
+    );
+
+    renderWithProviders(<JournalTab />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Merge Incomplete')).toBeInTheDocument();
+    });
+    // What the generic title-case of the identifier produced, which is what an
+    // operator used to see and what no filter or doc ever said.
+    expect(screen.queryByText('Bulk Merge Incomplete')).toBeNull();
+  });
+
+  it.each([
+    ['merge_unapplied' as const],
+    ['bulk_merge_incomplete' as const],
+  ])(
+    'offers %s in the Action dropdown under the same words as its badge',
+    async (actionType) => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(
+        mockResponse([makeEntry({ action_type: actionType })]),
+      );
+
+      renderWithProviders(<JournalTab />);
+
+      // The badge is the operator's starting point: read what it actually says
+      // rather than restating a literal here, so a label changed in one place
+      // and not the other fails this test instead of passing both halves.
+      const badgeText = await waitFor(() => {
+        const text = document
+          .querySelector('.entry-row .action-badge')
+          ?.textContent?.trim();
+        expect(text).toBeTruthy();
+        return text as string;
+      });
+
+      fireEvent.click(screen.getByText('All Actions'));
+
+      expect(
+        await screen.findByRole('option', { name: badgeText as string }),
+      ).toBeInTheDocument();
+    },
+  );
 
   it('leaves the generic title-case in place for every other action type', async () => {
     vi.mocked(api.getJournalEntries).mockResolvedValue(
