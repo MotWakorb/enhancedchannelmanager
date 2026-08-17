@@ -277,9 +277,26 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         <p className="backup-card-description">
           Export ECM configuration as a single YAML file. Choose which sections to include.
         </p>
+        {/* The export's redaction contract, restated for the operator (bead
+            enhancedchannelmanager-gi4zn). This box used to say "sensitive data
+            (passwords, API keys) are redacted", which is the exact reading that
+            made the defect plausible: it names only the secret half of a
+            credential, so an operator reasonably concluded the whole provider
+            sign-in was covered when the username was not. The gather is now the
+            single redaction authority for both this YAML export and the DBAS
+            artifact, so all three rules — credential keys, provider identity,
+            and credentials inside a URL value — apply here too. Says what the
+            file carries and what the operator re-enters, not an inventory of
+            redacted key names; docs/user_guide/backup-restore/backup-overview.md
+            carries the full list. */}
         <div className="backup-sensitive-warning">
           <span className="material-icons">info</span>
-          <span>Sensitive data (passwords, API keys) are redacted in the export.</span>
+          <span>
+            <strong>No working credentials leave in this file.</strong> Passwords, API keys,
+            provider usernames, and credentials carried inside a URL are all replaced with a
+            placeholder. Your configuration restores; your provider sign-ins do not — re-enter
+            those on each M3U account and EPG source.
+          </span>
         </div>
 
         {exportSections.length > 0 && (

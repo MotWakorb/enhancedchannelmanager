@@ -169,9 +169,21 @@ describe('BackupRestoreSection', () => {
       });
     });
 
-    it('shows sensitive data warning on YAML export', async () => {
+    // Bead enhancedchannelmanager-gi4zn. The previous assertion matched
+    // /redacted in the export/i, which the SUPERSEDED copy ("sensitive data
+    // (passwords, API keys) are redacted in the export") satisfied — so it
+    // could not fail while the panel described the old, narrower contract.
+    // These assert the two rules that copy omitted (provider identity, and
+    // credentials inside a URL value) plus the re-entry consequence, so
+    // reverting to a credentials-only sentence fails the test.
+    it('tells the operator the YAML export drops provider identity and URL credentials too', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText(/redacted in the export/i)).toBeInTheDocument();
+      const warning = screen.getByText(/No working credentials leave in this file/i)
+        .closest('.backup-sensitive-warning') as HTMLElement;
+      expect(warning).not.toBeNull();
+      expect(warning.textContent).toMatch(/provider usernames/i);
+      expect(warning.textContent).toMatch(/inside a URL/i);
+      expect(warning.textContent).toMatch(/re-enter/i);
 
       // Let mount-time fetches settle.
       await waitFor(() => {
