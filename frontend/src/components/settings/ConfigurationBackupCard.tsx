@@ -80,8 +80,8 @@ export function ConfigurationBackupCard() {
         <span>
           <strong>Configuration only — no credentials, no accounts.</strong> Your M3U and EPG
           provider sign-ins are not in this file, and neither are your ECM login accounts.
-          Restoring it brings your configuration back but not your access: you re-enter provider
-          credentials by hand afterwards. To carry them to another install, use{' '}
+          Restoring it brings your configuration back but not your access: on a fresh install you
+          re-enter every provider credential by hand. To carry them to another install, use{' '}
           <strong>Encrypted Backup (Migration)</strong> below with{' '}
           <strong>Include credentials</strong>.
         </span>
