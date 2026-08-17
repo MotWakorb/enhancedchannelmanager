@@ -66,11 +66,20 @@ function getActionClass(actionType: JournalActionType): string {
  */
 const ACTION_TYPE_LABELS: Record<string, string> = {
   merge_unapplied: 'Merge Not Applied',
-  // Reads as a pair with the entry above, which is the point: both name a
-  // merge that did not fully happen, and an operator scanning the Action
-  // dropdown for merge trouble finds them together. The generic transform
-  // produced "Bulk Merge Incomplete", a phrase no filter or doc ever used.
-  bulk_merge_incomplete: 'Merge Incomplete',
+  // DELIBERATELY IDENTICAL to what the generic transform already produced.
+  // `docs/user_guide/channels-streams/the-journal.md` names this badge "Bulk
+  // Merge Incomplete" four times, once as the heading of the paragraph telling
+  // operators it is the badge worth reading for. Renaming it to something
+  // tidier would recreate, for this action type, precisely the defect the
+  // entry above exists to fix: documentation sending an operator to look for
+  // words the badge does not use.
+  //
+  // The entry still earns its place. Without it the filter option below would
+  // need its own string literal, leaving the badge and the option as two
+  // independent sources that agree only by coincidence — the drift condition.
+  // With it they are the same string by construction, so a future rewording
+  // moves both at once.
+  bulk_merge_incomplete: 'Bulk Merge Incomplete',
 };
 
 // Format action type for display

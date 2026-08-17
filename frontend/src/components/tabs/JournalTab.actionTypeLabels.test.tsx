@@ -98,7 +98,7 @@ describe('JournalTab — filter labels and row badges agree', () => {
     expect(screen.queryByText('Merge Unapplied')).toBeNull();
   });
 
-  it('renders the bulk_merge_incomplete badge with the label the filter offers', async () => {
+  it('renders the bulk_merge_incomplete badge with the words the user guide names', async () => {
     vi.mocked(api.getJournalEntries).mockResolvedValue(
       mockResponse([
         makeEntry({
@@ -110,12 +110,16 @@ describe('JournalTab — filter labels and row badges agree', () => {
 
     renderWithProviders(<JournalTab />);
 
+    // `docs/user_guide/channels-streams/the-journal.md` names this badge four
+    // times, once as a paragraph heading. The badge text is therefore pinned
+    // UNCHANGED: the gap being closed is that it could not be filtered for, and
+    // renaming it while closing that gap would recreate the `merge_unapplied`
+    // defect — a document sending an operator to look for words the badge does
+    // not use. That the string also happens to be what the generic transform
+    // produced is why the agreement test below, not this one, is the guard.
     await waitFor(() => {
-      expect(screen.getByText('Merge Incomplete')).toBeInTheDocument();
+      expect(screen.getByText('Bulk Merge Incomplete')).toBeInTheDocument();
     });
-    // What the generic title-case of the identifier produced, which is what an
-    // operator used to see and what no filter or doc ever said.
-    expect(screen.queryByText('Bulk Merge Incomplete')).toBeNull();
   });
 
   it.each([
