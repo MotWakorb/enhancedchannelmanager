@@ -1677,7 +1677,7 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 
 | Endpoint | Description |
 |-|-|
-| `GET /api/backup/create` | Download a legacy ZIP backup (settings + journal.db + logos). Always fully redacted: there is no encrypted or credential-carrying variant of this format. Returns 500 if the `journal.db` scrub cannot complete (see [Backup failure is fail-closed](#backup-failure-is-fail-closed)). |
+| `GET /api/backup/create` | Download a legacy ZIP backup (`settings.json`, `journal.db`, and the `uploads/logos`, `tls` and `m3u_uploads` directories). Its `journal.db` goes through the same allowlist scrub as a standard artifact, so it carries no ECM accounts. The rest of the archive is **not** redacted: `settings.json` keeps `username`, and `tls` and `m3u_uploads` are copied verbatim (private keys, playlists with credential-bearing stream URLs). Treat the file as a secret. Returns 500 if the `journal.db` scrub cannot complete (see [Backup failure is fail-closed](#backup-failure-is-fail-closed)). |
 | `POST /api/backup/restore` | Restore from an uploaded legacy ZIP backup. Returns `notices` (see [Restore notices](#restore-notices)). |
 | `POST /api/backup/restore-initial` | Restore from a legacy backup during first-run setup. Serves an instance that has no user accounts yet, so no credentials are needed there; once the instance holds an operator identity it requires an authenticated human admin, exactly like `POST /api/backup/restore`. Returns `notices` (see [Restore notices](#restore-notices)). |
 | `GET /api/backup/export-sections` | List available YAML export sections. |

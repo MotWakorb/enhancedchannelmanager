@@ -50,7 +50,7 @@ Three rules do the work, and it takes all three because none of them alone is co
 
 1. **Credential-class field names.** Any field named like a secret (`password`, `api_key`, `smtp_password`, `plex_token`, `emby_api_key`, `jellyfin_api_key`, `telegram_bot_token`, and the rest of the same class) becomes `***REDACTED***`.
 2. **Provider identity, not just provider secrets.** `username` is removed too, everywhere it appears: on the M3U account row, inside `profiles[].custom_properties.user_info`, on EPG sources, and in core settings. For an Xtream Codes provider the username is half the credential pair and the half that names your subscription, so a backup that kept it was not a redacted backup. The one deliberate exception is the **Dispatcharr users** category, which lists your own Dispatcharr accounts rather than a third party's. The restore creates each of those accounts by username and checks for collisions on it, so replacing it would break the restore rather than protect anything.
-3. **Credentials hidden inside URLs.** A URL that carries a credential in its userinfo (`https://user:pass@host/...`) or in a query parameter (`get.php?username=...&password=...`) is caught by its *value*, not by the name of the field holding it. A URL that carries no credential is left alone, because the restore needs the address.
+3. **Credentials hidden inside URLs.** A URL that carries a credential in its userinfo (`https://<username>:<password>@host/...`) or in a query parameter (`get.php?username=...&password=...`) is caught by its *value*, not by the name of the field holding it. A URL that carries no credential is left alone, because the restore needs the address.
 
 On top of that, the copy of ECM's own database (`journal.db`) inside the artifact is reduced to a fixed list of tables that hold configuration a restore needs. Everything else is dropped outright rather than filtered. So a standard artifact carries **none** of the following:
 
@@ -65,7 +65,9 @@ Alert methods themselves are kept, because they are configuration you authored, 
 !!! warning "A backup now fails rather than shipping an unscrubbed database"
     If ECM cannot open, read, or rewrite its copy of `journal.db` while removing this data, the whole backup **fails** and no artifact is written. That is deliberate. The alternative, which is what earlier builds did, was to fall back to shipping the database as-is behind a successful-looking result. A failed backup is a problem to investigate; an artifact you believed was redacted and was not is worse. See [If a backup fails while removing sensitive data](take-a-backup.md#if-a-backup-fails-while-removing-sensitive-data).
 
-This applies to the **Full Backup (legacy `.zip`)** format on the same page as well: its copy of `journal.db` is built by the same code and carries the same fixed table list. The legacy format has no encrypted variant, so it can no longer carry ECM accounts or credentials under any setting.
+One part of this applies to the **Full Backup (legacy `.zip`)** format on the same page as well: its copy of `journal.db` is built by the same code and carries the same fixed table list, so the legacy artifact no longer carries your ECM accounts either.
+
+That is the whole of what the legacy format guarantees, and it does not make the `.zip` a redacted backup. Its `settings.json` masks the credential-class fields but keeps your Dispatcharr username, and it is not scrubbed for credentials embedded in URL values. The archive also copies your `tls/` and `m3u_uploads/` directories verbatim, which means TLS private keys and uploaded playlists whose stream URLs carry provider credentials. The warning on the Full Backup card, that the backup contains sensitive data including passwords and certificates, is the accurate description: treat the file as a secret, and take a standard backup when you need something safe to hand to somebody else.
 
 ### What this means in practice
 
