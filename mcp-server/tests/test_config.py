@@ -2,6 +2,8 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 
 class TestGetMCPApiKey:
     """Tests for config.get_mcp_api_key()."""
@@ -133,3 +135,48 @@ class TestGetMCPApiKeyStatus:
         with patch("config.SETTINGS_FILE", settings_file):
             from config import get_mcp_api_key
             assert get_mcp_api_key() == "k"
+
+
+class TestMCPAllowedHosts:
+    """The sidecar has a small safe default plus explicit operator additions."""
+
+    def test_defaults_cover_loopback_and_compose_service(self):
+        from config import get_mcp_allowed_hosts
+
+        assert get_mcp_allowed_hosts("") == (
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+            "ecm-mcp",
+        )
+
+    def test_operator_hosts_are_trimmed_and_deduplicated(self):
+        from config import get_mcp_allowed_hosts
+
+        assert get_mcp_allowed_hosts(
+            " media-box.local,192.168.1.20,media-box.local "
+        ) == (
+            "localhost",
+            "127.0.0.1",
+            "[::1]",
+            "ecm-mcp",
+            "media-box.local",
+            "192.168.1.20",
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "example.com/health",
+            "example.com?path=",
+            "example.com#fragment",
+            "example.com:6101",
+            "*",
+            "-bad.example",
+        ],
+    )
+    def test_malformed_or_permissive_entries_fail_closed(self, value):
+        from config import get_mcp_allowed_hosts
+
+        with pytest.raises(ValueError, match="MCP_ALLOWED_HOSTS"):
+            get_mcp_allowed_hosts(value)

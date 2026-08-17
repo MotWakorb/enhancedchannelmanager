@@ -13,6 +13,8 @@ services:
       - CONFIG_DIR=/config
       - ECM_URL=http://ecm:${ECM_PORT:-6100}
       - MCP_PORT=${MCP_PORT:-6101}
+      # Comma-separated LAN hostnames/IPs clients use for this sidecar.
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
     depends_on:
       ecm:
         condition: service_healthy

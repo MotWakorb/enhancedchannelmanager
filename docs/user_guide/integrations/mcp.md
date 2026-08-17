@@ -17,6 +17,12 @@ as the `?api_key=` query parameter. Both methods below run on *your* machine and
 connect to ECM over your LAN/VPN. **Nothing needs to be exposed to the public
 internet**.
 
+When connecting through a LAN hostname or IP, add that exact value to the MCP
+container's comma-separated `MCP_ALLOWED_HOSTS` environment variable and
+recreate the container. The built-in allowlist covers `localhost`, loopback
+IPs, and the canonical `ecm-mcp` Compose service name. Entries are hostnames or
+IPs only—do not include `http://`, a port, a path, or `*`.
+
 | | mcp-remote bridge (Claude Desktop) | Claude Code (`.mcp.json`) |
 |---|---|---|
 | **Best for** | Claude Desktop users; private/homelab; existing setups | Claude Code in any project |
@@ -172,6 +178,12 @@ To rotate the static key:
    `?api_key=YOUR_API_KEY` value.
 4. Fully quit and reopen Claude Desktop (Step 4 above).
 
+After upgrading from a build that used Starlette 1.0.0 or earlier, rotate the
+key even if MCP was intended to be private. The old key must be treated as
+potentially exposed. Regeneration invalidates it immediately; update every MCP
+client with the new value afterward. The sidecar re-reads the key on each
+request, so it does not need a restart for the credential change itself.
+
 Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias). That is
 the Dispatcharr REST API token and is separate from MCP auth.
 
@@ -323,6 +335,11 @@ Verify manually:
 ```bash
 curl http://YOUR_ECM_HOST:6101/health
 ```
+
+If the response is `400 Invalid host header` or `421 Invalid Host header`, add
+`YOUR_ECM_HOST` (without scheme or port) to `MCP_ALLOWED_HOSTS` on the
+`ecm-mcp` service and recreate that container. Do not use `*`; it disables the
+DNS-rebinding boundary the allowlist provides.
 
 If that fails, check the MCP container is running (`docker ps | grep ecm-mcp`)
 and that the `ECM_URL` environment variable on the MCP container points at the

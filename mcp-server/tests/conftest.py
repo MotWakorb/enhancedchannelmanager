@@ -13,13 +13,12 @@ runs exactly once for the whole pytest session. Per-test auth state is injected
 with ``unittest.mock.patch`` inside each test, so sharing the client is safe.
 """
 import pytest
-from starlette.testclient import TestClient
-
 from server import app
+from starlette.testclient import TestClient
 
 
 @pytest.fixture(scope="session")
 def client():
     """One TestClient (and one app lifespan) for the entire test session."""
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://localhost") as c:
         yield c

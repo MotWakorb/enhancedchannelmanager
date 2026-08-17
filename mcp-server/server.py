@@ -6,21 +6,19 @@ Communicates with the ECM backend via HTTP API using an API key for auth.
 """
 import contextlib
 import hmac
+import ipaddress
 import logging
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
-from starlette.routing import Mount, Route
-
 from config import (
+    MCP_ALLOWED_HOSTS,
     MCP_PORT,
     get_mcp_api_key,
     get_mcp_api_key_status,
+    normalize_mcp_allowed_host,
 )
+from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
+
 # MCP OAuth offering RETIRED (bd-9axgc). The OAuth Resource-Server verify path
 # (oauth_rs.verify_oauth_token), the RFC 9728 discovery module (oauth_discovery),
 # and the config OAuth helpers (get_signing_key / get_signing_key_status /
@@ -30,6 +28,12 @@ from config import (
 # fall through to the static-key path — CD1 no-fail-cascade).
 from oauth_rs import looks_like_jwt
 from resources import register_all_resources
+from starlette.applications import Starlette
+from starlette.datastructures import Headers
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Mount, Route
 from tools import register_all_tools
 
 # Configure logging
@@ -41,10 +45,16 @@ logger = logging.getLogger(__name__)
 
 # Create MCP server using the high-level FastMCP API.
 #
-# DNS-rebinding protection (Host/Origin allowlisting) is disabled: ECM's MCP
-# sidecar is intended to be reached from another host by IP or hostname, and
-# FastMCP's default allowlist is localhost-only — which would 421 every remote
-# client. Access is gated by the static API key (APIKeyAuthMiddleware) instead.
+_MCP_SDK_ALLOWED_HOSTS = [
+    variant
+    for host in MCP_ALLOWED_HOSTS
+    for variant in (host, f"{host}:*")
+]
+
+# The home-lab defaults admit loopback and the canonical Compose service name.
+# Operators serving the sidecar at a LAN IP/hostname add it explicitly through
+# MCP_ALLOWED_HOSTS. The SDK performs the same check again at the transport
+# boundary, so a future outer-app routing change cannot silently remove it.
 mcp = FastMCP(
     "ecm-mcp",
     instructions=(
@@ -53,7 +63,10 @@ mcp = FastMCP(
         "manage M3U accounts, EPG sources, run auto-creation pipelines, probe "
         "stream health, view statistics, and more."
     ),
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_MCP_SDK_ALLOWED_HOSTS,
+    ),
 )
 
 # Register tools and resources
@@ -65,6 +78,68 @@ register_all_resources(mcp)
 #: required. The supported credential is the static MCP API key presented as
 #: ``?api_key=`` or a non-JWT-shaped ``Bearer <key>`` (OAuth retired — bd-9axgc).
 _WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
+
+
+def _validated_request_host(host_header: str) -> str | None:
+    """Return the normalized hostname when an HTTP Host authority is valid."""
+    if not host_header or any(character.isspace() for character in host_header):
+        return None
+
+    hostname: str
+    remainder: str
+    if host_header.startswith("["):
+        closing_bracket = host_header.find("]")
+        if closing_bracket < 0:
+            return None
+        hostname = host_header[: closing_bracket + 1]
+        remainder = host_header[closing_bracket + 1 :]
+        try:
+            ipaddress.IPv6Address(hostname[1:-1])
+        except ValueError:
+            return None
+    else:
+        if host_header.count(":") > 1:
+            return None
+        hostname, separator, port = host_header.partition(":")
+        remainder = f":{port}" if separator else ""
+
+    if remainder:
+        if not remainder.startswith(":"):
+            return None
+        port = remainder[1:]
+        if not port.isascii() or not port.isdigit() or int(port) > 65535:
+            return None
+
+    try:
+        return normalize_mcp_allowed_host(hostname)
+    except ValueError:
+        return None
+
+
+class MCPAllowedHostMiddleware:
+    """Reject malformed/untrusted Host values before Starlette routing.
+
+    Starlette's generic TrustedHostMiddleware splits on the first colon, which
+    cannot correctly validate bracketed IPv6 authorities. This small MCP-only
+    boundary validates the full RFC-style authority and compares the normalized
+    hostname against the configured exact allowlist.
+    """
+
+    def __init__(self, app, allowed_hosts: tuple[str, ...]) -> None:
+        self.app = app
+        self.allowed_hosts = frozenset(allowed_hosts)
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+
+        host = _validated_request_host(Headers(scope=scope).get("host", ""))
+        if host not in self.allowed_hosts:
+            response = PlainTextResponse("Invalid Host header", status_code=400)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -94,7 +169,11 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request, call_next):
-        path = request.url.path
+        # ``scope["path"]`` is the trusted path Uvicorn decoded from the HTTP
+        # request target. Never derive an auth exemption from ``request.url``:
+        # Starlette <=1.0.0 allowed a malformed Host header to poison its path
+        # and make a routed /mcp request appear to be /health (CVE-2026-48710).
+        path = request.scope.get("path", "")
 
         # Health endpoint is always public
         if path == "/health":
@@ -236,6 +315,20 @@ async def handle_health(request):
 streamable_app = mcp.streamable_http_app()
 
 
+def mcp_http_middleware() -> list[Middleware]:
+    """Build the outer HTTP security stack used by production and E2E tests.
+
+    Authentication deliberately runs first: an unauthenticated poisoned /mcp
+    request receives the same 401 as any other missing-credential request.
+    Requests admitted by auth, plus public /health requests, then pass through
+    strict Host validation before routing.
+    """
+    return [
+        Middleware(APIKeyAuthMiddleware),
+        Middleware(MCPAllowedHostMiddleware, allowed_hosts=MCP_ALLOWED_HOSTS),
+    ]
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app):
     # MCP OAuth offering RETIRED (bd-9axgc): the one-per-startup OAuth discovery
@@ -254,9 +347,7 @@ app = Starlette(
         Mount("/", app=streamable_app),
     ],
     lifespan=lifespan,
-    middleware=[
-        Middleware(APIKeyAuthMiddleware),
-    ],
+    middleware=mcp_http_middleware(),
 )
 
 if __name__ == "__main__":
