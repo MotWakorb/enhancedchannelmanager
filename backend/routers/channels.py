@@ -11,7 +11,7 @@ import re
 import time
 import uuid
 from datetime import date
-from typing import Any, Optional, Literal, Sequence, Union
+from typing import Any, Callable, Optional, Literal, Sequence, Union
 from urllib.parse import parse_qs, quote, urlsplit
 
 import httpx
@@ -271,6 +271,110 @@ def write_journal_rows(
                 "[%s] UNJOURNALLED MUTATION (batch=%s): %s", log_tag, batch_id, row,
             )
         raise
+
+
+def flush_journal_rows_on_exit(
+    flush: Callable[[], int],
+    *,
+    unwinding: bool,
+    context: str,
+    log_tag: str = "CHANNELS",
+) -> None:
+    """Drain a handler's queued rows from its ``finally``, without theft.
+
+    THE ONE MECHANISM, shared by every request handler that queues rows and
+    flushes them on the way out (fix round 3). The bulk-commit executor already
+    carried this precedence guard as `unwinding_base_exception`, and the
+    reasoning that a request handler had no analogue was wrong: the guard is
+    not about keeping ``task.cancelled()`` true, it is about which exception
+    reaches the caller.
+
+    ``write_journal_rows`` RE-RAISES ``BaseException`` by design — it logs
+    every row it has not resolved first, but it does not swallow. So a handler
+    already unwinding an ``asyncio.CancelledError`` from a client disconnect,
+    or an ``HTTPException`` it raised deliberately, whose synchronous journal
+    dependency then raises ``SystemExit`` or ``KeyboardInterrupt`` inside this
+    flush, had its original exception REPLACED. A disconnected request became
+    worker termination, and an operator-actionable 422 became a 500.
+
+    ``unwinding`` is therefore what the caller has already observed about its
+    own exit: ``True`` when something is on its way out of the ``try``,
+    ``False`` on the ordinary return. It is NOT a blanket ``except
+    BaseException: pass`` — that would be the same bug pointing the other way,
+    silently uncancelling a task when the flush on a clean return raised a
+    ``CancelledError`` of its own. Nothing is swallowed while nothing is
+    unwinding.
+    """
+    try:
+        unwritten = flush()
+    except Exception as flush_err:  # noqa: BLE001 — must not mask the unwind
+        logger.exception(
+            "[%s] Journal flush failed while leaving %s: %s",
+            log_tag, context, flush_err,
+        )
+    except BaseException as flush_base:
+        logger.exception(
+            "[%s] Journal flush raised a BaseException while leaving %s: %s",
+            log_tag, context, flush_base,
+        )
+        if not unwinding:
+            raise
+    else:
+        if unwritten:
+            logger.error(
+                "[%s] %s journal row(s) for %s could not be written and this "
+                "request is not returning a body to carry the count; the rows "
+                "are logged above", log_tag, unwritten, context,
+            )
+
+
+def finalise_bulk_merge_row(row: dict) -> dict:
+    """Rewrite one bulk-merge row's ACTION and PROSE from the facts it holds.
+
+    Called every time a fact about the group changes — after the target PATCH
+    returns, and after each source deletion returns — so the row sitting on the
+    flush queue is true at every ``await``, which is where a cancellation can
+    write it out.
+
+    Round 2 asserted ``Merged {n} channels into '{target}'`` at queue time and
+    then mutated ``deleted_ids`` by reference. That updates the id list and
+    corrects NEITHER the action nor the description, so a target PATCH that
+    landed with every source ``DELETE`` failing produced a row claiming a
+    completed merge while every source channel still existed.
+
+    A merge is COMPLETE only when the combined streams are on the target and
+    every source is gone. Anything else gets its own action type, so an
+    operator can filter for the merges that need attention instead of reading
+    every row's prose — and ``undeleted_ids`` names exactly which channels are
+    still upstream, counting the ones this request never reached alongside the
+    ones whose deletion failed, because both are still there.
+
+    Returns ``row`` for convenience; the mutation is the point.
+    """
+    after = row["after_value"]
+    deleted = after["deleted_ids"]
+    undeleted = after["undeleted_ids"]
+    target_patched = bool(after["streams_moved"])
+    target_name = row["entity_name"]
+    total = len(deleted) + len(undeleted)
+    complete = target_patched and not undeleted
+
+    row["action_type"] = "bulk_merge" if complete else "bulk_merge_incomplete"
+    if target_patched:
+        head = f"Moved {after['stream_count']} stream(s) into '{target_name}'"
+    else:
+        head = f"'{target_name}' needed no stream change"
+    if complete:
+        tail = f"and deleted all {total} source channel(s)"
+    elif deleted:
+        tail = (
+            f"and deleted {len(deleted)} of {total} source channel(s); "
+            f"{len(undeleted)} still exist"
+        )
+    else:
+        tail = f"and deleted none of the {total} source channel(s) — they all still exist"
+    row["description"] = f"{head}, {tail}."
+    return row
 
 
 def journal_rows_for(rows: list[dict], response: Any, *, context: str) -> Any:
@@ -1601,6 +1705,32 @@ async def preview_csv(data: dict):
 # Static bulk routes — MUST be defined before /api/channels/{channel_id}
 # ---------------------------------------------------------------------------
 
+def _assignment_description(old_number, new_number, *, observed: bool) -> str:
+    """Prose for one channel's row in a bulk number assignment.
+
+    ``observed`` is what separates "Dispatcharr has not told us yet" from "the
+    number is genuinely absent". A request that omits ``starting_number`` asks
+    Dispatcharr to choose, and the assign endpoint returns no numbers, so the
+    row is queued the moment the assignment lands with nothing to say about the
+    new number and is finalised from a read-back. A row that has not been
+    finalised must say so rather than name a number nobody observed.
+    """
+    if not observed:
+        return (
+            f"Changed channel number from {format_channel_number(old_number)}; "
+            "Dispatcharr chose the new number and ECM has not read it back"
+        )
+    if new_number is None:
+        return (
+            f"Changed channel number from {format_channel_number(old_number)}; "
+            "the channel now carries no number"
+        )
+    return (
+        f"Changed channel number from {format_channel_number(old_number)} "
+        f"to {format_channel_number(new_number)}"
+    )
+
+
 @router.post("/assign-numbers")
 async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAdminIfEnabled):
     """Bulk assign channel numbers. Admin only (bulk operator op, bd-um30y)."""
@@ -1622,6 +1752,10 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
     # one row built. Same shape as the immediate group-delete path in
     # `routers/channel_groups.py`.
     pending_rows: list[dict] = []
+    # Set by the `except` clauses below, read by the `finally`. See the guard
+    # there: a flush that raises must never REPLACE an exception that is
+    # already on its way out.
+    unwinding = False
 
     def flush_rows() -> int:
         """Write what is queued and return how many could NOT be written.
@@ -1675,11 +1809,31 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
         # below is a separate write that may never happen, and recording its
         # planned result before it lands is the same false claim in the other
         # direction. Each rename that returns updates its own row in place.
+        #
+        # `starting_number` IS OPTIONAL and omitting it is not an edge case: it
+        # is how a caller asks Dispatcharr to choose the numbers, and
+        # `DispatcharrClient.assign_channel_numbers` passes the `None` straight
+        # through by omitting the key. Round 2 computed `starting_number + idx`
+        # here, in front of the null check the auto-rename block still had, so
+        # an omitted starting number raised `TypeError` on `None + 0` AFTER the
+        # assignment had landed — a 500 with the queue empty and no row even
+        # attempted, which is the defect this whole branch removes.
+        #
+        # Dispatcharr's `POST /api/channels/channels/assign/` declares no
+        # response body beyond "Channels have been auto-assigned!"
+        # (`swagger.json`), so the numbers it chose are NOT in `result` and
+        # cannot be inferred from the request either. They are read back below.
+        # Until that read returns, the row says the number is not yet known
+        # rather than naming one, exactly as `name` does for an unlanded
+        # rename.
+        chose_numbers_upstream = request.starting_number is None
         row_for_channel: dict[Any, dict] = {}
         for idx, channel_id in enumerate(request.channel_ids):
             before_data = channels_before.get(channel_id, {})
             old_number = before_data.get("channel_number")
-            new_number = request.starting_number + idx
+            new_number = (
+                None if chose_numbers_upstream else request.starting_number + idx
+            )
             channel_name = before_data.get("name", f"Channel {channel_id}")
 
             row = {
@@ -1687,9 +1841,8 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
                 "action_type": "reorder",
                 "entity_id": channel_id,
                 "entity_name": channel_name,
-                "description": (
-                    f"Changed channel number from {format_channel_number(old_number)} "
-                    f"to {format_channel_number(new_number)}"
+                "description": _assignment_description(
+                    old_number, new_number, observed=not chose_numbers_upstream,
                 ),
                 "before_value": {"channel_number": old_number, "name": channel_name},
                 "after_value": {"channel_number": new_number, "name": channel_name},
@@ -1697,6 +1850,30 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
             }
             row_for_channel[channel_id] = row
             pending_rows.append(row)
+
+        # Read back what Dispatcharr chose, one channel at a time, and finalise
+        # each row from the observation. Only on the path where ECM did not
+        # specify the numbers — the specified path already knows them and must
+        # not pay N extra GETs for a several-hundred-channel renumber.
+        if chose_numbers_upstream:
+            for channel_id, row in row_for_channel.items():
+                try:
+                    observed = await client.get_channel(channel_id)
+                except Exception as e:
+                    # The assignment landed; only the read-back failed. The row
+                    # keeps saying the number has not been read back, which is
+                    # true, rather than acquiring one nothing observed.
+                    logger.warning(
+                        "[CHANNELS] Assigned channel %s but could not read its "
+                        "new number back: %s", channel_id, e,
+                    )
+                    continue
+                new_number = observed.get("channel_number")
+                row["after_value"]["channel_number"] = new_number
+                row["description"] = _assignment_description(
+                    row["before_value"]["channel_number"], new_number,
+                    observed=True,
+                )
 
         # Apply name updates if any
         for channel_id, new_name in name_updates.items():
@@ -1728,22 +1905,30 @@ async def assign_channel_numbers(request: AssignNumbersRequest, _admin=RequireAd
         return result
     except Exception as e:
         logger.exception("[CHANNELS] Failed to assign channel numbers: %s", e)
+        unwinding = True
         raise HTTPException(status_code=500, detail="Internal server error")
+    except BaseException:
+        # NOT an `Exception`, so the clause above never sees it: a
+        # `CancelledError` from a client disconnect or application shutdown,
+        # `SystemExit`, `KeyboardInterrupt`. Nothing to record and no envelope
+        # to return — this clause exists only to tell the `finally` that
+        # something is already on its way out.
+        unwinding = True
+        raise
     finally:
         # Every exit that is NOT the return above: the 500, a cancellation from
         # application shutdown, a `SystemExit`. `asyncio.CancelledError`
-        # inherits from `BaseException`, so the handler above never saw it, and
-        # the renumber it interrupts has already landed. `flush_rows` has
-        # emptied the queue on the success path, so this writes only what that
-        # path never reached.
-        unwritten = flush_rows()
-        if unwritten:
-            logger.error(
-                "[CHANNELS] %s journal row(s) for the assignment of %s "
-                "channel(s) could not be written and this request is not "
-                "returning a body to carry the count; the rows are logged above",
-                unwritten, len(request.channel_ids),
-            )
+        # inherits from `BaseException`, so the `except Exception` above never
+        # saw it, and the renumber it interrupts has already landed.
+        # `flush_rows` has emptied the queue on the success path, so this
+        # writes only what that path never reached.
+        flush_journal_rows_on_exit(
+            flush_rows,
+            unwinding=unwinding,
+            context=(
+                f"the assignment of {len(request.channel_ids)} channel(s)"
+            ),
+        )
 
 
 #: The fields of :class:`BulkUpdateChannelOp` that describe the
@@ -5094,6 +5279,9 @@ async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEn
     # row appended. Same shape as the immediate group-delete path in
     # `routers/channel_groups.py`.
     journal_rows: list[dict] = []
+    # Set by the `except BaseException` below, read by the `finally`: a flush
+    # that raises must never REPLACE an exception already on its way out.
+    unwinding = False
 
     def flush_rows() -> int:
         """Write what is queued and return how many could NOT be written.
@@ -5184,26 +5372,53 @@ async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEn
                         ),
                     )
 
-                # Built before the first write and QUEUED the moment one lands.
-                # `deleted` goes in by reference, so every deletion that returns
-                # is visible in the row already on the queue without it having
-                # to be re-appended.
+                # Built before the first write, QUEUED the moment one lands, and
+                # REWRITTEN from the outcome every time a fact about this group
+                # changes — so the row on the queue is true at every `await`,
+                # which is where a cancellation can flush it (bead
+                # …-ftidn round 3).
+                #
+                # Round 2 queued a row asserting `Merged {n} channels into
+                # '{target}'` at the moment the target PATCH landed, and source
+                # DELETE failures are swallowed with `continue` below. A target
+                # PATCH that succeeded with every delete failing therefore wrote
+                # a row claiming a completed merge while every source channel
+                # still existed — this branch's own defect, reintroduced by the
+                # fix for a different one. Mutating `deleted` by reference
+                # updated the id list and corrected neither the action nor the
+                # prose. `_finalise` is what corrects both; queueing early and
+                # describing accurately are not in tension.
+                #
+                # `deleted` and `undeleted` go into `after_value` BY REFERENCE,
+                # so the row holds the group's facts and
+                # `finalise_bulk_merge_row` needs nothing but the row to render
+                # the action and the prose from them.
                 deleted: list[int] = []
+                undeleted: list[int] = list(item.source_channel_ids)
                 item_row = {
                     "category": "channel",
                     "action_type": "bulk_merge",
                     "entity_id": item.target_channel_id,
                     "entity_name": target_name,
-                    "description": f"Merged {len(item.source_channel_ids)} channels into '{target_name}'",
+                    "description": "",
                     "before_value": {"source_names": source_names},
-                    "after_value": {"stream_count": len(all_streams), "deleted_ids": deleted},
+                    "after_value": {
+                        "stream_count": len(all_streams),
+                        "deleted_ids": deleted,
+                        "undeleted_ids": undeleted,
+                        "streams_moved": False,
+                    },
                     "batch_id": batch_id,
                 }
+
+                finalise_bulk_merge_row(item_row)
                 row_queued = False
 
                 # Update target with combined streams
                 if all_streams:
                     await client.update_channel(item.target_channel_id, {"streams": all_streams})
+                    item_row["after_value"]["streams_moved"] = True
+                    finalise_bulk_merge_row(item_row)
                     journal_rows.append(item_row)
                     row_queued = True
 
@@ -5215,6 +5430,8 @@ async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEn
                         logger.warning("[CHANNELS] bulk-merge: failed to delete source %s: %s", src_id, e)
                         continue
                     deleted.append(src_id)
+                    undeleted.remove(src_id)
+                    finalise_bulk_merge_row(item_row)
                     if not row_queued:
                         journal_rows.append(item_row)
                         row_queued = True
@@ -5224,6 +5441,7 @@ async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEn
                     # but the group is still one of the outcomes the envelope
                     # reports, so it keeps its row rather than vanishing from
                     # the trail while being counted as merged.
+                    # `finalise_bulk_merge_row` has already made that row say so.
                     journal_rows.append(item_row)
 
                 merged_count += 1
@@ -5231,6 +5449,11 @@ async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEn
                     "target_channel_id": item.target_channel_id,
                     "target_name": target_name,
                     "sources_deleted": len(deleted),
+                    # The same fact the row now carries, so a caller reading the
+                    # envelope and an operator reading the journal cannot reach
+                    # different conclusions about one group. Always present, so
+                    # a caller checks a number rather than probing for a key.
+                    "sources_failed": len(item.source_channel_ids) - len(deleted),
                     "total_streams": len(all_streams),
                     "success": True,
                 })
@@ -5275,17 +5498,19 @@ async def bulk_merge_channels(request: BulkMergeRequest, _admin=RequireAdminIfEn
             # the number rather than probing for a key.
             "journalRowsUnwritten": flush_rows(),
         }
+    except BaseException:
+        # Every way out that is not the return above — the 422 for a stale id,
+        # a per-item `Exception` that escaped, a cancellation, a `SystemExit`.
+        # Nothing to record and no envelope to return; this clause exists only
+        # to tell the `finally` that something is already on its way out, so
+        # the flush there cannot take its place.
+        unwinding = True
+        raise
     finally:
-        # Every exit that is NOT the return above: the 422 for a stale id, a
-        # cancellation from application shutdown, a `SystemExit`.
         # `asyncio.CancelledError` inherits from `BaseException`, so neither
         # handler in the loop saw it, and the channels deleted before it
         # arrived are gone. `flush_rows` has emptied the queue on the success
         # path, so this writes only what that path never reached.
-        unwritten = flush_rows()
-        if unwritten:
-            logger.error(
-                "[CHANNELS] %s bulk-merge journal row(s) could not be written "
-                "and this request is not returning a body to carry the count; "
-                "the rows are logged above", unwritten,
-            )
+        flush_journal_rows_on_exit(
+            flush_rows, unwinding=unwinding, context="a bulk merge",
+        )

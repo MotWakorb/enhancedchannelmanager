@@ -234,9 +234,15 @@ class TestBulkMergeJournalsEachItemAsItsWritesLand:
 
         rows = _rows(journal_double)
         assert len(rows) == 1, rows
-        assert rows[0]["action_type"] == "bulk_merge"
+        # `bulk_merge_incomplete`, not `bulk_merge`. Round 2 pinned the latter
+        # here and that was the wrong expectation: source 44 is still upstream,
+        # so this group did not merge. Corrected in round 3 along with the
+        # defect it was pinning — see
+        # ``test_ftidn_round3_rows_finalised_from_the_outcome.py``.
+        assert rows[0]["action_type"] == "bulk_merge_incomplete"
         assert rows[0]["entity_id"] == 42
         assert rows[0]["after_value"]["deleted_ids"] == [43]
+        assert rows[0]["after_value"]["undeleted_ids"] == [44]
 
     @pytest.mark.asyncio
     async def test_an_earlier_item_survives_a_later_items_cancellation(
