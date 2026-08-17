@@ -10,10 +10,75 @@ class IntersectionObserverMock {
   unobserve() {}
 }
 
+/**
+ * A frame clock these tests OWN, instead of one they race.
+ *
+ * The deep-link scroll is performed inside `requestAnimationFrame`, and jsdom
+ * implements rAF as a 60 Hz `setInterval` (`jsdom/lib/jsdom/browser/Window.js`
+ * — the interval is even started lazily, on the first outstanding callback).
+ * A test that WAITS for that frame is waiting on a timer it does not control,
+ * so on a loaded runner the tick arrives late and the assertion loses. That is
+ * bead enhancedchannelmanager-vmk2m.1: the flake recurred straight THROUGH a
+ * `waitFor` added to outrun it, because a longer wait is still a wait. This
+ * flake and its sibling in tabs/PendingMergesPage.test.tsx have between them
+ * blocked the dev image publish three times.
+ *
+ * So `requestAnimationFrame` here only queues. Nothing runs a frame except
+ * `flushFrames()`, which runs every queued callback inside `act`. No assertion
+ * below depends on WHEN a frame fires — only on the fact that one was queued,
+ * which the assertion itself then makes true by running it.
+ *
+ * The NEGATIVE assertions get stronger too, not merely more stable. "Sleep,
+ * then assert no scroll happened" passes whenever the frame is merely late —
+ * it is a check that cannot fail while the thing it guards is broken. Running
+ * the queue first turns it into a fact about what the frames actually did.
+ */
+function installFrameClock() {
+  const queued = new Map<number, FrameRequestCallback>();
+  let nextHandle = 0;
+  const queueFrame = (callback: FrameRequestCallback) => {
+    const handle = ++nextHandle;
+    queued.set(handle, callback);
+    return handle;
+  };
+  vi.stubGlobal('requestAnimationFrame', queueFrame);
+  vi.stubGlobal('cancelAnimationFrame', (handle: number) => { queued.delete(handle); });
+  // The instrument checks itself, because a clock that quietly failed to
+  // install is INVISIBLE here: jsdom's real 60 Hz interval fires during the
+  // `findBy*` that precedes every flush, so the assertions would still pass —
+  // by racing the timer again, which is the entire defect. Measured: with the
+  // stub misnamed, ten of these eleven tests stayed green.
+  if (globalThis.requestAnimationFrame !== queueFrame) {
+    throw new Error('installFrameClock: requestAnimationFrame was not replaced; '
+      + 'these tests would silently be racing jsdom\'s real frame timer again.');
+  }
+  return queued;
+}
+
+/** The queue installed for the running test, replaced by every `beforeEach`. */
+let frames = new Map<number, FrameRequestCallback>();
+
+/**
+ * Runs every queued frame, including frames a frame queues, inside `act` so
+ * React commits whatever they cause. The pass bound is a guard against a
+ * self-requeueing animation, not a tolerance: nothing here should need two.
+ */
+async function flushFrames() {
+  await act(async () => {
+    for (let pass = 0; pass < 10 && frames.size > 0; pass += 1) {
+      const pending = [...frames.values()];
+      frames.clear();
+      pending.forEach((callback) => callback(performance.now()));
+      await Promise.resolve();
+    }
+  });
+}
+
 describe('StickySectionNav', () => {
   beforeEach(() => {
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    frames = installFrameClock();
     window.history.replaceState(null, '', '#stats');
   });
 
@@ -92,8 +157,12 @@ describe('StickySectionNav', () => {
     </div>);
     ref.current!.scrollTo = scrollTo;
     const button = await screen.findByRole('button', { name: 'Watch history' });
+    // `aria-current` is the observable the component settles: it is set in the
+    // same synchronous block that queues the scroll. Run that frame rather than
+    // waiting for one — see `installFrameClock`.
     expect(button).toHaveAttribute('aria-current', 'location');
-    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    await flushFrames();
+    expect(scrollTo).toHaveBeenCalled();
   });
 
   it('uses instant scrolling when reduced motion is requested', async () => {
@@ -171,6 +240,7 @@ describe('StickySectionNav — the deep link fires once per navigation (bead ue1
   beforeEach(() => {
     vi.stubGlobal('IntersectionObserver', IntersectionObserverMock);
     vi.stubGlobal('matchMedia', vi.fn().mockReturnValue({ matches: false }));
+    frames = installFrameClock();
     window.history.replaceState(null, '', '#stats');
     scrollTo = vi.fn<(...args: unknown[]) => void>();
     // On the prototype, not on the instance, so the FIRST scroll is counted
@@ -179,8 +249,19 @@ describe('StickySectionNav — the deep link fires once per navigation (bead ue1
     Element.prototype.scrollIntoView = vi.fn();
   });
 
-  /** Lets the queued `requestAnimationFrame` scroll run. */
-  const settle = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+  /**
+   * Gives React the turn a DOM change needs (MutationObserver → `discover` →
+   * `setItems` → the deep-link effect), then RUNS every frame that turn queued.
+   *
+   * The frame flush is what makes the "never fired" assertions below mean
+   * something: a frame that has been queued can no longer escape them by
+   * arriving after the assertion.
+   */
+  const settle = async () => {
+    await flushFrames();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 40)); });
+    await flushFrames();
+  };
 
   it('does not re-fire when the page changes underneath the reader', async () => {
     window.history.replaceState(null, '', '#stats?section=stats-section-watch-history');
@@ -188,7 +269,8 @@ describe('StickySectionNav — the deep link fires once per navigation (bead ue1
     const { rerender } = render(<Harness containerRef={ref} />);
 
     await screen.findByRole('button', { name: 'Watch history' });
-    await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1));
+    await flushFrames();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
     scrollTo.mockClear();
 
     // Something else on the page changes — a status banner mounting, a
@@ -206,7 +288,10 @@ describe('StickySectionNav — the deep link fires once per navigation (bead ue1
 
     fireEvent.click(await screen.findByRole('button', { name: 'Watch history' }));
     expect(window.location.hash).toBe('#stats?section=stats-section-watch-history');
-    await waitFor(() => expect(scrollTo).toHaveBeenCalled());
+    // `activate()` scrolls in the click itself, not from a frame — a click has
+    // already decided where the reader is going. Nothing is outstanding here,
+    // so nothing needs waiting for.
+    expect(scrollTo).toHaveBeenCalled();
     scrollTo.mockClear();
 
     rerender(<Harness containerRef={ref} late />);
@@ -222,7 +307,8 @@ describe('StickySectionNav — the deep link fires once per navigation (bead ue1
     const { rerender } = render(<Harness containerRef={ref} />);
 
     await screen.findByRole('button', { name: 'Watch history' });
-    await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1));
+    await flushFrames();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
     scrollTo.mockClear();
 
     // A genuinely new navigation — a link opened into the page already on
@@ -231,12 +317,20 @@ describe('StickySectionNav — the deep link fires once per navigation (bead ue1
     window.history.replaceState(null, '', '#stats?section=stats-section-late-arrival');
     rerender(<Harness containerRef={ref} late />);
 
-    // The button's appearance only proves discovery completed. The deep-link
-    // effect runs afterwards; wait for its user-visible selection state before
-    // asserting the queued scroll side effect.
+    // Two separate facts, asserted separately so a failure names which one is
+    // wrong — the previous single wait could not say whether the component had
+    // declined to re-arm or had merely not scrolled yet.
+    //
+    // FIRST: the component re-armed. `aria-current` moving to the newly named
+    // section is the observable for that, and the only writer of it here is the
+    // deep-link effect (`discover` only fills an EMPTY selection, and the
+    // IntersectionObserver is a stub). It is set in the same synchronous block
+    // that queues the scroll, so once it is visible the frame is queued.
     await waitFor(() => expect(screen.getByRole('button', { name: 'Late arrival' }))
       .toHaveAttribute('aria-current', 'location'));
-    await waitFor(() => expect(scrollTo).toHaveBeenCalledTimes(1));
+    // SECOND: that frame scrolls exactly once. Run it; do not wait for it.
+    await flushFrames();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
   it('drops a ?section= that names nothing, says so, and never fires it later', async () => {

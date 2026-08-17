@@ -157,10 +157,30 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
   const bulkDialogRef = useRef<HTMLDivElement | null>(null);
   const bulkCancelRef = useRef<HTMLButtonElement | null>(null);
   const restoreBulkFocusRef = useRef(false);
+  /**
+   * What the list looked like before an all-scope confirmation replaced it with
+   * the server snapshot, so Cancel can put it back.
+   *
+   * `materializedRows` is the ARRAY IDENTITY handed to `setRows`, not a joined
+   * list of ids, and it is compared against the RENDERED `rows` rather than
+   * `rowsRef`. Both of those are the fix for bead enhancedchannelmanager-5dckk.
+   * `rowsRef` is written by an effect, so it trails the commit the operator is
+   * looking at by however long React takes to flush passive effects — under
+   * load that can be past the click. The old id-string comparison against it
+   * therefore reported "the view moved on" when nothing had moved at all, and
+   * Cancel silently declined to restore: the operator kept the materialized
+   * queue-wide list, and the test that pins the restore waited for a
+   * restoration that was never coming until the test timeout killed it.
+   *
+   * Identity is an exact test and needs no effect to settle: `setRows(targets)`
+   * puts that very array into state, and every other writer here builds a new
+   * one (`map`, `filter`, spread, or a fresh response), so `rows === targets`
+   * is true exactly while the materialized view is still what is on screen.
+   */
   const preConfirmViewRef = useRef<{
     rows: PendingMergeRecord[];
     total: number;
-    materializedIds: string;
+    materializedRows: PendingMergeRecord[];
   } | null>(null);
 
   useEffect(() => {
@@ -504,10 +524,14 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
         if (scope === 'all') {
           // The server snapshot precedes confirmation so the irreversible
           // target count and records are one coherent, reviewable set.
+          //
+          // `rows` is the rendered list this click was dispatched against —
+          // taken from the render closure rather than `rowsRef`, which an
+          // effect may not have caught up to yet (see `preConfirmViewRef`).
           preConfirmViewRef.current = {
-            rows: rowsRef.current,
+            rows,
             total: totalRows,
-            materializedIds: targets.map((row) => row.id).join(','),
+            materializedRows: targets,
           };
           setRows(targets);
           setTotalRows(targets.length);
@@ -691,10 +715,11 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
 
   const cancelBulkIntent = useCallback(() => {
     const previousView = preConfirmViewRef.current;
-    if (
-      previousView &&
-      rowsRef.current.map((row) => row.id).join(',') === previousView.materializedIds
-    ) {
+    // `rows` is what this render put on screen, so the comparison is a fact
+    // about the view the operator just cancelled — not about how far an effect
+    // has got. Restoring and closing land in the same commit, which is why the
+    // test asserts them without waiting.
+    if (previousView && rows === previousView.materializedRows) {
       setRows(previousView.rows);
       setTotalRows(previousView.total);
     }
@@ -702,7 +727,7 @@ export function PendingMergesPage({ groupId }: PendingMergesPageProps = {}) {
     restoreBulkFocusRef.current = true;
     setBulkIntent(null);
     bulkLockRef.current = false;
-  }, []);
+  }, [rows]);
 
   const stopBulkAction = useCallback(() => {
     stopRequestedRef.current = true;

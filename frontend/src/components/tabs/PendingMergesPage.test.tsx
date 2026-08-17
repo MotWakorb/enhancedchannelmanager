@@ -1399,14 +1399,23 @@ describe('PendingMergesPage — bulk actions (GH #642 / bead ixcf1)', () => {
     const dialog = await screen.findByRole('dialog', { name: /Confirm bulk action/i });
     expect(screen.getByText('Stream 51')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: /^Cancel$/i }));
-    await waitFor(() => expect(dialog).not.toBeInTheDocument());
-    await waitFor(
-      () => {
-        expect(screen.queryByText('Stream 51')).toBeNull();
-        expect(screen.getAllByRole('checkbox')).toHaveLength(50);
-      },
-      { timeout: 5000 },
-    );
+
+    // Nothing is awaited here, deliberately (bead enhancedchannelmanager-5dckk).
+    // Cancelling closes the dialog and restores the paginated view in ONE
+    // commit — there is no async step left to settle, so a wait could only ever
+    // hide a failure to restore rather than reveal one. It did exactly that:
+    // the previous version waited 5000ms for a restoration the component had
+    // already declined to perform, and since that budget equalled vitest's own
+    // `testTimeout` the wait could not even report its assertion — the run died
+    // with a bare "Test timed out in 5000ms" naming only the `it()` line. This
+    // flake and its sibling in StickySectionNav.test.tsx have between them
+    // blocked the dev image publish three times.
+    expect(dialog).not.toBeInTheDocument();
+    // Split, so a failure names which half of the restore is wrong: the
+    // materialized 51st row that should be gone, or the paginated 50 that
+    // should be back.
+    expect(screen.queryByText('Stream 51')).toBeNull();
+    expect(screen.getAllByRole('checkbox')).toHaveLength(50);
     expect(api.acceptPendingMerge).not.toHaveBeenCalled();
   });
 
