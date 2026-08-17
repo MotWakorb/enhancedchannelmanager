@@ -804,11 +804,48 @@ A test must **fail if the logic it claims to verify is removed or inverted**.
 | `expect(x != 422 or "error" not in body).toBe(true)` | One branch is always-true. | Assert the actual expected outcome directly. |
 | `expect(container.querySelector('.some-class')).toBeTruthy()` when the class is static boilerplate | Passes even if the feature logic is deleted. | Query for text or state that only appears when the feature works. |
 | Bare-substring match against always-present copy | `assert "Error" in text` where "Error" appears in the page title too. | Assert the specific error message the code-under-test emits. |
+| `await waitFor(() => expect(spy).toHaveBeenCalledTimes(n))` where the call originates from a timer the test does not control | No DOM change notifies `waitFor`, so it polls a wall clock and the timeout budget is the only defense against a race that recurs under load. | Stub the timer into a queue, flush it, then assert synchronously. |
 
 **Deferred tests must be `skip`, not tautologies.** When a test cannot be
 implemented yet, use `@pytest.mark.skip(reason="TODO(<bead-id>): …")` or
 `it.skip('…')`. A placeholder that always passes is worse than no test. It
 blocks the eventual real test from being added (the suite is already "green").
+
+#### Waits are not fixes
+
+*Origin: beads `enhancedchannelmanager-vmk2m.1`, `enhancedchannelmanager-vmk2m.2`,
+`enhancedchannelmanager-5dckk`. Two frontend tests were "fixed" for flakiness by
+raising a `waitFor` timeout, and both recurred through that fix, three times
+blocking the `dev` image publish.*
+
+- **Raising a `waitFor` timeout is a longer wait for the same race, not a fix.**
+  Two fixes in this repo did exactly that and both recurred.
+- **A green run on an idle machine is not evidence either way.** These tests
+  pass locally and on PR runs by construction; the race only surfaces on a
+  loaded CI runner.
+- **Never give a `waitFor` a timeout at or above Vitest's `testTimeout`
+  (5000ms).** The test timeout preempts it, so the wait can never report its
+  own assertion. The run dies with a bare `Test timed out in 5000ms` naming
+  only the `it()` line, and three CI re-runs produced no diagnosis for
+  exactly this reason.
+- **Assert on an observable the component actually settles**: a rendered
+  state, an aria attribute reaching its final value, a promise the code
+  under test awaits. Not on a duration.
+- **When completion happens inside a timer the test does not control**
+  (`requestAnimationFrame`, `setTimeout`, a poll), own the timer instead of
+  waiting for it: stub it into a queue and flush the queue explicitly.
+  Precedents in this repo: `frontend/src/hooks/useDropdownViewport.test.tsx`
+  and `frontend/src/components/StickySectionNav.test.tsx`.
+- **"Sleep, then assert nothing happened" passes whenever the thing is
+  merely late**, so it cannot fail while the thing it guards is broken.
+  Flush the queue first, then assert.
+- **A clock or timer stub must assert it was installed.** Measured on this
+  repo: with `StickySectionNav.test.tsx`'s stub misnamed, ten of the file's
+  eleven tests stayed green anyway, because jsdom's real 60Hz interval fired
+  during the query preceding each flush.
+- **Split coupled awaits** so a failure names which condition lost the race,
+  rather than reporting a bare timeout with no indication of which of two
+  things didn't happen.
 
 #### Good pattern
 
