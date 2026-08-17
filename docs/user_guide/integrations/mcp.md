@@ -21,7 +21,7 @@ When connecting through a LAN hostname or IP, add that exact value to the MCP
 container's comma-separated `MCP_ALLOWED_HOSTS` environment variable and
 recreate the container. The built-in allowlist covers `localhost`, loopback
 IPs, and the canonical `ecm-mcp` Compose service name. Entries are hostnames or
-IPs only—do not include `http://`, a port, a path, or `*`.
+IPs only. Do not include `http://`, a port, a path, or `*`.
 
 | | mcp-remote bridge (Claude Desktop) | Claude Code (`.mcp.json`) |
 |---|---|---|

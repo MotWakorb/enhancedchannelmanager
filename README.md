@@ -73,7 +73,7 @@ docker compose -f docker-compose.yml -f docker-compose.mcp.yml up -d
 
 **Reaching the MCP container from ECM** — ECM's Settings > MCP Integration status badge probes the MCP server's `/health` endpoint. By default it targets `ecm-mcp:6101`, which Docker DNS resolves to the MCP container on the canonical compose network — no extra configuration needed. If you run both containers with `network_mode: host` (host network namespace shared), set `MCP_HOST=localhost` on the ECM service so the probe targets the host loopback instead of the (non-existent on that topology) `ecm-mcp` DNS name.
 
-**Allowed MCP hostnames** — the MCP sidecar accepts `localhost`, loopback IPs,
+**Allowed MCP hostnames:** The MCP sidecar accepts `localhost`, loopback IPs,
 and the Compose service name `ecm-mcp` by default. If Claude connects through a
 LAN hostname or IP, set `MCP_ALLOWED_HOSTS` on the `ecm-mcp` service to that
 hostname/IP (comma-separated for more than one), then recreate the container.
