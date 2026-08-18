@@ -194,9 +194,17 @@ def test_every_gh_cli_step_declares_github_authentication():
     assert failures == [], f"gh CLI steps missing GitHub token env: {failures}"
 
 
-def test_trivy_scans_extracted_oci_layouts_not_raw_archives():
-    """Trivy requires an OCI layout directory; raw BuildKit OCI tar files fail."""
+def test_trivy_scans_converted_docker_archives_from_verified_oci_candidates():
+    """Pinned Trivy accepts Docker archives, converted without rebuilding candidates."""
     workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
-    assert workflow.count("candidate_image.py extract ") == 4
+    assert workflow.count("skopeo version 1.13.3") == 4
+    assert workflow.count("candidate_image.py verify-archive ") >= 5
+    assert workflow.count("skopeo copy oci-archive:") == 5
+    assert workflow.count("docker-archive:/tmp/trivy-") == 4
     assert workflow.count("input: /tmp/trivy-") == 4
+    assert workflow.count("-scan.docker.tar") == 8
+    scan_inputs = re.findall(r"input:\s+(\S+)", workflow)
+    scan_inputs = [value for value in scan_inputs if value.startswith("/tmp/trivy-")]
+    assert len(scan_inputs) == 4
+    assert all(value.endswith("-scan.docker.tar") for value in scan_inputs)
     assert not re.search(r"input:\s+\S+\.oci\.tar", workflow)

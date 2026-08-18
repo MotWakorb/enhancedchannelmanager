@@ -614,7 +614,7 @@ jobs:
 
   trivy-scan:
     name: Container Security Scan (Trivy)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build-amd64]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -623,10 +623,13 @@ jobs:
           name: ecm-amd64-candidate
           path: /tmp
       - name: Verify exact candidate identity
-        run: python scripts/candidate_image.py extract /tmp/ecm-amd64.oci.tar --destination /tmp/trivy-ecm-amd64 --expected '${{ needs.build-amd64.outputs.digest }}'
+        run: |
+          python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-archive:/tmp/trivy-ecm-amd64-scan.docker.tar
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/trivy-ecm-amd64
+          input: /tmp/trivy-ecm-amd64-scan.docker.tar
           format: table
           exit-code: '1'
           ignore-unfixed: true
@@ -644,10 +647,13 @@ jobs:
           name: ecm-arm64-candidate
           path: /tmp
       - name: Verify exact candidate identity
-        run: python scripts/candidate_image.py extract /tmp/ecm-arm64.oci.tar --destination /tmp/trivy-ecm-arm64 --expected '${{ needs.build-arm64.outputs.digest }}'
+        run: |
+          python scripts/candidate_image.py verify-archive /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/ecm-arm64.oci.tar docker-archive:/tmp/trivy-ecm-arm64-scan.docker.tar
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/trivy-ecm-arm64
+          input: /tmp/trivy-ecm-arm64-scan.docker.tar
           format: table
           exit-code: '1'
           ignore-unfixed: true
@@ -656,7 +662,7 @@ jobs:
 
   trivy-scan-mcp-amd64:
     name: MCP Container Security Scan (Trivy AMD64)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build-mcp-amd64]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -664,10 +670,13 @@ jobs:
         with:
           name: mcp-amd64-candidate
           path: /tmp
-      - run: python scripts/candidate_image.py extract /tmp/mcp-amd64.oci.tar --destination /tmp/trivy-mcp-amd64 --expected '${{ needs.build-mcp-amd64.outputs.digest }}'
+      - run: |
+          python scripts/candidate_image.py verify-archive /tmp/mcp-amd64.oci.tar --expected '${{ needs.build-mcp-amd64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/mcp-amd64.oci.tar docker-archive:/tmp/trivy-mcp-amd64-scan.docker.tar
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/trivy-mcp-amd64
+          input: /tmp/trivy-mcp-amd64-scan.docker.tar
           format: table
           exit-code: '1'
           vuln-type: os,library
@@ -683,10 +692,13 @@ jobs:
         with:
           name: mcp-arm64-candidate
           path: /tmp
-      - run: python scripts/candidate_image.py extract /tmp/mcp-arm64.oci.tar --destination /tmp/trivy-mcp-arm64 --expected '${{ needs.build-mcp-arm64.outputs.digest }}'
+      - run: |
+          python scripts/candidate_image.py verify-archive /tmp/mcp-arm64.oci.tar --expected '${{ needs.build-mcp-arm64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/mcp-arm64.oci.tar docker-archive:/tmp/trivy-mcp-arm64-scan.docker.tar
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/trivy-mcp-arm64
+          input: /tmp/trivy-mcp-arm64-scan.docker.tar
           format: table
           exit-code: '1'
           vuln-type: os,library

@@ -58,12 +58,3 @@ def test_missing_or_empty_manifest_digest_is_rejected(candidate, tmp_path):
         output.addfile(info, io.BytesIO(value))
     with pytest.raises(candidate.CandidateError):
         candidate.verify_archive(archive)
-
-
-def test_verified_oci_archive_is_extracted_for_scanning(candidate, tmp_path):
-    archive = tmp_path / "candidate.oci.tar"
-    expected = _archive(archive)
-    destination = tmp_path / "layout"
-    assert candidate.extract_archive(archive, destination, expected) == expected
-    assert (destination / "index.json").is_file()
-    assert (destination / f"blobs/sha256/{expected[7:]}").is_file()
