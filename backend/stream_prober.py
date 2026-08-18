@@ -60,7 +60,7 @@ BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 # (GH-106). Neither is a URL scheme an attacker can specify directly — they are
 # internal demuxers activated by https:// / hls variants.
 FFPROBE_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
-RELAY_PROTOCOL_WHITELIST = "http,tcp"
+RELAY_PROTOCOL_WHITELIST = "http,tcp,crypto"
 
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe

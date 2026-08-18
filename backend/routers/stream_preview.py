@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 # handshake, HLS AES-128 encrypted segments chain to crypto. Without tls ffmpeg
 # fails on every HTTPS URL with "Protocol 'tls' not on whitelist" (GH-106).
 FFMPEG_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
-RELAY_PROTOCOL_WHITELIST = "http,tcp"
+RELAY_PROTOCOL_WHITELIST = "http,tcp,crypto"
 
 router = APIRouter(tags=["Stream Preview"])
 

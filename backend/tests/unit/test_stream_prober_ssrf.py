@@ -144,7 +144,7 @@ async def test_ffprobe_retry_redirect_to_metadata_is_denied_before_retry_spawn()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["_run_ffprobe", "_detect_black_screen"])
-async def test_http_relay_subprocess_is_pipe_only(method):
+async def test_http_relay_subprocess_uses_only_relay_and_crypto_protocols(method):
     response = MagicMock()
 
     @asynccontextmanager
@@ -171,7 +171,7 @@ async def test_http_relay_subprocess_is_pipe_only(method):
         await getattr(prober, method)("https://provider.example/live.ts")
 
     command = spawn.await_args.args
-    assert command[command.index("-protocol_whitelist") + 1] == "http,tcp"
+    assert command[command.index("-protocol_whitelist") + 1] == "http,tcp,crypto"
     assert "https://provider.example/live.ts" not in command
 
 

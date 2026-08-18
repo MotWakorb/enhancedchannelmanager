@@ -18,8 +18,9 @@ Dispatcharr installations continue to work.
 FFmpeg and ffprobe do not receive provider HTTP(S) URLs. ECM first resolves and
 validates the initial redirect chain through the pinned HTTPX path, then gives
 the subprocess a tokenized URL on an ephemeral loopback-only relay. The
-subprocess protocol allowlist is reduced to `http,tcp`, so every provider fetch
-must return through that relay. Provider URLs and channel bearer credentials
+subprocess protocol allowlist is reduced to `http,tcp,crypto`: HTTP can reach
+only opaque loopback relay URLs, while `crypto` is required internally to
+decrypt AES-128 HLS segments. Provider URLs and channel bearer credentials
 remain in ECM's HTTP client and never appear in subprocess arguments.
 
 The relay streams bounded chunks with downstream backpressure. It rewrites HLS
@@ -36,3 +37,8 @@ UDP, RTP, and RTMP remain direct subprocess inputs because they are not HTTP
 redirect protocols. ECM validates their literal or resolved destination under
 the configured LAN policy immediately before every spawn and retry. Other
 direct schemes are rejected.
+
+The only remaining resolution race is on direct UDP, RTP, and RTMP inputs:
+their subprocess libraries resolve again after ECM validates the destination.
+HTTP(S), including HLS manifests, child playlists, keys, and segments, has no
+subprocess-owned provider DNS or redirect window.

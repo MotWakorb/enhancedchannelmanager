@@ -2,22 +2,23 @@
 
 HTTP callers connect to the address returned by the shared SSRF validator and
 manually follow redirects so every hop is validated and pinned independently.
-Subprocess callers cannot inject a custom resolver into FFmpeg, so
-``validate_stream_subprocess_url`` provides the bounded alternative documented
-in ``docs/security/stream_outbound_ssrf.md``.
+HTTP subprocess inputs use ECM's tokenized loopback relay; direct UDP/RTP/RTMP
+inputs use ``validate_stream_subprocess_url`` as documented in
+``docs/security/stream_outbound_ssrf.md``.
 """
 
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+import re
+import secrets
 from typing import AsyncIterator, Callable, Mapping
 from urllib.parse import urljoin
 from urllib.parse import urlsplit
 
 import httpx
 from aiohttp import web
-import re
 
 from security.ssrf import (
     SSRFError,
@@ -164,20 +165,43 @@ class _LocalStreamRelay:
         self._headers = dict(headers or {})
         self._timeout = timeout
         self._targets: dict[str, str] = {}
+        self._tokens_by_target: dict[str, str] = {}
         self._runner: web.AppRunner | None = None
         self._initial_context = None
         self._initial_response = None
         self._initial_token = self._register(url)
 
     def _register(self, url: str) -> str:
-        for token, target in self._targets.items():
-            if target == url:
-                return token
+        existing = self._tokens_by_target.get(url)
+        if existing is not None:
+            return existing
         if len(self._targets) >= _MAX_RELAY_RESOURCES:
             raise SSRFError("Stream manifest exceeds the relay resource limit")
-        token = str(len(self._targets))
+        token = secrets.token_hex(16)
+        while token in self._targets:
+            token = secrets.token_hex(16)
         self._targets[token] = url
+        self._tokens_by_target[url] = token
         return token
+
+    async def _read_hls_manifest(self, response: httpx.Response) -> bytes:
+        content_length = response.headers.get("content-length") or response.headers.get(
+            "Content-Length"
+        )
+        if content_length is not None and int(content_length) > _MAX_HLS_MANIFEST_BYTES:
+            raise web.HTTPRequestEntityTooLarge(
+                max_size=_MAX_HLS_MANIFEST_BYTES, actual_size=int(content_length)
+            )
+
+        body = bytearray()
+        async for chunk in response.aiter_bytes(chunk_size=65536):
+            remaining = _MAX_HLS_MANIFEST_BYTES + 1 - len(body)
+            body.extend(chunk[:remaining])
+            if len(body) > _MAX_HLS_MANIFEST_BYTES:
+                raise web.HTTPRequestEntityTooLarge(
+                    max_size=_MAX_HLS_MANIFEST_BYTES, actual_size=len(body)
+                )
+        return bytes(body)
 
     async def start(self) -> str:
         # Resolve the initial redirect chain before any subprocess can start.
@@ -235,11 +259,7 @@ class _LocalStreamRelay:
         content_type = response.headers.get("content-type", "")
         is_hls = urlsplit(url).path.lower().endswith(".m3u8") or "mpegurl" in content_type.lower()
         if is_hls:
-            body = await response.aread()
-            if len(body) > _MAX_HLS_MANIFEST_BYTES:
-                raise web.HTTPRequestEntityTooLarge(
-                    max_size=_MAX_HLS_MANIFEST_BYTES, actual_size=len(body)
-                )
+            body = await self._read_hls_manifest(response)
             base_url = str(response.extensions.get("ssrf_logical_url", url))
             rewritten = self._rewrite_hls(request, body, base_url)
             return web.Response(body=rewritten, content_type="application/vnd.apple.mpegurl")
@@ -279,11 +299,11 @@ async def validated_subprocess_input(
     headers: Mapping[str, str] | None = None,
     timeout: httpx.Timeout | float | None = None,
 ) -> AsyncIterator[ValidatedSubprocessInput]:
-    """Resolve redirects before spawn and relay HTTP bytes through ``pipe:0``.
+    """Resolve redirects before spawn and expose HTTP through a loopback relay.
 
     Direct IPTV transports remain subprocess-owned after address validation.
     For HTTP(S), ECM owns DNS, redirects, TLS identity and credentials for the
-    lifetime of the response; FFmpeg receives bytes only and cannot redirect.
+    lifetime of every resource; FFmpeg receives only opaque loopback URLs.
     """
 
     scheme = urlsplit(url).scheme.lower()
@@ -305,12 +325,12 @@ async def validated_subprocess_input(
 
 
 def validate_stream_subprocess_url(url: str) -> None:
-    """Fail closed immediately before an FFmpeg/ffprobe subprocess starts.
+    """Validate a direct non-HTTP FFmpeg/ffprobe input before process start.
 
-    FFmpeg owns DNS and redirect handling internally, so it cannot consume the
-    pinned transport above. This validates literal addresses and every current
-    DNS answer under the configured LAN policy at each process start/retry.
-    See the bounded-design document for the residual race and redirect window.
+    HTTP(S) inputs use :func:`validated_subprocess_input` and the pinned relay.
+    This function preserves direct UDP/RTP/RTMP compatibility by validating
+    literal addresses and every current DNS answer at each process start/retry.
+    Those direct transports retain a DNS validation-to-connect race.
     """
 
     parsed = urlsplit(url)

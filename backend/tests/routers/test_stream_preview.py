@@ -343,6 +343,6 @@ class TestChannelPreview:
         assert response.status_code == 500
         command = spawn.call_args.args[0]
         assert "http://127.0.0.1:1234/resource/0" in command
-        assert command[command.index("-protocol_whitelist") + 1] == "http,tcp"
+        assert command[command.index("-protocol_whitelist") + 1] == "http,tcp,crypto"
         assert all("synthetic-test-token" not in str(argument) for argument in command)
         assert "-headers" not in command

@@ -1,15 +1,23 @@
 """Regression coverage for stream HTTP/FFmpeg SSRF enforcement (04c0u.6)."""
 
 import asyncio
-import ipaddress
 from contextlib import asynccontextmanager
+import ipaddress
+from pathlib import Path
+import re
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from aiohttp import web
+from cryptography.hazmat.primitives import padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 from security.ssrf import SSRFError, SSRFMode
 from security.stream_outbound import (
+    _LocalStreamRelay,
+    _MAX_HLS_MANIFEST_BYTES,
+    _MAX_RELAY_RESOURCES,
     SSRFPinnedTransport,
     stream_request,
     validated_subprocess_input,
@@ -27,6 +35,93 @@ def _target(url: str, ip: str = "93.184.216.34"):
         ip=ipaddress.ip_address(ip),
         url=url,
     )
+
+
+def test_relay_tokens_are_random_128_bit_values_and_deduplicate():
+    relay = _LocalStreamRelay("https://media.example/root.m3u8", None, None)
+    first = relay._initial_token
+    second = relay._register("https://media.example/segment.ts")
+
+    assert re.fullmatch(r"[0-9a-f]{32}", first)
+    assert re.fullmatch(r"[0-9a-f]{32}", second)
+    assert first != second
+    assert second != "1"
+    assert relay._register("https://media.example/segment.ts") == second
+
+
+def test_relay_resource_cap_accepts_1024_unique_urls_and_rejects_1025th():
+    relay = _LocalStreamRelay("https://media.example/root.m3u8", None, None)
+    for index in range(_MAX_RELAY_RESOURCES - 1):
+        relay._register(f"https://media.example/segment-{index}.ts")
+
+    assert len(relay._targets) == 1024
+    with pytest.raises(SSRFError, match="resource limit"):
+        relay._register("https://media.example/one-too-many.ts")
+
+
+def test_build_0120_docs_match_pinned_relay_and_direct_transport_residual():
+    root = Path(__file__).resolve().parents[3]
+    changelog = (root / "CHANGELOG.md").read_text()
+    entry = changelog.split("build 0120", 1)[1].split("\n\n", 1)[0]
+    security_doc = (root / "docs/security/stream_outbound_ssrf.md").read_text()
+
+    assert "ephemeral pinned loopback relay" in entry
+    assert "HTTP(S) therefore has no subprocess-owned provider DNS or redirect residual" in entry
+    assert "only those direct transports retain" in entry
+    assert "`http,tcp,crypto`" in security_doc
+    assert "only remaining resolution race is on direct UDP, RTP, and RTMP" in security_doc
+    assert "pipe:0" not in security_doc
+
+
+class _ChunkedManifestResponse:
+    def __init__(self, chunks, content_length=None):
+        self._chunks = chunks
+        self.headers = {}
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+        self.chunks_read = 0
+
+    async def aiter_bytes(self, chunk_size):
+        assert chunk_size == 65536
+        for chunk in self._chunks:
+            self.chunks_read += 1
+            yield chunk
+
+
+@pytest.mark.asyncio
+async def test_manifest_reader_accepts_exact_two_mib_limit():
+    relay = _LocalStreamRelay("https://media.example/root.m3u8", None, None)
+    response = _ChunkedManifestResponse([b"a" * _MAX_HLS_MANIFEST_BYTES])
+
+    body = await relay._read_hls_manifest(response)
+
+    assert len(body) == _MAX_HLS_MANIFEST_BYTES
+
+
+@pytest.mark.asyncio
+async def test_manifest_reader_stops_at_limit_plus_one_without_reading_tail():
+    relay = _LocalStreamRelay("https://media.example/root.m3u8", None, None)
+    response = _ChunkedManifestResponse(
+        [b"a" * (_MAX_HLS_MANIFEST_BYTES + 1), b"unread-tail"]
+    )
+
+    with pytest.raises(web.HTTPRequestEntityTooLarge):
+        await relay._read_hls_manifest(response)
+
+    assert response.chunks_read == 1
+
+
+@pytest.mark.asyncio
+async def test_manifest_content_length_rejects_before_reading_body():
+    relay = _LocalStreamRelay("https://media.example/root.m3u8", None, None)
+    response = _ChunkedManifestResponse(
+        [b"must-not-be-read"], content_length=_MAX_HLS_MANIFEST_BYTES + 1
+    )
+
+    with pytest.raises(web.HTTPRequestEntityTooLarge):
+        await relay._read_hls_manifest(response)
+
+    assert response.chunks_read == 0
 
 
 @pytest.mark.asyncio
@@ -431,6 +526,58 @@ async def test_hls_relay_rewrites_segments_and_keys_with_origin_scoped_auth():
     )
     cross_headers = dict(calls)["https://cdn.example/cross.ts"]
     assert "Authorization" not in cross_headers
+
+
+@pytest.mark.asyncio
+async def test_encrypted_aes128_hls_manifest_demux_and_decrypts_via_relay():
+    manifest_url = "https://media.example/live/encrypted.m3u8"
+    key_url = "https://media.example/live/key.bin"
+    segment_url = "https://media.example/live/segment.ts"
+    key = bytes(range(16))
+    iv = bytes(range(16, 32))
+    packet = b"\x47" + (b"\x00" * 187)
+    plaintext = packet * 2
+    padder = padding.PKCS7(128).padder()
+    padded = padder.update(plaintext) + padder.finalize()
+    encryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    encrypted_segment = encryptor.update(padded) + encryptor.finalize()
+    manifest = (
+        "#EXTM3U\n#EXT-X-VERSION:3\n"
+        f'#EXT-X-KEY:METHOD=AES-128,URI="key.bin",IV=0x{iv.hex()}\n'
+        "#EXTINF:1.0,\nsegment.ts\n#EXT-X-ENDLIST\n"
+    ).encode()
+    bodies = {manifest_url: manifest, key_url: key, segment_url: encrypted_segment}
+
+    @asynccontextmanager
+    async def fake_request(url, **_kwargs):
+        yield httpx.Response(
+            200,
+            content=bodies[url],
+            headers={
+                "Content-Type": "application/vnd.apple.mpegurl"
+                if url == manifest_url
+                else "application/octet-stream"
+            },
+            request=httpx.Request("GET", url),
+        )
+
+    with patch("security.stream_outbound.stream_request", fake_request):
+        async with validated_subprocess_input(manifest_url) as subprocess_input:
+            async with httpx.AsyncClient() as client:
+                rewritten = (await client.get(subprocess_input.argument)).text
+                local_key_url = rewritten.split('URI="', 1)[1].split('"', 1)[0]
+                local_segment_url = next(
+                    line for line in rewritten.splitlines() if line.startswith("http://")
+                )
+                relayed_key = (await client.get(local_key_url)).content
+                relayed_segment = (await client.get(local_segment_url)).content
+
+    decryptor = Cipher(algorithms.AES(relayed_key), modes.CBC(iv)).decryptor()
+    padded_plaintext = decryptor.update(relayed_segment) + decryptor.finalize()
+    unpadder = padding.PKCS7(128).unpadder()
+    demuxed = unpadder.update(padded_plaintext) + unpadder.finalize()
+    assert demuxed == plaintext
+    assert demuxed[0] == demuxed[188] == 0x47
 
 
 @pytest.mark.asyncio
