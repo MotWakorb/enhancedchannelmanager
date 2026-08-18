@@ -1279,10 +1279,20 @@ jobs:
   security-governance-audit:
     name: Security Governance Audit
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    # `contents: read` is all the built-in token is used for downstream (the
+    # beads-branch ref and the default-branch cadence probe). The audit's
+    # administration and secret-scanning reads run on GOVERNANCE_AUDIT_TOKEN
+    # instead, because no `permissions:` value can grant the built-in token
+    # those; `security-events: read` was granted here and used by nothing.
     permissions:
       contents: read
-      security-events: read
     uses: ./.github/workflows/security-governance-audit.yml
+    # Explicit single-secret mapping. `secrets: inherit` is forbidden here:
+    # the reusable workflow must receive exactly this one named secret and no
+    # other, so adding an unrelated repository secret later cannot silently
+    # widen what this call hands over.
+    secrets:
+      GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
 
   publish-verified-dev-images:
     name: Publish Verified Dev Images

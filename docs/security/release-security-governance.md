@@ -5,6 +5,55 @@ The owner runs and dispositions the `Security Governance Audit` workflow on
 the first day of January, April, July, and October. A failed scheduled run is
 a release blocker until its evidence is explained or the control is restored.
 
+## When the quarterly cadence actually arms
+
+The audit currently runs on **every `dev` push**, invoked as a reusable
+workflow from `.github/workflows/test.yml`. That is the only path executing it
+today, and it is not a required status check.
+
+The quarterly `schedule:` and the `workflow_dispatch:` button in
+`.github/workflows/security-governance-audit.yml` are **inert until that file
+reaches the default branch (`main`)**. GitHub registers those two triggers only
+for workflow files present on the default branch, so
+`gh api repos/<owner>/<repo>/actions/workflows/security-governance-audit.yml`
+answers `404` while the file lives only on `dev`. Nothing in the workflow needs
+editing: both triggers arm by themselves the moment the file lands on `main` at
+the next release cut.
+
+This is checked rather than assumed. Every audit run probes the default branch
+for its own file and records **Scheduled cadence: ARMED** or **PENDING** in the
+job summary, and emits a `::warning::` annotation while it is PENDING. Read
+that line before treating a quarter as covered by the schedule: while it says
+PENDING, quarterly coverage depends on the owner dispatching the audit from a
+branch that carries the file, or on the `dev`-push runs, not on the cron.
+
+## The elevated audit credential
+
+Four of the controls below are repository *administration* surfaces, and the
+built-in `GITHUB_TOKEN` cannot read any of them: the workflow `permissions:`
+key has no `administration` scope, and `security-events` covers code scanning
+only. GitHub documents that secret-scanning alerts cannot be read with that
+permission either. The audit therefore reads those endpoints with
+**`GOVERNANCE_AUDIT_TOKEN`**, a repository secret holding a read-only
+fine-grained personal access token scoped to this repository alone, granting
+`Administration` (read) and `Secret scanning alerts` (read).
+
+`.github/workflows/test.yml` hands that secret over through an explicit
+one-entry `secrets:` mapping. `secrets: inherit` is deliberately not used: the
+audit receives exactly this one named secret, so adding an unrelated repository
+secret later cannot widen what the call passes.
+
+The remaining check, reading the `beads` branch ref, needs only
+`contents: read` and stays on the built-in token.
+
+If the secret is absent, empty, expired, or under-scoped, the audit **fails and
+says which**. A missing secret is named in the error; a `403` from an endpoint
+names that endpoint and the permission to grant; a `404` is reported as the
+control itself being off. There is no fallback to the built-in token, because a
+credential that silently degrades would turn an unreadable alert list into an
+apparently clean one. Rotation is a settings change: replace the secret value,
+then re-run the audit and link the green run in the audit bead.
+
 The workflow verifies the live control surfaces rather than documentation:
 
 - `main` requires the four test/CodeQL contexts plus `Release Cut Gate`;

@@ -1,29 +1,130 @@
 name: Security Governance Audit
 
+# ─── Credential model ──────────────────────────────────────────────────────
+# Four of the six controls this audit reads are repository ADMINISTRATION
+# surfaces, and the built-in GITHUB_TOKEN can never reach them: the workflow
+# `permissions:` key has no `administration` scope at all, so there is no
+# setting that would grant it. GitHub also documents that `security-events`
+# covers code scanning only, and that secret-scanning alerts "cannot be read
+# with this permission and require a GitHub App or a personal access token".
+# Before this wiring existed the audit failed in ~2s on every dev push with
+# `gh: Resource not accessible by integration (HTTP 403)`.
+#
+# So the elevated reads run on GOVERNANCE_AUDIT_TOKEN, a repository secret
+# holding a read-only fine-grained PAT scoped to this repository only. The one
+# call the built-in token CAN serve (reading a branch ref, which needs only
+# `contents: read`) deliberately stays on `github.token`: the elevated
+# credential is used where GitHub's permission model requires it, and nowhere
+# else. There is no fallback from one to the other in either direction, and no
+# swallowed exit code anywhere below, because a credential that silently
+# degrades to "nothing to report" is worse than an audit that does not run.
+#
+# ─── Cadence arming ────────────────────────────────────────────────────────
+# GitHub registers `schedule:` and `workflow_dispatch:` triggers only for a
+# workflow file present on the repository's DEFAULT branch (`main`). This file
+# lives on `dev`, so today
+# `gh api repos/<owner>/<repo>/actions/workflows/security-governance-audit.yml`
+# answers 404 and BOTH of those triggers are inert. They arm by themselves,
+# with no edit to this file, the moment it reaches `main` at the next release
+# cut. Until then the only path that executes this audit is the `workflow_call`
+# from `.github/workflows/test.yml` on every `dev` push.
+#
+# The final step probes the default branch for this file on every run and
+# reports ARMED or PENDING, so that state is checked rather than assumed.
+# Cadence ownership, quarterly disposition, and the evidence trail live in
+# `docs/security/release-security-governance.md`.
+
 on:
   workflow_call:
+    secrets:
+      GOVERNANCE_AUDIT_TOKEN:
+        description: >-
+          Read-only fine-grained personal access token, scoped to this
+          repository only, granting Administration (read) for branch
+          protection, Dependabot alert enablement and automated security
+          fixes, and Secret scanning alerts (read). See the credential-model
+          note at the top of this file for why the built-in GITHUB_TOKEN
+          cannot substitute.
+        required: true
   schedule:
     # 09:00 America/Chicago standard time on the first day of each quarter.
+    # Inert until this file reaches the default branch; see "Cadence arming".
     - cron: "0 15 1 1,4,7,10 *"
   workflow_dispatch:
 
+# Exactly what the `github.token`-served calls need, and nothing more: reading
+# the `beads` branch ref and probing the default branch for this workflow file
+# are both `contents: read`. `security-events: read` is deliberately absent.
+# Nothing here reads code-scanning alerts, and that scope does not grant
+# secret-scanning access, so leaving it granted would widen the token for no
+# call that uses it.
 permissions:
   contents: read
-  security-events: read
 
 jobs:
   audit:
     name: Release and Dependency Control Audit
     runs-on: ubuntu-latest
     steps:
-      - name: Verify branch protection contracts
+      - name: Verify the elevated audit credential is present
         env:
-          GH_TOKEN: ${{ github.token }}
+          GOVERNANCE_AUDIT_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A secret that is declared but never provisioned expands to the
+          # EMPTY STRING here, not to an unset variable, so `set -u` never
+          # fires and every `gh` call below would run unauthenticated. This
+          # explicit emptiness test is the only thing between a missing
+          # credential and an audit that reports "nothing to report". Fail
+          # closed, and name the secret so the message is actionable.
+          if [[ -z "${GOVERNANCE_AUDIT_TOKEN:-}" ]]; then
+            echo "::error::GOVERNANCE_AUDIT_TOKEN is absent or empty, so this audit cannot read any repository control and will not pretend otherwise. Provision a repository secret named GOVERNANCE_AUDIT_TOKEN holding a read-only fine-grained personal access token scoped to this repository only, granting Administration (read) and Secret scanning alerts (read). If this run came from .github/workflows/test.yml, also confirm that caller still passes the secret through its explicit secrets: mapping."
+            exit 1
+          fi
+          echo "GOVERNANCE_AUDIT_TOKEN is present."
+
+      - name: Verify repository controls that require the elevated credential
+        env:
+          GH_TOKEN: ${{ secrets.GOVERNANCE_AUDIT_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/branches/main/protection" > main-protection.json
-          gh api "repos/$REPO/branches/dev/protection" > dev-protection.json
+
+          # Three outcomes have to stay distinguishable, because they have
+          # three different owners: a missing credential (handled by the step
+          # above), an UNDER-SCOPED credential, which is a provisioning defect
+          # and must never be reported as a control violation, and a genuine
+          # control violation, which is a security finding. GitHub answers an
+          # under-scoped fine-grained PAT with 403; a 404 on these endpoints
+          # means the control itself is off, so the two are reported
+          # separately and the 404 message names both possibilities.
+          #
+          # Every call captures its own exit status and re-raises it. Nothing
+          # below defaults a failed read to an empty result.
+          scope_error() {
+            echo "::error::GOVERNANCE_AUDIT_TOKEN was refused (HTTP 403) by $1. Grant the token '$2' (read) on this repository, or reissue it if it has expired. This is a credential-provisioning defect, not a finding about the control itself."
+          }
+
+          read_protection() {
+            local branch="$1" endpoint="$2" status=0
+            gh api "$endpoint" > "$branch-protection.json" 2> gh-error.txt || status=$?
+            if [[ "$status" -ne 0 ]]; then
+              if grep -q 'HTTP 403' gh-error.txt; then
+                scope_error "$endpoint" "Administration"
+              elif grep -q 'HTTP 404' gh-error.txt; then
+                echo "::error::Branch '$branch' reports no protection settings at all (HTTP 404 from $endpoint). Restore branch protection on '$branch'. If protection IS configured, then GOVERNANCE_AUDIT_TOKEN has lost 'Administration' (read) instead."
+              else
+                echo "::error::Reading $endpoint failed."
+              fi
+              cat gh-error.txt >&2
+              exit 1
+            fi
+          }
+
+          # Branch protection. Requires Administration (read); this is the
+          # exact call that returned 403 under the built-in token.
+          read_protection main "repos/$REPO/branches/main/protection"
+          read_protection dev "repos/$REPO/branches/dev/protection"
 
           jq -e '.enforce_admins.enabled == true and .allow_force_pushes.enabled == false' main-protection.json
           jq -e '.enforce_admins.enabled == true and .allow_force_pushes.enabled == false' dev-protection.json
@@ -35,30 +136,131 @@ jobs:
           jq -e --argjson required "$required_dev" \
             '(.required_status_checks.contexts // []) as $actual | all($required[]; IN($actual[]))' dev-protection.json
 
-      - name: Verify current board and repository security services
+          # Dependabot alert enablement. Requires Administration (read).
+          # 204 means enabled, 404 means disabled.
+          status=0
+          gh api "repos/$REPO/vulnerability-alerts" >/dev/null 2> gh-error.txt || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            if grep -q 'HTTP 403' gh-error.txt; then
+              scope_error "repos/$REPO/vulnerability-alerts" "Administration"
+            elif grep -q 'HTTP 404' gh-error.txt; then
+              echo "::error::Dependabot alerts are DISABLED for this repository (HTTP 404 from repos/$REPO/vulnerability-alerts). Re-enable them under Settings, Code security."
+            else
+              echo "::error::Reading repos/$REPO/vulnerability-alerts failed."
+            fi
+            cat gh-error.txt >&2
+            exit 1
+          fi
+
+          # Automated security fixes. Requires Administration (read).
+          # 200 carries {"enabled": bool, "paused": bool}; 404 means the
+          # service is not available on this repository at all.
+          status=0
+          gh api "repos/$REPO/automated-security-fixes" \
+            > automated-security-fixes.json 2> gh-error.txt || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            if grep -q 'HTTP 403' gh-error.txt; then
+              scope_error "repos/$REPO/automated-security-fixes" "Administration"
+            elif grep -q 'HTTP 404' gh-error.txt; then
+              echo "::error::Dependabot security updates are unavailable for this repository (HTTP 404 from repos/$REPO/automated-security-fixes). Re-enable them under Settings, Code security."
+            else
+              echo "::error::Reading repos/$REPO/automated-security-fixes failed."
+            fi
+            cat gh-error.txt >&2
+            exit 1
+          fi
+          if ! jq -e '.enabled == true' automated-security-fixes.json >/dev/null; then
+            echo "::error::Dependabot security updates are switched off. repos/$REPO/automated-security-fixes reports: $(cat automated-security-fixes.json)"
+            exit 1
+          fi
+
+          # Secret-scanning alerts. Requires Secret scanning alerts (read);
+          # the GITHUB_TOKEN cannot read these under any `permissions:` value.
+          # 404 here means secret scanning itself is off, which is a control
+          # violation rather than a clean board.
+          status=0
+          gh api --paginate "repos/$REPO/secret-scanning/alerts?state=open&per_page=100" \
+            --jq '.[] | "#\(.number) \(.secret_type) opened \(.created_at)"' \
+            > open-secret-alerts.txt 2> gh-error.txt || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            if grep -q 'HTTP 403' gh-error.txt; then
+              scope_error "repos/$REPO/secret-scanning/alerts" "Secret scanning alerts"
+            elif grep -q 'HTTP 404' gh-error.txt; then
+              echo "::error::Secret scanning is DISABLED for this repository (HTTP 404 from repos/$REPO/secret-scanning/alerts). An unreadable alert list is not an empty alert list. Re-enable secret scanning under Settings, Code security."
+            else
+              echo "::error::Reading repos/$REPO/secret-scanning/alerts failed."
+            fi
+            cat gh-error.txt >&2
+            exit 1
+          fi
+          open_secrets=$(wc -l < open-secret-alerts.txt)
+          if [[ "$open_secrets" -ne 0 ]]; then
+            echo "::error::$open_secrets secret-scanning alert(s) remain undispositioned"
+            cat open-secret-alerts.txt >&2
+            exit 1
+          fi
+
+      - name: Verify the authoritative beads branch
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          gh api "repos/$REPO/branches/beads" >/dev/null
-          gh api "repos/$REPO/vulnerability-alerts" >/dev/null
-          gh api "repos/$REPO/automated-security-fixes" >/dev/null
-
-          open_secrets=$(gh api --paginate "repos/$REPO/secret-scanning/alerts?state=open&per_page=100" \
-            --jq '.[] | {number, secret_type, created_at}' | jq -s 'length')
-          if [[ "$open_secrets" -ne 0 ]]; then
-            echo "::error::$open_secrets secret-scanning alert(s) remain undispositioned"
+          # Reading a branch ref needs only `contents: read`, which the
+          # built-in token has. This check therefore does NOT use
+          # GOVERNANCE_AUDIT_TOKEN, and must not start doing so.
+          status=0
+          gh api "repos/$REPO/branches/beads" >/dev/null 2> gh-error.txt || status=$?
+          if [[ "$status" -ne 0 ]]; then
+            echo "::error::The authoritative 'beads' branch could not be read from repos/$REPO/branches/beads. The release gate fails closed while that remote branch is absent; publish the current board export with 'bd sync'."
+            cat gh-error.txt >&2
             exit 1
           fi
 
       - name: Record audit evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          AUDIT_WORKFLOW_PATH: .github/workflows/security-governance-audit.yml
         run: |
+          set -euo pipefail
+
+          # Whether the quarterly cadence is actually armed is a fact about
+          # the default branch, so read it instead of asserting it. Present on
+          # the default branch means GitHub has registered the `schedule:` and
+          # `workflow_dispatch:` triggers; absent means only the
+          # `workflow_call` path from test.yml can run this audit. Absent is
+          # the expected state until the next release cut, so it is reported,
+          # not failed. Anything that is neither present nor a clean 404 is a
+          # broken probe and does fail: a probe that cannot tell the two apart
+          # would report PENDING forever.
+          branch="${DEFAULT_BRANCH:-main}"
+          status=0
+          gh api "repos/$REPO/contents/$AUDIT_WORKFLOW_PATH?ref=$branch" \
+            >/dev/null 2> gh-error.txt || status=$?
+          if [[ "$status" -eq 0 ]]; then
+            cadence="ARMED (this file is on '$branch', so the quarterly schedule and manual dispatch are registered)"
+          elif grep -q 'HTTP 404' gh-error.txt; then
+            cadence="PENDING (this file is not yet on '$branch', so the quarterly schedule and manual dispatch are inert; they arm at the next release cut with no edit to the workflow). The dev-push workflow_call from .github/workflows/test.yml is the only path running this audit today."
+            echo "::warning::Quarterly security-governance cadence is PENDING: $AUDIT_WORKFLOW_PATH is not on the default branch '$branch' yet, so its schedule and workflow_dispatch triggers are inert. See docs/security/release-security-governance.md."
+          else
+            echo "::error::Could not determine whether the quarterly cadence is armed: probing repos/$REPO/contents/$AUDIT_WORKFLOW_PATH?ref=$branch failed for a reason other than a clean 404."
+            cat gh-error.txt >&2
+            exit 1
+          fi
+
           {
             echo "## Quarterly security governance audit"
             echo "- UTC time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- Commit audited: $GITHUB_SHA"
             echo "- Branch protection contract: verified"
             echo "- Authoritative beads branch: available"
-            echo "- Dependency alerts and automated fixes: available"
+            echo "- Dependency alerts and automated fixes: enabled"
             echo "- Open secret-scanning alerts: zero"
+            echo "- Elevated reads used GOVERNANCE_AUDIT_TOKEN; the beads-branch"
+            echo "  read and this cadence probe used the built-in GITHUB_TOKEN."
+            echo "- Scheduled cadence: $cadence"
+            echo "- Cadence owner and disposition process:"
+            echo "  docs/security/release-security-governance.md"
           } >> "$GITHUB_STEP_SUMMARY"
