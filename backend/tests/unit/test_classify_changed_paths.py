@@ -605,8 +605,16 @@ def _expected_verdict_manifest():
     code_true = "needs.detect.outputs.code_paths_changed != 'false'"
     code_always = "always() && " + code_true
     main_only = code_true + " && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
-    for job in ("security-scan-frontend", "security-scan-backend", "iac-security-scan"):
-        expected.add(("build.yml", ("jobs", job, "if"), main_only))
+    dependency_pr = (
+        code_true
+        + " && ((github.event_name == 'push' && github.ref == 'refs/heads/main') "
+        + "|| (github.event_name == 'pull_request' && github.base_ref == 'main') "
+        + "|| (github.event_name == 'pull_request' && github.base_ref == 'dev' "
+        + "&& needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
+    )
+    for job in ("security-scan-frontend", "security-scan-backend"):
+        expected.add(("build.yml", ("jobs", job, "if"), dependency_pr))
+    expected.add(("build.yml", ("jobs", "iac-security-scan", "if"), main_only))
     expected.add(("build.yml", ("jobs", "security-scan-mcp", "if"), code_true))
     expected.add(("build.yml", ("jobs", "wait-for-tests", "if"), code_true))
     for index, value in enumerate(
@@ -661,6 +669,9 @@ REGISTERED_CLASSIFIER_WORKFLOWS = {"build.yml", "docs-pages.yml", "test.yml"}
 CONTROL_FIELDS = ("if", "continue-on-error")
 CONTROL_MANIFEST_PATH = REPO_ROOT / "backend/tests/fixtures/workflow_control_manifest.json"
 EXPECTED_JOB_OUTPUTS = {
+    ("build.yml", "detect-dependency-change"): {
+        "dependency_files_changed": "${{ steps.classify.outputs.dependency_files_changed }}",
+    },
     ("test.yml", "detect"): {
         "code_paths_changed": "${{ steps.classify.outputs.code_paths_changed }}",
         "docs_site_affected": "${{ steps.classify.outputs.docs_site_affected }}",

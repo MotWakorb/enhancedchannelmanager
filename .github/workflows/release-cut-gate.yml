@@ -1,6 +1,6 @@
 # Mechanical verification of ADR-004 Pre-Cut Gate items G1a, G1b, G5, G6, G7
-# on release-cut PRs (PRs targeting `main` with title `Release vX.Y.Z` and
-# head branch `release/vX.Y.Z`).
+# on every PR targeting `main`. Only exact release-cut and hotfix shapes are
+# admitted; an unrecognized main-bound PR fails instead of bypassing policy.
 #
 # G2/G3 are enforced via existing branch-protection required checks
 # (Backend Tests, Frontend Tests). G4 is enforced via the GitHub Code
@@ -15,15 +15,12 @@
 # to `main` branch protection as a required status check so any failure
 # blocks the cut PR. Non-release PRs to `main` (e.g. hotfix PRs branched
 # from `main`) still need the check to report success or branch
-# protection will block them indefinitely; the workflow detects the
-# release-cut shape (title regex AND branch regex) and short-circuits
-# to a clean pass for everything else.
+# protection will block them indefinitely. Hotfixes receive the documented
+# hotfix subset; any other shape is rejected by the policy classifier.
 #
-# Hotfix PRs (branch `hotfix/vX.Y.(Z+1)-description`) are intentionally
-# exempt — ADR-004 §4 hotfix path applies a different gate subset
+# Hotfix PRs (branch `hotfix/vX.Y.(Z+1)-description`) use ADR-004's subset
 # (G2, G3, G4 + scoped G1a/G1b/G5/G6/G7 per the hotfix carve-outs in
-# docs/shipping.md §"Hotfix Path"). Hotfix gating is out of scope for
-# this bead and tracked as a possible follow-on per the bead description.
+# docs/shipping.md §"Hotfix Path").
 name: Release Cut Gate
 
 on:
@@ -35,11 +32,11 @@ on:
       - synchronize
       - reopened
       - edited
+      - ready_for_review
 
-# Beads JSONL data lands in main via release cuts but is otherwise dev-only.
-# The workflow needs read access to the JSONL on the PR head, plus the
-# default GITHUB_TOKEN for `gh api` calls (code-scanning alerts + open PR
-# enumeration).
+# The current beads JSONL is fetched from the dedicated `beads` sync branch;
+# the PR head's tracked copy is historical and is not a release-policy input.
+# The default GITHUB_TOKEN also reads code-scanning alerts and open PRs.
 permissions:
   contents: read
   pull-requests: read
@@ -49,61 +46,32 @@ jobs:
   release-cut-gate:
     name: Release Cut Gate
     runs-on: ubuntu-latest
-    env:
-      # Pinned to the v0.49.x line that matches the maintainer's local
-      # bd version (0.49.0). v0.49.6 is the latest patch in that minor
-      # line and reads the same JSONL shape that lives in `.beads/`.
-      # Bumping this to v1.x requires verifying JSONL format compatibility
-      # — the v1.0.x line is recent (released 2026-04) and the maintainer
-      # has not yet adopted it locally.
-      BEADS_VERSION: "0.49.6"
-      # Public checksum from the upstream v0.49.6 checksums.txt release asset.
-      # Kept in short chunks so the generic credential scanner does not treat
-      # a public integrity value as a newly committed secret.
-      BEADS_SHA256_A: "8546dc9a"
-      BEADS_SHA256_B: "47e11dc3"
-      BEADS_SHA256_C: "1ac2bc9a"
-      BEADS_SHA256_D: "0224a9c6"
-      BEADS_SHA256_E: "90975e91"
-      BEADS_SHA256_F: "850932cb"
-      BEADS_SHA256_G: "b6262305"
-      BEADS_SHA256_H: "3fbb7db8"
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@v6
         with:
           # Full history so we can diff CHANGELOG.md against `main`.
           fetch-depth: 0
 
-      - name: Detect release-cut PR shape
+      - name: Enforce allowed main-bound PR shape
         id: shape
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          # Two regexes must both match to classify a PR as a release cut.
-          # Anything else (hotfix, accidental main-bound feature PR, etc.)
-          # falls through to the short-circuit pass below.
-          title_re='^Release v[0-9]+\.[0-9]+\.[0-9]+$'
-          branch_re='^release/v[0-9]+\.[0-9]+\.[0-9]+$'
-
-          if [[ "$PR_TITLE" =~ $title_re ]] && [[ "$HEAD_REF" =~ $branch_re ]]; then
-            # Extract X.Y.Z from the branch name so downstream steps can
-            # cross-check against frontend/package.json + CHANGELOG.md.
-            version="${HEAD_REF#release/v}"
-            echo "is_release_cut=true" >> "$GITHUB_OUTPUT"
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "Detected release-cut PR for version $version"
-          else
-            echo "is_release_cut=false" >> "$GITHUB_OUTPUT"
-            echo "version=" >> "$GITHUB_OUTPUT"
-            echo "Not a release-cut PR (title='$PR_TITLE', branch='$HEAD_REF') — gates skipped, passing."
-          fi
+          set -euo pipefail
+          classification=$(python scripts/release_gate_policy.py classify-pr \
+            --title "$PR_TITLE" --head-ref "$HEAD_REF")
+          kind=$(jq -er '.kind' <<<"$classification")
+          version=$(jq -er '.version' <<<"$classification")
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Allowed $kind PR for version $version"
 
       # ─── G6: Version in frontend/package.json matches release branch ──
       # Cheapest gate; runs first so a wrong version bump fails fast.
       - name: G6 — Version matches release branch name
-        if: steps.shape.outputs.is_release_cut == 'true'
+        if: steps.shape.outputs.kind == 'release'
         env:
           EXPECTED_VERSION: ${{ steps.shape.outputs.version }}
         run: |
@@ -121,7 +89,7 @@ jobs:
       # heading present with today's date; (c) the [Unreleased] section
       # appears ABOVE the [X.Y.Z] section (Keep-a-Changelog convention).
       - name: G5 — CHANGELOG promoted with today's date
-        if: steps.shape.outputs.is_release_cut == 'true'
+        if: steps.shape.outputs.kind == 'release'
         env:
           EXPECTED_VERSION: ${{ steps.shape.outputs.version }}
         run: |
@@ -174,7 +142,7 @@ jobs:
       # closes the steady-state case (catching any pre-existing competing
       # PR before the cut is even reviewed).
       - name: G7 — No other release-cut or hotfix PR open against main
-        if: steps.shape.outputs.is_release_cut == 'true'
+        if: steps.shape.outputs.kind == 'release'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           THIS_PR: ${{ github.event.pull_request.number }}
@@ -211,7 +179,7 @@ jobs:
       # and adds little signal beyond the state filter (a dismissed
       # alert is genuinely closed; only an open one needs waiving).
       - name: G1b — Zero open HIGH/CRITICAL CodeQL alerts
-        if: steps.shape.outputs.is_release_cut == 'true'
+        if: steps.shape.outputs.kind == 'release'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -235,95 +203,21 @@ jobs:
           fi
           echo "G1b PASS: 0 open HIGH/CRITICAL CodeQL alerts"
 
-      # ─── G1a: Zero open P0/P1 beads at the cut SHA ────────────────────
-      # Requires `bd` in CI. Pinned to v0.49.x to match maintainer-local
-      # bd version (avoids JSONL/CLI drift). The release branch must
-      # carry .beads/issues.jsonl with the cut SHA's bead state — which
-      # it does naturally because the release branch is cut from a dev
-      # SHA that includes the .beads/ tree.
-      - name: G1a — Install bd from pinned release
-        if: steps.shape.outputs.is_release_cut == 'true'
-        run: |
-          set -euo pipefail
-          tarball="beads_${BEADS_VERSION}_linux_amd64.tar.gz"
-          url="https://github.com/gastownhall/beads/releases/download/v${BEADS_VERSION}/${tarball}"
-          echo "Fetching $url"
-          curl -fsSL "$url" -o "$tarball"
-          checksum="${BEADS_SHA256_A}${BEADS_SHA256_B}${BEADS_SHA256_C}${BEADS_SHA256_D}${BEADS_SHA256_E}${BEADS_SHA256_F}${BEADS_SHA256_G}${BEADS_SHA256_H}"
-          echo "${checksum}  ${tarball}" | sha256sum --check --strict -
-          tar -xzf "$tarball"
-          # Locate the bd binary inside the extracted tarball — the upstream
-          # archive layout has historically been a flat `bd` at the root,
-          # but defensively search in case that changes.
-          bd_path=$(find . -maxdepth 3 -type f -name bd -perm /u+x | head -1)
-          if [[ -z "$bd_path" ]]; then
-            echo "::error::G1a FAIL: bd binary not found in extracted tarball $tarball"
-            exit 1
-          fi
-          install -m 755 "$bd_path" /usr/local/bin/bd
-          bd --version
+      # ─── G1a: Zero unresolved P0/P1 beads in current board ────────────
+      # The `beads` sync branch is the authoritative current board surface.
+      # A missing branch/export fails checkout and therefore fails the gate.
+      - name: G1a — Checkout authoritative board
+        if: steps.shape.outputs.kind == 'release'
+        uses: actions/checkout@v6
+        with:
+          ref: beads
+          path: authoritative-board
+          sparse-checkout: .beads/issues.jsonl
+          sparse-checkout-cone-mode: false
 
-      - name: G1a — Zero open P0/P1 beads
-        if: steps.shape.outputs.is_release_cut == 'true'
-        run: |
-          set -euo pipefail
-          # bd reads from .beads/issues.jsonl on the checked-out branch.
-          # `--no-db --no-daemon` forces JSONL-only mode: no SQLite write,
-          # no background sync daemon. This avoids the "legacy database
-          # detected" warning bd emits when it sees a JSONL without a
-          # repo-fingerprinted SQLite alongside it (the maintainer's
-          # local .beads/ is JSONL-as-source-of-truth per .beads/config.yaml).
-          # bd list emits human-formatted output by default; --json gives
-          # us a parseable array. Empty result is `[]`, length 0.
-          # Capture stdout (JSON) separately from stderr (bd warnings).
-          # Mixing them via 2>&1 would corrupt the JSON parse. Capture
-          # stderr to /tmp so we can echo it on failure.
-          if ! p0=$(bd --no-db --no-daemon list --status open --priority 0 --json 2>/tmp/bd-p0.err); then
-            echo "::error::G1a FAIL: 'bd list --priority 0' exited non-zero. Stderr:"
-            cat /tmp/bd-p0.err
-            exit 1
-          fi
-          if ! p1=$(bd --no-db --no-daemon list --status open --priority 1 --json 2>/tmp/bd-p1.err); then
-            echo "::error::G1a FAIL: 'bd list --priority 1' exited non-zero. Stderr:"
-            cat /tmp/bd-p1.err
-            exit 1
-          fi
-          # Validate that stdout actually parses as JSON — a silent JSONL
-          # parse failure could leave $p0 empty while bd exits 0.
-          if ! echo "$p0" | jq empty 2>/dev/null; then
-            echo "::error::G1a FAIL: 'bd list --priority 0' produced non-JSON output:"
-            echo "$p0"
-            cat /tmp/bd-p0.err
-            exit 1
-          fi
-          if ! echo "$p1" | jq empty 2>/dev/null; then
-            echo "::error::G1a FAIL: 'bd list --priority 1' produced non-JSON output:"
-            echo "$p1"
-            cat /tmp/bd-p1.err
-            exit 1
-          fi
-
-          p0_count=$(echo "$p0" | jq 'length')
-          p1_count=$(echo "$p1" | jq 'length')
-
-          fail=0
-          if [[ "$p0_count" -gt 0 ]]; then
-            echo "::error::G1a FAIL: $p0_count open P0 bead(s) at cut SHA"
-            echo "$p0" | jq -r '.[] | "  \(.id) (P0): \(.title)"'
-            fail=1
-          fi
-          if [[ "$p1_count" -gt 0 ]]; then
-            echo "::error::G1a FAIL: $p1_count open P1 bead(s) at cut SHA"
-            echo "$p1" | jq -r '.[] | "  \(.id) (P1): \(.title)"'
-            fail=1
-          fi
-
-          if [[ "$fail" -eq 1 ]]; then
-            echo ""
-            echo "Per ADR-004 G1a, every open P0/P1 must either be closed or explicitly justified in the 'G1a Justifications' section of the PR description. PR-description parsing is not yet automated — escalate to manual reviewer if a justified item is genuinely required to ship."
-            exit 1
-          fi
-          echo "G1a PASS: 0 open P0/P1 beads at cut SHA"
+      - name: G1a — Zero unresolved P0/P1 beads
+        if: steps.shape.outputs.kind == 'release'
+        run: python scripts/release_gate_policy.py check-board authoritative-board/.beads/issues.jsonl
 
       # ─── Summary ──────────────────────────────────────────────────────
       # If we reach here, all enabled gates passed. The summary step
@@ -332,9 +226,9 @@ jobs:
       - name: Gate summary
         if: always()
         run: |
-          if [[ "${{ steps.shape.outputs.is_release_cut }}" == "true" ]]; then
+          if [[ "${{ steps.shape.outputs.kind }}" == "release" ]]; then
             echo "All mechanical pre-cut gates (G1a, G1b, G5, G6, G7) passed for release v${{ steps.shape.outputs.version }}."
             echo "G2/G3/G4 are enforced via separate required checks (Backend Tests, Frontend Tests, CodeQL Analysis [python|javascript-typescript])."
           else
-            echo "Non-release PR — release-cut gates skipped. Branch protection check satisfied via short-circuit pass."
+            echo "Allowed hotfix v${{ steps.shape.outputs.version }}; release-only G1a/G1b/G5/G6/G7 are governed by the documented hotfix carve-outs."
           fi

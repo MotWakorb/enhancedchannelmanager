@@ -7,7 +7,7 @@
         "security-scan-frontend",
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
     },
     {
       "file": "build.yml",
@@ -16,7 +16,7 @@
         "security-scan-backend",
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
     },
     {
       "file": "build.yml",
@@ -138,7 +138,7 @@
         "dast-scan",
         "if"
       ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')"
+      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')"
     },
     {
       "file": "build.yml",
@@ -288,7 +288,7 @@
         "trivy-scan",
         "if"
       ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')"
+      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')"
     },
     {
       "file": "build.yml",
@@ -919,7 +919,7 @@
         2,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -930,7 +930,7 @@
         3,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -941,7 +941,7 @@
         4,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -952,7 +952,7 @@
         5,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -963,7 +963,7 @@
         6,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -974,7 +974,7 @@
         7,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",

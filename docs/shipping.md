@@ -389,8 +389,8 @@ Adapted from ADR-004 §"Cut Mechanics", with the post-cut dev update (step 8) co
 
 ```bash
 # 0. Pre-flight — gate items G1a, G1b, G7 (human checks)
-bd list --status open --priority 0                # G1a: must be empty
-bd list --status open --priority 1                # G1a: must be empty (or each justified in PR)
+bd list --priority 0                              # G1a: every unresolved status must be empty
+bd list --priority 1                              # G1a: every unresolved status must be empty (or justified)
 gh api repos/:owner/:repo/code-scanning/alerts --paginate \
   | jq '[.[] | select(.state=="open" and (.rule.security_severity_level=="high" or .rule.security_severity_level=="critical"))] | length'
                                                    # G1b: must be 0 (or each formally waived)
@@ -426,7 +426,7 @@ PR_URL=$(gh pr create --base main --head release/v0.17.0 \
 <paste the promoted CHANGELOG [0.17.0] block here>
 
 ### Pre-Cut Gate Checklist
-- [ ] G1a: Zero open P0/P1 bugs at cut SHA (verified via `bd list`)
+- [ ] G1a: Zero unresolved P0/P1 bugs in the authoritative board (verified via `bd list`)
 - [ ] G1b: Zero open HIGH/CRITICAL security findings not formally waived (GitHub Security tab)
 - [x] G2: Backend Tests green (CI will verify)
 - [x] G3: Frontend Tests green (CI will verify)
@@ -486,11 +486,11 @@ git checkout dev && git pull
 
 ### Pre-Cut Gate Checklist
 
-All seven items must pass before the release-cut PR can merge. Copy-paste this block into the release-cut PR description (step 5 above already includes it). **Phase 2 (`bd-3d0tv`) lifted G1a, G1b, G5, G6, G7 to mechanical CI enforcement** via `.github/workflows/release-cut-gate.yml`. The workflow runs on every PR opened against `main`, classifies release-cut PRs by title-regex (`^Release vX.Y.Z$`) AND head-branch-regex (`^release/vX.Y.Z$`), and fails the `Release Cut Gate` required check if any of the five mechanical gates fail. The PR-description checklist is now a redundant safety net (kept for the cut-authorizer to read; no longer the primary gate). G2, G3, G4 are mechanically enforced via existing required checks (`Backend Tests`, `Frontend Tests`, `CodeQL Analysis (python|javascript-typescript)`).
+All seven items must pass before the release-cut PR can merge. Copy-paste this block into the release-cut PR description (step 5 above already includes it). **Phase 2 (`bd-3d0tv`) lifted G1a, G1b, G5, G6, G7 to mechanical CI enforcement** via `.github/workflows/release-cut-gate.yml`. The workflow runs on every PR opened against `main`; exact matching release and hotfix title/branch pairs are the only admitted shapes, and every other main-bound PR fails closed. The PR-description checklist is now a redundant safety net (kept for the cut-authorizer to read; no longer the primary gate). G2, G3, G4 are mechanically enforced via existing required checks (`Backend Tests`, `Frontend Tests`, `CodeQL Analysis (python|javascript-typescript)`).
 
 | # | Gate | Enforcement | Cites |
 |---|---|---|---|
-| G1a | **Zero open P0/P1 bugs at the `dev` cut SHA** (beads board, all scopes) | Mechanical: `Release Cut Gate` workflow runs `bd list --status open --priority 0/1` on the release branch's `.beads/issues.jsonl`. PR-description "G1a Justifications" parsing is not yet automated, so open P0/P1s require manual override (close them, or escalate to the cut-authorizing reviewer) | `bd-vgm4l` root cause; `bd-3d0tv` automation |
+| G1a | **Zero unresolved P0/P1 bugs in the current authoritative board** (all scopes and every unresolved status) | Mechanical: `Release Cut Gate` reads the export on the dedicated remote `beads` branch and `scripts/release_gate_policy.py` includes `open`, `in_progress`, `blocked`, and `deferred`. Missing, empty, malformed, or unknown-status input fails closed. PR-description justification remains reviewer-authorized. | `bd-vgm4l`; `bd-3d0tv`; `enhancedchannelmanager-04c0u.11` |
 | G1b | **Zero open HIGH/CRITICAL security findings not formally waived** (GitHub Security tab + active advisories). This is distinct from G1a, so a mis-triaged finding cannot slip through "the bug board is clean" | Mechanical: `Release Cut Gate` workflow queries `code-scanning/alerts?state=open` and fails on any HIGH/CRITICAL. Dismissed-in-Security-tab alerts have `state=dismissed` and naturally pass. PR-description cross-reference (the second half of "formally waived" semantics) is human-verified | Complement to ADR-005 gate G4; `bd-3d0tv` automation |
 | G2 | `Backend Tests` green on the release branch | Branch protection required check | Existing `bd-8w33i` |
 | G3 | `Frontend Tests` green on the release branch | Branch protection required check | Existing `bd-8w33i` |
@@ -508,7 +508,7 @@ gh run list --workflow=release-cut-gate.yml --branch release/vX.Y.Z --limit 1
 gh run view <run-id> --log
 ```
 
-Per-gate pass/fail messages are prefixed with the gate name (`G1a PASS:`, `G5 FAIL: ...`) for grep-friendly inspection. Non-release PRs to `main` (hotfixes; accidental main-bound feature PRs) short-circuit to a pass. The workflow only enforces gates when both the title and head-branch regex match the release-cut shape.
+Per-gate pass/fail messages are prefixed with the gate name (`G1a PASS:`, `G5 FAIL: ...`) for grep-friendly inspection. Hotfixes use the documented carve-outs. Accidental feature, documentation, or malformed release PRs targeting `main` fail the policy classifier; editing a title or branch cannot turn an unrecognized main-bound PR into a green bypass.
 
 #### G1b "formally waived" semantics
 
