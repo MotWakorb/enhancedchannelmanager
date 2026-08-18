@@ -15,6 +15,8 @@ These tests pin the behavior at the middleware boundary:
 - Empty configured key never accepts an arbitrary token.
 """
 import hmac
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -92,10 +94,17 @@ async def test_correct_mcp_key_cannot_change_outbound_destination(monkeypatch):
 async def test_human_jwt_is_not_subject_to_service_capability_matrix(monkeypatch):
     _patch_common(monkeypatch, mcp_api_key=MCP_KEY, token="human.jwt.token")
     monkeypatch.setattr(main, "decode_token_safe", lambda token: {"sub": 42})
+    session = MagicMock()
+    session.query.return_value.filter.return_value.first.return_value = SimpleNamespace(
+        id=42, is_active=True
+    )
+    monkeypatch.setattr(main, "get_session", lambda: session)
+    monkeypatch.setattr(main, "token_matches_user_auth_epoch", lambda payload, user: True)
     result = await main.auth_middleware(
         _Request("/api/cloud-targets", "POST"), _call_next_sentinel
     )
     assert result == "PASSED_THROUGH"
+    session.close.assert_called_once()
 
 
 @pytest.mark.asyncio
