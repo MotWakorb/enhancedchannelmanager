@@ -124,12 +124,12 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   };
 
   const mcpPort = '6101';
-  const mcpEndpoint = `http://YOUR_ECM_HOST:${mcpPort}/mcp?api_key=YOUR_API_KEY`;
+  const mcpEndpoint = `http://localhost:${mcpPort}/mcp`;
   const claudeDesktopConfig = JSON.stringify({
     mcpServers: {
       ecm: {
         command: 'npx',
-        args: ['mcp-remote', mcpEndpoint, '--allow-http']
+        args: ['mcp-remote', mcpEndpoint, '--header', 'Authorization:${ECM_MCP_AUTH}', '--allow-http']
       }
     }
   }, null, 2);
@@ -137,7 +137,8 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     mcpServers: {
       ecm: {
         type: 'http',
-        url: mcpEndpoint
+        url: mcpEndpoint,
+        headers: { Authorization: 'Bearer ${ECM_MCP_API_KEY}' }
       }
     }
   }, null, 2);
@@ -298,7 +299,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
           <div className="form-group-vertical">
             <p className="form-description">
-              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint. Authentication uses your static MCP API key, passed as the <code>?api_key=</code> query parameter — all traffic stays on your private network, with no public exposure required.
+              The MCP server is published on host loopback by default at port <strong>{mcpPort}</strong>. Authentication uses an <code>Authorization: Bearer</code> header; credentials in URLs are rejected so they cannot leak through histories or access logs.
             </p>
 
             {/* mcp-remote bridge (Node) — Claude Desktop static-key path */}
@@ -311,7 +312,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>
               {', '}
               <code>winget install OpenJS.NodeJS.LTS</code>, <code>brew install node</code>, or <code>apt install nodejs npm</code>), add this to your <code>claude_desktop_config.json</code>.
-              Replace <code>YOUR_ECM_HOST</code> and <code>YOUR_API_KEY</code>. Without Node on PATH, Claude Desktop&apos;s logs show <code>spawn npx ENOENT</code>.
+              Set the operating-system environment variable <code>ECM_MCP_AUTH</code> to <code>Bearer &lt;your key&gt;</code> before launching Claude Desktop. The generated config intentionally contains no credential. Without Node on PATH, Claude Desktop&apos;s logs show <code>spawn npx ENOENT</code>.
             </p>
             <div className="mcp-config-block">
               <pre>{claudeDesktopConfig}</pre>
@@ -325,12 +326,12 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               </button>
             </div>
             <p className="form-description" style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary, #888)' }}>
-              (<code>--allow-http</code> is needed because the endpoint is plain HTTP. The <code>?api_key=</code> parameter is your <code>mcp_api_key</code> — not your Dispatcharr key.)
+              (<code>--allow-http</code> is safe here only because the default endpoint is host loopback. Remote access must use the documented HTTPS profile.)
             </p>
 
             <label className="form-label" style={{ marginTop: '1rem' }}>MCP Endpoint (reference)</label>
             <div className="mcp-key-display">
-              <code>http://YOUR_ECM_HOST:{mcpPort}/mcp?api_key=YOUR_API_KEY</code>
+              <code>http://localhost:{mcpPort}/mcp</code>
               <button
                 className="mcp-copy-btn"
                 onClick={() => handleCopy(mcpEndpoint, 'MCP endpoint URL')}

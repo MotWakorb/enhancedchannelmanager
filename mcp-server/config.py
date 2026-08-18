@@ -9,6 +9,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,23 @@ ECM_URL = os.environ.get("ECM_URL", "http://ecm:6100")
 
 # MCP server port
 MCP_PORT = int(os.environ.get("MCP_PORT", "6101"))
+MCP_BIND_ADDRESS = os.environ.get("MCP_BIND_ADDRESS", "127.0.0.1")
+
+
+def _environment_boolean(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false")
+
+
+MCP_REQUIRE_HTTPS = _environment_boolean("MCP_REQUIRE_HTTPS")
+MCP_TRUSTED_PROXY_IPS = os.environ.get("MCP_TRUSTED_PROXY_IPS", "127.0.0.1")
 
 _DEFAULT_MCP_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "[::1]", "ecm-mcp")
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -78,6 +96,58 @@ def get_mcp_allowed_hosts(raw: str | None = None) -> tuple[str, ...]:
 
 
 MCP_ALLOWED_HOSTS = get_mcp_allowed_hosts()
+
+
+def get_mcp_allowed_origins(raw: str | None = None) -> tuple[str, ...]:
+    """Return exact browser origins allowed to reach MCP.
+
+    Non-browser MCP clients normally omit Origin. When a browser supplies one,
+    it must match this list exactly; wildcards are deliberately unsupported.
+    """
+    configured = os.environ.get("MCP_ALLOWED_ORIGINS", "") if raw is None else raw
+    defaults = (
+        "http://localhost",
+        "https://localhost",
+        f"http://localhost:{MCP_PORT}",
+        f"https://localhost:{MCP_PORT}",
+        "http://127.0.0.1",
+        "https://127.0.0.1",
+        f"http://127.0.0.1:{MCP_PORT}",
+        f"https://127.0.0.1:{MCP_PORT}",
+        "http://[::1]",
+        "https://[::1]",
+        f"http://[::1]:{MCP_PORT}",
+        f"https://[::1]:{MCP_PORT}",
+    )
+    result = list(defaults)
+    for item in ([] if not configured.strip() else configured.split(",")):
+        origin = item.strip()
+        parsed = urlsplit(origin)
+        try:
+            _validated_port = parsed.port
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid MCP_ALLOWED_ORIGINS entry: {item!r}"
+            ) from exc
+        if (
+            not origin
+            or origin == "*"
+            or parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or any(character.isspace() for character in origin)
+        ):
+            raise ValueError(f"Invalid MCP_ALLOWED_ORIGINS entry: {item!r}")
+        if origin not in result:
+            result.append(origin)
+    return tuple(result)
+
+
+MCP_ALLOWED_ORIGINS = get_mcp_allowed_origins()
 
 
 def get_mcp_api_key() -> str:

@@ -7,7 +7,7 @@ before any static-key compare.
 MCP OAuth offering RETIRED (bd-9axgc): ECM no longer accepts OAuth 2.1 Bearer
 tokens for MCP. A JWT-shaped Bearer is now REJECTED with 401 and is never
 compared against the static key — the CD1 no-fail-cascade invariant still holds,
-and these tests pin it. The supported credential is the static ?api_key= path.
+and these tests pin it. The supported credential is the static Bearer path.
 
 These exercise the full Starlette app (``server.app``) + the dual-path
 middleware over HTTP (TestClient), mirroring ``test_server.py``'s style.
@@ -102,7 +102,7 @@ class _StaticKeySpy:
 class TestNoFailCascade:
     """A JWT-shaped Bearer is REJECTED 401 and NEVER compared against the static
     key (threat model CD1). OAuth retired (bd-9axgc): every JWT-shaped value is
-    rejected outright — the supported path is static ?api_key=."""
+    rejected outright — the supported path is a static Bearer header."""
 
     def _assert_401_and_static_key_untouched(self, client, token):
         spy = _StaticKeySpy()
@@ -181,16 +181,14 @@ class TestNoFailCascade:
 
 
 class TestStaticKeyRegression:
-    """Existing static-key behavior is PO-locked permanent and must not change."""
+    """The static key is accepted only through the Bearer header."""
 
-    def test_query_param_static_key_still_authenticates(self, client):
+    def test_query_param_static_key_is_rejected(self, client):
         with patch("server.get_mcp_api_key", return_value=_STATIC_KEY):
             response = client.post(
                 f"/mcp?api_key={_STATIC_KEY}", headers=_MCP_HEADERS, json=_INITIALIZE
             )
-        assert response.status_code == 200, response.text
-        result = _parse_initialize_result(response)
-        assert result["result"]["serverInfo"]["name"] == "ecm-mcp"
+        assert response.status_code == 400
 
     def test_bearer_static_key_still_authenticates(self, client):
         # A non-JWT-shaped Bearer value routes to the static-key path.
@@ -202,12 +200,12 @@ class TestStaticKeyRegression:
             )
         assert response.status_code == 200, response.text
 
-    def test_wrong_static_key_query_rejected(self, client):
+    def test_wrong_static_key_query_rejected_without_key_comparison(self, client):
         with patch("server.get_mcp_api_key", return_value=_STATIC_KEY):
             response = client.post(
                 "/mcp?api_key=wrong-key", headers=_MCP_HEADERS, json=_INITIALIZE
             )
-        assert response.status_code == 401
+        assert response.status_code == 400
 
     def test_wrong_bearer_static_key_rejected(self, client):
         with patch("server.get_mcp_api_key", return_value=_STATIC_KEY):
@@ -227,7 +225,9 @@ class TestStaticKeyRegression:
     def test_not_configured_returns_503(self, client):
         with patch("server.get_mcp_api_key", return_value=""):
             response = client.post(
-                f"/mcp?api_key={_STATIC_KEY}", headers=_MCP_HEADERS, json=_INITIALIZE
+                "/mcp",
+                headers={**_MCP_HEADERS, "Authorization": f"Bearer {_STATIC_KEY}"},
+                json=_INITIALIZE,
             )
         assert response.status_code == 503
 
@@ -237,7 +237,9 @@ class TestStaticKeyRegression:
         with caplog.at_level(logging.INFO, logger="server"):
             with patch("server.get_mcp_api_key", return_value=_STATIC_KEY):
                 client.post(
-                    f"/mcp?api_key={_STATIC_KEY}", headers=_MCP_HEADERS, json=_INITIALIZE
+                    "/mcp",
+                    headers={**_MCP_HEADERS, "Authorization": f"Bearer {_STATIC_KEY}"},
+                    json=_INITIALIZE,
                 )
         assert any(
             "auth_method=static_key" in r.getMessage() for r in caplog.records

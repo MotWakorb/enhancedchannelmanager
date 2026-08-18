@@ -1,0 +1,14 @@
+services:
+  ecm-mcp:
+    # Explicit remote-access overlay. Publish only when a TLS reverse proxy is
+    # configured, and do not expose this port through a router/firewall.
+    ports: !override
+      - "0.0.0.0:${MCP_PORT:-6101}:${MCP_PORT:-6101}"
+    environment:
+      - MCP_BIND_ADDRESS=0.0.0.0
+      - MCP_REQUIRE_HTTPS=true
+      # Set to the reverse proxy's exact source IP/CIDR. Forwarded headers from
+      # every other peer are ignored by Uvicorn.
+      - MCP_TRUSTED_PROXY_IPS=${MCP_TRUSTED_PROXY_IPS:?set trusted proxy IP/CIDR}
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:?set public MCP hostname}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS:-}

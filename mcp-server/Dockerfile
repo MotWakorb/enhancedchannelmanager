@@ -18,10 +18,11 @@ COPY . .
 ENV CONFIG_DIR=/config
 ENV ECM_URL=http://ecm:6100
 ENV MCP_PORT=6101
+ENV MCP_BIND_ADDRESS=127.0.0.1
 
 EXPOSE 6101
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:6101/health')" || exit 1
 
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "6101"]
+CMD ["python", "server.py"]
