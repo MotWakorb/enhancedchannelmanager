@@ -22,6 +22,15 @@
       "file": "build.yml",
       "path": [
         "jobs",
+        "security-scan-mcp",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
         "codeql-analysis",
         "if"
       ],
@@ -715,10 +724,28 @@
       "file": "build.yml",
       "path": [
         "jobs",
+        "trivy-scan-mcp-amd64",
+        "if"
+      ],
+      "value": "github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "trivy-scan-mcp-arm64",
+        "if"
+      ],
+      "value": "github.event_name != 'pull_request' && needs.build-mcp-arm64.result == 'success'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
         "merge-mcp-manifests",
         "if"
       ],
-      "value": "always() && github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success'"
+      "value": "always() && github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success'"
     },
     {
       "file": "build.yml",

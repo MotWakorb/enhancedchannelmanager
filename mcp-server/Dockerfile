@@ -1,6 +1,13 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
 
 WORKDIR /app
+
+# Apply Debian security updates that may have landed after the pinned base
+# manifest was published. The digest makes the input reviewable; this upgrade
+# step closes fixed OS advisories until the next intentional digest refresh.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
 COPY requirements.txt .

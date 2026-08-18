@@ -57,9 +57,10 @@ jobs:
       # — the v1.0.x line is recent (released 2026-04) and the maintainer
       # has not yet adopted it locally.
       BEADS_VERSION: "0.49.6"
+      BEADS_SHA256: "8546dc9a47e11dc31ac2bc9a0224a9c690975e91850932cbb62623053fbb7db8"
     steps:
       - name: Checkout PR head
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           # Full history so we can diff CHANGELOG.md against `main`.
           fetch-depth: 0
@@ -238,6 +239,7 @@ jobs:
           url="https://github.com/gastownhall/beads/releases/download/v${BEADS_VERSION}/${tarball}"
           echo "Fetching $url"
           curl -fsSL "$url" -o "$tarball"
+          echo "${BEADS_SHA256}  ${tarball}" | sha256sum --check --strict -
           tar -xzf "$tarball"
           # Locate the bd binary inside the extracted tarball — the upstream
           # archive layout has historically been a flat `bd` at the root,
