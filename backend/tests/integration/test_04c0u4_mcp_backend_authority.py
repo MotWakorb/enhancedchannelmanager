@@ -1,7 +1,7 @@
 """Direct-ASGI adversarial checks for the MCP service-principal boundary."""
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -52,21 +52,78 @@ async def test_direct_backend_call_with_mcp_key_is_refused(
     assert "MCP service principal" in response.json()["detail"]
 
 
+@pytest.mark.parametrize(
+    "method,path",
+    [
+        ("GET", "/api/backup/create"),
+        ("POST", "/api/backup/save"),
+        ("GET", "/api/backup/saved"),
+        ("GET", "/api/backup/saved/ecm-backup-2026-08-18_010203.zip"),
+        ("DELETE", "/api/backup/saved/ecm-backup-2026-08-18_010203.zip"),
+    ],
+)
 @pytest.mark.asyncio
-async def test_direct_mcp_task_call_cannot_export_credentials(async_client):
+async def test_direct_mcp_backup_capabilities_are_human_only_before_artifact_access(
+    async_client, tmp_path, method, path
+):
+    """The TLS sentinel must neither be read nor copied by an MCP request."""
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    saved = backup_dir / "ecm-backup-2026-08-18_010203.zip"
+    saved.write_bytes(b"TLS-PRIVATE-KEY-SENTINEL-04c0u4")
+    create_zip = MagicMock(side_effect=AssertionError("backup body was constructed"))
+    with (
+        patch("main.get_auth_settings", return_value=_auth_on()),
+        patch("main.get_settings", return_value=_runtime_settings()),
+        patch("routers.backup.BACKUPS_DIR", backup_dir),
+        patch("routers.backup._create_backup_zip", create_zip),
+    ):
+        response = await async_client.request(
+            method,
+            path,
+            headers={"Authorization": f"Bearer {MCP_KEY}"},
+        )
+    assert response.status_code == 403, response.text
+    assert b"TLS-PRIVATE-KEY-SENTINEL-04c0u4" not in response.content
+    assert saved.read_bytes() == b"TLS-PRIVATE-KEY-SENTINEL-04c0u4"
+    assert sorted(item.name for item in backup_dir.iterdir()) == [saved.name]
+    create_zip.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"include_credentials": True},
+        {"include_credentials": 1},
+        {"include_credentials": "true"},
+        {"include_credentials": []},
+        {"cloud_target_id": 7},
+        {"cloud_targets": [7]},
+        {"retention_enabled": True},
+        {"last_n": 2},
+        {"max_age": 30},
+    ],
+)
+@pytest.mark.asyncio
+async def test_direct_mcp_dbas_backup_run_is_human_only_before_validation_or_execution(
+    async_client, parameters
+):
+    engine_factory = MagicMock(side_effect=AssertionError("task engine was reached"))
     with (
         patch("main.get_auth_settings", return_value=_auth_on()),
         patch("main.get_settings", return_value=_runtime_settings()),
         patch("auth.dependencies.get_auth_settings", return_value=_auth_on()),
         patch("auth.dependencies.get_settings", return_value=_runtime_settings()),
+        patch("task_engine.get_engine", engine_factory),
     ):
         response = await async_client.post(
             "/api/tasks/dbas_backup/run",
-            json={"parameters": {"include_credentials": True}},
+            json={"parameters": parameters},
             headers={"Authorization": f"Bearer {MCP_KEY}"},
         )
     assert response.status_code == 403, response.text
-    assert "cannot export credentials" in response.json()["detail"]
+    assert "MCP service principal" in response.json()["detail"]
+    engine_factory.assert_not_called()
 
 
 @pytest.mark.parametrize(

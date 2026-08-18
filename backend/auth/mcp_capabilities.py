@@ -35,6 +35,7 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ('GET', '/api/backup/create'),
     ('GET', '/api/backup/export-sections'),
     ('GET', '/api/backup/saved'),
+    ('GET', '/api/backup/saved/{filename}'),
     ('GET', '/api/channel-groups'),
     ('GET', '/api/channel-groups/auto-created'),
     ('GET', '/api/channel-groups/hidden'),
@@ -198,7 +199,7 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/channels/import-csv"),
     ("GET", "/api/channels/bulk-commit/{job_id}"),
     ("GET", "/api/emby/clear-logos/{job_id}"),
-    ("GET", "/api/epg/data/{epg_data_id}"),
+    ("GET", "/api/epg/data/{data_id}"),
     ("POST", "/api/channel-pipeline/rules/analyze/from-bundle"),
     ("PATCH", "/api/m3u/accounts/{account_id}/group-settings"),
     # Full settings round-trip used by M3U group-auto-sync tooling. The
@@ -213,6 +214,11 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
 # routes remain classified if a future tool tries to call them.
 MCP_HUMAN_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({
     # Credential-bearing backup export/restore and destructive restore.
+    ("GET", "/api/backup/create"),
+    ("POST", "/api/backup/save"),
+    ("GET", "/api/backup/saved"),
+    ("GET", "/api/backup/saved/{filename}"),
+    ("DELETE", "/api/backup/saved/{filename}"),
     ("POST", "/api/backup/restore-saved"),
     ("POST", "/api/backup/restore-dbas-saved"),
     ("POST", "/api/backup/restore"),

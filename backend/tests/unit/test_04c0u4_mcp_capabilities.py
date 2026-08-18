@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
+from fastapi.routing import APIRoute
 
 from auth.mcp_capabilities import (
     MCP_ALLOWED_ROUTES,
@@ -29,6 +30,19 @@ def test_every_declared_mcp_endpoint_has_an_explicit_backend_verdict():
     classified = MCP_ALLOWED_ROUTES | MCP_HUMAN_ONLY_ROUTES
     assert declared <= classified, sorted(declared - classified)
     assert not (MCP_ALLOWED_ROUTES & MCP_HUMAN_ONLY_ROUTES)
+
+
+def test_every_allowed_capability_matches_an_actual_registered_fastapi_route():
+    """Aliases in the service contract must not silently fail closed at runtime."""
+    from main import app
+
+    registered = {
+        (method, route.path)
+        for route in app.routes
+        if isinstance(route, APIRoute)
+        for method in route.methods
+    }
+    assert MCP_ALLOWED_ROUTES <= registered, sorted(MCP_ALLOWED_ROUTES - registered)
 
 
 @pytest.mark.parametrize(
@@ -65,13 +79,13 @@ def test_normal_channel_automation_remains_allowed():
 
 
 @pytest.mark.asyncio
-async def test_mcp_cannot_run_credential_bearing_backup_directly():
+async def test_mcp_cannot_run_dbas_backup_directly():
     from routers.tasks import TaskRunRequest, run_task
 
     with pytest.raises(HTTPException) as exc:
         await run_task(
             "dbas_backup",
-            TaskRunRequest(parameters={"include_credentials": True}),
+            TaskRunRequest(parameters={"include_credentials": False}),
             is_admin=True,
             caller_is_mcp=True,
         )

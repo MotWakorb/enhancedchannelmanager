@@ -626,24 +626,10 @@ async def run_task(
             "[TASKS] Refusing privileged task run for non-admin: task=%s", task_id
         )
         raise HTTPException(status_code=403, detail="Admin access required")
-    if task_id != "dbas_backup":
-        _reject_mcp_privileged_task(task_id, caller_is_mcp)
-    parameters = request.parameters if request and request.parameters else {}
-    if (
-        caller_is_mcp
-        and task_id == "dbas_backup"
-        and parameters.get("include_credentials") is True
-    ):
-        logger.warning(
-            "[TASKS] Refusing credential-bearing backup for MCP service principal"
-        )
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "The MCP service principal cannot export credentials; "
-                "a human operator admin is required"
-            ),
-        )
+    # DBAS backup is human-only as a whole. Its ad-hoc parameters can activate
+    # outbound uploads, retention pruning, or credential export; filtering a
+    # few truthy spellings would leave coercion and future-parameter bypasses.
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
     try:
         from task_engine import get_engine
         engine = get_engine()
