@@ -121,7 +121,7 @@ No alert fired. No journal entry surfaced the disease. The signal was "absence o
 
 3. **Confirm the Prometheus value matches the database truth:**
    ```bash
-   docker exec ecm-ecm-1 curl -s localhost:8000/metrics | grep ecm_task_schedule
+   docker exec ecm-ecm-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/metrics', timeout=5).read().decode())" | grep ecm_task_schedule
    ```
    The gauge values in `/metrics` should reflect the latest scrape. If `ecm_task_schedule_last_success_timestamp` is missing for a `task_id` you expect to see, the task has never completed successfully since the metric was added: that's a different signal from "completed long ago."
 
@@ -150,7 +150,7 @@ bd-qxi02 closes the detection gap with `ecm_task_schedule_next_run_null_count` +
 
 ```bash
 # 1. Confirm the gauge is now 0.
-docker exec ecm-ecm-1 curl -s localhost:8000/metrics | grep ecm_task_schedule_next_run_null_count
+docker exec ecm-ecm-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/metrics', timeout=5).read().decode())" | grep ecm_task_schedule_next_run_null_count
 
 # 2. Confirm task_schedules has computed next_run_at for every non-MANUAL row.
 docker exec ecm-ecm-1 python3 -c "

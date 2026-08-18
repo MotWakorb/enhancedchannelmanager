@@ -38,6 +38,17 @@ verifying the connection.
 immediately. Update every client's configuration with the new key. See
 [Key rotation](../integrations/mcp.md#key-rotation) in the full reference.
 
+Only a signed-in administrator can do this. A caller presenting the MCP API key
+is refused, so a leaked key cannot rotate or revoke itself. Rotation replaces
+the client-facing key only; the sidecar's private credentials are managed by ECM
+and need no action from you.
+
+**Enabling TLS in ECM does not encrypt MCP traffic.** ECM's TLS setting covers
+ECM's own HTTPS port (default `6143`); the MCP sidecar is a separate listener on
+port `6101` and is not wrapped by it. Keep MCP on loopback, or put an HTTPS
+reverse proxy in front of it. See
+[What the MCP key is, and what it cannot do](../integrations/mcp.md#what-the-mcp-key-is-and-what-it-cannot-do).
+
 ## Going deeper
 
 - [MCP Integration reference](../integrations/mcp.md): full setup, both connection methods, and troubleshooting.

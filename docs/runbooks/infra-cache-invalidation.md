@@ -92,7 +92,7 @@ curl -sS https://<public-host>/ | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | 
 curl -sS http://<origin-host>:<origin-port>/ | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | sort -u
 
 # Inside the container (ground truth):
-docker exec ecm-ecm-1 curl -sS http://localhost:${ECM_PORT:-6100}/ | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | sort -u
+docker exec ecm-ecm-1 python3 -c "import os,urllib.request; port=os.environ.get('ECM_PORT','6100'); print(urllib.request.urlopen(f'http://localhost:{port}/', timeout=5).read().decode())" | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | sort -u
 ```
 
 Decision tree:

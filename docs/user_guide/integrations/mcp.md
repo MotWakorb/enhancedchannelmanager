@@ -8,6 +8,62 @@ Context Protocol. The [README MCP section](https://github.com/MotWakorb/enhanced
 covers quick-start setup; come here when you need the step-by-step setup, key
 rotation details, or troubleshooting.
 
+## What the MCP key is, and what it cannot do
+
+ECM's MCP integration uses **three separate credentials**. Only the first is
+yours to handle:
+
+| Credential | Who holds it | What it is for |
+|---|---|---|
+| `mcp_api_key` | You, and every MCP client you configure | Authenticates a client to the MCP sidecar. This is the key the Settings page generates. |
+| Sidecar backend key | ECM and the sidecar only | Authenticates the sidecar to the ECM backend. Generated automatically, stored owner-only, never displayed. |
+| Confirmation key | ECM and the sidecar only | Signs the short-lived tokens that authorize destructive tool calls. Also never displayed. |
+
+The last two are created and rotated by ECM itself. You never copy them into a
+client, and `mcp_api_key` is **not** sent to the backend: the backend refuses
+it outright.
+
+!!! info "The MCP key is a limited service credential, not an administrator"
+    Authenticating with the MCP key does not grant administrator authority.
+    Backend capabilities are deny-by-default: routes the sidecar has no explicit
+    verdict for are refused, and a defined set is reserved to a signed-in human
+    administrator and answers the MCP key with `403`:
+
+    - taking, listing, downloading, deleting or restoring backups;
+    - TLS certificate and private-key lifecycle, and the security settings blob;
+    - user, identity and authorization administration, including password change;
+    - generating or revoking the MCP API key itself;
+    - creating, changing, deleting or **testing** outbound destinations
+      (cloud-storage targets, sync targets, alert methods), and changing M3U or
+      EPG source credentials.
+
+    A stolen MCP key is still serious: it can read and modify your channel,
+    stream, EPG and pipeline configuration. It cannot exfiltrate a backup,
+    replace your TLS key, create an administrator, or use ECM as a credential
+    oracle against an outbound host.
+
+    The list above is enforced by `MCP_HUMAN_ONLY_ROUTES` in
+    `backend/auth/mcp_capabilities.py`.
+
+Destructive MCP tools additionally require two calls. The first is
+mutation-free: it resolves and shows you exactly what would be affected and
+returns a token bound to that content. The token expires after 5 minutes, is
+single-use, and is invalidated if the arguments or the resolved targets drift.
+An agent cannot delete anything in one step.
+
+!!! danger "Enabling TLS in ECM does not protect MCP"
+    ECM's **Settings → TLS** feature terminates HTTPS for ECM's own web
+    interface on `ECM_HTTPS_PORT` (default `6143`). It does **not** wrap the MCP
+    sidecar, which is a separate process listening on its own port (`6101`) with
+    no TLS of its own. Turning ECM's TLS on changes nothing about MCP traffic.
+
+    Because `mcp_api_key` travels in an `Authorization: Bearer` header on every
+    request, an unencrypted network hop exposes it. The Compose default
+    publishes MCP on loopback only, which is why it is safe without TLS. For any
+    client on another machine, put an HTTPS reverse proxy in front of port 6101
+    and use the remote overlay below. That proxy, not ECM's TLS setting, is
+    what encrypts MCP.
+
 ## Published image security
 
 The ECM backend and MCP sidecar must use the same `PUID` and `PGID` values
@@ -267,6 +323,15 @@ potentially exposed. Regeneration invalidates it immediately; update every MCP
 client with the new value afterward. The sidecar re-reads the key on each
 request, so it does not need a restart for the credential change itself.
 
+Rotation is a **human administrator** action in the ECM UI. `POST`/`DELETE` on
+`/api/settings/mcp-api-key` are reserved routes: a caller presenting the MCP key
+gets `403`, so a compromised key cannot rotate or revoke itself, and neither can
+an agent acting through MCP.
+
+Rotating `mcp_api_key` replaces only the client-facing credential. The sidecar's
+private backend and confirmation keys are separate, are never exposed to a
+client, and are not affected. There is nothing for you to update for them.
+
 Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias). That is
 the Dispatcharr REST API token and is separate from MCP auth.
 
@@ -457,7 +522,7 @@ services:
 
 Verify manually from inside the MCP container:
 ```bash
-docker exec ecm-ecm-mcp-1 curl -s http://localhost:6100/api/health
+docker exec ecm-ecm-mcp-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:6100/api/health', timeout=5).read().decode())"
 ```
 
 ### MCP server online but "API key not configured"

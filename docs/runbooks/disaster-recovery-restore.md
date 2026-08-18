@@ -4,7 +4,9 @@
 
 - **Severity**: P1 (complete configuration loss) / P2 (partial data loss, instance degraded)
 - **Owner**: SRE / Operator
-- **Last reviewed**: 2026-08-04
+- **Last exercised**: 2026-08-18. Every command below was run against a live
+  ECM (`ecm-ecm-1`, build 0.18.1) and Dispatcharr 0.28.2, except the two
+  state-changing calls noted inline as *not executed*.
 - **Related beads**: `enhancedchannelmanager-0i2vt` (epic), `enhancedchannelmanager-sxx9x` (this doc)
 - **Related ADR**: ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`)
 
@@ -52,10 +54,22 @@ If the sidecar is absent or the hash does not match, the artifact is corrupted. 
 ### Step 3: Check ECM is running and can reach Dispatcharr
 
 ```bash
-docker exec ecm-ecm-1 curl -s http://localhost:8080/api/health/ready | python3 -m json.tool
+docker exec ecm-ecm-1 python3 -c "import json,os,urllib.request; port=os.environ.get('ECM_PORT','6100'); print(json.dumps(json.load(urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=5)), indent=2))"
 ```
 
-Expected: `"dispatcharr": "ok"` (or equivalent healthy state). If Dispatcharr is unreachable, resolve that first. The restore pipeline writes directly to the Dispatcharr API.
+!!! note "Why `python3` and not `curl`"
+    The ECM image ships no `curl` and no `wget`. `docker exec ecm-ecm-1 curl …`
+    fails with `executable file not found`, which during an incident reads like
+    a dead container. `python3` is always present (it is what runs ECM). The
+    backend listens on `ECM_PORT`, default `6100`. It has never served on `8080`.
+
+Expected: `"status": "ready"` with `"dispatcharr": {"status": "ok", …}`. This one
+call is also the Dispatcharr reachability check: ECM probes its **configured**
+Dispatcharr URL, so a green result here proves the exact path the restore
+pipeline uses. If Dispatcharr is unreachable, resolve that first: the restore
+writes directly to the Dispatcharr API.
+
+`/api/health/ready` is public, so this needs no credentials.
 
 ### Step 4: Determine if the artifact is encrypted
 
@@ -98,13 +112,16 @@ None is retroactively fixable. If you are rolling ECM back, roll back to an arti
 
 If the Dispatcharr instance still has any configuration (even partial), snapshot it first:
 
+Use the UI: **Settings → Backup & Restore → Configuration Backup → Create
+Configuration Backup**. Or, from the Docker host, against ECM's published port
+(`ECM_PORT`, default `6100`):
+
 ```bash
-# Trigger a manual backup via the API
-curl -s -X POST http://localhost:8080/api/backup/save \
+# Trigger a manual backup via the API. YOUR_TOKEN is an ECM administrator's
+# session token — a signed-in human. The MCP API key is refused here (403).
+curl -s -X POST http://localhost:6100/api/backup/save \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
-
-Or use the UI: **Settings → Backup & Restore → Configuration Backup → Create Configuration Backup**.
 
 !!! danger "If this backup fails with a scrub error, that is the control working"
     ECM removes its accounts, credentials, telemetry and history from the artifact's copy of
@@ -197,7 +214,13 @@ If validation fails, stop and use an older backup.
 
 Read the notes section. Common causes:
 - Dispatcharr returned an API error for a specific entity. Check Dispatcharr logs: `docker logs dispatcharr 2>&1 | tail -100`.
-- Network timeout. Confirm ECM→Dispatcharr connectivity: `docker exec ecm-ecm-1 curl -s http://dispatcharr:8080/api/health`.
+- Network timeout. Confirm ECM-to-Dispatcharr connectivity by re-running the
+  Step 3 readiness command and reading its `"dispatcharr"` check. Do not probe a
+  hardcoded `dispatcharr:8080`. That host and port are wrong on every
+  deployment this runbook has been exercised against, and the name does not
+  resolve at all when ECM runs with `network_mode: host`. ECM's own probe uses
+  the Dispatcharr URL configured in **Settings → Dispatcharr Connection**, which
+  is the URL the restore actually writes to.
 - Name conflict on the destination. If the destination has existing entities with conflicting names, the restore skips or fails them. Consider wiping the destination first if this is a fresh install.
 
 After resolving the cause, re-attempt from Phase 3.
@@ -207,12 +230,22 @@ After resolving the cause, re-attempt from Phase 3.
 The restore created some entities and could not roll them back. The report lists the entity IDs.
 
 ```bash
-# Get the residue list from the restore report (displayed in the UI)
-# Manually delete each listed entity via the Dispatcharr UI or API
-# Example: delete a channel group by its destination ID
-curl -s -X DELETE http://dispatcharr:8080/api/channel-groups/ID \
+# Get the residue list from the restore report (displayed in the UI).
+# Manually delete each listed entity via the Dispatcharr UI or API.
+# DISPATCHARR_URL is the value from ECM Settings → Dispatcharr Connection
+# (for example http://192.0.2.20:9191) — Dispatcharr's default port is 9191.
+# Example: delete a channel group by its destination ID.
+curl -s -X DELETE "$DISPATCHARR_URL/api/channels/groups/ID/" \
   -H "Authorization: Bearer DISPATCHARR_TOKEN"
 ```
+
+!!! warning "Check the response, not just the exit code"
+    Dispatcharr serves its web UI from the same origin, so a **mistyped API
+    path returns `200` with an HTML page** instead of `404`. `/api/channel-groups/`
+    is one such path: it looks like it worked and deletes nothing. The channel-group
+    route is `/api/channels/groups/`, which is what ECM itself calls. Confirm each
+    deletion returned JSON. `curl -s -o /dev/null -w '%{content_type}\n' ...`
+    must not print `text/html`.
 
 Repeat for each listed entity type and ID. Once all residue is deleted, take a fresh local backup and retry the restore from Phase 3.
 
@@ -231,7 +264,8 @@ provider stream, then removes the leftover placeholders and the synthetic
 it is why you re-enter the provider credential before running it.
 
 ```bash
-curl -s -X POST http://localhost:8080/api/tasks/m3u_refresh/run \
+# YOUR_TOKEN is an ECM administrator's session token.
+curl -s -X POST http://localhost:6100/api/tasks/m3u_refresh/run \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
@@ -244,7 +278,37 @@ recovery required re-running the whole restore after the refresh.
 
 **6.4** Run an EPG refresh if guide data is absent.
 
-**6.4a** If you restored a **legacy full ZIP** (not the DBAS artifact), read the
+**6.4a Restored Dispatcharr accounts are deliberately unusable.** If you
+selected the Dispatcharr users category, every account it created:
+
+- has a **fresh random password that ECM generates and discards**. No password
+  or hash ever crosses from the archive: Dispatcharr's API never exposes one.
+  Nobody can sign in to a restored account until you set its password out of
+  band.
+- is forced **non-privileged**: `is_superuser` and `is_staff` are set false and
+  `user_level` to 0, whatever the archive claimed. Re-grant only the privileges
+  each account actually needs, deliberately.
+- is **skipped, never overwritten**, when its username already exists on the
+  destination. The account you are signed in as is likewise never overwritten,
+  deleted, disabled, or demoted. It is identified by the credential you
+  authenticated with, not by a name in the archive.
+
+Read the restore report's skip reasons before assuming an account was restored.
+This policy is enforced in `backend/dbas/importers/users.py` and pinned by
+`backend/tests/dbas/test_users_importer.py`.
+
+**6.4b TLS certificates are not part of a DBAS restore.** The DBAS artifact
+carries Dispatcharr entities and ECM settings; ECM's `tls/` directory is not one
+of its categories, so a DBAS restore never reinstates a certificate or private
+key. After host loss, reinstall or reissue the ECM certificate yourself
+(**Settings → TLS**) and expect HTTPS to be down until you do.
+
+A **legacy full ZIP** is different: it can contain `tls/`, including the private
+key, and a legacy restore does write that directory back. Treat every backup
+artifact as a secret regardless of format: store it with the same care as the
+key itself.
+
+**6.4c** If you restored a **legacy full ZIP** (not the DBAS artifact), read the
 notices on the restore response before anything else. A standard artifact carries no ECM
 accounts, so a rebuilt instance lands at first-run setup and the notice says so; create the
 admin account and sign in. A second notice names any configured surface this instance had

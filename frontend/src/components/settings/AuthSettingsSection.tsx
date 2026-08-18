@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { AuthSettingsPublic, AuthSettingsUpdate } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
 import {
   SettingsSectionHeader,
   SettingsSectionPlaceholders,
@@ -41,6 +42,11 @@ export function AuthSettingsSection({ isAdmin }: Props) {
   const [, setSettings] = useState<AuthSettingsPublic | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Scoped confirmation for the one setting on this page that can lock nobody
+  // out and let everybody in (bead enhancedchannelmanager-04c0u.12). Every
+  // other field shares the same generic Save button, so the danger is invisible
+  // at the point of click without this.
+  const [confirmDisableAuth, setConfirmDisableAuth] = useState(false);
 
   // Form state for each provider
   const [localEnabled, setLocalEnabled] = useState(true);
@@ -80,7 +86,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
     loadSettings();
   }, [isAdmin, notifications]);
 
-  const handleSave = useCallback(async () => {
+  const saveSettings = useCallback(async () => {
     setSaving(true);
 
     const update: AuthSettingsUpdate = {
@@ -106,6 +112,14 @@ export function AuthSettingsSection({ isAdmin }: Props) {
     dispatcharrEnabled, dispatcharrAutoCreate,
     notifications,
   ]);
+
+  const handleSave = useCallback(() => {
+    if (!requireAuth) {
+      setConfirmDisableAuth(true);
+      return;
+    }
+    void saveSettings();
+  }, [requireAuth, saveSettings]);
 
   if (!isAdmin) {
     return (
@@ -230,6 +244,28 @@ export function AuthSettingsSection({ isAdmin }: Props) {
           {saving ? 'Saving...' : 'Save Authentication Settings'}
         </button>
       </div>
+
+      {confirmDisableAuth && (
+        <TypeToConfirmDialog
+          title="Disable Authentication"
+          message={
+            <>
+              Anyone who can reach this ECM instance over the network will be able
+              to use it — including every administrative page — without signing
+              in. Existing accounts are kept, but they stop protecting anything
+              until you turn this back on.
+            </>
+          }
+          confirmText="DISABLE AUTHENTICATION"
+          confirmLabel="Disable Authentication"
+          busy={saving}
+          onCancel={() => setConfirmDisableAuth(false)}
+          onConfirm={async () => {
+            await saveSettings();
+            setConfirmDisableAuth(false);
+          }}
+        />
+      )}
     </div>
   );
 }

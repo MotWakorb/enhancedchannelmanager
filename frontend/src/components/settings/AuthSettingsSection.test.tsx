@@ -96,4 +96,65 @@ describe('AuthSettingsSection', () => {
       });
     });
   });
+  describe('disabling authentication (bead enhancedchannelmanager-04c0u.12)', () => {
+    // Turning Require Authentication off leaves the whole instance open to
+    // anyone who can reach it. It is saved by the same generic "Save" button
+    // as every other field on the page, so without a scoped confirmation the
+    // most dangerous setting here is the easiest one to change by accident.
+    const disableAuthAndSave = async () => {
+      render(<AuthSettingsSection isAdmin={true} />);
+      const toggle = await screen.findByLabelText('Require Authentication');
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole('button', { name: /save authentication settings/i }));
+    };
+
+    it('does not save until the operator confirms, and names what is lost', async () => {
+      await disableAuthAndSave();
+
+      const dialog = await screen.findByRole('dialog', { name: /disable authentication/i });
+      expect(dialog).toHaveTextContent(/anyone who can reach this ECM instance/i);
+      expect(api.updateAuthSettings).not.toHaveBeenCalled();
+    });
+
+    it('saves require_auth false once the exact phrase is typed', async () => {
+      await disableAuthAndSave();
+      await screen.findByRole('dialog', { name: /disable authentication/i });
+
+      fireEvent.change(screen.getByLabelText(/type DISABLE AUTHENTICATION to confirm/i), {
+        target: { value: 'DISABLE AUTHENTICATION' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^disable authentication$/i }));
+
+      await waitFor(() =>
+        expect(api.updateAuthSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ require_auth: false }),
+        ),
+      );
+    });
+
+    it('abandons the change when the confirmation is cancelled', async () => {
+      await disableAuthAndSave();
+      await screen.findByRole('dialog', { name: /disable authentication/i });
+
+      fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: /disable authentication/i })).not.toBeInTheDocument(),
+      );
+      expect(api.updateAuthSettings).not.toHaveBeenCalled();
+    });
+
+    it('saves without a confirmation when authentication stays on', async () => {
+      render(<AuthSettingsSection isAdmin={true} />);
+      await screen.findByLabelText('Require Authentication');
+      fireEvent.click(screen.getByRole('button', { name: /save authentication settings/i }));
+
+      await waitFor(() =>
+        expect(api.updateAuthSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ require_auth: true }),
+        ),
+      );
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
 });
