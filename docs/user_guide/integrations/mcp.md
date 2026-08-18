@@ -10,6 +10,12 @@ rotation details, or troubleshooting.
 
 ## Published image security
 
+The ECM backend and MCP sidecar must use the same `PUID` and `PGID` values
+(default `1000:1000`). The backend stores its private sidecar credential with
+owner-only permissions, and the sidecar fails readiness rather than reading a
+credential owned by a different account. Set `PUID` and `PGID` once in the
+Compose environment so both services inherit the same identity.
+
 The published MCP container uses a reviewed, digest-pinned Alpine base. Each
 architecture-specific image is scanned before the multi-architecture manifest
 is created. Any Critical or High operating-system or Python-library finding

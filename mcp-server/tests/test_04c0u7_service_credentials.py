@@ -61,6 +61,33 @@ def test_backend_projection_readiness_is_strict_and_non_secret(tmp_path: Path):
     assert "b" * 48 not in get_mcp_backend_credentials_status.__doc__
 
 
+def test_compose_identity_can_read_backend_owned_projection(tmp_path: Path):
+    """Model the shared PUID contract without weakening owner-only mode."""
+    projection = tmp_path / "mcp-service.json"
+    projection.write_text(json.dumps({
+        "backend_key": "b" * 48,
+        "confirmation_key": "c" * 48,
+    }))
+    projection.chmod(0o600)
+    backend_uid = projection.stat().st_uid
+    with patch("config.MCP_SERVICE_FILE", projection), patch(
+        "config.os.geteuid", return_value=backend_uid
+    ):
+        assert get_mcp_backend_credentials_status() == "ok"
+    with patch("config.MCP_SERVICE_FILE", projection), patch(
+        "config.os.geteuid", return_value=backend_uid + 1
+    ):
+        assert get_mcp_backend_credentials_status() == "wrong_owner"
+
+
+def test_image_and_compose_pin_matching_non_root_identity():
+    repo = Path(__file__).resolve().parents[2]
+    dockerfile = (repo / "mcp-server" / "Dockerfile").read_text()
+    compose = (repo / "docker-compose.mcp.yml").read_text()
+    assert "USER appuser:appgroup" in dockerfile
+    assert 'user: "${PUID:-1000}:${PGID:-1000}"' in compose
+
+
 @pytest.mark.asyncio
 async def test_async_auth_signs_multipart_json_and_query_requests(tmp_path: Path):
     projection = tmp_path / "mcp-service.json"
