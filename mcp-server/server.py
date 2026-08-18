@@ -11,7 +11,11 @@ import logging
 
 from config import (
     MCP_ALLOWED_HOSTS,
+    MCP_ALLOWED_ORIGINS,
+    MCP_BIND_ADDRESS,
     MCP_PORT,
+    MCP_REQUIRE_HTTPS,
+    MCP_TRUSTED_PROXY_IPS,
     get_mcp_api_key,
     get_mcp_api_key_status,
     normalize_mcp_allowed_host,
@@ -66,6 +70,7 @@ mcp = FastMCP(
     transport_security=TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=_MCP_SDK_ALLOWED_HOSTS,
+        allowed_origins=list(MCP_ALLOWED_ORIGINS),
     ),
 )
 
@@ -76,8 +81,90 @@ register_all_resources(mcp)
 
 #: The 401 challenge header (RFC 6750). Signals that a Bearer credential is
 #: required. The supported credential is the static MCP API key presented as
-#: ``?api_key=`` or a non-JWT-shaped ``Bearer <key>`` (OAuth retired — bd-9axgc).
+#: a non-JWT-shaped ``Bearer <key>`` (OAuth retired — bd-9axgc).
 _WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
+
+
+class MCPSafeAccessLogMiddleware:
+    """Log bounded request metadata without raw targets, headers, or bodies."""
+
+    def __init__(self, app):
+        self.app = app
+
+    @staticmethod
+    def _route_class(scope) -> str:
+        path = scope.get("path")
+        if path == "/health":
+            return "health"
+        if path == "/mcp":
+            return "mcp"
+        return "other"
+
+    @staticmethod
+    def _method_class(scope) -> str:
+        method = scope.get("method")
+        if method in {"GET", "POST", "DELETE", "OPTIONS", "HEAD"}:
+            return method
+        return "OTHER"
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        status_code = 500
+
+        async def capture_status(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, capture_status)
+        finally:
+            # Both fields come from fixed vocabularies. Never interpolate a
+            # raw request target: decoded paths can still carry control chars.
+            logger.info(
+                "[MCP-ACCESS] request method=%s route=%s status=%d",
+                self._method_class(scope),
+                self._route_class(scope),
+                int(status_code),
+            )
+
+
+class MCPTransportSecurityMiddleware:
+    """Enforce exact browser origins and HTTPS for protected remote traffic."""
+
+    def __init__(self, app, allowed_origins: tuple[str, ...], require_https: bool):
+        self.app = app
+        self.allowed_origins = frozenset(allowed_origins)
+        self.require_https = require_https
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        origin = headers.get("origin")
+        if origin is not None and origin not in self.allowed_origins:
+            response = PlainTextResponse("Invalid Origin header", status_code=403)
+            await response(scope, receive, send)
+            return
+
+        if (
+            self.require_https
+            and scope.get("path") != "/health"
+            and scope.get("scheme") != "https"
+        ):
+            response = JSONResponse(
+                {"error": "HTTPS is required for remote MCP access"},
+                status_code=400,
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 def _validated_request_host(host_header: str) -> str | None:
@@ -147,8 +234,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
     The MCP OAuth offering was retired by PO decision (bd-9axgc): ECM no longer
     accepts OAuth 2.1 Bearer tokens for MCP. The ONLY supported credential is
-    the static ``?api_key=`` (or non-JWT-shaped ``Bearer <key>``) path —
-    PO-locked permanent.
+    a non-JWT-shaped ``Bearer <key>``. Query-string credentials are rejected
+    because request targets leak into logs, histories, and intermediary URLs.
 
     Routing (decided pre-validation, preserving the CD1 no-fail-cascade
     invariant — a JWT-shaped Bearer must NEVER be compared to the static key):
@@ -156,7 +243,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         JSON with ``alg``) → **REJECTED 401**. OAuth/JWT-shaped tokens are no
         longer accepted; the request is NEVER tried against the static key
         (no fail-cascade leakage).
-      - ``?api_key=<value>`` OR ``Bearer <non-JWT-shaped>`` → **static-key path**.
+      - ``Bearer <non-JWT-shaped>`` → **static-key path**.
+      - ``?api_key=<value>`` → rejected; credentials never belong in URLs.
       - Neither → 401 + ``WWW-Authenticate: Bearer``.
 
     The OAuth verify path (``oauth_rs.verify_oauth_token``) and the RFC 9728
@@ -179,6 +267,17 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         if path == "/health":
             return await call_next(request)
 
+        if "api_key" in request.query_params:
+            return JSONResponse(
+                {
+                    "error": (
+                        "Query credentials are not accepted. Use the "
+                        "Authorization Bearer header."
+                    )
+                },
+                status_code=400,
+            )
+
         # ── SHAPE CLASSIFICATION (before any validation — CD1 no-fail-cascade) ──
         # RFC 6750 §2.1: the "Bearer" auth-scheme token is case-insensitive and
         # the credential is whitespace-trimmed. Parse leniently so a well-formed
@@ -198,7 +297,12 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             # token was rejected — never the token value (CodeQL #1604).
             logger.warning("[MCP] OAuth/JWT-shaped Bearer rejected: MCP OAuth offering retired (bd-9axgc)")
             return JSONResponse(
-                {"error": "OAuth is not supported. Use the static ?api_key= MCP credential."},
+                {
+                    "error": (
+                        "OAuth is not supported. Use the static MCP credential "
+                        "as an Authorization Bearer header."
+                    )
+                },
                 status_code=401,
                 headers=_WWW_AUTHENTICATE,
             )
@@ -216,8 +320,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 status_code=503,
             )
 
-        # Extract key from query param, else the (non-JWT-shaped) Bearer value.
-        api_key = request.query_params.get("api_key", "") or bearer_value
+        api_key = bearer_value
 
         if not api_key:
             # No credential at all → 401 with the OAuth bootstrap challenge.
@@ -324,6 +427,12 @@ def mcp_http_middleware() -> list[Middleware]:
     strict Host validation before routing.
     """
     return [
+        Middleware(MCPSafeAccessLogMiddleware),
+        Middleware(
+            MCPTransportSecurityMiddleware,
+            allowed_origins=MCP_ALLOWED_ORIGINS,
+            require_https=MCP_REQUIRE_HTTPS,
+        ),
         Middleware(APIKeyAuthMiddleware),
         Middleware(MCPAllowedHostMiddleware, allowed_hosts=MCP_ALLOWED_HOSTS),
     ]
@@ -353,5 +462,12 @@ app = Starlette(
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("[MCP] Starting ECM MCP server on port %s", MCP_PORT)
-    uvicorn.run(app, host="0.0.0.0", port=MCP_PORT)
+    logger.info("[MCP] Starting ECM MCP server on %s:%s", MCP_BIND_ADDRESS, MCP_PORT)
+    uvicorn.run(
+        app,
+        host=MCP_BIND_ADDRESS,
+        port=MCP_PORT,
+        access_log=False,
+        proxy_headers=True,
+        forwarded_allow_ips=MCP_TRUSTED_PROXY_IPS,
+    )

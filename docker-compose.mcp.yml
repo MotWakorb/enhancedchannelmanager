@@ -6,15 +6,19 @@ services:
       context: ./mcp-server
       dockerfile: Dockerfile
     ports:
-      - "${MCP_PORT:-6101}:${MCP_PORT:-6101}"
+      # Secure default: MCP is reachable only from this Docker host. Use the
+      # explicit remote overlay behind an HTTPS reverse proxy for LAN clients.
+      - "127.0.0.1:${MCP_PORT:-6101}:${MCP_PORT:-6101}"
     volumes:
       - ecm-config:/config:ro
     environment:
       - CONFIG_DIR=/config
       - ECM_URL=http://ecm:${ECM_PORT:-6100}
       - MCP_PORT=${MCP_PORT:-6101}
+      - MCP_BIND_ADDRESS=0.0.0.0
       # Comma-separated LAN hostnames/IPs clients use for this sidecar.
       - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS:-}
     depends_on:
       ecm:
         condition: service_healthy

@@ -363,14 +363,14 @@ digest while the base image or dependency is remediated.
 
 Before cutting any release that touches MCP code, the releaser must walk the manual verification checklist in [`docs/runbooks/mcp-release-verification.md`](runbooks/mcp-release-verification.md). This covers:
 
-1. Static `?api_key=` connection (query-param path) end-to-end
+1. Static `Authorization: Bearer` connection end-to-end and query rejection
 2. Making a tool call over the static-key connection
 3. Settings panel smoke check (MCP server status, key generate/regenerate)
 
 Sign-off text from the checklist goes in the release PR description alongside the G1a–G7 gate checklist.
 
 > **Note (bd-9axgc):** the MCP OAuth "Custom Connector" offering was retired. The
-> static `?api_key=` path is the supported MCP authentication method. The OAuth
+> static Bearer-header path is the supported MCP authentication method. The OAuth
 > verification steps were removed from this checklist.
 
 Releases that do not touch `mcp-server/` or `MCPSettingsSection.tsx` may skip this checklist (at releaser discretion).

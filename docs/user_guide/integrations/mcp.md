@@ -1,7 +1,7 @@
 # MCP Integration: Claude AI Connection Reference
 
-> **Status:** MCP authenticates with a static API key via the `?api_key=`
-> path. (The OAuth 2.1 "Custom Connector" offering was retired.)
+> **Status:** MCP authenticates with a static API key in the
+> `Authorization: Bearer` header. Credentials in URLs are rejected.
 
 This is the full operator reference for connecting Claude to ECM via the Model
 Context Protocol. The [README MCP section](https://github.com/MotWakorb/enhancedchannelmanager#mcp-server-claude-integration)
@@ -23,10 +23,10 @@ do not assemble or publish the manifest manually.
 
 ## Choose your connection method
 
-ECM's MCP server is authenticated with a static API key (`mcp_api_key`), passed
-as the `?api_key=` query parameter. Both methods below run on *your* machine and
-connect to ECM over your LAN/VPN. **Nothing needs to be exposed to the public
-internet**.
+ECM's MCP server is authenticated with a static API key (`mcp_api_key`) in an
+`Authorization: Bearer` header. The Compose default publishes port 6101 only on
+the Docker host's loopback interface. Remote clients require the explicit
+remote overlay and an HTTPS reverse proxy.
 
 When connecting through a LAN hostname or IP, add that exact value to the MCP
 container's comma-separated `MCP_ALLOWED_HOSTS` environment variable and
@@ -34,10 +34,29 @@ recreate the container. The built-in allowlist covers `localhost`, loopback
 IPs, and the canonical `ecm-mcp` Compose service name. Entries are hostnames or
 IPs only. Do not include `http://`, a port, a path, or `*`.
 
+### Remote access requires HTTPS
+
+The default `docker-compose.mcp.yml` publishes MCP as
+`127.0.0.1:6101`. For a client on another machine, terminate TLS in Caddy,
+nginx, or Traefik and start the explicit remote overlay:
+
+```bash
+MCP_ALLOWED_HOSTS=mcp.example.home \
+MCP_ALLOWED_ORIGINS=https://mcp.example.home \
+MCP_TRUSTED_PROXY_IPS=172.20.0.10 \
+docker compose -f docker-compose.yml -f docker-compose.mcp.yml \
+  -f docker-compose.mcp.remote.yml up -d
+```
+
+Replace the example values with the public hostname and the proxy's exact
+source IP or CIDR. The overlay rejects non-HTTPS `/mcp` traffic and Uvicorn
+trusts forwarded scheme information only from that proxy. Keep port 6101
+blocked at the router/firewall; clients connect to the proxy's HTTPS URL.
+
 | | mcp-remote bridge (Claude Desktop) | Claude Code (`.mcp.json`) |
 |---|---|---|
 | **Best for** | Claude Desktop users; private/homelab; existing setups | Claude Code in any project |
-| **Auth model** | Static API key embedded in the MCP URL | Static API key embedded in the MCP URL |
+| **Auth model** | Bearer header populated from a local environment variable | Bearer header populated from a local environment variable |
 | **Prerequisites** | Node.js LTS 18+ on the Claude Desktop machine | None. Claude Code speaks Streamable HTTP natively |
 | **Config file** | `claude_desktop_config.json` | `.mcp.json` in your project directory |
 | **Network** | Private OK: bridge runs on your machine, connects over LAN/VPN | Private OK: Claude Code connects directly from your machine |
@@ -54,9 +73,8 @@ IPs only. Do not include `http://`, a port, a path, or `*`.
 Claude Desktop speaks stdio for locally-configured MCP servers, so a remote
 HTTP server needs a local bridge. The `mcp-remote` npm package is that bridge:
 Claude Desktop runs it via `npx`, it connects to ECM's Streamable HTTP MCP
-endpoint over your LAN, and presents a standard MCP interface back to Claude
-Desktop. The static API key is embedded in the URL. Everything runs on your
-machine. ECM never has to be reachable from the internet.
+endpoint and presents a standard MCP interface back to Claude Desktop. The
+static key is supplied through an environment-backed header, never the URL.
 
 > **Why not use Settings → Connectors → Add custom connector?**
 > Claude Desktop's built-in "Connectors" UI requires OAuth 2.1 per the MCP
@@ -93,9 +111,8 @@ Verify after install: `node --version` should print `v18.x.x` or higher.
 > [README field reference](https://github.com/MotWakorb/enhancedchannelmanager#mcp-server-claude-integration)
 > for the distinction.
 
-The Settings → MCP Integration panel also has a **copy button** for the
-pre-filled `claude_desktop_config.json` block with your host and key already
-substituted. Use it to skip manual editing in Step 3.
+The Settings → MCP Integration panel has a **copy button** for a credential-free
+config template. It never places the key in a generated config or URL.
 
 ### Step 2: Open the Claude Desktop config file
 
@@ -121,10 +138,8 @@ creates a blank one when you click Edit Config.
 
 ### Step 3: Add the ECM server block
 
-Paste the following into `claude_desktop_config.json`, replacing
-`YOUR_ECM_HOST` with your ECM hostname or IP, and `YOUR_API_KEY` with the key
-from Step 1. If you used the copy button in Settings → MCP Integration, the
-values are already filled in.
+Set the operating-system environment variable `ECM_MCP_AUTH` to `Bearer
+<your key>` before launching Claude Desktop, then paste this block:
 
 ```json
 {
@@ -133,7 +148,9 @@ values are already filled in.
       "command": "npx",
       "args": [
         "mcp-remote",
-        "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY",
+        "http://localhost:6101/mcp",
+        "--header",
+        "Authorization:${ECM_MCP_AUTH}",
         "--allow-http"
       ]
     }
@@ -142,12 +159,12 @@ values are already filled in.
 ```
 
 Notes:
-- `--allow-http` is required because the endpoint is plain HTTP (not HTTPS).
-  Omitting it causes `mcp-remote` to refuse the connection.
+- `--allow-http` is allowed only for the loopback endpoint above. For remote
+  use, replace the URL with your reverse proxy's `https://` URL and omit it.
 - If you already have other entries in `"mcpServers"`, add the `"ecm"` block
   alongside them. Do not replace the whole file.
-- If running ECM on the same machine as Claude Desktop, use `localhost` for
-  `YOUR_ECM_HOST`.
+- Do not put the key in `args`; process arguments are visible to other local
+  processes on many operating systems.
 
 Save the file.
 
@@ -178,15 +195,13 @@ working end-to-end.
 
 ### Key rotation
 
-The `?api_key=` URL uses `mcp_api_key` from `settings.json`. This is the
-supported MCP authentication path.
+The Bearer header uses `mcp_api_key` from `settings.json`.
 
 To rotate the static key:
 
 1. In ECM: Settings → MCP Integration → **Regenerate Key**.
 2. Copy the new key.
-3. Open `claude_desktop_config.json` (Step 2 above) and update the
-   `?api_key=YOUR_API_KEY` value.
+3. Update the local `ECM_MCP_AUTH` environment variable.
 4. Fully quit and reopen Claude Desktop (Step 4 above).
 
 After upgrading from a build that used Starlette 1.0.0 or earlier, rotate the
@@ -229,10 +244,10 @@ Choose one method:
 
 #### Method A: CLI (`claude mcp add`)
 
-Run this command in your terminal (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`):
+Run this command from the Docker host after setting `ECM_MCP_API_KEY`:
 
 ```bash
-claude mcp add --transport http ecm "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
+claude mcp add --transport http --header 'Authorization: Bearer ${ECM_MCP_API_KEY}' ecm "http://localhost:6101/mcp"
 ```
 
 By default this uses `--scope local`, which registers the server for your
@@ -247,17 +262,12 @@ You can pass a different scope:
 
 Example: register for all your projects:
 ```bash
-claude mcp add --transport http --scope user ecm "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
+claude mcp add --transport http --scope user --header 'Authorization: Bearer ${ECM_MCP_API_KEY}' ecm "http://localhost:6101/mcp"
 ```
 
-> **Security note:** `project` scope stores the URL in `.mcp.json` at the repo
-> root, which you will likely commit. Do not put your API key in plaintext in a
-> committed file. Instead, use an environment-variable reference: Claude Code
-> expands `${VAR}` from your shell environment when it reads `.mcp.json`. The
-> repo ships a working example at `.mcp.json` in the project root, using
-> `http://localhost:6101/mcp?api_key=${ECM_MCP_API_KEY}`. Set
-> `ECM_MCP_API_KEY` in your shell (e.g. in `~/.zshrc` or `~/.bashrc`) and the
-> key never appears in the committed file.
+> **Security note:** keep the single quotes shown above. They pass the variable
+> reference, not its value, so the key does not enter shell history or process
+> arguments. The `.mcp.json` method below uses the same reference.
 
 ---
 
@@ -270,13 +280,17 @@ Create (or edit) `.mcp.json` in your project root:
   "mcpServers": {
     "ecm": {
       "type": "http",
-      "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
+      "url": "http://localhost:6101/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ECM_MCP_API_KEY}"
+      }
     }
   }
 }
 ```
 
-Replace `YOUR_ECM_HOST` and `YOUR_API_KEY`. Save the file.
+Set `ECM_MCP_API_KEY` in the environment that launches Claude Code. For remote
+access, replace the URL with the HTTPS reverse-proxy URL.
 
 This is equivalent to `--scope project` from the CLI: Claude Code auto-detects
 `.mcp.json` at startup when it is in the working directory.
@@ -316,9 +330,7 @@ restart.
 ### Key rotation
 
 To rotate the static key: **Settings → MCP Integration → Regenerate Key** in
-ECM, then update the `?api_key=` value in your config (`.mcp.json` or the
-stored CLI registration) and restart Claude Code (or run `/mcp` to
-reconnect).
+ECM, then update `ECM_MCP_API_KEY` and restart Claude Code (or run `/mcp`).
 
 For the full rotation procedure, see
 [Key rotation](#key-rotation) in the Claude Desktop section above. The
@@ -344,11 +356,11 @@ service so the probe targets the host loopback instead.
 
 Verify manually:
 ```bash
-curl http://YOUR_ECM_HOST:6101/health
+curl http://localhost:6101/health
 ```
 
-If the response is `400 Invalid host header` or `421 Invalid Host header`, add
-`YOUR_ECM_HOST` (without scheme or port) to `MCP_ALLOWED_HOSTS` on the
+If the response is `400 Invalid host header` or `421 Invalid Host header` in
+remote mode, add the proxy-facing hostname (without scheme or port) to `MCP_ALLOWED_HOSTS` on the
 `ecm-mcp` service and recreate that container. Do not use `*`; it disables the
 DNS-rebinding boundary the allowlist provides.
 
@@ -411,8 +423,8 @@ curl -s http://YOUR_ECM_HOST:6101/health | python3 -m json.tool
 
 ### `401 Invalid API key` on tool calls
 
-The `?api_key=` value in your Claude config does not match `mcp_api_key` in
-`settings.json`. This happens after a key rotation if the config wasn't updated.
+The Bearer value supplied by your local environment does not match
+`mcp_api_key` in `settings.json`.
 Regenerate the key in ECM (or copy the current value), update your config, and
 restart Claude.
 
@@ -423,10 +435,9 @@ REST token (`dispatcharr_api_key` / legacy `api_key`).
 
 The MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`)
 to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have
-an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or
-`"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type":
-"http"` for Claude Code). The `/sse` endpoint was removed. API-key auth is
-unchanged.
+an existing config with `/sse` or `?api_key=...`, change the path to `/mcp`,
+remove the query string, configure the Bearer header, and rotate the exposed
+key. The `/sse` endpoint was removed.
 
 ---
 

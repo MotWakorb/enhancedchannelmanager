@@ -180,3 +180,50 @@ class TestMCPAllowedHosts:
 
         with pytest.raises(ValueError, match="MCP_ALLOWED_HOSTS"):
             get_mcp_allowed_hosts(value)
+
+
+class TestMCPAllowedOrigins:
+    def test_defaults_are_exact_loopback_origins(self):
+        from config import get_mcp_allowed_origins
+
+        origins = get_mcp_allowed_origins("")
+        assert "http://localhost" in origins
+        assert "https://127.0.0.1" in origins
+        assert "*" not in origins
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "*",
+            "mcp.example.home",
+            "https://mcp.example.home/",
+            "https://bad host",
+            "https://user@mcp.example.home",
+            "https://mcp.example.home?credential=value",
+            "https://mcp.example.home#fragment",
+        ],
+    )
+    def test_permissive_or_malformed_origin_fails_closed(self, value):
+        from config import get_mcp_allowed_origins
+
+        with pytest.raises(ValueError, match="MCP_ALLOWED_ORIGINS"):
+            get_mcp_allowed_origins(value)
+
+
+class TestMCPTrustedProxyIPs:
+    def test_exact_addresses_and_bounded_cidrs_are_normalized(self):
+        from config import get_mcp_trusted_proxy_ips
+
+        assert get_mcp_trusted_proxy_ips(
+            "127.0.0.1, 172.20.0.0/24, 2001:db8::1"
+        ) == "127.0.0.1,172.20.0.0/24,2001:db8::1"
+
+    @pytest.mark.parametrize(
+        "value",
+        ["*", "0.0.0.0/0", "::/0", "not-an-ip", "127.0.0.1,,::1"],
+    )
+    def test_permissive_or_malformed_proxy_trust_fails_closed(self, value):
+        from config import get_mcp_trusted_proxy_ips
+
+        with pytest.raises(ValueError, match="MCP_TRUSTED_PROXY_IPS"):
+            get_mcp_trusted_proxy_ips(value)

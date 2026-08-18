@@ -52,14 +52,14 @@ services:
   ecm-mcp:
     image: ghcr.io/motwakorb/enhancedchannelmanager-mcp:latest
     ports:
-      - "6101:6101"
+      - "127.0.0.1:6101:6101"
     volumes:
       - ./config:/config:ro
     environment:
       - ECM_URL=http://ecm:6100
       - MCP_PORT=6101
-      # Required when clients connect through a LAN hostname or IP.
-      - MCP_ALLOWED_HOSTS=YOUR_ECM_HOST
+      # Container-internal bind; host publishing above remains loopback-only.
+      - MCP_BIND_ADDRESS=0.0.0.0
     depends_on:
       ecm:
         condition: service_healthy
@@ -71,12 +71,28 @@ Or if you're building from source, use the MCP compose overlay:
 docker compose -f docker-compose.yml -f docker-compose.mcp.yml up -d
 ```
 
+This default publishes MCP on host loopback only. For another machine, put an
+HTTPS reverse proxy in front of MCP and use the fail-closed remote overlay:
+
+```bash
+MCP_ALLOWED_HOSTS=mcp.example.home \
+MCP_TRUSTED_PROXY_IPS=172.20.0.10 \
+docker compose -f docker-compose.yml -f docker-compose.mcp.yml \
+  -f docker-compose.mcp.remote.yml up -d
+```
+
+The proxy must terminate TLS and forward to port 6101. Do not expose port 6101
+through a router or firewall; remote mode rejects non-HTTPS `/mcp` requests.
+`MCP_TRUSTED_PROXY_IPS` accepts only explicit IP addresses or bounded CIDRs.
+Trust-all values (`*`, `0.0.0.0/0`, and `::/0`) and malformed entries stop the
+sidecar at startup. Forwarded HTTPS is honored only from a configured peer.
+
 **Reaching the MCP container from ECM** — ECM's Settings > MCP Integration status badge probes the MCP server's `/health` endpoint. By default it targets `ecm-mcp:6101`, which Docker DNS resolves to the MCP container on the canonical compose network — no extra configuration needed. If you run both containers with `network_mode: host` (host network namespace shared), set `MCP_HOST=localhost` on the ECM service so the probe targets the host loopback instead of the (non-existent on that topology) `ecm-mcp` DNS name.
 
 **Allowed MCP hostnames:** The MCP sidecar accepts `localhost`, loopback IPs,
-and the Compose service name `ecm-mcp` by default. If Claude connects through a
-LAN hostname or IP, set `MCP_ALLOWED_HOSTS` on the `ecm-mcp` service to that
-hostname/IP (comma-separated for more than one), then recreate the container.
+and the Compose service name `ecm-mcp` by default. The remote HTTPS profile
+requires the proxy-facing hostname in `MCP_ALLOWED_HOSTS` (comma-separated for
+more than one), then recreates the container.
 List hostnames/IPs only: no scheme, port, path, or wildcard. Requests carrying
 any other or malformed `Host` value are rejected before MCP routing.
 
@@ -194,7 +210,7 @@ Things you can ask Claude to do:
 > | `url` | Dispatcharr base URL |
 > | `dispatcharr_api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. (Canonical field name as of v0.17.1, GH #273. Operators upgrading from v0.17.0 or earlier will have the value in the legacy `api_key` field; ECM auto-migrates on next startup with a one-time `[CONFIG] Reading deprecated 'api_key' field …` WARN log.) Never replace it with an MCP key. |
 > | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
-> | `mcp_api_key` | **ECM MCP static key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM via the `?api_key=` path. This is what the Generate / Regenerate button in Settings > MCP Integration writes. The `?api_key=` path is the supported MCP authentication method. |
+> | `mcp_api_key` | **ECM MCP static key:** clients present it in the `Authorization: Bearer` header. This is what the Generate / Regenerate button in Settings > MCP Integration writes. Query-string credentials are rejected. |
 >
 > When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias) — overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
 >
@@ -223,7 +239,7 @@ Things you can ask Claude to do:
 
 ### Choose your connection method
 
-ECM's MCP server is authenticated with a static API key (`mcp_api_key`), passed as the `?api_key=` query parameter. Both connection methods below run on *your* machine and connect to ECM over your LAN/VPN — nothing needs to be exposed to the public internet.
+ECM's MCP server is authenticated with a static API key (`mcp_api_key`) in an `Authorization: Bearer` header. The default deployment is available only on the Docker host's loopback interface. Use the HTTPS remote profile above for access from another machine.
 
 | Method | Node.js? | Best for |
 |---|---|---|
@@ -247,16 +263,20 @@ Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge. Add 
       "command": "npx",
       "args": [
         "mcp-remote",
-        "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY",
+        "http://localhost:6101/mcp",
+        "--header",
+        "Authorization:${ECM_MCP_AUTH}",
         "--allow-http"
       ]
     }
   }
 }
 ```
-(`--allow-http` is needed because the endpoint is plain HTTP.)
+Set `ECM_MCP_AUTH` in the operating-system environment to `Bearer <your key>`
+before starting Claude Desktop. `--allow-http` is appropriate only for this
+loopback URL; use `https://` and omit it for remote access.
 
-> **Note:** the `?api_key=` query parameter in these URLs is your `mcp_api_key` value from `settings.json` — the key generated in ECM Settings > MCP Integration. It is **not** your Dispatcharr `api_key`.
+> **Note:** the Bearer value is your `mcp_api_key` from `settings.json`, not your Dispatcharr `api_key`.
 
 ---
 
@@ -271,14 +291,17 @@ Create a `.mcp.json` file in any project directory where you want ECM tools avai
   "mcpServers": {
     "ecm": {
       "type": "http",
-      "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
+      "url": "http://localhost:6101/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ECM_MCP_API_KEY}"
+      }
     }
   }
 }
 ```
 
 To connect:
-1. Create the `.mcp.json` file above in your project root (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`)
+1. Set `ECM_MCP_API_KEY` in your local environment and create the `.mcp.json` above
 2. Start Claude Code in that directory — it auto-detects `.mcp.json` on launch
 3. Run `/mcp` to reconnect if the MCP server restarts
 4. Ask Claude to manage your channels — e.g. "list my channels", "create a Channel Pipeline rule for sports", "probe all streams"
@@ -287,9 +310,9 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 
 ---
 
-**Upgrading from an earlier version:** the MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`) to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or `"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type": "http"` for Claude Code). The `/sse` endpoint was removed in this version. API-key auth is unchanged.
+**Upgrading from an earlier version:** remove `?api_key=...` from every MCP URL and configure the Bearer header shown above. The deprecated SSE endpoints remain removed. Rotate the old key after removing URL-based configs because URLs may have been retained in logs or histories.
 
-**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias) in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section). As of v0.17.1 (GH #273) the Dispatcharr token lives in `dispatcharr_api_key`; the legacy `api_key` field is still read for one release of back-compat with a deprecation WARN.
+**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key, then update the local environment variable used for the Bearer header. Rotation is effective on the next request without restarting the sidecar. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias).
 
 **For the full reference** — step-by-step connection setup, key rotation details, and troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
 

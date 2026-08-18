@@ -1,8 +1,8 @@
 """JWT-shape classification for the MCP RS static-key auth router.
 
 MCP OAuth offering RETIRED (bd-9axgc). ECM no longer accepts OAuth 2.1 Bearer
-tokens for MCP; the only supported credential is the static ``?api_key=`` (or
-non-JWT-shaped ``Bearer <key>``) path. The OAuth offline HS256 verifier
+tokens for MCP; the only supported credential is a non-JWT-shaped static
+``Authorization: Bearer <key>`` value. The OAuth offline HS256 verifier
 (``verify_oauth_token``) and the RFC 9728 discovery module were removed with the
 feature.
 

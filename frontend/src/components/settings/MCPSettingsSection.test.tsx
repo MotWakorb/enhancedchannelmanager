@@ -108,5 +108,16 @@ describe('MCPSettingsSection — Server Status diagnostic (bd-ix1g6)', () => {
     expect(screen.queryByTestId('mcp-status-unconfigured')).not.toBeInTheDocument();
     expect(screen.queryByTestId('mcp-status-hint')).not.toBeInTheDocument();
   });
-});
 
+  it('generates header-only connection configs without credentials in URLs', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(settingsConfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({ reachable: true, api_key_configured: true });
+
+    const { container } = render(<MCPSettingsSection isAdmin={true} />);
+    await waitFor(() => expect(container.textContent).toContain('Authorization'));
+
+    expect(container.textContent).not.toContain('?api_key=');
+    expect(container.textContent).not.toContain('YOUR_API_KEY');
+    expect(container.textContent).toContain('http://localhost:6101/mcp');
+  });
+});

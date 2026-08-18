@@ -111,7 +111,7 @@ server.
 
 ECM's MCP sidecar container exposes all ECM operations to Claude Desktop and
 Claude Code through the Model Context Protocol. Authentication uses a static API
-key (`mcp_api_key`) via the `?api_key=` path. Two connection methods are
+key (`mcp_api_key`) via an `Authorization: Bearer` header. Two connection methods are
 supported:
 
 | Path | When to use |

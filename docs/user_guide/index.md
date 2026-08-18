@@ -86,7 +86,7 @@ Configure SMTP, Discord webhooks, and Telegram bots so scheduled-task alerts (M3
 Connect ECM to Emby, Plex, and/or Jellyfin so the Stats page shows viewer
 usernames instead of raw IP addresses. Also covers the full MCP / Claude AI
 connection reference: the mcp-remote bridge (Claude Desktop) and the Claude
-Code `.mcp.json` path, both using the static `?api_key=` authentication method.
+Code `.mcp.json` path, both using a static Bearer header.
 
 - **[Emby Integration](integrations/emby.md)**: full Emby walkthrough:
   prerequisites, getting a server-local API key, configuration, what
