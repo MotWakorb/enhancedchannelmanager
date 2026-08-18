@@ -209,7 +209,15 @@ Read that summary before treating a green rollup as proof the suite passed. `gh 
 
 #### Confirm the image published
 
-A merged PR is not a published image. Merging to `dev` triggers the **Build and Push Docker Image** workflow, and that workflow can fail *after* the merge for reasons the PR's own checks never saw. The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
+A merged PR is not a published image. Merging to `dev` triggers independent
+**Tests** and **Build and Push Docker Image** verification workflows. Image
+builds and scans no longer wait on a polling job: a wedged test runner cannot
+hide image-build evidence. Completion of either workflow triggers **Publish
+Verified Images**, which publishes only when both exact-SHA push workflows are
+successful and the SHA is still the current branch head. Until then, mutable
+tags retain their last known-good image.
+
+The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
 
 1. A Buildx flake that skipped the multi-arch manifest.
 2. A GitHub Actions outage that orphaned queued runs.
@@ -226,7 +234,7 @@ So after `git checkout dev && git pull`, run:
 
 The script checks two things for the merge commit at `HEAD`:
 
-1. The **Build and Push Docker Image** workflow run for that commit concluded `success`.
+1. The **Publish Verified Images** workflow run for that commit concluded `success`.
 2. The published tag's build marker (`ECM_VERSION`, baked into the image from the `ECM_VERSION` build-arg) equals the version in `frontend/package.json` **at that commit**.
 
 Both must hold. A green workflow with a stale marker means the push did not land on the tag. A correct marker with a failed workflow means the tag is still serving an older build.

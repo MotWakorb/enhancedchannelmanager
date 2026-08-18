@@ -1,0 +1,201 @@
+name: Publish Verified Images
+
+on:
+  workflow_run:
+    workflows: [Tests, Build and Push Docker Image]
+    types: [completed]
+
+concurrency:
+  group: publish-images-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  authorize:
+    name: Authorize Exact-SHA Publication
+    if: >-
+      github.event.workflow_run.event == 'push'
+      && (github.event.workflow_run.head_branch == 'dev'
+      || github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.authorize.outputs.sha }}
+      branch: ${{ steps.authorize.outputs.branch }}
+    steps:
+      - name: Checkout candidate policy from the immutable revision
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 1
+
+      - name: Require current, successful Tests and Build runs
+        id: authorize
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          TRIGGER: ${{ toJSON(github.event.workflow_run) }}
+        run: |
+          set -euo pipefail
+          branch_sha=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq '.object.sha')
+          runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+            --jq '.workflow_runs' | jq -sc 'add // []')
+          decision=$(python scripts/image_publish_policy.py \
+            --trigger "$TRIGGER" --branch-sha "$branch_sha" --runs "$runs")
+          test "$(jq -r '.sha' <<<"$decision")" = "$SHA"
+          test "$(jq -r '.branch' <<<"$decision")" = "$BRANCH"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+  publish-amd64:
+    name: Publish Images (AMD64)
+    needs: [authorize]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ecm_digest: ${{ steps.ecm.outputs.digest }}
+      mcp_digest: ${{ steps.mcp.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set publication metadata
+        id: metadata
+        env:
+          BRANCH: ${{ needs.authorize.outputs.branch }}
+        run: |
+          echo "image=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
+          if test "$BRANCH" = main; then echo "channel=latest" >> "$GITHUB_OUTPUT"; else echo "channel=dev" >> "$GITHUB_OUTPUT"; fi
+      - name: Push ECM AMD64 by digest
+        id: ecm
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            GIT_COMMIT=${{ needs.authorize.outputs.sha }}
+            ECM_VERSION=${{ steps.metadata.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.metadata.outputs.channel }}
+          cache-from: type=gha,scope=amd64
+      - name: Push MCP AMD64 by digest
+        id: mcp
+        uses: docker/build-push-action@v7
+        with:
+          context: ./mcp-server
+          platforms: linux/amd64
+          push: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }}-mcp,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=mcp-amd64
+
+  publish-arm64:
+    name: Publish Images (ARM64)
+    needs: [authorize]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      ecm_digest: ${{ steps.ecm.outputs.digest }}
+      mcp_digest: ${{ steps.mcp.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set publication metadata
+        id: metadata
+        env:
+          BRANCH: ${{ needs.authorize.outputs.branch }}
+        run: |
+          echo "image=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
+          if test "$BRANCH" = main; then echo "channel=latest" >> "$GITHUB_OUTPUT"; else echo "channel=dev" >> "$GITHUB_OUTPUT"; fi
+      - name: Push ECM ARM64 by digest
+        id: ecm
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            GIT_COMMIT=${{ needs.authorize.outputs.sha }}
+            ECM_VERSION=${{ steps.metadata.outputs.version }}
+            RELEASE_CHANNEL=${{ steps.metadata.outputs.channel }}
+          cache-from: type=gha,scope=arm64
+      - name: Push MCP ARM64 by digest
+        id: mcp
+        uses: docker/build-push-action@v7
+        with:
+          context: ./mcp-server
+          platforms: linux/arm64
+          push: true
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }}-mcp,push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=mcp-arm64
+
+  publish-manifests:
+    name: Publish Verified Multi-Arch Manifests
+    needs: [authorize, publish-amd64, publish-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create exact verified tags
+        env:
+          BRANCH: ${{ needs.authorize.outputs.branch }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+          ECM_AMD64: ${{ needs.publish-amd64.outputs.ecm_digest }}
+          ECM_ARM64: ${{ needs.publish-arm64.outputs.ecm_digest }}
+          MCP_AMD64: ${{ needs.publish-amd64.outputs.mcp_digest }}
+          MCP_ARM64: ${{ needs.publish-arm64.outputs.mcp_digest }}
+        run: |
+          set -euo pipefail
+          image="${GITHUB_REPOSITORY,,}"
+          version=$(jq -r '.version' frontend/package.json)
+          short_sha=${SHA:0:7}
+          if test "$BRANCH" = main; then
+            tags=("latest" "$version" "${version%.*}" "$BRANCH-$short_sha")
+          else
+            tags=("dev" "$version-dev" "${version%.*}-dev" "$BRANCH-$short_sha")
+          fi
+          ecm_tags=(); mcp_tags=()
+          for tag in "${tags[@]}"; do
+            ecm_tags+=(--tag "$REGISTRY/$image:$tag")
+            mcp_tags+=(--tag "$REGISTRY/$image-mcp:$tag")
+          done
+          docker buildx imagetools create "${ecm_tags[@]}" \
+            "$REGISTRY/$image@$ECM_AMD64" "$REGISTRY/$image@$ECM_ARM64"
+          docker buildx imagetools create "${mcp_tags[@]}" \
+            "$REGISTRY/$image-mcp@$MCP_AMD64" "$REGISTRY/$image-mcp@$MCP_ARM64"

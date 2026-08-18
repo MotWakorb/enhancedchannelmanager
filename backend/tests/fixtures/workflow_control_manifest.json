@@ -126,19 +126,10 @@
       "file": "build.yml",
       "path": [
         "jobs",
-        "wait-for-tests",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
         "dast-scan",
         "if"
       ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')"
+      "value": "(github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')"
     },
     {
       "file": "build.yml",
@@ -180,7 +171,7 @@
         "build-amd64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "build.yml",
@@ -288,7 +279,7 @@
         "trivy-scan",
         "if"
       ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')"
+      "value": "(github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')"
     },
     {
       "file": "build.yml",
@@ -319,7 +310,7 @@
         "build-arm64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "build.yml",
@@ -427,7 +418,7 @@
         "trivy-scan-arm64",
         "if"
       ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')"
+      "value": "(github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')"
     },
     {
       "file": "build.yml",
@@ -458,7 +449,7 @@
         "merge-manifests",
         "if"
       ],
-      "value": "always() && github.event_name != 'pull_request' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.trivy-scan.result) && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.trivy-scan-arm64.result) && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.dast-scan.result)"
+      "value": "false && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.trivy-scan.result) && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.trivy-scan-arm64.result) && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.dast-scan.result)"
     },
     {
       "file": "build.yml",
@@ -511,7 +502,7 @@
         "build-mcp-amd64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "build.yml",
@@ -619,7 +610,7 @@
         "build-mcp-arm64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "build.yml",
@@ -745,7 +736,7 @@
         "merge-mcp-manifests",
         "if"
       ],
-      "value": "always() && github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success'"
+      "value": "false && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success'"
     },
     {
       "file": "build.yml",
@@ -909,6 +900,15 @@
         "if"
       ],
       "value": "always()"
+    },
+    {
+      "file": "publish-images.yml",
+      "path": [
+        "jobs",
+        "authorize",
+        "if"
+      ],
+      "value": "github.event.workflow_run.event == 'push' && (github.event.workflow_run.head_branch == 'dev' || github.event.workflow_run.head_branch == 'main')"
     },
     {
       "file": "release-cut-gate.yml",

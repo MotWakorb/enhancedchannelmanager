@@ -13,10 +13,8 @@ name: Build and Push Docker Image
 # two check-runs per required context, one of them a permanently green echo.
 #
 # So `codeql-analysis` now runs on every event and gates its expensive steps
-# on the `detect` job. The image-build jobs are NOT required contexts and
-# still have nothing to do on an inert machine-state change; they skip cleanly
-# because `wait-for-tests` skips and they already require it to have
-# succeeded.
+# on the `detect` job. Image verification is independent of Tests; only the
+# exact-SHA publication workflow joins their authoritative results.
 
 on:
   push:
@@ -461,134 +459,17 @@ jobs:
           #   influence build output, only which PR a read-then-comment job targets.
           skip_check: CKV2_GHA_1,CKV_DOCKER_3,CKV_DOCKER_8,CKV_GHA_7
 
-  # bd-ruzzg: gate every image build/push on test.yml's results for THIS
-  # commit. test.yml is a separate workflow file — GitHub Actions has no
-  # cross-workflow `needs:`, so without this job, build-amd64/build-arm64/
-  # build-mcp-amd64/build-mcp-arm64 only depended on the security-scan jobs
-  # above and would build (and, on a push to dev/main, PUSH to ghcr.io)
-  # regardless of whether the backend/frontend/MCP test suites had finished
-  # or passed on this exact commit. Polls the GitHub Checks API instead of
-  # a cross-workflow trigger (workflow_run) or merging the two workflow
-  # files — both of those would either complicate the required-status-check
-  # setup or risk drifting the check names dev/main branch protection
-  # depends on byte-for-byte.
+  # Image verification is deliberately independent of test.yml. A wedged test
+  # runner must not suppress build/scan evidence. Publishing is owned by
+  # publish-images.yml, which is triggered by native workflow completion and
+  # requires successful exact-SHA Tests + Build runs before changing any tag.
   #
-  # NOT a required context, so it may skip at the job level. Skipping it on a
-  # inert machine-state change is what keeps the image builds off: every build
-  # job requires `needs.wait-for-tests.result == 'success'`, and a skipped job
-  # does not report success. Net effect matches the pre-5rwzy behaviour, where
-  # this workflow did not run at all on an ignored-path change.
-  wait-for-tests:
-    name: Wait for Test Suite
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    permissions:
-      checks: read
-    steps:
-      - name: Poll test.yml check-runs for this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          # PR events check the PR head SHA (github.sha on a pull_request
-          # event is a synthetic merge commit, not the commit test.yml's
-          # check-runs are actually posted against).
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-
-          # test.yml job display names that must all report success before
-          # any image build proceeds. Keep in sync with the required-status-
-          # check list in dev/main branch protection (docs/shipping.md §6).
-          # Fake-Test Guard isn't a required check for merging, but it's a
-          # real test-quality signal worth gating an image push on too.
-          CHECKS=(
-            "Backend Tests"
-            "Frontend Tests"
-            "MCP Server Tests"
-            "Semgrep Lint"
-            "Version Consistency"
-            "Fake-Test Guard"
-          )
-          # 60 attempts * 30s = 30 minutes. Generous relative to observed suite
-          # runtime (Backend Tests alone has taken 7m+) so a busy runner queue
-          # or a cold dependency cache doesn't false-positive this into a
-          # "failed" gate for image publishing.
-          MAX_ATTEMPTS=60
-          SLEEP_SECONDS=30
-
-          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-            # --paginate emits one JSON object per page (each {check_runs: [...]}
-            # here); --jq '.check_runs' turns that into one array PER PAGE, and
-            # the external `jq -s 'add // []'` slurps + flattens those into a
-            # single combined array. Mirrors the codeql-analysis job's alert
-            # pagination above (same object-shaped paginated-response pattern) —
-            # if you're fixing a pagination bug here, check that job too.
-            #
-            # Deliberately NOT a bare assignment: `set -e` only exempts a
-            # failing command when its status is tested directly (as in this
-            # `if !`), so a transient gh api hiccup (5xx, secondary rate
-            # limit) retries instead of hard-failing the whole gate.
-            if ! runs_json=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs" --jq '.check_runs' \
-              | jq -s 'add // []'); then
-              echo "Transient error polling the Checks API (attempt $attempt/$MAX_ATTEMPTS) — retrying in ${SLEEP_SECONDS}s"
-              sleep "$SLEEP_SECONDS"
-              continue
-            fi
-            all_done=true
-
-            for name in "${CHECKS[@]}"; do
-              # As of bead enhancedchannelmanager-5rwzy each of these names
-              # is emitted by exactly one job, so `matches` should hold a
-              # single run. The loop still checks EVERY match rather than
-              # the first one found: that is what caught the duplicate on
-              # PR #797, where `Backend Tests` reported failure and success
-              # on the same commit, and it is the cheapest possible detector
-              # if a second emitter is ever reintroduced.
-              matches=$(echo "$runs_json" | jq -c --arg n "$name" '[.[] | select(.name == $n)]')
-              count=$(echo "$matches" | jq 'length')
-
-              if [ "$count" -eq 0 ]; then
-                echo "No check-run yet for '$name'"
-                all_done=false
-                continue
-              fi
-
-              incomplete=$(echo "$matches" | jq '[.[] | select(.status != "completed")] | length')
-              if [ "$incomplete" -gt 0 ]; then
-                echo "'$name' still running ($incomplete in progress)"
-                all_done=false
-                continue
-              fi
-
-              failed=$(echo "$matches" | jq '[.[] | select(.conclusion != "success")] | length')
-              if [ "$failed" -gt 0 ]; then
-                echo "::error::'$name' completed without success"
-                echo "$matches" | jq '[.[] | {conclusion, html_url}]'
-                exit 1
-              fi
-
-              echo "'$name' passed"
-            done
-
-            if [ "$all_done" = true ]; then
-              echo "All test.yml checks passed for $SHA"
-              exit 0
-            fi
-
-            echo "Waiting for test suite to finish (attempt $attempt/$MAX_ATTEMPTS)..."
-            sleep "$SLEEP_SECONDS"
-          done
-
-          echo "::error::Timed out after $((MAX_ATTEMPTS * SLEEP_SECONDS / 60)) minutes waiting for test.yml checks to complete"
-          exit 1
-
   # DAST - Dynamic Application Security Testing (loads image from build-amd64 cache)
   dast-scan:
     name: DAST Security Scan
     runs-on: ubuntu-latest
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
       || (github.event_name == 'pull_request' && github.base_ref == 'main')
       || (github.event_name == 'pull_request' && github.base_ref == 'dev'
       && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')
@@ -707,13 +588,11 @@ jobs:
   build-amd64:
     name: Build Docker Image (AMD64)
     runs-on: ubuntu-latest
-    # On PRs to main, wait for security scans; on dev branch pushes, run immediately.
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike the
-    # security scans, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, wait-for-tests]
+    # Build verification must run even while the independent test workflow is
+    # queued or wedged. This job never publishes; publish-images.yml owns GHCR.
+    needs: [detect]
     if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+      needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
       packages: write
@@ -805,13 +684,12 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
 
@@ -829,13 +707,12 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
 
@@ -852,13 +729,12 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
 
@@ -881,7 +757,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-amd64, detect-dependency-change]
     if: >-
-      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
       || (github.event_name == 'pull_request' && github.base_ref == 'main')
       || (github.event_name == 'pull_request' && github.base_ref == 'dev'
       && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')
@@ -945,13 +821,9 @@ jobs:
   build-arm64:
     name: Build Docker Image (ARM64)
     runs-on: ubuntu-24.04-arm
-    # On PRs to main, wait for security scans; on dev branch pushes, run immediately.
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike the
-    # security scans, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, wait-for-tests]
+    needs: [detect]
     if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+      needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
       packages: write
@@ -1040,13 +912,12 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
 
@@ -1064,13 +935,12 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
 
@@ -1087,13 +957,12 @@ jobs:
         with:
           context: .
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
 
@@ -1113,8 +982,12 @@ jobs:
   trivy-scan-arm64:
     name: Container Security Scan (Trivy ARM64)
     runs-on: ubuntu-24.04-arm
-    needs: [build-arm64]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: [build-arm64, detect-dependency-change]
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      || (github.event_name == 'pull_request' && github.base_ref == 'main')
+      || (github.event_name == 'pull_request' && github.base_ref == 'dev'
+      && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')
     steps:
       - name: Checkout repository
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -1177,7 +1050,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-amd64, build-arm64, trivy-scan, trivy-scan-arm64, dast-scan]
     if: >-
-      always() && github.event_name != 'pull_request'
+      false
       && needs.build-amd64.result == 'success'
       && needs.build-arm64.result == 'success'
       && !contains(fromJSON('["failure","cancelled"]'), needs.trivy-scan.result)
@@ -1303,13 +1176,9 @@ jobs:
   build-mcp-amd64:
     name: Build MCP Image (AMD64)
     runs-on: ubuntu-latest
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike
-    # security-scan-backend, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-backend, security-scan-mcp, wait-for-tests]
+    needs: [detect]
     if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && needs.security-scan-mcp.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+      needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
       packages: write
@@ -1388,9 +1257,8 @@ jobs:
         with:
           context: ./mcp-server
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=mcp-amd64
           cache-to: type=gha,mode=max,scope=mcp-amd64
 
@@ -1408,9 +1276,8 @@ jobs:
         with:
           context: ./mcp-server
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=mcp-amd64
           cache-to: type=gha,mode=max,scope=mcp-amd64
 
@@ -1427,9 +1294,8 @@ jobs:
         with:
           context: ./mcp-server
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=mcp-amd64
           cache-to: type=gha,mode=max,scope=mcp-amd64
 
@@ -1448,13 +1314,9 @@ jobs:
   build-mcp-arm64:
     name: Build MCP Image (ARM64)
     runs-on: ubuntu-24.04-arm
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike
-    # security-scan-backend, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-backend, security-scan-mcp, wait-for-tests]
+    needs: [detect]
     if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && needs.security-scan-mcp.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+      needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
       packages: write
@@ -1533,9 +1395,8 @@ jobs:
         with:
           context: ./mcp-server
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=mcp-arm64
           cache-to: type=gha,mode=max,scope=mcp-arm64
 
@@ -1553,9 +1414,8 @@ jobs:
         with:
           context: ./mcp-server
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=mcp-arm64
           cache-to: type=gha,mode=max,scope=mcp-arm64
 
@@ -1572,9 +1432,8 @@ jobs:
         with:
           context: ./mcp-server
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
+          push: false
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=mcp-arm64
           cache-to: type=gha,mode=max,scope=mcp-arm64
 
@@ -1591,63 +1450,61 @@ jobs:
           echo "digest=$DIGEST" >> $GITHUB_OUTPUT
 
   trivy-scan-mcp-amd64:
-    name: Scan MCP Image (AMD64)
+    name: MCP Container Security Scan (Trivy AMD64)
     runs-on: ubuntu-latest
     needs: [build-mcp-amd64]
-    if: github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success'
-    permissions:
-      contents: read
-      packages: read
     steps:
-      - name: Log in to Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
+      - name: Load exact MCP AMD64 image from verification cache
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Scan pushed MCP digest
+          context: ./mcp-server
+          load: true
+          tags: ecm-mcp-scan:amd64
+          platforms: linux/amd64
+          cache-from: type=gha,scope=mcp-amd64
+      - name: Reject critical or high vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          version: 'v0.74.0'
-          image-ref: ${{ env.REGISTRY }}/${{ needs.build-mcp-amd64.outputs.image }}@${{ needs.build-mcp-amd64.outputs.digest }}
-          format: 'table'
+          image-ref: ecm-mcp-scan:amd64
+          format: table
           exit-code: '1'
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
 
   trivy-scan-mcp-arm64:
-    name: Scan MCP Image (ARM64)
+    name: MCP Container Security Scan (Trivy ARM64)
     runs-on: ubuntu-24.04-arm
     needs: [build-mcp-arm64]
-    if: github.event_name != 'pull_request' && needs.build-mcp-arm64.result == 'success'
-    permissions:
-      contents: read
-      packages: read
     steps:
-      - name: Log in to Container Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
+      - name: Load exact MCP ARM64 image from verification cache
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Scan pushed MCP digest
+          context: ./mcp-server
+          load: true
+          tags: ecm-mcp-scan:arm64
+          platforms: linux/arm64
+          cache-from: type=gha,scope=mcp-arm64
+      - name: Reject critical or high vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          version: 'v0.74.0'
-          image-ref: ${{ env.REGISTRY }}/${{ needs.build-mcp-arm64.outputs.image }}@${{ needs.build-mcp-arm64.outputs.digest }}
-          format: 'table'
+          image-ref: ecm-mcp-scan:arm64
+          format: table
           exit-code: '1'
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
 
   merge-mcp-manifests:
     name: Create MCP Multi-Arch Manifest
     runs-on: ubuntu-latest
     needs: [build-mcp-amd64, build-mcp-arm64, trivy-scan-mcp-amd64, trivy-scan-mcp-arm64]
     if: >-
-      always() && github.event_name != 'pull_request'
+      false
       && needs.build-mcp-amd64.result == 'success'
       && needs.build-mcp-arm64.result == 'success'
       && needs.trivy-scan-mcp-amd64.result == 'success'

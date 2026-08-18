@@ -616,7 +616,8 @@ def _expected_verdict_manifest():
         expected.add(("build.yml", ("jobs", job, "if"), dependency_pr))
     expected.add(("build.yml", ("jobs", "iac-security-scan", "if"), main_only))
     expected.add(("build.yml", ("jobs", "security-scan-mcp", "if"), code_true))
-    expected.add(("build.yml", ("jobs", "wait-for-tests", "if"), code_true))
+    for job in ("build-amd64", "build-arm64", "build-mcp-amd64", "build-mcp-arm64"):
+        expected.add(("build.yml", ("jobs", job, "if"), code_true))
     for index, value in enumerate(
         (code_false, code_true, code_true, code_true, code_true,
          code_true + " && github.event_name == 'pull_request'", code_always)
@@ -694,6 +695,17 @@ EXPECTED_JOB_OUTPUTS = {
             "image": "${{ steps.image.outputs.name }}",
         }
         for job in ("build-mcp-amd64", "build-mcp-arm64")
+    },
+    ("publish-images.yml", "authorize"): {
+        "sha": "${{ steps.authorize.outputs.sha }}",
+        "branch": "${{ steps.authorize.outputs.branch }}",
+    },
+    **{
+        ("publish-images.yml", job): {
+            "ecm_digest": "${{ steps.ecm.outputs.digest }}",
+            "mcp_digest": "${{ steps.mcp.outputs.digest }}",
+        }
+        for job in ("publish-amd64", "publish-arm64")
     },
 }
 def _reserved_occurrences(value, path=()):

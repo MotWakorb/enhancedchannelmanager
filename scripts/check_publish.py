@@ -25,7 +25,7 @@ unrelated merge republished it by accident.
 
 ## What it checks
 
-  1. The "Build and Push Docker Image" workflow run for the commit under
+  1. The "Publish Verified Images" workflow run for the commit under
      test concluded `success`.
   2. The published tag's build marker (`ECM_VERSION`, baked into the
      image by the Dockerfile from the `ECM_VERSION` build-arg) equals the
@@ -83,7 +83,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "ghcr.io/motwakorb/enhancedchannelmanager"
 DEFAULT_TAG = "dev"
 DEFAULT_BRANCH = "dev"
-WORKFLOW_NAME = "Build and Push Docker Image"
+WORKFLOW_NAME = "Publish Verified Images"
 MARKER_ENV = "ECM_VERSION"
 COMMIT_ENV = "GIT_COMMIT"
 
@@ -467,7 +467,7 @@ def main(argv: list[str] | None = None) -> int:
     errors: list[str] = []
 
     # --- Check 1 ---
-    print("\n[1/2] Build and Push Docker Image workflow run")
+    print("\n[1/2] Publish Verified Images workflow run")
     if args.skip_workflow:
         print("  SKIPPED (--skip-workflow)")
     else:
