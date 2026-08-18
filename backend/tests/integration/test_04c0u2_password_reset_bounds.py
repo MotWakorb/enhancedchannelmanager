@@ -245,6 +245,87 @@ async def test_successful_reset_consumes_token_and_revokes_sessions(
 
 
 @pytest.mark.asyncio
+async def test_successful_reset_invalidates_existing_credentials_and_new_password_logs_in(
+    async_client, test_session, local_user,
+):
+    """A completed reset ends the old access and refresh session together."""
+    from auth.tokens import hash_token
+    from models import PasswordResetToken
+
+    login = await async_client.post(
+        "/api/auth/login",
+        json={"username": local_user.username, "password": "OldPassword123!"},
+    )
+    assert login.status_code == 200
+    old_access = async_client.cookies.get("access_token")
+    old_refresh = async_client.cookies.get("refresh_token")
+    assert old_access and old_refresh
+
+    raw_token = "whole-path-reset-credential"
+    test_session.add(
+        PasswordResetToken(
+            user_id=local_user.id,
+            token_hash=hash_token(raw_token),
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+    )
+    test_session.commit()
+
+    reset = await async_client.post(
+        "/api/auth/reset-password",
+        json={
+            "token": raw_token,
+            "new_password": "NewPassword456!",
+        },
+    )
+    assert reset.status_code == 200
+
+    stale_access = await async_client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {old_access}"},
+    )
+    stale_refresh = await async_client.post(
+        "/api/auth/refresh",
+        headers={"X-Refresh-Token": old_refresh},
+    )
+    old_login = await async_client.post(
+        "/api/auth/login",
+        json={"username": local_user.username, "password": "OldPassword123!"},
+    )
+    new_login = await async_client.post(
+        "/api/auth/login",
+        json={"username": local_user.username, "password": "NewPassword456!"},
+    )
+
+    assert stale_access.status_code == 401
+    assert stale_refresh.status_code == 401
+    assert old_login.status_code == 401
+    assert new_login.status_code == 200
+    assert (await async_client.get("/api/auth/me")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_rollout_accepts_existing_access_token_without_auth_epoch(
+    async_client, local_user,
+):
+    """Pre-migration access JWTs remain valid while the user is at epoch zero."""
+    from auth.tokens import ALGORITHM, _get_secret_key, create_access_token, decode_token
+    from jose import jwt
+
+    claims = decode_token(create_access_token(local_user.id, local_user.username))
+    claims.pop("auth_epoch")
+    claims["sub"] = str(claims["sub"])
+    legacy_token = jwt.encode(claims, _get_secret_key(), algorithm=ALGORITHM)
+
+    response = await async_client.get(
+        "/api/auth/me",
+        headers={"Authorization": f"Bearer {legacy_token}"},
+    )
+
+    assert response.status_code == 200, response.text
+
+
+@pytest.mark.asyncio
 async def test_reset_token_account_attempt_budget_is_bounded(
     async_client, test_session, local_user,
 ):
@@ -480,5 +561,53 @@ def test_migration_deduplicates_unused_tokens_and_adds_attempt_budget(tmp_path):
         }
         assert "attempt_count" not in columns
         assert "uq_reset_token_unused_user" not in indexes
+    finally:
+        engine.dispose()
+
+
+def test_auth_epoch_migration_backfills_existing_users_and_is_idempotent(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+
+    import database
+
+    db_path = tmp_path / "auth-epoch-migration.db"
+    config = Config(str(database.ALEMBIC_INI_PATH))
+    config.set_main_option("sqlalchemy.url", f"sqlite:///{db_path}")
+    command.upgrade(config, "0044")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    now = datetime.utcnow()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO users "
+                "(id, username, auth_provider, is_active, is_admin, created_at, updated_at) "
+                "VALUES (1, 'epoch-user', 'local', 1, 0, :created, :created)"
+            ),
+            {"created": now},
+        )
+    engine.dispose()
+
+    command.upgrade(config, "0045")
+    command.upgrade(config, "0045")
+
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        columns = {column["name"] for column in inspect(engine).get_columns("users")}
+        with engine.connect() as connection:
+            epoch = connection.execute(
+                text("SELECT auth_epoch FROM users WHERE id = 1")
+            ).scalar_one()
+        assert "auth_epoch" in columns
+        assert epoch == 0
+    finally:
+        engine.dispose()
+
+    command.downgrade(config, "0044")
+    engine = create_engine(f"sqlite:///{db_path}")
+    try:
+        columns = {column["name"] for column in inspect(engine).get_columns("users")}
+        assert "auth_epoch" not in columns
     finally:
         engine.dispose()

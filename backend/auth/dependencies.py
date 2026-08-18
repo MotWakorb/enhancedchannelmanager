@@ -237,6 +237,13 @@ async def get_current_user(
     if not user.is_active:
         raise AuthenticationError("User account is disabled")
 
+    # Tokens created before auth epochs were introduced are epoch zero. That
+    # keeps existing logins working during rollout while allowing a password
+    # reset to invalidate every access token issued under an earlier epoch.
+    token_epoch = payload.get("auth_epoch", 0)
+    if not isinstance(token_epoch, int) or token_epoch != user.auth_epoch:
+        raise AuthenticationError("Token has been invalidated")
+
     return user
 
 

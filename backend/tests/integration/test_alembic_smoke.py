@@ -1832,6 +1832,12 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE password_reset_tokens "
                     "ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
                 ))
+                # 0045 (enhancedchannelmanager-04c0u.2): account-wide access
+                # token invalidation epoch on the baseline users table.
+                conn.execute(text(
+                    "ALTER TABLE users "
+                    "ADD COLUMN auth_epoch INTEGER NOT NULL DEFAULT 0"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.

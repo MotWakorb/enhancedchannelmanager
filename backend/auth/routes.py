@@ -718,7 +718,9 @@ async def login(
         )
 
     # Create tokens
-    access_token = create_access_token(user_id=user.id, username=user.username)
+    access_token = create_access_token(
+        user_id=user.id, username=user.username, auth_epoch=user.auth_epoch
+    )
     refresh_token = create_refresh_token(user_id=user.id)
 
     # Create session record
@@ -1175,7 +1177,9 @@ def _refresh_via_predecessor(
             claims=claims,
         )
 
-    access_token = create_access_token(user_id=user.id, username=user.username)
+    access_token = create_access_token(
+        user_id=user.id, username=user.username, auth_epoch=user.auth_epoch
+    )
     _set_access_cookie(response, access_token)
 
     rotated_at = prior_session.rotated_at
@@ -1292,7 +1296,7 @@ async def refresh_tokens(
         # placeholder (bd-suuoh) — that claim is what main.py's
         # deprecated-admin-router warning logs as the acting operator.
         new_access_token, new_refresh_token = rotate_refresh_token(
-            refresh_token, username=user.username
+            refresh_token, username=user.username, auth_epoch=user.auth_epoch
         )
 
         # Guarded rotation (bd-x67qe): the UPDATE only applies while the row
@@ -1641,6 +1645,7 @@ async def reset_password(
     # changes none of them.
     user.password_hash = new_password_hash
     user.updated_at = consumed_at
+    user.auth_epoch += 1
     session.query(UserSession).filter(
         UserSession.user_id == user.id,
         UserSession.is_revoked.is_(False),
@@ -1868,7 +1873,9 @@ async def dispatcharr_login(
         )
 
     # Create tokens
-    access_token = create_access_token(user_id=user.id, username=user.username)
+    access_token = create_access_token(
+        user_id=user.id, username=user.username, auth_epoch=user.auth_epoch
+    )
     refresh_token = create_refresh_token(user_id=user.id)
 
     # Create session record

@@ -1770,6 +1770,9 @@ class User(Base):
     # Status
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
+    # Incremented when credentials must be invalidated account-wide. Access
+    # JWTs carry the epoch they were issued under; older epochs are rejected.
+    auth_epoch = Column(Integer, default=0, server_default="0", nullable=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
