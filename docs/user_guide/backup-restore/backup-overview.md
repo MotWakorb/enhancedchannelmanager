@@ -65,9 +65,33 @@ Alert methods themselves are kept, because they are configuration you authored, 
 !!! warning "A backup now fails rather than shipping an unscrubbed database"
     If ECM cannot open, read, or rewrite its copy of `journal.db` while removing this data, the whole backup **fails** and no artifact is written. That is deliberate. The alternative, which is what earlier builds did, was to fall back to shipping the database as-is behind a successful-looking result. A failed backup is a problem to investigate; an artifact you believed was redacted and was not is worse. See [If a backup fails while removing sensitive data](take-a-backup.md#if-a-backup-fails-while-removing-sensitive-data).
 
-One part of this applies to the **Full Backup (legacy `.zip`)** format on the same page as well: its copy of `journal.db` is built by the same code and carries the same fixed table list, so the legacy artifact no longer carries your ECM accounts either.
+The **Full Backup (legacy `.zip`)** format follows the same minimum
+confidentiality boundary. Its `journal.db` carries the same fixed configuration
+table list, and its `settings.json` masks credential-class fields. ECM also
+omits the complete `tls/` and `m3u_uploads/` trees: the former can contain TLS
+private keys and the latter can contain provider credentials inside playlist
+URLs. Logos remain included. A `.zip` taken by an earlier build still contains those
+trees and is still restored in full, so nothing you already hold loses material.
+After restoring a newly taken one, re-import or reissue the TLS certificate and
+re-upload any local playlists you still need.
 
-That is the whole of what the legacy format guarantees, and it does not make the `.zip` a redacted backup. Its `settings.json` masks the credential-class fields but keeps your Dispatcharr username, and it is not scrubbed for credentials embedded in URL values. The archive also copies your `tls/` and `m3u_uploads/` directories verbatim, which means TLS private keys and uploaded playlists whose stream URLs carry provider credentials. The warning on the Full Backup card, that the backup contains sensitive data including passwords and certificates, is the accurate description: treat the file as a secret. Use a standard backup when you need the credential-redacted format, and still inspect its operator-authored content before sharing it.
+Two things the legacy `settings.json` still keeps, and they are the reason this
+format is not the one to hand out. It masks the credential-class fields by name,
+so it keeps your Dispatcharr **username** beside the removed password. And it
+predates the DBAS value-aware URL scrubber, so a credential embedded inside a
+URL value, such as a Dispatcharr address that carries a name and a secret ahead
+of the host name, is written to the archive as you entered it. Use a standard DBAS backup when you need the
+credential-redacted format, and inspect operator-authored free text before
+sharing either plaintext format.
+
+### Confidentiality policy by artifact class
+
+| Artifact | Persisted or off-host policy | Recovery/key strategy |
+|-|-|-|
+| Standard DBAS ZIP (manual or scheduled) | Plaintext, structurally redacted; omits ECM accounts, password/session/reset hashes, storage credentials, TLS private keys, and raw uploaded playlists. Local ZIP and checksum sidecar are `0600`. | No key is required. Restore configuration, then re-enter destination credentials or keep those already configured. Run a dry-run preview before apply. |
+| Encrypted DBAS migration ZIP | Authenticated whole-artifact encryption; may include credentials only with the explicit **Include credentials** option. Local ZIP and checksum sidecar are `0600`. | Manual-only passphrase stored by the operator in a password manager. Verify by decrypting through a restore preview before relying on it. |
+| Legacy full ZIP | Plaintext and redacted only at its legacy seams; omits ECM account state, TLS files, and uploaded playlists, but keeps the Dispatcharr username and any credential embedded in a URL value in `settings.json`. Treat it as a secret. A saved local copy is `0600`. | No key is required. TLS material, uploaded playlists, and destination credentials are re-established after restore. |
+| YAML export (downloaded or scheduled) | Plaintext structured export with the shared credential redactor; it contains no file trees or ECM authentication database. A scheduled local file is `0600`. | No key is required; re-enter redacted values after restore. |
 
 ### What this means in practice
 
@@ -135,7 +159,7 @@ If you are migrating to a new install and want credentials to travel with the ba
 
 **A passphrase alone does not preserve the structured credentials.** The two settings are separate: encryption protects the artifact, and **Include credentials** is what preserves the recognized credential fields and credential-bearing URL values. An encrypted backup taken *without* **Include credentials** applies the same structured redaction rules as a standard one. With it enabled, the artifact carries everything a standard one removes, ECM's own accounts included, which is what makes it the migration path and also what makes it a file to guard.
 
-An encrypted backup uses scrypt (N=2¹⁵) for key derivation and ChaCha20-Poly1305 for authenticated encryption, applied as a chunked streaming pass over the whole artifact. The passphrase is never logged or stored.
+An encrypted backup uses scrypt (N=2¹⁵, r=8, p=1) for key derivation and ChaCha20-Poly1305 for authenticated encryption, applied as a chunked streaming pass over the whole artifact. Before scrypt runs, ECM requires the exact supported envelope version, KDF and AEAD identifiers and validates fixed bounds for the KDF parameters, salt, nonce, and chunk size. A malformed header is rejected without performing attacker-selected KDF work. The passphrase is never logged or stored.
 
 > **Warning: lost passphrase = permanently unrecoverable artifact.** There is no recovery path. Store your passphrase in a password manager before taking an encrypted backup.
 

@@ -1,7 +1,8 @@
 """
 Backup & Restore router — create and restore ECM configuration backups.
 
-Backs up: settings.json, journal.db, uploads/logos/, tls/, m3u_uploads/
+Backs up: settings.json, journal.db, uploads/logos/ (tls/ and m3u_uploads/
+are deliberately excluded from the plaintext artifact; see BACKUP_DIRS)
 YAML export: settings + DB tables + Dispatcharr state in a single file.
 """
 import asyncio
@@ -92,8 +93,21 @@ def _resolve_backup_normalization_group_ids(item: dict, session) -> str | None:
         return json.dumps([g.id for g in groups]) if groups else None
     return None
 
-# Directories to include in backup (relative to CONFIG_DIR)
-BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
+# Plaintext legacy ZIPs carry only files that are safe under the backup
+# confidentiality policy. ``tls`` contains private keys and ``m3u_uploads`` can
+# contain live provider credentials in stream URLs, so neither may enter an
+# unencrypted artifact. DBAS captures the restorable provider configuration in
+# its redacted categories; encrypted credential-bearing migration artifacts use
+# that DBAS path rather than this legacy file-copy path.
+BACKUP_DIRS = ["uploads/logos"]
+
+# Restore accepts what OLDER ECM builds produced. A legacy artifact taken before
+# the confidentiality policy above still carries ``tls`` and ``m3u_uploads``, and
+# silently discarding them would turn an upgrade into unannounced data loss for
+# an operator whose only copy of a certificate lives in that ZIP. Restoring the
+# operator's own material is not a confidentiality question; producing new
+# plaintext copies of it is, and that is what BACKUP_DIRS governs.
+LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports).
 #
@@ -103,7 +117,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0139"
+APP_VERSION = "0.18.1-0140"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1087,6 +1101,29 @@ def _get_backup_filename() -> str:
     return f"ecm-backup-{now}.zip"
 
 
+def _open_private_binary(path: Path):
+    """Open a local backup artifact for write and enforce owner-only access."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _write_private_bytes(path: Path, data: bytes) -> None:
+    """Write a complete local backup artifact with mode ``0600``."""
+    with _open_private_binary(path) as fh:
+        fh.write(data)
+
+
+def _write_private_text(path: Path, data: str) -> None:
+    """Write a UTF-8 backup sidecar with mode ``0600``."""
+    with _open_private_binary(path) as fh:
+        fh.write(data.encode("utf-8"))
+
+
 def _build_manifest(files: list[str]) -> dict:
     """Build backup manifest with version and file list."""
     return {
@@ -1718,9 +1755,9 @@ def _compute_sha256_streaming(path: Path) -> str:
 def _estimate_artifact_source_bytes() -> int:
     """Estimate the on-disk byte cost of the artifact before building.
 
-    Sums journal.db plus every file under the backup directories (logos, tls,
-    m3u_uploads). DEFLATE rarely shrinks already-compressed logo images, so we
-    treat the raw source size as the floor for the free-disk pre-check.
+    Sums journal.db plus every file under ``BACKUP_DIRS``. DEFLATE rarely
+    shrinks already-compressed logo images, so we treat the raw source size as
+    the floor for the free-disk pre-check.
     """
     total = 0
     if JOURNAL_DB_FILE.exists():
@@ -2688,7 +2725,7 @@ async def build_backup_artifact(
 
         # Open the ZIP on a writable FILE HANDLE (NamedTemporaryFile-class temp
         # path), NOT io.BytesIO — the artifact is streamed to disk (D8).
-        with open(zip_path, "wb") as zfh:
+        with _open_private_binary(zip_path) as zfh:
             with zipfile.ZipFile(zfh, "w", zipfile.ZIP_DEFLATED) as zf:
                 # Per-category redacted YAML.
                 for name, yaml_text in categories.items():
@@ -2758,8 +2795,8 @@ async def build_backup_artifact(
         # SHA-256 of the FINISHED artifact (encrypted bytes if encrypted),
         # computed by streaming the file.
         artifact_sha = _compute_sha256_streaming(zip_path)
-        sidecar_path.write_text(
-            "%s  %s\n" % (artifact_sha, zip_path.name), encoding="utf-8"
+        _write_private_text(
+            sidecar_path, "%s  %s\n" % (artifact_sha, zip_path.name)
         )
 
         logger.info(
@@ -3631,7 +3668,7 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
             _reassert_auth_rows_after_restore(prior_auth_rows)
 
         # Restore directories — clear existing before writing
-        for dir_rel in BACKUP_DIRS:
+        for dir_rel in LEGACY_RESTORE_DIRS:
             dir_path = CONFIG_DIR / dir_rel
             # Find files in this directory from the zip
             prefix = dir_rel + "/"
@@ -5929,7 +5966,7 @@ async def save_backup(_admin=RequireAdminIfEnabled):
             path.relative_to(safe_root)
         except (ValueError, OSError):
             raise HTTPException(status_code=400, detail="Invalid filename")
-        path.write_bytes(data)
+        _write_private_bytes(path, data)
         logger.info("[BACKUP] Saved backup %s (%d bytes)", filename, len(data))
         return {
             "filename": filename,

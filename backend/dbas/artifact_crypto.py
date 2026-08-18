@@ -44,6 +44,7 @@ derived key is NEVER logged).
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import logging
 import os
@@ -94,6 +95,7 @@ MIN_PASSPHRASE_LENGTH = 12
 # artifact, so a corrupt/hostile length prefix cannot drive an enormous
 # allocation before authentication. chunk_size + tag + generous slack.
 _MAX_CT_CHUNK = _CHUNK_SIZE + 1024
+_MAX_HEADER_LEN = 2048
 
 
 class ArtifactCryptoError(Exception):
@@ -172,6 +174,21 @@ def _build_header_bytes(salt: bytes, base_nonce: bytes) -> bytes:
     return json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _open_private_binary(path: Path):
+    """Open ``path`` for a private artifact write, enforcing mode ``0600``.
+
+    The explicit ``fchmod`` also repairs an existing destination whose mode was
+    broader; relying on the process umask would protect only newly-created files.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        return os.fdopen(fd, "wb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _chunk_aad(header_bytes: bytes, index: int, is_final: bool) -> bytes:
     """AAD for a chunk: header bytes + chunk index + is_final flag.
 
@@ -213,7 +230,7 @@ def read_header(path: Path) -> dict:
             if len(raw_len) != 4:
                 raise UnsupportedArtifactFormatError("Truncated artifact header")
             (header_len,) = struct.unpack(">I", raw_len)
-            if header_len <= 0 or header_len > 64 * 1024:
+            if header_len <= 0 or header_len > _MAX_HEADER_LEN:
                 raise UnsupportedArtifactFormatError("Invalid artifact header length")
             header_bytes = fh.read(header_len)
             if len(header_bytes) != header_len:
@@ -229,10 +246,38 @@ def read_header(path: Path) -> dict:
         raise UnsupportedArtifactFormatError("Malformed artifact header")
 
     version = header.get("format_version")
-    if not isinstance(version, int) or version > FORMAT_VERSION:
-        raise UnsupportedArtifactFormatError(
-            "Unsupported artifact format version"
-        )
+    if type(version) is not int or version != FORMAT_VERSION:
+        raise UnsupportedArtifactFormatError("Unsupported artifact format version")
+
+    # The cleartext header is attacker-controlled and is consumed before AEAD
+    # authentication. Validate every work-factor and allocation-driving value
+    # against the one envelope profile this format version supports BEFORE a
+    # caller can invoke scrypt. A future profile requires a new format version.
+    kdf = header.get("kdf")
+    if not isinstance(kdf, dict) or kdf.get("name") != "scrypt":
+        raise UnsupportedArtifactFormatError("Unsupported artifact KDF")
+    expected_kdf = {
+        "n": _SCRYPT_N,
+        "r": _SCRYPT_R,
+        "p": _SCRYPT_P,
+        "length": _KEY_LEN,
+    }
+    for name, expected in expected_kdf.items():
+        value = kdf.get(name)
+        if type(value) is not int or value != expected:
+            raise UnsupportedArtifactFormatError("Unsupported artifact KDF parameters")
+    if header.get("aead") != _AEAD_ID:
+        raise UnsupportedArtifactFormatError("Unsupported artifact AEAD")
+    chunk_size = header.get("chunk_size")
+    if type(chunk_size) is not int or chunk_size != _CHUNK_SIZE:
+        raise UnsupportedArtifactFormatError("Unsupported artifact chunk size")
+    try:
+        salt = base64.b64decode(header.get("salt", ""), validate=True)
+        nonce = base64.b64decode(header.get("base_nonce", ""), validate=True)
+    except (binascii.Error, TypeError, ValueError) as exc:
+        raise UnsupportedArtifactFormatError("Malformed artifact header") from exc
+    if len(salt) != _SALT_LEN or len(nonce) != _NONCE_LEN:
+        raise UnsupportedArtifactFormatError("Malformed artifact header")
     return header
 
 
@@ -258,7 +303,7 @@ def encrypt_file(plaintext_path: Path, passphrase: str, dest_path: Path) -> None
     header_bytes = _build_header_bytes(salt, base_nonce)
 
     try:
-        with open(plaintext_path, "rb") as src, open(dest_path, "wb") as dst:
+        with open(plaintext_path, "rb") as src, _open_private_binary(dest_path) as dst:
             dst.write(MAGIC)
             dst.write(struct.pack(">I", len(header_bytes)))
             dst.write(header_bytes)
@@ -331,7 +376,7 @@ def decrypt_file(ciphertext_path: Path, passphrase: str, dest_path: Path) -> Non
             if len(header_bytes) != header_len:
                 raise ArtifactDecryptError()
 
-            with open(dest_path, "wb") as dst:
+            with _open_private_binary(dest_path) as dst:
                 index = 0
                 current = _read_chunk(src)
                 if current is None:

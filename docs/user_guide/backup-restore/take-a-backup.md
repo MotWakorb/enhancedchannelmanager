@@ -57,7 +57,7 @@ Encrypted backups are always manual. A passphrase cannot be persisted in the tas
 
 ## Option B: Scheduled backup (recurring)
 
-After creating and verifying a manual backup, set up a schedule for ongoing protection. A backup you take by hand only reflects that moment; a schedule keeps a current recovery point on disk. Scheduled backups are always redacted configuration backups because ECM never stores an encryption passphrase in the scheduler.
+After creating and verifying a manual backup, set up a schedule for ongoing protection. A backup you take by hand only reflects that moment; a schedule keeps a current recovery point on disk. Scheduled backups are always redacted configuration backups because ECM never stores an encryption passphrase in the scheduler. This is the unattended-recovery key strategy: the scheduled artifact deliberately contains no ECM account hashes, live credentials, TLS private keys, or raw uploaded playlists, so it needs no secret key that could be lost with the host. After a restore, keep the destination's existing credentials or re-enter them.
 
 1. Go to **Settings → Scheduled Tasks**.
 2. Find the **DBAS Backup** task, or create a new schedule for it.
@@ -80,6 +80,10 @@ ecm-backup-YYYY-MM-DD_HHMMSS.zip
 All timestamps are UTC.
 
 A `.sha256` sidecar file is written alongside each `.zip`, containing the artifact's SHA-256 hash. ECM verifies this hash before any restore, so do not rename or move the sidecar separately from its `.zip`.
+
+ECM creates locally persisted ZIP, YAML, and checksum files with owner-only
+permissions (`0600`). Preserve equivalent access controls when copying an
+artifact to another filesystem or backup service.
 
 ### Listing saved backups
 
