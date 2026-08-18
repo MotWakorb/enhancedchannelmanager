@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -210,6 +211,38 @@ def get_mcp_backend_credentials() -> tuple[str, str]:
     except (OSError, json.JSONDecodeError, TypeError):
         return "", ""
     return backend_key, confirmation_key
+
+
+def get_mcp_backend_credentials_status() -> str:
+    """Return non-secret readiness for the private backend projection."""
+    try:
+        metadata = MCP_SERVICE_FILE.stat()
+        if not stat.S_ISREG(metadata.st_mode):
+            return "invalid_file"
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            return "insecure_permissions"
+        if metadata.st_uid != os.geteuid():
+            return "wrong_owner"
+        data = json.loads(MCP_SERVICE_FILE.read_text())
+    except FileNotFoundError:
+        return "file_not_found"
+    except PermissionError:
+        return "unreadable"
+    except (OSError, json.JSONDecodeError):
+        return "invalid_file"
+    if not isinstance(data, dict) or set(data) != {"backend_key", "confirmation_key"}:
+        return "invalid_schema"
+    backend_key = data.get("backend_key")
+    confirmation_key = data.get("confirmation_key")
+    if (
+        not isinstance(backend_key, str)
+        or not isinstance(confirmation_key, str)
+        or len(backend_key) < 32
+        or len(confirmation_key) < 32
+        or backend_key == confirmation_key
+    ):
+        return "invalid_credentials"
+    return "ok"
 
 
 def get_mcp_api_key_status() -> tuple[str, str]:

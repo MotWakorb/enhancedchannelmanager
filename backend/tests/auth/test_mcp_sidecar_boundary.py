@@ -19,12 +19,13 @@ from config import DispatcharrSettings, save_settings
 
 def test_internal_credentials_are_distinct_private_and_not_in_settings(tmp_path: Path):
     settings = tmp_path / "settings.json"
-    settings.write_text(json.dumps({"mcp_api_key": "operator-client-key"}))
+    external_key = "<EXTERNAL_MCP_CLIENT_KEY>"
+    settings.write_text(json.dumps({"mcp_api_key": external_key}))
     projection = tmp_path / "mcp-service.json"
 
     credentials = ensure_mcp_service_credentials(projection)
 
-    assert credentials.backend_key != "operator-client-key"
+    assert credentials.backend_key != external_key
     assert credentials.confirmation_key != credentials.backend_key
     assert projection.stat().st_mode & 0o777 == 0o600
     assert "backend_key" not in settings.read_text()
@@ -37,11 +38,11 @@ def test_internal_credentials_are_distinct_private_and_not_in_settings(tmp_path:
 
 def test_external_key_rotation_projects_settings_atomically(tmp_path: Path):
     target = tmp_path / "settings.json"
-    target.write_text('{"mcp_api_key":"old"}')
-    settings = DispatcharrSettings(mcp_api_key="new")
+    target.write_text('{"mcp_api_key":"<OLD_MCP_CLIENT_KEY>"}')
+    settings = DispatcharrSettings(mcp_api_key="<NEW_MCP_CLIENT_KEY>")
     with patch("config.CONFIG_FILE", target), patch("config.ensure_config_dir"):
         save_settings(settings)
-    assert json.loads(target.read_text())["mcp_api_key"] == "new"
+    assert json.loads(target.read_text())["mcp_api_key"] == "<NEW_MCP_CLIENT_KEY>"
     assert target.stat().st_mode & 0o777 == 0o600
     assert not list(tmp_path.glob(".*.tmp"))
 

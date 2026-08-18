@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from typing import Iterator
 
+import httpx
+
 
 @dataclass(frozen=True)
 class ClaimContext:
@@ -72,13 +74,17 @@ def request_claim_headers(method: str, path: str, body: object = None) -> dict[s
     }
 
 
-class SidecarBackendAuth:
+class SidecarBackendAuth(httpx.Auth):
     """httpx auth hook that signs the final serialized request body."""
 
-    def auth_flow(self, request):
+    async def async_auth_flow(self, request):
+        # Multipart bodies are streams until httpx serializes them.  Reading
+        # here materializes replayable bytes before the claim is bound to the
+        # body; accessing ``request.content`` earlier raises RequestNotRead.
+        body = await request.aread()
         raw_target = request.url.raw_path.decode("ascii")
         for name, value in request_claim_headers(
-            request.method, raw_target, request.content
+            request.method, raw_target, body
         ).items():
             request.headers[name] = value
         yield request
