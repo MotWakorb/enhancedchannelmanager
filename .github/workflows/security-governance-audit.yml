@@ -30,7 +30,10 @@ name: Security Governance Audit
 # from `.github/workflows/test.yml` on every `dev` push.
 #
 # The final step probes the default branch for this file on every run and
-# reports ARMED or PENDING, so that state is checked rather than assumed.
+# reports ARMED or PENDING, so presence on the default branch is checked
+# rather than assumed. That presence is what GitHub requires before it
+# registers the triggers; the probe does not read back the registered
+# triggers themselves, and does not validate the cron expression.
 # Cadence ownership, quarterly disposition, and the evidence trail live in
 # `docs/security/release-security-governance.md`.
 
@@ -78,7 +81,15 @@ jobs:
           # credential and an audit that reports "nothing to report". Fail
           # closed, and name the secret so the message is actionable.
           if [[ -z "${GOVERNANCE_AUDIT_TOKEN:-}" ]]; then
-            echo "::error::GOVERNANCE_AUDIT_TOKEN is absent or empty, so this audit cannot read any repository control and will not pretend otherwise. Provision a repository secret named GOVERNANCE_AUDIT_TOKEN holding a read-only fine-grained personal access token scoped to this repository only, granting Administration (read) and Secret scanning alerts (read). If this run came from .github/workflows/test.yml, also confirm that caller still passes the secret through its explicit secrets: mapping."
+            # Keep credential keywords out of colon-prefix position anywhere
+            # in this body, in prose as well as in code. GitHub Actions YAML
+            # collapses the whole `run:` block onto one logical line for
+            # scanners, and detect-secrets' KeywordDetector then reads a
+            # keyword immediately followed by a colon and a word as a keyed
+            # assignment, failing the repository's secret ratchet on a message
+            # that contains no credential at all. Write "the one-entry secrets
+            # mapping", never the same phrase with a colon after the keyword.
+            echo "::error::GOVERNANCE_AUDIT_TOKEN is absent or empty, so this audit cannot read any repository control and will not pretend otherwise. Provision a repository secret named GOVERNANCE_AUDIT_TOKEN holding a read-only fine-grained personal access token scoped to this repository only, granting Administration (read) and Secret scanning alerts (read). If this run came from .github/workflows/test.yml, also confirm that caller still passes the credential through its explicit one-entry secrets mapping."
             exit 1
           fi
           echo "GOVERNANCE_AUDIT_TOKEN is present."
@@ -90,26 +101,35 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Three outcomes have to stay distinguishable, because they have
-          # three different owners: a missing credential (handled by the step
-          # above), an UNDER-SCOPED credential, which is a provisioning defect
-          # and must never be reported as a control violation, and a genuine
-          # control violation, which is a security finding. GitHub answers an
-          # under-scoped fine-grained PAT with 403; a 404 on these endpoints
-          # means the control itself is off, so the two are reported
-          # separately and the 404 message names both possibilities.
+          # Four outcomes have to stay distinguishable, because they have
+          # four different owners: a missing credential (handled by the step
+          # above), an EXPIRED or revoked credential, an UNDER-SCOPED
+          # credential — both provisioning defects that must never be reported
+          # as control violations — and a genuine control violation, which is
+          # a security finding. GitHub answers an invalid or expired token
+          # with 401, an under-scoped fine-grained PAT with 403, and a 404 on
+          # these endpoints usually means the control itself is off. 404 is
+          # also what GitHub returns when a token cannot see the resource at
+          # all, so every 404 message names both possibilities rather than
+          # flatly asserting the control is disabled.
           #
           # Every call captures its own exit status and re-raises it. Nothing
           # below defaults a failed read to an empty result.
+          credential_error() {
+            echo "::error::GOVERNANCE_AUDIT_TOKEN was rejected (HTTP 401, bad credentials) by $1. The token itself is no longer valid: it has expired, been revoked, or been stored with a typo. Reissue a read-only fine-grained personal access token scoped to this repository only and replace the GOVERNANCE_AUDIT_TOKEN repository secret with it. This is a credential-provisioning defect, not a finding about the control itself."
+          }
+
           scope_error() {
-            echo "::error::GOVERNANCE_AUDIT_TOKEN was refused (HTTP 403) by $1. Grant the token '$2' (read) on this repository, or reissue it if it has expired. This is a credential-provisioning defect, not a finding about the control itself."
+            echo "::error::GOVERNANCE_AUDIT_TOKEN was refused (HTTP 403) by $1. Grant the token '$2' (read) on this repository. This is a credential-provisioning defect, not a finding about the control itself."
           }
 
           read_protection() {
             local branch="$1" endpoint="$2" status=0
             gh api "$endpoint" > "$branch-protection.json" 2> gh-error.txt || status=$?
             if [[ "$status" -ne 0 ]]; then
-              if grep -q 'HTTP 403' gh-error.txt; then
+              if grep -q 'HTTP 401' gh-error.txt; then
+                credential_error "$endpoint"
+              elif grep -q 'HTTP 403' gh-error.txt; then
                 scope_error "$endpoint" "Administration"
               elif grep -q 'HTTP 404' gh-error.txt; then
                 echo "::error::Branch '$branch' reports no protection settings at all (HTTP 404 from $endpoint). Restore branch protection on '$branch'. If protection IS configured, then GOVERNANCE_AUDIT_TOKEN has lost 'Administration' (read) instead."
@@ -126,25 +146,48 @@ jobs:
           read_protection main "repos/$REPO/branches/main/protection"
           read_protection dev "repos/$REPO/branches/dev/protection"
 
-          jq -e '.enforce_admins.enabled == true and .allow_force_pushes.enabled == false' main-protection.json
-          jq -e '.enforce_admins.enabled == true and .allow_force_pushes.enabled == false' dev-protection.json
+          # Each assertion re-raises its own status and names what failed.
+          # A bare `jq -e` would fail the job only through `set -e`, and would
+          # print an unannotated `false` that says nothing about which control
+          # is weak on which branch.
+          check_enforcement() {
+            local branch="$1"
+            if ! jq -e '.enforce_admins.enabled == true and .allow_force_pushes.enabled == false' \
+              "$branch-protection.json" >/dev/null; then
+              echo "::error::Branch protection on '$branch' is weaker than the release contract requires: administrator enforcement must be ON and force pushes must be OFF. Currently enforce_admins.enabled=$(jq -c '.enforce_admins.enabled' "$branch-protection.json") and allow_force_pushes.enabled=$(jq -c '.allow_force_pushes.enabled' "$branch-protection.json")."
+              exit 1
+            fi
+          }
+
+          check_required_contexts() {
+            local branch="$1" required="$2"
+            if ! jq -e --argjson required "$required" \
+              '(.required_status_checks.contexts // []) as $actual | all($required[]; IN($actual[]))' \
+              "$branch-protection.json" >/dev/null; then
+              echo "::error::Branch '$branch' is missing at least one required status check. The release contract requires $required; the branch currently requires $(jq -c '.required_status_checks.contexts // []' "$branch-protection.json")."
+              exit 1
+            fi
+          }
+
+          check_enforcement main
+          check_enforcement dev
 
           required_main='["Backend Tests","Frontend Tests","CodeQL Analysis (python)","CodeQL Analysis (javascript-typescript)","Release Cut Gate"]'
           required_dev='["Backend Tests","Frontend Tests","CodeQL Analysis (python)","CodeQL Analysis (javascript-typescript)","Build Docker Image (AMD64)","DAST Security Scan","Container Security Scan (Trivy)"]'
-          jq -e --argjson required "$required_main" \
-            '(.required_status_checks.contexts // []) as $actual | all($required[]; IN($actual[]))' main-protection.json
-          jq -e --argjson required "$required_dev" \
-            '(.required_status_checks.contexts // []) as $actual | all($required[]; IN($actual[]))' dev-protection.json
+          check_required_contexts main "$required_main"
+          check_required_contexts dev "$required_dev"
 
           # Dependabot alert enablement. Requires Administration (read).
           # 204 means enabled, 404 means disabled.
           status=0
           gh api "repos/$REPO/vulnerability-alerts" >/dev/null 2> gh-error.txt || status=$?
           if [[ "$status" -ne 0 ]]; then
-            if grep -q 'HTTP 403' gh-error.txt; then
+            if grep -q 'HTTP 401' gh-error.txt; then
+              credential_error "repos/$REPO/vulnerability-alerts"
+            elif grep -q 'HTTP 403' gh-error.txt; then
               scope_error "repos/$REPO/vulnerability-alerts" "Administration"
             elif grep -q 'HTTP 404' gh-error.txt; then
-              echo "::error::Dependabot alerts are DISABLED for this repository (HTTP 404 from repos/$REPO/vulnerability-alerts). Re-enable them under Settings, Code security."
+              echo "::error::Dependabot alerts read as DISABLED for this repository (HTTP 404 from repos/$REPO/vulnerability-alerts). Re-enable them under Settings, Code security. If they ARE enabled, then GOVERNANCE_AUDIT_TOKEN has lost 'Administration' (read) instead: GitHub answers this endpoint with 404 both when the control is off and when the credential cannot see it."
             else
               echo "::error::Reading repos/$REPO/vulnerability-alerts failed."
             fi
@@ -159,18 +202,30 @@ jobs:
           gh api "repos/$REPO/automated-security-fixes" \
             > automated-security-fixes.json 2> gh-error.txt || status=$?
           if [[ "$status" -ne 0 ]]; then
-            if grep -q 'HTTP 403' gh-error.txt; then
+            if grep -q 'HTTP 401' gh-error.txt; then
+              credential_error "repos/$REPO/automated-security-fixes"
+            elif grep -q 'HTTP 403' gh-error.txt; then
               scope_error "repos/$REPO/automated-security-fixes" "Administration"
             elif grep -q 'HTTP 404' gh-error.txt; then
-              echo "::error::Dependabot security updates are unavailable for this repository (HTTP 404 from repos/$REPO/automated-security-fixes). Re-enable them under Settings, Code security."
+              echo "::error::Dependabot security updates read as unavailable for this repository (HTTP 404 from repos/$REPO/automated-security-fixes). Re-enable them under Settings, Code security. If they ARE available, then GOVERNANCE_AUDIT_TOKEN has lost 'Administration' (read) instead: GitHub answers this endpoint with 404 both when the service is off and when the credential cannot see it."
             else
               echo "::error::Reading repos/$REPO/automated-security-fixes failed."
             fi
             cat gh-error.txt >&2
             exit 1
           fi
+          # `paused` is a SEPARATE field from `enabled`, and GitHub sets it by
+          # itself on repositories whose Dependabot PRs go unactioned. A paused
+          # service reports `enabled: true` while opening no security-update
+          # PRs at all, so asserting only on `enabled` is a vacuous pass.
+          # Resuming and re-enabling are different operator actions, so they
+          # get different messages.
           if ! jq -e '.enabled == true' automated-security-fixes.json >/dev/null; then
-            echo "::error::Dependabot security updates are switched off. repos/$REPO/automated-security-fixes reports: $(cat automated-security-fixes.json)"
+            echo "::error::Dependabot security updates are switched off. Re-enable them under Settings, Code security. repos/$REPO/automated-security-fixes reports: $(cat automated-security-fixes.json)"
+            exit 1
+          fi
+          if ! jq -e '.paused == false' automated-security-fixes.json >/dev/null; then
+            echo "::error::Dependabot security updates are enabled but PAUSED, so no security-update pull requests are being opened. GitHub pauses them automatically when its update pull requests go unactioned. Resume them under Settings, Code security, and disposition the outstanding Dependabot pull requests. repos/$REPO/automated-security-fixes reports: $(cat automated-security-fixes.json)"
             exit 1
           fi
 
@@ -178,24 +233,39 @@ jobs:
           # the GITHUB_TOKEN cannot read these under any `permissions:` value.
           # 404 here means secret scanning itself is off, which is a control
           # violation rather than a clean board.
+          #
+          # THIS REPOSITORY IS PUBLIC, so Actions logs are world-readable and
+          # the failure path below writes this file to the log. The alert
+          # objects carry a plaintext `.secret` field holding the leaked
+          # credential itself, which Actions would NOT redact because it is not
+          # a registered Actions secret. The projection therefore emits only
+          # the alert number, the detector name and the timestamp. Never widen
+          # it to `.[]` and never add `.secret`; `.secret_type` is the
+          # detector name and is safe.
           status=0
           gh api --paginate "repos/$REPO/secret-scanning/alerts?state=open&per_page=100" \
             --jq '.[] | "#\(.number) \(.secret_type) opened \(.created_at)"' \
             > open-secret-alerts.txt 2> gh-error.txt || status=$?
           if [[ "$status" -ne 0 ]]; then
-            if grep -q 'HTTP 403' gh-error.txt; then
+            if grep -q 'HTTP 401' gh-error.txt; then
+              credential_error "repos/$REPO/secret-scanning/alerts"
+            elif grep -q 'HTTP 403' gh-error.txt; then
               scope_error "repos/$REPO/secret-scanning/alerts" "Secret scanning alerts"
             elif grep -q 'HTTP 404' gh-error.txt; then
-              echo "::error::Secret scanning is DISABLED for this repository (HTTP 404 from repos/$REPO/secret-scanning/alerts). An unreadable alert list is not an empty alert list. Re-enable secret scanning under Settings, Code security."
+              echo "::error::Secret scanning reads as DISABLED for this repository (HTTP 404 from repos/$REPO/secret-scanning/alerts). An unreadable alert list is not an empty alert list. Re-enable secret scanning under Settings, Code security. If it IS enabled, then GOVERNANCE_AUDIT_TOKEN has lost 'Secret scanning alerts' (read) instead: GitHub documents this endpoint as answering 404 both when the feature is off and when the credential cannot see it."
             else
               echo "::error::Reading repos/$REPO/secret-scanning/alerts failed."
             fi
             cat gh-error.txt >&2
             exit 1
           fi
-          open_secrets=$(wc -l < open-secret-alerts.txt)
-          if [[ "$open_secrets" -ne 0 ]]; then
-            echo "::error::$open_secrets secret-scanning alert(s) remain undispositioned"
+          # Emptiness, not a line count: `wc -l` counts newlines, so an alert
+          # list whose last line lacks a trailing newline would undercount and
+          # a single-alert board could report clean. `-s` is invariant under
+          # that. The count in the message uses `grep -c ''`, which does count
+          # a final unterminated line.
+          if [[ -s open-secret-alerts.txt ]]; then
+            echo "::error::$(grep -c '' open-secret-alerts.txt) secret-scanning alert(s) remain undispositioned"
             cat open-secret-alerts.txt >&2
             exit 1
           fi
@@ -239,10 +309,20 @@ jobs:
           status=0
           gh api "repos/$REPO/contents/$AUDIT_WORKFLOW_PATH?ref=$branch" \
             >/dev/null 2> gh-error.txt || status=$?
+          # What is CHECKED is presence of this file on the default branch,
+          # not registration of the triggers themselves. Presence is the
+          # necessary condition GitHub documents, but a file that reached
+          # '$branch' with its `schedule:` block deleted or its cron malformed
+          # would still be present. Reading `repos/$REPO/actions/workflows/...`
+          # instead would need an `actions: read` grant that nothing else here
+          # uses, and it still would not validate the cron, so the state is
+          # named for the check that actually ran rather than for the
+          # conclusion. `docs/security/release-security-governance.md` records
+          # the same distinction.
           if [[ "$status" -eq 0 ]]; then
-            cadence="ARMED (this file is on '$branch', so the quarterly schedule and manual dispatch are registered)"
+            cadence="ARMED (checked: this file is present on '$branch', which is what GitHub requires before it registers the quarterly schedule and the manual dispatch button; the cron expression itself is not validated here)"
           elif grep -q 'HTTP 404' gh-error.txt; then
-            cadence="PENDING (this file is not yet on '$branch', so the quarterly schedule and manual dispatch are inert; they arm at the next release cut with no edit to the workflow). The dev-push workflow_call from .github/workflows/test.yml is the only path running this audit today."
+            cadence="PENDING (checked: this file is not on '$branch' yet, so the quarterly schedule and manual dispatch are inert; they arm at the next release cut with no edit to the workflow). The dev-push workflow_call from .github/workflows/test.yml is the only path running this audit today."
             echo "::warning::Quarterly security-governance cadence is PENDING: $AUDIT_WORKFLOW_PATH is not on the default branch '$branch' yet, so its schedule and workflow_dispatch triggers are inert. See docs/security/release-security-governance.md."
           else
             echo "::error::Could not determine whether the quarterly cadence is armed: probing repos/$REPO/contents/$AUDIT_WORKFLOW_PATH?ref=$branch failed for a reason other than a clean 404."
@@ -250,13 +330,22 @@ jobs:
             exit 1
           fi
 
+          # These four control lines are string literals, not values carried
+          # over from the steps that did the reading. They are true only
+          # because each earlier step exits non-zero on any violation and
+          # GitHub aborts the job, so this step running at all is what they
+          # restate: the job got this far. The authority for any individual
+          # control is that step's own log and its ::error:: annotations, not
+          # this summary.
           {
             echo "## Quarterly security governance audit"
             echo "- UTC time: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "- Commit audited: $GITHUB_SHA"
+            echo "- The four lines below restate that every earlier step"
+            echo "  passed; each step fails the job outright otherwise."
             echo "- Branch protection contract: verified"
             echo "- Authoritative beads branch: available"
-            echo "- Dependency alerts and automated fixes: enabled"
+            echo "- Dependency alerts and automated fixes: enabled and not paused"
             echo "- Open secret-scanning alerts: zero"
             echo "- Elevated reads used GOVERNANCE_AUDIT_TOKEN; the beads-branch"
             echo "  read and this cadence probe used the built-in GITHUB_TOKEN."
