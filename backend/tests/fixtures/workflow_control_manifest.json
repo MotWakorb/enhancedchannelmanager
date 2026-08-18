@@ -22,6 +22,15 @@
       "file": "build.yml",
       "path": [
         "jobs",
+        "security-scan-mcp",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
         "codeql-analysis",
         "if"
       ],
@@ -502,7 +511,7 @@
         "build-mcp-amd64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
     },
     {
       "file": "build.yml",
@@ -610,7 +619,7 @@
         "build-mcp-arm64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
     },
     {
       "file": "build.yml",
@@ -710,6 +719,24 @@
         "if"
       ],
       "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "trivy-scan-mcp-amd64",
+        "if"
+      ],
+      "value": "github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "trivy-scan-mcp-arm64",
+        "if"
+      ],
+      "value": "github.event_name != 'pull_request' && needs.build-mcp-arm64.result == 'success'"
     },
     {
       "file": "build.yml",
@@ -718,7 +745,7 @@
         "merge-mcp-manifests",
         "if"
       ],
-      "value": "always() && github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success'"
+      "value": "always() && github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success'"
     },
     {
       "file": "build.yml",

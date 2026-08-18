@@ -8,6 +8,17 @@ Context Protocol. The [README MCP section](https://github.com/MotWakorb/enhanced
 covers quick-start setup; come here when you need the step-by-step setup, key
 rotation details, or troubleshooting.
 
+## Published image security
+
+The published MCP container uses a reviewed, digest-pinned Alpine base. Each
+architecture-specific image is scanned before the multi-architecture manifest
+is created. Any Critical or High operating-system or Python-library finding
+blocks publication, including findings for which the upstream distributor has
+not yet published a fix. ECM does not use a blanket `ignore-unfixed` setting or
+an MCP vulnerability waiver list. If either architecture fails its scan, keep
+the previously published MCP image in service and wait for a remediated build;
+do not assemble or publish the manifest manually.
+
 ---
 
 ## Choose your connection method

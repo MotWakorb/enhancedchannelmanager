@@ -1,0 +1,3 @@
+# Deliberately vulnerable fixture for the MCP SCA gate's fail-closed self-test.
+# This file is never installed or used to build an image.
+starlette==0.27.0

@@ -607,6 +607,7 @@ def _expected_verdict_manifest():
     main_only = code_true + " && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
     for job in ("security-scan-frontend", "security-scan-backend", "iac-security-scan"):
         expected.add(("build.yml", ("jobs", job, "if"), main_only))
+    expected.add(("build.yml", ("jobs", "security-scan-mcp", "if"), code_true))
     expected.add(("build.yml", ("jobs", "wait-for-tests", "if"), code_true))
     for index, value in enumerate(
         (code_false, code_true, code_true, code_true, code_true,
@@ -674,7 +675,14 @@ EXPECTED_JOB_OUTPUTS = {
     },
     **{
         ("build.yml", job): {"digest": "${{ steps.digest.outputs.digest }}"}
-        for job in ("build-amd64", "build-arm64", "build-mcp-amd64", "build-mcp-arm64")
+        for job in ("build-amd64", "build-arm64")
+    },
+    **{
+        ("build.yml", job): {
+            "digest": "${{ steps.digest.outputs.digest }}",
+            "image": "${{ steps.image.outputs.name }}",
+        }
+        for job in ("build-mcp-amd64", "build-mcp-arm64")
     },
 }
 def _reserved_occurrences(value, path=()):

@@ -1,6 +1,11 @@
-FROM python:3.12-slim
+FROM python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31
 
 WORKDIR /app
+
+# Apply Alpine security updates that may have landed after the pinned base
+# manifest was published. The digest makes the input reviewable; this upgrade
+# step closes fixed OS advisories until the next intentional digest refresh.
+RUN apk upgrade --no-cache
 
 # Install dependencies
 COPY requirements.txt .

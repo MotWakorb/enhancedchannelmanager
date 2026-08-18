@@ -353,6 +353,14 @@ may be in-flight agent work, not orphans.
 
 ## MCP Release Verification
 
+The MCP publication path is fail-closed for both AMD64 and ARM64. The
+architecture-specific digest scans include operating-system and library
+findings at Critical and High severity, whether or not an upstream fix is
+available, and both must succeed before the multi-architecture manifest job
+runs. There is no wildcard, waiver file, or `ignore-unfixed` bypass. A red MCP
+image scan means the manifest must not be created; retain the last published
+digest while the base image or dependency is remediated.
+
 Before cutting any release that touches MCP code, the releaser must walk the manual verification checklist in [`docs/runbooks/mcp-release-verification.md`](runbooks/mcp-release-verification.md). This covers:
 
 1. Static `?api_key=` connection (query-param path) end-to-end
