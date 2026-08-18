@@ -66,6 +66,70 @@ def test_legacy_validator_rejects_high_ratio_member_before_any_read(tmp_path):
     assert exc.value.detail == "Backup archive rejected"
 
 
+@pytest.mark.parametrize("member_name", ["journal.db", "m3u_uploads/playlist.m3u"])
+def test_legacy_validator_accepts_ecm_shaped_high_ratio_member(tmp_path, member_name):
+    """Only legacy SQLite/M3U data may exceed the DBAS 100x ratio cap."""
+    archive = tmp_path / "legacy-high-ratio.zip"
+    content = b"SQLite format 3\x00" + b"abcde12345" * (1024 * 1024 // 10)
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("ecm_backup.json", json.dumps({"version": "1.0"}))
+        zf.writestr(member_name, content)
+
+    with zipfile.ZipFile(archive) as zf:
+        info = zf.getinfo(member_name)
+        assert 292 < info.file_size / info.compress_size < 650
+        manifest = backup_mod._validate_backup_zip(zf)
+
+    assert manifest["version"] == "1.0"
+
+
+def test_legacy_validator_keeps_100x_ratio_for_other_members_before_any_read(tmp_path):
+    """The legacy allowance is not a blanket relaxation for arbitrary members."""
+    archive = tmp_path / "non-legacy-data-bomb.zip"
+    content = b"abcde12345" * (1024 * 1024 // 10)
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("tls/cert.pem", content)
+
+    with zipfile.ZipFile(archive) as zf:
+        with patch.object(zf, "read", side_effect=AssertionError("member decompressed")):
+            with pytest.raises(backup_mod.HTTPException) as exc:
+                backup_mod._validate_backup_zip(zf)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Backup archive rejected"
+
+
+@pytest.mark.parametrize(
+    ("members", "limit_name", "limit"),
+    [
+        ([("one", b"x"), ("two", b"x")], "_ARTIFACT_MAX_ENTRIES", 1),
+        ([("oversized", b"x" * 65)], "_ARTIFACT_MAX_MEMBER_UNCOMPRESSED", 64),
+        (
+            [("first", b"x" * 48), ("second", b"x" * 48)],
+            "_ARTIFACT_MAX_TOTAL_UNCOMPRESSED",
+            64,
+        ),
+    ],
+)
+def test_legacy_validator_enforces_declared_bounds_before_any_read(
+    tmp_path, monkeypatch, members, limit_name, limit
+):
+    """Legacy compatibility does not relax entry or declared-size controls."""
+    archive = tmp_path / "bounded.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for name, content in members:
+            zf.writestr(name, content)
+    monkeypatch.setattr(backup_mod, limit_name, limit)
+
+    with zipfile.ZipFile(archive) as zf:
+        with patch.object(zf, "read", side_effect=AssertionError("member decompressed")):
+            with pytest.raises(backup_mod.HTTPException) as exc:
+                backup_mod._validate_backup_zip(zf)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Backup archive rejected"
+
+
 def test_legacy_validator_reads_only_sqlite_header_from_journal(tmp_path):
     archive = tmp_path / "backup.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
