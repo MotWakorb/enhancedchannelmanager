@@ -14,6 +14,7 @@ Covers ``POST /api/backup/restore-dbas`` and the streaming helper
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 import stat
@@ -37,6 +38,20 @@ class _FakeUpload:
     async def read(self, size: int = -1) -> bytes:
         self.read_calls += 1
         return self._buf.read(size)
+
+
+class _CancellingUpload:
+    """Yields one chunk, then models a client-disconnect cancellation."""
+
+    def __init__(self, first_chunk: bytes):
+        self._first_chunk = first_chunk
+        self.read_calls = 0
+
+    async def read(self, size: int = -1) -> bytes:
+        self.read_calls += 1
+        if self.read_calls == 1:
+            return self._first_chunk
+        raise asyncio.CancelledError()
 
 
 @pytest.mark.asyncio
@@ -82,6 +97,16 @@ class TestStreamUploadToTemp:
         with pytest.raises(HTTPException) as ei:
             await _stream_upload_to_temp(upload, tmp_path)
         assert ei.value.status_code == 400
+        assert list(tmp_path.glob("ecm-restore-*")) == []
+
+    async def test_cancellation_after_a_chunk_removes_partial_temp(self, tmp_path):
+        """A cancelled request must propagate and leave no sensitive ZIP behind."""
+        upload = _CancellingUpload(b"PK\x03\x04 partial artifact")
+
+        with pytest.raises(asyncio.CancelledError):
+            await _stream_upload_to_temp(upload, tmp_path)
+
+        assert upload.read_calls == 2
         assert list(tmp_path.glob("ecm-restore-*")) == []
 
 

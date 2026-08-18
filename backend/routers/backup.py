@@ -103,7 +103,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0116"
+APP_VERSION = "0.18.1-0117"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1391,6 +1391,7 @@ _RESTORE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 # checklist's ratified defaults (A4): 100x per-entry ratio, 1 GiB cumulative
 # uncompressed, 10,000 entries.
 _ARTIFACT_MAX_ENTRIES = 10_000
+_ARTIFACT_MAX_MEMBER_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB per member
 _ARTIFACT_MAX_TOTAL_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB cumulative
 _ARTIFACT_MAX_ENTRY_RATIO = 100  # max decompressed:compressed per entry
 # A small stored entry (e.g. a 12-byte manifest) has a degenerate ratio; only
@@ -1398,6 +1399,15 @@ _ARTIFACT_MAX_ENTRY_RATIO = 100  # max decompressed:compressed per entry
 # stored file is not falsely flagged. The cumulative + per-entry-size caps still
 # bound everything below the floor.
 _ARTIFACT_RATIO_MIN_COMPRESSED = 1024  # 1 KiB
+
+# Legacy ZIPs produced by ECM can hold its SQLite database and uploaded M3U
+# files with a 292x--650x DEFLATE ratio. Keep the DBAS 100x policy unchanged,
+# but accept only those known legacy data members up to 1000x: the demonstrated
+# journal.db bomb is ~1028x (261,180 compressed -> 268,435,456 declared bytes),
+# so it remains rejected before a member is read.
+_LEGACY_COMPRESSIBLE_MEMBER_NAMES = ("journal.db",)
+_LEGACY_COMPRESSIBLE_MEMBER_PREFIXES = ("m3u_uploads/",)
+_LEGACY_MAX_ENTRY_RATIO = 1000
 
 # Headroom multiplier for the pre-build free-disk check. The redacted source
 # (logos + journal.db) is read once into a compressed ZIP; we conservatively
@@ -2704,7 +2714,9 @@ def validate_restore_schema_version(manifest) -> None:
     )
 
 
-def guard_artifact_against_zip_bomb(zf: zipfile.ZipFile) -> None:
+def guard_artifact_against_zip_bomb(
+    zf: zipfile.ZipFile, *, legacy_compatibility: bool = False
+) -> None:
     """Refuse a decompression-bomb archive BEFORE any member is ``zf.read()``.
 
     Implements the threat-model D2 control
@@ -2715,13 +2727,15 @@ def guard_artifact_against_zip_bomb(zf: zipfile.ZipFile) -> None:
     the archive if any of the D2 caps is exceeded:
 
     * entry count   > :data:`_ARTIFACT_MAX_ENTRIES`
+    * per-entry declared uncompressed size >
+      :data:`_ARTIFACT_MAX_MEMBER_UNCOMPRESSED`,
     * per-entry decompressed:compressed ratio > :data:`_ARTIFACT_MAX_ENTRY_RATIO`
       (only for entries whose compressed size exceeds
       :data:`_ARTIFACT_RATIO_MIN_COMPRESSED`, so a tiny stored file is not
       falsely flagged), and
     * cumulative declared uncompressed size > :data:`_ARTIFACT_MAX_TOTAL_UNCOMPRESSED`.
 
-    This is the SINGLE shared guard called at the start of validation
+    This is the shared DBAS guard called at the start of validation
     (:func:`validate_artifact_manifest`) AND at the start of decode
     (:func:`dbas.restore_artifact.decode_artifact_to_plan`) so both read sites are
     protected from one place. The refusal message is GENERIC — it leaks no sizes,
@@ -2746,6 +2760,12 @@ def guard_artifact_against_zip_bomb(zf: zipfile.ZipFile) -> None:
     for info in infos:
         uncompressed = info.file_size
         compressed = info.compress_size
+        if uncompressed > _ARTIFACT_MAX_MEMBER_UNCOMPRESSED:
+            logger.warning(
+                "[BACKUP] Refusing restore: member %s declared size exceeds %d bytes",
+                info.filename, _ARTIFACT_MAX_MEMBER_UNCOMPRESSED,
+            )
+            raise HTTPException(status_code=400, detail="Backup archive rejected")
         total_uncompressed += uncompressed
         if total_uncompressed > _ARTIFACT_MAX_TOTAL_UNCOMPRESSED:
             logger.warning(
@@ -2756,11 +2776,17 @@ def guard_artifact_against_zip_bomb(zf: zipfile.ZipFile) -> None:
             raise HTTPException(status_code=400, detail="Backup archive rejected")
         if compressed > _ARTIFACT_RATIO_MIN_COMPRESSED:
             ratio = uncompressed / compressed
-            if ratio > _ARTIFACT_MAX_ENTRY_RATIO:
+            ratio_limit = _ARTIFACT_MAX_ENTRY_RATIO
+            if legacy_compatibility and (
+                info.filename in _LEGACY_COMPRESSIBLE_MEMBER_NAMES
+                or info.filename.startswith(_LEGACY_COMPRESSIBLE_MEMBER_PREFIXES)
+            ):
+                ratio_limit = _LEGACY_MAX_ENTRY_RATIO
+            if ratio > ratio_limit:
                 logger.warning(
                     "[BACKUP] Refusing restore: member %s compression ratio %.1f "
                     "exceeds %dx (%d -> %d bytes)",
-                    info.filename, ratio, _ARTIFACT_MAX_ENTRY_RATIO,
+                    info.filename, ratio, ratio_limit,
                     compressed, uncompressed,
                 )
                 raise HTTPException(status_code=400, detail="Backup archive rejected")
@@ -2858,6 +2884,11 @@ def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
 
 def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     """Validate a backup zip file and return its manifest."""
+    # Bound metadata before reading the legacy manifest. Only ECM's historical
+    # SQLite/M3U members receive the documented 1000x compatibility ceiling;
+    # DBAS artifacts still call this guard with its default 100x policy.
+    guard_artifact_against_zip_bomb(zf, legacy_compatibility=True)
+
     # Must contain manifest
     if "ecm_backup.json" not in zf.namelist():
         raise HTTPException(status_code=400, detail="Not a valid ECM backup: missing ecm_backup.json manifest")
@@ -2880,7 +2911,8 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
 
     # Validate journal.db if present (check SQLite magic bytes)
     if "journal.db" in zf.namelist():
-        db_header = zf.read("journal.db")[:16]
+        with zf.open("journal.db") as db_member:
+            db_header = db_member.read(16)
         if not db_header.startswith(b"SQLite format 3"):
             raise HTTPException(status_code=400, detail="Backup contains invalid journal.db (not a SQLite database)")
 
@@ -3482,22 +3514,25 @@ async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminI
     """
     logger.info("[BACKUP] Restore requested, filename=%s", file.filename)
 
-    # Read uploaded file
+    # Stream to a bounded 0600 temp file. UploadFile itself may spool to disk,
+    # but reading it wholesale here created a second unbounded in-memory copy.
+    tmp_path = await _stream_upload_to_temp(file, _DBAS_RESTORE_TMP_DIR)
     try:
-        content = await file.read()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Failed to read uploaded file: %s" % str(e))
+        try:
+            zf = zipfile.ZipFile(tmp_path, "r")
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
 
-    # Open and validate zip
-    try:
-        buf = io.BytesIO(content)
-        zf = zipfile.ZipFile(buf, "r")
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
-
-    with zf:
-        manifest = _validate_backup_zip(zf)
-        restored = _restore_from_zip(zf, manifest)
+        with zf:
+            manifest = _validate_backup_zip(zf)
+            restored = _restore_from_zip(zf, manifest)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to remove legacy restore temp file: %s", exc)
 
     logger.info("[BACKUP] Restore complete, %d files restored", len(restored))
     return {
@@ -3646,22 +3681,24 @@ async def restore_backup_initial(
 
     logger.info("[BACKUP] Initial restore requested, filename=%s", file.filename)
 
-    # Read uploaded file
+    # Use the same bounded streaming path as authenticated and DBAS restores.
+    tmp_path = await _stream_upload_to_temp(file, _DBAS_RESTORE_TMP_DIR)
     try:
-        content = await file.read()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Failed to read uploaded file: %s" % str(e))
+        try:
+            zf = zipfile.ZipFile(tmp_path, "r")
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
 
-    # Open and validate zip
-    try:
-        buf = io.BytesIO(content)
-        zf = zipfile.ZipFile(buf, "r")
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
-
-    with zf:
-        manifest = _validate_backup_zip(zf)
-        restored = _restore_from_zip(zf, manifest)
+        with zf:
+            manifest = _validate_backup_zip(zf)
+            restored = _restore_from_zip(zf, manifest)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to remove initial restore temp file: %s", exc)
 
     logger.info("[BACKUP] Initial restore complete, %d files restored", len(restored))
     return {
@@ -3841,7 +3878,7 @@ async def _stream_upload_to_temp(file: UploadFile, dest_dir: Path) -> Path:
                         status_code=413, detail="Uploaded artifact is too large"
                     )
                 out.write(chunk)
-    except Exception:
+    except BaseException:
         try:
             if tmp_path.exists():
                 tmp_path.unlink()
