@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0116",
+    version="0.18.1-0117",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -524,9 +524,11 @@ AUTH_EXEMPT_PATHS = {
     #     state — does a user row exist? — independently of setup_complete, so
     #     the restore gate remains safe if configuration persistence is ever
     #     interrupted or damaged.
-    # Removing the exemption therefore adds no new refusal; it turns an
-    # anonymous multipart upload away before FastAPI spools an
-    # attacker-controlled ZIP to disk.
+    # Removing the exemption therefore adds no new refusal; it prevents the
+    # handler from accepting and applying the upload on an owned instance.
+    # Multipart parsing can still spool file data before handler dependencies
+    # run, so bounded upload/decompression enforcement also lives in the
+    # restore handler (bead enhancedchannelmanager-9kwzp.3).
     # OpenAPI docs
     "/api/docs",
     "/api/redoc",

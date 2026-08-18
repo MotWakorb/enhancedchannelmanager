@@ -103,7 +103,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # frontend/package.json and backend/main.py. Do NOT rename it, change its
 # shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0116"
+APP_VERSION = "0.18.1-0117"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -2858,6 +2858,10 @@ def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
 
 def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     """Validate a backup zip file and return its manifest."""
+    # Apply the same declared-size, entry-count, and compression-ratio limits
+    # as the DBAS importer before reading even the small legacy manifest.
+    guard_artifact_against_zip_bomb(zf)
+
     # Must contain manifest
     if "ecm_backup.json" not in zf.namelist():
         raise HTTPException(status_code=400, detail="Not a valid ECM backup: missing ecm_backup.json manifest")
@@ -2880,7 +2884,8 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
 
     # Validate journal.db if present (check SQLite magic bytes)
     if "journal.db" in zf.namelist():
-        db_header = zf.read("journal.db")[:16]
+        with zf.open("journal.db") as db_member:
+            db_header = db_member.read(16)
         if not db_header.startswith(b"SQLite format 3"):
             raise HTTPException(status_code=400, detail="Backup contains invalid journal.db (not a SQLite database)")
 
@@ -3482,22 +3487,25 @@ async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminI
     """
     logger.info("[BACKUP] Restore requested, filename=%s", file.filename)
 
-    # Read uploaded file
+    # Stream to a bounded 0600 temp file. UploadFile itself may spool to disk,
+    # but reading it wholesale here created a second unbounded in-memory copy.
+    tmp_path = await _stream_upload_to_temp(file, _DBAS_RESTORE_TMP_DIR)
     try:
-        content = await file.read()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Failed to read uploaded file: %s" % str(e))
+        try:
+            zf = zipfile.ZipFile(tmp_path, "r")
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
 
-    # Open and validate zip
-    try:
-        buf = io.BytesIO(content)
-        zf = zipfile.ZipFile(buf, "r")
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
-
-    with zf:
-        manifest = _validate_backup_zip(zf)
-        restored = _restore_from_zip(zf, manifest)
+        with zf:
+            manifest = _validate_backup_zip(zf)
+            restored = _restore_from_zip(zf, manifest)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to remove legacy restore temp file: %s", exc)
 
     logger.info("[BACKUP] Restore complete, %d files restored", len(restored))
     return {
@@ -3646,22 +3654,24 @@ async def restore_backup_initial(
 
     logger.info("[BACKUP] Initial restore requested, filename=%s", file.filename)
 
-    # Read uploaded file
+    # Use the same bounded streaming path as authenticated and DBAS restores.
+    tmp_path = await _stream_upload_to_temp(file, _DBAS_RESTORE_TMP_DIR)
     try:
-        content = await file.read()
-    except Exception as e:
-        raise HTTPException(status_code=400, detail="Failed to read uploaded file: %s" % str(e))
+        try:
+            zf = zipfile.ZipFile(tmp_path, "r")
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
 
-    # Open and validate zip
-    try:
-        buf = io.BytesIO(content)
-        zf = zipfile.ZipFile(buf, "r")
-    except zipfile.BadZipFile:
-        raise HTTPException(status_code=400, detail="Uploaded file is not a valid zip archive")
-
-    with zf:
-        manifest = _validate_backup_zip(zf)
-        restored = _restore_from_zip(zf, manifest)
+        with zf:
+            manifest = _validate_backup_zip(zf)
+            restored = _restore_from_zip(zf, manifest)
+    finally:
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to remove initial restore temp file: %s", exc)
 
     logger.info("[BACKUP] Initial restore complete, %d files restored", len(restored))
     return {
