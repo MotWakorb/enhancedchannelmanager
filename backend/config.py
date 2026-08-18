@@ -1,10 +1,13 @@
+from contextlib import contextmanager
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, field_validator
+import fcntl
 import json
 import os
 import logging
 import secrets
+import threading
 
 # Single source of truth for the dedup confidence floor per ADR-008 §D2.
 # Imported from the ``confidence_constants`` leaf module (NOT from
@@ -60,6 +63,48 @@ MCP_KEY_FILE = MCP_SECRETS_DIR / MCP_KEY_FILENAME
 # distinct backend principal key plus a distinct destructive-confirmation
 # signing key. Never derived from, and never merged with, the public key above.
 MCP_SERVICE_FILE = MCP_SECRETS_DIR / MCP_SERVICE_FILENAME
+
+# Writer serialization for settings.json (bead enhancedchannelmanager-04c0u.10),
+# mirroring the auth_settings.json pattern in ``auth/settings.py``.
+#
+# The in-process lock is the one that closes a demonstrated defect: sync routes
+# run in Starlette's threadpool, so two saves can interleave between the atomic
+# replace and the ``_cached_settings`` assignment. The thread that replaced the
+# file FIRST could assign the cache LAST, leaving ECM reporting an MCP API key
+# that is not the one the sidecar reads off disk. Holding the lock across both
+# makes the last writer to the file the last writer to the cache.
+#
+# The flock extends that serialization across processes, which the atomic
+# replace alone cannot do: replace stops readers seeing a torn document, not
+# two writers from racing. Re-entrant to match ``auth/settings.py`` and to stay
+# safe if a future caller saves while already holding it.
+_settings_write_lock = threading.RLock()
+_SETTINGS_LOCK_NAME = ".settings.lock"
+
+
+@contextmanager
+def _durable_settings_write_lock():
+    """Serialize settings.json writes across every process on the host."""
+    lock_fd = None
+    try:
+        CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = os.open(
+            CONFIG_FILE.parent / _SETTINGS_LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o600
+        )
+        os.fchmod(lock_fd, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                logger.error("[CONFIG] Failed to release settings lock")
+            finally:
+                try:
+                    os.close(lock_fd)
+                except OSError:
+                    logger.error("[CONFIG] Failed to close settings lock")
 
 
 ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -926,71 +971,91 @@ def save_settings(settings: DispatcharrSettings) -> None:
     workaround in the GH #273 issue body, ad-hoc operator scripts) functional
     until the legacy field is removed in a future release. The reverse mirror
     (legacy → canonical) is the loader's job, not the saver's.
+
+    bead enhancedchannelmanager-04c0u.10: the write is serialized in-process and
+    across processes, and the parent directory is fsynced after the replace so
+    the rename itself survives a crash. See ``_durable_settings_write_lock``.
     """
     global _cached_settings
 
     ensure_config_dir()
 
     try:
-        # Mirror canonical → legacy on write so external readers stay
-        # current. The legacy field is the documented surface that operators
-        # and ad-hoc scripts touch directly; keeping it in lockstep with the
-        # canonical field avoids the trap where a UI rotation makes the file
-        # look stale to those readers. Only mirror when the canonical field
-        # is populated — an explicit clear (both empty) stays cleared.
-        # Back-compat: legacy 'api_key' mirror. Remove in v0.19.0 (bd-ewm4h).
-        if settings.dispatcharr_api_key:
-            settings.api_key = settings.dispatcharr_api_key
-        settings_json = json.dumps(settings.model_dump(), indent=2)
-        # Credential rotation must never expose a partially-written JSON file
-        # to the live MCP sidecar. Write, sync, then atomically project it.
-        temporary = CONFIG_FILE.with_name(
-            f".{CONFIG_FILE.name}.{secrets.token_hex(8)}.tmp"
-        )
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        try:
-            with os.fdopen(descriptor, "w") as output:
-                output.write(settings_json)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, CONFIG_FILE)
-        finally:
+        with _settings_write_lock, _durable_settings_write_lock():
+            # Mirror canonical → legacy on write so external readers stay
+            # current. The legacy field is the documented surface that operators
+            # and ad-hoc scripts touch directly; keeping it in lockstep with the
+            # canonical field avoids the trap where a UI rotation makes the file
+            # look stale to those readers. Only mirror when the canonical field
+            # is populated — an explicit clear (both empty) stays cleared.
+            # Back-compat: legacy 'api_key' mirror. Remove in v0.19.0 (bd-ewm4h).
+            if settings.dispatcharr_api_key:
+                settings.api_key = settings.dispatcharr_api_key
+            settings_json = json.dumps(settings.model_dump(), indent=2)
+            # Credential rotation must never expose a partially-written JSON file
+            # to the live MCP sidecar. Write, sync, then atomically project it.
+            temporary = CONFIG_FILE.with_name(
+                f".{CONFIG_FILE.name}.{secrets.token_hex(8)}.tmp"
+            )
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
-        # Adopt the cache the instant the settings file is durable, BEFORE
-        # projecting. The projection can fail for reasons unrelated to the
-        # settings write — a full disk, a read-only or relabelled mount — and
-        # the old ordering left the new key durably on disk while this process
-        # kept serving the previous one from cache and returned 500 to the
-        # caller. For a credential rotation that is the worst possible split:
-        # the operator is handed a key ECM itself no longer believes in.
-        # Rotation stays fail-closed because the projection error below is
-        # still raised, not suppressed (see _project_mcp_api_key), and it is
-        # now raised over a cache that agrees with disk.
-        #
-        # MERGE NOTE for the save_settings lock landing in
-        # enhancedchannelmanager-04c0u.10: put BOTH of these statements inside
-        # that lock, in THIS order. Serializing them fixes the interleaving
-        # that lets one save project a key while another owns the cache. It
-        # does not fix the failure ordering, which is a separate defect: if
-        # the projection runs first and raises, this process keeps serving the
-        # superseded key out of a cache that no longer matches the settings
-        # file it just wrote. Swapping these two lines back reintroduces that
-        # and fails
-        # tests/test_04c0u8_mcp_key_projection.py::
-        # test_a_failed_projection_never_leaves_the_cache_behind_the_saved_file.
-        _cached_settings = settings
-        _project_mcp_api_key(settings.mcp_api_key)
-        logger.info("[CONFIG] Settings saved successfully to %s", CONFIG_FILE)
+                with os.fdopen(descriptor, "w") as output:
+                    output.write(settings_json)
+                    output.flush()
+                    os.fsync(output.fileno())
+                # O_CREAT's mode is narrowed by the caller's umask, which would
+                # make the stored mode depend on the operator's environment.
+                # Set it explicitly so the credentials file is always 0600.
+                os.chmod(temporary, 0o600)
+                os.replace(temporary, CONFIG_FILE)
+                # os.replace is atomic but not durable: without this the rename
+                # can be lost on a crash even though the file contents were
+                # fsynced, resurrecting the previous credentials.
+                directory_fd = os.open(CONFIG_FILE.parent, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
+            finally:
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
+            # Inside the lock: the thread that wrote the file last must also be
+            # the thread that leaves its settings in the cache.
+            #
+            # Adopt the cache the instant the settings file is durable, BEFORE
+            # projecting. The projection can fail for reasons unrelated to the
+            # settings write — a full disk, a read-only or relabelled mount — and
+            # the old ordering left the new key durably on disk while this process
+            # kept serving the previous one from cache and returned 500 to the
+            # caller. For a credential rotation that is the worst possible split:
+            # the operator is handed a key ECM itself no longer believes in.
+            # Rotation stays fail-closed because the projection error below is
+            # still raised, not suppressed (see _project_mcp_api_key), and it is
+            # now raised over a cache that agrees with disk.
+            #
+            # MERGE NOTE for the save_settings lock landing in
+            # enhancedchannelmanager-04c0u.10: put BOTH of these statements inside
+            # that lock, in THIS order. Serializing them fixes the interleaving
+            # that lets one save project a key while another owns the cache. It
+            # does not fix the failure ordering, which is a separate defect: if
+            # the projection runs first and raises, this process keeps serving the
+            # superseded key out of a cache that no longer matches the settings
+            # file it just wrote. Swapping these two lines back reintroduces that
+            # and fails
+            # tests/test_04c0u8_mcp_key_projection.py::
+            # test_a_failed_projection_never_leaves_the_cache_behind_the_saved_file.
+            _cached_settings = settings
+            _project_mcp_api_key(settings.mcp_api_key)
+            logger.info("[CONFIG] Settings saved successfully to %s", CONFIG_FILE)
 
-        # Verify the save worked
-        if CONFIG_FILE.exists():
-            saved_data = CONFIG_FILE.read_text()
-            logger.info("[CONFIG] Verified settings file exists, size: %s bytes", len(saved_data))
-        else:
-            logger.error("[CONFIG] Settings file does not exist after save!")
+            # Verify the save worked
+            if CONFIG_FILE.exists():
+                saved_data = CONFIG_FILE.read_text()
+                logger.info("[CONFIG] Verified settings file exists, size: %s bytes", len(saved_data))
+            else:
+                logger.error("[CONFIG] Settings file does not exist after save!")
     except Exception as e:
         logger.exception("[CONFIG] Failed to save settings to %s: %s", CONFIG_FILE, e)
         raise
