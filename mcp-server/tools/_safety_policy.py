@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 from enum import Enum
 from types import MethodType
@@ -81,7 +82,7 @@ update_normalization_group update_normalization_rule update_sync_target update_t
 
 _READ_ONLY_TOOLS = frozenset(name for name in _ALL_TOOLS if name.startswith((
     "analyze_", "audit_", "compute_", "export_", "find_", "get_", "list_",
-    "preview_", "search_", "test_",
+    "preview_", "search_",
 ))) | {"bulk_search_streams"}
 
 # These remove/overwrite state, perform a bulk mutation, or launch a fan-out
@@ -97,7 +98,8 @@ _DESTRUCTIVE_TOOLS = frozenset(name for name in _ALL_TOOLS if name.startswith((
     "bulk_toggle_channel_pipeline_rules", "bulk_update_m3u_group_settings",
     "import_channels_csv", "match_channels_epg", "match_streams_to_channels",
     "merge_channels", "probe_bulk_streams", "refresh_all_epg", "refresh_all_m3u",
-    "update_event_sync_team_aliases",
+    "update_event_sync_team_aliases", "accept_channel_merge", "dismiss_probe_failures",
+    "probe_streams", "run_channel_pipeline", "run_auto_creation",
 })
 
 SAFETY_INVENTORY: dict[str, ToolSafety] = {
@@ -115,6 +117,19 @@ _SIGNING_KEY = secrets.token_bytes(32)
 _LEGACY_CONTENT_GUARDED_TOOLS = frozenset({
     "bulk_delete_channels", "clear_auto_created", "bulk_merge_duplicate_channels",
 })
+
+# This is a behavior table, rather than a naming heuristic.  These tools are
+# destructive only for the listed argument state; their preview modes remain
+# directly callable and are also used to resolve the mutation's actual plan.
+_CONDITIONAL_MUTATION: dict[str, tuple[str, Any]] = {
+    "run_channel_pipeline": ("dry_run", False),
+    "run_auto_creation": ("dry_run", False),
+    "match_streams_to_channels": ("apply", True),
+    "apply_normalization_to_channels": ("dry_run", False),
+}
+
+_NONCE_LEDGER: dict[str, tuple[str, bytes, bytes, int]] = {}
+_NONCE_LOCK = threading.Lock()
 
 
 def _canonical_arguments(arguments: dict[str, Any]) -> bytes:
@@ -149,9 +164,27 @@ def _validate_confirmation(tool_name: str, arguments: dict[str, Any], supplied: 
     return None if hmac.compare_digest(supplied, expected) else "mismatch"
 
 
-def _preview(tool_name: str, arguments: dict[str, Any]) -> str:
-    token = confirmation_token(tool_name, arguments)
-    targets = _canonical_arguments(arguments).decode()
+def _issue_preview(tool_name: str, arguments: dict[str, Any], resolved: Any) -> str:
+    nonce = secrets.token_urlsafe(18)
+    timestamp = int(time.time())
+    args_bytes = _canonical_arguments(arguments)
+    resolved_bytes = json.dumps(
+        resolved, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode()
+    payload = b"\0".join(
+        (str(timestamp).encode(), nonce.encode(), tool_name.encode(), args_bytes, resolved_bytes)
+    )
+    signature = base64.urlsafe_b64encode(
+        hmac.new(_SIGNING_KEY, payload, hashlib.sha256).digest()
+    ).decode().rstrip("=")
+    token = f"v2.{timestamp}.{nonce}.{signature}"
+    with _NONCE_LOCK:
+        expired_before = timestamp - CONFIRMATION_TTL_SECONDS
+        for old_token, record in list(_NONCE_LEDGER.items()):
+            if record[3] < expired_before:
+                del _NONCE_LEDGER[old_token]
+        _NONCE_LEDGER[token] = (tool_name, args_bytes, resolved_bytes, timestamp)
+    targets = resolved_bytes.decode()
     return (
         f"PREVIEW ONLY — {tool_name} will run against this resolved target/input set: {targets}\n"
         "No state was changed. Review the set, then repeat the exact call with:\n"
@@ -162,8 +195,128 @@ def _preview(tool_name: str, arguments: dict[str, Any]) -> str:
 
 def _oversized_batch(arguments: dict[str, Any]) -> tuple[str, int] | None:
     for key, value in arguments.items():
-        if isinstance(value, list) and len(value) > DESTRUCTIVE_BATCH_HARD_CAP:
+        if isinstance(value, list) and len(value) >= DESTRUCTIVE_BATCH_HARD_CAP:
             return key, len(value)
+    return None
+
+
+def _resolved_count(resolved: Any) -> int:
+    if isinstance(resolved, dict):
+        candidate_counts = [len(v) for v in resolved.values() if isinstance(v, list)]
+        return max(candidate_counts, default=0)
+    return len(resolved) if isinstance(resolved, list) else 0
+
+
+async def _paged_ids(client, endpoint, *, query: dict[str, Any] | None = None) -> list[int]:
+    ids: list[int] = []
+    page = 1
+    while True:
+        page_query = {**(query or {}), "page": page, "page_size": 500}
+        result = await client.call_endpoint(endpoint, query=page_query)
+        rows = (
+            result.get("results", result.get("channels", []))
+            if isinstance(result, dict) else (result or [])
+        )
+        ids.extend(
+            row["id"] for row in rows
+            if isinstance(row, dict) and row.get("id") is not None
+        )
+        if not isinstance(result, dict) or not result.get("next"):
+            return sorted(set(ids))
+        page += 1
+
+
+async def _resolve_targets(name: str, arguments: dict[str, Any], original_run) -> Any:
+    """Resolve state-derived selections without invoking a mutating handler."""
+    clean = {k: v for k, v in arguments.items() if k != "confirmation_token"}
+
+    if name == "cleanup_struck_out_streams":
+        from _endpoint_contracts import ENDPOINTS
+        from tools import streams
+
+        result = await streams.get_ecm_client().call_endpoint(ENDPOINTS["stream_stats_struck_out"])
+        rows = result.get("streams", []) if isinstance(result, dict) else (result or [])
+        return {
+            "stream_ids": sorted({
+                r.get("stream_id", r.get("id")) for r in rows
+                if r.get("stream_id", r.get("id")) is not None
+            }),
+            "channel_ids": sorted({
+                c.get("id") for r in rows for c in r.get("channels", [])
+                if c.get("id") is not None
+            }),
+            "delete_empty_channels": bool(clean.get("delete_empty_channels")),
+        }
+    if name in {"refresh_all_epg", "match_channels_epg"}:
+        from _endpoint_contracts import ENDPOINTS
+        from tools import epg
+
+        client = epg.get_ecm_client()
+        resolved: dict[str, Any] = {}
+        source_ids = (
+            clean.get("source_ids") if name == "refresh_all_epg"
+            else clean.get("epg_source_ids")
+        )
+        all_sources_selected = source_ids is None or (name == "match_channels_epg" and not source_ids)
+        if all_sources_selected:
+            sources = await client.call_endpoint(ENDPOINTS["epg_list_sources"])
+            sources = (
+                sources.get("sources", sources.get("results", []))
+                if isinstance(sources, dict) else (sources or [])
+            )
+            source_ids = [row.get("id") for row in sources if row.get("id") is not None]
+        resolved["epg_source_ids"] = sorted(set(source_ids))
+        if name == "match_channels_epg":
+            channel_ids = clean.get("channel_ids")
+            resolved["channel_ids"] = (
+                sorted(set(channel_ids)) if channel_ids
+                else await _paged_ids(client, ENDPOINTS["channels_list"])
+            )
+        return resolved
+    if name == "refresh_all_m3u":
+        from _endpoint_contracts import ENDPOINTS
+        from tools import m3u
+
+        rows = await m3u.get_ecm_client().call_endpoint(ENDPOINTS["m3u_list_providers"])
+        return {"account_ids": sorted({
+            r.get("id") for r in (rows or []) if r.get("id") is not None
+        })}
+    if name == "probe_streams":
+        from _endpoint_contracts import ENDPOINTS
+        from tools import streams
+
+        return {"stream_ids": await _paged_ids(streams.get_ecm_client(), ENDPOINTS["streams_list"])}
+    if name in _CONDITIONAL_MUTATION:
+        preview_args = dict(clean)
+        field, _ = _CONDITIONAL_MUTATION[name]
+        preview_args[field] = False
+        preview = await original_run(preview_args, context=None, convert_result=False)
+        return {"backend_preview": str(preview)}
+    return json.loads(_canonical_arguments(clean))
+
+
+def _consume(token: str, tool_name: str, arguments: dict[str, Any], resolved: Any) -> str | None:
+    try:
+        _, raw_timestamp, _, _ = token.split(".", 3)
+        timestamp = int(raw_timestamp)
+    except (AttributeError, TypeError, ValueError):
+        return "invalid"
+    age = int(time.time()) - timestamp
+    if age < 0 or age > CONFIRMATION_TTL_SECONDS:
+        with _NONCE_LOCK:
+            _NONCE_LEDGER.pop(token, None)
+        return "expired"
+    args_bytes = _canonical_arguments(arguments)
+    resolved_bytes = json.dumps(
+        resolved, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode()
+    with _NONCE_LOCK:
+        record = _NONCE_LEDGER.get(token)
+        if record is None:
+            return "used"
+        if record[:3] != (tool_name, args_bytes, resolved_bytes):
+            return "drift"
+        del _NONCE_LEDGER[token]
     return None
 
 
@@ -206,6 +359,15 @@ def install_safety_policy(mcp) -> None:
                 return self.fn_metadata.convert_result(value) if convert_result else value
 
             supplied = arguments.get("confirmation_token")
+            conditional = _CONDITIONAL_MUTATION.get(_name)
+            if conditional:
+                field, mutating_value = conditional
+                if arguments.get(field, self.parameters["properties"].get(field, {}).get("default")) != mutating_value:
+                    clean_arguments = {
+                        key: value for key, value in arguments.items()
+                        if key != "confirmation_token"
+                    }
+                    return await _run(clean_arguments, context=context, convert_result=convert_result)
             oversized = _oversized_batch(arguments)
             if oversized:
                 field, count = oversized
@@ -213,11 +375,33 @@ def install_safety_policy(mcp) -> None:
                     f"Refusing destructive batch: {field} contains {count} items; "
                     f"the hard cap is {DESTRUCTIVE_BATCH_HARD_CAP}. Split the operation."
                 )
+            if supplied and supplied.startswith("v1."):
+                failure = _validate_confirmation(_name, arguments, supplied)
+                if failure == "expired":
+                    return present("Confirmation token expired; request a new mutation-free preview.")
+                return present(
+                    "Confirmation does not match the current resolved target/input set; "
+                    "request a new preview."
+                )
+            resolved = await _resolve_targets(_name, arguments, _run)
+            resolved_count = _resolved_count(resolved)
+            if resolved_count >= DESTRUCTIVE_BATCH_HARD_CAP:
+                return present(
+                    f"Refusing destructive batch: resolved target set contains {resolved_count} items; "
+                    f"the hard cap is {DESTRUCTIVE_BATCH_HARD_CAP}. Narrow the operation."
+                )
             if not supplied:
-                return present(_preview(_name, arguments))
-            failure = _validate_confirmation(_name, arguments, supplied)
+                return present(_issue_preview(_name, arguments, resolved))
+            failure = _consume(supplied, _name, arguments, resolved)
             if failure == "expired":
                 return present("Confirmation token expired; request a new mutation-free preview.")
+            if failure == "used":
+                return present(
+                    "Confirmation token was already used or is unknown; "
+                    "request a new mutation-free preview."
+                )
+            if failure == "drift":
+                return present("Backend target drift detected; request a new mutation-free preview.")
             if failure:
                 return present(
                     "Confirmation does not match the current resolved target/input set; "

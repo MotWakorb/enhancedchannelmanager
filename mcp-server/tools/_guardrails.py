@@ -5,10 +5,9 @@ account / rule tools:
 
 W2 — confirm / dry-run gating
 -----------------------------
-MCP tools are STATELESS thin HTTP wrappers: there is no server-side session
-between two tool calls. Instead the confirm token is derived from the resolved
-target set and its issue time
-(:func:`derive_token`). The tool:
+MCP tools are thin HTTP wrappers. Confirmation tokens are derived from the
+resolved target set and issue time and recorded in a process-local, single-use
+ledger (:func:`derive_token`). The tool:
 
   1. First call (no token): resolves the full target set, returns a preview that
      INCLUDES the token, mutates nothing.
@@ -19,7 +18,8 @@ target set and its issue time
 Because the token is a digest over the sorted target ids, a target set that has
 changed since the preview (a channel added/removed, ids shifted) yields a
 different token — the echoed token is stale and the tool refuses, closing the
-TOCTOU gap. Tokens expire after five minutes.
+TOCTOU gap. Tokens expire after five minutes, are atomically consumed, and fail
+closed after a process restart because the issuance ledger is not persisted.
 
 W4 — batch-size caps
 --------------------
@@ -36,6 +36,7 @@ import hashlib
 import hmac
 import logging
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 
@@ -43,6 +44,8 @@ logger = logging.getLogger(__name__)
 
 CONTENT_TOKEN_TTL_SECONDS = 300
 _CONTENT_SIGNING_KEY = secrets.token_bytes(32)
+_ISSUED_TOKENS: dict[str, tuple[tuple[int, ...], int]] = {}
+_TOKEN_LOCK = threading.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -75,13 +78,22 @@ def derive_token(target_ids, *, issued_at: int | None = None) -> str:
     """
     ids = sorted({int(i) for i in target_ids})
     timestamp = int(time.time()) if issued_at is None else int(issued_at)
-    content = f"{timestamp}:".encode() + ",".join(map(str, ids)).encode()
+    # Hex keeps the dash-delimited wire format unambiguous.
+    nonce = secrets.token_hex(12)
+    content = f"{timestamp}:{nonce}:".encode() + ",".join(map(str, ids)).encode()
     digest = hmac.new(_CONTENT_SIGNING_KEY, content, hashlib.sha256).hexdigest()[:16]
-    return f"v2-{timestamp}-{len(ids)}-{digest}"
+    token = f"v3-{timestamp}-{len(ids)}-{nonce}-{digest}"
+    with _TOKEN_LOCK:
+        expired_before = timestamp - CONTENT_TOKEN_TTL_SECONDS
+        for old_token, (_, issued_at) in list(_ISSUED_TOKENS.items()):
+            if issued_at < expired_before:
+                del _ISSUED_TOKENS[old_token]
+        _ISSUED_TOKENS[token] = (tuple(ids), timestamp)
+    return token
 
 
 def token_matches(supplied: str | None, target_ids) -> bool:
-    """True iff ``supplied`` equals the token re-derived from ``target_ids``.
+    """Atomically consume ``supplied`` iff it matches the current target ids.
 
     A ``None`` / empty supplied token never matches (the caller hasn't confirmed
     yet). A non-matching token means the target set drifted since the preview —
@@ -91,16 +103,29 @@ def token_matches(supplied: str | None, target_ids) -> bool:
         return False
     candidate = str(supplied).strip()
     try:
-        version, raw_timestamp, _count, _digest = candidate.split("-", 3)
+        version, raw_timestamp, raw_count, nonce, digest = candidate.split("-", 4)
         timestamp = int(raw_timestamp)
+        count = int(raw_count)
     except (TypeError, ValueError):
         return False
-    if version != "v2":
+    if version != "v3":
         return False
     age = int(time.time()) - timestamp
     if age < 0 or age > CONTENT_TOKEN_TTL_SECONDS:
         return False
-    return hmac.compare_digest(candidate, derive_token(target_ids, issued_at=timestamp))
+    ids = tuple(sorted({int(i) for i in target_ids}))
+    content = f"{timestamp}:{nonce}:".encode() + ",".join(map(str, ids)).encode()
+    expected_digest = hmac.new(
+        _CONTENT_SIGNING_KEY, content, hashlib.sha256
+    ).hexdigest()[:16]
+    if count != len(ids) or not hmac.compare_digest(digest, expected_digest):
+        return False
+    with _TOKEN_LOCK:
+        issued = _ISSUED_TOKENS.get(candidate)
+        if issued != (ids, timestamp):
+            return False
+        del _ISSUED_TOKENS[candidate]
+    return True
 
 
 # ---------------------------------------------------------------------------

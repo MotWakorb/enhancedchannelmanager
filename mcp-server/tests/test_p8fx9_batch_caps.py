@@ -9,6 +9,8 @@ Caps are read from the backend GET /api/settings response with conservative
 defaults. Tests assert behaviour at/around each threshold and that the refusal
 message names the limit.
 """
+import re
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -34,6 +36,12 @@ def _register_channels() -> FastMCP:
 
 def _text(result) -> str:
     return result[0][0].text
+
+
+def _token(result) -> str:
+    match = re.search(r"confirm_token='([^']+)'", _text(result))
+    assert match, _text(result)
+    return match.group(1)
 
 
 def _mutation_calls(mock_client) -> list:
@@ -63,10 +71,11 @@ class TestBulkDeleteCaps:
         mock_client = AsyncMock()
         mock_client.call_endpoint.return_value = None
         ids = list(range(1, 6))  # 5 << soft cap 25
-        token = derive_token(ids)
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool("bulk_delete_channels", {"channel_ids": ids})
             await mcp.call_tool(
-                "bulk_delete_channels", {"channel_ids": ids, "confirm_token": token}
+                "bulk_delete_channels",
+                {"channel_ids": ids, "confirm_token": _token(preview)},
             )
         assert len(_mutation_calls(mock_client)) == 5
 
@@ -80,7 +89,7 @@ class TestBulkDeleteCaps:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("bulk_delete_channels", {"channel_ids": ids})
         assert _mutation_calls(mock_client) == []
-        assert derive_token(ids) in _text(result)
+        assert "confirm_token='v3-" in _text(result)
 
     @pytest.mark.asyncio
     async def test_between_soft_and_hard_requires_token(self):
@@ -91,7 +100,7 @@ class TestBulkDeleteCaps:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("bulk_delete_channels", {"channel_ids": ids})
         assert _mutation_calls(mock_client) == []
-        assert derive_token(ids) in _text(result)
+        assert "confirm_token='v3-" in _text(result)
 
     @pytest.mark.asyncio
     async def test_over_hard_cap_refused_even_with_token(self):
@@ -146,7 +155,7 @@ class TestClearAutoCreatedCaps:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("clear_auto_created", {"all_groups": True})
         assert _mutation_calls(mock_client) == []
-        assert derive_token([1]) in _text(result)
+        assert "confirm_token='v3-" in _text(result)
 
 
 # ===========================================================================

@@ -1,6 +1,5 @@
 """Registry-level safety contract for every ECM MCP tool (04c0u.7)."""
 
-import json
 import re
 from unittest.mock import AsyncMock, patch
 
@@ -90,7 +89,11 @@ async def test_first_destructive_call_is_a_mutation_free_preview(module, tool_na
         result = await mcp.call_tool(tool_name, arguments)
     assert "PREVIEW" in _text(result)
     assert "confirmation_token:" in _text(result)
-    client.call_endpoint.assert_not_awaited()
+    mutation_calls = [
+        call for call in client.call_endpoint.await_args_list
+        if getattr(call.args[0], "method", "GET").upper() != "GET"
+    ]
+    assert not mutation_calls
 
 
 @pytest.mark.asyncio
@@ -104,7 +107,7 @@ async def test_confirmation_is_content_bound_and_drift_invalidates_it():
             "delete_saved_backup",
             {"filename": "b.yaml", "confirmation_token": token},
         )
-    assert "confirmation does not match" in _text(result).lower()
+    assert "drift" in _text(result).lower()
     client.call_endpoint.assert_not_awaited()
 
 
@@ -149,10 +152,97 @@ async def test_uniform_destructive_batch_cap_refuses_without_entering_tool():
     with patch("tools.channels.get_ecm_client", return_value=client):
         result = await mcp.call_tool(
             "bulk_add_streams_to_channel",
-            {"channel_id": 1, "stream_ids": list(range(501))},
+            {"channel_id": 1, "stream_ids": list(range(500))},
         )
     assert "hard cap is 500" in _text(result)
     client.call_endpoint.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count, refused", [(499, False), (500, True)])
+async def test_hard_cap_boundary_is_exclusive(count, refused):
+    mcp = _registry()
+    result = await mcp.call_tool(
+        "bulk_add_streams_to_channel",
+        {"channel_id": 1, "stream_ids": list(range(count))},
+    )
+    assert ("hard cap is 500" in _text(result)) is refused
+
+
+@pytest.mark.asyncio
+async def test_state_derived_targets_are_signed_and_drift_rejected():
+    mcp = _registry()
+    client = AsyncMock()
+    client.call_endpoint.return_value = {
+        "streams": [{"stream_id": 7, "channels": [{"id": 3}]}],
+        "threshold": 3,
+    }
+    with patch("tools.streams.get_ecm_client", return_value=client):
+        preview = await mcp.call_tool(
+            "cleanup_struck_out_streams", {"delete_empty_channels": True}
+        )
+        assert '"stream_ids":[7]' in _text(preview)
+        token = _token(_text(preview))
+        client.call_endpoint.return_value = {
+            "streams": [{"stream_id": 8, "channels": [{"id": 3}]}],
+            "threshold": 3,
+        }
+        result = await mcp.call_tool(
+            "cleanup_struck_out_streams",
+            {"delete_empty_channels": True, "confirmation_token": token},
+        )
+    assert "drift" in _text(result).lower()
+    assert all(call.args[0].method == "GET" for call in client.call_endpoint.await_args_list)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("count, refused", [(499, False), (500, True)])
+async def test_resolved_set_cap_boundary(count, refused):
+    mcp = _registry()
+    client = AsyncMock()
+    client.call_endpoint.return_value = {
+        "results": [{"id": value} for value in range(count)],
+        "next": None,
+    }
+    with patch("tools.streams.get_ecm_client", return_value=client):
+        result = await mcp.call_tool("probe_streams", {})
+    assert ("hard cap is 500" in _text(result)) is refused
+    assert all(call.args[0].method == "GET" for call in client.call_endpoint.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_confirmation_token_is_single_use():
+    mcp = _registry()
+    preview = await mcp.call_tool("delete_saved_backup", {"filename": "a.yaml"})
+    token = _token(_text(preview))
+    client = AsyncMock()
+    with patch("tools.system.get_ecm_client", return_value=client):
+        args = {"filename": "a.yaml", "confirmation_token": token}
+        await mcp.call_tool("delete_saved_backup", args)
+        replay = await mcp.call_tool("delete_saved_backup", args)
+    assert "used" in _text(replay).lower()
+    mutation_calls = [
+        call for call in client.call_endpoint.await_args_list
+        if getattr(call.args[0], "method", "GET").upper() != "GET"
+    ]
+    assert len(mutation_calls) == 1
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "accept_channel_merge", "dismiss_probe_failures", "probe_streams",
+        "run_channel_pipeline", "run_auto_creation",
+    ],
+)
+def test_behaviorally_destructive_inventory(name):
+    assert SAFETY_INVENTORY[name] is ToolSafety.DESTRUCTIVE
+
+
+def test_external_notification_is_not_annotated_read_only_or_idempotent():
+    tool = _registry()._tool_manager._tools["test_alert_method"]
+    assert tool.annotations.readOnlyHint is False
+    assert tool.annotations.idempotentHint is False
 
 
 def test_resolved_target_token_expires_and_rejects_drift():
@@ -160,6 +250,7 @@ def test_resolved_target_token_expires_and_rejects_drift():
         token = derive_token([3, 1, 2])
     with patch("tools._guardrails.time.time", return_value=399):
         assert token_matches(token, [1, 2, 3])
+        assert not token_matches(token, [1, 2, 3])  # single-use replay refusal
         assert not token_matches(token, [1, 2, 4])
     with patch("tools._guardrails.time.time", return_value=401):
         assert not token_matches(token, [1, 2, 3])
