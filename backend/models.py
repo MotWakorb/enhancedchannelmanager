@@ -1770,6 +1770,9 @@ class User(Base):
     # Status
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
+    # Incremented when credentials must be invalidated account-wide. Access
+    # JWTs carry the epoch they were issued under; older epochs are rejected.
+    auth_epoch = Column(Integer, default=0, server_default="0", nullable=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1884,11 +1887,18 @@ class PasswordResetToken(Base):
     token_hash = Column(String(255), nullable=False, unique=True)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
+    attempt_count = Column(Integer, default=0, server_default="0", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
         Index("idx_reset_token_hash", token_hash),
         Index("idx_reset_token_user", user_id),
+        Index(
+            "uq_reset_token_unused_user",
+            user_id,
+            unique=True,
+            sqlite_where=used_at.is_(None),
+        ),
     )
 
     def __repr__(self):

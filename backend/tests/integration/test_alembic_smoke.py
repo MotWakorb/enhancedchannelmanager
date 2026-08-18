@@ -1826,6 +1826,18 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE m3u_digest_settings "
                     "ADD COLUMN account_ids TEXT"
                 ))
+                # 0044 (enhancedchannelmanager-04c0u.2): persistent attempt
+                # budget on the baseline password-reset table.
+                conn.execute(text(
+                    "ALTER TABLE password_reset_tokens "
+                    "ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0"
+                ))
+                # 0045 (enhancedchannelmanager-04c0u.2): account-wide access
+                # token invalidation epoch on the baseline users table.
+                conn.execute(text(
+                    "ALTER TABLE users "
+                    "ADD COLUMN auth_epoch INTEGER NOT NULL DEFAULT 0"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.
@@ -1851,7 +1863,9 @@ class TestSmartBootstrapFastPath:
             # 4a. Only the destructive revisions ran, each targeted by id.
             # A blanket ``upgrade head`` would reopen bd-ax3uj / bd-5w6jz.
             targets = [call.args[1] for call in mock_upgrade.call_args_list]
-            assert targets == ["0010", "0011", "0012", "0029", "0041"], targets
+            assert targets == [
+                "0010", "0011", "0012", "0029", "0041", "0044",
+            ], targets
             assert "head" not in targets, (
                 "a blanket `upgrade head` re-runs every pending migration — "
                 "that is the whack-a-mole the fast-path exists to prevent."
@@ -4385,11 +4399,18 @@ class TestFastPathDestructiveRevisions:
                         for col in inspector.get_columns(table.name)
                     }
                     for column in table.columns:
-                        if column.name in present or not column.nullable:
+                        if column.name in present:
                             continue
+                        if not column.nullable and column.server_default is None:
+                            continue
+                        default_sql = ""
+                        if column.server_default is not None:
+                            default_sql = f" DEFAULT {column.server_default.arg}"
+                        nullability_sql = "" if column.nullable else " NOT NULL"
                         conn.execute(sa_text(
                             f'ALTER TABLE "{table.name}" ADD COLUMN '
                             f'"{column.name}" {column.type.compile(engine.dialect)}'
+                            f"{nullability_sql}{default_sql}"
                         ))
         finally:
             engine.dispose()
@@ -4493,10 +4514,9 @@ class TestFastPathDestructiveRevisions:
     def test_fast_path_still_skips_non_destructive_pending_revisions(self, tmp_path):
         """The fix NARROWS the fast path — it does not remove it.
 
-        From 0040 the only pending revision is the destructive 0041, so
-        exactly one revision may be executed and it must be 0041 by id —
-        never a blanket ``upgrade head`` that re-runs the whole pending range
-        (that would reopen the bd-ax3uj / bd-5w6jz whack-a-mole).
+        From 0040, destructive revisions 0041 and 0044 are pending. Both must
+        execute by id, never through a blanket ``upgrade head`` that re-runs
+        the whole pending range (which would reopen bd-ax3uj / bd-5w6jz).
         """
         from unittest.mock import patch
 
@@ -4511,8 +4531,9 @@ class TestFastPathDestructiveRevisions:
                 database._bootstrap_alembic(engine)
 
             targets = [call.args[1] for call in mock_upgrade.call_args_list]
-            assert targets == ["0041"], (
-                f"expected exactly one targeted upgrade to 0041, got {targets}"
+            assert targets == ["0041", "0044"], (
+                "expected targeted upgrades to 0041 and 0044, "
+                f"got {targets}"
             )
         finally:
             engine.dispose()

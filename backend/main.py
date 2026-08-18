@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0117",
+    version="0.18.1-0118",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -536,7 +536,12 @@ AUTH_EXEMPT_PATHS = {
 }
 
 from auth.settings import get_auth_settings
-from auth.dependencies import get_token_from_request, decode_token_safe
+from auth.dependencies import (
+    get_token_from_request,
+    decode_token_safe,
+    token_matches_user_auth_epoch,
+)
+from models import User
 
 
 @app.middleware("http")
@@ -569,7 +574,20 @@ async def auth_middleware(request: Request, call_next):
                     and hmac.compare_digest(token, settings.mcp_api_key)
                 ):
                     return await call_next(request)
-                if not token or not decode_token_safe(token):
+                payload = decode_token_safe(token) if token else None
+                authenticated = False
+                if payload:
+                    session = get_session()
+                    try:
+                        user = session.query(User).filter(User.id == payload.get("sub")).first()
+                        authenticated = bool(
+                            user
+                            and user.is_active
+                            and token_matches_user_auth_epoch(payload, user)
+                        )
+                    finally:
+                        session.close()
+                if not authenticated:
                     return JSONResponse(
                         status_code=401,
                         content={"detail": "Not authenticated"},

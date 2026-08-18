@@ -155,6 +155,17 @@ def decode_token_safe(token: str) -> Optional[dict]:
         return None
 
 
+def token_matches_user_auth_epoch(payload: dict, user: User) -> bool:
+    """Return whether an access-token epoch is current for ``user``.
+
+    Tokens issued before the epoch claim was introduced are epoch zero. Using
+    one shared comparison keeps dependency-guarded and middleware-only routes
+    on the same invalidation policy.
+    """
+    token_epoch = payload.get("auth_epoch", 0)
+    return type(token_epoch) is int and token_epoch == user.auth_epoch
+
+
 def get_refresh_token_from_request(request: Request) -> Optional[str]:
     """
     Extract refresh token from request.
@@ -236,6 +247,9 @@ async def get_current_user(
     # Check if user is active
     if not user.is_active:
         raise AuthenticationError("User account is disabled")
+
+    if not token_matches_user_auth_epoch(payload, user):
+        raise AuthenticationError("Token has been invalidated")
 
     return user
 

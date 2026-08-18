@@ -119,6 +119,7 @@ def create_access_token(
     user_id: int,
     username: str,
     expires_delta: Optional[timedelta] = None,
+    auth_epoch: int = 0,
 ) -> str:
     """
     Create a JWT access token.
@@ -128,6 +129,7 @@ def create_access_token(
         username: The user's username.
         expires_delta: Optional custom expiration time. When omitted the
             configured ``jwt.access_token_expire_minutes`` is used.
+        auth_epoch: The user's current account-wide credential epoch.
 
     Returns:
         The encoded JWT string.
@@ -145,6 +147,7 @@ def create_access_token(
         "type": "access",
         "exp": expire,
         "iat": now,
+        "auth_epoch": auth_epoch,
     }
 
     return jwt.encode(payload, _get_secret_key(), algorithm=ALGORITHM)
@@ -276,6 +279,7 @@ def refresh_access_token(refresh_token: str) -> str:
 def rotate_refresh_token(
     refresh_token: str,
     username: Optional[str] = None,
+    auth_epoch: int = 0,
 ) -> Tuple[str, str]:
     """
     Rotate refresh token - revoke old one and create new access + refresh tokens.
@@ -291,6 +295,7 @@ def rotate_refresh_token(
             logged verbatim as the acting operator by ``main.py``'s
             deprecated-admin-router warning, so a placeholder there
             misattributes the request (bd-suuoh).
+        auth_epoch: The user's current account-wide credential epoch.
 
     Returns:
         Tuple of (new_access_token, new_refresh_token).
@@ -317,6 +322,7 @@ def rotate_refresh_token(
     new_access_token = create_access_token(
         user_id=user_id,
         username=username if username is not None else f"user_{user_id}",
+        auth_epoch=auth_epoch,
     )
     new_refresh_token = create_refresh_token(user_id=user_id)
 
@@ -344,5 +350,3 @@ def revoke_token(jti: str) -> None:
         jti: The token's unique identifier.
     """
     _revoked_tokens.add(jti)
-
-
