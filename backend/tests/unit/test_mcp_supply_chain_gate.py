@@ -132,15 +132,21 @@ def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
         ),
         (
             ".github/workflows/build.yml",
-            "needs: [build-mcp-amd64, build-mcp-arm64, trivy-scan-mcp-amd64, trivy-scan-mcp-arm64]",
-            "needs: [build-mcp-amd64, build-mcp-arm64]",
-            "MCP manifest",
+            "- trivy-scan-mcp-arm64",
+            "- omitted-mcp-arm64-scan",
+            "both MCP architectures",
         ),
         (
             ".github/workflows/build.yml",
             "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25",
             "aquasecurity/trivy-action@master",
             "immutable action",
+        ),
+        (
+            ".github/workflows/build.yml",
+            "fail_action: true",
+            "fail_action: false",
+            "DAST is configured fail-open",
         ),
         (
             "mcp-server/Dockerfile",

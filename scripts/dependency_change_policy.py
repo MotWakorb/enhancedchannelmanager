@@ -29,7 +29,7 @@ def _valid_path(path: str) -> bool:
 def is_dependency_input(path: str) -> bool:
     if path in DEPENDENCY_FILES:
         return True
-    return path.startswith("backend/requirements") and path.endswith(".txt")
+    return path.startswith("backend/requirements") and path.endswith((".in", ".txt"))
 
 
 def has_dependency_change(paths: list[str]) -> bool:

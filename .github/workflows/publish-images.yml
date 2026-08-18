@@ -39,6 +39,11 @@ jobs:
     outputs:
       sha: ${{ steps.authorize.outputs.sha }}
       branch: ${{ steps.authorize.outputs.branch }}
+      build_run_id: ${{ steps.authorize.outputs.build_run_id }}
+      ecm_amd64: ${{ steps.authorize.outputs.ecm_amd64 }}
+      ecm_arm64: ${{ steps.authorize.outputs.ecm_arm64 }}
+      mcp_amd64: ${{ steps.authorize.outputs.mcp_amd64 }}
+      mcp_arm64: ${{ steps.authorize.outputs.mcp_arm64 }}
     steps:
       - name: Checkout candidate policy from the immutable revision
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
@@ -49,7 +54,7 @@ jobs:
       - name: Require current, successful Tests and Build runs
         id: authorize
         env:
-          GH_TOKEN: ${{ github.token }}
+          REGISTRY_AUTH: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
           BRANCH: ${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
@@ -68,6 +73,11 @@ jobs:
           # Build may still be finishing; wait here, after verification images
           # and scans have already run, rather than suppressing those jobs.
           for attempt in $(seq 1 60); do
+            branch_sha=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq '.object.sha')
+            if test "$branch_sha" != "$SHA"; then
+              echo "::error::Candidate became stale while awaiting verification"
+              exit 1
+            fi
             runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
               --jq '.workflow_runs' | jq -sc 'add // []')
             if test "$TESTS_ATTESTED" = true; then
@@ -81,9 +91,20 @@ jobs:
             else
               trigger="$TRIGGER"
             fi
-            if decision=$(python scripts/image_publish_policy.py \
+            build_run_id=$(jq '[.[] | select(.name == "Build and Push Docker Image")]
+              | sort_by([.run_number, .run_attempt, .id]) | last | .id // empty' <<<"$runs")
+            if test -z "$build_run_id"; then
+              decision=""
+            elif gh run download "$build_run_id" --repo "$REPO" \
+              --name verified-image-candidates --dir "/tmp/candidate-attestation-$attempt" 2>/dev/null \
+              && decision=$(python scripts/image_publish_policy.py \
               --trigger "$trigger" --branch-sha "$branch_sha" --runs "$runs"); then
-              break
+              attestation=$(cat "/tmp/candidate-attestation-$attempt/candidate-attestation.json")
+              if decision=$(python scripts/image_publish_policy.py \
+                --trigger "$trigger" --branch-sha "$branch_sha" --runs "$runs" \
+                --build-run-id "$build_run_id" --attestation "$attestation"); then
+                break
+              fi
             fi
             if test "$attempt" = 60; then
               echo "::error::Exact-SHA publication authorization did not become green"
@@ -95,108 +116,92 @@ jobs:
           test "$(jq -r '.branch' <<<"$decision")" = "$BRANCH"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "build_run_id=$(jq -r '.build_run_id' <<<"$decision")" >> "$GITHUB_OUTPUT"
+          for name in ecm_amd64 ecm_arm64 mcp_amd64 mcp_arm64; do
+            echo "$name=$(jq -r --arg name "$name" '.digests[$name]' <<<"$decision")" >> "$GITHUB_OUTPUT"
+          done
 
   publish-amd64:
     name: Publish Images (AMD64)
     needs: [authorize]
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       packages: write
     outputs:
-      ecm_digest: ${{ steps.ecm.outputs.digest }}
-      mcp_digest: ${{ steps.mcp.outputs.digest }}
+      ecm_digest: ${{ steps.promote.outputs.ecm_digest }}
+      mcp_digest: ${{ steps.promote.outputs.mcp_digest }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.authorize.outputs.sha }}
-      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set publication metadata
-        id: metadata
+      - name: Download exact verified OCI candidates
         env:
-          BRANCH: ${{ needs.authorize.outputs.branch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "image=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
-          if test "$BRANCH" = main; then echo "channel=latest" >> "$GITHUB_OUTPUT"; else echo "channel=dev" >> "$GITHUB_OUTPUT"; fi
-      - name: Push ECM AMD64 by digest
-        id: ecm
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: true
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
-          build-args: |
-            GIT_COMMIT=${{ needs.authorize.outputs.sha }}
-            ECM_VERSION=${{ steps.metadata.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.metadata.outputs.channel }}
-          cache-from: type=gha,scope=amd64
-      - name: Push MCP AMD64 by digest
-        id: mcp
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
-        with:
-          context: ./mcp-server
-          platforms: linux/amd64
-          push: true
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }}-mcp,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=mcp-amd64
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name ecm-amd64-candidate --dir /tmp/candidates
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name mcp-amd64-candidate --dir /tmp/candidates
+      - name: Verify and promote exact candidates
+        id: promote
+        env:
+          REGISTRY_AUTH: ${{ github.token }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+          ECM_DIGEST: ${{ needs.authorize.outputs.ecm_amd64 }}
+          MCP_DIGEST: ${{ needs.authorize.outputs.mcp_amd64 }}
+        run: |
+          set -euo pipefail
+          python scripts/candidate_image.py verify-archive /tmp/candidates/ecm-amd64.oci.tar --expected "$ECM_DIGEST"
+          python scripts/candidate_image.py verify-archive /tmp/candidates/mcp-amd64.oci.tar --expected "$MCP_DIGEST"
+          image="${GITHUB_REPOSITORY,,}"
+          echo "$REGISTRY_AUTH" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/ecm-amd64.oci.tar "docker://ghcr.io/$image:candidate-$SHA-amd64"
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/mcp-amd64.oci.tar "docker://ghcr.io/$image-mcp:candidate-$SHA-amd64"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image:candidate-$SHA-amd64")" = "$ECM_DIGEST"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image-mcp:candidate-$SHA-amd64")" = "$MCP_DIGEST"
+          echo "ecm_digest=$ECM_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "mcp_digest=$MCP_DIGEST" >> "$GITHUB_OUTPUT"
 
   publish-arm64:
     name: Publish Images (ARM64)
     needs: [authorize]
     runs-on: ubuntu-24.04-arm
     permissions:
+      actions: read
       contents: read
       packages: write
     outputs:
-      ecm_digest: ${{ steps.ecm.outputs.digest }}
-      mcp_digest: ${{ steps.mcp.outputs.digest }}
+      ecm_digest: ${{ steps.promote.outputs.ecm_digest }}
+      mcp_digest: ${{ steps.promote.outputs.mcp_digest }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.authorize.outputs.sha }}
-      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Set publication metadata
-        id: metadata
+      - name: Download exact verified OCI candidates
         env:
-          BRANCH: ${{ needs.authorize.outputs.branch }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "image=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
-          echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
-          if test "$BRANCH" = main; then echo "channel=latest" >> "$GITHUB_OUTPUT"; else echo "channel=dev" >> "$GITHUB_OUTPUT"; fi
-      - name: Push ECM ARM64 by digest
-        id: ecm
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
-        with:
-          context: .
-          platforms: linux/arm64
-          push: true
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }},push-by-digest=true,name-canonical=true,push=true
-          build-args: |
-            GIT_COMMIT=${{ needs.authorize.outputs.sha }}
-            ECM_VERSION=${{ steps.metadata.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.metadata.outputs.channel }}
-          cache-from: type=gha,scope=arm64
-      - name: Push MCP ARM64 by digest
-        id: mcp
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
-        with:
-          context: ./mcp-server
-          platforms: linux/arm64
-          push: true
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.metadata.outputs.image }}-mcp,push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=mcp-arm64
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name ecm-arm64-candidate --dir /tmp/candidates
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name mcp-arm64-candidate --dir /tmp/candidates
+      - name: Verify and promote exact candidates
+        id: promote
+        env:
+          REGISTRY_AUTH: ${{ github.token }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+          ECM_DIGEST: ${{ needs.authorize.outputs.ecm_arm64 }}
+          MCP_DIGEST: ${{ needs.authorize.outputs.mcp_arm64 }}
+        run: |
+          set -euo pipefail
+          python scripts/candidate_image.py verify-archive /tmp/candidates/ecm-arm64.oci.tar --expected "$ECM_DIGEST"
+          python scripts/candidate_image.py verify-archive /tmp/candidates/mcp-arm64.oci.tar --expected "$MCP_DIGEST"
+          image="${GITHUB_REPOSITORY,,}"
+          echo "$REGISTRY_AUTH" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/ecm-arm64.oci.tar "docker://ghcr.io/$image:candidate-$SHA-arm64"
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/mcp-arm64.oci.tar "docker://ghcr.io/$image-mcp:candidate-$SHA-arm64"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image:candidate-$SHA-arm64")" = "$ECM_DIGEST"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image-mcp:candidate-$SHA-arm64")" = "$MCP_DIGEST"
+          echo "ecm_digest=$ECM_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "mcp_digest=$MCP_DIGEST" >> "$GITHUB_OUTPUT"
 
   publish-manifests:
     name: Publish Verified Multi-Arch Manifests

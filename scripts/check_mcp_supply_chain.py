@@ -30,7 +30,7 @@ MCP_BASE_IMAGE = "python:3.12-alpine@sha256:" + "".join(
 )
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
-_USES = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
+_USES = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)", re.MULTILINE)
 _FROM = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 
 
@@ -64,28 +64,39 @@ def check_repository(root: Path) -> list[str]:
         failures.append("MCP vulnerable-fixture matcher is output-format brittle")
     if "workflows: [Tests, Build and Push Docker Image]" not in publish:
         failures.append("publication is not triggered by both verification workflows")
-    if "image_publish_policy.py" not in publish:
+    if publish.count("image_publish_policy.py") != 2:
         failures.append("publication does not enforce the exact-SHA policy")
 
-    expected_needs = (
-        "needs: [build-mcp-amd64, build-mcp-arm64, "
-        "trivy-scan-mcp-amd64, trivy-scan-mcp-arm64]"
-    )
-    if expected_needs not in build:
-        failures.append("MCP manifest is not gated by both architecture image scans")
+    for required in (
+        "- trivy-scan-mcp-amd64",
+        "- trivy-scan-mcp-arm64",
+        "- build-mcp-amd64",
+        "- build-mcp-arm64",
+    ):
+        if required not in build:
+            failures.append("candidate attestation is not gated by both MCP architectures")
     for job in ("trivy-scan-mcp-amd64:", "trivy-scan-mcp-arm64:"):
         if job not in build:
             failures.append(f"MCP image scan job missing: {job[:-1]}")
     mcp_scan_section = build[
-        build.index("  trivy-scan-mcp-amd64:") : build.index(
-            "  merge-mcp-manifests:"
-        )
+        build.index("  trivy-scan-mcp-amd64:") : build.index("  dast-scan:")
     ]
     if "ignore-unfixed:" in mcp_scan_section:
         failures.append("MCP image scans ignore unfixed Critical/High findings")
     for setting in ("exit-code: '1'", "severity: 'CRITICAL,HIGH'"):
         if build.count(setting) < 4:
             failures.append(f"MCP image scans do not enforce {setting}")
+    if "outputs: type=oci" not in build or "candidate_image.py digest" not in build:
+        failures.append("MCP candidates do not produce verified OCI digests")
+    if "skopeo copy --preserve-digests" not in publish:
+        failures.append("publication does not preserve verified candidate digests")
+    if "docker/build-push-action" in publish:
+        failures.append("publication rebuilds instead of promoting verified candidates")
+    if "fail_action: true" not in build:
+        failures.append("DAST is configured fail-open")
+    verification = build[build.index("  build-amd64:") :]
+    if "packages: write" in verification or "docker/login-action" in verification:
+        failures.append("verification jobs retain registry write authority")
 
     for workflow_name, workflow in (
         ("build.yml", build),

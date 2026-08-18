@@ -1269,8 +1269,6 @@ jobs:
       candidate_sha: ${{ github.sha }}
       candidate_branch: dev
       tests_attested: true
-    secrets: inherit
-
   semgrep-lint:
     name: Semgrep Lint
     runs-on: ubuntu-latest

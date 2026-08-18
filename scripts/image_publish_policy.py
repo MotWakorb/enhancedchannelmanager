@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import re
 from typing import Any
 
 
@@ -15,6 +16,32 @@ class PolicyError(ValueError):
 
 REQUIRED_WORKFLOWS = frozenset({"Tests", "Build and Push Docker Image"})
 ALLOWED_BRANCHES = frozenset({"dev", "main"})
+REQUIRED_DIGESTS = frozenset({"ecm_amd64", "ecm_arm64", "mcp_amd64", "mcp_arm64"})
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+
+def validate_candidate_attestation(
+    attestation: dict[str, Any], *, expected_sha: str, expected_build_run_id: int
+) -> dict[str, str]:
+    """Bind publication to four exact verified OCI manifests and SCA evidence."""
+    if attestation.get("sha") != expected_sha:
+        raise PolicyError("candidate attestation is for the wrong revision")
+    if attestation.get("build_run_id") != expected_build_run_id:
+        raise PolicyError("candidate attestation is for the wrong Build run")
+    digests = attestation.get("digests")
+    if not isinstance(digests, dict) or set(digests) != REQUIRED_DIGESTS:
+        raise PolicyError("candidate attestation must bind exactly four architectures")
+    if any(not isinstance(value, str) or not _DIGEST.fullmatch(value) for value in digests.values()):
+        raise PolicyError("candidate attestation contains a malformed digest")
+    if len(set(digests.values())) != len(REQUIRED_DIGESTS):
+        raise PolicyError("candidate attestation reuses a digest across candidates")
+    if attestation.get("dependency_change") is True:
+        for name in ("frontend_sca", "backend_sca"):
+            if attestation.get(name) != "success":
+                raise PolicyError(f"dependency-changing revision lacks successful {name}")
+    elif attestation.get("dependency_change") is not False:
+        raise PolicyError("candidate attestation lacks a dependency-change verdict")
+    return {name: digests[name] for name in sorted(REQUIRED_DIGESTS)}
 
 
 def _latest_run(runs: list[dict[str, Any]], workflow: str) -> dict[str, Any]:
@@ -70,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trigger", required=True)
     parser.add_argument("--branch-sha", required=True)
     parser.add_argument("--runs", required=True)
+    parser.add_argument("--attestation")
+    parser.add_argument("--build-run-id", type=int)
     args = parser.parse_args(argv)
     try:
         branch, sha = validate_publish_candidate(
@@ -77,10 +106,20 @@ def main(argv: list[str] | None = None) -> int:
             branch_sha=args.branch_sha,
             runs=json.loads(args.runs),
         )
+        output: dict[str, Any] = {"branch": branch, "sha": sha}
+        if args.attestation is not None:
+            if args.build_run_id is None:
+                raise PolicyError("attestation requires Build run id")
+            digests = validate_candidate_attestation(
+                json.loads(args.attestation),
+                expected_sha=sha,
+                expected_build_run_id=args.build_run_id,
+            )
+            output.update({"build_run_id": args.build_run_id, "digests": digests})
     except (PolicyError, json.JSONDecodeError, TypeError, ValueError) as exc:
         print(f"IMAGE PUBLISH DENIED: {exc}", file=sys.stderr)
         return 1
-    print(json.dumps({"branch": branch, "sha": sha}))
+    print(json.dumps(output))
     return 0
 
 

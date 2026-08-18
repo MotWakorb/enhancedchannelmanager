@@ -608,6 +608,8 @@ def _expected_verdict_manifest():
     dependency_pr = (
         code_true
         + " && ((github.event_name == 'push' && github.ref == 'refs/heads/main') "
+        + "|| (github.event_name == 'push' && github.ref == 'refs/heads/dev' "
+        + "&& needs.detect-dependency-change.outputs.dependency_files_changed == 'true') "
         + "|| (github.event_name == 'pull_request' && github.base_ref == 'main') "
         + "|| (github.event_name == 'pull_request' && github.base_ref == 'dev' "
         + "&& needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
@@ -687,23 +689,21 @@ EXPECTED_JOB_OUTPUTS = {
     },
     **{
         ("build.yml", job): {"digest": "${{ steps.digest.outputs.digest }}"}
-        for job in ("build-amd64", "build-arm64")
-    },
-    **{
-        ("build.yml", job): {
-            "digest": "${{ steps.digest.outputs.digest }}",
-            "image": "${{ steps.image.outputs.name }}",
-        }
-        for job in ("build-mcp-amd64", "build-mcp-arm64")
+        for job in ("build-amd64", "build-arm64", "build-mcp-amd64", "build-mcp-arm64")
     },
     ("publish-images.yml", "authorize"): {
         "sha": "${{ steps.authorize.outputs.sha }}",
         "branch": "${{ steps.authorize.outputs.branch }}",
+        "build_run_id": "${{ steps.authorize.outputs.build_run_id }}",
+        "ecm_amd64": "${{ steps.authorize.outputs.ecm_amd64 }}",
+        "ecm_arm64": "${{ steps.authorize.outputs.ecm_arm64 }}",
+        "mcp_amd64": "${{ steps.authorize.outputs.mcp_amd64 }}",
+        "mcp_arm64": "${{ steps.authorize.outputs.mcp_arm64 }}",
     },
     **{
         ("publish-images.yml", job): {
-            "ecm_digest": "${{ steps.ecm.outputs.digest }}",
-            "mcp_digest": "${{ steps.mcp.outputs.digest }}",
+            "ecm_digest": "${{ steps.promote.outputs.ecm_digest }}",
+            "mcp_digest": "${{ steps.promote.outputs.mcp_digest }}",
         }
         for job in ("publish-amd64", "publish-arm64")
     },

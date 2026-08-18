@@ -31,6 +31,7 @@ def policy():
     "path",
     [
         "backend/requirements.txt",
+        "backend/requirements.in",
         "backend/requirements-dev.txt",
         "frontend/package.json",
         "frontend/package-lock.json",
@@ -63,6 +64,9 @@ def test_workflow_gates_dev_dependency_prs_before_merge():
         "needs.detect-dependency-change.outputs.dependency_files_changed == 'true'"
         in workflow
     )
+    assert 'git diff --name-only --no-renames -z "$BEFORE_SHA" "$HEAD_SHA"' in workflow
+    assert "github.event.before" in workflow
+    assert "refs/heads/dev" in workflow
     for check_name in (
         "Frontend Security Scan",
         "Backend Security Scan",

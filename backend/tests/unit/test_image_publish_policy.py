@@ -107,6 +107,52 @@ def test_latest_rerun_controls_outcome(policy):
     assert policy.validate_publish_candidate(**values) == ("dev", "abc123")
 
 
+def _attestation(**overrides):
+    value = {
+        "sha": "abc123",
+        "build_run_id": 42,
+        "dependency_change": True,
+        "frontend_sca": "success",
+        "backend_sca": "success",
+        "digests": {
+            name: "sha256:" + character * 64
+            for name, character in (
+                ("ecm_amd64", "1"),
+                ("ecm_arm64", "2"),
+                ("mcp_amd64", "3"),
+                ("mcp_arm64", "4"),
+            )
+        },
+    }
+    value.update(overrides)
+    return value
+
+
+def test_attestation_binds_all_four_candidate_digests(policy):
+    result = policy.validate_candidate_attestation(
+        _attestation(), expected_sha="abc123", expected_build_run_id=42
+    )
+    assert set(result) == {"ecm_amd64", "ecm_arm64", "mcp_amd64", "mcp_arm64"}
+
+
+def test_missing_architecture_digest_is_rejected(policy):
+    value = _attestation()
+    del value["digests"]["mcp_arm64"]
+    with pytest.raises(policy.PolicyError):
+        policy.validate_candidate_attestation(
+            value, expected_sha="abc123", expected_build_run_id=42
+        )
+
+
+def test_dependency_change_requires_both_exact_sha_sca_results(policy):
+    with pytest.raises(policy.PolicyError):
+        policy.validate_candidate_attestation(
+            _attestation(backend_sca="skipped"),
+            expected_sha="abc123",
+            expected_build_run_id=42,
+        )
+
+
 def test_workflows_separate_verification_from_publication():
     build = BUILD.read_text(encoding="utf-8")
     publish = PUBLISH.read_text(encoding="utf-8")
@@ -120,4 +166,11 @@ def test_workflows_separate_verification_from_publication():
     assert "tests_attested: true" in tests
     assert "github.event.workflow_run.head_sha" in publish
     assert "image_publish_policy.py" in publish
-    assert "push: true" in publish
+    assert "docker/build-push-action" not in publish
+    assert "skopeo copy --preserve-digests" in publish
+    assert "outputs: type=oci" in build
+    assert build.count("outputs: type=oci") == 4
+    assert "steps.build.outputs.digest" not in build
+    assert "verify-archive" in publish
+    assert "fail_action: true" in build
+    assert "packages: write" not in build
