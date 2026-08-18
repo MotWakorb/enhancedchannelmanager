@@ -623,10 +623,10 @@ jobs:
           name: ecm-amd64-candidate
           path: /tmp
       - name: Verify exact candidate identity
-        run: python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
+        run: python scripts/candidate_image.py extract /tmp/ecm-amd64.oci.tar --destination /tmp/trivy-ecm-amd64 --expected '${{ needs.build-amd64.outputs.digest }}'
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/ecm-amd64.oci.tar
+          input: /tmp/trivy-ecm-amd64
           format: table
           exit-code: '1'
           ignore-unfixed: true
@@ -644,10 +644,10 @@ jobs:
           name: ecm-arm64-candidate
           path: /tmp
       - name: Verify exact candidate identity
-        run: python scripts/candidate_image.py verify-archive /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}'
+        run: python scripts/candidate_image.py extract /tmp/ecm-arm64.oci.tar --destination /tmp/trivy-ecm-arm64 --expected '${{ needs.build-arm64.outputs.digest }}'
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/ecm-arm64.oci.tar
+          input: /tmp/trivy-ecm-arm64
           format: table
           exit-code: '1'
           ignore-unfixed: true
@@ -664,10 +664,10 @@ jobs:
         with:
           name: mcp-amd64-candidate
           path: /tmp
-      - run: python scripts/candidate_image.py verify-archive /tmp/mcp-amd64.oci.tar --expected '${{ needs.build-mcp-amd64.outputs.digest }}'
+      - run: python scripts/candidate_image.py extract /tmp/mcp-amd64.oci.tar --destination /tmp/trivy-mcp-amd64 --expected '${{ needs.build-mcp-amd64.outputs.digest }}'
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/mcp-amd64.oci.tar
+          input: /tmp/trivy-mcp-amd64
           format: table
           exit-code: '1'
           vuln-type: os,library
@@ -683,10 +683,10 @@ jobs:
         with:
           name: mcp-arm64-candidate
           path: /tmp
-      - run: python scripts/candidate_image.py verify-archive /tmp/mcp-arm64.oci.tar --expected '${{ needs.build-mcp-arm64.outputs.digest }}'
+      - run: python scripts/candidate_image.py extract /tmp/mcp-arm64.oci.tar --destination /tmp/trivy-mcp-arm64 --expected '${{ needs.build-mcp-arm64.outputs.digest }}'
       - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          input: /tmp/mcp-arm64.oci.tar
+          input: /tmp/trivy-mcp-arm64
           format: table
           exit-code: '1'
           vuln-type: os,library

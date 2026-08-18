@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -174,3 +175,28 @@ def test_workflows_separate_verification_from_publication():
     assert "verify-archive" in publish
     assert "fail_action: true" in build
     assert "packages: write" not in build
+
+
+def test_every_gh_cli_step_declares_github_authentication():
+    """A gh invocation must never depend on ambient or misnamed credentials."""
+    import yaml
+
+    command = re.compile(r"\bgh\s+")
+    failures = []
+    for path in sorted((ROOT / ".github/workflows").glob("*.y*ml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_id, job in (workflow.get("jobs") or {}).items():
+            for index, step in enumerate((job or {}).get("steps") or []):
+                if command.search(str((step or {}).get("run", ""))):
+                    env = (step or {}).get("env") or {}
+                    if not ({"GH_TOKEN", "GITHUB_TOKEN"} & set(env)):
+                        failures.append(f"{path.name}:{job_id}:steps[{index}]")
+    assert failures == [], f"gh CLI steps missing GitHub token env: {failures}"
+
+
+def test_trivy_scans_extracted_oci_layouts_not_raw_archives():
+    """Trivy requires an OCI layout directory; raw BuildKit OCI tar files fail."""
+    workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
+    assert workflow.count("candidate_image.py extract ") == 4
+    assert workflow.count("input: /tmp/trivy-") == 4
+    assert not re.search(r"input:\s+\S+\.oci\.tar", workflow)

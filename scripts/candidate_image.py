@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import tarfile
 from pathlib import Path
@@ -42,14 +43,55 @@ def verify_archive(path: Path, expected: str | None = None) -> str:
     return digest
 
 
+def extract_archive(path: Path, destination: Path, expected: str | None = None) -> str:
+    """Verify an OCI archive, then safely materialize its exact layout for scanners."""
+    digest = verify_archive(path, expected)
+    destination.mkdir(parents=True, exist_ok=False)
+    root = destination.resolve()
+    try:
+        with tarfile.open(path, "r:*") as archive:
+            members = archive.getmembers()
+            for member in members:
+                target = (root / member.name).resolve()
+                if (
+                    (target != root and root not in target.parents)
+                    or not (member.isdir() or member.isfile())
+                ):
+                    raise CandidateError(f"unsafe OCI archive member: {member.name}")
+            for member in members:
+                target = root / member.name
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                    continue
+                source = archive.extractfile(member)
+                if source is None:
+                    raise CandidateError(f"OCI archive member is unreadable: {member.name}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with source, target.open("xb") as output:
+                    shutil.copyfileobj(source, output)
+    except (OSError, tarfile.TarError) as exc:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise CandidateError(f"cannot extract OCI candidate archive: {exc}") from exc
+    except CandidateError:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+    return digest
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("digest", "verify-archive"))
+    parser.add_argument("command", choices=("digest", "verify-archive", "extract"))
     parser.add_argument("archive", type=Path)
     parser.add_argument("--expected")
+    parser.add_argument("--destination", type=Path)
     args = parser.parse_args()
     try:
-        print(verify_archive(args.archive, args.expected))
+        if args.command == "extract":
+            if args.destination is None:
+                parser.error("extract requires --destination")
+            print(extract_archive(args.archive, args.destination, args.expected))
+        else:
+            print(verify_archive(args.archive, args.expected))
     except CandidateError as exc:
         print(f"CANDIDATE DENIED: {exc}", file=sys.stderr)
         return 1

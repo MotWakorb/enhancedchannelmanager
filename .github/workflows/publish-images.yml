@@ -54,7 +54,7 @@ jobs:
       - name: Require current, successful Tests and Build runs
         id: authorize
         env:
-          REGISTRY_AUTH: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
           BRANCH: ${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
