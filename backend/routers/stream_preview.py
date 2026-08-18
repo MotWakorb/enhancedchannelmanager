@@ -8,12 +8,17 @@ import logging
 import subprocess
 import time
 
-import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from config import get_settings
 from dispatcharr_client import get_client
+from security.ssrf import SSRFError
+from security.stream_outbound import (
+    prepare_stream_http_url,
+    stream_request,
+    validated_subprocess_input,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +27,17 @@ logger = logging.getLogger(__name__)
 # handshake, HLS AES-128 encrypted segments chain to crypto. Without tls ffmpeg
 # fails on every HTTPS URL with "Protocol 'tls' not on whitelist" (GH-106).
 FFMPEG_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
+RELAY_PROTOCOL_WHITELIST = "http,tcp,crypto"
 
 router = APIRouter(tags=["Stream Preview"])
 
 
-async def stream_generator(process: subprocess.Popen, chunk_size: int = 65536):
+async def stream_generator(
+    process: subprocess.Popen,
+    chunk_size: int = 65536,
+    *,
+    input_context=None,
+):
     """Generator that yields chunks from FFmpeg process stdout."""
     try:
         while True:
@@ -42,6 +53,8 @@ async def stream_generator(process: subprocess.Popen, chunk_size: int = 65536):
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+        if input_context is not None:
+            await input_context.__aexit__(None, None, None)
 
 
 @router.get("/api/stream-preview/{stream_id}")
@@ -83,12 +96,20 @@ async def stream_preview(stream_id: int):
 
     if mode == "passthrough":
         # Direct proxy - just fetch and forward
-        # Use httpx to stream the content, following redirects
+        try:
+            initial_target = prepare_stream_http_url(stream_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
+
         async def passthrough_generator():
-            async with httpx.AsyncClient(timeout=None, follow_redirects=True) as http_client:
-                async with http_client.stream("GET", stream_url) as response:
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        yield chunk
+            async with stream_request(
+                stream_url, timeout=None, initial_target=initial_target
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    yield chunk
 
         return StreamingResponse(
             passthrough_generator(),
@@ -103,15 +124,26 @@ async def stream_preview(stream_id: int):
     elif mode == "transcode":
         # Transcode audio to AAC for browser compatibility
         # FFmpeg: copy video, transcode audio to AAC
+        input_context = validated_subprocess_input(stream_url)
+        try:
+            subprocess_input = await input_context.__aenter__()
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
-            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
+            "-protocol_whitelist", (
+                RELAY_PROTOCOL_WHITELIST
+                if subprocess_input.is_http_relay
+                else FFMPEG_PROTOCOL_WHITELIST
+            ),
             "-fflags", "+genpts+discardcorrupt",  # Generate pts, handle corruption
             "-analyzeduration", "2000000",        # 2 seconds to analyze stream
             "-probesize", "2000000",              # 2MB probe size
-            "-i", stream_url,
+            "-i", subprocess_input.argument,
             "-c:v", "copy",           # Copy video as-is
             "-c:a", "aac",            # Transcode audio to AAC
             "-b:a", "192k",           # 192kbps audio bitrate
@@ -130,7 +162,10 @@ async def stream_preview(stream_id: int):
             )
 
             return StreamingResponse(
-                stream_generator(process),
+                stream_generator(
+                    process,
+                    input_context=input_context,
+                ),
                 media_type="video/mp2t",
                 headers={
                     "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -139,25 +174,38 @@ async def stream_preview(stream_id: int):
                 }
             )
         except FileNotFoundError:
+            await input_context.__aexit__(None, None, None)
             raise HTTPException(
                 status_code=500,
                 detail="FFmpeg not found. Please install FFmpeg for transcoding support."
             )
         except Exception as e:
+            await input_context.__aexit__(type(e), e, e.__traceback__)
             logger.exception("[PREVIEW] FFmpeg transcode error for stream %s", stream_id)
             raise HTTPException(status_code=500, detail=f"Transcoding failed: {str(e)}")
 
     elif mode == "video_only":
         # Strip audio entirely for quick preview
+        input_context = validated_subprocess_input(stream_url)
+        try:
+            subprocess_input = await input_context.__aenter__()
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
-            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
+            "-protocol_whitelist", (
+                RELAY_PROTOCOL_WHITELIST
+                if subprocess_input.is_http_relay
+                else FFMPEG_PROTOCOL_WHITELIST
+            ),
             "-fflags", "+genpts+discardcorrupt",  # Generate pts, handle corruption
             "-analyzeduration", "2000000",        # 2 seconds to analyze stream
             "-probesize", "2000000",              # 2MB probe size
-            "-i", stream_url,
+            "-i", subprocess_input.argument,
             "-c:v", "copy",           # Copy video as-is
             "-an",                    # No audio
             "-max_muxing_queue_size", "1024",     # Larger muxing buffer
@@ -174,7 +222,10 @@ async def stream_preview(stream_id: int):
             )
 
             return StreamingResponse(
-                stream_generator(process),
+                stream_generator(
+                    process,
+                    input_context=input_context,
+                ),
                 media_type="video/mp2t",
                 headers={
                     "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -183,11 +234,13 @@ async def stream_preview(stream_id: int):
                 }
             )
         except FileNotFoundError:
+            await input_context.__aexit__(None, None, None)
             raise HTTPException(
                 status_code=500,
                 detail="FFmpeg not found. Please install FFmpeg for video-only preview."
             )
         except Exception as e:
+            await input_context.__aexit__(type(e), e, e.__traceback__)
             logger.exception("[PREVIEW] FFmpeg video-only error for stream %s", stream_id)
             raise HTTPException(status_code=500, detail=f"Video extraction failed: {str(e)}")
 
@@ -251,14 +304,25 @@ async def channel_preview(channel_id: int):
 
     if mode == "passthrough":
         # Direct proxy with JWT auth - just fetch and forward
+        try:
+            initial_target = prepare_stream_http_url(channel_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
+
         async def passthrough_generator():
-            async with httpx.AsyncClient(timeout=None, follow_redirects=True) as http_client:
-                async with http_client.stream("GET", channel_url, headers=auth_headers) as response:
-                    if response.status_code != 200:
-                        logger.error("[PREVIEW] Dispatcharr proxy returned %s", response.status_code)
-                        return
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        yield chunk
+            async with stream_request(
+                channel_url,
+                timeout=None,
+                headers=auth_headers,
+                initial_target=initial_target,
+            ) as response:
+                if response.status_code != 200:
+                    logger.error("[PREVIEW] Dispatcharr proxy returned %s", response.status_code)
+                    return
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    yield chunk
 
         return StreamingResponse(
             passthrough_generator(),
@@ -273,16 +337,26 @@ async def channel_preview(channel_id: int):
     elif mode == "transcode":
         # Transcode audio to AAC for browser compatibility
         # FFmpeg -headers option passes JWT auth to Dispatcharr proxy
+        input_context = validated_subprocess_input(channel_url, headers=auth_headers)
+        try:
+            subprocess_input = await input_context.__aenter__()
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
-            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
+            "-protocol_whitelist", (
+                RELAY_PROTOCOL_WHITELIST
+                if subprocess_input.is_http_relay
+                else FFMPEG_PROTOCOL_WHITELIST
+            ),
             "-fflags", "+genpts+discardcorrupt",
             "-analyzeduration", "2000000",
             "-probesize", "2000000",
-            "-headers", f"Authorization: Bearer {client.access_token}\r\n",
-            "-i", channel_url,
+            "-i", subprocess_input.argument,
             "-c:v", "copy",
             "-c:a", "aac",
             "-b:a", "192k",
@@ -301,7 +375,10 @@ async def channel_preview(channel_id: int):
             )
 
             return StreamingResponse(
-                stream_generator(process),
+                stream_generator(
+                    process,
+                    input_context=input_context,
+                ),
                 media_type="video/mp2t",
                 headers={
                     "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -310,27 +387,39 @@ async def channel_preview(channel_id: int):
                 }
             )
         except FileNotFoundError:
+            await input_context.__aexit__(None, None, None)
             raise HTTPException(
                 status_code=500,
                 detail="FFmpeg not found. Please install FFmpeg for transcoding support."
             )
         except Exception as e:
+            await input_context.__aexit__(type(e), e, e.__traceback__)
             logger.exception("[PREVIEW] FFmpeg transcode error for channel %s", channel_id)
             raise HTTPException(status_code=500, detail=f"Transcoding failed: {str(e)}")
 
     elif mode == "video_only":
         # Strip audio entirely for quick preview
         # FFmpeg -headers option passes JWT auth to Dispatcharr proxy
+        input_context = validated_subprocess_input(channel_url, headers=auth_headers)
+        try:
+            subprocess_input = await input_context.__aenter__()
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
             "-loglevel", "error",
-            "-protocol_whitelist", FFMPEG_PROTOCOL_WHITELIST,
+            "-protocol_whitelist", (
+                RELAY_PROTOCOL_WHITELIST
+                if subprocess_input.is_http_relay
+                else FFMPEG_PROTOCOL_WHITELIST
+            ),
             "-fflags", "+genpts+discardcorrupt",
             "-analyzeduration", "2000000",
             "-probesize", "2000000",
-            "-headers", f"Authorization: Bearer {client.access_token}\r\n",
-            "-i", channel_url,
+            "-i", subprocess_input.argument,
             "-c:v", "copy",
             "-an",
             "-max_muxing_queue_size", "1024",
@@ -347,7 +436,10 @@ async def channel_preview(channel_id: int):
             )
 
             return StreamingResponse(
-                stream_generator(process),
+                stream_generator(
+                    process,
+                    input_context=input_context,
+                ),
                 media_type="video/mp2t",
                 headers={
                     "Cache-Control": "no-cache, no-store, must-revalidate",
@@ -356,11 +448,13 @@ async def channel_preview(channel_id: int):
                 }
             )
         except FileNotFoundError:
+            await input_context.__aexit__(None, None, None)
             raise HTTPException(
                 status_code=500,
                 detail="FFmpeg not found. Please install FFmpeg for video-only preview."
             )
         except Exception as e:
+            await input_context.__aexit__(type(e), e, e.__traceback__)
             logger.exception("[PREVIEW] FFmpeg video-only error for channel %s", channel_id)
             raise HTTPException(status_code=500, detail=f"Video extraction failed: {str(e)}")
 

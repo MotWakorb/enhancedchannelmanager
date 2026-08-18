@@ -149,9 +149,10 @@ class ResolvedTarget:
     def host_header(self) -> str:
         """Value for the ``Host:`` header (host[:port] when non-default)."""
         default = 443 if self.scheme == "https" else 80
+        hostname = f"[{self.hostname}]" if ":" in self.hostname else self.hostname
         if self.port == default:
-            return self.hostname
-        return f"{self.hostname}:{self.port}"
+            return hostname
+        return f"{hostname}:{self.port}"
 
 
 # ---------------------------------------------------------------------------
