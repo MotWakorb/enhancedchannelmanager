@@ -16,19 +16,27 @@ from sqlalchemy.pool import StaticPool
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
-# Set test config directory before importing modules
-os.environ["CONFIG_DIR"] = "/tmp/ecm_test_config"
+# Create a new, explicit test posture before importing application modules.
+# Never reuse CONFIG_DIR from the host: auth settings are persistent state and
+# a stale developer/runner directory can silently turn broad API tests into an
+# authenticated deployment (and make the suite order-dependent).
+from tests._config_harness import cleanup_test_config, initialize_test_config
+
+_TEST_CONFIG_DIR = initialize_test_config()
 # Disable rate limiting in tests
 os.environ["RATE_LIMIT_ENABLED"] = "0"
-
-# Ensure test config directory exists
-Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 
 import database
 import models  # noqa: F401 — registers all tables with SQLAlchemy Base
 import export_models  # noqa: F401 — registers export tables with SQLAlchemy Base
 # Reference side-effect imports so static analysis sees them as used
 assert models and export_models
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Clean up only the uniquely marked directory this process created."""
+    del session, exitstatus
+    cleanup_test_config(_TEST_CONFIG_DIR)
 
 
 def patch_ssrf_dns(*ips: str):
