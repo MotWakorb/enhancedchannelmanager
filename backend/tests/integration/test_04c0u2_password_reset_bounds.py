@@ -104,6 +104,40 @@ async def test_forgot_password_removes_expired_and_superseded_rows(
 
 
 @pytest.mark.asyncio
+async def test_forgot_password_replaces_stale_active_token(
+    async_client, test_session, local_user, monkeypatch,
+):
+    from auth.tokens import hash_token
+    from models import PasswordResetToken
+
+    stale_hash = hash_token("stale-active-reset-token")
+    test_session.add(
+        PasswordResetToken(
+            user_id=local_user.id,
+            token_hash=stale_hash,
+            expires_at=datetime.utcnow() + timedelta(minutes=30),
+            created_at=datetime.utcnow() - timedelta(minutes=6),
+        )
+    )
+    test_session.commit()
+    sent = []
+    monkeypatch.setattr(
+        "auth.routes.send_password_reset_email",
+        lambda _email, token, _base_url: sent.append(token) or True,
+    )
+
+    response = await async_client.post(
+        "/api/auth/forgot-password", json={"email": local_user.email}
+    )
+
+    rows = test_session.query(PasswordResetToken).filter_by(user_id=local_user.id).all()
+    assert response.status_code == 200
+    assert len(sent) == 1
+    assert len(rows) == 1
+    assert rows[0].token_hash != stale_hash
+
+
+@pytest.mark.asyncio
 async def test_known_and_unknown_forgot_responses_match(
     async_client, local_user, monkeypatch,
 ):
