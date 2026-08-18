@@ -3,6 +3,16 @@
 WHAT THIS PINS AND WHY
 ----------------------
 
+04c0u.4 AUTHORITY LAYER: this inventory describes only the dependencies
+attached to FastAPI routes. It is not the MCP service principal's effective
+authority. ``auth.mcp_capabilities`` is the deny-by-default outer boundary;
+the global auth middleware applies that explicit method+route matrix before a
+request can reach any dependency classified here. An entry called ADMITTED
+below therefore means "the route's legacy admin dependency admits it", not
+"the MCP key can reach the handler". This distinction preserves the useful
+dependency drift audit without turning its historical classifications into a
+second, conflicting authority source.
+
 ECM has two admin gates that look interchangeable and are not:
 
 * ``auth.RequireAdminIfEnabled`` — admin required, and the static MCP service
@@ -357,7 +367,9 @@ _BACKUP_ARCHIVE = {
 # fixes is the cloud-target half — every route in both routers now requires
 # admin.
 #
-# THE MCP PRINCIPAL IS ADMITTED ON ALL NINE, WRITES INCLUDED. This bead first
+# THE ROUTE DEPENDENCIES admit the principal on all nine, writes included. The
+# effective 04c0u.4 capability matrix now refuses all six writes while keeping
+# the three masked reads available. This bead first
 # denied the six writes via a ``RequireHumanAdminForOutboundDestination`` gate;
 # the PO withdrew that before it shipped and the gate no longer exists. The
 # reason is capability: bead jcj0f ships ``create_cloud_target``,
@@ -383,7 +395,8 @@ _BACKUP_ARCHIVE = {
 # stays denied (``_OUTBOUND_POLICY_WRITE``), and that both cloud-target
 # ``/test`` verbs stay denied (``_OUTBOUND_CREDENTIAL_TEST``).
 #
-# Bring the gate back if these tools are withdrawn.
+# Do not infer effective authority from this dependency-only classification;
+# see auth.mcp_capabilities.
 _DESTINATION_CRUD = {
     ("GET", "/api/cloud-targets"),
     ("POST", "/api/cloud-targets"),

@@ -10,7 +10,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, model_validator
 
-from auth import ResolveIsAdminIfEnabled
+from auth import ResolveIsAdminIfEnabled, ResolveIsMcpServicePrincipalIfEnabled
 from database import get_session
 from dispatcharr_client import get_client
 
@@ -49,6 +49,18 @@ def is_privileged_task_id(task_id: str) -> bool:
     return task_id in PRIVILEGED_TASK_IDS or task_id.startswith(
         PRIVILEGED_TASK_ID_PREFIXES
     )
+
+
+def _reject_mcp_privileged_task(task_id: str, caller_is_mcp: bool) -> None:
+    """Keep outbound/restore task activation under human authority."""
+    if caller_is_mcp and is_privileged_task_id(task_id):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "The MCP service principal cannot activate or configure this "
+                "privileged task; a human operator admin is required"
+            ),
+        )
 
 
 # -------------------------------------------------------------------------
@@ -600,6 +612,7 @@ async def run_task(
     task_id: str,
     request: Optional[TaskRunRequest] = None,
     is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Manually trigger a task execution.
 
@@ -613,6 +626,24 @@ async def run_task(
             "[TASKS] Refusing privileged task run for non-admin: task=%s", task_id
         )
         raise HTTPException(status_code=403, detail="Admin access required")
+    if task_id != "dbas_backup":
+        _reject_mcp_privileged_task(task_id, caller_is_mcp)
+    parameters = request.parameters if request and request.parameters else {}
+    if (
+        caller_is_mcp
+        and task_id == "dbas_backup"
+        and parameters.get("include_credentials") is True
+    ):
+        logger.warning(
+            "[TASKS] Refusing credential-bearing backup for MCP service principal"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "The MCP service principal cannot export credentials; "
+                "a human operator admin is required"
+            ),
+        )
     try:
         from task_engine import get_engine
         engine = get_engine()
@@ -632,7 +663,11 @@ async def run_task(
 
 
 @router.post("/api/tasks/{task_id}/cancel", tags=["Tasks"])
-async def cancel_task(task_id: str, is_admin: bool = ResolveIsAdminIfEnabled):
+async def cancel_task(
+    task_id: str,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Cancel a running task.
 
     Privileged tasks (:data:`PRIVILEGED_TASK_IDS`) are refused for non-admins,
@@ -645,6 +680,7 @@ async def cancel_task(task_id: str, is_admin: bool = ResolveIsAdminIfEnabled):
             "[TASKS] Refusing privileged task cancel for non-admin: task=%s", task_id
         )
         raise HTTPException(status_code=403, detail="Admin access required")
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
     try:
         from task_engine import get_engine
         engine = get_engine()
@@ -866,8 +902,13 @@ async def list_task_schedules(task_id: str):
 
 
 @router.post("/api/tasks/{task_id}/schedules", tags=["Tasks"])
-async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
+async def create_task_schedule(
+    task_id: str,
+    data: TaskScheduleCreate,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Create a new schedule for a task."""
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
     logger.debug("[TASKS] POST /api/tasks/%s/schedules - type=%s", task_id, data.schedule_type)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -942,8 +983,14 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
 
 
 @router.patch("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
-async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
+async def update_task_schedule(
+    task_id: str,
+    schedule_id: int,
+    data: TaskScheduleUpdate,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Update a task schedule."""
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -1043,8 +1090,13 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
 
 
 @router.delete("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
-async def delete_task_schedule(task_id: str, schedule_id: int):
+async def delete_task_schedule(
+    task_id: str,
+    schedule_id: int,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Delete a task schedule."""
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
     logger.debug("[TASKS] DELETE /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule

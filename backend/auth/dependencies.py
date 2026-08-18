@@ -218,9 +218,9 @@ async def get_current_user(
 
     # Static MCP API key: recognize it BEFORE attempting JWT decode. The key
     # is not a 3-part JWT, so decode_token() would reject it as "Malformed
-    # token". The global auth_middleware already grants this key full /api/*
-    # access; honoring it here aligns the route-dependency layer with that
-    # grant and unblocks JWT-guarded routes (dedup, backup, add_stream).
+    # token". The global auth_middleware first restricts this key through the
+    # deny-by-default method+route capability matrix; honoring it here lets an
+    # explicitly admitted request satisfy ordinary route dependencies.
     if _is_mcp_service_token(token):
         logger.debug("[AUTH] Authenticated request via static MCP service key")
         return _build_mcp_service_principal()
