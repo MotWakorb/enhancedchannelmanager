@@ -1,6 +1,7 @@
 name: Security Governance Audit
 
 on:
+  workflow_call:
   schedule:
     # 09:00 America/Chicago standard time on the first day of each quarter.
     - cron: "0 15 1 1,4,7,10 *"

@@ -1239,6 +1239,17 @@ jobs:
   # semgrep image and then does nothing. That is a few seconds of runner time
   # in exchange for the context being emitted exactly once, which is the
   # trade this design is built on.
+  # This workflow already exists on the default branch, so it is the active
+  # bridge that can invoke the governance workflow at the exact dev push SHA
+  # while that newly added workflow is not yet present on main.
+  security-governance-audit:
+    name: Security Governance Audit
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    permissions:
+      contents: read
+      security-events: read
+    uses: ./.github/workflows/security-governance-audit.yml
+
   publish-verified-dev-images:
     name: Publish Verified Dev Images
     needs:
