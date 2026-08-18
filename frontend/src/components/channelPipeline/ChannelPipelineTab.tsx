@@ -1408,13 +1408,16 @@ export function ChannelPipelineTab() {
                         when has_snapshot=true; hidden for dry runs, legacy runs,
                         and already-reverted executions so the operator always
                         knows what will happen. */}
-                    {execution.has_snapshot && (execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
+                    {execution.has_snapshot && (execution.status === 'completed' || execution.status === 'completed_with_errors' || execution.status === 'failed') && execution.mode === 'execute' && (
                       <button
                         className="action-btn action-btn-revert"
                         onClick={() => handleRevertClick(execution)}
-                        aria-label="Undo this run"
+                        aria-label={execution.status === 'failed' ? 'Recover from snapshot' : 'Undo this run'}
                         title={
-                          'Undo this run — restores affected channels to their exact stream state ' +
+                          (execution.status === 'failed'
+                            ? 'Recover from snapshot — this failed run may have applied some changes before it stopped. '
+                            : 'Undo this run — ') +
+                          'Restores affected channels to their exact stream state ' +
                           'from the pre-run snapshot, overwriting any changes made since ' +
                           '(including edits made after this run). Unlike Rollback, this is a ' +
                           "full snapshot restore, not just this run's own changes." +
@@ -1426,6 +1429,11 @@ export function ChannelPipelineTab() {
                       >
                         <span className="material-icons">settings_backup_restore</span>
                       </button>
+                    )}
+                    {execution.has_snapshot && execution.status === 'failed' && execution.mode === 'execute' && (
+                      <span className="execution-no-snapshot" role="status">
+                        Failed after some changes may have been applied; snapshot recovery is available.
+                      </span>
                     )}
                     {!execution.has_snapshot && execution.mode === 'execute' && (execution.status === 'completed' || execution.status === 'completed_with_errors') && (
                       <span

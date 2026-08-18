@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import stat
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 SETTINGS_FILE = CONFIG_DIR / "settings.json"
+MCP_SERVICE_FILE = CONFIG_DIR / "mcp-service.json"
 
 # ECM backend URL (internal Docker network)
 ECM_URL = os.environ.get("ECM_URL", "http://ecm:6100")
@@ -193,6 +195,54 @@ def get_mcp_api_key() -> str:
     # status. Keeps two read paths from drifting apart (bd-ix1g6).
     key, _ = get_mcp_api_key_status()
     return key
+
+
+def get_mcp_backend_credentials() -> tuple[str, str]:
+    """Read the owner-only sidecar projection used for backend calls.
+
+    This is deliberately separate from ``mcp_api_key``: the latter is an
+    operator-disclosed client credential and must never authenticate directly
+    to the ECM backend. Re-reading supports backend-side atomic rotation.
+    """
+    try:
+        data = json.loads(MCP_SERVICE_FILE.read_text())
+        backend_key = str(data.get("backend_key") or "")
+        confirmation_key = str(data.get("confirmation_key") or "")
+    except (OSError, json.JSONDecodeError, TypeError):
+        return "", ""
+    return backend_key, confirmation_key
+
+
+def get_mcp_backend_credentials_status() -> str:
+    """Return non-secret readiness for the private backend projection."""
+    try:
+        metadata = MCP_SERVICE_FILE.stat()
+        if not stat.S_ISREG(metadata.st_mode):
+            return "invalid_file"
+        if stat.S_IMODE(metadata.st_mode) != 0o600:
+            return "insecure_permissions"
+        if metadata.st_uid != os.geteuid():
+            return "wrong_owner"
+        data = json.loads(MCP_SERVICE_FILE.read_text())
+    except FileNotFoundError:
+        return "file_not_found"
+    except PermissionError:
+        return "unreadable"
+    except (OSError, json.JSONDecodeError):
+        return "invalid_file"
+    if not isinstance(data, dict) or set(data) != {"backend_key", "confirmation_key"}:
+        return "invalid_schema"
+    backend_key = data.get("backend_key")
+    confirmation_key = data.get("confirmation_key")
+    if (
+        not isinstance(backend_key, str)
+        or not isinstance(confirmation_key, str)
+        or len(backend_key) < 32
+        or len(confirmation_key) < 32
+        or backend_key == confirmation_key
+    ):
+        return "invalid_credentials"
+    return "ok"
 
 
 def get_mcp_api_key_status() -> tuple[str, str]:

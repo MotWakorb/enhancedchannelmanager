@@ -18,6 +18,7 @@ from config import (
     MCP_TRUSTED_PROXY_IPS,
     get_mcp_api_key,
     get_mcp_api_key_status,
+    get_mcp_backend_credentials_status,
     normalize_mcp_allowed_host,
 )
 from mcp.server.fastmcp import FastMCP
@@ -364,6 +365,8 @@ async def handle_health(request):
     """
     api_key, status = get_mcp_api_key_status()
     configured = bool(api_key)
+    service_status = get_mcp_backend_credentials_status()
+    ready = configured and service_status == "ok"
 
     # Pick a hint tailored to the specific failure mode so the user sees a
     # remediation matching the actual cause, not a one-size-fits-all message.
@@ -391,17 +394,19 @@ async def handle_health(request):
     }
 
     response = {
-        "status": "ok" if configured else "not_configured",
+        "status": "ok" if ready else "not_ready",
         "server": "ecm-mcp",
         "transport": "streamable-http",
         "api_key_configured": configured,
         "api_key_status": status,
+        "backend_service_ready": service_status == "ok",
+        "backend_service_status": service_status,
         "tools_available": len(mcp._tool_manager.list_tools()),
         "resources_available": len(mcp._resource_manager.list_resources()),
     }
     if not configured and status in setup_hints:
         response["setup_hint"] = setup_hints[status]
-    return JSONResponse(response)
+    return JSONResponse(response, status_code=200 if ready else 503)
 
 
 # MCP OAuth offering RETIRED (bd-9axgc). ``handle_protected_resource`` (RFC 9728

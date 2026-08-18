@@ -43,11 +43,17 @@ def register(mcp: FastMCP):
             return f"Error listing notifications: {e}"
 
     @mcp.tool()
-    async def mark_notifications_read() -> str:
+    async def mark_notifications_read(
+        plan_notification_ids: list[int] | None = None,
+    ) -> str:
         """Mark all notifications as read."""
         try:
             client = get_ecm_client()
-            await client.call_endpoint(ENDPOINTS["notifications_mark_all_read"])
+            body = (
+                {"notification_ids": plan_notification_ids}
+                if plan_notification_ids is not None else None
+            )
+            await client.call_endpoint(ENDPOINTS["notifications_mark_all_read"], body=body)
             # Read-back: confirm there are no unread notifications left.
             try:
                 result = await client.call_endpoint(ENDPOINTS["notifications_list"], query={"page_size": 1})
@@ -62,7 +68,10 @@ def register(mcp: FastMCP):
             return f"Error marking notifications as read: {e}"
 
     @mcp.tool()
-    async def delete_all_notifications(include_unread: bool = False) -> str:
+    async def delete_all_notifications(
+        include_unread: bool = False,
+        plan_notification_ids: list[int] | None = None,
+    ) -> str:
         """Delete notifications.
 
         By default only deletes read notifications (safe behaviour).  Set
@@ -85,6 +94,10 @@ def register(mcp: FastMCP):
             await client.call_endpoint(
                 ENDPOINTS["notifications_delete_all"],
                 query={"read_only": read_only},
+                body=(
+                    {"notification_ids": plan_notification_ids}
+                    if plan_notification_ids is not None else None
+                ),
             )
             # Read-back: confirm the notification list reflects the deletion.
             try:

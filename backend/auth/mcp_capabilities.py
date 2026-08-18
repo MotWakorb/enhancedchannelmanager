@@ -125,6 +125,8 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ('PATCH', '/api/tags/groups/{group_id}'),
     ('PATCH', '/api/tags/groups/{group_id}/tags/{tag_id}'),
     ('POST', '/api/alert-methods/{method_id}/test'),
+    ('POST', '/api/auto-creation/run/commit'),
+    ('POST', '/api/auto-creation/run/prepare'),
     ('POST', '/api/backup/restore-dbas-saved'),
     ('POST', '/api/backup/restore-saved'),
     ('POST', '/api/backup/save'),
@@ -132,6 +134,8 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ('POST', '/api/channel-merges'),
     ('POST', '/api/channel-merges/{merge_id}/accept'),
     ('POST', '/api/channel-merges/{merge_id}/dismiss'),
+    ('POST', '/api/channel-pipeline/run/commit'),
+    ('POST', '/api/channel-pipeline/run/prepare'),
     ('POST', '/api/channel-pipeline/event-sync-preview'),
     ('POST', '/api/channel-pipeline/executions/{execution_id}/restore-snapshot'),
     ('POST', '/api/channel-pipeline/executions/{execution_id}/rollback'),
@@ -160,6 +164,7 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ('POST', '/api/dummy-epg/preview'),
     ('POST', '/api/dummy-epg/profiles'),
     ('POST', '/api/emby/clear-logos'),
+    ('POST', '/api/emby/clear-logos/prepare'),
     ('POST', '/api/epg/channels/{channel_id}/link'),
     ('POST', '/api/epg/match'),
     ('POST', '/api/epg/sources'),
@@ -213,6 +218,9 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
 # broader than the current sidecar contract: identity, service-key and TLS
 # routes remain classified if a future tool tries to call them.
 MCP_HUMAN_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    # MCP pipeline execution is exposed only through the content-bound
+    # prepare/commit pair. Humans retain the legacy one-shot route.
+    ("POST", "/api/channel-pipeline/run"),
     # Credential-bearing backup export/restore and destructive restore.
     ("GET", "/api/backup/create"),
     ("POST", "/api/backup/save"),

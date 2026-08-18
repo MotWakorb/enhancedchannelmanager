@@ -488,7 +488,11 @@ def register(mcp: FastMCP):
             return f"Error getting stale stream ids: {e}"
 
     @mcp.tool()
-    async def cleanup_struck_out_streams(delete_empty_channels: bool = False) -> str:
+    async def cleanup_struck_out_streams(
+        delete_empty_channels: bool = False,
+        plan_stream_ids: list[int] | None = None,
+        plan_channel_ids: list[int] | None = None,
+    ) -> str:
         """Remove all struck-out streams from their channels in one operation.
 
         This is a bulk cleanup tool that:
@@ -504,9 +508,13 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
 
             # Get struck-out streams with channel associations
-            struck_result = await client.call_endpoint(ENDPOINTS["stream_stats_struck_out"])
-            streams = struck_result.get("streams", []) if isinstance(struck_result, dict) else struck_result
-            threshold = struck_result.get("threshold", "?") if isinstance(struck_result, dict) else "?"
+            if plan_stream_ids is not None:
+                streams = [{"stream_id": value} for value in plan_stream_ids]
+                threshold = "planned"
+            else:
+                struck_result = await client.call_endpoint(ENDPOINTS["stream_stats_struck_out"])
+                streams = struck_result.get("streams", []) if isinstance(struck_result, dict) else struck_result
+                threshold = struck_result.get("threshold", "?") if isinstance(struck_result, dict) else "?"
 
             if not streams:
                 return f"No struck-out streams to clean up (threshold: {threshold})."
@@ -521,6 +529,11 @@ def register(mcp: FastMCP):
 
             # Build map of channels that will be affected
             affected_channels = {}  # ch_id -> {name, struck_ids}
+            if plan_channel_ids is not None:
+                affected_channels = {
+                    value: {"name": f"channel {value}", "struck_ids": set(stream_ids)}
+                    for value in plan_channel_ids
+                }
             for s in streams:
                 for ch in s.get("channels", []):
                     ch_id = ch.get("id")

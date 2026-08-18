@@ -20,6 +20,7 @@ from config import (
     get_http_port,
     CONFIG_DIR,
     CONFIG_FILE,
+    MCP_SERVICE_FILE,
     get_log_level_from_env,
     set_log_level,
 )
@@ -142,7 +143,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0122",
+    version="0.18.1-0123",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -542,6 +543,7 @@ from auth.dependencies import (
     token_matches_user_auth_epoch,
 )
 from auth.mcp_capabilities import is_mcp_route_allowed
+from auth.mcp_service import ensure_mcp_service_credentials, verify_mcp_service_claim
 from models import User
 
 
@@ -559,20 +561,43 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith("/api/"):
         auth_settings = get_auth_settings()
 
+        # Credential separation is independent of the human-auth mode. The
+        # operator-facing key terminates at the MCP listener and can never
+        # become a backend principal, including while JWT auth is disabled.
+        presented_token = get_token_from_request(request)
+        public_mcp_key = get_settings().mcp_api_key
+        if (
+            public_mcp_key and presented_token
+            and hmac.compare_digest(presented_token, public_mcp_key)
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "MCP service principal client credentials are valid only "
+                        "at the sidecar and cannot authenticate to the backend"
+                    )
+                },
+            )
+
         # Skip auth when it's not required or setup isn't complete
         if auth_settings.require_auth and auth_settings.setup_complete:
             # Check if path is exempt
             if path not in AUTH_EXEMPT_PATHS:
-                token = get_token_from_request(request)
+                token = presented_token
                 # Allow MCP API key as alternative to JWT. Constant-time compare
                 # to avoid a timing oracle on the static key (bd-1wq7z.24 (a));
                 # the truthiness guards on both operands keep compare_digest from
                 # ever seeing None (it raises on None) and reject an empty key.
-                settings = get_settings()
+                credentials = ensure_mcp_service_credentials(MCP_SERVICE_FILE)
+                # The operator-disclosed key authenticates only the MCP
+                # listener. Return an explicit refusal (rather than treating it
+                # as a malformed JWT) so upgrades fail closed and are easy to
+                # diagnose without granting any backend principal.
                 if (
-                    settings.mcp_api_key
+                    credentials.backend_key
                     and token
-                    and hmac.compare_digest(token, settings.mcp_api_key)
+                    and hmac.compare_digest(token, credentials.backend_key)
                 ):
                     # The static key authenticates a service principal; it
                     # does not confer blanket /api authority. Match the
@@ -604,6 +629,13 @@ async def auth_middleware(request: Request, call_next):
                                     "for this operation; a human operator admin is required"
                                 )
                             },
+                        )
+                    try:
+                        await verify_mcp_service_claim(request, credentials)
+                    except HTTPException as exc:
+                        return JSONResponse(
+                            status_code=exc.status_code,
+                            content={"detail": exc.detail},
                         )
                     return await call_next(request)
                 payload = decode_token_safe(token) if token else None
@@ -1056,6 +1088,12 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
     logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
+
+    # Materialize the private sidecar projection before the backend becomes
+    # healthy. The MCP container waits on that health check, so its very first
+    # tool call can authenticate after a fresh install or restart.
+    ensure_mcp_service_credentials(MCP_SERVICE_FILE)
+    logger.info("[MAIN] MCP sidecar backend credentials are ready")
 
     # Exit-path diagnostics (bd-0gt2i / GH #546): the loop exception handler
     # can only be installed once the event loop is running. Logs loudly on

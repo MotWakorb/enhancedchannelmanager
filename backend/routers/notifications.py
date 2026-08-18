@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from database import get_session
 from services.notification_service import create_notification_internal
@@ -27,6 +27,10 @@ class CreateNotificationRequest(BaseModel):
     action_url: Optional[str] = None
     metadata: Optional[dict] = None
     send_alerts: bool = True
+
+
+class NotificationIdsRequest(BaseModel):
+    notification_ids: list[int] = Field(default_factory=list, max_length=499)
 
 
 @router.get("")
@@ -115,7 +119,7 @@ async def create_notification(request: CreateNotificationRequest):
 
 
 @router.patch("/mark-all-read")
-async def mark_all_notifications_read():
+async def mark_all_notifications_read(body: NotificationIdsRequest | None = None):
     """Mark all notifications as read."""
     logger.debug("[NOTIFY] PATCH /notifications/mark-all-read")
     from datetime import datetime
@@ -123,7 +127,10 @@ async def mark_all_notifications_read():
 
     session = get_session()
     try:
-        count = session.query(Notification).filter(Notification.read == False).update(
+        query = session.query(Notification).filter(Notification.read == False)
+        if body is not None:
+            query = query.filter(Notification.id.in_(body.notification_ids))
+        count = query.update(
             {"read": True, "read_at": datetime.utcnow()},
             synchronize_session=False
         )
@@ -180,7 +187,9 @@ async def delete_notification(notification_id: int):
 
 
 @router.delete("")
-async def clear_all_notifications(read_only: bool = True):
+async def clear_all_notifications(
+    read_only: bool = True, body: NotificationIdsRequest | None = None
+):
     """Clear notifications. By default only clears read notifications."""
     logger.debug("[NOTIFY] DELETE /notifications - read_only=%s", read_only)
     from models import Notification
@@ -188,6 +197,8 @@ async def clear_all_notifications(read_only: bool = True):
     session = get_session()
     try:
         query = session.query(Notification)
+        if body is not None:
+            query = query.filter(Notification.id.in_(body.notification_ids))
         if read_only:
             query = query.filter(Notification.read == True)
 

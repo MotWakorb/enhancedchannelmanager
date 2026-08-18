@@ -349,7 +349,8 @@ class ActionExecutor:
                  epg_data: list = None, epg_sources: list = None,
                  triggered_by: str = "manual", execution_id: int | None = None,
                  channel_profile_membership: dict[int, set[int]] | None = None,
-                 managed_channel_ids: Iterable[int] | None = None):
+                 managed_channel_ids: Iterable[int] | None = None,
+                 plan_only: bool = False):
         """
         Initialize the executor.
 
@@ -417,6 +418,7 @@ class ActionExecutor:
         self._all_profile_ids = all_profile_ids
         self._triggered_by = triggered_by
         self._execution_id = execution_id
+        self._plan_only = plan_only
         # GH #801 / bead 0ippw: durable ECM provenance for _is_manual_channel.
         # Populated by the engine from every rule's persisted
         # managed_channel_ids; grows as this run creates channels so the marker
@@ -691,6 +693,9 @@ class ActionExecutor:
 
     def _flush_journal_buffer(self) -> None:
         """Flush buffered journal entries in one transaction."""
+        if self._plan_only:
+            self._journal_buffer.clear()
+            return
         if not self._journal_buffer:
             return
 
@@ -5649,7 +5654,7 @@ class ActionExecutor:
                 candidates=candidates,
                 threshold=threshold,
                 triggered_by=self._triggered_by,
-                dry_run=exec_ctx.dry_run,
+                dry_run=exec_ctx.dry_run or self._plan_only,
                 db_session=db_session,
             )
         finally:

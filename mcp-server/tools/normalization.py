@@ -414,6 +414,8 @@ def register(mcp: FastMCP):
     async def apply_normalization_to_channels(
         dry_run: bool = True,
         actions: list[dict] | None = None,
+        plan_id: str | None = None,
+        plan_hash: str | None = None,
     ) -> str:
         """Apply enabled normalization rules to existing channel names.
 
@@ -448,8 +450,10 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             body = None
-            if not dry_run and actions:
+            if actions:
                 body = {"actions": actions}
+            if plan_id and plan_hash:
+                body = {**(body or {}), "plan_id": plan_id, "plan_hash": plan_hash}
             result = await client.call_endpoint(
                 ENDPOINTS["normalization_apply_to_channels"],
                 query={"dry_run": dry_run},

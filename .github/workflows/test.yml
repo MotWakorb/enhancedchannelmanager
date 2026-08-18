@@ -289,6 +289,9 @@ jobs:
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest
+    # Healthy runs complete in under ten minutes. Bound future deadlocks so a
+    # wedged test cannot occupy a runner for GitHub's six-hour default.
+    timeout-minutes: 30
     needs: [detect]
     if: ${{ !cancelled() }}
     steps:
@@ -344,7 +347,6 @@ jobs:
         if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         run: |
-          mkdir -p /tmp/ecm_test_config
           rm -f /tmp/ecm-test.db
           # Materialize an empty SQLite file — tests that opt into the
           # `ci_seed_db` fixture load their own tmp DBs; this file exists so
@@ -356,7 +358,9 @@ jobs:
         if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         env:
-          CONFIG_DIR: /tmp/ecm_test_config
+          # conftest owns baseline creation. This is only the private parent
+          # for its per-process mkdtemp directory, so no runner state is reused.
+          ECM_TEST_CONFIG_ROOT: ${{ runner.temp }}
           RATE_LIMIT_ENABLED: '0'
           ECM_CI_DB_PATH: /tmp/ecm-test.db
         run: |

@@ -5,15 +5,21 @@ Covers the empty-group_ids safety fix:
 - all_groups=True with no group_ids clears everything and reports it correctly
 - a non-empty group_ids list clears just those groups and reports the correct count
 """
+import re
+
 import pytest
 from unittest.mock import AsyncMock, patch
-
-from tools._guardrails import derive_token
-
 
 def _page(channels):
     """A channels_list page envelope for enumeration in clear_auto_created."""
     return {"results": channels, "next": None, "count": len(channels)}
+
+
+def _token(result) -> str:
+    text = result[0][0].text
+    match = re.search(r"confirm_token='([^']+)'", text)
+    assert match, text
+    return match.group(1)
 
 
 def _make_mock(return_value=None, side_effect=None):
@@ -108,11 +114,11 @@ class TestClearAutoCreatedAllGroupsFlag:
             return {"deleted": 42, "updated_count": 42}
 
         mock_client = _make_mock(side_effect=_side)
-        token = derive_token([1, 2])
-
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool("clear_auto_created", {"all_groups": True})
             result = await mcp.call_tool(
-                "clear_auto_created", {"all_groups": True, "confirm_token": token}
+                "clear_auto_created",
+                {"all_groups": True, "confirm_token": _token(preview)},
             )
 
         text = result[0][0].text
@@ -187,12 +193,13 @@ class TestClearAutoCreatedSpecificGroups:
             return {"deleted": 7, "updated_count": 7}
 
         mock_client = _make_mock(side_effect=_side)
-        token = derive_token([100, 101])
-
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool(
+                "clear_auto_created", {"group_ids": [10, 20, 30]}
+            )
             result = await mcp.call_tool(
                 "clear_auto_created",
-                {"group_ids": [10, 20, 30], "confirm_token": token},
+                {"group_ids": [10, 20, 30], "confirm_token": _token(preview)},
             )
 
         text = result[0][0].text
@@ -237,12 +244,11 @@ class TestClearAutoCreatedSpecificGroups:
             return {"deleted": 3, "updated_count": 3}
 
         mock_client = _make_mock(side_effect=_side)
-        token = derive_token([10, 11, 12])
-
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool("clear_auto_created", {"group_ids": [5]})
             result = await mcp.call_tool(
                 "clear_auto_created",
-                {"group_ids": [5], "confirm_token": token},
+                {"group_ids": [5], "confirm_token": _token(preview)},
             )
 
         text = result[0][0].text
@@ -299,12 +305,13 @@ class TestClearAutoCreatedSpecificGroups:
             return {"deleted": 5, "updated_count": 5}
 
         mock_client = _make_mock(side_effect=_side)
-        token = derive_token([100, 200])
-
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool(
+                "clear_auto_created", {"group_ids": [100, 200]}
+            )
             result = await mcp.call_tool(
                 "clear_auto_created",
-                {"group_ids": [100, 200], "confirm_token": token},
+                {"group_ids": [100, 200], "confirm_token": _token(preview)},
             )
 
         text = result[0][0].text

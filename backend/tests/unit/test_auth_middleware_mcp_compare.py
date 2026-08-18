@@ -62,11 +62,12 @@ def _patch_common(monkeypatch, *, mcp_api_key, token):
 
 
 @pytest.mark.asyncio
-async def test_correct_mcp_key_passes_through(monkeypatch):
-    """A request bearing the configured MCP key is allowed through."""
+async def test_external_mcp_client_key_is_refused_before_route_dispatch(monkeypatch):
+    """The key disclosed to clients terminates at the sidecar."""
     _patch_common(monkeypatch, mcp_api_key=MCP_KEY, token=MCP_KEY)
     result = await main.auth_middleware(_Request("/api/channels"), _call_next_sentinel)
-    assert result == "PASSED_THROUGH"
+    assert result != "PASSED_THROUGH"
+    assert result.status_code == 403
 
 
 @pytest.mark.asyncio
@@ -132,7 +133,7 @@ async def test_static_key_compare_is_constant_time(monkeypatch):
     monkeypatch.setattr(main.hmac, "compare_digest", _spy)
 
     result = await main.auth_middleware(_Request("/api/channels"), _call_next_sentinel)
-    assert result == "PASSED_THROUGH"
+    assert result.status_code == 403
     assert (MCP_KEY, MCP_KEY) in calls
 
 

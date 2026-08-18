@@ -69,13 +69,34 @@ class TestHealthEndpoint:
         assert data["tools_available"] > 0
         assert data["resources_available"] > 0
 
+    @pytest.mark.parametrize(
+        "service_status",
+        ["file_not_found", "unreadable", "insecure_permissions", "invalid_schema"],
+    )
+    def test_health_is_unready_without_valid_private_projection(
+        self, client, service_status
+    ):
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("<MCP_CLIENT_KEY>", "ok")
+        ), patch(
+            "server.get_mcp_backend_credentials_status", return_value=service_status
+        ):
+            response = client.get("/health")
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "not_ready"
+        assert data["backend_service_ready"] is False
+        assert data["backend_service_status"] == service_status
+        assert "backend_key" not in response.text
+        assert "confirmation_key" not in response.text
+
     def test_health_shows_unconfigured(self, client):
         """Health shows api_key_configured=false when no key."""
         with patch(
             "server.get_mcp_api_key_status", return_value=("", "field_empty")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         assert response.json()["api_key_configured"] is False
 
     def test_health_no_auth_required(self, client):
@@ -121,7 +142,7 @@ class TestHealthEndpoint:
             "server.get_mcp_api_key_status", return_value=("", "file_not_found")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "file_not_found"
@@ -136,7 +157,7 @@ class TestHealthEndpoint:
             "server.get_mcp_api_key_status", return_value=("", "invalid_json")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "invalid_json"
@@ -153,7 +174,7 @@ class TestHealthEndpoint:
             "server.get_mcp_api_key_status", return_value=("", "field_missing")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "field_missing"
@@ -169,7 +190,7 @@ class TestHealthEndpoint:
             "server.get_mcp_api_key_status", return_value=("", "field_empty")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "field_empty"

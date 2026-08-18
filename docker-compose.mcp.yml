@@ -11,6 +11,9 @@ services:
       - "127.0.0.1:${MCP_PORT:-6101}:${MCP_PORT:-6101}"
     volumes:
       - ecm-config:/config:ro
+    # Match ECM's runtime identity. The backend creates the private service
+    # projection as owner-only (0600), and the sidecar rejects other owners.
+    user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       - CONFIG_DIR=/config
       - ECM_URL=http://ecm:${ECM_PORT:-6100}

@@ -639,11 +639,20 @@ def register(mcp: FastMCP):
             return f"Error listing dummy EPG profiles: {e}"
 
     @mcp.tool()
-    async def generate_dummy_epg() -> str:
+    async def generate_dummy_epg(
+        plan_profile_ids: list[int] | None = None,
+    ) -> str:
         """Force regeneration of all dummy EPG XMLTV data from enabled profiles."""
         try:
             client = get_ecm_client()
-            result = await client.call_endpoint(ENDPOINTS["dummy_epg_generate"], timeout=60.0)
+            result = await client.call_endpoint(
+                ENDPOINTS["dummy_epg_generate"],
+                body=(
+                    {"profile_ids": plan_profile_ids}
+                    if plan_profile_ids is not None else None
+                ),
+                timeout=60.0,
+            )
             count = result.get("profiles_generated", 0) if isinstance(result, dict) else 0
             return f"Dummy EPG regenerated for {count} enabled profiles."
         except Exception as e:

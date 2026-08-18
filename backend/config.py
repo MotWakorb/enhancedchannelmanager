@@ -4,6 +4,7 @@ from pydantic import BaseModel, field_validator
 import json
 import os
 import logging
+import secrets
 
 # Single source of truth for the dedup confidence floor per ADR-008 §D2.
 # Imported from the ``confidence_constants`` leaf module (NOT from
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 # Config file location
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 CONFIG_FILE = CONFIG_DIR / "settings.json"
+MCP_SERVICE_FILE = CONFIG_DIR / "mcp-service.json"
 
 
 ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -897,7 +899,23 @@ def save_settings(settings: DispatcharrSettings) -> None:
         if settings.dispatcharr_api_key:
             settings.api_key = settings.dispatcharr_api_key
         settings_json = json.dumps(settings.model_dump(), indent=2)
-        CONFIG_FILE.write_text(settings_json)
+        # Credential rotation must never expose a partially-written JSON file
+        # to the live MCP sidecar. Write, sync, then atomically project it.
+        temporary = CONFIG_FILE.with_name(
+            f".{CONFIG_FILE.name}.{secrets.token_hex(8)}.tmp"
+        )
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "w") as output:
+                output.write(settings_json)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, CONFIG_FILE)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
         _cached_settings = settings
         logger.info("[CONFIG] Settings saved successfully to %s", CONFIG_FILE)
 

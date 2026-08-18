@@ -391,3 +391,19 @@ class TestRunPipelineDryRunGate:
         )
 
         engine._capture_snapshot.assert_not_called()
+
+    def test_planning_run_skips_every_run_level_persistence_sink(self):
+        """Dangerous mutant: plan_only must not behave like live dry_run=False."""
+        engine = self._stub_engine()
+
+        asyncio.get_event_loop().run_until_complete(
+            engine.run_pipeline(
+                dry_run=False, triggered_by="api", record_execution=False,
+                plan_only=True, skip_prerefresh=True,
+            )
+        )
+
+        engine._capture_snapshot.assert_not_called()
+        engine._save_execution.assert_not_called()
+        engine._update_rule_stats.assert_not_called()
+        engine._create_execution.assert_not_called()

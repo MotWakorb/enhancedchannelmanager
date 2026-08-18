@@ -25,6 +25,9 @@ from services.epg_migration import build_xmltv_lcn_index
 # value this generous (10x the worst event-loop stall ever observed on a
 # saturated CI runner) cannot be reached by machine load alone.
 _LOOP_LIVENESS_TIMEOUT = 10.0
+# Async task handshakes must never turn a rejected launch into an unbounded
+# suite hang. Healthy in-process launches signal in milliseconds.
+_TASK_HANDSHAKE_TIMEOUT = 10.0
 
 
 class _FakeEPGHTTPClient:
@@ -871,11 +874,17 @@ class TestGuideMigration:
             "routers.epg._run_guide_migration", side_effect=slow_run
         ):
             first = await async_client.post("/api/epg/migration/apply", json=payload)
-            await started.wait()
-            second = await async_client.post("/api/epg/migration/apply", json=payload)
-            assert first.status_code == 202
-            assert second.status_code == 409
-            release.set()
+            assert first.status_code == 202, first.text
+            try:
+                await asyncio.wait_for(
+                    started.wait(), timeout=_TASK_HANDSHAKE_TIMEOUT
+                )
+                second = await async_client.post(
+                    "/api/epg/migration/apply", json=payload
+                )
+                assert second.status_code == 409
+            finally:
+                release.set()
             terminal = await _poll_migration(async_client, first)
         assert terminal["status"] == "completed"
 

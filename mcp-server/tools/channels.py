@@ -313,6 +313,7 @@ def register(mcp: FastMCP):
         logo_id: int | None = None,
         streams: list[int] | None = None,
         confirm: bool = False,
+        plan_current_channel: dict | None = None,
     ) -> str:
         """Update an existing channel.
 
@@ -365,6 +366,16 @@ def register(mcp: FastMCP):
 
             if not payload:
                 return "No changes specified."
+
+            if plan_current_channel is not None:
+                fresh = await client.call_endpoint(
+                    ENDPOINTS["channels_get"], path_args={"channel_id": channel_id}
+                )
+                if fresh != plan_current_channel:
+                    return (
+                        f"Backend target drift detected for channel {channel_id}; "
+                        "request a new mutation-free preview."
+                    )
 
             # --- bd-onazy confirm gate ---------------------------------------
             # Only a rename or group-change is "high blast radius"; a bare
@@ -868,7 +879,11 @@ def register(mcp: FastMCP):
             return f"Error removing stream {stream_id} from channel {channel_id}: {e}"
 
     @mcp.tool()
-    async def reorder_streams(channel_id: int, stream_ids: list[int]) -> str:
+    async def reorder_streams(
+        channel_id: int,
+        stream_ids: list[int],
+        plan_current_channel: dict | None = None,
+    ) -> str:
         """Reorder streams within a channel. The order of stream_ids defines the new priority.
 
         Args:
@@ -885,6 +900,11 @@ def register(mcp: FastMCP):
             channel = await client.call_endpoint(
                 ENDPOINTS["channels_get"], path_args={"channel_id": channel_id}
             )
+            if plan_current_channel is not None and channel != plan_current_channel:
+                return (
+                    f"Backend target drift detected for channel {channel_id}; "
+                    "request a new mutation-free preview."
+                )
             current_ids = list(channel.get("streams", []) or []) if isinstance(channel, dict) else []
             current_set = set(current_ids)
 
@@ -1466,7 +1486,10 @@ def register(mcp: FastMCP):
             return f"Error in bulk commit: {e}"
 
     @mcp.tool()
-    async def set_logo_from_epg(channel_ids: list[int]) -> str:
+    async def set_logo_from_epg(
+        channel_ids: list[int],
+        plan_logo_actions: list[dict] | None = None,
+    ) -> str:
         """Set channel logos from their linked EPG entry's icon_url.
 
         For each channel: reads its epg_data_id, fetches the linked EPG entry from
@@ -1486,19 +1509,36 @@ def register(mcp: FastMCP):
             errors: list[str] = []
             logo_cache: dict[str, int] = {}
 
+            actions = plan_logo_actions
+            if actions is not None:
+                if sorted(action.get("channel_id") for action in actions) != sorted(set(channel_ids)):
+                    return "Backend target drift detected; request a new mutation-free preview."
+                # Validate the complete read set before the first logo create or
+                # channel patch. This prevents a partially applied stale plan.
+                for action in actions:
+                    cid = action["channel_id"]
+                    fresh_channel = await client.get(f"/api/channels/{cid}")  # contract-exempt: pre-write validation of the signed cross-domain logo plan
+                    if fresh_channel != action.get("channel"):
+                        return "Backend target drift detected; request a new mutation-free preview."
+                    epg_data_id = fresh_channel.get("epg_data_id")
+                    fresh_epg = await client.get(f"/api/epg/data/{epg_data_id}") if epg_data_id else None  # contract-exempt: pre-write validation of the signed EPG entry
+                    if fresh_epg != action.get("epg_entry"):
+                        return "Backend target drift detected; request a new mutation-free preview."
+
             # contract-exempt: composes per-channel reads + an epg-domain read
             # (/api/epg/data/{id}) + a logo create + a channel PATCH — a
             # multi-call/cross-domain flow that doesn't reduce to one Endpoint.
-            for cid in channel_ids:
+            for action in actions or ({"channel_id": cid} for cid in channel_ids):
                 try:
-                    channel = await client.get(f"/api/channels/{cid}")  # contract-exempt: see above
+                    cid = action["channel_id"]
+                    channel = action.get("channel") or await client.get(f"/api/channels/{cid}")  # contract-exempt: see above
                     epg_data_id = channel.get("epg_data_id")
                     if not epg_data_id:
                         skipped_no_epg += 1
                         continue
 
-                    epg_entry = await client.get(f"/api/epg/data/{epg_data_id}")  # contract-exempt: part of set_logo_from_epg cross-domain flow (no MCP tool hits /api/epg/data directly)
-                    icon_url = epg_entry.get("icon_url") or epg_entry.get("icon")
+                    epg_entry = action.get("epg_entry") or await client.get(f"/api/epg/data/{epg_data_id}")  # contract-exempt: part of set_logo_from_epg cross-domain flow (no MCP tool hits /api/epg/data directly)
+                    icon_url = action.get("icon_url") or epg_entry.get("icon_url") or epg_entry.get("icon")
                     if not icon_url:
                         skipped_no_icon += 1
                         continue
