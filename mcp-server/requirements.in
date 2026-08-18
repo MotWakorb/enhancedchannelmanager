@@ -8,4 +8,4 @@ starlette>=0.41.0
 # PyJWT to exercise the CD1 no-fail-cascade guard (a JWT-shaped Bearer must be
 # rejected and never compared to the static key). Pinned as a direct dependency
 # so the test fixtures cannot silently break if a transitive provider drops it.
-pyjwt>=2.10.0
+pyjwt>=2.13.0
