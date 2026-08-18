@@ -142,7 +142,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0121",
+    version="0.18.1-0122",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -541,6 +541,7 @@ from auth.dependencies import (
     decode_token_safe,
     token_matches_user_auth_epoch,
 )
+from auth.mcp_capabilities import is_mcp_route_allowed
 from models import User
 
 
@@ -573,6 +574,37 @@ async def auth_middleware(request: Request, call_next):
                     and token
                     and hmac.compare_digest(token, settings.mcp_api_key)
                 ):
+                    # The static key authenticates a service principal; it
+                    # does not confer blanket /api authority. Match the
+                    # concrete URL to FastAPI's registered route template so
+                    # path parameters cannot evade the explicit matrix. A new
+                    # or unregistered route fails closed.
+                    route_template = None
+                    for route in app.routes:
+                        path_regex = getattr(route, "path_regex", None)
+                        methods = getattr(route, "methods", set()) or set()
+                        if (
+                            request.method in methods
+                            and path_regex is not None
+                            and path_regex.fullmatch(path)
+                        ):
+                            route_template = route.path
+                            break
+                    if not is_mcp_route_allowed(request.method, route_template):
+                        logger.warning(
+                            "[AUTH] MCP service principal denied: %s %s",
+                            request.method,
+                            path,
+                        )
+                        return JSONResponse(
+                            status_code=403,
+                            content={
+                                "detail": (
+                                    "The MCP service principal is not authorized "
+                                    "for this operation; a human operator admin is required"
+                                )
+                            },
+                        )
                     return await call_next(request)
                 payload = decode_token_safe(token) if token else None
                 authenticated = False
