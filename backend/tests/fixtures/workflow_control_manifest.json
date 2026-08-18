@@ -511,7 +511,7 @@
         "build-mcp-amd64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
     },
     {
       "file": "build.yml",
@@ -619,7 +619,7 @@
         "build-mcp-arm64",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
+      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
     },
     {
       "file": "build.yml",

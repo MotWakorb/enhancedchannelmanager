@@ -20,9 +20,69 @@ def _load_gate():
     return module
 
 
+def _copy_policy_files(gate, destination_root: Path) -> None:
+    for path in gate.POLICY_FILES:
+        destination = destination_root / path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            (REPO_ROOT / path).read_text(encoding="utf-8"), encoding="utf-8"
+        )
+
+
 def test_repository_satisfies_mcp_publication_policy():
     gate = _load_gate()
     assert gate.check_repository(REPO_ROOT) == []
+
+
+def test_policy_rejects_push_builders_that_do_not_require_mcp_scan_success(
+    tmp_path,
+):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    workflow = tmp_path / ".github/workflows/build.yml"
+    contents = workflow.read_text(encoding="utf-8")
+    trigger = "      && needs.security-scan-mcp.result == 'success'\n"
+    assert contents.count(trigger) == 2
+    workflow.write_text(contents.replace(trigger, "", 1), encoding="utf-8")
+
+    failures = gate.check_repository(tmp_path)
+
+    assert any("MCP dependency audit success" in failure for failure in failures), failures
+
+
+def test_policy_rejects_mcp_scans_that_ignore_unfixed_high_findings(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    workflow = tmp_path / ".github/workflows/build.yml"
+    contents = workflow.read_text(encoding="utf-8")
+    trigger = "          vuln-type: 'os,library'\n"
+    assert contents.count(trigger) >= 2
+    scan_start = contents.index("  trivy-scan-mcp-amd64:")
+    prefix, mcp_scans = contents[:scan_start], contents[scan_start:]
+    unsafe_setting = "          ignore-unfixed: true\n" + trigger
+    workflow.write_text(
+        prefix + mcp_scans.replace(trigger, unsafe_setting, 1),
+        encoding="utf-8",
+    )
+
+    failures = gate.check_repository(tmp_path)
+
+    assert any("unfixed Critical/High" in failure for failure in failures), failures
+
+
+def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    workflow = tmp_path / ".github/workflows/build.yml"
+    contents = workflow.read_text(encoding="utf-8")
+    robust = "^starlette[[:space:]]+0\\.27\\.0[[:space:]]+[^[:space:]]+"
+    brittle = "starlette[[:space:]]+0\\.27\\.0[[:space:]]+[1-9][0-9]*"
+    assert contents.count(robust) == 1
+    workflow.write_text(contents.replace(robust, brittle, 1), encoding="utf-8")
+
+    failures = gate.check_repository(tmp_path)
+
+    assert any("output-format brittle" in failure for failure in failures), failures
 
 
 @pytest.mark.parametrize(
@@ -80,10 +140,7 @@ def test_repository_satisfies_mcp_publication_policy():
 )
 def test_policy_mutations_fail_closed(tmp_path, relative_path, old, new, expected):
     gate = _load_gate()
-    for path in gate.POLICY_FILES:
-        destination = tmp_path / path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text((REPO_ROOT / path).read_text(encoding="utf-8"), encoding="utf-8")
+    _copy_policy_files(gate, tmp_path)
 
     target = tmp_path / relative_path
     original = target.read_text(encoding="utf-8")

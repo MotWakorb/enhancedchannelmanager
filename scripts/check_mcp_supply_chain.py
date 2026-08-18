@@ -35,10 +35,19 @@ def check_repository(root: Path) -> list[str]:
         or "pip-audit accepted the deliberately vulnerable MCP fixture" not in build
     ):
         failures.append("MCP dependency audit vulnerable-fixture self-test is absent")
+    robust_fixture_matcher = (
+        "grep -Eq '^starlette[[:space:]]+0\\.27\\.0[[:space:]]+[^[:space:]]+'"
+    )
+    if robust_fixture_matcher not in build:
+        failures.append("MCP vulnerable-fixture matcher is output-format brittle")
     if build.count(
         "needs: [security-scan-backend, security-scan-mcp, wait-for-tests]"
     ) != 2:
         failures.append("MCP dependency audit does not gate both image builders")
+    if build.count("needs.security-scan-mcp.result == 'success'") != 2:
+        failures.append(
+            "MCP dependency audit success does not unconditionally gate both image builders"
+        )
 
     expected_needs = (
         "needs: [build-mcp-amd64, build-mcp-arm64, "
@@ -49,6 +58,13 @@ def check_repository(root: Path) -> list[str]:
     for job in ("trivy-scan-mcp-amd64:", "trivy-scan-mcp-arm64:"):
         if job not in build:
             failures.append(f"MCP image scan job missing: {job[:-1]}")
+    mcp_scan_section = build[
+        build.index("  trivy-scan-mcp-amd64:") : build.index(
+            "  merge-mcp-manifests:"
+        )
+    ]
+    if "ignore-unfixed:" in mcp_scan_section:
+        failures.append("MCP image scans ignore unfixed Critical/High findings")
     for setting in ("exit-code: '1'", "severity: 'CRITICAL,HIGH'"):
         if build.count(setting) < 4:
             failures.append(f"MCP image scans do not enforce {setting}")

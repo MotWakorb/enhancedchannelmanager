@@ -144,7 +144,7 @@ jobs:
             echo "::error::pip-audit accepted the deliberately vulnerable MCP fixture"
             exit 1
           fi
-          if ! grep -Eq 'starlette[[:space:]]+0\.27\.0[[:space:]]+[1-9][0-9]*' <<< "$audit_output"; then
+          if ! grep -Eq '^starlette[[:space:]]+0\.27\.0[[:space:]]+[^[:space:]]+' <<< "$audit_output"; then
             echo "::error::pip-audit failed without reporting the fixture's Starlette advisories"
             exit 1
           fi
@@ -1258,6 +1258,7 @@ jobs:
     needs: [security-scan-backend, security-scan-mcp, wait-for-tests]
     if: >-
       always() && needs.wait-for-tests.result == 'success'
+      && needs.security-scan-mcp.result == 'success'
       && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
     permissions:
       contents: read
@@ -1402,6 +1403,7 @@ jobs:
     needs: [security-scan-backend, security-scan-mcp, wait-for-tests]
     if: >-
       always() && needs.wait-for-tests.result == 'success'
+      && needs.security-scan-mcp.result == 'success'
       && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
     permissions:
       contents: read
@@ -1561,7 +1563,6 @@ jobs:
           image-ref: ${{ env.REGISTRY }}/${{ needs.build-mcp-amd64.outputs.image }}@${{ needs.build-mcp-amd64.outputs.digest }}
           format: 'table'
           exit-code: '1'
-          ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
@@ -1588,7 +1589,6 @@ jobs:
           image-ref: ${{ env.REGISTRY }}/${{ needs.build-mcp-arm64.outputs.image }}@${{ needs.build-mcp-arm64.outputs.digest }}
           format: 'table'
           exit-code: '1'
-          ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
 
