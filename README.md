@@ -143,8 +143,24 @@ See [MCP Server (Claude Integration)](#mcp-server-claude-integration) for setup 
 Set these to match the owner of your bind-mounted volumes to avoid permission issues. Find your IDs with `id your_user`.
 
 **Port Configuration:**
-- **ECM_PORT** (default: 6100) — HTTP interface (always available as fallback)
+- **ECM_PORT** (default: 6100): HTTP interface. It remains available when TLS is enabled, but authenticated browser cookies are Secure and are not sent over HTTP unless an administrator explicitly enables the break-glass recovery option in TLS Settings.
 - **ECM_HTTPS_PORT** (default: 6143) — HTTPS interface (when TLS is configured in Settings)
+
+When ECM TLS is enabled, use the HTTPS address for the web UI. The HTTP port
+continues to serve health checks and unauthenticated recovery surfaces, but browsers
+cannot establish or refresh an authenticated session there. If HTTPS is inaccessible,
+an administrator may temporarily enable **Emergency recovery: allow authenticated
+sessions over HTTP** in TLS Settings. This sends session credentials in plaintext;
+use it only on a trusted network and turn it off immediately after recovery. Reverse
+proxy deployments should set the canonical `public_base_url` to an `https://` origin;
+ECM does not trust caller-supplied `X-Forwarded-Proto` headers.
+
+If HTTPS is already unavailable and you cannot sign in to change TLS Settings, stop
+ECM, set `ECM_ALLOW_HTTP_SESSION_COOKIES=true` on the ECM container, and restart it.
+Sign in through HTTP only long enough to repair or disable TLS. Then remove the
+environment variable (or set it back to `false`) and restart ECM. Anyone able to
+observe that HTTP connection can steal the session, so this recovery mode is never
+appropriate on an untrusted LAN or an internet-exposed listener.
 
 **Volumes:**
 - `/config` — Persistent storage for database, settings, logos, TLS certificates, and backups

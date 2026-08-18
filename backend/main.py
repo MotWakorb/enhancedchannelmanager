@@ -145,7 +145,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0137",
+    version="0.18.1-0138",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -232,6 +232,10 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Only assert HSTS when this process observed TLS itself. ECM has no
+    # trusted-proxy allowlist, so X-Forwarded-Proto is not an authority.
+    if request.url.scheme.lower() == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
 

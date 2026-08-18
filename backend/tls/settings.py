@@ -94,6 +94,11 @@ class TLSSettings(BaseModel):
     # 3. Default value 6143
     https_port: int = int(os.environ.get("ECM_HTTPS_PORT", 6143))
 
+    # Emergency recovery only. When false, enabling ECM TLS makes browser
+    # session cookies Secure even on the still-listening HTTP port, so a
+    # browser cannot send an authenticated session over plaintext.
+    allow_http_session_cookies: bool = False
+
     @field_validator("domain")
     @classmethod
     def validate_domain(cls, v: str) -> str:

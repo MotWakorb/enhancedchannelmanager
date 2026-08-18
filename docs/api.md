@@ -1554,6 +1554,18 @@ To reconstruct one batch:
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
 
+When TLS is enabled, browser authentication cookies are `Secure`, `HttpOnly`, and
+`SameSite=Lax`; the HTTP listener does not establish or refresh authenticated browser
+sessions. `allow_http_session_cookies` is an explicit break-glass setting exposed by
+`GET /api/tls/settings` and `POST /api/tls/configure`. A locked-out operator can set
+`ECM_ALLOW_HTTP_SESSION_COOKIES=true` for one recovery restart. Either option permits
+plaintext session theft and must be disabled after HTTPS is repaired. ECM trusts a
+configured HTTPS `public_base_url` for reverse-proxy cookie policy; it does not trust
+caller-supplied `X-Forwarded-Proto`. HSTS is emitted only by ECM's direct HTTPS
+listener, where the application can authenticate the transport itself. ECM does not
+redirect the always-on HTTP port because the HTTPS listener may use a different port
+or be unavailable during recovery.
+
 **Authorization (bead `enhancedchannelmanager-9kwzp.11`):** every route above requires an admin when authentication is enabled. `GET /api/tls/status` and `GET /api/tls/https/status` disclose no credential material and accept the static MCP API key. The other eleven refuse it with `403`, because they manage certificate and private-key material, the DNS-provider credentials that issue it, the HTTPS listener that serves it, or (for `GET /api/tls/settings`) a response carrying masked credential fragments. Use an operator admin JWT for those.
 
 **Auth-disabled instances (beads `enhancedchannelmanager-jy006` and `enhancedchannelmanager-2u4e0`):** this paragraph used to end "all of these gates no-op while `require_auth` is false or setup is incomplete, so first-run and auth-disabled instances are unaffected." That is no longer true of eleven of the thirteen routes. Everything above except `GET /api/tls/status` and `GET /api/tls/https/status` requires an authenticated human admin even while `require_auth` is false, on any instance that already holds an operator identity: the ten certificate/key-material routes under `jy006`, and `POST /api/tls/test-dns-provider` under `2u4e0`, which closed the whole twelve-route connection-test family on the credential-oracle axis. An instance with no operator identity (genuine first run, or a headless auth-disabled deployment that never created a user) still reaches all thirteen anonymously. See `docs/auth_middleware.md` → "What `require_auth: false` permits" for the full rule and the other surfaces it covers.

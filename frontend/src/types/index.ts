@@ -1746,6 +1746,7 @@ export interface TLSSettings {
   aws_region: string;
   auto_renew: boolean;
   renew_days_before_expiry: number;
+  allow_http_session_cookies: boolean;
 }
 
 // TLS configure request
@@ -1765,6 +1766,7 @@ export interface TLSConfigureRequest {
   aws_region: string;
   auto_renew: boolean;
   renew_days_before_expiry: number;
+  allow_http_session_cookies: boolean;
 }
 
 // Certificate request response

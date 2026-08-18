@@ -178,6 +178,7 @@ class TLSConfigureRequest(BaseModel):
     aws_region: str = "us-east-1"
     auto_renew: bool = True
     renew_days_before_expiry: int = 30
+    allow_http_session_cookies: bool = False
 
 
 class CertificateRequestResponse(BaseModel):
@@ -327,6 +328,7 @@ async def configure_tls(
     settings.dns_provider = request.dns_provider
     settings.auto_renew = request.auto_renew
     settings.renew_days_before_expiry = request.renew_days_before_expiry
+    settings.allow_http_session_cookies = request.allow_http_session_cookies
 
     # Only update dns_api_token if not masked
     if request.dns_api_token and not request.dns_api_token.startswith("***"):
@@ -992,5 +994,4 @@ async def test_dns_provider(
             _redact_request(request, str(e)),
         )
         return {"success": False, "message": "DNS provider test failed unexpectedly. Check logs for details."}
-
 

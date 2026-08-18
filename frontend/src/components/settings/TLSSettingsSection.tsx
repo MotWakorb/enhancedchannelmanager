@@ -39,6 +39,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
   const [awsRegion, setAwsRegion] = useState('us-east-1');
   const [autoRenew, setAutoRenew] = useState(true);
   const [renewDaysBefore, setRenewDaysBefore] = useState(30);
+  const [allowHttpSessionCookies, setAllowHttpSessionCookies] = useState(false);
 
   // File upload refs
   const certFileRef = useRef<HTMLInputElement>(null);
@@ -74,6 +75,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         if (settingsData.aws_region) setAwsRegion(settingsData.aws_region);
         setAutoRenew(settingsData.auto_renew);
         setRenewDaysBefore(settingsData.renew_days_before_expiry);
+        setAllowHttpSessionCookies(settingsData.allow_http_session_cookies ?? false);
       } catch (err) {
         notifications.error('Failed to load TLS settings', 'TLS');
         logger.error('Failed to load TLS settings:', err);
@@ -105,6 +107,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         aws_region: awsRegion,
         auto_renew: autoRenew,
         renew_days_before_expiry: renewDaysBefore,
+        allow_http_session_cookies: allowHttpSessionCookies,
       });
 
       notifications.success('TLS settings saved');
@@ -125,7 +128,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
   }, [
     enabled, mode, domain, httpsPort, acmeEmail, useStaging,
     dnsProvider, dnsApiToken, dnsZoneId, awsAccessKeyId, awsSecretAccessKey, awsRegion,
-    autoRenew, renewDaysBefore, notifications,
+    autoRenew, renewDaysBefore, allowHttpSessionCookies, notifications,
   ]);
 
   const handleRequestCertificate = useCallback(async () => {
@@ -347,7 +350,11 @@ export function TLSSettingsSection({ isAdmin }: Props) {
           <span className={`tls-status-badge ${status.enabled && status.has_certificate ? 'encrypted' : 'unencrypted'}`}>
             {status.enabled && status.has_certificate ? `Encrypted (port ${status.https_port})` : 'UNENCRYPTED'}
           </span>
-          <span className="tls-status-fallback">HTTP fallback available</span>
+          <span className="tls-status-fallback">
+            {status.enabled && status.has_certificate
+              ? 'HTTP remains available without authenticated sessions'
+              : 'HTTP available'}
+          </span>
         </div>
       )}
 
@@ -372,6 +379,21 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
           {enabled && (
           <>
+            <div className="form-group-vertical">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={allowHttpSessionCookies}
+                  onChange={(e) => setAllowHttpSessionCookies(e.target.checked)}
+                />
+                <span>Emergency recovery: allow authenticated sessions over HTTP</span>
+              </label>
+              <span className="form-description">
+                Break-glass only. This permits login and refresh cookies over plaintext HTTP,
+                where another device on the network may steal them. Disable it immediately
+                after recovering HTTPS access.
+              </span>
+            </div>
             <div className="form-group-vertical">
               <label>Certificate Mode</label>
               <div className="radio-group">
@@ -414,7 +436,7 @@ export function TLSSettingsSection({ isAdmin }: Props) {
 
                 <div className="form-group-vertical">
                   <label htmlFor="httpsPort">HTTPS Port</label>
-                  <span className="form-description">HTTPS will listen on this port (default: 6143). HTTP stays on its configured port (default: 6100) as fallback.</span>
+                  <span className="form-description">HTTPS will listen on this port (default: 6143). HTTP stays on its configured port for health checks and emergency recovery, but does not receive authenticated browser cookies by default.</span>
                   <input
                     type="number"
                     id="httpsPort"
@@ -693,8 +715,9 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         </h4>
         <ul>
           <li>
-            <strong>Dual-Port Setup:</strong> HTTP always runs on its configured port (default 6100) as a fallback.
-            HTTPS runs on the configured port (default 6143) when TLS is enabled.
+            <strong>Dual-Port Setup:</strong> HTTP continues listening on its configured port (default 6100),
+            but authenticated browser sessions are restricted to HTTPS after TLS is enabled.
+            HTTPS runs on the configured port (default 6143).
           </li>
           <li>
             <strong>Let's Encrypt</strong> provides free, automated certificates valid for 90 days.
@@ -709,8 +732,9 @@ export function TLSSettingsSection({ isAdmin }: Props) {
             You are responsible for renewal.
           </li>
           <li>
-            After enabling TLS, ECM will restart. Access via HTTPS on port {httpsPort},
-            or HTTP on its configured port as fallback.
+            After enabling TLS, ECM will restart. Use HTTPS on port {httpsPort}. Plain HTTP
+            remains useful for health checks; browser login over HTTP requires the explicitly
+            insecure emergency-recovery option above.
           </li>
         </ul>
       </div>

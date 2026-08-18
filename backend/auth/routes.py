@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -26,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import get_public_base_url, get_settings
+from tls.settings import get_tls_settings
 from database import get_session
 from models import User, UserSession, PasswordResetToken
 from .password import verify_password, hash_password, validate_password
@@ -417,10 +419,60 @@ def _access_token_seconds_remaining(request: Request) -> Optional[int]:
         return None
 
 
+def _auth_cookie_secure(request: Request) -> bool:
+    """Return the cookie transport policy from trusted local state.
+
+    Two trusted signals, both read from this process rather than the request
+    body of headers:
+
+    * this connection was terminated as HTTPS by ECM itself, and
+    * ``public_base_url``, the operator-configured canonical origin, is an
+      ``https://`` origin.
+
+    The second is deliberately the SAME notion of proxy trust bead
+    ``...-qsqfv`` established for the password-reset link (``config.
+    get_public_base_url``), not a second one: a reverse-proxy deployment
+    declares its external scheme once, in configuration, and everything that
+    needs to know reads it there.
+
+    ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` / ``Forwarded`` are
+    deliberately NOT consulted. The ECM backend has no trusted-proxy
+    allowlist (the one in ``mcp-server/config.py`` belongs to the sidecar's
+    own listener, a different process), so any client that can reach the
+    plaintext port could forge an HTTPS scheme and talk ECM into calling its
+    own cleartext session safe — which is the qsqfv defect class exactly.
+
+    With neither signal present, activating ECM's TLS listener still protects
+    the parallel HTTP port, unless the operator explicitly opens the
+    documented break-glass escape hatch.
+    """
+    if request.url.scheme.lower() == "https":
+        return True
+    if get_public_base_url().lower().startswith("https://"):
+        return True
+
+    tls_settings = get_tls_settings()
+    environment_break_glass = os.environ.get(
+        "ECM_ALLOW_HTTP_SESSION_COOKIES", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    break_glass = (
+        tls_settings.allow_http_session_cookies or environment_break_glass
+    )
+    # Enabled-but-not-yet-issued is not active TLS. Requiring the key material
+    # on disk is what stops "enable TLS" from locking an operator out of the
+    # UI before a certificate exists.
+    tls_active = bool(
+        tls_settings.enabled
+        and Path(tls_settings.cert_path).is_file()
+        and Path(tls_settings.key_path).is_file()
+    )
+    return bool(tls_active and not break_glass)
+
+
 def _set_access_cookie(
     response: Response,
     access_token: str,
-    secure: bool = False,  # Set to True in production with HTTPS
+    request: Request,
 ) -> None:
     """Set ONLY the short-lived access-token cookie.
 
@@ -433,7 +485,7 @@ def _set_access_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=secure,
+        secure=_auth_cookie_secure(request),
         samesite="lax",
         max_age=settings.jwt.access_token_expire_minutes * 60,
         path="/",
@@ -444,7 +496,7 @@ def _set_auth_cookies(
     response: Response,
     access_token: str,
     refresh_token: str,
-    secure: bool = False,  # Set to True in production with HTTPS
+    request: Request,
 ) -> None:
     """
     Set authentication cookies on the response.
@@ -453,12 +505,17 @@ def _set_auth_cookies(
         response: FastAPI response object.
         access_token: JWT access token.
         refresh_token: JWT refresh token.
-        secure: Whether to set Secure flag (requires HTTPS).
+        request: Request whose trusted transport context selects cookie policy.
     """
     settings = get_auth_settings()
 
+    # One policy decision for both cookies: _set_access_cookie derives its own
+    # from the same request, and a split verdict between the two would be a
+    # bug, not a feature.
+    secure = _auth_cookie_secure(request)
+
     # Access token - short lived, httpOnly for security
-    _set_access_cookie(response, access_token, secure=secure)
+    _set_access_cookie(response, access_token, request)
 
     # Refresh token - longer lived, httpOnly for security
     response.set_cookie(
@@ -742,7 +799,7 @@ async def login(
     _cleanup_expired_sessions(session, user.id)
 
     # Set cookies
-    _set_auth_cookies(response, access_token, refresh_token)
+    _set_auth_cookies(response, access_token, refresh_token, request)
 
     logger.info("[AUTH] User logged in: %s", user.username)
 
@@ -1180,7 +1237,7 @@ def _refresh_via_predecessor(
     access_token = create_access_token(
         user_id=user.id, username=user.username, auth_epoch=user.auth_epoch
     )
-    _set_access_cookie(response, access_token)
+    _set_access_cookie(response, access_token, request)
 
     rotated_at = prior_session.rotated_at
     # last_used_at only. Never expires_at, never either hash, never
@@ -1342,7 +1399,7 @@ async def refresh_tokens(
         _cleanup_expired_sessions(session, int(user_id))
 
         # Set new cookies
-        _set_auth_cookies(response, new_access_token, new_refresh_token)
+        _set_auth_cookies(response, new_access_token, new_refresh_token, request)
 
         logger.info("[AUTH] Token refreshed for user: %s", user.username)
         return RefreshResponse(
@@ -1896,7 +1953,7 @@ async def dispatcharr_login(
     session.refresh(user)
 
     # Set cookies
-    _set_auth_cookies(response, access_token, refresh_token)
+    _set_auth_cookies(response, access_token, refresh_token, request)
 
     logger.info("[AUTH] Dispatcharr user logged in: %s", user.username)
 
