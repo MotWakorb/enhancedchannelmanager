@@ -188,7 +188,7 @@ async def test_private_sidecar_principal_with_bound_claim_reaches_safe_capabilit
     with (
         patch("main.get_auth_settings", return_value=_auth_on()),
         patch("main.get_settings", return_value=_runtime_settings()),
-        patch("main.ensure_mcp_service_credentials", return_value=credentials),
+        patch("main.load_mcp_service_credentials", return_value=credentials),
         patch("auth.dependencies.ensure_mcp_service_credentials", return_value=credentials),
         patch("auth.dependencies.get_auth_settings", return_value=_auth_on()),
         patch("routers.channels.get_client", return_value=client),

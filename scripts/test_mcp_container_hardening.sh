@@ -1,171 +1,323 @@
 #!/usr/bin/env bash
 #
-# Runtime-hardening assertions for the ECM MCP sidecar
-# (enhancedchannelmanager-04c0u.8). Everything here is checked against a live
-# container, because the container is the thing being claimed about:
+# End-to-end isolation gate for the ECM MCP sidecar
+# (enhancedchannelmanager-04c0u.8).
 #
-#   * the sidecar runs as a fixed non-root uid,
-#   * it can read its credential projection and nothing else — no ECM
-#     settings, auth data, journal, TLS keys or backups exist for it to open,
-#   * the projection is owner-only, so a different uid in the same container
-#     cannot read the credentials,
-#   * the root filesystem is read-only, all capabilities are dropped,
-#     no-new-privileges is set, and /tmp is a bounded noexec/nosuid/nodev
-#     tmpfs,
-#   * an authenticated MCP session still lists tools through all of that,
-#   * and rotating the projected key takes effect without a restart, with the
+# This brings up the SHIPPED topology — `docker compose -f docker-compose.yml
+# -f docker-compose.mcp.yml` — on brand-new, unprovisioned Docker volumes, with
+# no manual privilege or ownership step, and drives the whole credential path:
+#
+#     ECM writes the projection  ->  the sidecar reads it  ->  a client
+#     authenticates with it  ->  ECM rotates it  ->  the superseded key dies.
+#
+# The producer is deliberately the real one. An earlier revision of this script
+# hand-seeded the projection from `docker run --user 0:0` and then chowned the
+# files to the target uid. That substituted root for the actor whose writability
+# is actually in question — the ECM backend at PUID, writing into a directory
+# Docker created as root:root 0755 — so every downstream assertion was true of a
+# hand-seeded container and said nothing about the shipped deployment. It passed
+# green while a first-run `docker compose up` could not start ECM at all.
+#
+# What is asserted, all against live containers:
+#
+#   * ECM starts on unprovisioned volumes and reaches /api/health/ready,
+#   * ECM — not this script — writes both projection files, owner-only and
+#     owned by PUID/PGID,
+#   * the sidecar runs as that same fixed non-root uid,
+#   * the sidecar can read its projection and nothing else: no ECM settings,
+#     auth data, journal, TLS keys or backups exist for it to open,
+#   * a different uid inside the sidecar cannot read the projection,
+#   * the sidecar's root filesystem is read-only, all capabilities are dropped,
+#     no-new-privileges is set, and /tmp is a bounded noexec/nosuid/nodev tmpfs,
+#   * an authenticated MCP session lists tools through all of that, and
+#   * rotating the key through ECM takes effect without a restart, with the
 #     superseded key rejected.
 #
-# Usage: scripts/test_mcp_container_hardening.sh [image-tag]
+# Usage: scripts/test_mcp_container_hardening.sh
+#
+# Environment:
+#   PUID / PGID   runtime identity to test (default 1000/1000). The invariant is
+#                 "any pair the compose file accepts", so CI runs this twice.
+#   ECM_PORT, ECM_HTTPS_PORT, MCP_PORT
+#                 published ports; free ports are chosen automatically when unset
+#                 so a developer's own ECM stack is never disturbed.
+#   COMPOSE_BUILD if "false", require the images to exist already.
+#   MCP_GATE_PROJECT
+#                 compose project name (default "ecmmcpgate").
+#
+# Pass --build-only to build the two images and exit, so CI can report a
+# transient registry/mirror build failure under its own step name instead of
+# under a name that reads as a security regression.
 set -euo pipefail
 
-image="${1:-ecm-mcp-hardening-test:local}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-suffix="$$-${RANDOM}"
-container="ecm-mcp-hardening-${suffix}"
-volume="ecm-mcp-hardening-secrets-${suffix}"
-
-# Must match the image's appuser/appgroup so the owner-only projection is
-# readable exactly the way it is in production, where ECM and the sidecar share
-# PUID/PGID (enhancedchannelmanager-04c0u.7).
-sidecar_uid=1000
-sidecar_gid=1000
+# Deterministic project name so a separate build step and this gate address the
+# same compose-built images (`<project>-ecm`, `<project>-ecm-mcp`). The gate is
+# serial by nature; override MCP_GATE_PROJECT if you need two on one host.
+project="${MCP_GATE_PROJECT:-ecmmcpgate}"
 projection_dir=/run/secrets/ecm-mcp
 
-old_key='<Synthetic-Old-MCP-Key-04c0u8>'
-new_key='<Synthetic-New-MCP-Key-04c0u8>'
-backend_key='<Synthetic-Backend-Principal-Key-04c0u8-aaaaaaaaaa>'
-confirmation_key='<Synthetic-Confirmation-Signing-Key-04c0u8-bbbbbb>'
+build_only=false
+if [ "${1:-}" = "--build-only" ]; then
+  build_only=true
+fi
 
-cleanup() {
-  docker rm -f "$container" >/dev/null 2>&1 || true
-  docker volume rm -f "$volume" >/dev/null 2>&1 || true
+export PUID="${PUID:-1000}"
+export PGID="${PGID:-1000}"
+
+pick_free_port() {
+  python3 - <<'PY'
+import socket
+with socket.socket() as probe:
+    probe.bind(("127.0.0.1", 0))
+    print(probe.getsockname()[1])
+PY
 }
+
+ports_are_operator_supplied=true
+if [ -z "${ECM_PORT:-}" ] && [ -z "${ECM_HTTPS_PORT:-}" ] && [ -z "${MCP_PORT:-}" ]; then
+  ports_are_operator_supplied=false
+fi
+
+pick_ports() {
+  export ECM_PORT="${ECM_PORT:-$(pick_free_port)}"
+  export ECM_HTTPS_PORT="${ECM_HTTPS_PORT:-$(pick_free_port)}"
+  export MCP_PORT="${MCP_PORT:-$(pick_free_port)}"
+}
+
+pick_ports
+
+compose() {
+  docker compose \
+    -p "$project" \
+    -f "$repository_root/docker-compose.yml" \
+    -f "$repository_root/docker-compose.mcp.yml" \
+    "$@"
+}
+
+fail() {
+  echo "ISOLATION GATE FAILED: $1" >&2
+  exit 1
+}
+
+# An assertion helper that names the property, because a CI failure reporting
+# only a line number tells the next engineer nothing.
+assert_equal() {
+  if [ "$1" != "$2" ]; then
+    fail "$3 (expected '$2', got '$1')"
+  fi
+}
+
+# Dump both services' logs on any failure. "Did not run" and "found nothing"
+# must be distinguishable from the CI output alone.
+cleanup() {
+  status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "== compose logs (gate failed with status $status) ==" >&2
+    compose logs --no-color --tail 200 >&2 2>&1 || true
+  fi
+  compose down -v --remove-orphans --timeout 5 >/dev/null 2>&1 || true
+  return $status
+}
+
 trap cleanup EXIT
 
-# Write the projection the way ECM does: owner-only, owned by the shared uid.
-# Done from a throwaway root container so the result does not depend on the
-# uid the CI runner happens to use.
-project_credentials() {
-  local public_key="$1"
-  docker run --rm --user 0:0 \
-    -e PUBLIC_KEY="$public_key" \
-    -e BACKEND_KEY="$backend_key" \
-    -e CONFIRMATION_KEY="$confirmation_key" \
-    -e OWNER="${sidecar_uid}:${sidecar_gid}" \
-    -v "$volume:$projection_dir" \
-    --entrypoint sh "$image" -eu -c '
-      printf "%s\n" "$PUBLIC_KEY" >'"$projection_dir"'/.api-key.tmp
-      printf "{\"backend_key\":\"%s\",\"confirmation_key\":\"%s\"}" \
-        "$BACKEND_KEY" "$CONFIRMATION_KEY" >'"$projection_dir"'/.mcp-service.tmp
-      chown "$OWNER" '"$projection_dir"'/.api-key.tmp '"$projection_dir"'/.mcp-service.tmp
-      chmod 0600 '"$projection_dir"'/.api-key.tmp '"$projection_dir"'/.mcp-service.tmp
-      mv '"$projection_dir"'/.api-key.tmp '"$projection_dir"'/api-key
-      mv '"$projection_dir"'/.mcp-service.tmp '"$projection_dir"'/mcp-service.json
-    ' >/dev/null
-}
+echo "== MCP isolation gate: project=$project PUID=$PUID PGID=$PGID"
+echo "== ports: ecm=$ECM_PORT https=$ECM_HTTPS_PORT mcp=$MCP_PORT"
 
-# Run the MCP client from the same image so the check needs no host-side MCP
-# dependency, sharing the sidecar's network namespace so loopback reaches it.
-verify_authenticated_tools() {
-  local key="$1"
-  docker run --rm --user "${sidecar_uid}:${sidecar_gid}" \
-    --network "container:$container" \
-    -e MCP_TEST_URL="http://127.0.0.1:6101/mcp" \
-    -e MCP_TEST_KEY="$key" \
-    -v "$repository_root/scripts/verify_mcp_authenticated_tools.py:/verify.py:ro" \
-    --entrypoint python "$image" /verify.py
-}
+# Brand-new, unprovisioned resources. `down -v` in the trap removes them again;
+# nothing here pre-creates, pre-chowns or pre-seeds a mount, which is the whole
+# point — a first-run operator does none of that either.
+compose down -v --remove-orphans >/dev/null 2>&1 || true
 
-docker volume create "$volume" >/dev/null
-project_credentials "$old_key"
+if [ "${COMPOSE_BUILD:-true}" != "false" ] || [ "$build_only" = true ]; then
+  compose build
+fi
+if [ "$build_only" = true ]; then
+  echo "built $project images for the MCP isolation gate"
+  exit 0
+fi
 
-docker run -d --name "$container" \
-  --user "${sidecar_uid}:${sidecar_gid}" \
-  --read-only \
-  --cap-drop ALL \
-  --security-opt no-new-privileges \
-  --pids-limit 128 \
-  --memory 256m \
-  --cpus 1 \
-  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777 \
-  --mount "type=volume,src=$volume,dst=$projection_dir,readonly" \
-  "$image" >/dev/null
+# `depends_on: ecm: condition: service_healthy` means this call itself waits
+# for ECM to pass its healthcheck before the sidecar starts, so a backend that
+# cannot start fails here rather than later.
+#
+# An auto-picked port can be claimed by another process between the probe and
+# the bind, which is a flaky infrastructure failure and not the property under
+# test. Re-pick and retry; an operator-supplied port is never silently
+# replaced.
+started=false
+for attempt in 1 2 3; do
+  if compose up -d --no-build; then
+    started=true
+    break
+  fi
+  if [ "$ports_are_operator_supplied" = true ] || [ "$attempt" = 3 ]; then
+    break
+  fi
+  echo "-- compose up failed on attempt ${attempt}; re-picking ports and retrying" >&2
+  compose down -v --remove-orphans >/dev/null 2>&1 || true
+  unset ECM_PORT ECM_HTTPS_PORT MCP_PORT
+  pick_ports
+  echo "== ports: ecm=$ECM_PORT https=$ECM_HTTPS_PORT mcp=$MCP_PORT"
+done
+if [ "$started" != true ]; then
+  fail "docker compose up did not bring the stack up on unprovisioned volumes"
+fi
 
+ecm_container="$(compose ps -q ecm)"
+sidecar_container="$(compose ps -q ecm-mcp)"
+[ -n "$ecm_container" ] || fail "the ecm container was not created"
+
+# ── ECM starts on unprovisioned volumes ───────────────────────────────────
+# This is the BLOCK-1 invariant. Before the entrypoint prepared MCP_SECRETS_DIR
+# while still root, ECM raised PermissionError inside its FastAPI startup
+# handler, uvicorn logged "Application startup failed. Exiting.", and this loop
+# never went green.
 ready=false
-for _ in $(seq 1 60); do
-  if docker exec "$container" python -c \
-    "import urllib.request; urllib.request.urlopen('http://localhost:6101/health')" \
-    >/dev/null 2>&1; then
+for _ in $(seq 1 120); do
+  if curl -fsS "http://127.0.0.1:${ECM_PORT}/api/health/ready" >/dev/null 2>&1; then
     ready=true
     break
   fi
-  if [ -z "$(docker ps -q --filter "name=^${container}$")" ]; then
-    echo "MCP container exited before becoming ready" >&2
-    docker logs "$container" >&2 || true
-    exit 1
+  if [ -z "$(docker ps -q --filter "id=${ecm_container}")" ]; then
+    docker logs "$ecm_container" >&2 || true
+    fail "the ECM container exited before becoming ready"
+  fi
+  sleep 2
+done
+if [ "$ready" != true ]; then
+  docker logs "$ecm_container" >&2 || true
+  fail "ECM never reached /api/health/ready on unprovisioned volumes"
+fi
+echo "-- ECM reached /api/health/ready on brand-new volumes"
+
+# ── ECM, not this script, publishes the credentials ───────────────────────
+# A first-run instance has no operator identity yet, so this is the same
+# anonymous call the setup flow makes. ECM's real save_settings() +
+# rotate_mcp_service_credentials() write the projection at PUID.
+generate_key() {
+  curl -fsS -X POST "http://127.0.0.1:${ECM_PORT}/api/settings/mcp-api-key" \
+    -H 'Content-Type: application/json' \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["mcp_api_key"])'
+}
+
+old_key="$(generate_key)"
+[ -n "$old_key" ] || fail "ECM did not return a generated MCP key"
+echo "-- ECM generated and projected an MCP key"
+
+# ── The projection is what ECM wrote, under the terms it claims ───────────
+observed_owner="$(docker exec "$ecm_container" stat -c '%u:%g' "${projection_dir}/api-key")"
+assert_equal "$observed_owner" "${PUID}:${PGID}" \
+  "the projected public key is not owned by the configured PUID/PGID"
+observed_owner="$(docker exec "$ecm_container" stat -c '%u:%g' "${projection_dir}/mcp-service.json")"
+assert_equal "$observed_owner" "${PUID}:${PGID}" \
+  "the projected private credentials are not owned by the configured PUID/PGID"
+
+# ── Sidecar readiness through the projection ECM wrote ────────────────────
+[ -n "$sidecar_container" ] || fail "the ecm-mcp container was not created"
+sidecar_ready=false
+for _ in $(seq 1 90); do
+  status="$(docker exec "$sidecar_container" python -c "
+import json, urllib.request
+with urllib.request.urlopen('http://localhost:${MCP_PORT}/health') as response:
+    print(json.load(response)['api_key_status'])
+" 2>/dev/null || true)"
+  if [ "$status" = "ok" ]; then
+    sidecar_ready=true
+    break
+  fi
+  if [ -z "$(docker ps -q --filter "id=${sidecar_container}")" ]; then
+    docker logs "$sidecar_container" >&2 || true
+    fail "the MCP sidecar exited before becoming ready"
   fi
   sleep 1
 done
-if [ "$ready" != true ]; then
-  echo "MCP container never reported ready" >&2
-  docker logs "$container" >&2 || true
-  exit 1
+if [ "$sidecar_ready" != true ]; then
+  docker logs "$sidecar_container" >&2 || true
+  fail "the MCP sidecar never reported api_key_status=ok (last: ${status:-unknown})"
 fi
+echo "-- the sidecar read the projection ECM wrote (api_key_status=ok)"
 
 # ── Identity ──────────────────────────────────────────────────────────────
-observed_uid="$(docker exec "$container" id -u)"
-observed_gid="$(docker exec "$container" id -g)"
-test "$observed_uid" = "$sidecar_uid"
-test "$observed_gid" = "$sidecar_gid"
-test "$observed_uid" != 0
+observed_uid="$(docker exec "$sidecar_container" id -u)"
+observed_gid="$(docker exec "$sidecar_container" id -g)"
+assert_equal "$observed_uid" "$PUID" "the sidecar is not running as the configured PUID"
+assert_equal "$observed_gid" "$PGID" "the sidecar is not running as the configured PGID"
+if [ "$observed_uid" = 0 ]; then
+  fail "the sidecar is running as root"
+fi
 
 # ── Runtime confinement and blast radius ──────────────────────────────────
-docker exec "$container" sh -eu -c '
-  test "$(awk "/^CapEff/ {print \$2}" /proc/self/status)" = 0000000000000000
-  test "$(awk "/^NoNewPrivs/ {print \$2}" /proc/self/status)" = 1
-  grep -Eq "^[^ ]+ / [^ ]+ ro([, ]|$)" /proc/mounts
-  grep -Eq "^[^ ]+ /tmp [^ ]+ [^ ]*noexec" /proc/mounts
-  grep -Eq "^[^ ]+ /tmp [^ ]+ [^ ]*nosuid" /proc/mounts
-  grep -Eq "^[^ ]+ /tmp [^ ]+ [^ ]*nodev" /proc/mounts
+# Every check is an explicit if/exit. `! cmd` is NOT a usable assertion here:
+# `set -e` is specified to ignore a pipeline beginning with `!`, so the two
+# unwritability checks below used to continue on failure and report success.
+docker exec "$sidecar_container" sh -eu -c '
+  fail() { echo "ISOLATION GATE FAILED: $1" >&2; exit 1; }
+
+  observed="$(awk "/^CapEff/ {print \$2}" /proc/self/status)"
+  [ "$observed" = 0000000000000000 ] || fail "sidecar retains capabilities: CapEff=$observed"
+  observed="$(awk "/^NoNewPrivs/ {print \$2}" /proc/self/status)"
+  [ "$observed" = 1 ] || fail "no-new-privileges is not set: NoNewPrivs=$observed"
+  grep -Eq "^[^ ]+ / [^ ]+ ro([, ]|$)" /proc/mounts || fail "the sidecar root filesystem is not read-only"
+  grep -Eq "^[^ ]+ /tmp [^ ]+ [^ ]*noexec" /proc/mounts || fail "/tmp is not noexec"
+  grep -Eq "^[^ ]+ /tmp [^ ]+ [^ ]*nosuid" /proc/mounts || fail "/tmp is not nosuid"
+  grep -Eq "^[^ ]+ /tmp [^ ]+ [^ ]*nodev" /proc/mounts || fail "/tmp is not nodev"
 
   # The credential projection is present, owner-only, and holds nothing else.
-  test -r '"$projection_dir"'/api-key
-  test -r '"$projection_dir"'/mcp-service.json
-  test "$(stat -c %a '"$projection_dir"'/api-key)" = 600
-  test "$(stat -c %a '"$projection_dir"'/mcp-service.json)" = 600
-  test "$(ls '"$projection_dir"' | sort | tr "\n" " ")" = "api-key mcp-service.json "
+  [ -r '"$projection_dir"'/api-key ] || fail "the sidecar cannot read the public key projection"
+  [ -r '"$projection_dir"'/mcp-service.json ] || fail "the sidecar cannot read the private credential projection"
+  observed="$(stat -c %a '"$projection_dir"'/api-key)"
+  [ "$observed" = 600 ] || fail "the public key projection is not owner-only (mode $observed)"
+  observed="$(stat -c %a '"$projection_dir"'/mcp-service.json)"
+  [ "$observed" = 600 ] || fail "the private credential projection is not owner-only (mode $observed)"
+  observed="$(ls '"$projection_dir"' | sort | tr "\n" " ")"
+  [ "$observed" = "api-key mcp-service.json " ] || fail "the projection directory holds more than MCP credential material: $observed"
 
   # ECM secrets are simply not reachable from this process.
-  test ! -e /config
-  test ! -e /config/settings.json
-  test ! -e /config/auth_settings.json
-  test ! -e /config/journal.db
-  test ! -e /config/tls
-  test ! -e /config/backups
+  for forbidden in /config /config/settings.json /config/auth_settings.json \
+                   /config/journal.db /config/tls /config/backups; do
+    [ ! -e "$forbidden" ] || fail "the sidecar can see $forbidden"
+  done
 
   # Nothing is writable: not the app, not the read-only projection mount.
-  ! touch /app/forbidden 2>/dev/null
-  ! touch '"$projection_dir"'/forbidden 2>/dev/null
+  if touch /app/forbidden 2>/dev/null; then
+    fail "the sidecar application directory is writable"
+  fi
+  if touch '"$projection_dir"'/forbidden 2>/dev/null; then
+    fail "the credential projection mount is writable by the sidecar"
+  fi
 '
+echo "-- sidecar confinement, projection modes and blast radius verified"
 
 # Owner-only means owner-only: another uid in the same container cannot read
 # the projected credentials even though the mount is visible to it.
-if docker exec --user 1234:1234 "$container" \
+if docker exec --user 1234:1234 "$sidecar_container" \
   cat "$projection_dir/api-key" >/dev/null 2>&1; then
-  echo "projected MCP key was readable by a non-owner uid" >&2
-  exit 1
+  fail "the projected MCP key was readable by a non-owner uid"
 fi
 
 # ── Authenticated tool access, then live rotation ─────────────────────────
+# The client runs from the sidecar's own image so the check needs no host-side
+# MCP dependency, sharing the sidecar's network namespace so loopback reaches it.
+sidecar_image="$(docker inspect -f '{{.Config.Image}}' "$sidecar_container")"
+verify_authenticated_tools() {
+  docker run --rm --user "${PUID}:${PGID}" \
+    --network "container:$sidecar_container" \
+    -e MCP_TEST_URL="http://127.0.0.1:${MCP_PORT}/mcp" \
+    -e MCP_TEST_KEY="$1" \
+    -v "$repository_root/scripts/verify_mcp_authenticated_tools.py:/verify.py:ro" \
+    --entrypoint python "$sidecar_image" /verify.py
+}
+
 verify_authenticated_tools "$old_key"
 
-project_credentials "$new_key"
+new_key="$(generate_key)"
+[ "$new_key" != "$old_key" ] || fail "rotation returned the same MCP key"
 
 if verify_authenticated_tools "$old_key" >/dev/null 2>&1; then
-  echo "superseded MCP key remained valid after rotation" >&2
-  exit 1
+  fail "the superseded MCP key remained valid after rotation"
 fi
 verify_authenticated_tools "$new_key"
 
-echo "MCP container isolation, authenticated tools, and live key rotation verified"
+echo "MCP container isolation, real-producer projection, authenticated tools, and live key rotation verified (PUID=$PUID PGID=$PGID)"

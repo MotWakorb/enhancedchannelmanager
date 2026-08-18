@@ -504,11 +504,28 @@ jobs:
             --cov=. --cov-config=.coveragerc --cov-fail-under=26 \
             --junitxml=junit.xml
 
-      - name: Assert MCP container runtime isolation
+      # Split from the assertion step below on purpose. A transient Alpine
+      # mirror, PyPI or npm failure is a build failure, and reporting it under
+      # a step named "Assert MCP container runtime isolation" reads as a
+      # security regression to everyone who sees the red check.
+      - name: Build the ECM and MCP images for the isolation gate
+        id: isolation_build
         if: needs.detect.outputs.code_paths_changed != 'false'
+        run: bash scripts/test_mcp_container_hardening.sh --build-only
+
+      - name: Assert MCP container runtime isolation
+        id: isolation
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        env:
+          COMPOSE_BUILD: "false"
         run: |
-          docker build -t ecm-mcp-hardening-test:ci ./mcp-server
-          bash scripts/test_mcp_container_hardening.sh ecm-mcp-hardening-test:ci
+          # Twice, because the invariant is "any PUID/PGID pair the compose
+          # file accepts", not "1000:1000". Only the second run exercises the
+          # entrypoint's chown against a uid the images were not built with.
+          # The images are already built, so the second run costs container
+          # startup, not a rebuild.
+          bash scripts/test_mcp_container_hardening.sh
+          PUID=1571 PGID=1572 bash scripts/test_mcp_container_hardening.sh
 
       - name: Summarize what this check did
         # A run summary must never be the reason a required check reports
@@ -518,12 +535,23 @@ jobs:
         if: always() && needs.detect.outputs.code_paths_changed != 'false'
         env:
           PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
+          ISOLATION_BUILD_OUTCOME: ${{ steps.isolation_build.outcome }}
+          ISOLATION_OUTCOME: ${{ steps.isolation.outcome }}
         run: |
+          # The summary must describe everything this check gates. Reporting
+          # only the pytest outcome let the check go red for a failed
+          # isolation gate while its own summary said the suite passed.
+          summary_outcome="$PYTEST_OUTCOME"
+          for step_outcome in "$ISOLATION_BUILD_OUTCOME" "$ISOLATION_OUTCOME"; do
+            if [ "$step_outcome" = failure ] || [ "$step_outcome" = cancelled ]; then
+              summary_outcome="$step_outcome"
+            fi
+          done
           python3 scripts/ci_junit_summary.py \
             --label "MCP Server Tests" \
-            --ran "ran the mcp-server pytest suite" \
+            --ran "ran the mcp-server pytest suite, built the ECM and MCP images, and asserted live MCP container isolation end to end (build: ${ISOLATION_BUILD_OUTCOME:-skipped}, isolation: ${ISOLATION_OUTCOME:-skipped}, pytest: ${PYTEST_OUTCOME:-skipped})" \
             --junit mcp-server/junit.xml \
-            --outcome "$PYTEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+            --outcome "$summary_outcome" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload mcp-server coverage artifact
         if: always() && needs.detect.outputs.code_paths_changed != 'false'

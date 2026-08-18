@@ -11,6 +11,7 @@ from auth.mcp_service import (
     MCP_CLAIM_HEADER,
     ensure_mcp_service_credentials,
     issue_test_claim,
+    load_mcp_service_credentials,
     rotate_mcp_service_credentials,
     verify_mcp_service_claim,
 )
@@ -71,3 +72,62 @@ async def test_claim_is_bound_to_request_and_single_use(tmp_path: Path):
     assert first.status_code == 200
     assert replay.status_code == 403
     assert drift.status_code == 403
+
+
+class TestUnwritableProjectionDegradesInsteadOfKillingECM:
+    """…-04c0u.8: the projection must never be able to take ECM down.
+
+    ``ensure_mcp_service_credentials`` is called from two liveness paths — the
+    FastAPI startup handler and the auth middleware, which runs on every
+    non-exempt request. An exception out of a startup handler aborts the ASGI
+    lifespan (uvicorn logs "Application startup failed. Exiting."), and an
+    exception out of the middleware is a 500 on every authenticated request.
+    Those paths go through ``load_mcp_service_credentials``, which reports the
+    failure and returns ``None`` — no sidecar principal, ordinary 401 — rather
+    than raising.
+    """
+
+    def test_an_unwritable_projection_directory_returns_none(self, tmp_path: Path):
+        projection_dir = tmp_path / "ecm-mcp"
+        projection_dir.mkdir()
+        projection_dir.chmod(0o500)
+        try:
+            with pytest.raises(PermissionError):
+                ensure_mcp_service_credentials(projection_dir / "mcp-service.json")
+
+            assert (
+                load_mcp_service_credentials(projection_dir / "mcp-service.json")
+                is None
+            )
+        finally:
+            projection_dir.chmod(0o700)
+
+    def test_a_malformed_projection_returns_none(self, tmp_path: Path):
+        projection = tmp_path / "mcp-service.json"
+        projection.write_text("not json at all")
+
+        with pytest.raises(RuntimeError):
+            ensure_mcp_service_credentials(projection)
+
+        assert load_mcp_service_credentials(projection) is None
+
+    def test_a_healthy_projection_is_returned_unchanged(self, tmp_path: Path):
+        projection = tmp_path / "mcp-service.json"
+
+        created = load_mcp_service_credentials(projection)
+
+        assert created is not None
+        assert created == ensure_mcp_service_credentials(projection)
+
+    def test_a_symlinked_projection_is_refused_rather_than_chmodded(
+        self, tmp_path: Path
+    ):
+        """finding 10 — the re-chmod must not follow a link to its target."""
+        target = tmp_path / "unrelated.json"
+        target.write_text(json.dumps({"backend_key": "a" * 40, "confirmation_key": "b" * 40}))
+        target.chmod(0o644)
+        projection = tmp_path / "mcp-service.json"
+        projection.symlink_to(target)
+
+        assert load_mcp_service_credentials(projection) is None
+        assert target.stat().st_mode & 0o777 == 0o644

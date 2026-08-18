@@ -634,7 +634,11 @@ def _expected_verdict_manifest():
     )
     step_contracts = {
         "backend": (1, 6, 9),
-        "mcp-server": (1, 5, 8),
+        # 1..6 gated on the classifier, 7..9 additionally on always().
+        # Step 5 is the image build for the MCP isolation gate, split out from
+        # the assertion step so a transient registry failure does not report
+        # under a security-sounding name (…-04c0u.8).
+        "mcp-server": (1, 6, 9),
         "frontend": (1, 9, 12),
         "semgrep-lint": (1, 4, 5),
     }

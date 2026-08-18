@@ -245,6 +245,71 @@ check_config_persistence() {
     return 0
 }
 
+# Prepare the MCP sidecar credential projection while we are still root
+# (bead enhancedchannelmanager-04c0u.8).
+#
+# Under the MCP overlay MCP_SECRETS_DIR is a SEPARATE mount from CONFIG_DIR,
+# and nothing else in the container prepares it:
+#
+#   * a brand-new Docker named volume is created root:root 0755, and
+#   * a bind mount arrives owned by whatever host uid created the directory,
+#
+# so after the exec-time drop to `gosu appuser` the backend cannot create
+# ``api-key`` or ``mcp-service.json`` there. That is not a degraded sidecar:
+# backend/main.py materializes the private projection inside the FastAPI
+# startup handler, and an exception out of a startup handler aborts the ASGI
+# lifespan ("Application startup failed. Exiting."), so the whole of ECM fails
+# to start. Chowning here is what makes a first-run deployment work with no
+# manual privilege step, for ANY PUID/PGID — setup_user() has already moved
+# appuser onto the requested uid/gid by the time this runs.
+#
+# Parameterised rather than hardcoded so backend/tests/unit/
+# test_entrypoint_mcp_projection.py can exercise the real function without
+# root or gosu, and so no new operator-settable environment seam is created
+# (contrast ECM_MOUNTINFO, bead enhancedchannelmanager-nz8q4 item 2).
+#
+# Usage: prepare_mcp_projection_dir <dir> <user> <group> <probe-runner...>
+prepare_mcp_projection_dir() {
+    projection_dir="$1"
+    projection_user="$2"
+    projection_group="$3"
+    shift 3
+
+    if [ -z "$projection_dir" ]; then
+        return 0
+    fi
+    if [ "$projection_dir" = "$CONFIG_DIR" ]; then
+        # No overlay: the projection lands in CONFIG_DIR, which the config
+        # checks above already create, chown and probe. Nothing extra to do.
+        return 0
+    fi
+
+    if ! mkdir -p "$projection_dir" 2>/dev/null; then
+        print_error "Failed to create MCP credential projection directory ${projection_dir}"
+        return 1
+    fi
+
+    # Ownership is the mechanism, not the mode: the projected files are 0600
+    # and the sidecar can read them only because it shares PUID/PGID with ECM.
+    chown "${projection_user}:${projection_group}" "$projection_dir" 2>/dev/null || true
+    chmod 700 "$projection_dir" 2>/dev/null || true
+
+    # The probe is the check. chown/chmod above are best-effort because the
+    # directory may already be correct without us being root; what must hold
+    # is that the account ECM runs as can actually create a file here.
+    if "$@" touch "${projection_dir}/.mcp_write_test" 2>/dev/null; then
+        rm -f "${projection_dir}/.mcp_write_test"
+        print_success "MCP credential projection ${projection_dir} is writable"
+        return 0
+    fi
+
+    print_error "MCP credential projection ${projection_dir} is not writable by ${projection_user}"
+    print_error "  ECM writes ${projection_dir}/api-key and ${projection_dir}/mcp-service.json there."
+    print_error "  Fix: chown it to PUID=${PUID} PGID=${PGID} on the host (bind mount), or"
+    print_error "  remove the volume and recreate the container so ECM can initialize it."
+    return 1
+}
+
 check_filesystem() {
     print_info "Checking filesystem..."
 
@@ -275,6 +340,10 @@ check_filesystem() {
         print_error "Config directory is not writable"
         return 1
     fi
+
+    # MCP sidecar credential projection (…-04c0u.8) — see the function above.
+    prepare_mcp_projection_dir \
+        "${MCP_SECRETS_DIR:-}" appuser appuser gosu appuser || return 1
 
     # Check frontend build
     if [ -d "/app/static" ]; then

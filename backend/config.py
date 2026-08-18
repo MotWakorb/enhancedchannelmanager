@@ -28,9 +28,22 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 # Sidecar credential projection (enhancedchannelmanager-04c0u.8). The AI-facing
 # MCP process mounts only this directory, never the full ``/config`` volume, so
 # it can reach MCP credential material and nothing else — no settings.json, no
-# auth_settings.json, no journal, no TLS keys, no backups. Deployments without
-# the MCP overlay leave it at ``CONFIG_DIR`` and behave exactly as before.
-MCP_SECRETS_DIR = Path(os.environ.get("MCP_SECRETS_DIR", CONFIG_DIR))
+# auth_settings.json, no journal, no TLS keys, no backups.
+#
+# The fallback is ``CONFIG_DIR``, NOT "no projection". That is deliberate: a
+# 0.18.1+ backend running under an older compose file (no ``MCP_SECRETS_DIR``,
+# sidecar still mounting ``/config``) has to keep publishing the credentials
+# the sidecar reads, or upgrading the backend alone would break MCP. The
+# consequence is that EVERY deployment writes ``<CONFIG_DIR>/api-key`` and
+# ``<CONFIG_DIR>/mcp-service.json``, overlay or not — both 0600 and owned by
+# ECM. Operators who bind-mount a host directory at ``/config`` should know
+# that ``api-key`` is a credential file sitting at its top level; see
+# docs/user_guide/integrations/mcp.md § "Where the MCP credentials live".
+#
+# ``or`` rather than a ``get`` default so an explicitly empty ``MCP_SECRETS_DIR=``
+# in an ``.env`` resolves to CONFIG_DIR instead of ``Path("")`` → the process
+# CWD; mcp-server/config.py resolves the same variable the same way.
+MCP_SECRETS_DIR = Path(os.environ.get("MCP_SECRETS_DIR") or CONFIG_DIR)
 # Public client credential the operator hands to MCP clients.
 MCP_KEY_FILE = MCP_SECRETS_DIR / "api-key"
 # Private sidecar-to-backend credentials (enhancedchannelmanager-04c0u.7): a
@@ -935,8 +948,30 @@ def save_settings(settings: DispatcharrSettings) -> None:
                 temporary.unlink()
             except FileNotFoundError:
                 pass
-        _project_mcp_api_key(settings.mcp_api_key)
+        # Adopt the cache the instant the settings file is durable, BEFORE
+        # projecting. The projection can fail for reasons unrelated to the
+        # settings write — a full disk, a read-only or relabelled mount — and
+        # the old ordering left the new key durably on disk while this process
+        # kept serving the previous one from cache and returned 500 to the
+        # caller. For a credential rotation that is the worst possible split:
+        # the operator is handed a key ECM itself no longer believes in.
+        # Rotation stays fail-closed because the projection error below is
+        # still raised, not suppressed (see _project_mcp_api_key), and it is
+        # now raised over a cache that agrees with disk.
+        #
+        # MERGE NOTE for the save_settings lock landing in
+        # enhancedchannelmanager-04c0u.10: put BOTH of these statements inside
+        # that lock, in THIS order. Serializing them fixes the interleaving
+        # that lets one save project a key while another owns the cache. It
+        # does not fix the failure ordering, which is a separate defect: if
+        # the projection runs first and raises, this process keeps serving the
+        # superseded key out of a cache that no longer matches the settings
+        # file it just wrote. Swapping these two lines back reintroduces that
+        # and fails
+        # tests/test_04c0u8_mcp_key_projection.py::
+        # test_a_failed_projection_never_leaves_the_cache_behind_the_saved_file.
         _cached_settings = settings
+        _project_mcp_api_key(settings.mcp_api_key)
         logger.info("[CONFIG] Settings saved successfully to %s", CONFIG_FILE)
 
         # Verify the save worked
@@ -962,8 +997,17 @@ def _project_mcp_api_key(key: str) -> None:
     The projection is owner-only (0600) and readable by the sidecar solely
     because the sidecar runs under the same PUID/PGID as the backend.  Widening
     the mode, or granting group/other read, would hand the credential to every
-    other process sharing the volume.  Deployments that do not enable the MCP
-    overlay simply have no projection directory, so ECM operation is unchanged.
+    other process sharing the volume.
+
+    This runs on EVERY deployment, not only overlay deployments.
+    ``MCP_SECRETS_DIR`` defaults to ``CONFIG_DIR`` (see the module header for
+    why), so without the overlay the projection is written to
+    ``<CONFIG_DIR>/api-key`` rather than skipped.  The ``parent.exists()``
+    guard below therefore fires only when the configured directory is genuinely
+    absent — an ``MCP_SECRETS_DIR`` pointing at an unmounted path — not as the
+    normal no-overlay path.  Enforced by
+    ``backend/tests/test_04c0u8_mcp_key_projection.py``
+    ``test_the_default_projection_directory_is_config_dir``.
     """
     parent = MCP_KEY_FILE.parent
     if not parent.exists():
@@ -976,14 +1020,41 @@ def _project_mcp_api_key(key: str) -> None:
         with os.fdopen(descriptor, "w") as handle:
             handle.write(f"{key}\n")
             handle.flush()
+            # Fix the mode on the descriptor, not on the path after the
+            # rename: a path-based chmod follows symlinks, so it would widen
+            # the mode of a link target rather than of the file just written.
+            os.fchmod(handle.fileno(), 0o600)
             os.fsync(handle.fileno())
         os.replace(temporary, MCP_KEY_FILE)
-        os.chmod(MCP_KEY_FILE, 0o600)
     finally:
         try:
             temporary.unlink()
         except FileNotFoundError:
             pass
+
+
+def superseded_mcp_service_projection() -> Path | None:
+    """Return the pre-…-04c0u.8 private projection if it was left behind.
+
+    Deployments that ran …-04c0u.7 have a live-format ``mcp-service.json``
+    (backend principal key + destructive-confirmation signing key) at
+    ``CONFIG_DIR``. Moving the projection to ``MCP_SECRETS_DIR`` does not
+    remove it, so it becomes stale secret material sitting in the config
+    volume, where host-side sweep-everything backup tools will capture it.
+
+    It is inert — this backend accepts only the projection at
+    ``MCP_SERVICE_FILE``, so the superseded pair authenticates nothing — but
+    inert is not gone. ECM deliberately does NOT delete it: removing
+    credential material on an operator's behalf is destructive and
+    irreversible, and ``CONFIG_DIR`` is a path ECM shares rather than owns.
+    The caller reports it instead, on every start, until the operator removes
+    it. See docs/user_guide/integrations/mcp.md § "Where the MCP credentials
+    live".
+    """
+    if MCP_SECRETS_DIR == CONFIG_DIR:
+        return None
+    superseded = CONFIG_DIR / MCP_SERVICE_FILE.name
+    return superseded if superseded.is_file() else None
 
 
 def clear_settings_cache() -> None:

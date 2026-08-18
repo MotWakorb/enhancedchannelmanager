@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import secrets
 import threading
@@ -19,6 +20,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import HTTPException, Request
+
+logger = logging.getLogger(__name__)
 
 MCP_CLAIM_HEADER = "X-ECM-MCP-Claim"
 MCP_CLAIM_TTL_SECONDS = 30
@@ -40,6 +43,34 @@ def ensure_mcp_service_credentials(path: Path) -> MCPServiceCredentials:
         return _ensure_mcp_service_credentials_locked(path)
 
 
+def load_mcp_service_credentials(path: Path) -> MCPServiceCredentials | None:
+    """Load or create the projection, returning ``None`` instead of raising.
+
+    For callers on a liveness path — the FastAPI startup handler and the auth
+    middleware, which runs on every non-exempt request. An exception out of a
+    startup handler aborts the ASGI lifespan, and an exception out of the
+    middleware is a 500 on every authenticated request, so a projection
+    directory ECM cannot write must not be able to take the whole application
+    down (bead enhancedchannelmanager-04c0u.8).
+
+    This is not a relaxation of the credential rules. ``None`` means the
+    sidecar principal has no credential, so the middleware's MCP branch is
+    simply never entered and an MCP-authenticated request falls through to the
+    ordinary 401 — fail-closed. ``backend/entrypoint.sh`` prepares the
+    projection directory while it is still root, so reaching ``None`` in
+    production means the mount changed underneath a running container.
+    """
+    try:
+        return ensure_mcp_service_credentials(path)
+    except (OSError, RuntimeError):
+        logger.exception(
+            "[MCP-AUTH] MCP sidecar credential projection at %s is unusable; "
+            "the MCP service principal is unavailable until it is repaired",
+            path.parent,
+        )
+        return None
+
+
 def rotate_mcp_service_credentials(path: Path) -> MCPServiceCredentials:
     """Atomically rotate both private credentials without disclosing them."""
     with _credential_lock:
@@ -56,14 +87,26 @@ def _ensure_mcp_service_credentials_locked(path: Path) -> MCPServiceCredentials:
     """Implementation serialized across concurrent first requests."""
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        data = json.loads(path.read_text())
+        # Read and re-assert the mode through a descriptor, never through the
+        # path: ``os.chmod(path, ...)`` follows symlinks, so a path-based
+        # re-chmod on an attacker-planted link would widen the mode of the
+        # link target instead of this credential file. ``O_NOFOLLOW`` refuses
+        # the link outright and ``os.fchmod`` acts on the opened inode.
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        try:
+            os.fchmod(descriptor, 0o600)
+            handle = os.fdopen(descriptor, "r")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        with handle:
+            data = json.loads(handle.read())
         credentials = MCPServiceCredentials(
             backend_key=str(data["backend_key"]),
             confirmation_key=str(data["confirmation_key"]),
         )
         if not credentials.backend_key or not credentials.confirmation_key:
             raise ValueError("empty MCP service credential")
-        os.chmod(path, 0o600)
         return credentials
     except FileNotFoundError:
         pass
@@ -85,9 +128,12 @@ def _atomic_write_credentials(path: Path, credentials: MCPServiceCredentials) ->
         with os.fdopen(descriptor, "w") as output:
             json.dump(credentials.__dict__, output, separators=(",", ":"))
             output.flush()
+            # Fix the mode on the descriptor before the rename, not on the
+            # path afterwards: a path-based chmod follows symlinks, and the
+            # descriptor is the file we actually wrote (finding 10).
+            os.fchmod(output.fileno(), 0o600)
             os.fsync(output.fileno())
         os.replace(temporary, path)
-        os.chmod(path, 0o600)
     finally:
         try:
             temporary.unlink()
