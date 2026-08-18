@@ -29,8 +29,9 @@ keys, and maps) to fresh opaque relay tokens. Every token fetch independently
 uses the pinned redirect-safe client. Authorization is retained for the same
 normalized origin and stripped for cross-origin resources. Manifests are capped
 at 2 MiB and one subprocess relay may register at most 1,024 resources.
-Cancellation closes active HTTP responses and the relay before terminating the
-subprocess. Direct HTTP transport streams and HLS therefore remain supported
+Cancellation terminates (and, if needed, kills) the subprocess before closing
+active HTTP responses and the relay. Direct HTTP transport streams and HLS
+therefore remain supported
 without giving FFmpeg a provider-network path.
 
 UDP, RTP, and RTMP remain direct subprocess inputs because they are not HTTP

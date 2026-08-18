@@ -145,8 +145,6 @@ async def test_ffprobe_retry_redirect_to_metadata_is_denied_before_retry_spawn()
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["_run_ffprobe", "_detect_black_screen"])
 async def test_http_relay_subprocess_uses_only_relay_and_crypto_protocols(method):
-    response = MagicMock()
-
     @asynccontextmanager
     async def relayed(_url, **_kwargs):
         yield SimpleNamespace(
