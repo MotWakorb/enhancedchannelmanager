@@ -16,6 +16,7 @@ SCRIPT = Path(
 )
 BUILD = ROOT / ".github" / "workflows" / "build.yml"
 PUBLISH = ROOT / ".github" / "workflows" / "publish-images.yml"
+TESTS = ROOT / ".github" / "workflows" / "test.yml"
 
 
 @pytest.fixture(scope="module")
@@ -109,10 +110,14 @@ def test_latest_rerun_controls_outcome(policy):
 def test_workflows_separate_verification_from_publication():
     build = BUILD.read_text(encoding="utf-8")
     publish = PUBLISH.read_text(encoding="utf-8")
+    tests = TESTS.read_text(encoding="utf-8")
     assert "needs.wait-for-tests.result" not in build
     assert "push: ${{ github.event_name != 'pull_request' }}" not in build
     assert "workflow_run:" in publish
+    assert "workflow_call:" in publish
     assert "workflows: [Tests, Build and Push Docker Image]" in publish
+    assert "uses: ./.github/workflows/publish-images.yml" in tests
+    assert "tests_attested: true" in tests
     assert "github.event.workflow_run.head_sha" in publish
     assert "image_publish_policy.py" in publish
     assert "push: true" in publish

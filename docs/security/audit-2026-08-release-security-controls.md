@@ -1,4 +1,4 @@
-# Release Security Control Audit — 2026-08-18
+# Release Security Control Audit: 2026-08-18
 
 Scope: read-only live GitHub settings audit for
 `enhancedchannelmanager-04c0u.11`. Evidence was collected through GitHub's API

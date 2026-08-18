@@ -4,9 +4,20 @@ on:
   workflow_run:
     workflows: [Tests, Build and Push Docker Image]
     types: [completed]
+  workflow_call:
+    inputs:
+      candidate_sha:
+        required: true
+        type: string
+      candidate_branch:
+        required: true
+        type: string
+      tests_attested:
+        required: true
+        type: boolean
 
 concurrency:
-  group: publish-images-${{ github.event.workflow_run.head_branch }}
+  group: publish-images-${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
   cancel-in-progress: true
 
 env:
@@ -16,9 +27,11 @@ jobs:
   authorize:
     name: Authorize Exact-SHA Publication
     if: >-
-      github.event.workflow_run.event == 'push'
-      && (github.event.workflow_run.head_branch == 'dev'
-      || github.event.workflow_run.head_branch == 'main')
+      (github.event_name == 'workflow_call'
+      && inputs.tests_attested && inputs.candidate_branch == 'dev')
+      || (github.event_name == 'workflow_run'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -28,9 +41,9 @@ jobs:
       branch: ${{ steps.authorize.outputs.branch }}
     steps:
       - name: Checkout candidate policy from the immutable revision
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
           fetch-depth: 1
 
       - name: Require current, successful Tests and Build runs
@@ -38,16 +51,46 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SHA: ${{ github.event.workflow_run.head_sha }}
-          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
+          BRANCH: ${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
+          TESTS_ATTESTED: ${{ inputs.tests_attested || false }}
           TRIGGER: ${{ toJSON(github.event.workflow_run) }}
         run: |
           set -euo pipefail
           branch_sha=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq '.object.sha')
-          runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-            --jq '.workflow_runs' | jq -sc 'add // []')
-          decision=$(python scripts/image_publish_policy.py \
-            --trigger "$TRIGGER" --branch-sha "$branch_sha" --runs "$runs")
+          if test "$branch_sha" != "$SHA"; then
+            echo "::error::Candidate $SHA is stale; refs/heads/$BRANCH is $branch_sha"
+            exit 1
+          fi
+          # On dev, this reusable workflow is called only after every Tests job
+          # succeeds. The Tests run itself is still in progress until this call
+          # returns, so add that trusted caller attestation to the API evidence.
+          # Build may still be finishing; wait here, after verification images
+          # and scans have already run, rather than suppressing those jobs.
+          for attempt in $(seq 1 60); do
+            runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+              --jq '.workflow_runs' | jq -sc 'add // []')
+            if test "$TESTS_ATTESTED" = true; then
+              test_run=$(jq -nc --arg sha "$SHA" --arg branch "$BRANCH" \
+                '{id: 0, name: "Tests", head_sha: $sha, head_branch: $branch,
+                  event: "push", status: "completed", conclusion: "success",
+                  run_number: 2147483647, run_attempt: 1}')
+              runs=$(jq -nc --argjson runs "$runs" --argjson test "$test_run" \
+                '$runs + [$test]')
+              trigger="$test_run"
+            else
+              trigger="$TRIGGER"
+            fi
+            if decision=$(python scripts/image_publish_policy.py \
+              --trigger "$trigger" --branch-sha "$branch_sha" --runs "$runs"); then
+              break
+            fi
+            if test "$attempt" = 60; then
+              echo "::error::Exact-SHA publication authorization did not become green"
+              exit 1
+            fi
+            sleep 30
+          done
           test "$(jq -r '.sha' <<<"$decision")" = "$SHA"
           test "$(jq -r '.branch' <<<"$decision")" = "$BRANCH"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -64,11 +107,11 @@ jobs:
       ecm_digest: ${{ steps.ecm.outputs.digest }}
       mcp_digest: ${{ steps.mcp.outputs.digest }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.authorize.outputs.sha }}
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -83,7 +126,7 @@ jobs:
           if test "$BRANCH" = main; then echo "channel=latest" >> "$GITHUB_OUTPUT"; else echo "channel=dev" >> "$GITHUB_OUTPUT"; fi
       - name: Push ECM AMD64 by digest
         id: ecm
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
         with:
           context: .
           platforms: linux/amd64
@@ -96,7 +139,7 @@ jobs:
           cache-from: type=gha,scope=amd64
       - name: Push MCP AMD64 by digest
         id: mcp
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
         with:
           context: ./mcp-server
           platforms: linux/amd64
@@ -115,11 +158,11 @@ jobs:
       ecm_digest: ${{ steps.ecm.outputs.digest }}
       mcp_digest: ${{ steps.mcp.outputs.digest }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.authorize.outputs.sha }}
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -134,7 +177,7 @@ jobs:
           if test "$BRANCH" = main; then echo "channel=latest" >> "$GITHUB_OUTPUT"; else echo "channel=dev" >> "$GITHUB_OUTPUT"; fi
       - name: Push ECM ARM64 by digest
         id: ecm
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
         with:
           context: .
           platforms: linux/arm64
@@ -147,7 +190,7 @@ jobs:
           cache-from: type=gha,scope=arm64
       - name: Push MCP ARM64 by digest
         id: mcp
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v7
         with:
           context: ./mcp-server
           platforms: linux/arm64
@@ -163,11 +206,11 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.authorize.outputs.sha }}
-      - uses: docker/setup-buildx-action@v4
-      - uses: docker/login-action@v4
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}

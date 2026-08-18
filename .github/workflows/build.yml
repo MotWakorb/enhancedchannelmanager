@@ -64,7 +64,7 @@ jobs:
       dependency_files_changed: ${{ steps.classify.outputs.dependency_files_changed }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 0
 
@@ -1470,9 +1470,8 @@ jobs:
           image-ref: ecm-mcp-scan:amd64
           format: table
           exit-code: '1'
-          ignore-unfixed: true
           vuln-type: os,library
-          severity: CRITICAL,HIGH
+          severity: 'CRITICAL,HIGH'
 
   trivy-scan-mcp-arm64:
     name: MCP Container Security Scan (Trivy ARM64)
@@ -1495,9 +1494,8 @@ jobs:
           image-ref: ecm-mcp-scan:arm64
           format: table
           exit-code: '1'
-          ignore-unfixed: true
           vuln-type: os,library
-          severity: CRITICAL,HIGH
+          severity: 'CRITICAL,HIGH'
 
   merge-mcp-manifests:
     name: Create MCP Multi-Arch Manifest

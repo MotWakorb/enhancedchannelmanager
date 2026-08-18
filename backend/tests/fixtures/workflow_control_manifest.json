@@ -715,28 +715,10 @@
       "file": "build.yml",
       "path": [
         "jobs",
-        "trivy-scan-mcp-amd64",
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan-mcp-arm64",
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && needs.build-mcp-arm64.result == 'success'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
         "merge-mcp-manifests",
         "if"
       ],
-      "value": "false && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success'"
+      "value": "false && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success'"
     },
     {
       "file": "build.yml",
@@ -908,7 +890,7 @@
         "authorize",
         "if"
       ],
-      "value": "github.event.workflow_run.event == 'push' && (github.event.workflow_run.head_branch == 'dev' || github.event.workflow_run.head_branch == 'main')"
+      "value": "(github.event_name == 'workflow_call' && inputs.tests_attested && inputs.candidate_branch == 'dev') || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')"
     },
     {
       "file": "release-cut-gate.yml",
@@ -1602,6 +1584,15 @@
         "if"
       ],
       "value": "failure()"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "publish-verified-dev-images",
+        "if"
+      ],
+      "value": "always() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped')"
     },
     {
       "file": "test.yml",

@@ -10,6 +10,7 @@ from pathlib import Path
 
 POLICY_FILES = (
     Path(".github/workflows/build.yml"),
+    Path(".github/workflows/publish-images.yml"),
     Path(".github/workflows/release-cut-gate.yml"),
     Path("Dockerfile"),
     Path("mcp-server/Dockerfile"),
@@ -36,9 +37,10 @@ _FROM = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 def check_repository(root: Path) -> list[str]:
     failures: list[str] = []
     build = (root / POLICY_FILES[0]).read_text(encoding="utf-8")
-    release = (root / POLICY_FILES[1]).read_text(encoding="utf-8")
-    dockerfile = (root / POLICY_FILES[2]).read_text(encoding="utf-8")
-    mcp_dockerfile = (root / POLICY_FILES[3]).read_text(encoding="utf-8")
+    publish = (root / POLICY_FILES[1]).read_text(encoding="utf-8")
+    release = (root / POLICY_FILES[2]).read_text(encoding="utf-8")
+    dockerfile = (root / POLICY_FILES[3]).read_text(encoding="utf-8")
+    mcp_dockerfile = (root / POLICY_FILES[4]).read_text(encoding="utf-8")
 
     mcp_base_images = _FROM.findall(mcp_dockerfile)
     if mcp_base_images != [MCP_BASE_IMAGE]:
@@ -60,14 +62,10 @@ def check_repository(root: Path) -> list[str]:
     )
     if robust_fixture_matcher not in build:
         failures.append("MCP vulnerable-fixture matcher is output-format brittle")
-    if build.count(
-        "needs: [security-scan-backend, security-scan-mcp, wait-for-tests]"
-    ) != 2:
-        failures.append("MCP dependency audit does not gate both image builders")
-    if build.count("needs.security-scan-mcp.result == 'success'") != 2:
-        failures.append(
-            "MCP dependency audit success does not unconditionally gate both image builders"
-        )
+    if "workflows: [Tests, Build and Push Docker Image]" not in publish:
+        failures.append("publication is not triggered by both verification workflows")
+    if "image_publish_policy.py" not in publish:
+        failures.append("publication does not enforce the exact-SHA policy")
 
     expected_needs = (
         "needs: [build-mcp-amd64, build-mcp-arm64, "
@@ -89,7 +87,11 @@ def check_repository(root: Path) -> list[str]:
         if build.count(setting) < 4:
             failures.append(f"MCP image scans do not enforce {setting}")
 
-    for workflow_name, workflow in (("build.yml", build), ("release-cut-gate.yml", release)):
+    for workflow_name, workflow in (
+        ("build.yml", build),
+        ("publish-images.yml", publish),
+        ("release-cut-gate.yml", release),
+    ):
         for reference in _USES.findall(workflow):
             if reference.startswith("./"):
                 continue
@@ -107,10 +109,8 @@ def check_repository(root: Path) -> list[str]:
     if "RUN npm ci" not in dockerfile or "RUN npm install" in dockerfile:
         failures.append("npm production build must install from the lockfile with npm ci")
 
-    checksum = 'echo "${checksum}  ${tarball}" | sha256sum --check --strict -'
-    checksum_parts = tuple(f"BEADS_SHA256_{suffix}:" for suffix in "ABCDEFGH")
-    if checksum not in release or not all(part in release for part in checksum_parts):
-        failures.append("release asset checksum verification is absent")
+    if "ref: beads" not in release or "authoritative-board/.beads/issues.jsonl" not in release:
+        failures.append("release gate does not read the authoritative board branch")
 
     return failures
 

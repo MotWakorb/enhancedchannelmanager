@@ -58,20 +58,20 @@ def test_policy_rejects_a_different_digest_pinned_mcp_base(tmp_path):
     assert any("reviewed Alpine base digest" in failure for failure in failures), failures
 
 
-def test_policy_rejects_push_builders_that_do_not_require_mcp_scan_success(
+def test_policy_rejects_publication_without_exact_sha_authorization(
     tmp_path,
 ):
     gate = _load_gate()
     _copy_policy_files(gate, tmp_path)
-    workflow = tmp_path / ".github/workflows/build.yml"
+    workflow = tmp_path / ".github/workflows/publish-images.yml"
     contents = workflow.read_text(encoding="utf-8")
-    trigger = "      && needs.security-scan-mcp.result == 'success'\n"
-    assert contents.count(trigger) == 2
-    workflow.write_text(contents.replace(trigger, "", 1), encoding="utf-8")
+    trigger = "python scripts/image_publish_policy.py"
+    assert trigger in contents
+    workflow.write_text(contents.replace(trigger, "python -c 'print(1)'", 1), encoding="utf-8")
 
     failures = gate.check_repository(tmp_path)
 
-    assert any("MCP dependency audit success" in failure for failure in failures), failures
+    assert any("exact-SHA policy" in failure for failure in failures), failures
 
 
 def test_policy_rejects_mcp_scans_that_ignore_unfixed_high_findings(tmp_path):
@@ -79,7 +79,7 @@ def test_policy_rejects_mcp_scans_that_ignore_unfixed_high_findings(tmp_path):
     _copy_policy_files(gate, tmp_path)
     workflow = tmp_path / ".github/workflows/build.yml"
     contents = workflow.read_text(encoding="utf-8")
-    trigger = "          vuln-type: 'os,library'\n"
+    trigger = "          vuln-type: os,library\n"
     assert contents.count(trigger) >= 2
     scan_start = contents.index("  trivy-scan-mcp-amd64:")
     prefix, mcp_scans = contents[:scan_start], contents[scan_start:]
@@ -125,10 +125,10 @@ def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
             "vulnerable-fixture self-test",
         ),
         (
-            ".github/workflows/build.yml",
-            "needs: [security-scan-backend, security-scan-mcp, wait-for-tests]",
-            "needs: [security-scan-backend, wait-for-tests]",
-            "both image builders",
+            ".github/workflows/publish-images.yml",
+            "workflows: [Tests, Build and Push Docker Image]",
+            "workflows: [Build and Push Docker Image]",
+            "both verification workflows",
         ),
         (
             ".github/workflows/build.yml",
@@ -156,9 +156,9 @@ def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
         ),
         (
             ".github/workflows/release-cut-gate.yml",
-            'echo "${checksum}  ${tarball}" | sha256sum --check --strict -',
-            "echo checksum-disabled",
-            "release asset checksum",
+            "ref: beads",
+            "ref: dev",
+            "authoritative board branch",
         ),
     ],
 )
