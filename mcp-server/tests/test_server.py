@@ -152,9 +152,16 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "file_not_found"
-        # Setup hint is tailored to the specific failure mode.
+        # Setup hint is tailored to the specific failure mode. Pin what the
+        # hint actually says: the pre-…-04c0u.8 assertion was an `or` whose
+        # settings.json arm went dead when the sidecar stopped reading
+        # settings.json, leaving a disjunction that could no longer fail for
+        # the reason it was written.
         assert "setup_hint" in data
-        assert "settings.json" in data["setup_hint"].lower() or "volume" in data["setup_hint"].lower()
+        hint = data["setup_hint"]
+        assert "ecm-mcp-secrets" in hint
+        assert "MCP Integration" in hint
+        assert "settings.json" not in hint.lower()
 
     def test_health_reports_unreadable_projection(self, client):
         """/health reports the unreadable-projection diagnostic, with a hint.
@@ -172,10 +179,17 @@ class TestHealthEndpoint:
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == diagnostic
-        # A setup_hint must be present for actionable operator guidance.
+        # A setup_hint must be present for actionable operator guidance, and
+        # must name the cause a .8 deployment actually hits: a PUID/PGID
+        # mismatch between ECM and the sidecar makes the owner-only projection
+        # unreadable or wrongly-owned.
         assert "setup_hint" in data, (
             f"Expected 'setup_hint' in /health for {diagnostic}, got: {data!r}"
         )
+        hint = data["setup_hint"]
+        assert "PUID/PGID" in hint
+        assert "MCP Integration" in hint
+        assert "settings.json" not in hint.lower()
 
     def test_health_reports_field_empty(self, client):
         """/health reports api_key_status='field_empty' when the field exists

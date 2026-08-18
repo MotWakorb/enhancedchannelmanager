@@ -129,7 +129,11 @@ def _production_request(
 ) -> tuple[bytes, str]:
     port = _free_port()
     tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "api-key").write_text(f"{_KEY}\n")
+    projection = tmp_path / "api-key"
+    projection.write_text(f"{_KEY}\n")
+    # Owner-only, exactly as ECM writes it: since …-04c0u.8 the sidecar
+    # refuses a projection any other account could read.
+    projection.chmod(0o600)
     env = {
         **os.environ,
         "MCP_SECRETS_DIR": str(tmp_path),

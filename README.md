@@ -45,17 +45,39 @@ services:
       - "6143:6143"
     volumes:
       - ./config:/config
+      # ECM writes MCP credential material here. This is the ONLY ECM-owned
+      # directory the AI-facing sidecar can see.
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp
     environment:
       - PUID=1000
       - PGID=1000
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
 
   ecm-mcp:
     image: ghcr.io/motwakorb/enhancedchannelmanager-mcp:latest
     ports:
       - "127.0.0.1:6101:6101"
     volumes:
-      - ./config:/config:ro
+      # Credential projection only. Do NOT mount /config here: the sidecar is
+      # the process most exposed to prompt injection, and a /config mount puts
+      # settings.json, auth_settings.json, the audit journal, TLS private keys
+      # and every stored backup one file read away from it.
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp:ro
+    # Must match ECM's PUID/PGID above: the projection is owner-only (0600) and
+    # the sidecar can read it only because it runs as the same account.
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
     environment:
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
       - ECM_URL=http://ecm:6100
       - MCP_PORT=6101
       # Container-internal bind; host publishing above remains loopback-only.
@@ -63,7 +85,19 @@ services:
     depends_on:
       ecm:
         condition: service_healthy
+
+volumes:
+  ecm-mcp-secrets:
 ```
+
+**Upgrading from an MCP sidecar that mounted `./config:/config:ro`.** Add the
+`ecm-mcp-secrets` volume and the `MCP_SECRETS_DIR` variable to *both* services
+as shown, then recreate. Recreating the containers alone is not enough. The
+sidecar images from v0.18.1 onward default `MCP_SECRETS_DIR` to
+`/run/secrets/ecm-mcp`, so without that volume the sidecar finds an empty
+directory and reports `api_key_status: file_not_found` permanently. Generate or
+regenerate the key under **Settings > MCP Integration** once the volume is in
+place; that is what publishes the projection.
 
 Or if you're building from source, use the MCP compose overlay:
 

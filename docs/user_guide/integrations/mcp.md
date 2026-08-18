@@ -27,6 +27,49 @@ do not assemble or publish the manifest manually.
 
 ---
 
+## Where the MCP credentials live
+
+ECM publishes MCP credential material into one dedicated directory, set by the
+`MCP_SECRETS_DIR` environment variable on the **ecm** service. It holds exactly
+two files, both written by ECM with mode `0600` and owned by `PUID`:`PGID`:
+
+| File | Contents |
+|-|-|
+| `api-key` | The public client key you paste into Claude Desktop or Claude Code. |
+| `mcp-service.json` | The sidecar's private backend principal key and its separate destructive-confirmation signing key. Never disclosed. |
+
+The MCP Compose overlay and the published-image recipe in the README both set
+`MCP_SECRETS_DIR=/run/secrets/ecm-mcp` and mount a dedicated `ecm-mcp-secrets`
+volume there: read-write for ECM, read-only for the sidecar. The sidecar
+mounts nothing else, so it cannot read `settings.json`, `auth_settings.json`,
+the audit journal, TLS private keys, or backups.
+
+**Without the overlay, `MCP_SECRETS_DIR` defaults to `CONFIG_DIR`.** That is
+deliberate: it keeps a newer ECM backend working under an older Compose file
+whose sidecar still reads `/config`. The consequence is that every deployment
+writes both files, and on a default deployment they land at
+`/config/api-key` and `/config/mcp-service.json`. **If you bind-mount a host
+directory at `/config`, `api-key` is a credential file sitting at its top
+level.** Exclude it from any host-side backup or sync that sweeps the whole
+directory, or move the projection somewhere else by setting `MCP_SECRETS_DIR`
+on the ecm service and mounting that path.
+
+### After upgrading from v0.18.1 build 0123 or earlier
+
+Earlier builds kept `mcp-service.json` in `CONFIG_DIR`. Moving the projection
+does not remove the old copy, so `<CONFIG_DIR>/mcp-service.json` is left
+behind. It authenticates nothing, because the backend reads only the file
+under `MCP_SECRETS_DIR`. It is still secret material that a backup tool will
+capture. ECM logs a warning naming the file on every start and does **not**
+delete it, because deleting credential material on your behalf is
+irreversible. Delete it yourself once you have confirmed MCP is working:
+
+```bash
+docker compose exec ecm rm -f /config/mcp-service.json
+```
+
+---
+
 ## Choose your connection method
 
 ECM's MCP server is authenticated with a static API key (`mcp_api_key`) in an
