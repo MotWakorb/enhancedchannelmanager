@@ -246,11 +246,16 @@ async def test_successful_reset_consumes_token_and_revokes_sessions(
 
 @pytest.mark.asyncio
 async def test_successful_reset_invalidates_existing_credentials_and_new_password_logs_in(
-    async_client, test_session, local_user,
+    async_client, test_session, local_user, monkeypatch,
 ):
     """A completed reset ends the old access and refresh session together."""
     from auth.tokens import hash_token
     from models import PasswordResetToken
+
+    enforced_auth = type(
+        "EnforcedAuth", (), {"require_auth": True, "setup_complete": True}
+    )()
+    monkeypatch.setattr("main.get_auth_settings", lambda: enforced_auth)
 
     login = await async_client.post(
         "/api/auth/login",
@@ -260,6 +265,7 @@ async def test_successful_reset_invalidates_existing_credentials_and_new_passwor
     old_access = async_client.cookies.get("access_token")
     old_refresh = async_client.cookies.get("refresh_token")
     assert old_access and old_refresh
+    assert (await async_client.get("/api/debug/request-rates")).status_code == 200
 
     raw_token = "whole-path-reset-credential"
     test_session.add(
@@ -284,6 +290,10 @@ async def test_successful_reset_invalidates_existing_credentials_and_new_passwor
         "/api/auth/me",
         headers={"Authorization": f"Bearer {old_access}"},
     )
+    stale_middleware_access = await async_client.get(
+        "/api/debug/request-rates",
+        headers={"Authorization": f"Bearer {old_access}"},
+    )
     stale_refresh = await async_client.post(
         "/api/auth/refresh",
         headers={"X-Refresh-Token": old_refresh},
@@ -298,6 +308,7 @@ async def test_successful_reset_invalidates_existing_credentials_and_new_passwor
     )
 
     assert stale_access.status_code == 401
+    assert stale_middleware_access.status_code == 401
     assert stale_refresh.status_code == 401
     assert old_login.status_code == 401
     assert new_login.status_code == 200
