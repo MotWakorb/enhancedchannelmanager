@@ -22,7 +22,7 @@ recover automatically).
 
 Auth note (ADR-008 §D6): the actor_token_id recorded in the audit journal is
 resolved *server-side* from the bearer token the MCP server sends on every
-HTTP request (mcp_api_key from /config/settings.json, mapped by the ECM auth
+HTTP request (the dedicated projected MCP API key, mapped by the ECM auth
 layer to the corresponding User/token DB id).  The MCP tools do not need to
 pass actor identity explicitly — it flows through the Authorization header.
 

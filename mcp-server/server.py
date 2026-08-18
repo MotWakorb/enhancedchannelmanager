@@ -353,9 +353,9 @@ async def handle_health(request):
 
     Self-diagnosing /health (bd-ix1g6): in addition to the boolean
     ``api_key_configured`` flag, we surface ``api_key_status`` — a machine-
-    readable reason that distinguishes the four ways a key can be missing
-    (no settings file, corrupted JSON, missing field, empty field). This
-    lets an operator (and the ECM Settings UI's MCP Server Status panel)
+    readable reason that distinguishes the ways a key can be missing (no
+    credential projection, unreadable/malformed projection, empty projection).
+    This lets an operator (and the ECM Settings UI's MCP Server Status panel)
     diagnose a misconfigured deployment without container shell access.
 
     MCP OAuth offering RETIRED (bd-9axgc): the previously-reported
@@ -372,20 +372,14 @@ async def handle_health(request):
     # remediation matching the actual cause, not a one-size-fits-all message.
     setup_hints = {
         "file_not_found": (
-            "ECM has not written settings.json yet, or the MCP container's "
-            "/config volume is not sharing the same data as ECM. Verify both "
-            "containers mount the same volume and that ECM Settings has been "
-            "saved at least once."
+            "ECM has not projected the MCP credential yet. Verify both "
+            "containers mount the dedicated ecm-mcp-secrets volume and "
+            "generate a key in ECM Settings > MCP Integration."
         ),
-        "invalid_json": (
-            "/config/settings.json could not be parsed as JSON. The file may "
-            "be corrupted, partially written, or unrelated. Restore from a "
-            "backup or recreate it by saving ECM Settings."
-        ),
-        "field_missing": (
-            "settings.json predates the MCP feature and does not contain an "
-            "mcp_api_key field. Open ECM Settings > MCP Integration and "
-            "generate a key — saving will add the field."
+        "invalid_key": (
+            "The dedicated MCP credential projection is unreadable or "
+            "malformed. Confirm the sidecar runs under the same PUID/PGID as "
+            "ECM, then regenerate the key in ECM Settings > MCP Integration."
         ),
         "field_empty": (
             "No MCP API key configured. Generate one in ECM Settings > "

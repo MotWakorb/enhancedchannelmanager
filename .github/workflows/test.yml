@@ -504,6 +504,12 @@ jobs:
             --cov=. --cov-config=.coveragerc --cov-fail-under=26 \
             --junitxml=junit.xml
 
+      - name: Assert MCP container runtime isolation
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        run: |
+          docker build -t ecm-mcp-hardening-test:ci ./mcp-server
+          bash scripts/test_mcp_container_hardening.sh ecm-mcp-hardening-test:ci
+
       - name: Summarize what this check did
         # A run summary must never be the reason a required check reports
         # red. If this step breaks, the conclusion the check is named for

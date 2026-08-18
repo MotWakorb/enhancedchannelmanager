@@ -25,7 +25,18 @@ logger = logging.getLogger(__name__)
 # Config file location
 CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
 CONFIG_FILE = CONFIG_DIR / "settings.json"
-MCP_SERVICE_FILE = CONFIG_DIR / "mcp-service.json"
+# Sidecar credential projection (enhancedchannelmanager-04c0u.8). The AI-facing
+# MCP process mounts only this directory, never the full ``/config`` volume, so
+# it can reach MCP credential material and nothing else — no settings.json, no
+# auth_settings.json, no journal, no TLS keys, no backups. Deployments without
+# the MCP overlay leave it at ``CONFIG_DIR`` and behave exactly as before.
+MCP_SECRETS_DIR = Path(os.environ.get("MCP_SECRETS_DIR", CONFIG_DIR))
+# Public client credential the operator hands to MCP clients.
+MCP_KEY_FILE = MCP_SECRETS_DIR / "api-key"
+# Private sidecar-to-backend credentials (enhancedchannelmanager-04c0u.7): a
+# distinct backend principal key plus a distinct destructive-confirmation
+# signing key. Never derived from, and never merged with, the public key above.
+MCP_SERVICE_FILE = MCP_SECRETS_DIR / "mcp-service.json"
 
 
 ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -862,6 +873,14 @@ def load_settings() -> DispatcharrSettings:
             # Sanitize nulls to prevent Pydantic validation failures
             data = _sanitize_settings_data(data)
             _cached_settings = DispatcharrSettings(**data)
+            try:
+                _project_mcp_api_key(_cached_settings.mcp_api_key)
+            except OSError:
+                # A broken optional sidecar projection must not make ECM
+                # discard otherwise-valid settings and boot with defaults.
+                # Rotation/save remains fail-closed because save_settings does
+                # not suppress this error.
+                logger.exception("[CONFIG] Failed to project MCP API key")
             logger.info("[CONFIG] Loaded settings successfully, configured: %s", _cached_settings.is_configured())
             return _cached_settings
         except json.JSONDecodeError as e:
@@ -916,6 +935,7 @@ def save_settings(settings: DispatcharrSettings) -> None:
                 temporary.unlink()
             except FileNotFoundError:
                 pass
+        _project_mcp_api_key(settings.mcp_api_key)
         _cached_settings = settings
         logger.info("[CONFIG] Settings saved successfully to %s", CONFIG_FILE)
 
@@ -928,6 +948,42 @@ def save_settings(settings: DispatcharrSettings) -> None:
     except Exception as e:
         logger.exception("[CONFIG] Failed to save settings to %s: %s", CONFIG_FILE, e)
         raise
+
+
+def _project_mcp_api_key(key: str) -> None:
+    """Atomically publish only the public MCP credential to the sidecar volume.
+
+    The full settings document contains unrelated credentials and must never be
+    mounted into the AI-facing process.  Only the operator-disclosed client key
+    is projected here; the private backend and destructive-confirmation keys
+    stay in the separate owner-only ``mcp-service.json`` projection written by
+    ``backend.auth.mcp_service`` (enhancedchannelmanager-04c0u.7).
+
+    The projection is owner-only (0600) and readable by the sidecar solely
+    because the sidecar runs under the same PUID/PGID as the backend.  Widening
+    the mode, or granting group/other read, would hand the credential to every
+    other process sharing the volume.  Deployments that do not enable the MCP
+    overlay simply have no projection directory, so ECM operation is unchanged.
+    """
+    parent = MCP_KEY_FILE.parent
+    if not parent.exists():
+        return
+    temporary = MCP_KEY_FILE.with_name(
+        f".{MCP_KEY_FILE.name}.{secrets.token_hex(8)}.tmp"
+    )
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w") as handle:
+            handle.write(f"{key}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, MCP_KEY_FILE)
+        os.chmod(MCP_KEY_FILE, 0o600)
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def clear_settings_cache() -> None:

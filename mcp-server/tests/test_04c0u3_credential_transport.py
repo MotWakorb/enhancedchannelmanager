@@ -1,7 +1,6 @@
 """Security contract for MCP credential transport (bd-04c0u.3)."""
 from __future__ import annotations
 
-import json
 import os
 import socket
 import subprocess
@@ -130,10 +129,10 @@ def _production_request(
 ) -> tuple[bytes, str]:
     port = _free_port()
     tmp_path.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "settings.json").write_text(json.dumps({"mcp_api_key": _KEY}))
+    (tmp_path / "api-key").write_text(f"{_KEY}\n")
     env = {
         **os.environ,
-        "CONFIG_DIR": str(tmp_path),
+        "MCP_SECRETS_DIR": str(tmp_path),
         "MCP_BIND_ADDRESS": "127.0.0.1",
         "MCP_PORT": str(port),
         "MCP_TRUSTED_PROXY_IPS": trusted_proxies,

@@ -634,7 +634,7 @@ def _expected_verdict_manifest():
     )
     step_contracts = {
         "backend": (1, 6, 9),
-        "mcp-server": (1, 4, 7),
+        "mcp-server": (1, 5, 8),
         "frontend": (1, 9, 12),
         "semgrep-lint": (1, 4, 5),
     }

@@ -547,22 +547,25 @@ graph LR
     end
 
     ECMBackend["ECM Backend (:6100)"]
-    Settings["/config/settings.json (shared volume)"]
+    PublicKey["/run/secrets/ecm-mcp/api-key (projection, 0600)"]
+    ServiceKeys["/run/secrets/ecm-mcp/mcp-service.json (projection, 0600)"]
 
     Agent -->|"HTTP /mcp + API key"| Transport
-    Client -->|"Bearer token"| ECMBackend
-    AuthMW -.reads.-> Settings
-    Client -.reads.-> Settings
+    Client -->|"Bearer backend_key + signed claim"| ECMBackend
+    AuthMW -.reads.-> PublicKey
+    Client -.reads.-> ServiceKeys
 ```
 
 **Tool modules (13 domains):** `channels`, `channel_groups`, `streams`, `m3u`, `epg`, `channel_pipeline`, `tasks`, `stats`, `system`, `notifications`, `profiles`, `normalization`, `dedup`.
 
 **Resources (read-only):** `ecm://stats/overview`, `ecm://channels/summary`, `ecm://tasks/status`.
 
-**Auth model (two separate keys):**
+**Auth model (three distinct credentials):**
 
-- **Inbound (MCP client → MCP server):** API key from `settings.json:mcp_api_key`, accepted only as `Authorization: Bearer`; query credentials are rejected. The key is re-read on every request, so rotation and revocation take effect without restart. Compose publishes MCP on host loopback by default. The explicit remote overlay requires HTTPS as reported by an operator-configured trusted proxy. Exact Host and browser Origin allowlists protect every route, and the MCP SDK independently repeats both checks at its transport boundary. Uvicorn's raw-target access log is disabled; a bounded MCP access log records only method, decoded path (never query), and status.
-- **Outbound (MCP server → ECM backend):** the same key is sent as `Authorization: Bearer` to ECM. `ECMClient` recreates the httpx client on key change.
+- **Inbound (MCP client → MCP server):** the public `mcp_api_key`, projected on its own at `/run/secrets/ecm-mcp/api-key` and accepted only as `Authorization: Bearer`; query credentials are rejected. The sidecar has no `/config` mount, so it cannot read `settings.json`, `auth_settings.json`, the journal, TLS keys, or backups (`enhancedchannelmanager-04c0u.8`). The key is re-read on every request, so rotation and revocation take effect without restart. Compose publishes MCP on host loopback by default. The explicit remote overlay requires HTTPS as reported by an operator-configured trusted proxy. Exact Host and browser Origin allowlists protect every route, and the MCP SDK independently repeats both checks at its transport boundary. Uvicorn's raw-target access log is disabled; a bounded MCP access log records only method, decoded path (never query), and status.
+- **Outbound (MCP server → ECM backend):** a *different*, never-disclosed `backend_key` from the owner-only `mcp-service.json` projection, plus a request-bound single-use claim signed with a third credential, `confirmation_key` (`enhancedchannelmanager-04c0u.7`). The public `mcp_api_key` is never accepted by the backend's sidecar principal. `ECMClient` recreates the httpx client on key change.
+
+**Sidecar credential projection.** ECM writes both projection files under `MCP_SECRETS_DIR` (`/run/secrets/ecm-mcp` under the MCP overlay, `CONFIG_DIR` otherwise) with mode `0600` and the backend's own uid. The sidecar runs under the same `PUID`/`PGID`, which is the only reason it can read them; `get_mcp_backend_credentials_status()` fails readiness on any other owner or mode. The three credentials are independently generated; none is derived from another.
 
 **`settings.json` credential schema (bd-jmi1c, GH #273).** Three distinct credentials live in `/config/settings.json`; the lexical similarity of two of the field names was the root cause of GH #273 (operators copying the MCP key into the Dispatcharr token slot):
 

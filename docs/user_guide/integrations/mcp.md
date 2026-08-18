@@ -412,15 +412,18 @@ docker exec ecm-ecm-mcp-1 curl -s http://localhost:6100/api/health
 ### MCP server online but "API key not configured"
 
 The MCP container's `/health` endpoint reports `api_key_configured: false`. ECM
-and the MCP container share the `/config` volume, and the MCP container reads
-`mcp_api_key` from `settings.json`. The most common causes:
+projects only MCP credential material through the dedicated `ecm-mcp-secrets`
+volume; the sidecar cannot read ECM's `/config` volume. The most common causes:
 
 - **No key generated yet.** Open Settings → MCP Integration and click Generate
   Key. The MCP `/health` endpoint surfaces a machine-readable `api_key_status`
-  (`file_not_found` / `invalid_json` / `field_missing` / `field_empty`) plus a
-  setup hint describing the exact cause.
-- **The two containers don't share the same `/config` volume.** Verify both
-  containers mount the same volume.
+  (`file_not_found` / `invalid_key` / `field_empty`) plus a setup hint
+  describing the exact cause.
+- **The projection volume is missing.** Verify both containers mount the
+  dedicated `ecm-mcp-secrets` volume as shown in `docker-compose.mcp.yml`.
+- **The two containers disagree on identity.** The projection is owner-only,
+  so `PUID`/`PGID` must be identical for `ecm` and `ecm-mcp`; a mismatch shows
+  up as `invalid_key` (public key) or `wrong_owner` (backend credentials).
 
 Diagnose:
 ```bash

@@ -641,7 +641,7 @@
         5,
         "if"
       ],
-      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "test.yml",
@@ -661,6 +661,17 @@
         "mcp-server",
         "steps",
         7,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        8,
         "if"
       ],
       "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
@@ -1133,7 +1144,7 @@
         "jobs",
         "mcp-server",
         "steps",
-        5,
+        6,
         "continue-on-error"
       ],
       "value": true
