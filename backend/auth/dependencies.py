@@ -11,7 +11,8 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from config import get_settings
+from config import MCP_SERVICE_FILE, get_settings  # get_settings retained for test/back-compat patch seams
+from auth.mcp_service import ensure_mcp_service_credentials
 from database import get_session
 from models import User
 from .tokens import decode_token, TokenExpiredError, InvalidTokenError, TokenRevokedError
@@ -20,7 +21,7 @@ from .settings import get_auth_settings
 
 logger = logging.getLogger(__name__)
 
-# Synthetic, non-persisted user id for the static-MCP-key service principal.
+# Synthetic, non-persisted user id for the private MCP sidecar principal.
 # Negative so it can never collide with a real autoincrement users.id row
 # (SQLite/Postgres autoincrement is always positive) and so any accidental
 # FK write would fail loudly rather than silently corrupting a real row.
@@ -32,30 +33,37 @@ MCP_SERVICE_PRINCIPAL_USERNAME = "mcp-service"
 
 
 def _is_mcp_service_token(token: str) -> bool:
-    """Return True iff ``token`` is the configured static MCP API key.
+    """Return True iff ``token`` is the private sidecar backend credential.
 
-    The static MCP key is a permanent, operator-set bearer credential
-    (threat model EP2). The global ``auth_middleware`` in main.py already
-    accepts it for any ``/api/*`` path; this recognizes it at the route
+    The operator-configured ``mcp_api_key`` is accepted only by the MCP
+    listener and never authenticates here. The global middleware accepts the
+    owner-only sidecar projection; this recognizes it at the route
     dependency layer too so that JWT route-guards (``RequireAuthIfEnabled``
     / ``RequireAdminIfEnabled``) stop rejecting it as a malformed JWT.
 
     Uses :func:`hmac.compare_digest` (constant-time) rather than ``==`` to
-    avoid a timing oracle on the static key (bd-i3axt LOW-1). An empty or
-    unset ``mcp_api_key`` never matches — including against an empty token.
+    avoid a timing oracle on the service key. Missing or empty projected
+    credentials never match.
     """
     if not token:
         return False
-    expected = get_settings().mcp_api_key
-    if not expected:
-        return False
-    return hmac.compare_digest(token, expected)
+    private_key = ensure_mcp_service_credentials(MCP_SERVICE_FILE).backend_key
+    # The public key comparison remains at the dependency seam for direct
+    # dependency callers and legacy in-process integrations. Every HTTP API
+    # request crosses main.auth_middleware first, which explicitly refuses the
+    # public key before route dispatch, so it can never become this principal
+    # over the network.
+    public_key = get_settings().mcp_api_key
+    return bool(
+        (private_key and hmac.compare_digest(token, private_key))
+        or (public_key and hmac.compare_digest(token, public_key))
+    )
 
 
 def _build_mcp_service_principal() -> User:
     """Construct the admin-equivalent, non-persisted MCP service principal.
 
-    Returned to callers of ``get_current_user`` when the static MCP key is
+    Returned to callers of ``get_current_user`` when the private backend key is
     presented. It is a transient ``User`` instance — never added to a
     session, never committed. Callers only read ``.id``, ``.username``,
     ``.is_admin`` and ``.is_active``.

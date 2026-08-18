@@ -44,6 +44,12 @@ MCP_KEY = "mcp-secret-key-9kwzp8"
 
 MCP_API_KEY_PATH = "/api/settings/mcp-api-key"
 
+
+@pytest.fixture(autouse=True)
+def _isolate_private_sidecar_rotation():
+    with patch("routers.settings.rotate_mcp_service_credentials"):
+        yield
+
 # The key the ROUTER reads as already stored. An angle-bracket placeholder
 # rather than a credential-shaped literal: nothing here depends on its shape,
 # only on it being distinct from whatever the handler mints, so it follows the
@@ -154,10 +160,6 @@ async def test_mcp_principal_refused_on_mcp_api_key(async_client, method):
     assert response.status_code == 403, response.json()
     detail = response.json()["detail"]
     assert "MCP service principal" in detail
-    # The refusal must NAME this surface. If the outbound-test dependency were
-    # reused here the status code would still be 403 and this file would still
-    # be green, while every triage of the refusal started at a network probe
-    # that this route never makes.
     assert "MCP API key" in detail
     assert "connection test" not in detail
     save_settings.assert_not_called()

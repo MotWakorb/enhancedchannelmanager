@@ -23,6 +23,7 @@ from auth import (
     RequireHumanAdminForStatisticsReset,
 )
 from auth.dependencies import get_current_user, is_mcp_service_principal
+from auth.mcp_service import rotate_mcp_service_credentials
 from auth.settings import get_auth_settings
 from config import (
     ADMIN_ONLY_READ_REDACTED_FIELDS,
@@ -32,6 +33,7 @@ from config import (
     clear_settings_cache,
     set_log_level,
     DispatcharrSettings,
+    MCP_SERVICE_FILE,
 )
 from dispatcharr_client import (
     DispatcharrClient,
@@ -2450,6 +2452,7 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     settings = get_settings()
     settings.mcp_api_key = secrets.token_urlsafe(32)
     save_settings(settings)
+    rotate_mcp_service_credentials(MCP_SERVICE_FILE)
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key generated")
     return {"mcp_api_key": settings.mcp_api_key}
@@ -2474,6 +2477,7 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     settings = get_settings()
     settings.mcp_api_key = ""
     save_settings(settings)
+    rotate_mcp_service_credentials(MCP_SERVICE_FILE)
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}

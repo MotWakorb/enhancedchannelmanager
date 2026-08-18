@@ -1278,6 +1278,27 @@ describe('ChannelPipelineTab', () => {
   });
 
   describe('snapshot revert affordance (ADR-010 uc51o.7)', () => {
+    it('offers snapshot recovery for a failed planned run that has recovery evidence', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'failed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const recovery = await screen.findByRole('button', { name: /recover from snapshot/i });
+      expect(recovery.title).toMatch(/failed run/i);
+      expect(screen.getByText(/failed after some changes may have been applied/i)).toBeInTheDocument();
+    });
+
+    it('does not offer snapshot recovery for a failed run without evidence', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'failed', mode: 'execute', has_snapshot: false })
+      );
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByTestId('execution-item');
+      expect(screen.queryByRole('button', { name: /recover from snapshot/i })).toBeNull();
+    });
+
     it('shows the revert button when has_snapshot is true', async () => {
       mockDataStore.channelPipelineExecutions.push(
         createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })

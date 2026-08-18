@@ -300,6 +300,13 @@ def journal_entries_for_plan(
         })
 
     next_temp = -1
+    # A channel can be updated several times in one replay. Provenance must
+    # describe each transition, not repeatedly compare every write with the
+    # pre-run snapshot.
+    shadow = {
+        int(channel_id): copy.deepcopy(value)
+        for channel_id, value in plan.channel_preconditions.items()
+    }
     for write in plan.writes:
         method = write.method
         if method.startswith("create_"):
@@ -308,11 +315,22 @@ def journal_entries_for_plan(
             payload = write.args[0] if write.args else {}
             append(method, entity_id, payload.get("name") if isinstance(payload, dict) else str(payload),
                    None, payload, f"Planned pipeline executed {method} for {entity_id}")
+            if method == "create_channel" and isinstance(payload, dict):
+                shadow[entity_id] = {"id": entity_id, **copy.deepcopy(payload)}
             continue
         if method == "assign_channel_numbers":
-            for channel_id in write.args[0]:
-                append("assign_channel_number", remap.get(channel_id, channel_id), None, None,
-                       {"starting_number": write.args[1]}, "Planned pipeline assigned channel number")
+            starting_number = write.args[1]
+            for index, channel_id in enumerate(write.args[0]):
+                resolved_id = remap.get(channel_id, channel_id)
+                before_channel = shadow.setdefault(resolved_id, {})
+                old_number = before_channel.get("channel_number")
+                new_number = (
+                    starting_number + index if starting_number is not None else None
+                )
+                append("assign_channel_number", resolved_id, before_channel.get("name"),
+                       {"channel_number": old_number}, {"channel_number": new_number},
+                       "Planned pipeline assigned channel number")
+                before_channel["channel_number"] = new_number
             continue
         if method == "update_profile_channel":
             profile_id, raw_id, payload = write.args
@@ -323,7 +341,7 @@ def journal_entries_for_plan(
             continue
         raw_id = write.args[0] if write.args else None
         entity_id = remap.get(raw_id, raw_id)
-        before = plan.channel_preconditions.get(str(raw_id), {})
+        before = copy.deepcopy(shadow.get(entity_id, plan.channel_preconditions.get(str(raw_id), {})))
         payload = write.args[1] if len(write.args) > 1 else None
         if method == "update_channel" and isinstance(payload, dict) and "streams" in payload:
             old_streams = set(before.get("streams", []) or [])
@@ -343,4 +361,10 @@ def journal_entries_for_plan(
         else:
             append(method, entity_id, before.get("name"), before, payload,
                    f"Planned pipeline executed {method} for {entity_id}")
+        if method == "update_channel" and isinstance(payload, dict):
+            updated = copy.deepcopy(before)
+            updated.update(copy.deepcopy(payload))
+            shadow[entity_id] = updated
+        elif method == "delete_channel":
+            shadow.pop(entity_id, None)
     return entries

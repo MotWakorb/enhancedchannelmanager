@@ -1400,7 +1400,9 @@ def _create_pending_execution(
         session.close()
 
 
-def _mark_execution_failed(execution_id: int, error: BaseException) -> None:
+def _mark_execution_failed(
+    execution_id: int, error: BaseException, *, partial_replay: dict | None = None,
+) -> None:
     """Mark a pre-created execution as failed and capture the error message."""
     from models import ChannelPipelineExecution
 
@@ -1425,6 +1427,19 @@ def _mark_execution_failed(execution_id: int, error: BaseException) -> None:
             )
             execution.status = "failed"
             execution.error_message = f"{type(error).__name__}: {error}"
+            if partial_replay is not None:
+                execution.set_execution_log([{
+                    "type": "partial_replay_failure",
+                    **partial_replay,
+                }])
+                from models import ChannelPipelineSnapshot
+                snapshot = session.query(ChannelPipelineSnapshot).filter(
+                    ChannelPipelineSnapshot.execution_id == execution_id
+                ).first()
+                if snapshot is not None:
+                    evidence = snapshot.get_channels_data()
+                    evidence["partial_replay"] = partial_replay
+                    snapshot.set_channels_data(evidence)
             session.commit()
     finally:
         session.close()
@@ -1517,6 +1532,38 @@ def _plan_principal(principal) -> str:
         or getattr(principal, "role", None)
         or "api"
     )
+
+
+def _planned_run_warnings(result: dict) -> list:
+    """Preserve the warning surface produced during shadow planning."""
+    warnings = list(result.get("normalization_warnings", []))
+    warnings.extend(result.get("event_sync_warnings", []))
+    non_reversible_ids = sorted(result.get("non_reversible_channel_ids", []))
+    if non_reversible_ids:
+        warnings.append({
+            "type": "non_reversible_profile_changes",
+            "count": len(non_reversible_ids),
+            "channel_ids": non_reversible_ids,
+            "message": (
+                "This run changed channel-profile membership. Channel-profile "
+                "membership has no reversible previous state, so Rollback and "
+                "Undo will NOT restore it."
+            ),
+        })
+    ownership_ids = sorted(
+        result.get("profile_ownership_unestablished_channel_ids", [])
+    )
+    if ownership_ids:
+        warnings.append({
+            "type": "profile_ownership_not_established",
+            "count": len(ownership_ids),
+            "channel_ids": ownership_ids,
+            "message": (
+                "Channel profiles were applied, but the pipeline-ownership marker "
+                "could not be written, so precedence is not established."
+            ),
+        })
+    return warnings
 
 
 async def _compute_pipeline_plan_payload(request: RunPipelineRequest) -> dict:
@@ -1757,7 +1804,12 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
         try:
             _, remap = await replay_write_plan(engine.client, write_plan, read_set_validated=True)
         except PartialReplayError as exc:
-            _mark_execution_failed(execution_id, exc)
+            partial_replay = {
+                "failed_index": exc.failed_index,
+                "completed_targets": exc.completed,
+                "compensation_errors": exc.compensation_errors,
+            }
+            _mark_execution_failed(execution_id, exc, partial_replay=partial_replay)
             raise HTTPException(
                 status_code=502,
                 detail={
@@ -1833,7 +1885,7 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
             execution.set_created_entities(result.get("created_entities", []))
             execution.set_modified_entities(result.get("modified_entities", []))
             execution.set_execution_log(result.get("execution_log", []))
-            execution.set_warnings(result.get("normalization_warnings", []))
+            execution.set_warnings(_planned_run_warnings(result))
             event_summaries = [
                 {key: value for key, value in summary.items() if key != "review_candidates"}
                 for summary in result.get("event_sync", [])

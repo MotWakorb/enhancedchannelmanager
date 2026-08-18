@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from auth.mcp_service import MCP_CLAIM_HEADER, MCPServiceCredentials, issue_test_claim
 
 
 MCP_KEY = "<Synthetic-MCP-Service-Key-04c0u4>"
@@ -157,7 +158,7 @@ async def test_direct_mcp_call_cannot_activate_outbound_or_restore_tasks(
 
 
 @pytest.mark.asyncio
-async def test_direct_mcp_call_reaches_explicit_safe_capability(async_client):
+async def test_external_mcp_client_key_cannot_reach_even_safe_backend_capability(async_client):
     client = SimpleNamespace(
         get_channels=AsyncMock(return_value={"results": [], "count": 0})
     )
@@ -171,6 +172,33 @@ async def test_direct_mcp_call_reaches_explicit_safe_capability(async_client):
         response = await async_client.get(
             "/api/channels",
             headers={"Authorization": f"Bearer {MCP_KEY}"},
+        )
+    assert response.status_code == 403, response.text
+    assert "valid only at the sidecar" in response.json()["detail"]
+    client.get_channels.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_private_sidecar_principal_with_bound_claim_reaches_safe_capability(async_client):
+    credentials = MCPServiceCredentials("private-backend-key", "private-confirmation-key")
+    claim = issue_test_claim(credentials, "GET", "/api/channels", None)
+    client = SimpleNamespace(
+        get_channels=AsyncMock(return_value={"results": [], "count": 0})
+    )
+    with (
+        patch("main.get_auth_settings", return_value=_auth_on()),
+        patch("main.get_settings", return_value=_runtime_settings()),
+        patch("main.ensure_mcp_service_credentials", return_value=credentials),
+        patch("auth.dependencies.ensure_mcp_service_credentials", return_value=credentials),
+        patch("auth.dependencies.get_auth_settings", return_value=_auth_on()),
+        patch("routers.channels.get_client", return_value=client),
+    ):
+        response = await async_client.get(
+            "/api/channels",
+            headers={
+                "Authorization": "Bearer private-backend-key",
+                MCP_CLAIM_HEADER: claim,
+            },
         )
     assert response.status_code == 200, response.text
     client.get_channels.assert_awaited_once()

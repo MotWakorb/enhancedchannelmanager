@@ -19,6 +19,7 @@ from types import MethodType
 from typing import Any
 
 from mcp.types import ToolAnnotations
+from auth_claim import claim_context
 
 
 class ToolSafety(str, Enum):
@@ -451,6 +452,23 @@ def install_safety_policy(mcp) -> None:
             openWorldHint=False,
         )
         tool.meta = {**(tool.meta or {}), "ecmSafetyClassification": classification.value}
+
+        # Every backend call made by a registered tool is authenticated with a
+        # request-bound sidecar claim. The externally configured MCP client key
+        # never leaves the MCP listener. Destructive tools set ``confirmed``
+        # only on their validated second call; the guard below still owns token
+        # validation and single-use consumption.
+        unclaimed_run = tool.run
+
+        async def claimed_run(
+            self, arguments, context=None, convert_result=False, *,
+            _name=name, _classification=classification, _run=unclaimed_run,
+        ):
+            confirmed = bool(arguments.get("confirmation_token"))
+            with claim_context(_name, _classification.value, confirmed=confirmed):
+                return await _run(arguments, context=context, convert_result=convert_result)
+
+        object.__setattr__(tool, "run", MethodType(claimed_run, tool))
         if classification is not ToolSafety.DESTRUCTIVE:
             continue
 
