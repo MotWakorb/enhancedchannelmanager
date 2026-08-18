@@ -6,9 +6,8 @@ account / rule tools:
 W2 — confirm / dry-run gating
 -----------------------------
 MCP tools are STATELESS thin HTTP wrappers: there is no server-side session
-between two tool calls, so a "issue a token server-side then redeem it later"
-flow is impossible — there is nowhere to keep the issued token. Instead the
-confirm token is DERIVED DETERMINISTICALLY from the resolved target set
+between two tool calls. Instead the confirm token is derived from the resolved
+target set and its issue time
 (:func:`derive_token`). The tool:
 
   1. First call (no token): resolves the full target set, returns a preview that
@@ -20,8 +19,7 @@ confirm token is DERIVED DETERMINISTICALLY from the resolved target set
 Because the token is a digest over the sorted target ids, a target set that has
 changed since the preview (a channel added/removed, ids shifted) yields a
 different token — the echoed token is stale and the tool refuses, closing the
-TOCTOU gap. The caller cannot fabricate a valid token without first seeing the
-server-resolved id set, because it's a hash over ids the caller may not know.
+TOCTOU gap. Tokens expire after five minutes.
 
 W4 — batch-size caps
 --------------------
@@ -35,10 +33,16 @@ object the tool acts on.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import logging
+import secrets
+import time
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+CONTENT_TOKEN_TTL_SECONDS = 300
+_CONTENT_SIGNING_KEY = secrets.token_bytes(32)
 
 
 # ---------------------------------------------------------------------------
@@ -62,17 +66,18 @@ SETTING_BULK_MERGE_HARD_CAP = "mcp_bulk_merge_hard_cap"
 # ---------------------------------------------------------------------------
 # W2 — content-derived confirm token
 # ---------------------------------------------------------------------------
-def derive_token(target_ids) -> str:
-    """Return a short deterministic digest over a resolved target id set.
+def derive_token(target_ids, *, issued_at: int | None = None) -> str:
+    """Return a short expiring digest over a resolved target id set.
 
-    The token is ``"{count}-{sha1(sorted_ids)[:8]}"``. It is stable for the same
-    set regardless of input order (the ids are sorted first), and changes if any
-    id is added or removed — that change-detection IS the staleness / TOCTOU
-    guard. ``target_ids`` may be any iterable of ints; duplicates are collapsed.
+    It is stable for the same set and issue timestamp regardless of input order,
+    and changes if any id is added or removed. ``target_ids`` may be any
+    iterable of ints; duplicates are collapsed.
     """
     ids = sorted({int(i) for i in target_ids})
-    digest = hashlib.sha1(",".join(map(str, ids)).encode()).hexdigest()[:8]
-    return f"{len(ids)}-{digest}"
+    timestamp = int(time.time()) if issued_at is None else int(issued_at)
+    content = f"{timestamp}:".encode() + ",".join(map(str, ids)).encode()
+    digest = hmac.new(_CONTENT_SIGNING_KEY, content, hashlib.sha256).hexdigest()[:16]
+    return f"v2-{timestamp}-{len(ids)}-{digest}"
 
 
 def token_matches(supplied: str | None, target_ids) -> bool:
@@ -84,7 +89,18 @@ def token_matches(supplied: str | None, target_ids) -> bool:
     """
     if not supplied:
         return False
-    return str(supplied).strip() == derive_token(target_ids)
+    candidate = str(supplied).strip()
+    try:
+        version, raw_timestamp, _count, _digest = candidate.split("-", 3)
+        timestamp = int(raw_timestamp)
+    except (TypeError, ValueError):
+        return False
+    if version != "v2":
+        return False
+    age = int(time.time()) - timestamp
+    if age < 0 or age > CONTENT_TOKEN_TTL_SECONDS:
+        return False
+    return hmac.compare_digest(candidate, derive_token(target_ids, issued_at=timestamp))
 
 
 # ---------------------------------------------------------------------------
