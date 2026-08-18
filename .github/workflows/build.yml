@@ -133,6 +133,22 @@ jobs:
       - name: Audit MCP dependencies
         run: pip-audit -r mcp-server/requirements.txt
 
+      - name: Prove MCP dependency audit fails closed
+        run: |
+          set +e
+          audit_output=$(pip-audit -r backend/tests/fixtures/mcp_vulnerable_requirements.txt 2>&1)
+          audit_status=$?
+          set -e
+          echo "$audit_output"
+          if [ "$audit_status" -eq 0 ]; then
+            echo "::error::pip-audit accepted the deliberately vulnerable MCP fixture"
+            exit 1
+          fi
+          if ! grep -Eq 'starlette[[:space:]]+0\.27\.0[[:space:]]+[1-9][0-9]*' <<< "$audit_output"; then
+            echo "::error::pip-audit failed without reporting the fixture's Starlette advisories"
+            exit 1
+          fi
+
       - name: Verify MCP publication policy
         run: python scripts/check_mcp_supply_chain.py
 

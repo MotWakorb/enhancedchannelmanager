@@ -36,6 +36,18 @@ def test_repository_satisfies_mcp_publication_policy():
         ),
         (
             ".github/workflows/build.yml",
+            "pip-audit -r backend/tests/fixtures/mcp_vulnerable_requirements.txt",
+            "echo vulnerable-fixture-disabled",
+            "vulnerable-fixture self-test",
+        ),
+        (
+            ".github/workflows/build.yml",
+            "needs: [security-scan-backend, security-scan-mcp, wait-for-tests]",
+            "needs: [security-scan-backend, wait-for-tests]",
+            "both image builders",
+        ),
+        (
+            ".github/workflows/build.yml",
             "needs: [build-mcp-amd64, build-mcp-arm64, trivy-scan-mcp-amd64, trivy-scan-mcp-arm64]",
             "needs: [build-mcp-amd64, build-mcp-arm64]",
             "MCP manifest",

@@ -29,6 +29,16 @@ def check_repository(root: Path) -> list[str]:
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:
         failures.append("MCP dependency audit is absent from the publication workflow")
+    if (
+        "pip-audit -r backend/tests/fixtures/mcp_vulnerable_requirements.txt"
+        not in build
+        or "pip-audit accepted the deliberately vulnerable MCP fixture" not in build
+    ):
+        failures.append("MCP dependency audit vulnerable-fixture self-test is absent")
+    if build.count(
+        "needs: [security-scan-backend, security-scan-mcp, wait-for-tests]"
+    ) != 2:
+        failures.append("MCP dependency audit does not gate both image builders")
 
     expected_needs = (
         "needs: [build-mcp-amd64, build-mcp-arm64, "
