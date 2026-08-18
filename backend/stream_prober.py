@@ -18,7 +18,10 @@ import journal
 import safe_regex
 
 import httpx
-from security.stream_outbound import stream_request, validate_stream_subprocess_url
+from security.stream_outbound import (
+    stream_request,
+    validated_subprocess_input,
+)
 
 from database import get_session
 from models import StreamStats
@@ -40,6 +43,7 @@ NETWORK_FAILURE_MARKERS = (
 class ProbeNetworkRouteError(RuntimeError):
     """An upstream connection failure whose raw diagnostic must stay private."""
 
+
 # Default configuration
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
 BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
@@ -56,6 +60,7 @@ BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 # (GH-106). Neither is a URL scheme an attacker can specify directly — they are
 # internal demuxers activated by https:// / hls variants.
 FFPROBE_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
+RELAY_PROTOCOL_WHITELIST = "http,tcp"
 
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
@@ -1078,35 +1083,40 @@ class StreamProber:
 
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
         """Run ffprobe and parse JSON output."""
-        validate_stream_subprocess_url(url)
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",  # Show errors in stderr (was "quiet" which suppressed everything)
-            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",  # Mimic VLC to avoid server rejections
-            "-timeout",
-            str(self.probe_timeout * 1000000),  # microseconds
-            url,
-        ]
+        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+        async with validated_subprocess_input(url, headers=headers) as subprocess_input:
+            cmd = [
+                "ffprobe",
+                "-v",
+                "error",  # Show errors in stderr (was "quiet" which suppressed everything)
+                "-protocol_whitelist", (
+                    RELAY_PROTOCOL_WHITELIST
+                    if subprocess_input.is_http_relay
+                    else FFPROBE_PROTOCOL_WHITELIST
+                ),
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                "-timeout",
+                str(self.probe_timeout * 1000000),  # microseconds
+                subprocess_input.argument,
+            ]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=self.probe_timeout + 5
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            raise
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self.probe_timeout + 5
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                raise
 
         if process.returncode != 0:
             # Classify the complete diagnostic only after removing the exact
@@ -1227,41 +1237,46 @@ class StreamProber:
         wait_for a generous grace window so cold-start false-timeouts don't
         flip streams to "clean".
         """
-        validate_stream_subprocess_url(url)
-        cmd = [
-            "ffmpeg",
-            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
-            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
-            # Network stall guard (microseconds). If the upstream stops
-            # delivering data for this long, ffmpeg bails on its own rather
-            # than hanging until the asyncio wait_for budget runs out.
-            "-timeout", "15000000",
-            "-i", url,
-            "-t", str(self.black_screen_sample_duration),
-            "-vf", "signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG",
-            "-an", "-f", "null", "-",
-        ]
+        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
         # Grace window: sample duration + ample headroom for cold-start
         # buffering, connection setup, and ffmpeg startup. The previous 15-s
         # grace was too tight for cold scans and caused every timeout to be
         # silently treated as a clean stream.
         total_timeout = self.black_screen_sample_duration + 30
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        try:
-            _, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=total_timeout
+        async with validated_subprocess_input(url, headers=headers) as subprocess_input:
+            cmd = [
+                "ffmpeg",
+                "-protocol_whitelist", (
+                    RELAY_PROTOCOL_WHITELIST
+                    if subprocess_input.is_http_relay
+                    else FFPROBE_PROTOCOL_WHITELIST
+                ),
+                # Network stall guard (microseconds). If the upstream stops
+                # delivering data for this long, ffmpeg bails on its own.
+                "-timeout", "15000000",
+                "-i", subprocess_input.argument,
+                "-t", str(self.black_screen_sample_duration),
+                "-vf", "signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG",
+                "-an", "-f", "null", "-",
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.warning(
-                "[STREAM-PROBE] Black screen detection timed out after %ss",
-                total_timeout,
-            )
-            return None
+            try:
+                _, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=total_timeout
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                logger.warning(
+                    "[STREAM-PROBE] Black screen detection timed out after %ss",
+                    total_timeout,
+                )
+                return None
         output = stderr.decode()
         yavg_values = re.findall(r'lavfi\.signalstats\.YAVG=([\d.]+)', output)
         if not yavg_values:

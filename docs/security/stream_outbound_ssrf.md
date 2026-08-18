@@ -13,17 +13,26 @@ remain denied in both modes. RFC1918, shared-address-space, and loopback targets
 remain available only in `lan_friendly` mode so configured local IPTV and
 Dispatcharr installations continue to work.
 
-## FFmpeg and ffprobe bounded design
+## FFmpeg and ffprobe boundary
 
-FFmpeg and ffprobe perform DNS resolution and redirect handling inside their
-subprocess libraries and do not expose ECM's HTTPX transport hook. ECM therefore
-validates the input URL immediately before every subprocess start, including
-each retry. HTTP(S), UDP, RTP, and RTMP destinations receive the same address
-policy; other direct input schemes are rejected. This rejects literal forbidden
-addresses, DNS answers containing any forbidden address, and destinations
-disallowed by the configured LAN policy before the process is created.
+FFmpeg and ffprobe do not receive provider HTTP(S) URLs. ECM first resolves and
+validates the initial redirect chain through the pinned HTTPX path, then gives
+the subprocess a tokenized URL on an ephemeral loopback-only relay. The
+subprocess protocol allowlist is reduced to `http,tcp`, so every provider fetch
+must return through that relay. Provider URLs and channel bearer credentials
+remain in ECM's HTTP client and never appear in subprocess arguments.
 
-A bounded residual window remains between validation and the subprocess's own
-DNS lookup, and FFmpeg-managed redirects cannot be revalidated by ECM. Protocol
-allowlists continue to limit subprocess inputs to media-network protocols. The
-HTTPX paths, which ECM controls end to end, do not have this residual window.
+The relay streams bounded chunks with downstream backpressure. It rewrites HLS
+playlist resource lines and quoted `URI` attributes (segments, child playlists,
+keys, and maps) to fresh opaque relay tokens. Every token fetch independently
+uses the pinned redirect-safe client. Authorization is retained for the same
+normalized origin and stripped for cross-origin resources. Manifests are capped
+at 2 MiB and one subprocess relay may register at most 1,024 resources.
+Cancellation closes active HTTP responses and the relay before terminating the
+subprocess. Direct HTTP transport streams and HLS therefore remain supported
+without giving FFmpeg a provider-network path.
+
+UDP, RTP, and RTMP remain direct subprocess inputs because they are not HTTP
+redirect protocols. ECM validates their literal or resolved destination under
+the configured LAN policy immediately before every spawn and retry. Other
+direct schemes are rejected.

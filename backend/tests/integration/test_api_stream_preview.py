@@ -5,11 +5,17 @@ These tests verify error handling and basic functionality of the
 stream-preview and channel-preview endpoints.
 """
 from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
 
 import config
+
+
+@asynccontextmanager
+async def _allowed_direct_input(url, **_kwargs):
+    yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
 
 
 @pytest.fixture
@@ -142,7 +148,7 @@ class TestStreamPreview:
             with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="transcode")
 
-                with patch("routers.stream_preview.validate_stream_subprocess_url"), \
+                with patch("routers.stream_preview.validated_subprocess_input", _allowed_direct_input), \
                      patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/stream-preview/1")
                     assert response.status_code == 500
@@ -268,7 +274,7 @@ class TestChannelPreview:
                     url="http://localhost:5656"
                 )
 
-                with patch("routers.stream_preview.validate_stream_subprocess_url"), \
+                with patch("routers.stream_preview.validated_subprocess_input", _allowed_direct_input), \
                      patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/channel-preview/1")
                     assert response.status_code == 500
@@ -289,7 +295,7 @@ class TestChannelPreview:
                     url="http://localhost:5656"
                 )
 
-                with patch("routers.stream_preview.validate_stream_subprocess_url"), \
+                with patch("routers.stream_preview.validated_subprocess_input", _allowed_direct_input), \
                      patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/channel-preview/1")
                     assert response.status_code == 500

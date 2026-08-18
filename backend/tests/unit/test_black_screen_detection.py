@@ -1,5 +1,7 @@
 """Tests for black screen detection feature in StreamProber."""
 import asyncio
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -10,7 +12,11 @@ from stream_prober import StreamProber, smart_sort_streams
 
 @pytest.fixture(autouse=True)
 def _allow_synthetic_subprocess_destination():
-    with patch("stream_prober.validate_stream_subprocess_url"):
+    @asynccontextmanager
+    async def allowed(url, **_kwargs):
+        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
+
+    with patch("stream_prober.validated_subprocess_input", allowed):
         yield
 
 

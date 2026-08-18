@@ -10,11 +10,14 @@ in ``docs/security/stream_outbound_ssrf.md``.
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Mapping
+from dataclasses import dataclass
+from typing import AsyncIterator, Callable, Mapping
 from urllib.parse import urljoin
 from urllib.parse import urlsplit
 
 import httpx
+from aiohttp import web
+import re
 
 from security.ssrf import (
     SSRFError,
@@ -34,11 +37,18 @@ class SSRFPinnedTransport(httpx.AsyncBaseTransport):
         self,
         *,
         inner: httpx.AsyncBaseTransport | None = None,
+        inner_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
         mode: SSRFMode | None = None,
         verify: bool = True,
     ) -> None:
-        self._inner = inner or httpx.AsyncHTTPTransport(verify=verify)
+        if inner is not None and inner_factory is not None:
+            raise ValueError("Pass inner or inner_factory, not both")
+        self._inner_factory = inner_factory or (
+            None if inner is not None else lambda: httpx.AsyncHTTPTransport(verify=verify)
+        )
+        self._inner = inner or self._inner_factory()
         self._mode = mode
+        self._origin: tuple[str, str, int] | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         original_url = str(request.url)
@@ -51,6 +61,17 @@ class SSRFPinnedTransport(httpx.AsyncBaseTransport):
             target = validate_redirect(str(from_url), original_url, mode)
         else:
             target = validate_outbound_url(original_url, mode)
+
+        target_origin = (target.scheme, target.hostname.lower(), target.port)
+        if self._origin is not None and target_origin != self._origin:
+            if self._inner_factory is None:
+                # An injected transport is generally a test double. It has no
+                # safe recreation contract, so fail closed instead of risking
+                # a TLS pool keyed only by the pinned IP address.
+                raise SSRFError("Cross-origin request requires an isolated transport")
+            await self._inner.aclose()
+            self._inner = self._inner_factory()
+        self._origin = target_origin
 
         host = f"[{target.ip}]" if target.ip.version == 6 else str(target.ip)
         pinned_request = httpx.Request(
@@ -115,10 +136,172 @@ async def stream_request(
                 continue
 
             try:
+                response.extensions["ssrf_logical_url"] = current_url
                 yield response
             finally:
                 await response.aclose()
             return
+
+
+@dataclass(frozen=True)
+class ValidatedSubprocessInput:
+    """A subprocess input that cannot perform its own HTTP request."""
+
+    argument: str
+    is_http_relay: bool = False
+
+
+_HLS_URI_RE = re.compile(r'URI="([^"]+)"')
+_MAX_HLS_MANIFEST_BYTES = 2 * 1024 * 1024
+_MAX_RELAY_RESOURCES = 1024
+
+
+class _LocalStreamRelay:
+    """Loopback-only token relay whose every upstream fetch uses ``stream_request``."""
+
+    def __init__(self, url: str, headers: Mapping[str, str] | None, timeout) -> None:
+        self._initial_url = url
+        self._headers = dict(headers or {})
+        self._timeout = timeout
+        self._targets: dict[str, str] = {}
+        self._runner: web.AppRunner | None = None
+        self._initial_context = None
+        self._initial_response = None
+        self._initial_token = self._register(url)
+
+    def _register(self, url: str) -> str:
+        for token, target in self._targets.items():
+            if target == url:
+                return token
+        if len(self._targets) >= _MAX_RELAY_RESOURCES:
+            raise SSRFError("Stream manifest exceeds the relay resource limit")
+        token = str(len(self._targets))
+        self._targets[token] = url
+        return token
+
+    async def start(self) -> str:
+        # Resolve the initial redirect chain before any subprocess can start.
+        self._initial_context = stream_request(
+            self._initial_url, headers=self._headers, timeout=self._timeout
+        )
+        self._initial_response = await self._initial_context.__aenter__()
+        self._initial_response.raise_for_status()
+
+        app = web.Application()
+        app.router.add_get("/resource/{token}", self._handle)
+        self._runner = web.AppRunner(app, access_log=None, shutdown_timeout=1.0)
+        await self._runner.setup()
+        site = web.TCPSite(self._runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        return f"http://127.0.0.1:{port}/resource/{self._initial_token}"
+
+    async def close(self) -> None:
+        if self._runner is not None:
+            await self._runner.cleanup()
+        if self._initial_context is not None:
+            await self._initial_context.__aexit__(None, None, None)
+            self._initial_context = None
+
+    def _headers_for(self, url: str) -> dict[str, str]:
+        if _origin(url) == _origin(self._initial_url):
+            return dict(self._headers)
+        return {
+            name: value
+            for name, value in self._headers.items()
+            if name.lower() != "authorization"
+        }
+
+    def _local_url(self, request: web.Request, upstream: str) -> str:
+        token = self._register(upstream)
+        return f"{request.scheme}://{request.host}/resource/{token}"
+
+    def _rewrite_hls(self, request: web.Request, body: bytes, base_url: str) -> bytes:
+        text = body.decode("utf-8-sig")
+        lines = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                line = self._local_url(request, urljoin(base_url, stripped))
+            elif "URI=\"" in line:
+                line = _HLS_URI_RE.sub(
+                    lambda match: f'URI="{self._local_url(request, urljoin(base_url, match.group(1)))}"',
+                    line,
+                )
+            lines.append(line)
+        return ("\n".join(lines) + "\n").encode()
+
+    async def _serve(self, request: web.Request, response: httpx.Response, url: str):
+        content_type = response.headers.get("content-type", "")
+        is_hls = urlsplit(url).path.lower().endswith(".m3u8") or "mpegurl" in content_type.lower()
+        if is_hls:
+            body = await response.aread()
+            if len(body) > _MAX_HLS_MANIFEST_BYTES:
+                raise web.HTTPRequestEntityTooLarge(
+                    max_size=_MAX_HLS_MANIFEST_BYTES, actual_size=len(body)
+                )
+            base_url = str(response.extensions.get("ssrf_logical_url", url))
+            rewritten = self._rewrite_hls(request, body, base_url)
+            return web.Response(body=rewritten, content_type="application/vnd.apple.mpegurl")
+
+        downstream = web.StreamResponse(
+            status=response.status_code,
+            headers={"Content-Type": content_type or "application/octet-stream"},
+        )
+        await downstream.prepare(request)
+        async for chunk in response.aiter_bytes(chunk_size=65536):
+            await downstream.write(chunk)
+        await downstream.write_eof()
+        return downstream
+
+    async def _handle(self, request: web.Request):
+        token = request.match_info["token"]
+        url = self._targets.get(token)
+        if url is None:
+            raise web.HTTPNotFound()
+        if token == self._initial_token and self._initial_response is not None:
+            response, self._initial_response = self._initial_response, None
+            return await self._serve(request, response, url)
+        try:
+            async with stream_request(
+                url, headers=self._headers_for(url), timeout=self._timeout
+            ) as response:
+                response.raise_for_status()
+                return await self._serve(request, response, url)
+        except (SSRFError, httpx.HTTPError) as exc:
+            raise web.HTTPBadGateway(text="Upstream stream resource denied") from exc
+
+
+@asynccontextmanager
+async def validated_subprocess_input(
+    url: str,
+    *,
+    headers: Mapping[str, str] | None = None,
+    timeout: httpx.Timeout | float | None = None,
+) -> AsyncIterator[ValidatedSubprocessInput]:
+    """Resolve redirects before spawn and relay HTTP bytes through ``pipe:0``.
+
+    Direct IPTV transports remain subprocess-owned after address validation.
+    For HTTP(S), ECM owns DNS, redirects, TLS identity and credentials for the
+    lifetime of the response; FFmpeg receives bytes only and cannot redirect.
+    """
+
+    scheme = urlsplit(url).scheme.lower()
+    if scheme not in {"http", "https"}:
+        validate_stream_subprocess_url(url)
+        yield ValidatedSubprocessInput(argument=url)
+        return
+
+    relay = _LocalStreamRelay(url, headers, timeout)
+    try:
+        relay_url = await relay.start()
+        yield ValidatedSubprocessInput(
+            argument=relay_url, is_http_relay=True
+        )
+    finally:
+        await relay.close()
+
+
 
 
 def validate_stream_subprocess_url(url: str) -> None:
@@ -161,4 +344,8 @@ def prepare_stream_http_url(url: str) -> ResolvedTarget:
 
 def _origin(url: str) -> tuple[str, str, int | None]:
     parsed = urlsplit(url)
-    return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port
+    scheme = parsed.scheme.lower()
+    port = parsed.port
+    if port is None:
+        port = 443 if scheme == "https" else 80 if scheme == "http" else None
+    return scheme, (parsed.hostname or "").lower(), port
