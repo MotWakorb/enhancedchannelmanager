@@ -215,8 +215,15 @@ def _oversized_batch(arguments: dict[str, Any]) -> tuple[str, int] | None:
     return None
 
 
-def _resolved_count(resolved: Any) -> int:
+def _resolved_count(resolved: Any, *, server_planned: bool = False) -> int:
     if isinstance(resolved, dict):
+        if server_planned:
+            counts = (resolved.get("write_count"), resolved.get("unique_target_count"))
+            if not all(isinstance(value, int) and value >= 0 for value in counts):
+                # A server plan without authoritative accounting is not safe to
+                # infer from arbitrary nested preview lists.
+                return DESTRUCTIVE_BATCH_HARD_CAP
+            return max(counts)
         candidate_counts = [len(v) for v in resolved.values() if isinstance(v, list)]
         return max(candidate_counts, default=0)
     return len(resolved) if isinstance(resolved, list) else 0
@@ -501,7 +508,7 @@ def install_safety_policy(mcp) -> None:
             )
             if resolved is None:
                 return present("Confirmation token was already used or is unknown; request a new preview.")
-            resolved_count = _resolved_count(resolved)
+            resolved_count = _resolved_count(resolved, server_planned=server_planned)
             if resolved_count >= DESTRUCTIVE_BATCH_HARD_CAP:
                 return present(
                     f"Refusing destructive batch: resolved target set contains {resolved_count} items; "

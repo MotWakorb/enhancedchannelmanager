@@ -218,6 +218,9 @@ _MCP_DECLARED_ROUTES: frozenset[tuple[str, str]] = frozenset({
 # broader than the current sidecar contract: identity, service-key and TLS
 # routes remain classified if a future tool tries to call them.
 MCP_HUMAN_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({
+    # MCP pipeline execution is exposed only through the content-bound
+    # prepare/commit pair. Humans retain the legacy one-shot route.
+    ("POST", "/api/channel-pipeline/run"),
     # Credential-bearing backup export/restore and destructive restore.
     ("GET", "/api/backup/create"),
     ("POST", "/api/backup/save"),

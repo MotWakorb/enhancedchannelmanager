@@ -32,6 +32,19 @@ def _token(text: str) -> str:
     return match.group(1)
 
 
+def test_server_plan_cap_uses_authoritative_counts_at_499_and_500():
+    from tools._safety_policy import _resolved_count
+
+    assert _resolved_count(
+        {"preview": {"rows": list(range(900))}, "write_count": 499, "unique_target_count": 4},
+        server_planned=True,
+    ) == 499
+    assert _resolved_count(
+        {"preview": [], "write_count": 500, "unique_target_count": 1},
+        server_planned=True,
+    ) == 500
+
+
 def test_live_registry_is_completely_and_only_inventoried():
     mcp = _registry()
     assert set(SAFETY_INVENTORY) == set(mcp._tool_manager._tools)
@@ -313,8 +326,10 @@ async def test_normalization_confirmation_commits_backend_owned_plan_not_a_recom
             "dry_run": True,
             "diffs": [{"channel_id": 7, "current_name": "OLD", "proposed_name": "New"}],
             "plan_id": "plan-7",
-            "plan_hash": "hash-7",
-            "expires_at": 9999999999,
+                "plan_hash": "hash-7",
+                "expires_at": 9999999999,
+                "write_count": 1,
+                "unique_target_count": 1,
         },
         {"renamed": [{"channel_id": 7, "old_name": "OLD", "new_name": "New"}]},
     ]
@@ -340,11 +355,13 @@ async def test_pipeline_prerefresh_requires_two_distinct_confirmations(tool_name
         {
             "phase": "refresh", "plan_id": "refresh-plan", "plan_hash": "refresh-hash",
             "preview": {"m3u_account_ids_to_refresh": [7]},
+            "write_count": 1, "unique_target_count": 1,
         },
         {
             "requires_confirmation": True, "completed_phase": "refresh",
             "phase": "execute", "plan_id": "write-plan", "plan_hash": "write-hash",
             "preview": {"channels_created": 1},
+            "write_count": 1, "unique_target_count": 1,
         },
         {"execution_id": 99, "status": "completed"},
         {"execution_id": 99, "status": "completed", "channels_created": 1},

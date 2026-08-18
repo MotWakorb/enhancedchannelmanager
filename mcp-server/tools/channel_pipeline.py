@@ -347,6 +347,7 @@ def register(mcp: FastMCP):
         """
         try:
             client = get_ecm_client()
+            prepared_result = None
 
             # Kick off the run. Backend returns 202 + execution_id immediately.
             if plan_id and plan_hash:
@@ -354,6 +355,17 @@ def register(mcp: FastMCP):
                     ENDPOINTS["ac_commit_run"],
                     body={"plan_id": plan_id, "plan_hash": plan_hash, "phase": plan_phase},
                 )
+            elif dry_run:
+                prepared = await client.call_endpoint(
+                    ENDPOINTS["ac_prepare_run"], body={"dry_run": False}
+                )
+                if "preview" in prepared:
+                    prepared_result = prepared["preview"]
+                    kickoff = {"execution_id": "prepared-preview", "status": "completed"}
+                else:
+                    # Backward-compatible with an older backend during rolling
+                    # upgrades; that response is the legacy 202 kickoff shape.
+                    kickoff = prepared
             else:
                 kickoff = await client.call_endpoint(ENDPOINTS["ac_run"], body={"dry_run": dry_run})
             execution_id = kickoff.get("execution_id")
@@ -366,35 +378,35 @@ def register(mcp: FastMCP):
             logger.info("[MCP] run_channel_pipeline started execution_id=%s dry_run=%s", execution_id, dry_run)
 
             # Poll until the execution reaches a terminal status.
-            result = None
-            for attempt in range(_POLL_MAX_ATTEMPTS):
-                await _poll_sleep(_POLL_INTERVAL_SECONDS)
-                try:
-                    result = await client.call_endpoint(
-                        ENDPOINTS["ac_get_execution"],
-                        path_args={"execution_id": execution_id},
-                    )
-                except Exception as poll_err:
-                    logger.warning(
-                        "[MCP] run_channel_pipeline poll attempt %d failed: %s",
-                        attempt + 1, poll_err,
-                    )
-                    continue
+            result = prepared_result
+            if result is None:
+                for attempt in range(_POLL_MAX_ATTEMPTS):
+                    await _poll_sleep(_POLL_INTERVAL_SECONDS)
+                    try:
+                        result = await client.call_endpoint(
+                            ENDPOINTS["ac_get_execution"],
+                            path_args={"execution_id": execution_id},
+                        )
+                    except Exception as poll_err:
+                        logger.warning(
+                            "[MCP] run_channel_pipeline poll attempt %d failed: %s",
+                            attempt + 1, poll_err,
+                        )
+                        continue
 
-                status = result.get("status", "")
-                logger.debug(
-                    "[MCP] run_channel_pipeline poll attempt=%d status=%s",
-                    attempt + 1, status,
-                )
-                if status in _TERMINAL_STATUSES:
-                    break
-            else:
-                # Timed out — return execution_id so the user can check manually.
-                return (
-                    f"Auto-creation run is still running after {_POLL_MAX_ATTEMPTS} polls "
-                    f"(execution_id={execution_id}). "
-                    "Check status with list_channel_pipeline_executions."
-                )
+                    status = result.get("status", "")
+                    logger.debug(
+                        "[MCP] run_channel_pipeline poll attempt=%d status=%s",
+                        attempt + 1, status,
+                    )
+                    if status in _TERMINAL_STATUSES:
+                        break
+                else:
+                    return (
+                        f"Auto-creation run is still running after {_POLL_MAX_ATTEMPTS} polls "
+                        f"(execution_id={execution_id}). "
+                        "Check status with list_channel_pipeline_executions."
+                    )
 
             # result is now the final execution row.
             status = result.get("status", "unknown")

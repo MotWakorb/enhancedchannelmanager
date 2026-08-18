@@ -17,7 +17,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 import journal
-from auth import RequireAdminIfEnabled
+from auth import RequireAdminIfEnabled, ResolveIsMcpServicePrincipalIfEnabled
 from auth.routes import limiter
 from concurrency import run_cpu_bound
 from config import get_settings
@@ -1230,6 +1230,7 @@ async def apply_normalization_to_channels(
     dry_run: bool = True,
     body: Optional[ApplyToChannelsRequest] = None,
     _admin=RequireAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Apply enabled normalization rules to existing channels.
 
@@ -1244,6 +1245,8 @@ async def apply_normalization_to_channels(
     level lock so only one bulk rename/merge can run concurrently — a
     second caller sees HTTP 409.
     """
+    if caller_is_mcp and not dry_run and not (body and body.plan_id and body.plan_hash):
+        raise HTTPException(status_code=409, detail="MCP execution requires a prepared plan")
     logger.debug("[NORMALIZE] POST /apply-to-channels dry_run=%s actions=%s",
                  dry_run, len((body.actions if body else None) or []))
 
@@ -1313,13 +1316,27 @@ async def apply_normalization_to_channels(
                             "streams": list(channel.get("streams", []) or []),
                         }
                 payload = {"actions": actions, "diffs": diffs, "preconditions": preconditions}
+                write_count = sum(
+                    2 if action["action"] == "merge" else 1
+                    for action in actions if action["action"] != "skip"
+                )
+                accounting = {
+                    "write_count": write_count,
+                    "unique_target_count": len(preconditions),
+                }
+                if max(accounting.values()) >= 500:
+                    raise HTTPException(status_code=413, detail={
+                        "message": "normalization plan reaches the 500-operation hard cap",
+                        **accounting,
+                    })
+                payload["accounting"] = accounting
                 plan = mutation_plan_store.create(
                     "normalization_apply", payload, canonical_hash(diffs),
                     str(getattr(_admin, "id", None) or getattr(_admin, "role", None) or "api"),
                 )
                 response.update({
                     "plan_id": plan.plan_id, "plan_hash": plan.payload_hash,
-                    "expires_at": plan.expires_at,
+                    "expires_at": plan.expires_at, **accounting,
                 })
             return response
 
@@ -1330,15 +1347,19 @@ async def apply_normalization_to_channels(
                 raise HTTPException(status_code=409, detail="plan_id and plan_hash are both required")
             from services.mutation_plan_store import canonical_hash, mutation_plan_store
             try:
-                plan = mutation_plan_store.consume(body.plan_id, "normalization_apply", body.plan_hash)
+                principal = str(getattr(_admin, "id", None) or getattr(_admin, "role", None) or "api")
+                plan = mutation_plan_store.consume(
+                    body.plan_id, "normalization_apply", body.plan_hash,
+                    principal=principal,
+                )
             except ValueError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
-            principal = str(getattr(_admin, "id", None) or getattr(_admin, "role", None) or "api")
-            if plan.principal != principal:
-                raise HTTPException(status_code=409, detail="normalization plan principal does not match")
             supplied_actions = [action.model_dump() for action in (body.actions or [])]
             if supplied_actions != plan.payload["actions"] or canonical_hash(diffs) != plan.state_hash:
                 raise HTTPException(status_code=409, detail="normalization targets drifted; prepare a new plan")
+            accounting = plan.payload["accounting"]
+            if max(accounting.values()) >= 500:
+                raise HTTPException(status_code=413, detail="normalization plan exceeds hard cap")
             # Fetch and validate every relevant object before the first write.
             # Execution below uses these frozen values rather than a later read.
             for channel_id, expected in plan.payload["preconditions"].items():

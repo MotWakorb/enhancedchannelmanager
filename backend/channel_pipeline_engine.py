@@ -2122,6 +2122,8 @@ class ChannelPipelineEngine:
         Returns:
             Dict with processing results
         """
+        from services.pipeline_write_plan import PlanningContext
+        planning = PlanningContext(enabled=plan_only)
         # Load user settings once for the entire pipeline run
         settings = get_settings()
         logger.debug(
@@ -2521,7 +2523,10 @@ class ChannelPipelineEngine:
         # =====================================================================
         # Pass 1.5: Probe unprobed streams (for rules with probe_on_sort)
         # =====================================================================
-        await self._probe_unprobed_streams(matched_entries, rules, results, dry_run)
+        await self._probe_unprobed_streams(
+            matched_entries, rules, results,
+            dry_run or not planning.allow_internal_side_effects,
+        )
 
         # =====================================================================
         # Between passes: Sort matched entries by rule's sort configuration
@@ -2892,7 +2897,7 @@ class ChannelPipelineEngine:
         # =====================================================================
         # Pass 2.5: Verify EPG assignments on newly created channels
         # =====================================================================
-        if not dry_run:
+        if not dry_run and planning.allow_internal_side_effects:
             verified_ok, re_patched, failed = await executor.verify_epg_assignments()
             if re_patched or failed:
                 logger.info(
@@ -3069,7 +3074,7 @@ class ChannelPipelineEngine:
                 )
             await self._reconcile_orphans(
                 pass4_rules, rule_channel_order, executor, execution, results,
-                dry_run, settings=settings
+                dry_run, settings=settings, planning=planning,
             )
 
             # =================================================================
@@ -3080,14 +3085,18 @@ class ChannelPipelineEngine:
                     "[AUTO-CREATE-ENGINE] Pass 5: %s deferred EPG assignments to retry",
                     len(executor._deferred_epg_assignments)
                 )
-                await self._refresh_dummy_epg_and_retry(executor, results, epg_sources, dry_run)
+                await self._refresh_dummy_epg_and_retry(
+                    executor, results, epg_sources,
+                    dry_run or not planning.allow_internal_side_effects,
+                )
 
             # =================================================================
             # Pass 6: Batch probe streams queued by probe_streams actions
             # =================================================================
             if results["probe_stream_ids"]:
                 await self._batch_probe_streams(
-                    results["probe_stream_ids"], streams, results, dry_run
+                    results["probe_stream_ids"], streams, results,
+                    dry_run or not planning.allow_internal_side_effects,
                 )
 
             # Clean up non-serializable set before returning
@@ -5168,7 +5177,8 @@ class ChannelPipelineEngine:
         execution: ChannelPipelineExecution,
         results: dict,
         dry_run: bool,
-        settings=None
+        settings=None,
+        planning=None,
     ):
         """
         Reconcile orphaned channels after pipeline execution.
@@ -5177,6 +5187,9 @@ class ChannelPipelineEngine:
         with the current set of channel IDs. Orphans (previous - current) are
         cleaned up according to the rule's orphan_action setting.
         """
+        from services.pipeline_write_plan import PlanningContext
+        planning = planning or PlanningContext()
+        persist = not dry_run and planning.allow_internal_side_effects
         session = get_session()
         try:
             for rule in rules:
@@ -5315,7 +5328,7 @@ class ChannelPipelineEngine:
 
                 if not orphan_ids:
                     # No orphans — just update managed set
-                    if not dry_run and current_ids != previous_ids:
+                    if persist and current_ids != previous_ids:
                         rule.set_managed_channel_ids(list(current_ids))
                         session.merge(rule)
                     continue
@@ -5495,11 +5508,12 @@ class ChannelPipelineEngine:
                 # (degrading orphan detection) without actually gating any retry.
                 # The failure is no longer silent: it is now logged, recorded in
                 # the execution_log, and aggregated into completed_with_errors.
-                if not dry_run:
+                if persist:
                     rule.set_managed_channel_ids(list(current_ids))
                     session.merge(rule)
 
-            session.commit()
+            if persist:
+                session.commit()
         except Exception as e:
             session.rollback()
             logger.exception("[AUTO-CREATE-ENGINE] Failed to sync managed channel IDs: %s", e)

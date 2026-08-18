@@ -10,6 +10,16 @@ from services.pipeline_write_plan import (
 )
 
 
+def test_authoritative_accounting_counts_nested_operations_and_unique_targets():
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("assign_channel_numbers", [[1, 2, 3], 10], {}),
+        PlannedWrite("update_channel", [1, {"name": "x"}], {}),
+        PlannedWrite("update_profile_channel", [9, 2, {"enabled": True}], {}),
+        PlannedWrite("create_channel", [{"name": "new"}], {}),
+    ])
+    assert plan.accounting() == {"write_count": 4, "unique_target_count": 4}
+
+
 def test_every_pipeline_dispatcharr_write_chokepoint_is_recorded():
     root = Path(__file__).parents[2]
     discovered = set()
@@ -24,10 +34,34 @@ def test_every_pipeline_dispatcharr_write_chokepoint_is_recorded():
     assert discovered <= PIPELINE_WRITE_METHODS
 
 
+def test_pipeline_side_effect_ast_inventory_is_not_limited_to_client_calls():
+    root = Path(__file__).parents[2]
+    sink_names = {
+        "commit", "log_entries", "probe_stream", "_batch_probe_streams",
+        "_probe_unprobed_streams", "_capture_snapshot", "_save_execution",
+        "_update_rule_stats", "_record_conflict", "_refresh_dummy_epg_and_retry",
+        "_prerefresh_event_sync_providers",
+    }
+    discovered = set()
+    for filename in (root / "channel_pipeline_engine.py", root / "channel_pipeline_executor.py"):
+        tree = ast.parse(filename.read_text())
+        discovered.update(
+            node.func.attr for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr in sink_names
+        )
+    # Dangerous mutant: removing the broad commit/journal/prober inventory
+    # makes this fail even if every ``self.client`` write remains wrapped.
+    assert {"commit", "log_entries", "probe_stream"} <= discovered
+
+
 def test_internal_side_effect_parity_inventory_is_explicit_and_complete():
     assert PIPELINE_INTERNAL_SIDE_EFFECTS == {
         "execution_record", "rollback_snapshot", "journal_entries",
         "event_review_candidates", "rule_statistics", "conflict_records",
+        "database_commit", "managed_channel_ledger", "stream_probe",
+        "provider_refresh", "dummy_epg_refresh", "xmltv_cache",
+        "notification", "live_data_refresh",
     }
 
 

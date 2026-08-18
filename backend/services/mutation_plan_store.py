@@ -66,16 +66,23 @@ class MutationPlanStore:
             self._plans[plan.plan_id] = plan
         return plan
 
-    def consume(self, plan_id: str, operation: str, payload_hash: str) -> MutationPlan:
+    def consume(
+        self, plan_id: str, operation: str, payload_hash: str, *, principal: str
+    ) -> MutationPlan:
+        """Validate and consume atomically; invalid claims leave plans intact."""
         now = time.time()
         with self._lock:
             self._prune(now)
-            plan = self._plans.pop(plan_id, None)
-        if plan is None:
-            raise ValueError("plan is expired, unknown, or already consumed")
-        if plan.operation != operation or plan.payload_hash != payload_hash:
-            raise ValueError("plan operation or hash does not match")
-        return plan
+            plan = self._plans.get(plan_id)
+            if plan is None:
+                raise ValueError("plan is expired, unknown, or already consumed")
+            if plan.operation != operation:
+                raise ValueError("plan operation does not match")
+            if plan.payload_hash != payload_hash:
+                raise ValueError("plan hash does not match")
+            if plan.principal != principal:
+                raise ValueError("plan principal does not match")
+            return self._plans.pop(plan_id)
 
 
 mutation_plan_store = MutationPlanStore()

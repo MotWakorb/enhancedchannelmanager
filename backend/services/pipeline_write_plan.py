@@ -19,6 +19,9 @@ PIPELINE_WRITE_METHODS = frozenset({
 PIPELINE_INTERNAL_SIDE_EFFECTS = frozenset({
     "execution_record", "rollback_snapshot", "journal_entries",
     "event_review_candidates", "rule_statistics", "conflict_records",
+    "database_commit", "managed_channel_ledger", "stream_probe",
+    "provider_refresh", "dummy_epg_refresh", "xmltv_cache",
+    "notification", "live_data_refresh",
 })
 
 
@@ -27,6 +30,24 @@ class PlannedWrite:
     method: str
     args: list[Any]
     kwargs: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PlanningContext:
+    """Explicit capability boundary for a mutation-free planning traversal.
+
+    This is intentionally distinct from ``dry_run``: dry-run produces a user
+    simulation and therefore skips writes, while planning executes normal
+    decision logic against a shadow client so it can record the exact writes.
+    Internal sinks must key off this context rather than inferring safety from
+    the Dispatcharr client type.
+    """
+
+    enabled: bool = False
+
+    @property
+    def allow_internal_side_effects(self) -> bool:
+        return not self.enabled
 
 
 @dataclass
@@ -43,6 +64,23 @@ class PipelineWritePlan:
             "group_preconditions": self.group_preconditions,
             "profile_preconditions": self.profile_preconditions,
         }
+
+    def accounting(self) -> dict[str, int]:
+        """Authoritative counts derived from exact operations, never previews."""
+        targets: set[tuple[str, Any]] = set()
+        for index, write in enumerate(self.writes):
+            if write.method == "assign_channel_numbers":
+                targets.update(("channel", value) for value in write.args[0])
+            elif write.method == "update_profile_channel":
+                targets.add(("channel", write.args[1]))
+            elif write.method in {"update_channel", "delete_channel"}:
+                targets.add(("channel", write.args[0]))
+            elif write.method == "delete_channel_group":
+                targets.add(("group", write.args[0]))
+            else:
+                # Each create is a distinct future entity even when payloads match.
+                targets.add((write.method, index))
+        return {"write_count": len(self.writes), "unique_target_count": len(targets)}
 
 
 class PartialReplayError(RuntimeError):
@@ -237,8 +275,12 @@ async def replay_write_plan(
                         })
             except Exception as compensation_exc:  # noqa: BLE001
                 compensation_errors.append(f"{done.method}: {compensation_exc}")
+        completed_targets = [
+            f"{item[0].method}:{item[1][0] if item[1] else '<no-arg>'}"
+            for item in completed
+        ]
         raise PartialReplayError(
-            len(completed), [item[0].method for item in completed], compensation_errors
+            len(completed), completed_targets, compensation_errors
         ) from exc
     return results, remap
 
@@ -246,26 +288,59 @@ async def replay_write_plan(
 def journal_entries_for_plan(
     plan: PipelineWritePlan, remap: dict[int, int], execution_id: int
 ) -> list[dict[str, Any]]:
-    """Build non-secret audit entries, including surgical stream-merge rows."""
+    """Build target-specific audit rows for every replayed mutation semantic."""
     entries: list[dict[str, Any]] = []
+    def append(action: str, entity_id: Any, name: Any, before: Any, after: Any, description: str):
+        entries.append({
+            "category": "auto_creation", "action_type": action,
+            "entity_id": entity_id, "entity_name": name,
+            "description": description, "before_value": before,
+            "after_value": after, "user_initiated": False,
+            "mutation_source": "auto_creation", "batch_id": str(execution_id),
+        })
+
+    next_temp = -1
     for write in plan.writes:
-        if write.method != "update_channel" or len(write.args) < 2:
+        method = write.method
+        if method.startswith("create_"):
+            entity_id = remap.get(next_temp, next_temp)
+            next_temp -= 1
+            payload = write.args[0] if write.args else {}
+            append(method, entity_id, payload.get("name") if isinstance(payload, dict) else str(payload),
+                   None, payload, f"Planned pipeline executed {method} for {entity_id}")
             continue
-        raw_id, payload = write.args[0], write.args[1]
-        channel_id = remap.get(raw_id, raw_id)
-        if raw_id < 0 or "streams" not in payload:
+        if method == "assign_channel_numbers":
+            for channel_id in write.args[0]:
+                append("assign_channel_number", remap.get(channel_id, channel_id), None, None,
+                       {"starting_number": write.args[1]}, "Planned pipeline assigned channel number")
             continue
+        if method == "update_profile_channel":
+            profile_id, raw_id, payload = write.args
+            channel_id = remap.get(raw_id, raw_id)
+            append("assign_channel_profile", channel_id, None,
+                   {"profile_id": profile_id}, payload,
+                   f"Planned pipeline updated profile {profile_id} membership")
+            continue
+        raw_id = write.args[0] if write.args else None
+        entity_id = remap.get(raw_id, raw_id)
         before = plan.channel_preconditions.get(str(raw_id), {})
-        old_streams = set(before.get("streams", []) or [])
-        new_streams = set(payload.get("streams", []) or [])
-        for stream_id in sorted(new_streams - old_streams):
-            entries.append({
-                "category": "auto_creation", "action_type": "merge_stream",
-                "entity_id": channel_id, "entity_name": before.get("name"),
-                "description": f"Planned pipeline attached stream {stream_id} to channel {channel_id}",
-                "before_value": {"stream_ids": sorted(old_streams)},
-                "after_value": {"stream_id": stream_id},
-                "user_initiated": False, "mutation_source": "auto_creation",
-                "batch_id": str(execution_id),
-            })
+        payload = write.args[1] if len(write.args) > 1 else None
+        if method == "update_channel" and isinstance(payload, dict) and "streams" in payload:
+            old_streams = set(before.get("streams", []) or [])
+            new_streams = set(payload.get("streams", []) or [])
+            for stream_id in sorted(new_streams - old_streams):
+                append("merge_stream", entity_id, before.get("name"),
+                       {"stream_ids": sorted(old_streams)}, {"stream_id": stream_id},
+                       f"Planned pipeline attached stream {stream_id} to channel {entity_id}")
+            for stream_id in sorted(old_streams - new_streams):
+                append("remove_stream", entity_id, before.get("name"),
+                       {"stream_id": stream_id}, {"stream_ids": sorted(new_streams)},
+                       f"Planned pipeline removed stream {stream_id} from channel {entity_id}")
+            remaining = {key: value for key, value in payload.items() if key != "streams"}
+            if remaining:
+                append(method, entity_id, before.get("name"), before, remaining,
+                       f"Planned pipeline updated channel {entity_id}")
+        else:
+            append(method, entity_id, before.get("name"), before, payload,
+                   f"Planned pipeline executed {method} for {entity_id}")
     return entries

@@ -460,6 +460,10 @@ Channel-pipeline runs, normalization bulk apply, and Emby logo clearing also
 create a backend-owned plan. The plan records the exact scope and target/action
 set, expires after five minutes, and is single-use. A changed channel, rule, or
 Emby lineup rejects the commit before mutation and requires a new preview.
+The backend reports authoritative write and unique-target counts from that
+exact plan; either count reaching 500 is refused at preparation and checked
+again at commit. Preview list lengths are not used as a substitute for these
+server counts.
 Plans are held only in bounded process memory: restarting ECM invalidates them,
 and no API keys, stream URLs, or other credentials are stored in a plan.
 
@@ -479,9 +483,12 @@ only in the bounded in-process confirmation record and are redacted from the
 human-readable preview.
 
 Dispatcharr does not provide a multi-request transaction. ECM validates the
-complete plan read set before the first write and compensates reversible writes
-in reverse order if a later write fails. A failure response lists completed
-writes and any compensation failures. Deletes and channel-profile membership
-changes cannot always be restored with the same upstream identifiers; inspect
-the execution record and rollback snapshot before retrying a partially failed
-commit.
+complete plan read set and reruns the side-effect-free structured planner under
+the planned-run lock before the first write. Any difference in its canonical
+decision or exact write payload requires a new preview. ECM persists the exact
+execution program and target-scoped rollback snapshot immediately before replay,
+then compensates reversible writes in reverse order if a later write fails. A
+failure response lists target-specific completed writes and any compensation
+failures. Deletes and channel-profile membership changes cannot always be
+restored with the same upstream identifiers; inspect the execution record and
+rollback snapshot before retrying a partially failed commit.

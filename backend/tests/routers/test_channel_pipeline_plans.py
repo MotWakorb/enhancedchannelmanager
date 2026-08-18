@@ -2,7 +2,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from routers.channel_pipeline import RunPipelineRequest, prepare_auto_creation_pipeline
+from routers.channel_pipeline import (
+    RunPipelineRequest, prepare_auto_creation_pipeline, run_auto_creation_pipeline,
+)
 from services.mutation_plan_store import mutation_plan_store
 
 
@@ -29,9 +31,32 @@ async def test_prepare_pipeline_is_unrecorded_and_materializes_server_plan():
         rule_ids=[3], record_execution=False, plan_only=True, skip_prerefresh=True,
     )
     consumed = mutation_plan_store.consume(
-        response["plan_id"], "channel_pipeline", response["plan_hash"]
+        response["plan_id"], "channel_pipeline", response["plan_hash"], principal="api"
     )
     assert consumed.payload["request"]["rule_ids"] == [3]
+
+
+@pytest.mark.asyncio
+async def test_legacy_pipeline_execute_is_denied_only_to_mcp_principal():
+    with pytest.raises(Exception) as caught:
+        await run_auto_creation_pipeline(
+            RunPipelineRequest(dry_run=False), _admin=None, caller_is_mcp=True
+        )
+    assert getattr(caught.value, "status_code", None) == 409
+
+    engine = AsyncMock()
+    def consume_coroutine(coro, **_kwargs):
+        coro.close()
+    with patch("routers.channel_pipeline._ensure_engine", AsyncMock(return_value=engine)), patch(
+        "routers.channel_pipeline._create_pending_execution", return_value=91
+    ), patch(
+        "routers.channel_pipeline._supervise_background_pipeline",
+        side_effect=consume_coroutine,
+    ):
+        response = await run_auto_creation_pipeline(
+            RunPipelineRequest(dry_run=False), _admin=None, caller_is_mcp=False
+        )
+    assert response.status_code == 202
 
 
 @pytest.mark.asyncio
