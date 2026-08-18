@@ -83,6 +83,9 @@ docker compose -f docker-compose.yml -f docker-compose.mcp.yml \
 
 The proxy must terminate TLS and forward to port 6101. Do not expose port 6101
 through a router or firewall; remote mode rejects non-HTTPS `/mcp` requests.
+`MCP_TRUSTED_PROXY_IPS` accepts only explicit IP addresses or bounded CIDRs.
+Trust-all values (`*`, `0.0.0.0/0`, and `::/0`) and malformed entries stop the
+sidecar at startup. Forwarded HTTPS is honored only from a configured peer.
 
 **Reaching the MCP container from ECM** — ECM's Settings > MCP Integration status badge probes the MCP server's `/health` endpoint. By default it targets `ecm-mcp:6101`, which Docker DNS resolves to the MCP container on the canonical compose network — no extra configuration needed. If you run both containers with `network_mode: host` (host network namespace shared), set `MCP_HOST=localhost` on the ECM service so the probe targets the host loopback instead of the (non-existent on that topology) `ecm-mcp` DNS name.
 

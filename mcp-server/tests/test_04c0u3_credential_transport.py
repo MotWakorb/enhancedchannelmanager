@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import server
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -120,14 +121,23 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-def test_production_access_log_never_records_query_credentials(tmp_path: Path):
+def _production_request(
+    tmp_path: Path,
+    request: bytes,
+    *,
+    trusted_proxies: str = "127.0.0.1",
+    require_https: bool = False,
+) -> tuple[bytes, str]:
     port = _free_port()
+    tmp_path.mkdir(parents=True, exist_ok=True)
     (tmp_path / "settings.json").write_text(json.dumps({"mcp_api_key": _KEY}))
     env = {
         **os.environ,
         "CONFIG_DIR": str(tmp_path),
         "MCP_BIND_ADDRESS": "127.0.0.1",
         "MCP_PORT": str(port),
+        "MCP_TRUSTED_PROXY_IPS": trusted_proxies,
+        "MCP_REQUIRE_HTTPS": str(require_https).lower(),
         "PYTHONUNBUFFERED": "1",
     }
     process = subprocess.Popen(
@@ -143,13 +153,10 @@ def test_production_access_log_never_records_query_credentials(tmp_path: Path):
         while time.monotonic() < deadline:
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1) as sock:
-                    request = (
-                        f"GET /mcp?api_key={_KEY} HTTP/1.1\r\n"
-                        "Host: localhost\r\nConnection: close\r\n\r\n"
-                    )
-                    sock.sendall(request.encode())
-                    while sock.recv(65536):
-                        pass
+                    sock.sendall(request)
+                    response = b""
+                    while chunk := sock.recv(65536):
+                        response += chunk
                 break
             except OSError:
                 if process.poll() is not None:
@@ -161,5 +168,70 @@ def test_production_access_log_never_records_query_credentials(tmp_path: Path):
         process.terminate()
         output, _ = process.communicate(timeout=5)
 
+    return response, output
+
+
+@pytest.mark.parametrize(
+    ("security_headers", "expected_status"),
+    [
+        ("Host: localhost\r\n", 401),
+        (
+            f"Host: invalid.example\r\nAuthorization: Bearer {_KEY}\r\n",
+            400,
+        ),
+        (
+            "Host: localhost\r\nOrigin: https://attacker.invalid\r\n",
+            403,
+        ),
+    ],
+    ids=("unauthenticated", "invalid-host", "invalid-origin"),
+)
+def test_production_access_log_classifies_attacker_target_without_recording_it(
+    tmp_path: Path,
+    security_headers: str,
+    expected_status: int,
+):
+    injected_path = f"/not-a-route/%0d%0aFORGED-LOG-{_KEY}?credential={_KEY}"
+    response, output = _production_request(
+        tmp_path,
+        (
+            f"GET {injected_path} HTTP/1.1\r\n"
+            f"{security_headers}"
+            "Connection: close\r\n\r\n"
+        ).encode(),
+    )
+
     assert _KEY not in output
-    assert "request method=GET path=/mcp status=400" in output
+    assert "FORGED-LOG" not in output
+    assert "/not-a-route" not in output
+    assert str(expected_status).encode() in response.split(b"\r\n", 1)[0]
+    assert (
+        f"request method=GET route=other status={expected_status}" in output
+    )
+
+
+def test_production_uvicorn_accepts_forwarded_https_only_from_trusted_proxy(
+    tmp_path: Path,
+):
+    request = (
+        b"POST /mcp HTTP/1.1\r\n"
+        b"Host: localhost\r\n"
+        b"X-Forwarded-Proto: https\r\n"
+        b"Content-Length: 0\r\nConnection: close\r\n\r\n"
+    )
+    untrusted_response, _ = _production_request(
+        tmp_path / "untrusted",
+        request,
+        trusted_proxies="192.0.2.10",
+        require_https=True,
+    )
+    trusted_response, _ = _production_request(
+        tmp_path / "trusted",
+        request,
+        trusted_proxies="127.0.0.1",
+        require_https=True,
+    )
+
+    assert b"400 Bad Request" in untrusted_response
+    assert b"HTTPS is required" in untrusted_response
+    assert b"401 Unauthorized" in trusted_response

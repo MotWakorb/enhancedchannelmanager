@@ -91,6 +91,22 @@ class MCPSafeAccessLogMiddleware:
     def __init__(self, app):
         self.app = app
 
+    @staticmethod
+    def _route_class(scope) -> str:
+        path = scope.get("path")
+        if path == "/health":
+            return "health"
+        if path == "/mcp":
+            return "mcp"
+        return "other"
+
+    @staticmethod
+    def _method_class(scope) -> str:
+        method = scope.get("method")
+        if method in {"GET", "POST", "DELETE", "OPTIONS", "HEAD"}:
+            return method
+        return "OTHER"
+
     async def __call__(self, scope, receive, send) -> None:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
@@ -107,12 +123,13 @@ class MCPSafeAccessLogMiddleware:
         try:
             await self.app(scope, receive, capture_status)
         finally:
-            # ``scope['path']`` excludes the query string by ASGI contract.
+            # Both fields come from fixed vocabularies. Never interpolate a
+            # raw request target: decoded paths can still carry control chars.
             logger.info(
-                "[MCP-ACCESS] request method=%s path=%s status=%s",
-                scope.get("method", ""),
-                scope.get("path", ""),
-                status_code,
+                "[MCP-ACCESS] request method=%s route=%s status=%d",
+                self._method_class(scope),
+                self._route_class(scope),
+                int(status_code),
             )
 
 

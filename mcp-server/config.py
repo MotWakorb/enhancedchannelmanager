@@ -37,7 +37,40 @@ def _environment_boolean(name: str, default: bool = False) -> bool:
 
 
 MCP_REQUIRE_HTTPS = _environment_boolean("MCP_REQUIRE_HTTPS")
-MCP_TRUSTED_PROXY_IPS = os.environ.get("MCP_TRUSTED_PROXY_IPS", "127.0.0.1")
+
+
+def get_mcp_trusted_proxy_ips(raw: str | None = None) -> str:
+    """Validate Uvicorn's comma-separated forwarded-header trust boundary."""
+    configured = (
+        os.environ.get("MCP_TRUSTED_PROXY_IPS", "127.0.0.1")
+        if raw is None
+        else raw
+    )
+    entries = configured.split(",")
+    if not entries or any(not entry.strip() for entry in entries):
+        raise ValueError("MCP_TRUSTED_PROXY_IPS contains an empty entry")
+
+    normalized: list[str] = []
+    for entry in entries:
+        value = entry.strip()
+        try:
+            if "/" in value:
+                network = ipaddress.ip_network(value, strict=True)
+                if network.prefixlen == 0:
+                    raise ValueError("trust-all networks are forbidden")
+                safe_value = str(network)
+            else:
+                safe_value = str(ipaddress.ip_address(value))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid MCP_TRUSTED_PROXY_IPS entry: {entry!r}"
+            ) from exc
+        if safe_value not in normalized:
+            normalized.append(safe_value)
+    return ",".join(normalized)
+
+
+MCP_TRUSTED_PROXY_IPS = get_mcp_trusted_proxy_ips()
 
 _DEFAULT_MCP_ALLOWED_HOSTS = ("localhost", "127.0.0.1", "[::1]", "ecm-mcp")
 _DNS_LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
