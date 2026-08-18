@@ -71,8 +71,9 @@ def check_repository(root: Path) -> list[str]:
     if "RUN npm ci" not in dockerfile or "RUN npm install" in dockerfile:
         failures.append("npm production build must install from the lockfile with npm ci")
 
-    checksum = 'echo "${BEADS_SHA256}  ${tarball}" | sha256sum --check --strict -'
-    if checksum not in release or "BEADS_SHA256:" not in release:
+    checksum = 'echo "${checksum}  ${tarball}" | sha256sum --check --strict -'
+    checksum_parts = tuple(f"BEADS_SHA256_{suffix}:" for suffix in "ABCDEFGH")
+    if checksum not in release or not all(part in release for part in checksum_parts):
         failures.append("release asset checksum verification is absent")
 
     return failures

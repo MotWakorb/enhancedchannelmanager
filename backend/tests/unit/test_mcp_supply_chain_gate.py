@@ -72,7 +72,7 @@ def test_repository_satisfies_mcp_publication_policy():
         ),
         (
             ".github/workflows/release-cut-gate.yml",
-            'echo "${BEADS_SHA256}  ${tarball}" | sha256sum --check --strict -',
+            'echo "${checksum}  ${tarball}" | sha256sum --check --strict -',
             "echo checksum-disabled",
             "release asset checksum",
         ),
