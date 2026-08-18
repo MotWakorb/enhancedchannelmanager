@@ -78,13 +78,13 @@ def test_user(test_session):
 def password_reset_token(test_session, test_user):
     """Create a valid password reset token for testing."""
     from models import PasswordResetToken
-    from auth.password import hash_password
+    from auth.tokens import hash_token
 
     # Use a known raw token
     raw_token = "valid-reset-token"
     token = PasswordResetToken(
         user_id=test_user.id,
-        token_hash=hash_password(raw_token),
+        token_hash=hash_token(raw_token),
         expires_at=datetime.utcnow() + timedelta(hours=1),
     )
     test_session.add(token)
@@ -96,12 +96,12 @@ def password_reset_token(test_session, test_user):
 def expired_reset_token(test_session, test_user):
     """Create an expired password reset token for testing."""
     from models import PasswordResetToken
-    from auth.password import hash_password
+    from auth.tokens import hash_token
 
     raw_token = "expired-reset-token"
     token = PasswordResetToken(
         user_id=test_user.id,
-        token_hash=hash_password(raw_token),
+        token_hash=hash_token(raw_token),
         expires_at=datetime.utcnow() - timedelta(hours=2),  # Expired 2 hours ago
     )
     test_session.add(token)

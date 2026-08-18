@@ -1758,8 +1758,8 @@ See the [user guide](user_guide/backup-restore/configure-cloud-destinations.md) 
 | `GET /api/auth/me` | Get current user info |
 | `PUT /api/auth/me` | Update current user profile |
 | `POST /api/auth/change-password` | Change current user's password |
-| `POST /api/auth/forgot-password` | Request password reset email. The link's origin comes from the `public_base_url` setting when it is set; otherwise it falls back to the caller-supplied `X-Forwarded-Host` / `Host` headers, which is why the setting exists (bead qsqfv). |
-| `POST /api/auth/reset-password` | Reset password with token |
+| `POST /api/auth/forgot-password` | Request a password reset email. Always returns the same success response for known and unknown addresses. Limited to 5 requests/minute per client; one unused link is retained per local account and repeat email for that account is suppressed for 5 minutes. The link's origin comes from the `public_base_url` setting when it is set; otherwise it falls back to the caller-supplied `X-Forwarded-Host` / `Host` headers, which is why the setting exists (beads qsqfv, 04c0u.2). |
+| `POST /api/auth/reset-password` | Reset a password with a one-hour, single-use token. Limited to 10 requests/minute per client and 10 password-validation attempts per token. Success revokes the account's existing sessions (bead 04c0u.2). |
 | `GET /api/auth/providers` | List available auth providers |
 | `POST /api/auth/dispatcharr/login` | Login via Dispatcharr credentials |
 | `GET /api/auth/identities` | List linked auth identities for current user |

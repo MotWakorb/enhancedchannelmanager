@@ -22,6 +22,7 @@ from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import get_public_base_url, get_settings
@@ -51,6 +52,27 @@ from .dependencies import (
 logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address, enabled=os.environ.get("RATE_LIMIT_ENABLED", "1") != "0")
+
+RESET_ISSUE_RATE = "5/minute"
+RESET_VALIDATE_RATE = "10/minute"
+PASSWORD_RESET_ACCOUNT_COOLDOWN = timedelta(minutes=5)
+PASSWORD_RESET_MAX_ATTEMPTS = 10
+
+
+def _consume_reset_token(
+    session: Session,
+    token_id: int,
+    consumed_at: datetime,
+) -> bool:
+    """Claim one unused, unexpired reset credential with a conditional write."""
+    return session.query(PasswordResetToken).filter(
+        PasswordResetToken.id == token_id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.expires_at > consumed_at,
+    ).update(
+        {PasswordResetToken.used_at: consumed_at},
+        synchronize_session=False,
+    ) == 1
 
 
 def _serialize_initial_setup():
@@ -1422,6 +1444,7 @@ async def change_password(
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
+@limiter.limit(RESET_ISSUE_RATE)
 async def forgot_password(
     forgot_request: ForgotPasswordRequest,
     request: Request,
@@ -1436,9 +1459,45 @@ async def forgot_password(
     user = session.query(User).filter(User.email == forgot_request.email).first()
 
     if user and user.is_active and user.auth_provider == "local":
+        now = datetime.utcnow()
+        session.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            or_(
+                PasswordResetToken.used_at.is_not(None),
+                PasswordResetToken.expires_at <= now,
+            ),
+        ).delete(synchronize_session=False)
+        active_token = session.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > now,
+        ).order_by(PasswordResetToken.created_at.desc()).first()
+
+        # The response is deliberately identical to a fresh issuance. This
+        # account-level cooldown bounds token hashing, database writes and
+        # outbound email even when requests are distributed across clients.
+        if (
+            active_token
+            and active_token.created_at > now - PASSWORD_RESET_ACCOUNT_COOLDOWN
+        ):
+            session.commit()
+            return ForgotPasswordResponse()
+
+        if active_token:
+            superseded = session.query(PasswordResetToken).filter(
+                PasswordResetToken.id == active_token.id,
+                PasswordResetToken.used_at.is_(None),
+            ).update(
+                {PasswordResetToken.used_at: now},
+                synchronize_session=False,
+            )
+            session.commit()
+            if superseded != 1:
+                return ForgotPasswordResponse()
+
         # Generate reset token
         raw_token = secrets.token_urlsafe(32)
-        token_hash = hash_password(raw_token)  # Use bcrypt for token hash
+        token_hash = hash_token(raw_token)
 
         # Create reset token record (expires in 1 hour)
         reset_token = PasswordResetToken(
@@ -1447,6 +1506,19 @@ async def forgot_password(
             expires_at=datetime.utcnow() + timedelta(hours=1),
         )
         session.add(reset_token)
+        try:
+            session.commit()
+        except IntegrityError:
+            # The partial unique index is the cross-worker account limiter.
+            # A concurrent request won issuance; preserve the generic response
+            # and do not send a second email.
+            session.rollback()
+            return ForgotPasswordResponse()
+
+        session.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.id != reset_token.id,
+        ).delete(synchronize_session=False)
         session.commit()
 
         # Build the origin the emailed reset link points at.
@@ -1496,8 +1568,10 @@ async def forgot_password(
 
 
 @router.post("/reset-password", response_model=ResetPasswordResponse)
+@limiter.limit(RESET_VALIDATE_RATE)
 async def reset_password(
     reset_request: ResetPasswordRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ):
     """
@@ -1505,17 +1579,13 @@ async def reset_password(
 
     Token must be valid and not expired (1 hour expiry).
     """
-    # Find valid reset token
-    # We need to check all tokens since we hash them
-    reset_tokens = session.query(PasswordResetToken).filter(
+    now = datetime.utcnow()
+    token_hash = hash_token(reset_request.token)
+    valid_token = session.query(PasswordResetToken).filter(
+        PasswordResetToken.token_hash == token_hash,
         PasswordResetToken.used_at.is_(None),
-    ).all()
-
-    valid_token = None
-    for token_record in reset_tokens:
-        if verify_password(reset_request.token, token_record.token_hash):
-            valid_token = token_record
-            break
+        PasswordResetToken.expires_at > now,
+    ).first()
 
     if not valid_token:
         raise HTTPException(
@@ -1523,11 +1593,22 @@ async def reset_password(
             detail="Invalid or expired reset token",
         )
 
-    # Check if token is expired
-    if valid_token.expires_at < datetime.utcnow():
+    # Persist the per-account/token attempt budget independently of password
+    # validation. Otherwise every rejected weak password would roll the budget
+    # back with its 422 response and the limit would never become effective.
+    attempt_claimed = session.query(PasswordResetToken).filter(
+        PasswordResetToken.id == valid_token.id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.attempt_count < PASSWORD_RESET_MAX_ATTEMPTS,
+    ).update(
+        {PasswordResetToken.attempt_count: PasswordResetToken.attempt_count + 1},
+        synchronize_session=False,
+    )
+    session.commit()
+    if attempt_claimed != 1:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Reset token has expired",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many password reset attempts. Request a new reset link.",
         )
 
     # Get user
@@ -1546,12 +1627,24 @@ async def reset_password(
             detail=password_result.error,
         )
 
-    # Update password
-    user.password_hash = hash_password(reset_request.new_password)
-    user.updated_at = datetime.utcnow()
+    new_password_hash = hash_password(reset_request.new_password)
+    consumed_at = datetime.utcnow()
+    if not _consume_reset_token(session, valid_token.id, consumed_at):
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
 
-    # Mark token as used
-    valid_token.used_at = datetime.utcnow()
+    # Token consumption, password mutation and session revocation commit as a
+    # single transaction. A racing consumer that loses the conditional UPDATE
+    # changes none of them.
+    user.password_hash = new_password_hash
+    user.updated_at = consumed_at
+    session.query(UserSession).filter(
+        UserSession.user_id == user.id,
+        UserSession.is_revoked.is_(False),
+    ).update({UserSession.is_revoked: True}, synchronize_session=False)
 
     session.commit()
 
