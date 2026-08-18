@@ -5,8 +5,24 @@ Tests: GET /api/stream-preview/{stream_id}, GET /api/channel-preview/{channel_id
 Mocks: get_client(), get_settings(), subprocess, httpx.
 Focus on error paths and setup logic (streaming responses tested via status codes).
 """
-import pytest
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from security.ssrf import SSRFError
+
+
+@asynccontextmanager
+async def _mock_stream_response(*_args, **_kwargs):
+    response = MagicMock(status_code=200)
+
+    async def aiter_bytes(chunk_size):
+        yield b"mock stream data"
+
+    response.aiter_bytes = aiter_bytes
+    response.raise_for_status = MagicMock()
+    yield response
 
 
 class TestStreamPreview:
@@ -79,12 +95,36 @@ class TestStreamPreview:
         mock_client.get_stream.return_value = {"id": 1, "url": "http://example.com/stream"}
 
         with patch("routers.stream_preview.get_settings", return_value=mock_settings), \
-             patch("routers.stream_preview.get_client", return_value=mock_client):
+             patch("routers.stream_preview.get_client", return_value=mock_client), \
+             patch("routers.stream_preview.prepare_stream_http_url"), \
+             patch("routers.stream_preview.stream_request", _mock_stream_response):
             response = await async_client.get("/api/stream-preview/1")
 
         # StreamingResponse returns 200 (the generator will fail on actual stream but headers are set)
         assert response.status_code == 200
         assert response.headers.get("content-type") == "video/mp2t"
+
+    @pytest.mark.asyncio
+    async def test_passthrough_denied_destination_returns_403_before_streaming(
+        self, async_client
+    ):
+        mock_settings = MagicMock(stream_preview_mode="passthrough")
+        mock_client = AsyncMock()
+        mock_client.get_stream.return_value = {
+            "id": 1,
+            "url": "http://169.254.169.254/latest/meta-data",
+        }
+
+        with patch("routers.stream_preview.get_settings", return_value=mock_settings), \
+             patch("routers.stream_preview.get_client", return_value=mock_client), \
+             patch(
+                 "routers.stream_preview.prepare_stream_http_url",
+                 side_effect=SSRFError("denied"),
+             ):
+            response = await async_client.get("/api/stream-preview/1")
+
+        assert response.status_code == 403
+        assert response.json()["detail"] == "Stream destination is not permitted"
 
     @pytest.mark.asyncio
     async def test_transcode_ffmpeg_not_found(self, async_client):
@@ -97,6 +137,7 @@ class TestStreamPreview:
 
         with patch("routers.stream_preview.get_settings", return_value=mock_settings), \
              patch("routers.stream_preview.get_client", return_value=mock_client), \
+             patch("routers.stream_preview.validate_stream_subprocess_url"), \
              patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg")):
             response = await async_client.get("/api/stream-preview/1")
 
@@ -181,6 +222,7 @@ class TestChannelPreview:
 
         with patch("routers.stream_preview.get_settings", return_value=mock_settings), \
              patch("routers.stream_preview.get_client", return_value=mock_client), \
+             patch("routers.stream_preview.validate_stream_subprocess_url"), \
              patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg")):
             response = await async_client.get("/api/channel-preview/1")
 

@@ -25,6 +25,12 @@ from stream_prober import FFPROBE_PROTOCOL_WHITELIST, StreamProber
 EXPECTED_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
 
 
+@pytest.fixture(autouse=True)
+def _allow_synthetic_subprocess_destination():
+    with patch("stream_prober.validate_stream_subprocess_url"):
+        yield
+
+
 def _make_prober(**kwargs) -> StreamProber:
     """Build a StreamProber with test-friendly defaults."""
     mock_client = MagicMock()

@@ -12,6 +12,12 @@ from stream_prober import (
 SYNTHETIC_URL = "http://provider.invalid/account/token/stream.ts"
 
 
+@pytest.fixture(autouse=True)
+def _allow_synthetic_subprocess_destination():
+    with patch("stream_prober.validate_stream_subprocess_url"):
+        yield
+
+
 @pytest.mark.asyncio
 async def test_ffprobe_diagnostic_redacts_provider_url():
     prober = StreamProber(MagicMock(), probe_retry_count=0)

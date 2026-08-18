@@ -8,6 +8,12 @@ from models import StreamStats
 from stream_prober import StreamProber, smart_sort_streams
 
 
+@pytest.fixture(autouse=True)
+def _allow_synthetic_subprocess_destination():
+    with patch("stream_prober.validate_stream_subprocess_url"):
+        yield
+
+
 def create_prober(**kwargs) -> StreamProber:
     """Create a StreamProber with specified settings."""
     mock_client = MagicMock()

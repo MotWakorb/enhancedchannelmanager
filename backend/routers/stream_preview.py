@@ -8,12 +8,17 @@ import logging
 import subprocess
 import time
 
-import httpx
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from config import get_settings
 from dispatcharr_client import get_client
+from security.ssrf import SSRFError
+from security.stream_outbound import (
+    prepare_stream_http_url,
+    stream_request,
+    validate_stream_subprocess_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +88,20 @@ async def stream_preview(stream_id: int):
 
     if mode == "passthrough":
         # Direct proxy - just fetch and forward
-        # Use httpx to stream the content, following redirects
+        try:
+            initial_target = prepare_stream_http_url(stream_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
+
         async def passthrough_generator():
-            async with httpx.AsyncClient(timeout=None, follow_redirects=True) as http_client:
-                async with http_client.stream("GET", stream_url) as response:
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        yield chunk
+            async with stream_request(
+                stream_url, timeout=None, initial_target=initial_target
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    yield chunk
 
         return StreamingResponse(
             passthrough_generator(),
@@ -103,6 +116,12 @@ async def stream_preview(stream_id: int):
     elif mode == "transcode":
         # Transcode audio to AAC for browser compatibility
         # FFmpeg: copy video, transcode audio to AAC
+        try:
+            validate_stream_subprocess_url(stream_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -149,6 +168,12 @@ async def stream_preview(stream_id: int):
 
     elif mode == "video_only":
         # Strip audio entirely for quick preview
+        try:
+            validate_stream_subprocess_url(stream_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -251,14 +276,25 @@ async def channel_preview(channel_id: int):
 
     if mode == "passthrough":
         # Direct proxy with JWT auth - just fetch and forward
+        try:
+            initial_target = prepare_stream_http_url(channel_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
+
         async def passthrough_generator():
-            async with httpx.AsyncClient(timeout=None, follow_redirects=True) as http_client:
-                async with http_client.stream("GET", channel_url, headers=auth_headers) as response:
-                    if response.status_code != 200:
-                        logger.error("[PREVIEW] Dispatcharr proxy returned %s", response.status_code)
-                        return
-                    async for chunk in response.aiter_bytes(chunk_size=65536):
-                        yield chunk
+            async with stream_request(
+                channel_url,
+                timeout=None,
+                headers=auth_headers,
+                initial_target=initial_target,
+            ) as response:
+                if response.status_code != 200:
+                    logger.error("[PREVIEW] Dispatcharr proxy returned %s", response.status_code)
+                    return
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    yield chunk
 
         return StreamingResponse(
             passthrough_generator(),
@@ -273,6 +309,12 @@ async def channel_preview(channel_id: int):
     elif mode == "transcode":
         # Transcode audio to AAC for browser compatibility
         # FFmpeg -headers option passes JWT auth to Dispatcharr proxy
+        try:
+            validate_stream_subprocess_url(channel_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",
@@ -321,6 +363,12 @@ async def channel_preview(channel_id: int):
     elif mode == "video_only":
         # Strip audio entirely for quick preview
         # FFmpeg -headers option passes JWT auth to Dispatcharr proxy
+        try:
+            validate_stream_subprocess_url(channel_url)
+        except SSRFError as exc:
+            raise HTTPException(
+                status_code=403, detail="Stream destination is not permitted"
+            ) from exc
         ffmpeg_cmd = [
             "ffmpeg",
             "-hide_banner",

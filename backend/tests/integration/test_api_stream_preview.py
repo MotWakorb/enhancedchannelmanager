@@ -4,8 +4,10 @@ Integration tests for the Stream Preview API endpoints.
 These tests verify error handling and basic functionality of the
 stream-preview and channel-preview endpoints.
 """
-import pytest
+from contextlib import asynccontextmanager
 from unittest.mock import patch, MagicMock, AsyncMock
+
+import pytest
 
 import config
 
@@ -107,19 +109,28 @@ class TestStreamPreview:
             with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
 
-                # Mock httpx.AsyncClient to return our mocked response
-                with patch("httpx.AsyncClient") as mock_http:
-                    mock_context = AsyncMock()
-                    mock_context.__aenter__.return_value = MagicMock()
-                    stream_request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
-                    mock_context.__aenter__.return_value.stream = stream_request
-                    mock_http.return_value = mock_context
+                calls = []
 
+                @asynccontextmanager
+                async def mock_stream_request(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    mock_response.raise_for_status = MagicMock()
+                    yield mock_response
+
+                prepared = MagicMock()
+                with patch(
+                    "routers.stream_preview.prepare_stream_http_url",
+                    return_value=prepared,
+                ), \
+                     patch("routers.stream_preview.stream_request", mock_stream_request):
                     response = await async_client.get("/api/stream-preview/1")
                     # The endpoint returns a StreamingResponse with video/mp2t content type
                     assert response.status_code == 200
                     assert response.headers.get("content-type") == "video/mp2t"
-                    stream_request.assert_called_once_with("GET", provider_url)
+                    assert calls == [((provider_url,), {
+                        "timeout": None,
+                        "initial_target": prepared,
+                    })]
 
     @pytest.mark.asyncio
     async def test_stream_preview_transcode_ffmpeg_not_found(self, async_client):
@@ -131,7 +142,8 @@ class TestStreamPreview:
             with patch("routers.stream_preview.get_settings") as mock_settings:
                 mock_settings.return_value = MagicMock(stream_preview_mode="transcode")
 
-                with patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
+                with patch("routers.stream_preview.validate_stream_subprocess_url"), \
+                     patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/stream-preview/1")
                     assert response.status_code == 500
                     assert response.json()["detail"] == "Internal server error"
@@ -215,23 +227,31 @@ class TestChannelPreview:
                     url="http://localhost:5656"
                 )
 
-                # Mock httpx.AsyncClient to return our mocked response
-                with patch("httpx.AsyncClient") as mock_http:
-                    mock_context = AsyncMock()
-                    mock_context.__aenter__.return_value = MagicMock()
-                    stream_request = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=mock_response), __aexit__=AsyncMock()))
-                    mock_context.__aenter__.return_value.stream = stream_request
-                    mock_http.return_value = mock_context
+                calls = []
 
+                @asynccontextmanager
+                async def mock_stream_request(*args, **kwargs):
+                    calls.append((args, kwargs))
+                    yield mock_response
+
+                prepared = MagicMock()
+                with patch(
+                    "routers.stream_preview.prepare_stream_http_url",
+                    return_value=prepared,
+                ), \
+                     patch("routers.stream_preview.stream_request", mock_stream_request):
                     response = await async_client.get("/api/channel-preview/1")
                     # The endpoint returns a StreamingResponse with video/mp2t content type
                     assert response.status_code == 200
                     assert response.headers.get("content-type") == "video/mp2t"
-                    stream_request.assert_called_once_with(
-                        "GET",
-                        "http://localhost:5656/proxy/ts/stream/test-uuid-123",
-                        headers={"Authorization": "Bearer test-jwt-token"},
-                    )
+                    assert calls == [(
+                        ("http://localhost:5656/proxy/ts/stream/test-uuid-123",),
+                        {
+                            "timeout": None,
+                            "headers": {"Authorization": "Bearer test-jwt-token"},
+                            "initial_target": prepared,
+                        },
+                    )]
 
     @pytest.mark.asyncio
     async def test_channel_preview_transcode_ffmpeg_not_found(self, async_client):
@@ -248,7 +268,8 @@ class TestChannelPreview:
                     url="http://localhost:5656"
                 )
 
-                with patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
+                with patch("routers.stream_preview.validate_stream_subprocess_url"), \
+                     patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/channel-preview/1")
                     assert response.status_code == 500
                     assert response.json()["detail"] == "Internal server error"
@@ -268,7 +289,8 @@ class TestChannelPreview:
                     url="http://localhost:5656"
                 )
 
-                with patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
+                with patch("routers.stream_preview.validate_stream_subprocess_url"), \
+                     patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
                     response = await async_client.get("/api/channel-preview/1")
                     assert response.status_code == 500
                     assert response.json()["detail"] == "Internal server error"

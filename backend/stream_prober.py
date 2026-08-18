@@ -18,6 +18,7 @@ import journal
 import safe_regex
 
 import httpx
+from security.stream_outbound import stream_request, validate_stream_subprocess_url
 
 from database import get_session
 from models import StreamStats
@@ -1077,6 +1078,7 @@ class StreamProber:
 
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
         """Run ffprobe and parse JSON output."""
+        validate_stream_subprocess_url(url)
         cmd = [
             "ffprobe",
             "-v",
@@ -1159,18 +1161,17 @@ class StreamProber:
             )
 
             headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-                async with client.stream("GET", url) as response:
-                    response.raise_for_status()
+            async with stream_request(url, timeout=timeout, headers=headers) as response:
+                response.raise_for_status()
 
-                    # Download stream data for the sample duration
-                    async for chunk in response.aiter_bytes(chunk_size=65536):  # 64KB chunks
-                        bytes_downloaded += len(chunk)
-                        elapsed = time.time() - start_time
+                # Download stream data for the sample duration
+                async for chunk in response.aiter_bytes(chunk_size=65536):  # 64KB chunks
+                    bytes_downloaded += len(chunk)
+                    elapsed = time.time() - start_time
 
-                        # Stop after sample duration
-                        if elapsed >= self.bitrate_sample_duration:
-                            break
+                    # Stop after sample duration
+                    if elapsed >= self.bitrate_sample_duration:
+                        break
 
             elapsed = time.time() - start_time
 
@@ -1226,6 +1227,7 @@ class StreamProber:
         wait_for a generous grace window so cold-start false-timeouts don't
         flip streams to "clean".
         """
+        validate_stream_subprocess_url(url)
         cmd = [
             "ffmpeg",
             "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
