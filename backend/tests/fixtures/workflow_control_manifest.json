@@ -1003,6 +1003,15 @@
       "file": "test.yml",
       "path": [
         "jobs",
+        "security-governance-audit",
+        "if"
+      ],
+      "value": "github.event_name == 'push' && github.ref == 'refs/heads/dev'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
         "publish-verified-dev-images",
         "if"
       ],
