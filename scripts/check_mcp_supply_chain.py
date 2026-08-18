@@ -15,6 +15,19 @@ POLICY_FILES = (
     Path("mcp-server/Dockerfile"),
 )
 
+MCP_BASE_IMAGE = "python:3.12-alpine@sha256:" + "".join(
+    (
+        "d09d15e6",
+        "0962ca36",
+        "5d1cd544",
+        "a48773ba",
+        "c9d33f2f",
+        "b1b00f2a",
+        "a0deec78",
+        "ade7dc31",
+    )
+)
+
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _USES = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
 _FROM = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
@@ -26,6 +39,13 @@ def check_repository(root: Path) -> list[str]:
     release = (root / POLICY_FILES[1]).read_text(encoding="utf-8")
     dockerfile = (root / POLICY_FILES[2]).read_text(encoding="utf-8")
     mcp_dockerfile = (root / POLICY_FILES[3]).read_text(encoding="utf-8")
+
+    mcp_base_images = _FROM.findall(mcp_dockerfile)
+    if mcp_base_images != [MCP_BASE_IMAGE]:
+        failures.append(
+            "MCP image must use the reviewed Alpine base digest: "
+            f"expected {MCP_BASE_IMAGE}, found {mcp_base_images}"
+        )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:
         failures.append("MCP dependency audit is absent from the publication workflow")

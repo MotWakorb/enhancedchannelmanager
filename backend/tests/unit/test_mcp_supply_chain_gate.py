@@ -34,6 +34,30 @@ def test_repository_satisfies_mcp_publication_policy():
     assert gate.check_repository(REPO_ROOT) == []
 
 
+def test_policy_pins_mcp_to_reviewed_alpine_base():
+    gate = _load_gate()
+
+    dockerfile = (REPO_ROOT / "mcp-server/Dockerfile").read_text(encoding="utf-8")
+    assert dockerfile.splitlines()[0] == f"FROM {gate.MCP_BASE_IMAGE}"
+    assert gate.check_repository(REPO_ROOT) == []
+
+
+def test_policy_rejects_a_different_digest_pinned_mcp_base(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+    assert gate.MCP_BASE_IMAGE in contents
+    dockerfile.write_text(
+        contents.replace(gate.MCP_BASE_IMAGE, "python:3.12-slim@sha256:" + "0" * 64),
+        encoding="utf-8",
+    )
+
+    failures = gate.check_repository(tmp_path)
+
+    assert any("reviewed Alpine base digest" in failure for failure in failures), failures
+
+
 def test_policy_rejects_push_builders_that_do_not_require_mcp_scan_success(
     tmp_path,
 ):
@@ -120,9 +144,9 @@ def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
         ),
         (
             "mcp-server/Dockerfile",
-            "python:3.12-slim@sha256:",
-            "python:3.12-slim # sha256:",
-            "digest-pinned FROM",
+            "python:3.12-alpine@sha256:",
+            "python:3.12-alpine # sha256:",
+            "reviewed Alpine base digest",
         ),
         (
             "Dockerfile",

@@ -1,13 +1,11 @@
-FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
+FROM python:3.12-alpine@sha256:d09d15e60962ca365d1cd544a48773bac9d33f2fb1b00f2aa0deec78ade7dc31
 
 WORKDIR /app
 
-# Apply Debian security updates that may have landed after the pinned base
+# Apply Alpine security updates that may have landed after the pinned base
 # manifest was published. The digest makes the input reviewable; this upgrade
 # step closes fixed OS advisories until the next intentional digest refresh.
-RUN apt-get update \
-    && apt-get upgrade -y --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk upgrade --no-cache
 
 # Install dependencies
 COPY requirements.txt .
