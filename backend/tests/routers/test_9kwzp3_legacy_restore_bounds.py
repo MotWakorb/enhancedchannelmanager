@@ -70,7 +70,7 @@ def test_legacy_validator_rejects_high_ratio_member_before_any_read(tmp_path):
 def test_legacy_validator_accepts_ecm_shaped_high_ratio_member(tmp_path, member_name):
     """Only legacy SQLite/M3U data may exceed the DBAS 100x ratio cap."""
     archive = tmp_path / "legacy-high-ratio.zip"
-    content = b"SQLite format 3\x00" + b"abcde12345" * (1024 * 1024 // 10)
+    content = b"SQLite format 3\x00" + b"playlist-line-title-channel-name-operator-visible-metadata\n" * (1024 * 1024 // 57)
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("ecm_backup.json", json.dumps({"version": "1.0"}))
         zf.writestr(member_name, content)
@@ -86,7 +86,7 @@ def test_legacy_validator_accepts_ecm_shaped_high_ratio_member(tmp_path, member_
 def test_legacy_validator_keeps_100x_ratio_for_other_members_before_any_read(tmp_path):
     """The legacy allowance is not a blanket relaxation for arbitrary members."""
     archive = tmp_path / "non-legacy-data-bomb.zip"
-    content = b"abcde12345" * (1024 * 1024 // 10)
+    content = b"tls-certificate-fixture-metadata-not-a-secret\n" * (1024 * 1024 // 46)
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("tls/cert.pem", content)
 
