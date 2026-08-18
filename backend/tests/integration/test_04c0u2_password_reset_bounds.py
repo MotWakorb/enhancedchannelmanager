@@ -16,7 +16,7 @@ def local_user(test_session):
     user = User(
         username="reset-user",
         email="reset-user@example.com",
-        password_hash=hash_password("OldPassword123!"),
+        password_hash=hash_password("<Synthetic-04c0u2-Old-Password>"),
         auth_provider="local",
         is_active=True,
     )
@@ -259,7 +259,10 @@ async def test_successful_reset_invalidates_existing_credentials_and_new_passwor
 
     login = await async_client.post(
         "/api/auth/login",
-        json={"username": local_user.username, "password": "OldPassword123!"},
+        json={
+            "username": local_user.username,
+            "password": "<Synthetic-04c0u2-Old-Password>",
+        },
     )
     assert login.status_code == 200
     old_access = async_client.cookies.get("access_token")
@@ -281,7 +284,7 @@ async def test_successful_reset_invalidates_existing_credentials_and_new_passwor
         "/api/auth/reset-password",
         json={
             "token": raw_token,
-            "new_password": "NewPassword456!",
+            "new_password": "<Synthetic-04c0u2-New-Session-Password>",
         },
     )
     assert reset.status_code == 200
@@ -300,11 +303,17 @@ async def test_successful_reset_invalidates_existing_credentials_and_new_passwor
     )
     old_login = await async_client.post(
         "/api/auth/login",
-        json={"username": local_user.username, "password": "OldPassword123!"},
+        json={
+            "username": local_user.username,
+            "password": "<Synthetic-04c0u2-Old-Password>",
+        },
     )
     new_login = await async_client.post(
         "/api/auth/login",
-        json={"username": local_user.username, "password": "NewPassword456!"},
+        json={
+            "username": local_user.username,
+            "password": "<Synthetic-04c0u2-New-Session-Password>",
+        },
     )
 
     assert stale_access.status_code == 401
