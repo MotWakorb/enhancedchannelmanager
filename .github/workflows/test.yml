@@ -1239,6 +1239,36 @@ jobs:
   # semgrep image and then does nothing. That is a few seconds of runner time
   # in exchange for the context being emitted exactly once, which is the
   # trade this design is built on.
+  publish-verified-dev-images:
+    name: Publish Verified Dev Images
+    needs:
+      - operator-docs
+      - backend
+      - mcp-server
+      - frontend
+      - version-consistency
+      - fake-test-guard
+      - visual-regression
+      - operator-workspace-release
+      - sr-only-hidden
+      - edit-mode-immediacy-surfaces
+      - edit-mode-numbering-guards
+      - edit-mode-session-restore
+      - semgrep-lint
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/dev'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && !contains(needs.*.result, 'skipped')
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      candidate_sha: ${{ github.sha }}
+      candidate_branch: dev
+      tests_attested: true
   semgrep-lint:
     name: Semgrep Lint
     runs-on: ubuntu-latest

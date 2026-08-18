@@ -7,7 +7,7 @@
         "security-scan-frontend",
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
     },
     {
       "file": "build.yml",
@@ -16,7 +16,7 @@
         "security-scan-backend",
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
+      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
     },
     {
       "file": "build.yml",
@@ -126,7 +126,34 @@
       "file": "build.yml",
       "path": [
         "jobs",
-        "wait-for-tests",
+        "build-amd64",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "build-arm64",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "build-mcp-amd64",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "build-mcp-arm64",
         "if"
       ],
       "value": "needs.detect.outputs.code_paths_changed != 'false'"
@@ -136,39 +163,8 @@
       "path": [
         "jobs",
         "dast-scan",
-        "if"
-      ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "dast-scan",
         "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "dast-scan",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "dast-scan",
-        "steps",
-        9,
+        5,
         "if"
       ],
       "value": "always()"
@@ -177,619 +173,10 @@
       "file": "build.yml",
       "path": [
         "jobs",
-        "build-amd64",
+        "attest-image-candidates",
         "if"
       ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        6,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        11,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        12,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        13,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        14,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan",
-        "if"
-      ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "if"
-      ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        6,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        11,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        12,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        13,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        14,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan-arm64",
-        "if"
-      ],
-      "value": "(github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan-arm64",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan-arm64",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-manifests",
-        "if"
-      ],
-      "value": "always() && github.event_name != 'pull_request' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.trivy-scan.result) && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.trivy-scan-arm64.result) && !contains(fromJSON('[\"failure\",\"cancelled\"]'), needs.dast-scan.result)"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-manifests",
-        "steps",
-        1,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-manifests",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-manifests",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-manifests",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "if"
-      ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        6,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        10,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        11,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        12,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        13,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "if"
-      ],
-      "value": "always() && needs.wait-for-tests.result == 'success' && needs.security-scan-mcp.result == 'success' && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        6,
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        10,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        11,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        12,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        13,
-        "if"
-      ],
-      "value": "steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan-mcp-amd64",
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan-mcp-arm64",
-        "if"
-      ],
-      "value": "github.event_name != 'pull_request' && needs.build-mcp-arm64.result == 'success'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-mcp-manifests",
-        "if"
-      ],
-      "value": "always() && github.event_name != 'pull_request' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-mcp-manifests",
-        "steps",
-        1,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-mcp-manifests",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "steps.buildx.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-mcp-manifests",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "steps.login.outcome == 'failure'"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-mcp-manifests",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "steps.login.outcome == 'failure'"
+      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.dast-scan.result == 'success' && needs.security-scan-mcp.result == 'success'"
     },
     {
       "file": "docs-pages.yml",
@@ -911,6 +298,15 @@
       "value": "always()"
     },
     {
+      "file": "publish-images.yml",
+      "path": [
+        "jobs",
+        "authorize",
+        "if"
+      ],
+      "value": "(github.event_name == 'workflow_call' && inputs.tests_attested && inputs.candidate_branch == 'dev') || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')"
+    },
+    {
       "file": "release-cut-gate.yml",
       "path": [
         "jobs",
@@ -919,7 +315,7 @@
         2,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -930,7 +326,7 @@
         3,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -941,7 +337,7 @@
         4,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -952,7 +348,7 @@
         5,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -963,7 +359,7 @@
         6,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -974,7 +370,7 @@
         7,
         "if"
       ],
-      "value": "steps.shape.outputs.is_release_cut == 'true'"
+      "value": "steps.shape.outputs.kind == 'release'"
     },
     {
       "file": "release-cut-gate.yml",
@@ -1607,6 +1003,15 @@
       "file": "test.yml",
       "path": [
         "jobs",
+        "publish-verified-dev-images",
+        "if"
+      ],
+      "value": "always() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped')"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
         "semgrep-lint",
         "if"
       ],
@@ -1687,259 +1092,6 @@
         "codeql-analysis",
         "steps",
         6,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "dast-scan",
-        "steps",
-        1,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        1,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        4,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        10,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-amd64",
-        "steps",
-        12,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan",
-        "steps",
-        1,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        1,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        4,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        10,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-arm64",
-        "steps",
-        12,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "trivy-scan-arm64",
-        "steps",
-        1,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-manifests",
-        "steps",
-        0,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-manifests",
-        "steps",
-        3,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        1,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        4,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        9,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-amd64",
-        "steps",
-        11,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        1,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        4,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        9,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "build-mcp-arm64",
-        "steps",
-        11,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-mcp-manifests",
-        "steps",
-        0,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
-        "merge-mcp-manifests",
-        "steps",
-        3,
         "continue-on-error"
       ],
       "value": true

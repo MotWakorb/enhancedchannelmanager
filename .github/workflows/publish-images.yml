@@ -1,0 +1,249 @@
+name: Publish Verified Images
+
+on:
+  workflow_run:
+    workflows: [Tests, Build and Push Docker Image]
+    types: [completed]
+  workflow_call:
+    inputs:
+      candidate_sha:
+        required: true
+        type: string
+      candidate_branch:
+        required: true
+        type: string
+      tests_attested:
+        required: true
+        type: boolean
+
+concurrency:
+  group: publish-images-${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  authorize:
+    name: Authorize Exact-SHA Publication
+    if: >-
+      (github.event_name == 'workflow_call'
+      && inputs.tests_attested && inputs.candidate_branch == 'dev')
+      || (github.event_name == 'workflow_run'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      sha: ${{ steps.authorize.outputs.sha }}
+      branch: ${{ steps.authorize.outputs.branch }}
+      build_run_id: ${{ steps.authorize.outputs.build_run_id }}
+      ecm_amd64: ${{ steps.authorize.outputs.ecm_amd64 }}
+      ecm_arm64: ${{ steps.authorize.outputs.ecm_arm64 }}
+      mcp_amd64: ${{ steps.authorize.outputs.mcp_amd64 }}
+      mcp_arm64: ${{ steps.authorize.outputs.mcp_arm64 }}
+    steps:
+      - name: Checkout candidate policy from the immutable revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
+          fetch-depth: 1
+
+      - name: Require current, successful Tests and Build runs
+        id: authorize
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
+          BRANCH: ${{ inputs.candidate_branch || github.event.workflow_run.head_branch }}
+          TESTS_ATTESTED: ${{ inputs.tests_attested || false }}
+          TRIGGER: ${{ toJSON(github.event.workflow_run) }}
+        run: |
+          set -euo pipefail
+          branch_sha=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq '.object.sha')
+          if test "$branch_sha" != "$SHA"; then
+            echo "::error::Candidate $SHA is stale; refs/heads/$BRANCH is $branch_sha"
+            exit 1
+          fi
+          # On dev, this reusable workflow is called only after every Tests job
+          # succeeds. The Tests run itself is still in progress until this call
+          # returns, so add that trusted caller attestation to the API evidence.
+          # Build may still be finishing; wait here, after verification images
+          # and scans have already run, rather than suppressing those jobs.
+          for attempt in $(seq 1 60); do
+            branch_sha=$(gh api "repos/$REPO/git/ref/heads/$BRANCH" --jq '.object.sha')
+            if test "$branch_sha" != "$SHA"; then
+              echo "::error::Candidate became stale while awaiting verification"
+              exit 1
+            fi
+            runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+              --jq '.workflow_runs' | jq -sc 'add // []')
+            if test "$TESTS_ATTESTED" = true; then
+              test_run=$(jq -nc --arg sha "$SHA" --arg branch "$BRANCH" \
+                '{id: 0, name: "Tests", head_sha: $sha, head_branch: $branch,
+                  event: "push", status: "completed", conclusion: "success",
+                  run_number: 2147483647, run_attempt: 1}')
+              runs=$(jq -nc --argjson runs "$runs" --argjson test "$test_run" \
+                '$runs + [$test]')
+              trigger="$test_run"
+            else
+              trigger="$TRIGGER"
+            fi
+            build_run_id=$(jq '[.[] | select(.name == "Build and Push Docker Image")]
+              | sort_by([.run_number, .run_attempt, .id]) | last | .id // empty' <<<"$runs")
+            if test -z "$build_run_id"; then
+              decision=""
+            elif gh run download "$build_run_id" --repo "$REPO" \
+              --name verified-image-candidates --dir "/tmp/candidate-attestation-$attempt" 2>/dev/null \
+              && decision=$(python scripts/image_publish_policy.py \
+              --trigger "$trigger" --branch-sha "$branch_sha" --runs "$runs"); then
+              attestation=$(cat "/tmp/candidate-attestation-$attempt/candidate-attestation.json")
+              if decision=$(python scripts/image_publish_policy.py \
+                --trigger "$trigger" --branch-sha "$branch_sha" --runs "$runs" \
+                --build-run-id "$build_run_id" --attestation "$attestation"); then
+                break
+              fi
+            fi
+            if test "$attempt" = 60; then
+              echo "::error::Exact-SHA publication authorization did not become green"
+              exit 1
+            fi
+            sleep 30
+          done
+          test "$(jq -r '.sha' <<<"$decision")" = "$SHA"
+          test "$(jq -r '.branch' <<<"$decision")" = "$BRANCH"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "build_run_id=$(jq -r '.build_run_id' <<<"$decision")" >> "$GITHUB_OUTPUT"
+          for name in ecm_amd64 ecm_arm64 mcp_amd64 mcp_arm64; do
+            echo "$name=$(jq -r --arg name "$name" '.digests[$name]' <<<"$decision")" >> "$GITHUB_OUTPUT"
+          done
+
+  publish-amd64:
+    name: Publish Images (AMD64)
+    needs: [authorize]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    outputs:
+      ecm_digest: ${{ steps.promote.outputs.ecm_digest }}
+      mcp_digest: ${{ steps.promote.outputs.mcp_digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - name: Download exact verified OCI candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name ecm-amd64-candidate --dir /tmp/candidates
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name mcp-amd64-candidate --dir /tmp/candidates
+      - name: Verify and promote exact candidates
+        id: promote
+        env:
+          REGISTRY_AUTH: ${{ github.token }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+          ECM_DIGEST: ${{ needs.authorize.outputs.ecm_amd64 }}
+          MCP_DIGEST: ${{ needs.authorize.outputs.mcp_amd64 }}
+        run: |
+          set -euo pipefail
+          python scripts/candidate_image.py verify-archive /tmp/candidates/ecm-amd64.oci.tar --expected "$ECM_DIGEST"
+          python scripts/candidate_image.py verify-archive /tmp/candidates/mcp-amd64.oci.tar --expected "$MCP_DIGEST"
+          image="${GITHUB_REPOSITORY,,}"
+          echo "$REGISTRY_AUTH" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/ecm-amd64.oci.tar "docker://ghcr.io/$image:candidate-$SHA-amd64"
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/mcp-amd64.oci.tar "docker://ghcr.io/$image-mcp:candidate-$SHA-amd64"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image:candidate-$SHA-amd64")" = "$ECM_DIGEST"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image-mcp:candidate-$SHA-amd64")" = "$MCP_DIGEST"
+          echo "ecm_digest=$ECM_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "mcp_digest=$MCP_DIGEST" >> "$GITHUB_OUTPUT"
+
+  publish-arm64:
+    name: Publish Images (ARM64)
+    needs: [authorize]
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    outputs:
+      ecm_digest: ${{ steps.promote.outputs.ecm_digest }}
+      mcp_digest: ${{ steps.promote.outputs.mcp_digest }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - name: Download exact verified OCI candidates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name ecm-arm64-candidate --dir /tmp/candidates
+          gh run download '${{ needs.authorize.outputs.build_run_id }}' --repo "$GITHUB_REPOSITORY" --name mcp-arm64-candidate --dir /tmp/candidates
+      - name: Verify and promote exact candidates
+        id: promote
+        env:
+          REGISTRY_AUTH: ${{ github.token }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+          ECM_DIGEST: ${{ needs.authorize.outputs.ecm_arm64 }}
+          MCP_DIGEST: ${{ needs.authorize.outputs.mcp_arm64 }}
+        run: |
+          set -euo pipefail
+          python scripts/candidate_image.py verify-archive /tmp/candidates/ecm-arm64.oci.tar --expected "$ECM_DIGEST"
+          python scripts/candidate_image.py verify-archive /tmp/candidates/mcp-arm64.oci.tar --expected "$MCP_DIGEST"
+          image="${GITHUB_REPOSITORY,,}"
+          echo "$REGISTRY_AUTH" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/ecm-arm64.oci.tar "docker://ghcr.io/$image:candidate-$SHA-arm64"
+          skopeo copy --preserve-digests oci-archive:/tmp/candidates/mcp-arm64.oci.tar "docker://ghcr.io/$image-mcp:candidate-$SHA-arm64"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image:candidate-$SHA-arm64")" = "$ECM_DIGEST"
+          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image-mcp:candidate-$SHA-arm64")" = "$MCP_DIGEST"
+          echo "ecm_digest=$ECM_DIGEST" >> "$GITHUB_OUTPUT"
+          echo "mcp_digest=$MCP_DIGEST" >> "$GITHUB_OUTPUT"
+
+  publish-manifests:
+    name: Publish Verified Multi-Arch Manifests
+    needs: [authorize, publish-amd64, publish-arm64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.authorize.outputs.sha }}
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Create exact verified tags
+        env:
+          BRANCH: ${{ needs.authorize.outputs.branch }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+          ECM_AMD64: ${{ needs.publish-amd64.outputs.ecm_digest }}
+          ECM_ARM64: ${{ needs.publish-arm64.outputs.ecm_digest }}
+          MCP_AMD64: ${{ needs.publish-amd64.outputs.mcp_digest }}
+          MCP_ARM64: ${{ needs.publish-arm64.outputs.mcp_digest }}
+        run: |
+          set -euo pipefail
+          image="${GITHUB_REPOSITORY,,}"
+          version=$(jq -r '.version' frontend/package.json)
+          short_sha=${SHA:0:7}
+          if test "$BRANCH" = main; then
+            tags=("latest" "$version" "${version%.*}" "$BRANCH-$short_sha")
+          else
+            tags=("dev" "$version-dev" "${version%.*}-dev" "$BRANCH-$short_sha")
+          fi
+          ecm_tags=(); mcp_tags=()
+          for tag in "${tags[@]}"; do
+            ecm_tags+=(--tag "$REGISTRY/$image:$tag")
+            mcp_tags+=(--tag "$REGISTRY/$image-mcp:$tag")
+          done
+          docker buildx imagetools create "${ecm_tags[@]}" \
+            "$REGISTRY/$image@$ECM_AMD64" "$REGISTRY/$image@$ECM_ARM64"
+          docker buildx imagetools create "${mcp_tags[@]}" \
+            "$REGISTRY/$image-mcp@$MCP_AMD64" "$REGISTRY/$image-mcp@$MCP_ARM64"

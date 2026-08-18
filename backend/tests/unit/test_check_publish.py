@@ -131,7 +131,7 @@ def repo(tmp_path, script, monkeypatch) -> FakeRepo:
 
 def _run(number, *, event="push", branch="dev", name=None, attempt=1, conclusion="success"):
     return {
-        "name": name or "Build and Push Docker Image",
+        "name": name or "Publish Verified Images",
         "head_branch": branch,
         "event": event,
         "run_number": number,
@@ -148,7 +148,7 @@ def _run(number, *, event="push", branch="dev", name=None, attempt=1, conclusion
 class TestSelectBuildRun:
     def test_picks_the_matching_push_run(self, script):
         runs = [_run(10)]
-        chosen = script.select_build_run(runs, "Build and Push Docker Image", "dev")
+        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
         assert chosen is not None and chosen["run_number"] == 10
 
     def test_ignores_pull_request_runs_for_the_same_sha(self, script):
@@ -159,18 +159,18 @@ class TestSelectBuildRun:
             _run(11, event="pull_request", branch="feature", conclusion="success"),
             _run(12, event="push", conclusion="failure"),
         ]
-        chosen = script.select_build_run(runs, "Build and Push Docker Image", "dev")
+        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
         assert chosen is not None
         assert chosen["run_number"] == 12
         assert chosen["conclusion"] == "failure"
 
     def test_ignores_other_workflows(self, script):
         runs = [_run(13, name="Tests")]
-        assert script.select_build_run(runs, "Build and Push Docker Image", "dev") is None
+        assert script.select_build_run(runs, "Publish Verified Images", "dev") is None
 
     def test_ignores_runs_on_another_branch(self, script):
         runs = [_run(14, branch="main")]
-        assert script.select_build_run(runs, "Build and Push Docker Image", "dev") is None
+        assert script.select_build_run(runs, "Publish Verified Images", "dev") is None
 
     def test_prefers_the_latest_attempt_of_a_rerun(self, script):
         """A re-run that fixes a flake is the state of record, not the
@@ -180,11 +180,11 @@ class TestSelectBuildRun:
             _run(20, attempt=1, conclusion="failure"),
             _run(20, attempt=2, conclusion="success"),
         ]
-        chosen = script.select_build_run(runs, "Build and Push Docker Image", "dev")
+        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
         assert chosen is not None and chosen["run_attempt"] == 2
 
     def test_returns_none_for_an_empty_list(self, script):
-        assert script.select_build_run([], "Build and Push Docker Image", "dev") is None
+        assert script.select_build_run([], "Publish Verified Images", "dev") is None
 
 
 # --- Image config parsing ---------------------------------------------------
