@@ -79,6 +79,8 @@ class ClearEmbyLogosRequest(BaseModel):
         default_factory=lambda: sorted(VALID_LOGO_IMAGE_TYPES)
     )
     channel_ids: Optional[list[str]] = None
+    plan_id: Optional[str] = None
+    plan_hash: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +326,28 @@ async def clear_emby_logos(
             detail="Emby is not enabled/configured — set it up in Settings first",
         )
 
+    if request.plan_id or request.plan_hash:
+        if not request.plan_id or not request.plan_hash:
+            raise HTTPException(status_code=409, detail="plan_id and plan_hash are both required")
+        from services.mutation_plan_store import mutation_plan_store
+        try:
+            plan = mutation_plan_store.consume(request.plan_id, "clear_emby_logos", request.plan_hash)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        principal = str(getattr(_admin, "id", None) or getattr(_admin, "role", None) or "api")
+        if plan.principal != principal:
+            raise HTTPException(status_code=409, detail="Emby plan principal does not match")
+        if plan.payload["logo_types"] != logo_types:
+            raise HTTPException(status_code=409, detail="logo types differ from prepared plan")
+        verify_client = EmbyClient(base_url=base_url, api_key=api_key)
+        try:
+            live_ids = sorted(channel.channel_id for channel in await verify_client.get_livetv_channels())
+        finally:
+            await verify_client.close()
+        if live_ids != plan.payload["channel_ids"]:
+            raise HTTPException(status_code=409, detail="Emby channel set drifted; prepare a new plan")
+        request.channel_ids = list(plan.payload["channel_ids"])
+
     _prune_old_clear_logos_jobs()
     job_id = uuid.uuid4().hex
     _CLEAR_LOGOS_JOBS[job_id] = _ClearLogosJob()
@@ -366,6 +390,42 @@ async def clear_emby_logos(
             ),
         },
     )
+
+
+@router.post("/clear-logos/prepare")
+async def prepare_clear_emby_logos(
+    request: ClearEmbyLogosRequest,
+    _admin=RequireAdminIfEnabled,
+):
+    """Enumerate exact Emby targets without creating a job or notification."""
+    if not request.logo_types:
+        raise HTTPException(status_code=400, detail="At least one logo type is required")
+    invalid = [item for item in request.logo_types if item not in VALID_LOGO_IMAGE_TYPES]
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid logo type(s): {', '.join(invalid)}")
+    settings = get_settings()
+    base_url = getattr(settings, "emby_base_url", "") or ""
+    api_key = getattr(settings, "emby_api_key", "") or ""
+    if not getattr(settings, "emby_enabled", False) or not base_url or not api_key:
+        raise HTTPException(status_code=400, detail="Emby is not enabled/configured")
+    client = EmbyClient(base_url=base_url, api_key=api_key)
+    try:
+        ids = sorted(channel.channel_id for channel in await client.get_livetv_channels())
+    finally:
+        await client.close()
+    if request.channel_ids is not None:
+        requested = set(request.channel_ids)
+        ids = [channel_id for channel_id in ids if channel_id in requested]
+    from services.mutation_plan_store import canonical_hash, mutation_plan_store
+    payload = {"logo_types": list(dict.fromkeys(request.logo_types)), "channel_ids": ids}
+    plan = mutation_plan_store.create(
+        "clear_emby_logos", payload, canonical_hash(ids),
+        str(getattr(_admin, "id", None) or getattr(_admin, "role", None) or "api"),
+    )
+    return {
+        "plan_id": plan.plan_id, "plan_hash": plan.payload_hash,
+        "expires_at": plan.expires_at, **payload,
+    }
 
 
 @router.get("/clear-logos/{job_id}")

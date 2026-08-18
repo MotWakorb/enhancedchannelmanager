@@ -156,6 +156,8 @@ class ApplyToChannelsRequest(BaseModel):
     per-channel to decide whether to rename, merge, or skip.
     """
     actions: Optional[List[ApplyChannelAction]] = None
+    plan_id: Optional[str] = None
+    plan_hash: Optional[str] = None
 
 
 @router.get("/rules")
@@ -1282,11 +1284,72 @@ async def apply_normalization_to_channels(
             raise HTTPException(status_code=500, detail="Internal server error")
 
         if dry_run:
-            return {
+            response = {
                 "dry_run": True,
                 "diffs": diffs,
                 "channels_with_changes": len(diffs),
             }
+            if body and body.actions:
+                from services.mutation_plan_store import canonical_hash, mutation_plan_store
+                actions = [action.model_dump() for action in body.actions]
+                # Materialize every object whose contents a rename/merge can
+                # overwrite. This is read-only and occurs before plan issuance.
+                preconditions: dict[str, dict] = {}
+                diffs_by_id = {item.get("channel_id"): item for item in diffs}
+                for action in body.actions:
+                    if action.action == "skip":
+                        continue
+                    ids = [action.channel_id]
+                    if action.action == "merge":
+                        target = action.merge_target_id or diffs_by_id.get(action.channel_id, {}).get("collision_target_id")
+                        if target is not None:
+                            ids.append(target)
+                    for channel_id in ids:
+                        if str(channel_id) in preconditions:
+                            continue
+                        channel = await client.get_channel(channel_id)
+                        preconditions[str(channel_id)] = {
+                            "name": channel.get("name"),
+                            "streams": list(channel.get("streams", []) or []),
+                        }
+                payload = {"actions": actions, "diffs": diffs, "preconditions": preconditions}
+                plan = mutation_plan_store.create(
+                    "normalization_apply", payload, canonical_hash(diffs),
+                    str(getattr(_admin, "id", None) or getattr(_admin, "role", None) or "api"),
+                )
+                response.update({
+                    "plan_id": plan.plan_id, "plan_hash": plan.payload_hash,
+                    "expires_at": plan.expires_at,
+                })
+            return response
+
+        # MCP planned execution validates and consumes before the first write.
+        # Human UI calls remain compatible and use their existing explicit-action flow.
+        if body and (body.plan_id or body.plan_hash):
+            if not body.plan_id or not body.plan_hash:
+                raise HTTPException(status_code=409, detail="plan_id and plan_hash are both required")
+            from services.mutation_plan_store import canonical_hash, mutation_plan_store
+            try:
+                plan = mutation_plan_store.consume(body.plan_id, "normalization_apply", body.plan_hash)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            principal = str(getattr(_admin, "id", None) or getattr(_admin, "role", None) or "api")
+            if plan.principal != principal:
+                raise HTTPException(status_code=409, detail="normalization plan principal does not match")
+            supplied_actions = [action.model_dump() for action in (body.actions or [])]
+            if supplied_actions != plan.payload["actions"] or canonical_hash(diffs) != plan.state_hash:
+                raise HTTPException(status_code=409, detail="normalization targets drifted; prepare a new plan")
+            # Fetch and validate every relevant object before the first write.
+            # Execution below uses these frozen values rather than a later read.
+            for channel_id, expected in plan.payload["preconditions"].items():
+                current = await client.get_channel(int(channel_id))
+                actual = {"name": current.get("name"), "streams": list(current.get("streams", []) or [])}
+                if actual != expected:
+                    raise HTTPException(status_code=409, detail="normalization channel state drifted; prepare a new plan")
+            diffs = plan.payload["diffs"]
+            planned_channels = plan.payload["preconditions"]
+        else:
+            planned_channels = None
 
         # Execute mode --------------------------------------------------------
         # Index diffs by channel_id for quick lookup against caller actions.
@@ -1356,14 +1419,18 @@ async def apply_normalization_to_channels(
                         "error": "merge requested but no merge target identified",
                     })
                     continue
-                try:
-                    source_channel = await client.get_channel(channel_id)
-                    target_channel = await client.get_channel(target_id)
-                except Exception as e:
-                    logger.warning("[NORMALIZE] Failed to fetch channels for merge %s -> %s: %s",
-                                   channel_id, target_id, e)
-                    errors.append({"channel_id": channel_id, "error": str(e)})
-                    continue
+                if planned_channels is not None:
+                    source_channel = {"id": channel_id, **planned_channels[str(channel_id)]}
+                    target_channel = {"id": target_id, **planned_channels[str(target_id)]}
+                else:
+                    try:
+                        source_channel = await client.get_channel(channel_id)
+                        target_channel = await client.get_channel(target_id)
+                    except Exception as e:
+                        logger.warning("[NORMALIZE] Failed to fetch channels for merge %s -> %s: %s",
+                                       channel_id, target_id, e)
+                        errors.append({"channel_id": channel_id, "error": str(e)})
+                        continue
 
                 # Merge streams into target preserving order, deduping by id.
                 target_streams = list(target_channel.get("streams", []) or [])

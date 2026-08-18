@@ -100,6 +100,8 @@ _DESTRUCTIVE_TOOLS = frozenset(name for name in _ALL_TOOLS if name.startswith((
     "merge_channels", "probe_bulk_streams", "refresh_all_epg", "refresh_all_m3u",
     "update_event_sync_team_aliases", "accept_channel_merge", "dismiss_probe_failures",
     "probe_streams", "run_channel_pipeline", "run_auto_creation",
+    "mark_notifications_read", "generate_dummy_epg", "add_tags_to_group",
+    "reorder_streams", "set_logo_from_epg", "update_channel",
 })
 
 SAFETY_INVENTORY: dict[str, ToolSafety] = {
@@ -113,6 +115,7 @@ SAFETY_INVENTORY: dict[str, ToolSafety] = {
 
 CONFIRMATION_TTL_SECONDS = 300
 DESTRUCTIVE_BATCH_HARD_CAP = 500
+NONCE_LEDGER_MAX_ENTRIES = 256
 _SIGNING_KEY = secrets.token_bytes(32)
 _LEGACY_CONTENT_GUARDED_TOOLS = frozenset({
     "bulk_delete_channels", "clear_auto_created", "bulk_merge_duplicate_channels",
@@ -135,7 +138,7 @@ _NONCE_LOCK = threading.Lock()
 def _canonical_arguments(arguments: dict[str, Any]) -> bytes:
     resolved = {
         key: value for key, value in arguments.items()
-        if key not in {"confirmation_token", "confirm", "confirm_apply"}
+        if key not in {"confirmation_token", "confirm", "confirm_apply", "plan_id", "plan_hash", "plan_phase", "plan_stream_ids", "plan_channel_ids", "plan_notification_ids", "plan_profile_ids", "plan_current_channel", "plan_logo_actions"}
     }
     return json.dumps(resolved, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 
@@ -183,8 +186,20 @@ def _issue_preview(tool_name: str, arguments: dict[str, Any], resolved: Any) -> 
         for old_token, record in list(_NONCE_LEDGER.items()):
             if record[3] < expired_before:
                 del _NONCE_LEDGER[old_token]
+        while len(_NONCE_LEDGER) >= NONCE_LEDGER_MAX_ENTRIES:
+            oldest = min(_NONCE_LEDGER, key=lambda item: _NONCE_LEDGER[item][3])
+            del _NONCE_LEDGER[oldest]
         _NONCE_LEDGER[token] = (tool_name, args_bytes, resolved_bytes, timestamp)
-    targets = resolved_bytes.decode()
+    def safe_preview(value: Any, key: str = "") -> Any:
+        if isinstance(value, dict):
+            return {k: safe_preview(v, k) for k, v in value.items()}
+        if isinstance(value, list):
+            return [safe_preview(item, key) for item in value]
+        if isinstance(value, str) and any(marker in key.lower() for marker in ("url", "token", "key", "secret")):
+            return f"<redacted sha256:{hashlib.sha256(value.encode()).hexdigest()[:12]}>"
+        return value
+
+    targets = json.dumps(safe_preview(resolved), sort_keys=True, separators=(",", ":"))
     return (
         f"PREVIEW ONLY — {tool_name} will run against this resolved target/input set: {targets}\n"
         "No state was changed. Review the set, then repeat the exact call with:\n"
@@ -230,6 +245,27 @@ async def _resolve_targets(name: str, arguments: dict[str, Any], original_run) -
     """Resolve state-derived selections without invoking a mutating handler."""
     clean = {k: v for k, v in arguments.items() if k != "confirmation_token"}
 
+    if name in {"run_channel_pipeline", "run_auto_creation"}:
+        from _endpoint_contracts import ENDPOINTS
+        from tools import channel_pipeline
+        return await channel_pipeline.get_ecm_client().call_endpoint(
+            ENDPOINTS["ac_prepare_run"], body={"dry_run": True}
+        )
+    if name == "apply_normalization_to_channels":
+        from _endpoint_contracts import ENDPOINTS
+        from tools import normalization
+        return await normalization.get_ecm_client().call_endpoint(
+            ENDPOINTS["normalization_apply_to_channels"], query={"dry_run": True},
+            body={"actions": clean.get("actions") or []},
+        )
+    if name == "clear_emby_logos":
+        from _endpoint_contracts import ENDPOINTS
+        from tools import emby
+        types = clean.get("logo_types") or list(emby._VALID_LOGO_TYPES)
+        return await emby.get_ecm_client().call_endpoint(
+            ENDPOINTS["emby_prepare_clear_logos"], body={"logo_types": types}
+        )
+
     if name == "cleanup_struck_out_streams":
         from _endpoint_contracts import ENDPOINTS
         from tools import streams
@@ -247,6 +283,70 @@ async def _resolve_targets(name: str, arguments: dict[str, Any], original_run) -
             }),
             "delete_empty_channels": bool(clean.get("delete_empty_channels")),
         }
+    if name == "delete_orphaned_groups":
+        from _endpoint_contracts import ENDPOINTS
+        from tools import channel_groups
+        explicit = clean.get("group_ids")
+        if explicit:
+            return {"group_ids": sorted(set(explicit))}
+        result = await channel_groups.get_ecm_client().call_endpoint(ENDPOINTS["groups_orphaned"])
+        rows = result.get("groups", result.get("results", [])) if isinstance(result, dict) else (result or [])
+        return {"group_ids": sorted(row["id"] for row in rows if row.get("id") is not None)}
+    if name in {"delete_all_notifications", "mark_notifications_read"}:
+        from _endpoint_contracts import ENDPOINTS
+        from tools import notifications
+        client = notifications.get_ecm_client()
+        rows: list[dict] = []
+        page = 1
+        while len(rows) < DESTRUCTIVE_BATCH_HARD_CAP:
+            result = await client.call_endpoint(
+                ENDPOINTS["notifications_list"],
+                query={"page": page, "page_size": 100},
+            )
+            batch = result.get("notifications", result.get("results", [])) if isinstance(result, dict) else (result or [])
+            rows.extend(batch)
+            if len(batch) < 100 or (isinstance(result, dict) and len(rows) >= result.get("total", 0)):
+                break
+            page += 1
+        include_unread = bool(clean.get("include_unread"))
+        return {"notification_ids": sorted(
+            row["id"] for row in rows
+            if row.get("id") is not None and (
+                (name == "mark_notifications_read" and not row.get("read", row.get("is_read", False)))
+                or (name == "delete_all_notifications" and (include_unread or row.get("read", row.get("is_read", False))))
+            )
+        )}
+    if name == "generate_dummy_epg":
+        from _endpoint_contracts import ENDPOINTS
+        from tools import epg
+        result = await epg.get_ecm_client().call_endpoint(ENDPOINTS["dummy_epg_list_profiles"])
+        rows = result.get("profiles", result.get("results", [])) if isinstance(result, dict) else (result or [])
+        return {"profile_ids": sorted(
+            row["id"] for row in rows
+            if row.get("id") is not None and row.get("enabled", True)
+        )}
+    if name in {"reorder_streams", "update_channel"}:
+        from _endpoint_contracts import ENDPOINTS
+        from tools import channels
+        current = await channels.get_ecm_client().call_endpoint(
+            ENDPOINTS["channels_get"], path_args={"channel_id": clean["channel_id"]}
+        )
+        return {"current_channel": current}
+    if name == "set_logo_from_epg":
+        from tools import channels
+        client = channels.get_ecm_client()
+        actions = []
+        for channel_id in sorted(set(clean.get("channel_ids") or [])):
+            channel = await client.get(f"/api/channels/{channel_id}")  # contract-exempt: exact read-set materialization for cross-domain set_logo_from_epg
+            epg_data_id = channel.get("epg_data_id")
+            epg_entry = await client.get(f"/api/epg/data/{epg_data_id}") if epg_data_id else None  # contract-exempt: exact EPG read paired with channel precondition above
+            actions.append({
+                "channel_id": channel_id,
+                "channel": channel,
+                "epg_entry": epg_entry,
+                "icon_url": (epg_entry or {}).get("icon_url") or (epg_entry or {}).get("icon"),
+            })
+        return {"logo_actions": actions}
     if name in {"refresh_all_epg", "match_channels_epg"}:
         from _endpoint_contracts import ENDPOINTS
         from tools import epg
@@ -320,6 +420,13 @@ def _consume(token: str, tool_name: str, arguments: dict[str, Any], resolved: An
     return None
 
 
+def _stored_resolution(token: str) -> Any | None:
+    """Read the immutable server-plan reference; consumption remains separate."""
+    with _NONCE_LOCK:
+        record = _NONCE_LEDGER.get(token)
+    return json.loads(record[2]) if record is not None else None
+
+
 def install_safety_policy(mcp) -> None:
     """Annotate and guard a complete FastMCP registry, failing closed on drift."""
     tools = mcp._tool_manager._tools
@@ -383,7 +490,17 @@ def install_safety_policy(mcp) -> None:
                     "Confirmation does not match the current resolved target/input set; "
                     "request a new preview."
                 )
-            resolved = await _resolve_targets(_name, arguments, _run)
+            server_planned = _name in {
+                "run_channel_pipeline", "run_auto_creation",
+                "apply_normalization_to_channels", "clear_emby_logos",
+            }
+            resolved = (
+                _stored_resolution(supplied)
+                if supplied and server_planned
+                else await _resolve_targets(_name, arguments, _run)
+            )
+            if resolved is None:
+                return present("Confirmation token was already used or is unknown; request a new preview.")
             resolved_count = _resolved_count(resolved)
             if resolved_count >= DESTRUCTIVE_BATCH_HARD_CAP:
                 return present(
@@ -408,6 +525,22 @@ def install_safety_policy(mcp) -> None:
                     "request a new preview."
                 )
             clean_arguments = {key: value for key, value in arguments.items() if key != "confirmation_token"}
+            if _name in {"run_channel_pipeline", "run_auto_creation", "apply_normalization_to_channels", "clear_emby_logos"}:
+                clean_arguments["plan_id"] = resolved["plan_id"]
+                clean_arguments["plan_hash"] = resolved["plan_hash"]
+                if _name in {"run_channel_pipeline", "run_auto_creation"}:
+                    clean_arguments["plan_phase"] = resolved.get("phase", "execute")
+            if _name == "cleanup_struck_out_streams":
+                clean_arguments["plan_stream_ids"] = resolved["stream_ids"]
+                clean_arguments["plan_channel_ids"] = resolved["channel_ids"]
+            if _name in {"delete_all_notifications", "mark_notifications_read"}:
+                clean_arguments["plan_notification_ids"] = resolved["notification_ids"]
+            if _name == "generate_dummy_epg":
+                clean_arguments["plan_profile_ids"] = resolved["profile_ids"]
+            if _name in {"reorder_streams", "update_channel"}:
+                clean_arguments["plan_current_channel"] = resolved["current_channel"]
+            if _name == "set_logo_from_epg":
+                clean_arguments["plan_logo_actions"] = resolved["logo_actions"]
             # Retire older boolean second gates behind the uniform token. The
             # booleans are excluded from token content, so adding them cannot
             # create drift or an accidental third-call confirmation loop.
@@ -415,6 +548,22 @@ def install_safety_policy(mcp) -> None:
                 clean_arguments["confirm"] = True
             if "confirm_apply" in self.parameters["properties"]:
                 clean_arguments["confirm_apply"] = True
-            return await _run(clean_arguments, context=context, convert_result=convert_result)
+            result = await _run(clean_arguments, context=context, convert_result=convert_result)
+            staged_text = result if isinstance(result, str) else None
+            if (
+                staged_text is None and isinstance(result, tuple) and result
+                and isinstance(result[0], list) and result[0]
+            ):
+                staged_text = getattr(result[0][0], "text", None)
+            if (
+                _name in {"run_channel_pipeline", "run_auto_creation"}
+                and isinstance(staged_text, str) and staged_text.startswith("ECM_STAGED_PLAN:")
+            ):
+                next_plan = json.loads(staged_text.removeprefix("ECM_STAGED_PLAN:"))
+                return present(
+                    "Provider refresh completed. A second review is required for the exact "
+                    "post-refresh pipeline writes.\n" + _issue_preview(_name, arguments, next_plan)
+                )
+            return result
 
         object.__setattr__(tool, "run", MethodType(guarded_run, tool))

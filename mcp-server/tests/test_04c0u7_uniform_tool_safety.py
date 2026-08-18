@@ -196,6 +196,82 @@ async def test_state_derived_targets_are_signed_and_drift_rejected():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_executes_the_exact_resolved_stream_set_without_third_recompute():
+    mcp = _registry()
+    client = AsyncMock()
+    resolved = {"streams": [{"stream_id": 7, "channels": []}], "threshold": 3}
+    client.call_endpoint.side_effect = [resolved, resolved, {"removed_from_channels": 1}]
+    with patch("tools.streams.get_ecm_client", return_value=client):
+        preview = await mcp.call_tool("cleanup_struck_out_streams", {})
+        await mcp.call_tool(
+            "cleanup_struck_out_streams", {"confirmation_token": _token(_text(preview))}
+        )
+    remove_call = client.call_endpoint.await_args_list[2]
+    assert remove_call.kwargs["body"] == {"stream_ids": [7]}
+
+
+@pytest.mark.asyncio
+async def test_reorder_streams_rejects_channel_drift_before_write():
+    mcp = _registry()
+    client = AsyncMock()
+    client.call_endpoint.side_effect = [
+        {"id": 4, "streams": [7, 8]},
+        {"id": 4, "streams": [7, 8]},
+        {"id": 4, "streams": [7, 9]},
+    ]
+    with patch("tools.channels.get_ecm_client", return_value=client):
+        preview = await mcp.call_tool("reorder_streams", {"channel_id": 4, "stream_ids": [8, 7]})
+        result = await mcp.call_tool(
+            "reorder_streams",
+            {"channel_id": 4, "stream_ids": [8, 7], "confirmation_token": _token(_text(preview))},
+        )
+    assert "drift" in _text(result).lower()
+    assert all(call.args[0].method == "GET" for call in client.call_endpoint.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_update_channel_replacement_rejects_drift_before_write():
+    mcp = _registry()
+    client = AsyncMock()
+    client.call_endpoint.side_effect = [
+        {"id": 4, "name": "News", "streams": [7, 8]},
+        {"id": 4, "name": "News", "streams": [7, 8]},
+        {"id": 4, "name": "News", "streams": [7, 9]},
+    ]
+    with patch("tools.channels.get_ecm_client", return_value=client):
+        preview = await mcp.call_tool("update_channel", {"channel_id": 4, "streams": [8, 7]})
+        result = await mcp.call_tool(
+            "update_channel",
+            {"channel_id": 4, "streams": [8, 7], "confirmation_token": _token(_text(preview))},
+        )
+    assert "drift" in _text(result).lower()
+    assert all(call.args[0].method == "GET" for call in client.call_endpoint.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_set_logo_from_epg_uses_signed_actions_and_masks_icon_url_preview():
+    mcp = _registry()
+    client = AsyncMock()
+    channel = {"id": 4, "name": "News", "epg_data_id": 11}
+    epg = {"id": 11, "icon_url": "https://logos.invalid/a.png?token=secret"}
+    client.get.side_effect = [channel, epg, channel, epg, channel, epg]
+    client.post.return_value = {"id": 22}
+    with patch("tools.channels.get_ecm_client", return_value=client):
+        preview = await mcp.call_tool("set_logo_from_epg", {"channel_ids": [4]})
+        assert "token=secret" not in _text(preview)
+        result = await mcp.call_tool(
+            "set_logo_from_epg",
+            {"channel_ids": [4], "confirmation_token": _token(_text(preview))},
+        )
+    assert "1 assigned" in _text(result)
+    client.post.assert_awaited_once_with(
+        "/api/channels/logos",
+        json_data={"name": "News", "url": "https://logos.invalid/a.png?token=secret"},
+    )
+    client.patch.assert_awaited_once_with("/api/channels/4", json_data={"logo_id": 22})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("count, refused", [(499, False), (500, True)])
 async def test_resolved_set_cap_boundary(count, refused):
     mcp = _registry()
@@ -226,6 +302,70 @@ async def test_confirmation_token_is_single_use():
         if getattr(call.args[0], "method", "GET").upper() != "GET"
     ]
     assert len(mutation_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_normalization_confirmation_commits_backend_owned_plan_not_a_recomputed_preview():
+    mcp = _registry()
+    client = AsyncMock()
+    client.call_endpoint.side_effect = [
+        {
+            "dry_run": True,
+            "diffs": [{"channel_id": 7, "current_name": "OLD", "proposed_name": "New"}],
+            "plan_id": "plan-7",
+            "plan_hash": "hash-7",
+            "expires_at": 9999999999,
+        },
+        {"renamed": [{"channel_id": 7, "old_name": "OLD", "new_name": "New"}]},
+    ]
+    args = {"dry_run": False, "actions": [{"channel_id": 7, "action": "rename"}]}
+    with patch("tools.normalization.get_ecm_client", return_value=client):
+        preview = await mcp.call_tool("apply_normalization_to_channels", args)
+        token = _token(_text(preview))
+        await mcp.call_tool(
+            "apply_normalization_to_channels", {**args, "confirmation_token": token}
+        )
+    commit = client.call_endpoint.await_args_list[1]
+    assert commit.kwargs["query"] == {"dry_run": False}
+    assert commit.kwargs["body"]["plan_id"] == "plan-7"
+    assert commit.kwargs["body"]["plan_hash"] == "hash-7"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_name", ["run_channel_pipeline", "run_auto_creation"])
+async def test_pipeline_prerefresh_requires_two_distinct_confirmations(tool_name):
+    mcp = _registry()
+    client = AsyncMock()
+    client.call_endpoint.side_effect = [
+        {
+            "phase": "refresh", "plan_id": "refresh-plan", "plan_hash": "refresh-hash",
+            "preview": {"m3u_account_ids_to_refresh": [7]},
+        },
+        {
+            "requires_confirmation": True, "completed_phase": "refresh",
+            "phase": "execute", "plan_id": "write-plan", "plan_hash": "write-hash",
+            "preview": {"channels_created": 1},
+        },
+        {"execution_id": 99, "status": "completed"},
+        {"execution_id": 99, "status": "completed", "channels_created": 1},
+    ]
+    with patch("tools.channel_pipeline.get_ecm_client", return_value=client), patch(
+        "tools.channel_pipeline._poll_sleep", AsyncMock()
+    ):
+        first = await mcp.call_tool(tool_name, {"dry_run": False})
+        first_token = _token(_text(first))
+        second = await mcp.call_tool(
+            tool_name, {"dry_run": False, "confirmation_token": first_token}
+        )
+        assert "second review is required" in _text(second)
+        second_token = _token(_text(second))
+        assert second_token != first_token
+        final = await mcp.call_tool(
+            tool_name, {"dry_run": False, "confirmation_token": second_token}
+        )
+    assert "complete" in _text(final).lower()
+    assert client.call_endpoint.await_args_list[1].kwargs["body"]["phase"] == "refresh"
+    assert client.call_endpoint.await_args_list[2].kwargs["body"]["phase"] == "execute"
 
 
 @pytest.mark.parametrize(

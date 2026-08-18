@@ -374,6 +374,14 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/channel-pipeline/run",
         request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
     ),
+    "ac_prepare_run": Endpoint(
+        name="ac_prepare_run", method="POST", path="/api/channel-pipeline/run/prepare",
+        request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
+    ),
+    "ac_commit_run": Endpoint(
+        name="ac_commit_run", method="POST", path="/api/channel-pipeline/run/commit",
+        request_fields=frozenset({"plan_id", "plan_hash", "phase"}),
+    ),
     # enhancedchannelmanager-jnzst Component B: no-write scored fuzzy preview.
     # The MCP preview_fuzzy_matches tool + the dry-run path of
     # match_streams_to_channels / fuzzy_match_stream read from here.
@@ -621,6 +629,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="dummy_epg_generate",
         method="POST",
         path="/api/dummy-epg/generate",
+        request_fields=frozenset({"profile_ids"}),
     ),
     # -- enhancedchannelmanager-omxy5: dummy-EPG profile CRUD --------------
     "dummy_epg_get_profile": Endpoint(
@@ -918,7 +927,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         # ``dry_run`` is a QUERY param (FastAPI ``Query``, default True); the
         # per-channel execute-mode decisions live in the body's ``actions``.
         query_params=frozenset({"dry_run"}),
-        request_fields=frozenset({"actions"}),  # ApplyToChannelsRequest
+        request_fields=frozenset({"actions", "plan_id", "plan_hash"}),
     ),
     # -- notifications domain ---------------------------------------------
     "notifications_list": Endpoint(
@@ -931,6 +940,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="notifications_mark_all_read",
         method="PATCH",
         path="/api/notifications/mark-all-read",
+        request_fields=frozenset({"notification_ids"}),
     ),
     "notifications_delete_all": Endpoint(
         name="notifications_delete_all",
@@ -939,6 +949,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         # Backend DELETE /api/notifications accepts read_only (bool, default True)
         # to control whether unread notifications are included (bd-1wq7z.14).
         query_params=frozenset({"read_only"}),
+        request_fields=frozenset({"notification_ids"}),
     ),
     "alert_methods_list": Endpoint(
         name="alert_methods_list",
@@ -1493,7 +1504,11 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="emby_clear_logos",
         method="POST",
         path="/api/emby/clear-logos",
-        request_fields=frozenset({"logo_types", "channel_ids"}),
+        request_fields=frozenset({"logo_types", "channel_ids", "plan_id", "plan_hash"}),
+    ),
+    "emby_prepare_clear_logos": Endpoint(
+        name="emby_prepare_clear_logos", method="POST", path="/api/emby/clear-logos/prepare",
+        request_fields=frozenset({"logo_types", "channel_ids", "plan_id", "plan_hash"}),
     ),
     # -- event_sync team-alias dictionary (bead ti939.4.2) ------------------
     # Deliberately placed at the very END of the registry, away from the

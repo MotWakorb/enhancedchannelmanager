@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from cache import get_cache
@@ -690,8 +690,15 @@ async def get_xmltv_profile(profile_id: int, db: Session = Depends(get_session))
         db.close()
 
 
+class GenerateProfilesRequest(BaseModel):
+    profile_ids: list[int] = Field(default_factory=list, max_length=499)
+
+
 @router.post("/generate")
-async def force_regenerate(db: Session = Depends(get_session)):
+async def force_regenerate(
+    body: GenerateProfilesRequest | None = None,
+    db: Session = Depends(get_session),
+):
     """Force regeneration of all XMLTV cache."""
     logger.debug("[DUMMY-EPG] POST /generate")
     try:
@@ -701,9 +708,12 @@ async def force_regenerate(db: Session = Depends(get_session)):
         # Invalidate all XMLTV cache
         cache.invalidate_prefix("dummy_epg_xmltv")
 
-        profiles = db.query(DummyEPGProfile).filter(
+        query = db.query(DummyEPGProfile).filter(
             DummyEPGProfile.enabled == True  # noqa: E712
-        ).all()
+        )
+        if body is not None:
+            query = query.filter(DummyEPGProfile.id.in_(body.profile_ids))
+        profiles = query.all()
 
         channel_map = await _fetch_all_channels()
 

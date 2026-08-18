@@ -296,6 +296,8 @@ _PIPELINE_AUTOMATION = {
         ("POST", f"{prefix}/rules/{{rule_id}}/run"),
         ("POST", f"{prefix}/rules/{{rule_id}}/toggle"),
         ("POST", f"{prefix}/run"),
+        ("POST", f"{prefix}/run/prepare"),
+        ("POST", f"{prefix}/run/commit"),
     )
 }
 
@@ -324,6 +326,7 @@ _REVIEW_QUEUES = {
 # self-healing. It is logo maintenance, not a probe.
 _EMBY_LOGO_MAINTENANCE = {
     ("POST", "/api/emby/clear-logos"),
+    ("POST", "/api/emby/clear-logos/prepare"),
 }
 
 # bead 9kwzp.6, decided on its own merits: restart-services takes the PLAIN

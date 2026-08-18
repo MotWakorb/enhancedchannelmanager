@@ -9,6 +9,7 @@ have migrated (tracking bead to be filed after this phase ships).
 """
 import asyncio
 import json
+import json
 import logging
 
 from mcp.server.fastmcp import FastMCP
@@ -330,7 +331,10 @@ def register(mcp: FastMCP):
         return await list_channel_pipeline_rules()
 
     @mcp.tool()
-    async def run_channel_pipeline(dry_run: bool = True) -> str:
+    async def run_channel_pipeline(
+        dry_run: bool = True, plan_id: str | None = None, plan_hash: str | None = None
+        , plan_phase: str = "execute"
+    ) -> str:
         """Run the auto-creation pipeline to create channels from matching streams.
 
         The backend returns 202 immediately and runs the pipeline in the
@@ -345,10 +349,16 @@ def register(mcp: FastMCP):
             client = get_ecm_client()
 
             # Kick off the run. Backend returns 202 + execution_id immediately.
-            kickoff = await client.call_endpoint(
-                ENDPOINTS["ac_run"], body={"dry_run": dry_run}
-            )
+            if plan_id and plan_hash:
+                kickoff = await client.call_endpoint(
+                    ENDPOINTS["ac_commit_run"],
+                    body={"plan_id": plan_id, "plan_hash": plan_hash, "phase": plan_phase},
+                )
+            else:
+                kickoff = await client.call_endpoint(ENDPOINTS["ac_run"], body={"dry_run": dry_run})
             execution_id = kickoff.get("execution_id")
+            if kickoff.get("requires_confirmation"):
+                return "ECM_STAGED_PLAN:" + json.dumps(kickoff, sort_keys=True, separators=(",", ":"))
             if execution_id is None:
                 logger.error("[MCP] run_channel_pipeline: no execution_id in 202 response: %s", kickoff)
                 return "Error running auto-creation: backend did not return an execution_id"
@@ -506,14 +516,19 @@ def register(mcp: FastMCP):
             return f"Error running auto-creation: {e}"
 
     @mcp.tool()
-    async def run_auto_creation(dry_run: bool = True) -> str:
+    async def run_auto_creation(
+        dry_run: bool = True, plan_id: str | None = None, plan_hash: str | None = None
+        , plan_phase: str = "execute"
+    ) -> str:
         """[DEPRECATED — use run_channel_pipeline instead] Run the auto-creation pipeline to create channels from matching streams.
 
         Args:
             dry_run: If true (default), preview what would be created without making changes.
                      Set to false to actually create the channels.
         """
-        return await run_channel_pipeline(dry_run=dry_run)
+        return await run_channel_pipeline(
+            dry_run=dry_run, plan_id=plan_id, plan_hash=plan_hash, plan_phase=plan_phase
+        )
 
     @mcp.tool()
     async def get_channel_pipeline_rule(rule_id: int) -> str:

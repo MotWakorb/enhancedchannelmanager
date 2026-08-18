@@ -42,6 +42,7 @@ from regex_lint import (
 # cancel them mid-run — fire-and-forget without supervision is a known
 # footgun. Tasks remove themselves on completion via the done callback below.
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+_MCP_PLANNED_RUN_LOCK = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +226,29 @@ class RunPipelineRequest(BaseModel):
     dry_run: bool = False
     m3u_account_ids: Optional[List[int]] = None
     rule_ids: Optional[List[int]] = None
+
+
+class CommitPipelinePlanRequest(BaseModel):
+    plan_id: str
+    plan_hash: str
+    phase: str = "execute"
+
+
+def _pipeline_plan_view(result: dict) -> dict:
+    """Keep only exact actions/targets and non-sensitive counters in a plan."""
+    return {
+        "dry_run_results": result.get("dry_run_results", []),
+        "streams_evaluated": result.get("streams_evaluated", 0),
+        "streams_matched": result.get("streams_matched", 0),
+        "channels_created": result.get("channels_created", 0),
+        "channels_updated": result.get("channels_updated", 0),
+        "groups_created": result.get("groups_created", 0),
+        "streams_merged": result.get("streams_merged", 0),
+        "streams_removed": result.get("streams_removed", 0),
+        "channels_removed": result.get("channels_removed", 0),
+        "channels_moved": result.get("channels_moved", 0),
+        "rule_match_counts": result.get("rule_match_counts", {}),
+    }
 
 
 class ImportYAMLRequest(BaseModel):
@@ -1478,6 +1502,206 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest, _admin=Require
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation pipeline: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def _plan_principal(principal) -> str:
+    return str(
+        getattr(principal, "id", None)
+        or getattr(principal, "username", None)
+        or getattr(principal, "role", None)
+        or "api"
+    )
+
+
+async def _materialize_pipeline_plan(request: RunPipelineRequest, principal: str = "api") -> dict:
+    """Build the exact post-refresh write plan without any side effects."""
+    from services.mutation_plan_store import canonical_hash, mutation_plan_store
+    from channel_pipeline_engine import ChannelPipelineEngine
+    from services.pipeline_write_plan import PlanningDispatcharrClient
+    live_engine = await _ensure_engine()
+    planning_client = PlanningDispatcharrClient(live_engine.client)
+    engine = ChannelPipelineEngine(planning_client)
+    result = await engine.run_pipeline(
+        dry_run=False, triggered_by="api", m3u_account_ids=request.m3u_account_ids,
+        rule_ids=request.rule_ids, record_execution=False, plan_only=True,
+        skip_prerefresh=True,
+    )
+    summary = _pipeline_plan_view(result)
+    snapshot = [
+        {
+            "id": channel.get("id"), "name": channel.get("name"),
+            "channel_group_id": channel.get("channel_group_id"),
+            "epg_data_id": channel.get("epg_data_id"), "tvg_id": channel.get("tvg_id"),
+            "stream_ids": [item.get("id") if isinstance(item, dict) else item for item in channel.get("streams", [])],
+        }
+        for channel in (engine._existing_channels or []) if not channel.get("auto_created", False)
+    ]
+    payload = {
+        "request": request.model_dump(exclude={"dry_run"}),
+        "result": result,
+        "write_plan": planning_client.plan.as_dict(),
+        "snapshot": snapshot,
+    }
+    state_hash = canonical_hash(payload["write_plan"])
+    plan = mutation_plan_store.create("channel_pipeline", payload, state_hash, principal)
+    return {
+        "phase": "execute",
+        "plan_id": plan.plan_id, "plan_hash": plan.payload_hash,
+        "expires_at": plan.expires_at, "preview": summary,
+    }
+
+
+@router.post("/run/prepare")
+async def prepare_auto_creation_pipeline(request: RunPipelineRequest, _admin=RequireAdminIfEnabled):
+    """Prepare refresh phase when needed, otherwise materialize exact writes."""
+    from services.mutation_plan_store import canonical_hash, mutation_plan_store
+    engine = await _ensure_engine()
+    rules = await engine._load_rules(request.rule_ids)
+    account_ids: set[int] = set()
+    cache: dict = {}
+    for rule in rules:
+        config = rule.get_event_sync_config()
+        if config and config.get("refresh_providers_before_run"):
+            account_ids.update(
+                await engine._resolve_event_sync_refresh_accounts(config, cache)
+            )
+    if account_ids:
+        payload = {
+            "request": request.model_dump(exclude={"dry_run"}),
+            "account_ids": sorted(account_ids),
+        }
+        plan = mutation_plan_store.create(
+            "channel_pipeline_refresh", payload, canonical_hash(payload["account_ids"]),
+            _plan_principal(_admin),
+        )
+        return {
+            "phase": "refresh", "plan_id": plan.plan_id,
+            "plan_hash": plan.payload_hash, "expires_at": plan.expires_at,
+            "preview": {"m3u_account_ids_to_refresh": payload["account_ids"]},
+        }
+    return await _materialize_pipeline_plan(request, _plan_principal(_admin))
+
+
+@router.post("/run/commit", status_code=202)
+async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _admin=RequireAdminIfEnabled):
+    """Validate drift, consume once, then execute the prepared pipeline scope."""
+    from services.mutation_plan_store import mutation_plan_store
+    from services.pipeline_write_plan import (
+        PipelineWritePlan, PlannedWrite, PartialReplayError,
+        replay_write_plan, validate_read_set,
+        journal_entries_for_plan,
+    )
+    try:
+        operation = "channel_pipeline_refresh" if request.phase == "refresh" else "channel_pipeline"
+        plan = mutation_plan_store.consume(request.plan_id, operation, request.plan_hash)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if plan.principal != _plan_principal(_admin):
+        raise HTTPException(status_code=409, detail="pipeline plan principal does not match")
+    if request.phase == "refresh":
+        from tasks.m3u_refresh import M3URefreshTask
+        task = M3URefreshTask()
+        task.update_config({"account_ids": plan.payload["account_ids"], "skip_inactive": True})
+        refresh_result = await task.execute()
+        if isinstance(refresh_result, dict) and refresh_result.get("success") is False:
+            raise HTTPException(status_code=502, detail="planned provider refresh failed")
+        next_request = RunPipelineRequest(dry_run=False, **plan.payload["request"])
+        next_plan = await _materialize_pipeline_plan(next_request, plan.principal)
+        return {
+            "requires_confirmation": True,
+            "completed_phase": "refresh",
+            **next_plan,
+        }
+    if request.phase != "execute":
+        raise HTTPException(status_code=409, detail="unknown pipeline plan phase")
+    raw = plan.payload["write_plan"]
+    write_plan = PipelineWritePlan(
+        writes=[PlannedWrite(**item) for item in raw["writes"]],
+        channel_preconditions=raw["channel_preconditions"],
+        group_preconditions=raw.get("group_preconditions", {}),
+        profile_preconditions=raw.get("profile_preconditions", {}),
+    )
+    async with _MCP_PLANNED_RUN_LOCK:
+        engine = await _ensure_engine()
+        try:
+            await validate_read_set(engine.client, write_plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=f"pipeline state drifted: {exc}") from exc
+        execution_id = _create_pending_execution(mode="execute", triggered_by="api")
+        started = time.time()
+        try:
+            _, remap = await replay_write_plan(engine.client, write_plan, read_set_validated=True)
+        except PartialReplayError as exc:
+            _mark_execution_failed(execution_id, exc)
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "pipeline replay partially failed",
+                    "completed_writes": exc.completed,
+                    "compensation_errors": exc.compensation_errors,
+                },
+            ) from exc
+
+        def remapped(value):
+            if isinstance(value, int) and value < 0:
+                return remap.get(value, value)
+            if isinstance(value, list):
+                return [remapped(item) for item in value]
+            if isinstance(value, dict):
+                return {key: remapped(item) for key, item in value.items()}
+            return value
+
+        from models import ChannelPipelineExecution, ChannelPipelineSnapshot
+        planned_journal = journal_entries_for_plan(write_plan, remap, execution_id)
+        if planned_journal:
+            journal.log_entries(entries=planned_journal)
+        session = get_session()
+        try:
+            execution = session.query(ChannelPipelineExecution).filter(ChannelPipelineExecution.id == execution_id).one()
+            result = remapped(plan.payload["result"])
+            from models import ChannelPipelineConflict
+            for conflict in result.get("planned_conflicts", []):
+                row = ChannelPipelineConflict(
+                    execution_id=execution_id,
+                    stream_id=conflict["stream_id"],
+                    stream_name=conflict["stream_name"],
+                    winning_rule_id=conflict["winning_rule_id"],
+                    conflict_type=conflict["conflict_type"],
+                    resolution="first_rule_wins",
+                    description="Multiple channel-pipeline rules matched during planned execution",
+                )
+                row.set_losing_rule_ids(conflict["losing_rule_ids"])
+                session.add(row)
+            execution.status = "completed"
+            execution.completed_at = datetime.utcnow()
+            execution.duration_seconds = time.time() - started
+            execution.streams_evaluated = result.get("streams_evaluated", 0)
+            execution.streams_matched = result.get("streams_matched", 0)
+            execution.channels_created = result.get("channels_created", 0)
+            execution.channels_updated = result.get("channels_updated", 0)
+            execution.groups_created = result.get("groups_created", 0)
+            execution.streams_merged = result.get("streams_merged", 0)
+            execution.set_created_entities(result.get("created_entities", []))
+            execution.set_modified_entities(result.get("modified_entities", []))
+            execution.set_execution_log(result.get("execution_log", []))
+            snapshot = ChannelPipelineSnapshot(execution_id=execution_id, channel_count=len(plan.payload["snapshot"]))
+            snapshot.set_channels_data({"channels": plan.payload["snapshot"]})
+            session.add(snapshot)
+            session.commit()
+        finally:
+            session.close()
+        from services.event_sync_review_store import enqueue_review_candidates
+        for review in result.get("planned_review_candidates", []):
+            review_session = get_session()
+            try:
+                enqueue_review_candidates(
+                    review_session, review["rule_id"], review["candidates"]
+                )
+            finally:
+                review_session.close()
+        rules = await engine._load_rules(plan.payload["request"].get("rule_ids"))
+        await engine._update_rule_stats(rules, result)
+    return JSONResponse(status_code=202, content={"execution_id": execution_id, "status": "completed"})
 
 
 @router.post("/rules/{rule_id}/run", status_code=202)

@@ -450,3 +450,38 @@ key. The `/sse` endpoint was removed.
 - **Retired OAuth offering**: [`docs/security/threat_model_mcp_oauth.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/security/threat_model_mcp_oauth.md)
   (Superseded): history of the OAuth 2.1 "Custom Connector" offering that was
   retired, and whose code was removed from the tree in v0.17.3.
+## Destructive-operation confirmation
+
+MCP destructive and bulk operations use two calls. The first call is a
+mutation-free preview and returns a short-lived confirmation token. Repeat the
+same call with that token only after reviewing the exact targets.
+
+Channel-pipeline runs, normalization bulk apply, and Emby logo clearing also
+create a backend-owned plan. The plan records the exact scope and target/action
+set, expires after five minutes, and is single-use. A changed channel, rule, or
+Emby lineup rejects the commit before mutation and requires a new preview.
+Plans are held only in bounded process memory: restarting ECM invalidates them,
+and no API keys, stream URLs, or other credentials are stored in a plan.
+
+Pipeline rules that refresh providers before evaluating channels use a staged
+three-call flow: review and confirm the exact provider refresh, then review the
+new post-refresh channel write plan and confirm that second plan. The refresh
+token cannot authorize channel writes, and a restart or expiry requires starting
+again. Pipelines without a pre-refresh remain a two-call flow.
+
+Other state-derived bulk tools freeze their exact identifiers in the MCP
+confirmation: struck-out cleanup uses the signed stream and empty-channel IDs,
+notification operations use the signed unread/read notification IDs, and dummy
+EPG generation uses the signed enabled profile IDs. Channel stream replacement,
+stream reordering, and EPG-logo assignment also carry signed read preconditions;
+drift is rejected before the first write. Credential-bearing URLs are retained
+only in the bounded in-process confirmation record and are redacted from the
+human-readable preview.
+
+Dispatcharr does not provide a multi-request transaction. ECM validates the
+complete plan read set before the first write and compensates reversible writes
+in reverse order if a later write fails. A failure response lists completed
+writes and any compensation failures. Deletes and channel-profile membership
+changes cannot always be restored with the same upstream identifiers; inspect
+the execution record and rollback snapshot before retrying a partially failed
+commit.

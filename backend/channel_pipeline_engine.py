@@ -268,6 +268,9 @@ class ChannelPipelineEngine:
         m3u_account_ids: list[int] = None,
         rule_ids: list[int] = None,
         execution_id: int | None = None,
+        record_execution: bool = True,
+        plan_only: bool = False,
+        skip_prerefresh: bool = False,
     ) -> dict:
         """
         Run the full auto-creation pipeline.
@@ -434,7 +437,15 @@ class ChannelPipelineEngine:
         # Reuse pre-created execution record (bd-enfsy 202+poll path) when
         # the router has supplied an id; otherwise create one ourselves
         # (synchronous /tasks/scheduled path remains unchanged).
-        if execution_id is not None:
+        if not record_execution:
+            if not dry_run and not plan_only:
+                raise ValueError("record_execution=False is permitted only for dry runs")
+            from models import ChannelPipelineExecution
+            execution = ChannelPipelineExecution(
+                mode="dry_run", triggered_by=triggered_by,
+                started_at=started_at, status="running",
+            )
+        elif execution_id is not None:
             execution = await self._load_execution(execution_id)
             if execution is None:
                 # The pre-created row was deleted between enqueue and run —
@@ -469,7 +480,7 @@ class ChannelPipelineEngine:
         # Dispatcharr-auto-created (normally §D3-excluded) — the attach phase
         # mutates their stream lists, so rollback/restore needs their pre-run
         # state to undo attaches.
-        if not dry_run:
+        if not dry_run and not plan_only:
             event_sync_master_group_ids: set[int] = set()
             for r in event_sync_to_run:
                 cfg = r.get_event_sync_config()
@@ -483,9 +494,19 @@ class ChannelPipelineEngine:
         # Process streams through rules (+ the event_sync attach phase,
         # ti939.2.1 — runs inside _process_streams so its merges share the
         # same executor, journal buffer/flush and results plumbing).
+        process_options = {
+            "triggered_by": triggered_by,
+            "event_sync_rules": event_sync_to_run,
+        }
+        # Preserve the long-standing internal call contract for ordinary API
+        # runs and test/custom subclasses. Planning-only controls are supplied
+        # only by the new prepare path that needs them.
+        if plan_only:
+            process_options["plan_only"] = True
+        if skip_prerefresh:
+            process_options["skip_prerefresh"] = True
         results = await self._process_streams(
-            streams, rules, execution, dry_run, triggered_by=triggered_by,
-            event_sync_rules=event_sync_to_run,
+            streams, rules, execution, dry_run, **process_options,
         )
 
         # Prepend exclusion log entries and set streams_excluded count
@@ -628,12 +649,13 @@ class ChannelPipelineEngine:
         if dry_run:
             execution.set_dry_run_results(results["dry_run_results"])
 
-        await self._save_execution(execution)
+        if record_execution:
+            await self._save_execution(execution)
 
         # Update rule stats. event_sync rules that ran get last_run_at /
         # match_count too (ti939.2.1) — _run_event_sync_rules recorded their
         # attach counts in results["rule_match_counts"].
-        if not dry_run:
+        if not dry_run and not plan_only:
             await self._update_rule_stats(rules + event_sync_to_run, results)
 
         removed = results.get('channels_removed', 0)
@@ -659,7 +681,7 @@ class ChannelPipelineEngine:
             "success": not failed_actions,
             "status": execution.status,
             "failed_action_count": len(failed_actions),
-            "execution_id": execution.id,
+            "execution_id": execution.id if record_execution else None,
             "mode": execution.mode,
             "duration_seconds": execution.duration_seconds,
             "normalization_warnings": normalization_warnings,
@@ -2076,6 +2098,8 @@ class ChannelPipelineEngine:
         dry_run: bool,
         triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         event_sync_rules: list[ChannelPipelineRule] = None,
+        plan_only: bool = False,
+        skip_prerefresh: bool = False,
     ) -> dict:
         """
         Process streams through the rules pipeline.
@@ -2284,6 +2308,7 @@ class ChannelPipelineEngine:
             # inflation on idempotent reconciles).
             channel_profile_membership=channel_profile_membership,
             managed_channel_ids=pipeline_managed_channel_ids,
+            plan_only=plan_only,
         )
 
         # Results tracking
@@ -2641,13 +2666,22 @@ class ChannelPipelineEngine:
 
             # Record conflict if multiple rules matched
             if losing_rules:
-                await self._record_conflict(
-                    execution=execution,
-                    stream=stream,
-                    winning_rule=winning_rule,
-                    losing_rules=losing_rules,
-                    conflict_type="duplicate_match"
-                )
+                if plan_only:
+                    results.setdefault("planned_conflicts", []).append({
+                        "stream_id": stream.stream_id,
+                        "stream_name": stream.stream_name,
+                        "winning_rule_id": winning_rule.id,
+                        "losing_rule_ids": [rule.id for rule in losing_rules],
+                        "conflict_type": "duplicate_match",
+                    })
+                else:
+                    await self._record_conflict(
+                        execution=execution,
+                        stream=stream,
+                        winning_rule=winning_rule,
+                        losing_rules=losing_rules,
+                        conflict_type="duplicate_match"
+                    )
                 results["conflicts"].append({
                     "stream_id": stream.stream_id,
                     "stream_name": stream.stream_name,
@@ -2851,6 +2885,8 @@ class ChannelPipelineEngine:
                 # PROMOTED channel ids here — the managed set Pass 4
                 # reconciles. Attach-only rules never write it.
                 rule_channel_order=rule_channel_order,
+                plan_only=plan_only,
+                skip_prerefresh=skip_prerefresh,
             )
 
         # =====================================================================
@@ -3474,6 +3510,8 @@ class ChannelPipelineEngine:
         rule_channel_order_streams: dict = None,
         stream_m3u_map: dict = None,
         rule_channel_order: dict = None,
+        plan_only: bool = False,
+        skip_prerefresh: bool = False,
     ) -> None:
         """Execute the event_sync attach phase (bead ti939.2.1 — Phase 1B).
 
@@ -3740,7 +3778,10 @@ class ChannelPipelineEngine:
             # warns but the run PROCEEDS against current data (mirrors the M3U
             # refresh watermark's partial-success posture). Runs before the
             # secondary fetch below so the fetch sees post-refresh streams.
-            if not unattended and config.get("refresh_providers_before_run"):
+            if (
+                not unattended and config.get("refresh_providers_before_run")
+                and not skip_prerefresh
+            ):
                 await self._prerefresh_event_sync_providers(
                     rule, config, results, prerefresh_provider_cache
                 )
@@ -3815,12 +3856,17 @@ class ChannelPipelineEngine:
             # pending AND answered fingerprints is DB-enforced by the
             # unique fingerprint index + the store's status check.
             review_payloads = summary.pop("review_candidates", [])
+            if plan_only and review_payloads:
+                results.setdefault("planned_review_candidates", []).append({
+                    "rule_id": rule.id,
+                    "candidates": review_payloads,
+                })
             summary["review_enqueued"] = 0
             summary["review_refreshed"] = 0
             summary["review_would_enqueue"] = (
                 len(review_payloads) if dry_run else 0
             )
-            if review_payloads and not dry_run:
+            if review_payloads and not dry_run and not plan_only:
                 from services.event_sync_review import (
                     MAX_REVIEW_ENQUEUE_PER_RUN,
                 )
