@@ -45,7 +45,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 
 | Category | Notes |
 |-|-|
-| Logos | Off by default. Enable a target's `sync_logos` flag (API/MCP) to replicate locally-hosted logo files each cycle. Only logos B is missing are uploaded (matched by id, name, then filename), streamed one file at a time; sync never deletes or bulk-clears B's existing logos. |
+| Logos | Off by default. Enable a target's `sync_logos` flag (API/MCP) to replicate A's logos each cycle. Covers both sources: the files in ECM's own `/config/uploads/logos/` and the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives). Where both describe the same logo, Dispatcharr's copy is the one that travels. Only logos B is missing are uploaded (matched by id, name, then filename), fetched and uploaded one image at a time; sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. |
 
 ### Never synced
 

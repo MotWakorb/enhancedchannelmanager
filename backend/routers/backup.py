@@ -1779,16 +1779,6 @@ async def _fetch_source_logos(client=None) -> list[dict]:
     return [logo for logo in (logos or []) if isinstance(logo, dict)]
 
 
-async def _fetch_source_logo_index() -> dict[str, dict]:
-    """Basename -> ``{"id", "name"}`` index of the SOURCE Dispatcharr logos.
-
-    Thin wrapper over :func:`_fetch_source_logos` +
-    :func:`_build_source_logo_index` for callers that need only the index and do
-    their own listing lifetime (the sync engine's metadata-only logo gather).
-    """
-    return _build_source_logo_index(await _fetch_source_logos())
-
-
 def _build_source_logo_index(logos: list[dict]) -> dict[str, dict]:
     """Index SOURCE Dispatcharr logo rows by URL basename.
 
@@ -1831,7 +1821,7 @@ def _gather_logo_binary_subtree(
         each via zf.write(), which streams from disk, never buffering all logos
         in RAM).
       - ``metadata`` is the inventory written to binary/metadata.json. When
-        ``source_logo_index`` (see :func:`_fetch_source_logo_index`) resolves a
+        ``source_logo_index`` (see :func:`_build_source_logo_index`) resolves a
         file's basename, the entry also carries the SOURCE Dispatcharr logo
         ``id`` (+ display ``name``) — the correlation the restore decoder
         attaches to each logo record so the importer's affected-channel lookup

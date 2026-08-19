@@ -20,6 +20,7 @@ These tests mock BOTH the source-A client (the local gather) and the dest-B clie
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1225,6 +1226,243 @@ async def test_run_sync_logos_apply_uploads_misses_skips_matches(tmp_path):
     cat = report.category(EntityType.LOGO)
     assert cat.created == 1
     assert cat.skipped == 1
+
+
+# ---------------------------------------------------------------------------
+# DISPATCHARR-HOSTED logo bytes on the sync path (bead …-cfxml).
+#
+# Dispatcharr is ECM's source of truth for logos: a logo uploaded through ECM's
+# own Logo Manager is written to DISPATCHARR's ``/data/logos/``, and ECM's own
+# ``/config/uploads/logos/`` holds at most a stale mirror. Bead …-xb58a taught
+# the BACKUP builder to fetch those bytes; until this bead the sync gather read
+# only ECM's upload directory, so a replica received whatever happened to sit
+# there and nothing else.
+#
+# INVARIANT under test: after a cycle with ``sync_logos`` on, B holds every logo
+# A can serve, regardless of whether the bytes live in ECM's upload dir or are
+# hosted by Dispatcharr — and the gather never holds more than one logo's bytes
+# at a time (D8). The two-stale-files case on the live instance is one example
+# of that property, not the specification.
+# ---------------------------------------------------------------------------
+
+
+def _png_bytes() -> bytes:
+    """A minimal, magic-byte-valid 1x1 PNG (what the importer will accept)."""
+    import base64 as _b64mod
+
+    return _b64mod.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+        "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+
+# (url, id, name) for logos whose bytes ONLY Dispatcharr can supply: the url is
+# a path inside Dispatcharr's own volume, not an absolute http(s) CDN address,
+# so there is nothing for the restore/sync path to re-point at.
+_HOSTED_LOGOS = (
+    ("/data/logos/nbc.png", 91, "NBC"),
+    ("/data/logos/abc.png", 92, "ABC"),
+)
+
+
+def _source_client_with_hosted_logos(*, hosted=_HOSTED_LOGOS, fetch=None) -> MagicMock:
+    """A source-A client whose Dispatcharr logos are HOSTED, with a byte fetch."""
+    client = _source_client()
+    client.get_all_logos_paginated = AsyncMock(
+        return_value=[
+            {"id": logo_id, "name": name, "url": url} for url, logo_id, name in hosted
+        ]
+    )
+
+    async def _default_fetch(logo_id):
+        return _png_bytes()
+
+    client.fetch_logo_image = AsyncMock(side_effect=fetch or _default_fetch)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_plan_carries_hosted_logos_from_an_empty_upload_dir(tmp_path):
+    """The gather reaches Dispatcharr-hosted logos even when ECM's own upload
+    directory has nothing in it — the whole point of this bead. Records stay
+    METADATA-ONLY: no ``content_b64`` in the plan and NO image fetched at gather
+    time (D8 — bytes hydrate lazily, one missed logo at a time)."""
+    src = _source_client_with_hosted_logos()
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    cat = plan.category(EntityType.LOGO)
+    assert {e["filename"] for e in cat.entities} == {"nbc.png", "abc.png"}
+    assert {e["id"] for e in cat.entities} == {91, 92}
+    for entity in cat.entities:
+        assert "content_b64" not in entity
+    src.fetch_logo_image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_sync_uploads_hosted_logo_bytes_to_the_replica(tmp_path):
+    """Opt-in apply: every Dispatcharr-hosted logo reaches B with its real image
+    bytes, fetched from A one at a time, and the destructive bulk-delete still
+    never fires."""
+    png = _png_bytes()
+    src = _source_client_with_hosted_logos()
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    uploaded = {
+        call.args[1]: call.args[2] for call in dest.upload_logo_file.await_args_list
+    }
+    assert uploaded == {"nbc.png": png, "abc.png": png}
+    assert report.category(EntityType.LOGO).created == 2
+    dest.bulk_delete_logos.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hosted_bytes_supersede_the_stale_ecm_local_copy(tmp_path):
+    """A file in ECM's upload dir that correlates BY BASENAME to a hosted
+    Dispatcharr logo is a stale mirror of the authoritative bytes. Exactly one
+    record may claim that source id (two would collide through the LOGO remap
+    and one would be skipped as ALREADY_EXISTS_IDENTICAL — a claim of sameness
+    about bytes that are not the same), and the winner is Dispatcharr's."""
+    _seed_logo_files(tmp_path, files=("cnn.png",))
+    fresh = _png_bytes() + b"FRESH-DISPATCHARR-BYTES"
+
+    async def _fetch(logo_id):
+        return fresh
+
+    src = _source_client_with_hosted_logos(
+        hosted=(("/data/logos/cnn.png", 77, "CNN Logo"),), fetch=_fetch
+    )
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.upload_logo_file.assert_awaited_once()
+    args = dest.upload_logo_file.await_args.args
+    assert args[1] == "cnn.png"  # no id-suffixed collision name
+    assert args[2] == fresh  # the AUTHORITATIVE bytes, not the stale local file
+    assert report.category(EntityType.LOGO).created == 1
+
+
+@pytest.mark.asyncio
+async def test_hosted_logo_bytes_are_fetched_one_at_a_time(tmp_path):
+    """D8: fetch -> upload -> release, repeat. Never fetch-all-then-upload, which
+    would hold the whole logo set in memory (the failure mode bead …-drc55 is
+    open about on the restore side)."""
+    events: list[tuple[str, object]] = []
+
+    async def _fetch(logo_id):
+        events.append(("fetch", logo_id))
+        return _png_bytes()
+
+    src = _source_client_with_hosted_logos(fetch=_fetch)
+    dest = _dest_client_with_logos()
+
+    async def _upload(name, filename, content, content_type):
+        events.append(("upload", filename))
+        return {"id": 9000 + len(events), "name": name}
+
+    dest.upload_logo_file = AsyncMock(side_effect=_upload)
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert events == [
+        ("fetch", 91),
+        ("upload", "nbc.png"),
+        ("fetch", 92),
+        ("upload", "abc.png"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hosted_logo_fetch_budget_bounds_one_unattended_cycle(
+    tmp_path, monkeypatch
+):
+    """Sync runs on a SCHEDULE, unattended, so the byte fetch carries a per-cycle
+    wall-clock budget the backup builder does not have (open bead …-sj32h). Once
+    it is spent the remaining logos are honest misses this cycle; the next cycle
+    re-attempts them (the ones already uploaded now MATCH), so the target still
+    converges instead of the tail never syncing at all."""
+    monkeypatch.setattr(engine, "_LOGO_FETCH_BUDGET_SECONDS", 0.0)
+    src = _source_client_with_hosted_logos()
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    # The first fetch always runs (the budget starts when it does); the second is
+    # refused rather than left to run unbounded.
+    assert src.fetch_logo_image.await_count == 1
+    assert dest.upload_logo_file.await_count == 1
+    cat = report.category(EntityType.LOGO)
+    assert cat.created == 1
+    assert cat.failed == 1
+
+
+@pytest.mark.asyncio
+async def test_hosted_logo_fetch_cannot_hang_the_cycle(tmp_path, monkeypatch):
+    """A per-fetch wall-clock bound: the Dispatcharr client passes ``timeout=None``
+    through to httpx, which means NO timeout, so one unanswered logo request
+    would otherwise stall a scheduled cycle forever."""
+    monkeypatch.setattr(engine, "_LOGO_FETCH_TIMEOUT_SECONDS", 0.01)
+
+    async def _hang(logo_id):
+        await asyncio.sleep(30)
+
+    src = _source_client_with_hosted_logos(
+        hosted=(("/data/logos/nbc.png", 91, "NBC"),), fetch=_hang
+    )
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await asyncio.wait_for(
+            run_sync(
+                target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+            ),
+            timeout=10,
+        )
+
+    dest.upload_logo_file.assert_not_called()
+    assert report.category(EntityType.LOGO).failed == 1
 
 
 # ---------------------------------------------------------------------------

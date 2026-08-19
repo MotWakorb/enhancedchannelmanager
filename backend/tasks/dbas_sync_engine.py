@@ -57,9 +57,15 @@ default per-cycle slice. The guarded slice this engine ships is exactly the S9
 exit path: a ``SyncTarget.sync_logos`` flag (default OFF); when ON the LOGO
 category is assembled METADATA-ONLY (never bytes in the plan) and the REUSED
 logos importer runs with ``clear_existing`` hard-disabled (the sync path can
-NEVER bulk-delete B's logos) and a lazy ``content_provider`` that reads each
-MISSED logo's file from the local backup source dir one at a time (D8
-streaming: match first, hydrate misses only, one payload live at a time).
+NEVER bulk-delete B's logos) and a lazy ``content_provider`` that hydrates each
+MISSED logo one at a time (D8 streaming: match first, hydrate misses only, one
+payload live at a time). Bead ``…-cfxml``: that gather covers BOTH logo sources
+the backup artifact carries — the files under ECM's own ``/config/uploads/logos/``
+AND the bytes of every DISPATCHARR-HOSTED logo, fetched from Dispatcharr at
+hydration time. Dispatcharr is ECM's source of truth for logos, so before that
+a replica received only whatever happened to sit in A's upload directory. The
+fetches are wall-clock bounded per fetch and per cycle, because unlike a backup
+this runs unattended on a schedule.
 
 Users NEVER sync (D3). The deferred auto-sync / EPG-download phase is **not** run
 per cycle (S9) — the step registry passes a deferred-apply no-op to the
@@ -78,6 +84,7 @@ import asyncio
 import base64
 import logging
 import posixpath
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -294,6 +301,28 @@ async def _gather_live_channels() -> list[dict]:
 # (the importer reads name/filename/size/content_b64 — this key is inert there).
 _LOGO_REL_KEY = "_ecm_logo_rel"
 
+# The sibling key for a logo whose bytes only DISPATCHARR can supply (bead
+# …-cfxml): it names the SOURCE logo id to fetch, exactly as the local key names
+# a file to read. A record carries one or the other, never both. Also inert in
+# the importer, and deliberately NOT the logo's ``url`` — a Dispatcharr-local
+# path is a path, and paths are a leak class in this module.
+_LOGO_FETCH_ID_KEY = "_ecm_logo_fetch_id"
+
+# Wall-clock bound on ONE Dispatcharr logo-byte fetch. ``DispatcharrClient``
+# forwards ``timeout=None`` to httpx, which means NO timeout rather than "the
+# client default", so without this an unanswered logo request stalls a SCHEDULED
+# cycle indefinitely.
+_LOGO_FETCH_TIMEOUT_SECONDS = 30.0
+
+# Wall-clock budget for ALL logo-byte fetches in ONE cycle. The backup builder
+# bounds its equivalent by file count and byte total but has no wall-clock bound
+# at all (open bead …-sj32h); an unattended, recurring task needs one, because
+# nobody is watching it run long. Spending the budget is not data loss: the
+# logos already uploaded MATCH on the next cycle, so each cycle makes progress
+# and the target converges. A count cap would not — it would truncate the same
+# tail every cycle, forever.
+_LOGO_FETCH_BUDGET_SECONDS = 300.0
+
 
 def _sync_logos_dir() -> Path:
     """The local logo source dir — resolved through ``routers.backup`` at call
@@ -303,42 +332,8 @@ def _sync_logos_dir() -> Path:
     return Path(backup_mod.CONFIG_DIR) / "uploads" / "logos"
 
 
-async def _gather_live_logos() -> list[dict]:
-    """Gather source-A logos as METADATA-ONLY records (bead 7ipq2.1 — D8).
-
-    Reuses the backup builder's enumeration + correlation seam
-    (:func:`routers.backup._fetch_source_logo_index` +
-    :func:`routers.backup._gather_logo_binary_subtree`) so the sync slice reads
-    the files under ECM's OWN ``/config/uploads/logos/``, correlated to the
-    source Dispatcharr logo ``id``/``name`` by URL basename. NOTE: this is no
-    longer the same set a backup artifact archives. Since bead …-xb58a the
-    artifact ALSO carries the bytes of every Dispatcharr-hosted logo, fetched
-    from Dispatcharr at gather time
-    (:func:`routers.backup._gather_dispatcharr_logo_payloads`), and this gather
-    does not. Closing that gap for cross-instance sync is its own bead. The records mirror
-    the archive decoder's shape (``name``/``filename``/``size``/``id``) with
-    ONE deliberate difference: **no** ``content_b64``. Bytes are hydrated
-    lazily, one MISSED logo at a time, by :func:`_load_logo_content_b64` inside
-    the importer loop — assembling every logo's base64 into the plan up front
-    would hold the whole logo set in memory and defeat D8.
-
-    Returns:
-        Metadata-only logo records; empty when the logos dir is absent/empty.
-    """
-    try:
-        source_index = await backup_mod._fetch_source_logo_index()
-    except Exception as exc:  # noqa: BLE001 - correlation is best-effort
-        logger.warning("[SYNC] Could not build source logo index: %s", exc)
-        source_index = {}
-
-    try:
-        _entries, metadata, _url_mappings = backup_mod._gather_logo_binary_subtree(
-            source_index
-        )
-    except Exception as exc:  # noqa: BLE001 - fail-soft: no logos rather than crash
-        logger.warning("[SYNC] Could not enumerate source logos: %s", exc)
-        return []
-
+def _local_logo_records(metadata: dict) -> list[dict]:
+    """Metadata-only records for the files under ECM's OWN uploads/logos dir."""
     records: list[dict] = []
     for meta in metadata.get("logos") or []:
         rel = meta.get("filename")
@@ -361,24 +356,229 @@ async def _gather_live_logos() -> list[dict]:
         if isinstance(display_name, str) and display_name.strip():
             record["name"] = display_name
         records.append(record)
-
-    logger.info("[SYNC] Gathered %d source logo record(s) (metadata-only).", len(records))
     return records
 
 
+def _hosted_logo_records(
+    hosted_logos: list[dict], *, taken_filenames: set[str]
+) -> list[dict]:
+    """Metadata-only records for the DISPATCHARR-HOSTED logos (bead …-cfxml).
+
+    A hosted logo's ``url`` names a path inside Dispatcharr's own volume, so its
+    image bytes exist ONLY on the source instance and only Dispatcharr can
+    supply them. Reuses the backup builder's judgement calls verbatim
+    (:func:`routers.backup._dispatcharr_hosted_logos` selects the input,
+    :func:`routers.backup._archived_logo_filename` /
+    :func:`routers.backup._unique_logo_filename` for a filename the importer's
+    own validator will accept) so producer and consumer cannot drift apart.
+
+    Records stay METADATA-ONLY, exactly like the local ones: the bytes hydrate
+    lazily per MISSED logo through :func:`_load_logo_content_b64`, which fetches
+    them one at a time. No ``size`` is declared — it is not known until the
+    fetch — which is fine: the importer's authoritative post-decode cap still
+    applies.
+
+    Args:
+        hosted_logos: the Dispatcharr-HOSTED subset of the source logo rows.
+        taken_filenames: filenames the local records already claim. Mutated.
+    """
+    records: list[dict] = []
+    for logo in hosted_logos:
+        logo_id = logo["id"]
+        basename = backup_mod._archived_logo_filename(logo.get("url"))
+        filename = (
+            backup_mod._unique_logo_filename(basename, logo_id, taken_filenames)
+            if basename is not None
+            else None
+        )
+        if filename is None:
+            # Never log the url: it is a path, and paths are a leak class here.
+            logger.warning(
+                "[SYNC] Logo id=%s has no usable filename; its image bytes were "
+                "not gathered.", logo_id,
+            )
+            continue
+        taken_filenames.add(filename)
+        record: dict = {
+            "name": filename.rsplit(".", 1)[0],
+            "filename": filename,
+            "id": logo_id,
+            _LOGO_FETCH_ID_KEY: logo_id,
+        }
+        name = logo.get("name")
+        if isinstance(name, str) and name.strip():
+            record["name"] = name
+        records.append(record)
+    return records
+
+
+def _drop_superseded_local_logos(
+    local_records: list[dict], hosted_source_ids: set[int]
+) -> list[dict]:
+    """Drop local records a Dispatcharr-hosted record supersedes.
+
+    ``_build_source_logo_index`` correlates a file in ECM's
+    ``/config/uploads/logos/`` to a Dispatcharr logo BY BASENAME and stamps that
+    logo's ``id`` onto it. If the hosted record for the same id also travels,
+    TWO records claim ONE source id: the first to be imported registers the LOGO
+    remap, and the second resolves through it and is skipped
+    ``ALREADY_EXISTS_IDENTICAL`` — a claim of sameness about bytes that are not
+    the same.
+
+    Dispatcharr is ECM's source of truth for logos (PO decision, 2026-08-04), so
+    the hosted record wins and the ECM-local file — a mirror that on the live
+    instance is months stale — is dropped. This mirrors the ruling
+    :func:`routers.backup._drop_superseded_local_logos` makes for the artifact,
+    with one deliberate difference: the backup drops only for ids a fetch
+    ACTUALLY returned, and sync cannot know that at gather time because the
+    fetch is lazy. A failed fetch therefore becomes an honest reported miss
+    rather than a silent upload of stale bytes, which is the safe direction — a
+    miss is visible to the operator and an unnoticed stale logo is not.
+    """
+    if not hosted_source_ids:
+        return local_records
+    kept = [
+        record for record in local_records
+        if not (
+            isinstance(record.get("id"), int)
+            and record["id"] in hosted_source_ids
+        )
+    ]
+    dropped = len(local_records) - len(kept)
+    if dropped:
+        logger.info(
+            "[SYNC] Dropped %d ECM-local logo file(s) superseded by the "
+            "authoritative Dispatcharr bytes.", dropped,
+        )
+    return kept
+
+
+async def _gather_live_logos() -> list[dict]:
+    """Gather source-A logos as METADATA-ONLY records (bead 7ipq2.1 — D8).
+
+    Two sources, the SAME two the backup artifact carries since bead …-xb58a,
+    reusing the backup builder's seams rather than reimplementing them:
+
+    * the files under ECM's OWN ``/config/uploads/logos/``
+      (:func:`routers.backup._gather_logo_binary_subtree`), correlated to the
+      source Dispatcharr logo ``id``/``name`` by URL basename, and
+    * every DISPATCHARR-HOSTED logo (:func:`_hosted_logo_records`). Dispatcharr
+      is ECM's source of truth for logos, so on a normal install this is where
+      the real set lives and ECM's own upload dir holds at most a stale mirror.
+      Before bead …-cfxml the sync gather read only the first source, so a
+      replica received whatever happened to sit in A's upload directory — on the
+      live instance, two files from March.
+
+    One Dispatcharr listing serves both concerns (the id correlation and the
+    hosted set), the same lifetime the backup builder gives them. A logo whose
+    bytes both sources claim resolves to the hosted record
+    (:func:`_drop_superseded_local_logos`).
+
+    The records mirror the archive decoder's shape
+    (``name``/``filename``/``size``/``id``) with ONE deliberate difference:
+    **no** ``content_b64``. Bytes are hydrated lazily, one MISSED logo at a
+    time, by :func:`_load_logo_content_b64` inside the importer loop —
+    assembling every logo's base64 into the plan up front would hold the whole
+    logo set in memory and defeat D8.
+
+    Returns:
+        Metadata-only logo records; empty when neither source yields anything.
+    """
+    try:
+        source_logos = await backup_mod._fetch_source_logos()
+    except Exception as exc:  # noqa: BLE001 - the listing is best-effort
+        logger.warning("[SYNC] Could not list source logos: %s", type(exc).__name__)
+        source_logos = []
+    source_index = backup_mod._build_source_logo_index(source_logos)
+
+    try:
+        _entries, metadata, _url_mappings = backup_mod._gather_logo_binary_subtree(
+            source_index
+        )
+    except Exception as exc:  # noqa: BLE001 - fail-soft: no logos rather than crash
+        logger.warning("[SYNC] Could not enumerate source logos: %s", exc)
+        metadata = {"logos": []}
+
+    # Supersede FIRST, then name: a local file the hosted set replaces must not
+    # still be holding the filename its own replacement wants, or the hosted
+    # record ends up with an id-suffixed name that matches nothing on B (the
+    # importer's tier-3 file match keys on the basename).
+    hosted_logos = backup_mod._dispatcharr_hosted_logos(source_logos)
+    local_records = _drop_superseded_local_logos(
+        _local_logo_records(metadata), {logo["id"] for logo in hosted_logos}
+    )
+    taken = {record["filename"] for record in local_records}
+    hosted_records = _hosted_logo_records(hosted_logos, taken_filenames=taken)
+    records = local_records + hosted_records
+
+    logger.info(
+        "[SYNC] Gathered %d source logo record(s) (metadata-only): %d local "
+        "file(s), %d Dispatcharr-hosted.",
+        len(records), len(local_records), len(hosted_records),
+    )
+    return records
+
+
+async def _fetch_logo_content_b64(logo_id: int) -> Optional[str]:
+    """Fetch ONE Dispatcharr-hosted logo's bytes and return them base64 (D8).
+
+    The hosted half of :func:`_load_logo_content_b64`. Wall-clock bounded per
+    fetch (:data:`_LOGO_FETCH_TIMEOUT_SECONDS`) because the client forwards
+    ``timeout=None`` to httpx, which disables the timeout outright. Fails soft
+    to ``None`` — the importer surfaces a per-logo, path-free VALIDATION_ERROR
+    and counts the logo as a miss.
+    """
+    client = backup_mod._safe_get_client()
+    if not client:
+        logger.warning(
+            "[SYNC] No Dispatcharr client; logo id=%s could not be hydrated.",
+            logo_id,
+        )
+        return None
+    try:
+        data = await asyncio.wait_for(
+            client.fetch_logo_image(logo_id), timeout=_LOGO_FETCH_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "[SYNC] Timed out fetching image bytes for logo id=%s.", logo_id
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001 - one logo must never fail a cycle
+        # Only the exception TYPE: an httpx error's text embeds the full URL.
+        logger.warning(
+            "[SYNC] Could not fetch image bytes for logo id=%s: %s",
+            logo_id, type(exc).__name__,
+        )
+        return None
+    if not data:
+        return None
+    try:
+        return base64.b64encode(data).decode("ascii")
+    finally:
+        # Release the payload before the next logo is fetched (D8).
+        data = None  # noqa: F841 - intentional release of the fetched payload
+
+
 async def _load_logo_content_b64(record: dict) -> Optional[str]:
-    """Lazily read ONE logo's file and return its base64 payload (D8 seam).
+    """Lazily supply ONE logo's base64 payload (the D8 hydration seam).
 
     The ``content_provider`` handed to the reused logos importer: called only
     for a MISSED logo, immediately before validation+upload, so at most one
-    logo's payload is ever live. Containment-guarded: the record's relative
-    path must resolve INSIDE the logos dir (belt-and-braces — the rel paths
-    come from our own enumeration, but the record travelled through the plan).
-    Returns ``None`` on any failure (the importer surfaces a per-logo,
-    path-free VALIDATION_ERROR).
+    logo's payload is ever live. A record names EITHER a file under ECM's own
+    logos dir or a DISPATCHARR-HOSTED logo id, and this dispatches accordingly.
+
+    The local branch is containment-guarded: the record's relative path must
+    resolve INSIDE the logos dir (belt-and-braces — the rel paths come from our
+    own enumeration, but the record travelled through the plan). Returns
+    ``None`` on any failure (the importer surfaces a per-logo, path-free
+    VALIDATION_ERROR).
     """
     rel = record.get(_LOGO_REL_KEY)
     if not isinstance(rel, str) or not rel:
+        fetch_id = record.get(_LOGO_FETCH_ID_KEY)
+        if isinstance(fetch_id, int) and not isinstance(fetch_id, bool):
+            return await _fetch_logo_content_b64(fetch_id)
         return None
     logos_dir = _sync_logos_dir().resolve()
     try:
@@ -419,9 +619,10 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     Args:
         include_logos: the per-target ``sync_logos`` opt-in (bead 7ipq2.1 —
             ADR-013 S9 exit path). ``True`` appends a METADATA-ONLY ``LOGO``
-            category LAST (no ``content_b64`` in the plan — D8; bytes hydrate
-            lazily per missed logo at import time). ``False`` (default) keeps
-            logos out of the plan entirely.
+            category LAST covering BOTH logo sources — ECM's own upload dir and
+            the Dispatcharr-hosted set (bead …-cfxml) — with no ``content_b64``
+            in the plan (D8; bytes hydrate lazily per missed logo at import
+            time). ``False`` (default) keeps logos out of the plan entirely.
 
     Returns:
         An :class:`ImportPlan` of the redacted config categories PLUS the channels
@@ -723,6 +924,50 @@ def _sync_channels_step(*, allow_fuzzy_stream_match: bool) -> ImporterCallable:
     return _channels
 
 
+class _LogoFetchBudget:
+    """Per-cycle wall-clock bound on the Dispatcharr logo-byte fetches.
+
+    Sync is a SCHEDULED, unattended task, so "however long the logo set takes"
+    is not an acceptable answer the way it is for an operator-initiated backup
+    (whose own missing wall-clock bound is open bead …-sj32h). One budget is
+    created per cycle by :func:`_sync_logos_step` and wraps the content
+    provider; it starts when the FIRST fetch does, so a cycle whose logos all
+    match on B never starts a clock at all.
+
+    Only FETCHES are bounded. Reading a local file is not a network call and was
+    never the unbounded risk.
+
+    Spending the budget is not data loss. The logos already uploaded MATCH on
+    the next cycle, so the next cycle spends its budget on the ones that are
+    still missing and the target converges. A count cap would truncate the same
+    tail every cycle instead, forever.
+    """
+
+    def __init__(self, seconds: Optional[float] = None) -> None:
+        self._seconds = (
+            _LOGO_FETCH_BUDGET_SECONDS if seconds is None else seconds
+        )
+        self._deadline: Optional[float] = None
+        self._exhausted = False
+
+    async def load(self, record: dict) -> Optional[str]:
+        """The bounded ``content_provider`` — one logo's base64 payload."""
+        if record.get(_LOGO_FETCH_ID_KEY) is not None:
+            now = time.monotonic()
+            if self._deadline is None:
+                self._deadline = now + self._seconds
+            elif now >= self._deadline:
+                if not self._exhausted:
+                    self._exhausted = True
+                    logger.warning(
+                        "[SYNC] Logo fetch budget (%.0fs) spent; the remaining "
+                        "Dispatcharr-hosted logos are reported as misses this "
+                        "cycle and retried on the next one.", self._seconds,
+                    )
+                return None
+        return await _load_logo_content_b64(record)
+
+
 def _sync_logos_step() -> ImporterCallable:
     """Build the LOGOS importer step for the sync path (bead 7ipq2.1).
 
@@ -732,16 +977,19 @@ def _sync_logos_step() -> ImporterCallable:
       bulk-delete pre-step can never fire on the sync path (ADR-013 S9's core
       objection to per-cycle logos); B's existing logos are only ever matched
       against or added to, never cleared.
-    * ``content_provider=_load_logo_content_b64`` — the D8 lazy-hydration seam:
-      the plan's logo records are metadata-only, and each MISSED logo's bytes
-      are read from the local source dir one at a time inside the importer loop
-      (a matched logo never reads its file at all).
+    * a budgeted ``content_provider`` — the D8 lazy-hydration seam: the plan's
+      logo records are metadata-only, and each MISSED logo's bytes are read from
+      the local source dir OR fetched from Dispatcharr (bead …-cfxml) one at a
+      time inside the importer loop (a matched logo is never hydrated at all).
+      The :class:`_LogoFetchBudget` wrapper is built HERE, once per cycle, so
+      the wall-clock bound is per-cycle rather than global.
 
     When the plan carries no LOGO category (the target did not opt in), the
     step is a structural no-op — same single registry serves opted-in and
     opted-out targets, dry-run and apply alike (the kxcjf parity lesson: there
     is exactly ONE list to which a category can be added).
     """
+    budget = _LogoFetchBudget()
 
     async def _logos(ctx: ApplyContext) -> list[dict] | None:
         cat = ctx.plan.category(EntityType.LOGO)
@@ -758,7 +1006,7 @@ def _sync_logos_step() -> ImporterCallable:
             is_dry_run=ctx.is_dry_run,
             clear_existing=False,  # NEVER destructive on the sync path.
             archive_channels=list(channel_cat.entities) if channel_cat else [],
-            content_provider=_load_logo_content_b64,
+            content_provider=budget.load,
         )
         return None
 
