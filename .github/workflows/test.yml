@@ -503,6 +503,94 @@ jobs:
           # flake-pr-comment aggregator.
           retention-days: 30
 
+  # ─── Docs link check (advisory) ────────────────────────────────────────
+  # ADVISORY BY PO DECISION: a release blocks on the app being broken, not on
+  # a bad link. `Docs Link Check` is deliberately NOT a branch-protection
+  # required context, and deliberately NOT in `publish-verified-dev-images`'
+  # `needs:` below — adding it there would make a bad link stop publication,
+  # which is the opposite of the decision.
+  #
+  # It keeps the always-run, step-gated shape anyway. Advisory is about what
+  # the result is allowed to block, not about how the job is written: a
+  # job-level `if:` that can evaluate false renders as a pass in the checks
+  # rollup, so a reader scanning for red would see green on a run that built
+  # nothing. Gate the steps, and keep the job-level guard at `!cancelled()`
+  # so a failed `detect` cannot make this check disappear.
+  #
+  # The gate is `docs_site_affected`, not `code_paths_changed`: this job
+  # builds the published site, and that verdict is precisely "a changed path
+  # is an input the site is built from". Written `!= 'false'` like every other
+  # gate here, so an absent or empty output still builds.
+  #
+  # The Python and dependency setup mirrors the `build` job in
+  # docs-pages.yml on purpose — same '3.12', same
+  # `docs/requirements-docs.txt`, same `mkdocs build --strict`. If they drift,
+  # this check stops being a preview of the deploy and starts being a second
+  # opinion, which is worse than nothing.
+  #
+  # WHAT THIS DOES NOT BUY (bead enhancedchannelmanager-h2jjg): a link from a
+  # published page to a file `mkdocs.yml` excludes — `docs/adr/*.md` and the
+  # rest of the internal tree — is logged by mkdocs at INFO, not WARNING, so
+  # `--strict` exits 0 on it. Measured on mkdocs 1.6.1: the level is
+  # `min(logging.INFO, validation.links.not_found)` in
+  # `mkdocs/structure/pages.py`, so no `validation:` setting can raise it
+  # above INFO. This job catches links to files that do not exist. It does
+  # not catch links to files that exist but are not published, which is the
+  # shape of all 18 dead links h2jjg records.
+  docs-link-check:
+    name: Docs Link Check
+    runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Nothing the published site is built from changed
+        if: needs.detect.outputs.docs_site_affected == 'false'
+        run: |
+          echo "No changed path is an input to the mkdocs user-guide site."
+          echo "There are no published pages or links to re-check, so this"
+          echo "check passes without building the site. Any change under"
+          echo "docs/user_guide/, docs/index.md or mkdocs.yml builds it below."
+          echo "**Docs Link Check**: no site input changed, mkdocs was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout repository
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        uses: actions/checkout@v6
+
+      - name: Setup Python
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: docs/requirements-docs.txt
+
+      - name: Install docs dependencies
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        run: pip install -r docs/requirements-docs.txt
+
+      - name: Build site (strict)
+        id: mkdocs
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        # Identical to the docs-pages.yml deploy build. `--strict` turns
+        # mkdocs warnings into a non-zero exit, which is what makes a link to
+        # a nonexistent page fail here instead of shipping.
+        run: mkdocs build --strict --site-dir _site
+
+      - name: Summarize what this check did
+        # A run summary must never be the reason a check reports red.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.docs_site_affected != 'false'
+        env:
+          MKDOCS: ${{ steps.mkdocs.outcome }}
+        run: |
+          {
+            echo "**Docs Link Check** (advisory, not a required context):"
+            echo "- \`mkdocs build --strict\`: ${MKDOCS:-did not run}"
+            echo "- catches links to pages that do not exist; does NOT catch"
+            echo "  links to internal files excluded from the site."
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Publication rides on the test jobs that remain in this workflow. Every
   # name below must be a job that still exists here: `needs:` naming a deleted
   # job is a workflow-level error, and GitHub then runs nothing at all, so dev

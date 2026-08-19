@@ -156,7 +156,7 @@
         "attest-image-candidates",
         "if"
       ],
-      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.security-scan-mcp.result == 'success'"
+      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.security-scan-mcp.result == 'success'"
     },
     {
       "file": "docs-pages.yml",
@@ -724,6 +724,81 @@
       "file": "test.yml",
       "path": [
         "jobs",
+        "docs-link-check",
+        "if"
+      ],
+      "value": "${{ !cancelled() }}"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        0,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected == 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        1,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
         "publish-verified-dev-images",
         "if"
       ],
@@ -771,6 +846,17 @@
         "frontend",
         "steps",
         7,
+        "continue-on-error"
+      ],
+      "value": true
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        5,
         "continue-on-error"
       ],
       "value": true

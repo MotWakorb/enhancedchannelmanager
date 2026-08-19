@@ -637,6 +637,26 @@ def _expected_verdict_manifest():
             expected.add(("test.yml", ("jobs", job, "steps", index, "if"), code_true))
         for index in range(last_true + 1, last_always + 1):
             expected.add(("test.yml", ("jobs", job, "steps", index, "if"), code_always))
+
+    # `Docs Link Check` is the one job here gated on the OTHER verdict. It
+    # builds the published mkdocs site, so its input set is
+    # `docs_site_affected`, not `code_paths_changed`. Same step-gated shape
+    # as the three above — step 0 is the no-op summary on the negative
+    # verdict, steps 1..4 do the work, step 5 summarizes under `always()` —
+    # and the same `!= 'false'` fail-open direction. The job is advisory, not
+    # a required context; the shape is here so a skipped job can never render
+    # as a green check that built nothing.
+    site_false = "needs.detect.outputs.docs_site_affected == 'false'"
+    site_true = "needs.detect.outputs.docs_site_affected != 'false'"
+    site_always = "always() && " + site_true
+    expected.add(("test.yml", ("jobs", "docs-link-check", "steps", 0, "if"), site_false))
+    for index in range(1, 5):
+        expected.add(
+            ("test.yml", ("jobs", "docs-link-check", "steps", index, "if"), site_true)
+        )
+    expected.add(
+        ("test.yml", ("jobs", "docs-link-check", "steps", 5, "if"), site_always)
+    )
     return expected
 
 
