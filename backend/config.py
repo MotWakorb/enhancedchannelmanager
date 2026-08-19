@@ -747,6 +747,7 @@ _dedup_threshold_floor_warned: bool = False
 # request, so an unguarded WARN there would be per-request log spam.
 _public_base_url_unset_warned: bool = False
 _public_base_url_invalid_warned: bool = False
+_session_cookie_transport_warned: bool = False
 
 
 def ensure_config_dir():
@@ -1086,18 +1087,43 @@ def clear_settings_cache() -> None:
     """
     global _cached_settings, _legacy_api_key_warned, _legacy_api_key_conflict_warned, _dedup_threshold_floor_warned
     global _public_base_url_unset_warned, _public_base_url_invalid_warned
+    global _session_cookie_transport_warned
     _cached_settings = None
     _legacy_api_key_warned = False
     _legacy_api_key_conflict_warned = False
     _dedup_threshold_floor_warned = False
     _public_base_url_unset_warned = False
     _public_base_url_invalid_warned = False
+    _session_cookie_transport_warned = False
     logger.info("[CONFIG] Settings cache cleared")
 
 
 def get_settings() -> DispatcharrSettings:
     """Get the current Dispatcharr settings."""
     return load_settings()
+
+
+def _session_cookies_travel_in_cleartext() -> bool:
+    """True when auth is on and no transport signal protects session cookies.
+
+    Imported lazily: ``auth.settings`` and ``tls.settings`` are higher layers
+    than ``config``, and only this runtime check needs them. Any failure here
+    degrades to "say nothing" — a diagnostic must never break configuration
+    loading.
+    """
+    try:
+        from auth.settings import get_auth_settings
+        from tls.settings import get_tls_settings, TLS_DIR
+        from tls.storage import CertificateStorage
+
+        if not get_auth_settings().require_auth:
+            return False
+        tls_settings = get_tls_settings()
+        return not (
+            tls_settings.enabled and CertificateStorage(TLS_DIR).has_certificate()
+        )
+    except Exception:
+        return False
 
 
 def get_public_base_url() -> str:
@@ -1118,6 +1144,7 @@ def get_public_base_url() -> str:
     request a password reset.
     """
     global _public_base_url_unset_warned, _public_base_url_invalid_warned
+    global _session_cookie_transport_warned
 
     raw = get_settings().public_base_url
     normalized, err = normalize_public_base_url(raw)
@@ -1144,6 +1171,26 @@ def get_public_base_url() -> str:
             "public base URL under Settings > Email to close this."
         )
         _public_base_url_unset_warned = True
+
+    if (
+        not normalized
+        and not _session_cookie_transport_warned
+        and _session_cookies_travel_in_cleartext()
+    ):
+        # Second, separate WARN on purpose (bead 04c0u.9 remediation). The one
+        # above is about password-reset links, and an operator reading it has
+        # no reason to connect it to session-cookie policy — but it is the SAME
+        # unset value that leaves both open. Naming the consequence is what
+        # turns the known residual into an operator-visible signal.
+        logger.warning(
+            "[CONFIG] Session cookies are UNPROTECTED: no public base URL is "
+            "configured and ECM is not terminating TLS, so browser session "
+            "cookies are issued without Secure and anyone who can observe this "
+            "network can capture a live session (bead 04c0u.9). Set the public "
+            "base URL to your https:// origin under Settings > Email if a "
+            "reverse proxy terminates TLS, or enable TLS under Settings > TLS."
+        )
+        _session_cookie_transport_warned = True
 
     return normalized
 

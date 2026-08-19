@@ -343,6 +343,31 @@ export function TLSSettingsSection({ isAdmin }: Props) {
         </div>
       )}
 
+      {/* Break-glass banner (bead enhancedchannelmanager-04c0u.9).
+          Both inputs to the escape hatch, because the checkbox below renders
+          only the stored one — an operator who recovered with the environment
+          variable and forgot the line saw an unchecked box and an "Encrypted"
+          badge while every session cookie shipped without Secure. */}
+      {status?.session_cookies_plaintext && (
+        <div className="error-banner" role="alert">
+          <span className="material-icons">warning</span>
+          <div>
+            <strong>Session cookies are being sent over plaintext HTTP.</strong>{' '}
+            Emergency recovery is active
+            {status.http_session_cookies_env_override && status.allow_http_session_cookies
+              ? ' via both the ECM_ALLOW_HTTP_SESSION_COOKIES environment variable and the setting below'
+              : status.http_session_cookies_env_override
+                ? ' via the ECM_ALLOW_HTTP_SESSION_COOKIES environment variable on this container'
+                : ' via the setting below'}
+            . Anyone who can observe this network can steal a live session. Turn it
+            off as soon as HTTPS is reachable
+            {status.http_session_cookies_env_override
+              ? '; the environment variable must be removed and ECM restarted.'
+              : '.'}
+          </div>
+        </div>
+      )}
+
       {/* Current Status */}
       {status && (
         <div className="tls-status-line">

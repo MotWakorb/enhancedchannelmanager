@@ -1554,17 +1554,49 @@ To reconstruct one batch:
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
 
-When TLS is enabled, browser authentication cookies are `Secure`, `HttpOnly`, and
-`SameSite=Lax`; the HTTP listener does not establish or refresh authenticated browser
-sessions. `allow_http_session_cookies` is an explicit break-glass setting exposed by
-`GET /api/tls/settings` and `POST /api/tls/configure`. A locked-out operator can set
-`ECM_ALLOW_HTTP_SESSION_COOKIES=true` for one recovery restart. Either option permits
-plaintext session theft and must be disabled after HTTPS is repaired. ECM trusts a
-configured HTTPS `public_base_url` for reverse-proxy cookie policy; it does not trust
-caller-supplied `X-Forwarded-Proto`. HSTS is emitted only by ECM's direct HTTPS
-listener, where the application can authenticate the transport itself. ECM does not
-redirect the always-on HTTP port because the HTTPS listener may use a different port
-or be unavailable during recovery.
+**Session transport (bead `enhancedchannelmanager-04c0u.9`).** When ECM terminates
+TLS, browser authentication cookies are `Secure`, `HttpOnly` and `SameSite=Lax`, and
+the HTTP listener does not establish or refresh authenticated browser sessions:
+`POST /api/auth/login`, `POST /api/auth/dispatcharr/login` and `POST /api/auth/refresh`
+answer `403` there with a message naming the HTTPS address and both recovery options.
+The refusal is scoped to exactly that configuration: ECM terminating TLS, break-glass
+closed, a cleartext request, and no `https://` `public_base_url`. A reverse-proxy
+deployment is unaffected.
+
+`POST /api/tls/configure` revokes every existing `UserSession` and bumps every user's
+`auth_epoch` when it switches `enabled` from false to true with a certificate already
+present, so a browser holding a pre-activation non-`Secure` `refresh_token` cannot keep
+replaying it on the HTTP port. This is a one-time forced sign-out.
+
+**Break-glass.** `allow_http_session_cookies` is an explicit setting exposed by
+`GET /api/tls/settings` and `POST /api/tls/configure`; a locked-out operator can
+instead set `ECM_ALLOW_HTTP_SESSION_COOKIES` to `1`/`true`/`yes`/`on` for one recovery
+restart (any other value, including the `false` that `docker-compose.yml` ships, leaves
+protection on). Both work regardless of `public_base_url`, and both permit plaintext
+session theft, so they must be disabled once HTTPS is repaired. Both are reported by
+`GET /api/tls/status` as `allow_http_session_cookies`,
+`http_session_cookies_env_override` and `session_cookies_plaintext`, and ECM logs a
+warning at startup, on the first cookie the hatch downgrades, and whenever
+`POST /api/tls/configure` changes the stored flag.
+
+On `POST /api/tls/configure`, `allow_http_session_cookies` is **preserve-on-omit**: a
+request that does not carry the field leaves the stored value unchanged. A client that
+does not know the field cannot turn the hatch on, so it must not be able to turn it off
+either.
+
+**Header trust.** ECM trusts a configured HTTPS `public_base_url` for reverse-proxy
+cookie policy. ECM's own policy code does not consult `X-Forwarded-Proto`,
+`X-Forwarded-Host` or `Forwarded`; note that uvicorn's `ProxyHeadersMiddleware` is
+enabled by default and, for clients within `FORWARDED_ALLOW_IPS` (default
+`127.0.0.1`), may itself rewrite `scope['scheme']` before any ECM code runs.
+
+**HSTS** is emitted only by ECM's direct HTTPS listener, as
+`max-age=31536000` with no `includeSubDomains` and no `preload`. Per RFC 6797 §8.3 the
+pin is host-scoped and port-agnostic, so visiting the HTTPS listener also force-upgrades
+the plaintext listener on that hostname for a year; see the recovery notes in
+`README.md` (Port Configuration) for how to reach the HTTP port once a pin exists. ECM
+does not redirect the always-on HTTP port because the HTTPS listener may use a
+different port or be unavailable during recovery.
 
 **Authorization (bead `enhancedchannelmanager-9kwzp.11`):** every route above requires an admin when authentication is enabled. `GET /api/tls/status` and `GET /api/tls/https/status` disclose no credential material and accept the static MCP API key. The other eleven refuse it with `403`, because they manage certificate and private-key material, the DNS-provider credentials that issue it, the HTTPS listener that serves it, or (for `GET /api/tls/settings`) a response carrying masked credential fragments. Use an operator admin JWT for those.
 

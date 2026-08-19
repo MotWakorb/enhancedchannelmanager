@@ -1,25 +1,32 @@
 """Every cookie-emitting auth route honours the TLS transport policy.
 
-Bead enhancedchannelmanager-04c0u.9. The helper-level unit tests in
-``backend/tests/unit/test_04c0u9_session_transport.py`` prove the policy
-function. These prove the property that actually protects an operator: with
-ECM TLS activated, NO route that hands a browser a session cookie emits one
-without ``Secure``, on any of the four call sites, driven through the real
-ASGI app over the plain-HTTP transport the parallel listener serves.
+Bead enhancedchannelmanager-04c0u.9.
 
-The AST guard at the bottom is the completeness half: it fails if a future
-call site is added that does not pass the request through, which the four
-behavioural tests cannot see.
+The helper-level unit tests in ``backend/tests/unit/test_04c0u9_session_transport.py``
+prove the policy function, and ``backend/tests/unit/test_04c0u9_tls_settings_cache.py``
+proves the cache layer beneath it. These prove the property that actually
+protects an operator, driven through the real ASGI app over the plain-HTTP
+transport the parallel listener serves:
+
+* on a reverse-proxy deployment (an ``https://`` ``public_base_url``, where
+  plaintext to ECM is legitimate), NO route that hands a browser a session
+  cookie emits one without ``Secure`` — on any of the four call sites; and
+* on an instance where ECM terminates TLS itself, those routes REFUSE rather
+  than mint a session the browser will silently discard.
+
+The completeness half — that a future call site cannot opt out — moved to
+``backend/tests/unit/test_04c0u9_cookie_call_site_guard.py``, which is pure
+source analysis with no I/O and now walks the whole backend rather than
+``auth/routes.py`` alone.
 """
 
-import ast
 from datetime import datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+import auth.routes as auth_routes
 from auth.settings import AuthSettings, DispatcharrAuthSettings, LocalAuthSettings
 from auth.providers.dispatcharr import DispatcharrAuthResult
 
@@ -30,26 +37,78 @@ from auth.providers.dispatcharr import DispatcharrAuthResult
 ADMIN_PASSWORD = "<synthetic-04c0u9-admin-password>"
 DISPATCHARR_PASSWORD = "<synthetic-04c0u9-dispatcharr-password>"
 
-AUTH_ROUTES_SOURCE = Path(__file__).resolve().parents[2] / "auth" / "routes.py"
-COOKIE_HELPERS = {"_set_access_cookie", "_set_auth_cookies"}
+
+def _tls_settings(**overrides):
+    values = {
+        "enabled": False,
+        "allow_http_session_cookies": False,
+        "domain": "ecm.test",
+        "https_port": 6143,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+@pytest.fixture(autouse=True)
+def _rearm_warn_once():
+    auth_routes._reset_session_transport_log_state()
+    yield
+    auth_routes._reset_session_transport_log_state()
 
 
 @pytest.fixture
-def tls_active(tmp_path):
-    """ECM TLS enabled with real key material, break-glass off."""
-    cert = tmp_path / "cert.pem"
-    key = tmp_path / "key.pem"
-    cert.write_text("certificate fixture")
-    key.write_text("private-key fixture")
-    tls = SimpleNamespace(
-        enabled=True,
-        allow_http_session_cookies=False,
-        cert_path=str(cert),
-        key_path=str(key),
-    )
-    with patch("auth.routes.get_tls_settings", return_value=tls), \
+def issued_tls_dir(tmp_path, monkeypatch):
+    """Key material where ``tls/https_server.py`` starts the listener from."""
+    tls_dir = tmp_path / "tls"
+    tls_dir.mkdir()
+    (tls_dir / "cert.pem").write_text("certificate fixture")
+    (tls_dir / "key.pem").write_text("private-key fixture")
+    monkeypatch.setattr(auth_routes, "TLS_DIR", tls_dir)
+    return tls_dir
+
+
+@pytest.fixture
+def empty_tls_dir(tmp_path, monkeypatch):
+    tls_dir = tmp_path / "tls-empty"
+    tls_dir.mkdir()
+    monkeypatch.setattr(auth_routes, "TLS_DIR", tls_dir)
+    return tls_dir
+
+
+@pytest.fixture
+def behind_https_proxy(empty_tls_dir):
+    """A reverse proxy terminates TLS and declared its origin (bead qsqfv).
+
+    This is the configuration where a plaintext request to ECM is LEGITIMATE —
+    it is the proxy's back-channel — so the routes serve, and the property under
+    test is the cookie attributes. The ECM-terminates-TLS configuration is
+    covered by the refusal tests below, where these routes serve nothing at all.
+    """
+    with patch("auth.routes.get_tls_settings", return_value=_tls_settings()), \
+         patch("auth.routes.tls_settings_load_failed", return_value=False), \
+         patch("auth.routes.get_public_base_url", return_value="https://ecm.example.test"):
+        yield
+
+
+@pytest.fixture
+def ecm_terminates_tls(issued_tls_dir):
+    """ECM's own HTTPS listener is serving and break-glass is closed."""
+    with patch(
+        "auth.routes.get_tls_settings", return_value=_tls_settings(enabled=True)
+    ), patch("auth.routes.tls_settings_load_failed", return_value=False), \
          patch("auth.routes.get_public_base_url", return_value=""):
-        yield tls
+        yield
+
+
+@pytest.fixture
+def break_glass_open(issued_tls_dir):
+    """ECM terminates TLS but the operator opened the recovery hatch."""
+    with patch(
+        "auth.routes.get_tls_settings",
+        return_value=_tls_settings(enabled=True, allow_http_session_cookies=True),
+    ), patch("auth.routes.tls_settings_load_failed", return_value=False), \
+         patch("auth.routes.get_public_base_url", return_value=""):
+        yield
 
 
 @pytest.fixture
@@ -102,11 +161,43 @@ def _assert_protected(response, expected_count):
     for cookie in cookies:
         assert "Secure" in cookie, cookie
         assert "HttpOnly" in cookie, cookie
-        assert "SameSite=lax" in cookie.replace("SameSite=Lax", "SameSite=lax"), cookie
+        assert "samesite=lax" in cookie.lower(), cookie
+
+
+def _dispatcharr_patches():
+    settings = MagicMock(spec=AuthSettings)
+    settings.dispatcharr = MagicMock(spec=DispatcharrAuthSettings)
+    settings.dispatcharr.enabled = True
+    settings.local = MagicMock(spec=LocalAuthSettings)
+    settings.local.enabled = True
+    settings.oidc = MagicMock(enabled=False)
+    settings.saml = MagicMock(enabled=False)
+    settings.ldap = MagicMock(enabled=False)
+    settings.jwt = MagicMock()
+    settings.jwt.refresh_token_expire_days = 7
+
+    client = MagicMock()
+    client.__aenter__ = AsyncMock(return_value=client)
+    client.__aexit__ = AsyncMock(return_value=None)
+    client.authenticate = AsyncMock(
+        return_value=DispatcharrAuthResult(
+            user_id="disp-04c0u9",
+            username="dispuser",
+            email="dispuser@dispatcharr.local",
+        )
+    )
+    return settings, client
+
+
+# ---------------------------------------------------------------------------
+# Cookie attributes at every call site
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_login_over_http_emits_protected_cookies(async_client, admin_user, tls_active):
+async def test_login_over_http_emits_protected_cookies(
+    async_client, admin_user, behind_https_proxy
+):
     """Call site 1: POST /api/auth/login."""
     response = await async_client.post(
         "/api/auth/login",
@@ -117,7 +208,9 @@ async def test_login_over_http_emits_protected_cookies(async_client, admin_user,
 
 
 @pytest.mark.asyncio
-async def test_refresh_over_http_emits_protected_cookies(async_client, admin_user, tls_active):
+async def test_refresh_over_http_emits_protected_cookies(
+    async_client, admin_user, behind_https_proxy
+):
     """Call site 2: POST /api/auth/refresh, current-token path."""
     login = await async_client.post(
         "/api/auth/login",
@@ -135,7 +228,7 @@ async def test_refresh_over_http_emits_protected_cookies(async_client, admin_use
 
 @pytest.mark.asyncio
 async def test_predecessor_refresh_over_http_emits_protected_cookie(
-    async_client, admin_user, test_session, tls_active
+    async_client, admin_user, test_session, behind_https_proxy
 ):
     """Call site 3: the predecessor branch of POST /api/auth/refresh."""
     from models import UserSession
@@ -171,29 +264,11 @@ async def test_predecessor_refresh_over_http_emits_protected_cookie(
 
 
 @pytest.mark.asyncio
-async def test_dispatcharr_login_over_http_emits_protected_cookies(async_client, tls_active):
+async def test_dispatcharr_login_over_http_emits_protected_cookies(
+    async_client, behind_https_proxy
+):
     """Call site 4: POST /api/auth/dispatcharr/login."""
-    settings = MagicMock(spec=AuthSettings)
-    settings.dispatcharr = MagicMock(spec=DispatcharrAuthSettings)
-    settings.dispatcharr.enabled = True
-    settings.local = MagicMock(spec=LocalAuthSettings)
-    settings.local.enabled = True
-    settings.oidc = MagicMock(enabled=False)
-    settings.saml = MagicMock(enabled=False)
-    settings.ldap = MagicMock(enabled=False)
-    settings.jwt = MagicMock()
-    settings.jwt.refresh_token_expire_days = 7
-
-    client = MagicMock()
-    client.__aenter__ = AsyncMock(return_value=client)
-    client.__aexit__ = AsyncMock(return_value=None)
-    client.authenticate = AsyncMock(
-        return_value=DispatcharrAuthResult(
-            user_id="disp-04c0u9",
-            username="dispuser",
-            email="dispuser@dispatcharr.local",
-        )
-    )
+    settings, client = _dispatcharr_patches()
 
     with patch("auth.routes.get_auth_settings", return_value=settings), \
          patch("auth.providers.dispatcharr.DispatcharrClient", return_value=client):
@@ -206,51 +281,130 @@ async def test_dispatcharr_login_over_http_emits_protected_cookies(async_client,
     _assert_protected(response, 2)
 
 
-def test_every_cookie_helper_call_site_passes_the_request():
-    """Completeness guard: no call site may omit the transport context.
+@pytest.mark.asyncio
+async def test_logout_deletion_mirrors_issue_time_attributes(
+    async_client, admin_user, behind_https_proxy
+):
+    """Nothing covered logout cookie attributes at all before this.
 
-    A new route that calls a helper without threading its ``Request`` would
-    hand a browser an unprotected cookie. The helpers take ``request`` with
-    no default so such a call raises, but a caller could still pass ``None``
-    or a literal; this pins the argument to a name.
+    Starlette's ``delete_cookie`` defaults to ``secure=False, httponly=False``.
+    Deletion matches on (name, domain, path) so it worked, but RFC 6265bis 8.6
+    says a non-secure origin cannot clear a ``Secure`` cookie, and the asymmetry
+    is a trap for the next change here.
     """
-    tree = ast.parse(AUTH_ROUTES_SOURCE.read_text())
-    call_sites = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in COOKIE_HELPERS
+    login = await async_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": ADMIN_PASSWORD},
+    )
+    assert login.status_code == 200
+
+    response = await async_client.post(
+        "/api/auth/logout",
+        cookies={"refresh_token": _cookie_value(login, "refresh_token")},
+    )
+    assert response.status_code == 200
+
+    deletions = [
+        header
+        for header in response.headers.get_list("set-cookie")
+        if header.split("=", 1)[0] in {"access_token", "refresh_token"}
     ]
-    # Four route call sites plus the internal hop inside _set_auth_cookies.
-    assert len(call_sites) == 5, [
-        (node.func.id, node.lineno) for node in call_sites
-    ]
-    for node in call_sites:
-        supplied = [
-            arg for arg in node.args
-            if isinstance(arg, ast.Name) and arg.id == "request"
-        ] + [
-            kw.value for kw in node.keywords
-            if kw.arg == "request"
-            and isinstance(kw.value, ast.Name)
-            and kw.value.id == "request"
-        ]
-        assert supplied, (
-            f"{node.func.id} at line {node.lineno} does not pass the request"
+    assert len(deletions) == 2, deletions
+    for cookie in deletions:
+        assert "Max-Age=0" in cookie, cookie
+        assert "Secure" in cookie, cookie
+        assert "HttpOnly" in cookie, cookie
+        assert "samesite=lax" in cookie.lower(), cookie
+
+
+# ---------------------------------------------------------------------------
+# Refusing to mint a session over cleartext (PO-authorised behaviour change)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plaintext_login_is_refused_when_ecm_terminates_tls(
+    async_client, admin_user, test_session, ecm_terminates_tls
+):
+    """This used to answer 200 and create a session row.
+
+    The browser then discarded the ``Secure`` cookie (RFC 6265bis 5.6), the SPA
+    resolved on the 200 and fired ``onLoginSuccess``, the first API call 401'd,
+    and the operator was bounced back to the login form with no error shown —
+    so the natural response was to retry and ship the cleartext password again.
+    """
+    from models import UserSession
+
+    response = await async_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": ADMIN_PASSWORD},
+    )
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert "https://ecm.test:6143" in detail
+    assert "ECM_ALLOW_HTTP_SESSION_COOKIES" in detail
+    assert not _session_cookies(response)
+    # Refused BEFORE the password is read, so no session row is created.
+    assert test_session.query(UserSession).count() == 0
+
+
+@pytest.mark.asyncio
+async def test_plaintext_refresh_is_refused_when_ecm_terminates_tls(
+    async_client, admin_user, ecm_terminates_tls
+):
+    response = await async_client.post(
+        "/api/auth/refresh", cookies={"refresh_token": "irrelevant"}
+    )
+    assert response.status_code == 403
+    assert not _session_cookies(response)
+
+
+@pytest.mark.asyncio
+async def test_plaintext_dispatcharr_login_is_refused_when_ecm_terminates_tls(
+    async_client, ecm_terminates_tls
+):
+    settings, client = _dispatcharr_patches()
+
+    with patch("auth.routes.get_auth_settings", return_value=settings), \
+         patch("auth.providers.dispatcharr.DispatcharrClient", return_value=client):
+        response = await async_client.post(
+            "/api/auth/dispatcharr/login",
+            json={"username": "dispuser", "password": DISPATCHARR_PASSWORD},
         )
 
+    assert response.status_code == 403
+    assert not _session_cookies(response)
+    # Refused before the upstream is contacted at all.
+    client.authenticate.assert_not_awaited()
 
-def test_cookie_helpers_have_no_default_request():
-    """A defaulted ``request`` would let a new call site silently opt out."""
-    tree = ast.parse(AUTH_ROUTES_SOURCE.read_text())
-    checked = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name in COOKIE_HELPERS:
-            names = [arg.arg for arg in node.args.args]
-            assert "request" in names, node.name
-            # Defaults bind to the tail of args; request must not be in it.
-            defaulted = names[len(names) - len(node.args.defaults):] if node.args.defaults else []
-            assert "request" not in defaulted, node.name
-            checked.add(node.name)
-    assert checked == COOKIE_HELPERS
+
+@pytest.mark.asyncio
+async def test_break_glass_restores_plaintext_login(
+    async_client, admin_user, break_glass_open
+):
+    """The escape hatch must actually recover an operator, end to end."""
+    response = await async_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": ADMIN_PASSWORD},
+    )
+
+    assert response.status_code == 200
+    cookies = _session_cookies(response)
+    assert len(cookies) == 2
+    assert all("Secure" not in cookie for cookie in cookies), cookies
+
+
+@pytest.mark.asyncio
+async def test_environment_break_glass_restores_plaintext_login(
+    async_client, admin_user, ecm_terminates_tls, monkeypatch
+):
+    monkeypatch.setenv("ECM_ALLOW_HTTP_SESSION_COOKIES", "true")
+
+    response = await async_client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": ADMIN_PASSWORD},
+    )
+
+    assert response.status_code == 200
+    assert all("Secure" not in cookie for cookie in _session_cookies(response))

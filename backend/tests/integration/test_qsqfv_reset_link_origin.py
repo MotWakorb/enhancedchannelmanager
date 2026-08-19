@@ -413,3 +413,71 @@ class TestSettingsSaveValidation:
             response = await non_admin_client.post("/api/settings", json=self._body())
 
         assert response.status_code == 200
+
+
+class TestSessionCookieTransportWarning:
+    """bead 04c0u.9: the same unset value also leaves session cookies open.
+
+    The warning above is about password-reset links. An operator reading it has
+    no reason to connect it to cookie policy, so the residual — auth on, ECM
+    terminating no TLS, no canonical https origin — stayed invisible. This is
+    the second, separately-worded WARN that names that consequence.
+    """
+
+    _FRAGMENT = "Session cookies are UNPROTECTED"
+
+    @staticmethod
+    def _tls_off():
+        return patch(
+            "config._session_cookies_travel_in_cleartext", return_value=True
+        )
+
+    @staticmethod
+    def _tls_on():
+        return patch(
+            "config._session_cookies_travel_in_cleartext", return_value=False
+        )
+
+    def test_warns_once_per_process_when_nothing_protects_the_cookies(
+        self, stub_settings, caplog
+    ):
+        stub_settings(_settings(public_base_url=""))
+
+        with self._tls_off(), caplog.at_level("WARNING"):
+            assert config.get_public_base_url() == ""
+            assert config.get_public_base_url() == ""
+
+        warnings = [r for r in caplog.records if self._FRAGMENT in r.message]
+        assert len(warnings) == 1, [r.message for r in caplog.records]
+        assert "04c0u.9" in warnings[0].message
+
+    def test_silent_when_ecm_terminates_tls(self, stub_settings, caplog):
+        stub_settings(_settings(public_base_url=""))
+
+        with self._tls_on(), caplog.at_level("WARNING"):
+            assert config.get_public_base_url() == ""
+
+        assert not [r for r in caplog.records if self._FRAGMENT in r.message]
+
+    def test_silent_when_a_canonical_https_origin_is_configured(
+        self, stub_settings, caplog
+    ):
+        stub_settings(_settings(public_base_url=CONFIGURED_ORIGIN))
+
+        with self._tls_off(), caplog.at_level("WARNING"):
+            assert config.get_public_base_url() == CONFIGURED_ORIGIN
+
+        assert not [r for r in caplog.records if self._FRAGMENT in r.message]
+
+    def test_the_predicate_is_false_when_auth_is_disabled(self):
+        """Guard the guard: the helper must be able to answer both ways."""
+        with patch("auth.settings.get_auth_settings") as auth_mock:
+            auth_mock.return_value.require_auth = False
+            assert config._session_cookies_travel_in_cleartext() is False
+
+    def test_the_predicate_is_true_when_auth_is_on_and_tls_is_off(self, tmp_path):
+        with patch("auth.settings.get_auth_settings") as auth_mock, \
+                patch("tls.settings.get_tls_settings") as tls_mock:
+            auth_mock.return_value.require_auth = True
+            tls_mock.return_value.enabled = False
+            assert config._session_cookies_travel_in_cleartext() is True

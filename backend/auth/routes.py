@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
@@ -27,7 +27,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from config import get_public_base_url, get_settings
-from tls.settings import get_tls_settings
+from tls.settings import (
+    TLS_DIR,
+    break_glass_environment_override,
+    get_tls_settings,
+    tls_settings_load_failed,
+)
+from tls.storage import CertificateStorage
 from database import get_session
 from models import User, UserSession, PasswordResetToken
 from .password import verify_password, hash_password, validate_password
@@ -419,11 +425,82 @@ def _access_token_seconds_remaining(request: Request) -> Optional[int]:
         return None
 
 
-def _auth_cookie_secure(request: Request) -> bool:
-    """Return the cookie transport policy from trusted local state.
+class _SessionTransport(NamedTuple):
+    """The transport verdict for one request, decided from local state only."""
 
-    Two trusted signals, both read from this process rather than the request
-    body of headers:
+    #: Emit session cookies with ``Secure``.
+    secure: bool
+    #: ECM terminates TLS itself and this request arrived in cleartext anyway,
+    #: with no break-glass and no https ``public_base_url``. There is no
+    #: legitimate plaintext client in that configuration, so routes that MINT a
+    #: browser session refuse rather than hand out a cookie the browser will
+    #: discard (RFC 6265bis 5.6) and then bounce the operator back to the login
+    #: form with no error.
+    refuse_plaintext: bool
+    #: An operator escape hatch is open (stored flag or environment variable).
+    break_glass: bool
+
+
+def _ecm_terminates_tls() -> bool:
+    """True when ECM's own HTTPS listener is serving, or we cannot tell.
+
+    ``has_certificate()`` is the SAME predicate ``tls/https_server.py`` starts
+    the listener from (``CertificateStorage(TLS_DIR)``, i.e. the hard-coded
+    ``cert.pem`` / ``key.pem`` under the TLS directory). Reading
+    ``tls_settings.cert_path`` / ``key_path`` instead would be a second,
+    independent notion of "the certificate exists" that a backup restore of
+    ``tls_settings.json`` can move out from under the listener.
+
+    Fails CLOSED on an unreadable ``tls_settings.json``: ``load_tls_settings``
+    degrades to ``enabled=False`` there, and reading that as "TLS is off" would
+    emit cleartext-replayable cookies while the HTTPS listener kept serving.
+    """
+    if tls_settings_load_failed():
+        return True
+    tls_settings = get_tls_settings()
+    return bool(tls_settings.enabled and CertificateStorage(TLS_DIR).has_certificate())
+
+
+# Once per process, re-armed by ``_reset_session_transport_log_state`` in tests.
+_break_glass_suppression_warned: bool = False
+
+
+def _reset_session_transport_log_state() -> None:
+    """Re-arm the once-per-process break-glass warning."""
+    global _break_glass_suppression_warned
+    _break_glass_suppression_warned = False
+
+
+def _warn_break_glass_suppression() -> None:
+    """WARN, once per process, that break-glass is downgrading live sessions.
+
+    Bead 04c0u.9 remediation. The escape hatch was previously silent in every
+    surface: no log at issue time, no field in ``GET /api/tls/status``, nothing
+    in the UI. An operator who set it at 02:00 to recover and then forgot the
+    line had every session cookie shipping without ``Secure`` indefinitely,
+    with a 7-day ``refresh_token`` capturable by anyone on the LAN, and no
+    signal anywhere. There is no security-audit facility in this codebase, so a
+    rate-limited ``logger.warning`` is the house pattern for this.
+    """
+    global _break_glass_suppression_warned
+    if _break_glass_suppression_warned:
+        return
+    _break_glass_suppression_warned = True
+    logger.warning(
+        "[AUTH] Break-glass is ON: session cookies are being issued WITHOUT "
+        "Secure over plaintext HTTP even though this instance is otherwise "
+        "protected. Anyone who can observe this network can steal a live "
+        "session. Turn off 'Emergency recovery: allow authenticated sessions "
+        "over HTTP' in TLS Settings and unset "
+        "ECM_ALLOW_HTTP_SESSION_COOKIES as soon as HTTPS is reachable."
+    )
+
+
+def _session_transport(request: Request) -> _SessionTransport:
+    """Decide session-cookie transport policy from trusted local state.
+
+    Two trusted signals, both read from this process rather than from the
+    request body or headers:
 
     * this connection was terminated as HTTPS by ECM itself, and
     * ``public_base_url``, the operator-configured canonical origin, is an
@@ -435,38 +512,108 @@ def _auth_cookie_secure(request: Request) -> bool:
     declares its external scheme once, in configuration, and everything that
     needs to know reads it there.
 
-    ``X-Forwarded-Proto`` / ``X-Forwarded-Host`` / ``Forwarded`` are
-    deliberately NOT consulted. The ECM backend has no trusted-proxy
-    allowlist (the one in ``mcp-server/config.py`` belongs to the sidecar's
-    own listener, a different process), so any client that can reach the
-    plaintext port could forge an HTTPS scheme and talk ECM into calling its
-    own cleartext session safe — which is the qsqfv defect class exactly.
+    ECM's own policy code never consults ``X-Forwarded-Proto`` /
+    ``X-Forwarded-Host`` / ``Forwarded``. The ECM backend has no trusted-proxy
+    allowlist of its own (the one in ``mcp-server/config.py`` belongs to the
+    sidecar's listener, a different process). Note what that does and does not
+    claim: uvicorn's ``ProxyHeadersMiddleware`` is enabled by default and runs
+    OUTSIDE this application, so for a client within ``FORWARDED_ALLOW_IPS``
+    (default ``127.0.0.1``) it may itself rewrite ``scope['scheme']`` before
+    any ECM code sees the request. The property this function holds is that ECM
+    adds no header trust of its own on top of that.
 
-    With neither signal present, activating ECM's TLS listener still protects
-    the parallel HTTP port, unless the operator explicitly opens the
-    documented break-glass escape hatch.
+    ORDER IS LOAD-BEARING. Break-glass is evaluated BEFORE the
+    ``public_base_url`` signal: with an ``https://`` public base URL configured
+    the old order returned early and made BOTH escape hatches unreachable, so
+    the documented recovery did nothing on precisely the reverse-proxy
+    deployments whose operators had followed the qsqfv advice. Genuine TLS on
+    this connection still wins over everything, so break-glass can never
+    downgrade a real HTTPS session.
     """
-    if request.url.scheme.lower() == "https":
-        return True
-    if get_public_base_url().lower().startswith("https://"):
-        return True
-
     tls_settings = get_tls_settings()
-    environment_break_glass = os.environ.get(
-        "ECM_ALLOW_HTTP_SESSION_COOKIES", ""
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    break_glass = (
-        tls_settings.allow_http_session_cookies or environment_break_glass
+    break_glass = bool(
+        tls_settings.allow_http_session_cookies or break_glass_environment_override()
     )
-    # Enabled-but-not-yet-issued is not active TLS. Requiring the key material
-    # on disk is what stops "enable TLS" from locking an operator out of the
-    # UI before a certificate exists.
-    tls_active = bool(
-        tls_settings.enabled
-        and Path(tls_settings.cert_path).is_file()
-        and Path(tls_settings.key_path).is_file()
+
+    if request.url.scheme.lower() == "https":
+        return _SessionTransport(secure=True, refuse_plaintext=False, break_glass=break_glass)
+
+    proxy_https = get_public_base_url().lower().startswith("https://")
+    tls_active = _ecm_terminates_tls()
+
+    if break_glass:
+        # Only warn when the hatch actually changed the answer. With no TLS and
+        # no https origin the cookies would be non-Secure regardless, and a
+        # warning there would be noise on every plain-HTTP install.
+        if proxy_https or tls_active:
+            _warn_break_glass_suppression()
+        return _SessionTransport(secure=False, refuse_plaintext=False, break_glass=True)
+
+    if proxy_https:
+        return _SessionTransport(secure=True, refuse_plaintext=False, break_glass=False)
+
+    # ECM terminates TLS and this arrived in cleartext: protect the cookie AND
+    # refuse to mint a session at all (see ``refuse_plaintext``).
+    return _SessionTransport(
+        secure=tls_active, refuse_plaintext=tls_active, break_glass=False
     )
-    return bool(tls_active and not break_glass)
+
+
+def _auth_cookie_secure(request: Request) -> bool:
+    """Return the cookie transport policy from trusted local state.
+
+    Single source of truth for the ``secure=`` attribute of every session
+    cookie ECM emits; see :func:`_session_transport` for the policy itself.
+    """
+    return _session_transport(request).secure
+
+
+def _https_sign_in_url(request: Request) -> str:
+    """Best-effort HTTPS address of this instance, for a recovery message."""
+    tls_settings = get_tls_settings()
+    host = tls_settings.domain or (request.url.hostname or "your-ecm-host")
+    return f"https://{host}:{tls_settings.https_port}"
+
+
+def _require_secure_session_transport(request: Request) -> None:
+    """Refuse to mint a browser session over cleartext when ECM terminates TLS.
+
+    Bead 04c0u.9 remediation, PO-authorised behaviour change. ``/api/auth/login``
+    is in ``AUTH_EXEMPT_PATHS``, so before this the request succeeded
+    server-side — password verified, ``UserSession`` row created,
+    ``200 {"message": "Login successful"}`` — and only then did the browser
+    silently discard the ``Secure`` cookie per RFC 6265bis 5.6. The SPA resolved
+    on the 200, the next call 401'd, and the operator was bounced back to the
+    login form with no error shown, so the usual response was to retry and ship
+    the cleartext password again.
+
+    The predicate is narrow on purpose: it fires ONLY when ECM itself is
+    terminating TLS, break-glass is closed, this request is cleartext, and no
+    ``https://`` ``public_base_url`` is configured. In that configuration there
+    is no legitimate plaintext client, so this cannot break a reverse-proxy
+    deployment.
+
+    Raised as 403 rather than 401 deliberately: the SPA's ``fetchJson`` treats
+    401 as "try a token refresh and retry", which would bury the message.
+    """
+    if not _session_transport(request).refuse_plaintext:
+        return
+    logger.warning(
+        "[AUTH] Refused a plaintext session request from %s: ECM is terminating "
+        "TLS and break-glass is closed.",
+        _client_address(request),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"This instance terminates TLS, so ECM will not start a browser "
+            f"session over plaintext HTTP. Sign in at {_https_sign_in_url(request)} "
+            f"instead. If HTTPS is unreachable, an admin can enable 'Emergency "
+            f"recovery: allow authenticated sessions over HTTP' in TLS Settings, "
+            f"or set ECM_ALLOW_HTTP_SESSION_COOKIES=true on the container and "
+            f"restart ECM."
+        ),
+    )
 
 
 def _set_access_cookie(
@@ -529,10 +676,31 @@ def _set_auth_cookies(
     )
 
 
-def _clear_auth_cookies(response: Response) -> None:
-    """Clear authentication cookies from the response."""
-    response.delete_cookie(key="access_token", path="/")
-    response.delete_cookie(key="refresh_token", path="/api/auth")
+def _clear_auth_cookies(response: Response, request: Request) -> None:
+    """Clear authentication cookies, mirroring the attributes they were set with.
+
+    Starlette's ``delete_cookie`` defaults to ``secure=False, httponly=False,
+    samesite="lax"``. Deletion matches on (name, domain, path) so the omission
+    works today, but RFC 6265bis 8.6 is explicit that a non-secure origin
+    cannot overwrite a ``Secure`` cookie, and a deletion that does not mirror
+    its issue-time attributes is a trap for the next change here. Same request,
+    same ``_auth_cookie_secure``, same answer as ``_set_auth_cookies``.
+    """
+    secure = _auth_cookie_secure(request)
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api/auth",
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
 
 
 @router.get("/status", response_model=AuthStatusResponse)
@@ -716,6 +884,10 @@ async def login(
     Sets httpOnly cookies with access and refresh tokens.
     Uses the user_identities table to find the user by local identity.
     """
+    # Before any credential is read: an instance that terminates TLS itself
+    # has no legitimate plaintext client (bead 04c0u.9 remediation).
+    _require_secure_session_transport(request)
+
     from models import UserIdentity
 
     # First, try to find user via identity table
@@ -1288,6 +1460,8 @@ async def refresh_tokens(
     runs straight through without yielding the event loop, which is what lets
     the compare-and-swap below be decided from ``rowcount`` alone.
     """
+    _require_secure_session_transport(request)
+
     refresh_token = get_refresh_token_from_request(request)
     if not refresh_token:
         raise _deny_refresh(request, "no_credential", "No refresh token provided")
@@ -1454,7 +1628,7 @@ async def logout(
             logger.warning("[AUTH] Error revoking session: %s", e)
 
     # Always clear cookies
-    _clear_auth_cookies(response)
+    _clear_auth_cookies(response, request)
 
     return LogoutResponse(message="Logged out successfully")
 
@@ -1796,6 +1970,8 @@ async def dispatcharr_login(
     Validates credentials against Dispatcharr and creates/updates local user.
     Sets httpOnly cookies with access and refresh tokens.
     """
+    _require_secure_session_transport(request)
+
     from auth.providers.dispatcharr import (
         DispatcharrClient,
         DispatcharrAuthenticationError,

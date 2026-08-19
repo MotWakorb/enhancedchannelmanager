@@ -143,24 +143,66 @@ See [MCP Server (Claude Integration)](#mcp-server-claude-integration) for setup 
 Set these to match the owner of your bind-mounted volumes to avoid permission issues. Find your IDs with `id your_user`.
 
 **Port Configuration:**
-- **ECM_PORT** (default: 6100): HTTP interface. It remains available when TLS is enabled, but authenticated browser cookies are Secure and are not sent over HTTP unless an administrator explicitly enables the break-glass recovery option in TLS Settings.
+- **ECM_PORT** (default: 6100): HTTP interface. It remains available when TLS is enabled, but ECM refuses to start or refresh a browser session there (see below).
 - **ECM_HTTPS_PORT** (default: 6143) — HTTPS interface (when TLS is configured in Settings)
 
 When ECM TLS is enabled, use the HTTPS address for the web UI. The HTTP port
-continues to serve health checks and unauthenticated recovery surfaces, but browsers
-cannot establish or refresh an authenticated session there. If HTTPS is inaccessible,
-an administrator may temporarily enable **Emergency recovery: allow authenticated
-sessions over HTTP** in TLS Settings. This sends session credentials in plaintext;
-use it only on a trusted network and turn it off immediately after recovery. Reverse
-proxy deployments should set the canonical `public_base_url` to an `https://` origin;
-ECM does not trust caller-supplied `X-Forwarded-Proto` headers.
+continues to serve health checks and unauthenticated recovery surfaces, but sign-in,
+Dispatcharr sign-in and token refresh all answer `403` there with a message naming the
+HTTPS address, rather than appearing to succeed and then failing on the next request.
+Session cookies are `Secure`, `HttpOnly` and `SameSite=Lax`.
 
-If HTTPS is already unavailable and you cannot sign in to change TLS Settings, stop
-ECM, set `ECM_ALLOW_HTTP_SESSION_COOKIES=true` on the ECM container, and restart it.
-Sign in through HTTP only long enough to repair or disable TLS. Then remove the
-environment variable (or set it back to `false`) and restart ECM. Anyone able to
-observe that HTTP connection can steal the session, so this recovery mode is never
-appropriate on an untrusted LAN or an internet-exposed listener.
+**Turning TLS on signs everyone out once.** Activating TLS (with a certificate already
+present) revokes every existing browser session, so a browser still holding a
+pre-activation cookie cannot keep replaying it on the HTTP port. Everyone, including
+the administrator who made the change, signs in again over HTTPS.
+
+Reverse proxy deployments should set the canonical `public_base_url` to an `https://`
+origin. ECM's own policy code does not consult `X-Forwarded-Proto`, `X-Forwarded-Host`
+or `Forwarded`, because it has no trusted-proxy allowlist of its own. That setting
+is how a proxy declares its external scheme. (Note that uvicorn, the server ECM runs under,
+enables its own `ProxyHeadersMiddleware` by default and may rewrite the request scheme
+for clients within `FORWARDED_ALLOW_IPS`, which defaults to `127.0.0.1`. That is
+uvicorn's policy, not ECM's.)
+
+#### Emergency recovery when HTTPS is unreachable
+
+There are two escape hatches. Both send session credentials in plaintext, so use them
+only on a trusted network and close them the moment HTTPS is repaired. Both work
+regardless of whether `public_base_url` is set.
+
+1. **If you can still sign in over HTTPS**, enable **Emergency recovery: allow
+   authenticated sessions over HTTP** in Settings › TLS. While it is on, the TLS panel
+   shows a plaintext-session warning banner and ECM logs a warning.
+2. **If you cannot sign in at all**, stop ECM, set
+   `ECM_ALLOW_HTTP_SESSION_COOKIES=true` on the ECM container, and restart it. ECM logs
+   a warning at startup for as long as it is set. Sign in through HTTP only long enough
+   to repair or disable TLS, then remove the variable (or set it back to `false`) and
+   restart ECM.
+
+Values other than `1`, `true`, `yes` or `on` (including the `false` that
+`docker-compose.yml` ships by default) leave the protection ON.
+
+**Your browser may refuse to open the HTTP port at all. Read this before you need it.**
+Every HTTPS response from ECM carries `Strict-Transport-Security: max-age=31536000`
+(one year, deliberately without `includeSubDomains` and without `preload`). Per
+[RFC 6797 §8.3](https://www.rfc-editor.org/rfc/rfc6797#section-8.3) that pin is scoped
+to the **hostname and is port-agnostic**: once you have visited
+`https://ecm.example.com:6143` even once, your browser will silently upgrade
+`http://ecm.example.com:6100` to `https://ecm.example.com:6100` for a year, with no
+click-through to bypass it. So "browse to `http://ecm.example.com:6100`" is *not* a
+recovery instruction that works on a pinned browser. Use one of these instead:
+
+- **Reach ECM by IP literal**, e.g. `http://192.168.1.50:6100`. HSTS pins are stored
+  per hostname and are never applied to IP addresses, so this always works and is the
+  fastest route.
+- **Use a different hostname** for the same instance (another DNS name, or a
+  `hosts`-file alias) that you have never visited over HTTPS.
+- **Clear the pin** for the hostname: in Chrome/Edge open `chrome://net-internals/#hsts`,
+  enter the domain under *Delete domain security policies*, and delete it. In Firefox,
+  open the History sidebar (or Library › History), right-click the site and choose
+  *Forget About This Site*. Note that this also clears that site's cookies, cache and
+  history. Then browse to the HTTP port.
 
 **Volumes:**
 - `/config` — Persistent storage for database, settings, logos, TLS certificates, and backups
