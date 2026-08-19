@@ -586,6 +586,41 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # ECM candidate scans, one per architecture. The two jobs are deliberate
+  # mirror images of each other: same Trivy action pin, same
+  # `exit-code: '1'`, same `ignore-unfixed: true`, same
+  # `severity: 'CRITICAL,HIGH'`, each reading only the OCI archive its own
+  # build job produced. Change one and change the other, or one
+  # architecture publishes on a weaker bar than its twin.
+  #
+  # This is enforced, not merely asked for: `scripts/check_mcp_supply_chain.py`
+  # requires four scans carrying `exit-code: '1'` and `severity:
+  # 'CRITICAL,HIGH'`, and `attest-image-candidates` below needs all four,
+  # so dropping or weakening one fails `Backend Tests` and stops publication.
+  trivy-scan:
+    name: Container Security Scan (Trivy)
+    runs-on: ubuntu-24.04
+    needs: [build-amd64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ecm-amd64-candidate
+          path: /tmp
+      - name: Verify exact candidate identity
+        run: |
+          python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-archive:/tmp/trivy-ecm-amd64-scan.docker.tar
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: /tmp/trivy-ecm-amd64-scan.docker.tar
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: 'CRITICAL,HIGH'
+
   trivy-scan-arm64:
     name: Container Security Scan (Trivy ARM64)
     runs-on: ubuntu-24.04-arm
@@ -666,6 +701,7 @@ jobs:
       - build-arm64
       - build-mcp-amd64
       - build-mcp-arm64
+      - trivy-scan
       - trivy-scan-arm64
       - trivy-scan-mcp-amd64
       - trivy-scan-mcp-arm64
@@ -676,6 +712,7 @@ jobs:
       && needs.build-arm64.result == 'success'
       && needs.build-mcp-amd64.result == 'success'
       && needs.build-mcp-arm64.result == 'success'
+      && needs.trivy-scan.result == 'success'
       && needs.trivy-scan-arm64.result == 'success'
       && needs.trivy-scan-mcp-amd64.result == 'success'
       && needs.trivy-scan-mcp-arm64.result == 'success'

@@ -1,15 +1,18 @@
 # ADR-001: Dependency Upgrade Validation Gate
 
-> **Status note (CI gate reduction).** The gates this ADR adopted no longer
-> exist. `Container Security Scan (Trivy)` (`trivy-scan`, the ECM AMD64 image
-> scan), `DAST Security Scan` (`dast-scan`) and the Checkov `IaC Security
-> Scan` were removed from `.github/workflows/build.yml` by PO decision. The
-> `build-amd64` fresh-image build survives, because image publication depends
-> on it, and the ARM64 and MCP Trivy scans survive; the AMD64 ECM image is now
-> published without a container scan and nothing runs DAST. Branch protection
-> on `dev` requires four contexts (`Backend Tests`, `Frontend Tests`, and the
-> two `CodeQL Analysis` matrix legs); none of the checks this ADR asked to be
-> made required is among them. Everything below describes the decision as
+> **Status note (CI gate reduction).** Two of the three gates this ADR adopted
+> survive; one does not. `DAST Security Scan` (`dast-scan`) and the Checkov
+> `IaC Security Scan` were removed from `.github/workflows/build.yml` by PO
+> decision, so **nothing boots the candidate image or runs an OWASP ZAP
+> baseline any more**. `build-amd64` and `Container Security Scan (Trivy)`
+> (`trivy-scan`) both survive, alongside their ARM64 and MCP counterparts: all
+> four published images are Trivy-scanned at CRITICAL/HIGH before
+> `attest-image-candidates` will attest them, and therefore before anything
+> publishes. What did NOT happen is this ADR's actual ask: the dependency-
+> manifest `paths-filter` trigger was never implemented, and none of these
+> jobs is a branch-protection required check. Branch protection on `dev`
+> requires four contexts (`Backend Tests`, `Frontend Tests`, and the two
+> `CodeQL Analysis` matrix legs). Everything below describes the decision as
 > taken, not the pipeline as it stands.
 
 

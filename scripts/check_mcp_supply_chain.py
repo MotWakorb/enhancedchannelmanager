@@ -83,11 +83,22 @@ def check_repository(root: Path) -> list[str]:
     ]
     if "ignore-unfixed:" in mcp_scan_section:
         failures.append("MCP image scans ignore unfixed Critical/High findings")
-    # Three image scans remain: ECM arm64 and both MCP architectures. The ECM
-    # amd64 Trivy scan and the DAST scan were removed with the CI gate
-    # reduction, so this floor is three rather than four.
+    # Four image scans: ECM amd64, ECM arm64, and both MCP architectures.
+    # Every published architecture is scanned on the same bar, which is why
+    # the floor is four and not three.
+    #
+    # Count settings, not prose. These literals also appear inside build.yml's
+    # own comments describing the policy, and a raw whole-file count therefore
+    # reads those comments as scans: with the comment block that documents this
+    # very floor in place, deleting the ECM amd64 scan job outright still left
+    # five `exit-code` and four `severity` matches, so the floor passed on three
+    # real scans. Comment lines are stripped first so the count is of settings
+    # a runner would actually apply.
+    build_settings = "\n".join(
+        line for line in build.splitlines() if not line.lstrip().startswith("#")
+    )
     for setting in ("exit-code: '1'", "severity: 'CRITICAL,HIGH'"):
-        if build.count(setting) < 3:
+        if build_settings.count(setting) < 4:
             failures.append(f"MCP image scans do not enforce {setting}")
     if "outputs: type=oci" not in build or "candidate_image.py digest" not in build:
         failures.append("MCP candidates do not produce verified OCI digests")

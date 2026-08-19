@@ -70,5 +70,6 @@ def test_workflow_gates_dev_dependency_prs_before_merge():
     for check_name in (
         "Frontend Security Scan",
         "Backend Security Scan",
+        "Container Security Scan (Trivy)",
     ):
         assert check_name in workflow

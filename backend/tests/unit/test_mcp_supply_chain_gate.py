@@ -94,6 +94,31 @@ def test_policy_rejects_mcp_scans_that_ignore_unfixed_high_findings(tmp_path):
     assert any("unfixed Critical/High" in failure for failure in failures), failures
 
 
+def test_policy_rejects_deleting_the_ecm_amd64_image_scan(tmp_path):
+    """The four-scan floor must fail on the mutation it exists to catch.
+
+    build.yml documents this floor in a comment that quotes the very literals
+    the floor counts. A whole-file count therefore scored those comment lines
+    as scans, and deleting the ECM amd64 scan job outright still left four
+    matches, so the floor passed on three real scans. The gate strips comment
+    lines before counting; this pins that.
+    """
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    workflow = tmp_path / ".github/workflows/build.yml"
+    contents = workflow.read_text(encoding="utf-8")
+    scan_start = contents.index("  trivy-scan:\n")
+    scan_end = contents.index("  trivy-scan-arm64:\n")
+    without_amd64_scan = contents[:scan_start] + contents[scan_end:]
+    assert "  trivy-scan:\n" not in without_amd64_scan
+    workflow.write_text(without_amd64_scan, encoding="utf-8")
+
+    failures = gate.check_repository(tmp_path)
+
+    assert any("exit-code: '1'" in failure for failure in failures), failures
+    assert any("severity: 'CRITICAL,HIGH'" in failure for failure in failures), failures
+
+
 def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
     gate = _load_gate()
     _copy_policy_files(gate, tmp_path)

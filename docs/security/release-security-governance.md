@@ -15,8 +15,10 @@ its absence is explained or the control is restored.
 The checks are against the live settings rather than documentation:
 
 - `main` requires the four test/CodeQL contexts plus `Release Cut Gate`;
-- `dev` requires those same four test/CodeQL contexts. The ADR-001 image,
-  DAST, and Trivy dependency gates were removed and are no longer expected;
+- `dev` requires those same four test/CodeQL contexts. The ADR-001 image and
+  Trivy gates were never made required contexts and still are not, though
+  `build-amd64` and all four Trivy scans do run and do block publication;
+  the DAST gate was removed outright and is no longer expected;
 - administrator enforcement is on and force pushes are off on both branches;
 - the remote `beads` branch exists as the current board source;
 - dependency alerts and automated security updates are enabled; and
@@ -29,9 +31,14 @@ not treat a historical snapshot as proof of current state.
 Dependabot checks npm, backend Python, MCP Python, GitHub Actions, and both
 Docker build roots weekly. Compatible minor/patch changes may be grouped;
 major updates remain separate under ADR-001. All update PRs target `dev`.
-The ADR-001 pre-merge dependency gates that used to run on those PRs (fresh
-image build plus DAST plus Trivy) were removed; a dependency bump now merges
-on `Backend Tests`, `Frontend Tests` and CodeQL alone.
+A dependency bump merges on `Backend Tests`, `Frontend Tests` and CodeQL. The
+image build and the four Trivy scans are not absent from the PR — `build.yml`
+runs on every pull request to `dev`, and a dependency manifest is a code path
+by `scripts/classify_changed_paths.py`, so `build-amd64` and all four scans do
+execute there. What ADR-001 asked for and never got is for them to *block* that
+merge: they are advisory on the PR, not required contexts. The DAST gate was
+removed outright. On the push to `dev` after the merge the same four scans run
+again and gate publication, which is where they do block.
 
 ## Bootstrap actions after this change lands
 

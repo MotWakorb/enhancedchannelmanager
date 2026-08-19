@@ -4,10 +4,11 @@
 > four contexts it names (`Backend Tests`, `Frontend Tests`,
 > `CodeQL Analysis (python)`, `CodeQL Analysis (javascript-typescript)`) are
 > now the *entire* required set on `dev`. What has changed is the surrounding
-> pipeline the text below assumes: `dast-scan` and the ECM AMD64 `trivy-scan`
-> were deleted from `build.yml`, so the "unchanged by this ADR" statements
-> about DAST and container CVE coverage no longer hold. `build-amd64` and the
-> ARM64 / MCP Trivy scans survive.
+> pipeline the text below assumes: `dast-scan` was deleted from `build.yml`,
+> so the "unchanged by this ADR" statement about dynamic application security
+> no longer holds. Container CVE coverage is intact: `build-amd64` and all
+> four Trivy scans (ECM amd64/arm64, MCP amd64/arm64) survive and gate
+> attestation.
 
 
 - **Status**: Accepted
