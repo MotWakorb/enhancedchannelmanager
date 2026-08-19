@@ -29,6 +29,11 @@ _CLAIM_LEDGER_LIMIT = 4096
 _consumed_nonces: dict[str, int] = {}
 _ledger_lock = threading.Lock()
 _credential_lock = threading.Lock()
+# One traceback per unhealthy episode, not one per request — see
+# load_mcp_service_credentials. Plain assignment rather than a lock: a race
+# between two concurrent first failures costs at most one duplicate traceback,
+# which is the thing being bounded, not a correctness property.
+_projection_failure_reported = False
 
 
 @dataclass(frozen=True)
@@ -46,12 +51,21 @@ def ensure_mcp_service_credentials(path: Path) -> MCPServiceCredentials:
 def load_mcp_service_credentials(path: Path) -> MCPServiceCredentials | None:
     """Load or create the projection, returning ``None`` instead of raising.
 
-    For callers on a liveness path — the FastAPI startup handler and the auth
-    middleware, which runs on every non-exempt request. An exception out of a
-    startup handler aborts the ASGI lifespan, and an exception out of the
-    middleware is a 500 on every authenticated request, so a projection
-    directory ECM cannot write must not be able to take the whole application
-    down (bead enhancedchannelmanager-04c0u.8).
+    For callers on a liveness path. There are three, and every one of them
+    must go through this function rather than
+    :func:`ensure_mcp_service_credentials`:
+
+    * the FastAPI startup handler (``main.py``) — an exception out of a startup
+      handler aborts the ASGI lifespan and uvicorn exits;
+    * ``main.auth_middleware`` — runs on every non-exempt request;
+    * ``auth.dependencies._is_mcp_service_token``, called by
+      ``get_current_user`` before the JWT decode for every token-bearing
+      request on a dependency-guarded route.
+
+    A projection directory ECM cannot write must not be able to take the whole
+    application down, nor 500 an operator holding a valid JWT while
+    ``/api/health`` — exempt from auth, and what the container ``HEALTHCHECK``
+    probes — still reports healthy (bead enhancedchannelmanager-04c0u.8).
 
     This is not a relaxation of the credential rules. ``None`` means the
     sidecar principal has no credential, so the middleware's MCP branch is
@@ -60,15 +74,45 @@ def load_mcp_service_credentials(path: Path) -> MCPServiceCredentials | None:
     projection directory while it is still root, so reaching ``None`` in
     production means the mount changed underneath a running container.
     """
+    global _projection_failure_reported
     try:
-        return ensure_mcp_service_credentials(path)
-    except (OSError, RuntimeError):
-        logger.exception(
-            "[MCP-AUTH] MCP sidecar credential projection at %s is unusable; "
-            "the MCP service principal is unavailable until it is repaired",
+        credentials = ensure_mcp_service_credentials(path)
+    except (OSError, RuntimeError) as exc:
+        # Latched: this runs on every non-exempt request, so an unlatched
+        # ``logger.exception`` here lets an unauthenticated caller drive two
+        # unbounded stack traces per request — and the likeliest cause of the
+        # broken projection is a full or failing disk, which more logging makes
+        # worse. The first failure of an episode carries the traceback; the
+        # rest are DEBUG one-liners until the projection recovers.
+        if not _projection_failure_reported:
+            _projection_failure_reported = True
+            logger.exception(
+                "[MCP-AUTH] MCP sidecar credential projection at %s is unusable; "
+                "the MCP service principal is unavailable until it is repaired. "
+                "Further failures are logged at DEBUG until it recovers",
+                path.parent,
+            )
+        else:
+            logger.debug(
+                "[MCP-AUTH] MCP sidecar credential projection at %s is still "
+                "unusable: %s",
+                path.parent,
+                exc,
+            )
+        return None
+    if _projection_failure_reported:
+        _projection_failure_reported = False
+        logger.info(
+            "[MCP-AUTH] MCP sidecar credential projection at %s recovered",
             path.parent,
         )
-        return None
+    return credentials
+
+
+def reset_mcp_projection_failure_log_latch() -> None:
+    """Re-arm the degraded-mode log latch. For tests only."""
+    global _projection_failure_reported
+    _projection_failure_reported = False
 
 
 def rotate_mcp_service_credentials(path: Path) -> MCPServiceCredentials:

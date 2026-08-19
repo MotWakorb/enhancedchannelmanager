@@ -29,9 +29,12 @@
 #   * a different uid inside the sidecar cannot read the projection,
 #   * the sidecar's root filesystem is read-only, all capabilities are dropped,
 #     no-new-privileges is set, and /tmp is a bounded noexec/nosuid/nodev tmpfs,
-#   * an authenticated MCP session lists tools through all of that, and
+#   * an authenticated MCP session lists tools through all of that,
 #   * rotating the key through ECM takes effect without a restart, with the
-#     superseded key rejected.
+#     superseded key rejected, and
+#   * a BROKEN projection degrades rather than 5xx-ing authenticated routes,
+#     logs once rather than once per request, and repairs itself without a
+#     restart once the fault is cleared.
 #
 # Usage: scripts/test_mcp_container_hardening.sh
 #
@@ -320,4 +323,75 @@ if verify_authenticated_tools "$old_key" >/dev/null 2>&1; then
 fi
 verify_authenticated_tools "$new_key"
 
-echo "MCP container isolation, real-producer projection, authenticated tools, and live key rotation verified (PUID=$PUID PGID=$PGID)"
+# ── Degraded projection: ECM stays up AND stays usable ────────────────────
+# Everything above exercises only the HEALTHY projection, which is how a route
+# dependency regression survived a first remediation round. The middleware and
+# the startup handler both degraded correctly; /api/health and /api/health/ready
+# are in AUTH_EXEMPT_PATHS and never touch the projection, so the container
+# HEALTHCHECK kept reporting healthy and `depends_on: service_healthy` stayed
+# satisfied — while auth.dependencies._is_mcp_service_token, which
+# get_current_user calls BEFORE the JWT decode for every token-bearing request,
+# still raised and 500'd every dependency-guarded route.
+#
+# The invariant, not that reproduction: no reachable call site may raise out of
+# a request or startup path on an unusable projection, on any branch.
+docker exec --user 0:0 "$ecm_container" \
+  sh -c "printf 'not json at all' > ${projection_dir}/mcp-service.json"
+
+curl -fsS "http://127.0.0.1:${ECM_PORT}/api/health/ready" >/dev/null \
+  || fail "ECM stopped being ready with a corrupt credential projection"
+
+# /api/auth/me depends on get_current_user unconditionally, so it is the
+# dependency seam whether or not auth has been configured. A bearer token that
+# is not a JWT must reach the ordinary 401 — never a 5xx.
+degraded_requests=20
+observed=""
+for _ in $(seq 1 "$degraded_requests"); do
+  observed="$(curl -s -o /dev/null -w '%{http_code}' \
+    -H 'Authorization: Bearer not-a-jwt-at-all' \
+    "http://127.0.0.1:${ECM_PORT}/api/auth/me")"
+  if [ "$observed" != 401 ]; then
+    docker logs --tail 100 "$ecm_container" >&2 || true
+    # Exactly 401, not merely "below 500": a 404 from a route that moved would
+    # otherwise satisfy a <500 check while exercising nothing at all.
+    fail "a corrupt credential projection did not degrade to the ordinary 401 (got $observed)"
+  fi
+done
+echo "-- a corrupt projection degrades to HTTP 401 at the route dependency, not 5xx"
+
+# The journal's actor-resolution middleware calls the same helper on every
+# /api/* request and swallows exceptions into a warning. A line here means the
+# dependency seam is raising again behind that except clause.
+if docker logs "$ecm_container" 2>&1 | grep -q "Failed to resolve request mutation source"; then
+  fail "the degraded projection is still raising inside the journal actor middleware"
+fi
+
+# ... and degraded mode must not become a log amplifier: one report per
+# unhealthy episode, not one stack trace per request, because the likeliest
+# cause of the broken state is a disk problem. 2 tolerates a second ECM process
+# holding its own latch; it is decisively below $degraded_requests either way.
+reports="$(docker logs "$ecm_container" 2>&1 \
+  | grep -c "MCP sidecar credential projection .* is unusable" || true)"
+if [ "$reports" -lt 1 ]; then
+  fail "degraded mode never reported the broken credential projection at all"
+fi
+if [ "$reports" -gt 2 ]; then
+  fail "degraded mode logged the broken projection $reports times over $degraded_requests requests; it must latch"
+fi
+echo "-- degraded mode reported the broken projection $reports time(s) over $degraded_requests requests"
+
+# Recovery: ECM owns the projection, so clearing the fault must re-arm it
+# without a restart.
+docker exec --user 0:0 "$ecm_container" rm -f "${projection_dir}/mcp-service.json"
+curl -s -o /dev/null -H 'Authorization: Bearer not-a-jwt-at-all' \
+  "http://127.0.0.1:${ECM_PORT}/api/auth/me"
+docker exec "$ecm_container" test -f "${projection_dir}/mcp-service.json" \
+  || fail "ECM did not rebuild the credential projection after the fault was cleared"
+observed_owner="$(docker exec "$ecm_container" stat -c '%u:%g' "${projection_dir}/mcp-service.json")"
+assert_equal "$observed_owner" "${PUID}:${PGID}" \
+  "the rebuilt private projection is not owned by the configured PUID/PGID"
+observed="$(docker exec "$ecm_container" stat -c %a "${projection_dir}/mcp-service.json")"
+assert_equal "$observed" "600" "the rebuilt private projection is not owner-only"
+echo "-- ECM rebuilt the projection at PUID/PGID, owner-only, with no restart"
+
+echo "MCP container isolation, real-producer projection, authenticated tools, live key rotation, and degraded-projection survival verified (PUID=$PUID PGID=$PGID)"

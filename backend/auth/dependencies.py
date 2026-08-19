@@ -12,7 +12,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from config import MCP_SERVICE_FILE, get_settings  # get_settings retained for test/back-compat patch seams
-from auth.mcp_service import ensure_mcp_service_credentials
+from auth.mcp_service import load_mcp_service_credentials
 from database import get_session
 from models import User
 from .tokens import decode_token, TokenExpiredError, InvalidTokenError, TokenRevokedError
@@ -44,10 +44,24 @@ def _is_mcp_service_token(token: str) -> bool:
     Uses :func:`hmac.compare_digest` (constant-time) rather than ``==`` to
     avoid a timing oracle on the service key. Missing or empty projected
     credentials never match.
+
+    Never raises on an unusable projection. ``get_current_user`` calls this
+    before the JWT decode for every token-bearing request, and 16 router
+    modules depend on it, so a projection ECM cannot read or write must
+    degrade the sidecar principal here exactly as it does in
+    ``main.auth_middleware`` — otherwise an operator holding a valid JWT gets
+    a 500 from the route dependency while ``/api/health`` (exempt from auth,
+    and what the container HEALTHCHECK probes) still reports healthy
+    (…-04c0u.8). ``None`` means no sidecar principal exists; the empty string
+    it degrades to is rejected by the truthiness guard below rather than
+    reaching ``compare_digest``, so "no credential" can never authenticate an
+    empty bearer token. Pinned by
+    ``tests/auth/test_mcp_sidecar_boundary.py::TestBrokenProjectionAtTheRouteDependencySeam``.
     """
     if not token:
         return False
-    private_key = ensure_mcp_service_credentials(MCP_SERVICE_FILE).backend_key
+    credentials = load_mcp_service_credentials(MCP_SERVICE_FILE)
+    private_key = credentials.backend_key if credentials else ""
     # The public key comparison remains at the dependency seam for direct
     # dependency callers and legacy in-process integrations. Every HTTP API
     # request crosses main.auth_middleware first, which explicitly refuses the

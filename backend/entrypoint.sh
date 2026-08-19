@@ -284,6 +284,54 @@ prepare_mcp_projection_dir() {
         return 0
     fi
 
+    # Everything below this point runs as ROOT, before the exec-time drop to
+    # `gosu appuser`, on a path taken verbatim from MCP_SECRETS_DIR. That makes
+    # this a privileged sink, so refuse the shapes where "prepare this
+    # directory" becomes "re-own something else".
+
+    # An absolute path is the only shape a mount target can legitimately have,
+    # and it is what makes the exact-match refusal below meaningful.
+    case "$projection_dir" in
+        /*) ;;
+        *)
+            print_error "MCP_SECRETS_DIR must be an absolute path, got ${projection_dir}"
+            return 1
+            ;;
+    esac
+
+    # Exact matches only — /var/lib/ecm-mcp is a perfectly good target, /var is
+    # not. Non-recursive, so pointing MCP_SECRETS_DIR at /etc is operator
+    # self-harm rather than a boundary crossing, but it is free to stop.
+    normalized_projection_dir="$projection_dir"
+    while [ "$normalized_projection_dir" != "/" ] \
+        && [ "${normalized_projection_dir%/}" != "$normalized_projection_dir" ]; do
+        normalized_projection_dir="${normalized_projection_dir%/}"
+    done
+    case "$normalized_projection_dir" in
+        /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+            print_error "MCP_SECRETS_DIR refuses the system directory ${projection_dir}"
+            print_error "  Point it at a dedicated directory, e.g. /run/secrets/ecm-mcp."
+            return 1
+            ;;
+    esac
+
+    # A symlinked final component is the one real boundary crossing here.
+    # `mkdir -p` returns 0 on a symlink that resolves to a directory, so the
+    # writability probe below never fires, and both `chown` and `chmod`
+    # dereference the link: a host account with write access to a bind-mounted
+    # parent plants `mcp-secrets -> ../../etc` and collects a root-in-container
+    # `chown appuser /etc` plus `chmod 700 /etc`. Note this would be NEW
+    # surface — the pre-existing `chown -R appuser:appuser /config` does not
+    # follow symlinks encountered during traversal. The other link shapes
+    # (symlink to a file, broken link, plain file) already fail closed at the
+    # mkdir; this refuses them by name too rather than by accident.
+    if [ -L "$projection_dir" ]; then
+        print_error "MCP credential projection ${projection_dir} is a symbolic link"
+        print_error "  Refusing to chown/chmod through it — that would re-own the link target."
+        print_error "  Replace it with a real directory, or point MCP_SECRETS_DIR at one."
+        return 1
+    fi
+
     if ! mkdir -p "$projection_dir" 2>/dev/null; then
         print_error "Failed to create MCP credential projection directory ${projection_dir}"
         return 1

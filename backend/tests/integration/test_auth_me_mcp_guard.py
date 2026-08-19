@@ -130,3 +130,54 @@ class TestRealUserSelfMutationStillWorks:
             },
         )
         assert response.status_code == 200
+
+
+class TestBrokenCredentialProjectionDoesNot500TheRealApp:
+    """…-04c0u.8: the same "never a 500 from this seam" property, real app.
+
+    ``get_current_user`` calls ``_is_mcp_service_token`` before the JWT decode,
+    so an unusable MCP credential projection used to raise straight out of the
+    route dependency: valid-JWT operators got a 500 on every dependency-guarded
+    route while ``/api/health`` and ``/api/health/ready`` (both in
+    ``AUTH_EXEMPT_PATHS``) never touched the projection and the container
+    HEALTHCHECK went on reporting healthy.
+
+    Crosses the real seam — real app, real router, real middleware — rather
+    than the synthetic route used in
+    ``tests/auth/test_mcp_sidecar_boundary.py``.
+    """
+
+    @pytest.mark.asyncio
+    async def test_get_me_401s_on_an_unwritable_projection(
+        self, async_client, tmp_path, monkeypatch
+    ):
+        projection_dir = tmp_path / "ecm-mcp"
+        projection_dir.mkdir()
+        projection_dir.chmod(0o500)
+        monkeypatch.setattr(
+            deps, "MCP_SERVICE_FILE", projection_dir / "mcp-service.json"
+        )
+        try:
+            response = await async_client.get(
+                "/api/auth/me",
+                headers={"Authorization": "Bearer not-a-jwt-at-all"},
+            )
+        finally:
+            projection_dir.chmod(0o700)
+
+        assert response.status_code == 401, response.text
+
+    @pytest.mark.asyncio
+    async def test_get_me_401s_on_a_malformed_projection(
+        self, async_client, tmp_path, monkeypatch
+    ):
+        projection = tmp_path / "mcp-service.json"
+        projection.write_text("not json at all")
+        monkeypatch.setattr(deps, "MCP_SERVICE_FILE", projection)
+
+        response = await async_client.get(
+            "/api/auth/me",
+            headers={"Authorization": "Bearer not-a-jwt-at-all"},
+        )
+
+        assert response.status_code == 401, response.text

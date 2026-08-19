@@ -171,3 +171,64 @@ class TestGenuineFailureIsANamedPreflightError:
         # The message has to tell the operator what to do about it.
         assert "chown" in out
         assert "PUID" in out and "PGID" in out
+
+
+class TestRootPrivilegedPreparationRefusesUnsafeTargets:
+    """The chown/chmod run as root, before the ``gosu`` drop, on an operator
+    string. That makes ``MCP_SECRETS_DIR`` a privileged sink, so preparation
+    has to refuse the shapes where "prepare this directory" turns into
+    "re-own something else".
+
+    Only the symlinked final component is a boundary crossing: ``mkdir -p``
+    returns 0 on a symlink that resolves to a directory (so the existing
+    writability probe never fires), and both ``chown`` and ``chmod``
+    dereference it. A host account with write access to a bind-mounted parent
+    plants ``mcp-secrets -> ../../etc`` and collects a root-in-container
+    ``chown appuser /etc`` plus ``chmod 700 /etc``. The system-directory and
+    relative-path refusals below are operator self-harm rather than a boundary
+    crossing — non-recursive — but they are free to stop.
+    """
+
+    def test_a_symlinked_projection_dir_is_refused_before_chown(self, tmp_path):
+        target = tmp_path / "sensitive"
+        target.mkdir()
+        target.chmod(0o777)
+        link = tmp_path / "mcp-secrets"
+        link.symlink_to(target, target_is_directory=True)
+
+        rc, out = _run_prepare(link)
+
+        assert rc == 1, out
+        assert "symbolic link" in out
+        # The invariant is the target, not the message: nothing about the
+        # thing the link pointed at may have changed.
+        assert stat.S_IMODE(target.stat().st_mode) == 0o777
+        assert link.is_symlink()
+
+    def test_a_broken_symlink_is_refused_by_name_not_by_accident(self, tmp_path):
+        link = tmp_path / "mcp-secrets"
+        link.symlink_to(tmp_path / "does-not-exist", target_is_directory=True)
+
+        rc, out = _run_prepare(link)
+
+        assert rc == 1, out
+        assert "symbolic link" in out
+
+    @pytest.mark.parametrize("system_dir", ["/", "/etc", "/usr", "/var", "/etc/"])
+    def test_a_system_directory_is_refused_before_any_privileged_call(
+        self, system_dir
+    ):
+        rc, out = _run_prepare(system_dir)
+
+        assert rc == 1, out
+        assert "system directory" in out
+        # It must refuse up front, not fall through to the writability probe —
+        # otherwise the chown/chmod have already run by the time it fails.
+        assert "is not writable by" not in out
+
+    def test_a_relative_projection_dir_is_refused(self):
+        rc, out = _run_prepare("var/secrets")
+
+        assert rc == 1, out
+        assert "absolute path" in out
+        assert "is not writable by" not in out

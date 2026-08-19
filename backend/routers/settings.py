@@ -2421,6 +2421,35 @@ async def reset_stats(_admin=RequireHumanAdminForStatisticsReset):
 # MCP API Key Management
 # ============================================================================
 
+def _rotate_private_projection_or_503() -> None:
+    """Rotate the private sidecar projection, or refuse with a named 503.
+
+    …-04c0u.8: an unusable projection must not raise out of a request path.
+    Unlike the liveness callers it must NOT degrade to a no-op — a rotation
+    that silently did not rotate would leave the operator believing a
+    superseded credential was dead — so this stays fail-loud, but as a
+    diagnosable 503 naming the directory rather than an anonymous 500 with a
+    stack trace. The public key in ``settings.json`` has already been written
+    at this point, exactly as before; only the response shape changes.
+    """
+    try:
+        rotate_mcp_service_credentials(MCP_SERVICE_FILE)
+    except OSError as exc:
+        logger.error(
+            "[SETTINGS] MCP credential rotation failed: %s is not writable (%s)",
+            MCP_SERVICE_FILE.parent,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"The MCP credential projection at {MCP_SERVICE_FILE.parent} is not "
+                "writable, so the private sidecar credentials were not rotated. "
+                "Repair the mount (chown it to the container's PUID/PGID) and retry."
+            ),
+        ) from exc
+
+
 @router.post("/mcp-api-key")
 async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     """Generate a new MCP API key (replaces any existing key).
@@ -2452,7 +2481,7 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     settings = get_settings()
     settings.mcp_api_key = secrets.token_urlsafe(32)
     save_settings(settings)
-    rotate_mcp_service_credentials(MCP_SERVICE_FILE)
+    _rotate_private_projection_or_503()
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key generated")
     return {"mcp_api_key": settings.mcp_api_key}
@@ -2477,7 +2506,7 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     settings = get_settings()
     settings.mcp_api_key = ""
     save_settings(settings)
-    rotate_mcp_service_credentials(MCP_SERVICE_FILE)
+    _rotate_private_projection_or_503()
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}

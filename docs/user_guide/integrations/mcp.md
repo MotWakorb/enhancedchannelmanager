@@ -54,6 +54,14 @@ level.** Exclude it from any host-side backup or sync that sweeps the whole
 directory, or move the projection somewhere else by setting `MCP_SECRETS_DIR`
 on the ecm service and mounting that path.
 
+If you do move it, `MCP_SECRETS_DIR` must name an absolute path that is a real
+directory: not a relative path, not a symbolic link, and not a system directory
+such as `/`, `/etc`, `/usr` or `/var`. The container entrypoint chowns and
+chmods that path as root before it drops privileges, and both operations follow
+a symbolic link to its target, so a link there would re-own whatever it points
+at. ECM refuses those shapes during preflight with a named error instead of
+acting on them.
+
 ### After upgrading from v0.18.1 build 0123 or earlier
 
 Earlier builds kept `mcp-service.json` in `CONFIG_DIR`. Moving the projection
