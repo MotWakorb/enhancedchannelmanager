@@ -24,7 +24,7 @@ observations from a lifetime aggregate.
 
 We considered synthesizing rows or running a UNION-of-shapes
 transition window. Both were rejected: synthesized rows would be
-fabricated data that downstream features (popularity ranking, GH-62
+fabricated data that downstream features (popularity ranking,
 watch-time-by-user) cannot distinguish from real observations, and a
 UNION window doubles read cost on every query with no natural close.
 

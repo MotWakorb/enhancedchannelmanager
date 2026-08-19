@@ -8,10 +8,14 @@ edit_uri: edit/dev/docs/
 docs_dir: docs
 
 # Publish ONLY the user-facing guide. Developer/internal docs (architecture,
-# ADRs, security threat models, SRE, runbooks, shipping, testing, commands) are
-# deliberately kept OUT of the public site per COMPONENTS.md (docs tier note).
+# ADRs, security threat models, SRE, runbooks, shipping, testing, commands,
+# QA validation reports) are deliberately kept OUT of the public site per
+# COMPONENTS.md (docs tier note).
 # New top-level *.md files are auto-excluded by /*.md; if a new INTERNAL
 # top-level directory is ever added under docs/, add it to this list too.
+# A directory left off this list is published even when it appears in no nav
+# entry, so the omission is silent: docs/validation/ shipped its bead ids into
+# the public site and the search index that way.
 exclude_docs: |
   /*.md
   !/index.md
@@ -22,6 +26,7 @@ exclude_docs: |
   /security/
   /sre/
   /testing/
+  /validation/
   /user_guide/README.md
   /requirements-docs.txt
 
