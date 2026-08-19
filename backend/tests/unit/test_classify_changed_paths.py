@@ -120,10 +120,10 @@ def test_classifier_consumers_use_only_positive_output_name():
     positive_consumers = [
         REPO_ROOT / ".github/workflows/test.yml",
         REPO_ROOT / ".github/workflows/build.yml",
-        REPO_ROOT / ".claude/hooks/version-advance-guard.sh",
     ]
+    docs_pages = REPO_ROOT / ".github/workflows/docs-pages.yml"
     all_consumers = positive_consumers + [
-        REPO_ROOT / ".github/workflows/docs-pages.yml",
+        docs_pages,
         REPO_ROOT / "docs/shipping.md",
     ]
     for consumer in all_consumers:
@@ -132,7 +132,7 @@ def test_classifier_consumers_use_only_positive_output_name():
     for consumer in positive_consumers:
         text = consumer.read_text(encoding="utf-8")
         assert "code_paths_changed" in text, consumer
-    assert "docs_site_affected" in all_consumers[3].read_text(encoding="utf-8")
+    assert "docs_site_affected" in docs_pages.read_text(encoding="utf-8")
 
 
 # --- Whole-set classification ----------------------------------------------
@@ -432,21 +432,17 @@ class TestWorkflowContract:
 
     # `CodeQL Analysis` is the job name; its matrix expands it into the two
     # required contexts `CodeQL Analysis (python)` and
-    # `CodeQL Analysis (javascript-typescript)`.
+    # `CodeQL Analysis (javascript-typescript)`. With those two, `Backend
+    # Tests` and `Frontend Tests` are the four contexts branch protection on
+    # `dev` requires.
     #
-    # `Operator Docs` hosts two documentation gates and four security
-    # ratchets. It is safe to require because it has no job-level `if:` and no
-    # path filter, so it runs and reports on every event; the assertions in
-    # this class and in TestOperatorDocsRequiredContext are what keep that
-    # true.
+    # `MCP Server Tests` deliberately is NOT here: it still runs in test.yml
+    # and is still worth running, but it no longer gates anything, so the
+    # never-skipped / one-emitter invariants below do not cover it.
     REQUIRED_CONTEXTS = (
         "Backend Tests",
         "Frontend Tests",
-        "MCP Server Tests",
-        "Semgrep Lint",
-        "Version Consistency",
         "CodeQL Analysis",
-        "Operator Docs",
     )
     WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
@@ -556,11 +552,7 @@ class TestWorkflowContract:
         required_job_names = {
             "Backend Tests": "test.yml:backend",
             "Frontend Tests": "test.yml:frontend",
-            "MCP Server Tests": "test.yml:mcp-server",
-            "Semgrep Lint": "test.yml:semgrep-lint",
-            "Version Consistency": "test.yml:version-consistency",
             "CodeQL Analysis": "build.yml:codeql-analysis",
-            "Operator Docs": "test.yml:operator-docs",
         }
         found: dict[str, str] = {}
         for path in self._workflow_files():
@@ -604,7 +596,6 @@ def _expected_verdict_manifest():
     code_false = "needs.detect.outputs.code_paths_changed == 'false'"
     code_true = "needs.detect.outputs.code_paths_changed != 'false'"
     code_always = "always() && " + code_true
-    main_only = code_true + " && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
     dependency_pr = (
         code_true
         + " && ((github.event_name == 'push' && github.ref == 'refs/heads/main') "
@@ -616,7 +607,6 @@ def _expected_verdict_manifest():
     )
     for job in ("security-scan-frontend", "security-scan-backend"):
         expected.add(("build.yml", ("jobs", job, "if"), dependency_pr))
-    expected.add(("build.yml", ("jobs", "iac-security-scan", "if"), main_only))
     expected.add(("build.yml", ("jobs", "security-scan-mcp", "if"), code_true))
     for job in ("build-amd64", "build-arm64", "build-mcp-amd64", "build-mcp-arm64"):
         expected.add(("build.yml", ("jobs", job, "if"), code_true))
@@ -639,8 +629,7 @@ def _expected_verdict_manifest():
         # the assertion step so a transient registry failure does not report
         # under a security-sounding name (…-04c0u.8).
         "mcp-server": (1, 6, 9),
-        "frontend": (1, 9, 12),
-        "semgrep-lint": (1, 4, 5),
+        "frontend": (1, 6, 9),
     }
     for job, (first_true, last_true, last_always) in step_contracts.items():
         expected.add(("test.yml", ("jobs", job, "steps", 0, "if"), code_false))
@@ -648,26 +637,6 @@ def _expected_verdict_manifest():
             expected.add(("test.yml", ("jobs", job, "steps", index, "if"), code_true))
         for index in range(last_true + 1, last_always + 1):
             expected.add(("test.yml", ("jobs", job, "steps", index, "if"), code_always))
-    expected.add(
-        (
-            "test.yml",
-            ("jobs", "version-consistency", "steps", 3, "if"),
-            code_true + " && github.event_name == 'pull_request' && github.base_ref == 'dev'",
-        )
-    )
-    expected.add(
-        (
-            "test.yml",
-            ("jobs", "version-consistency", "steps", 4, "env", "CODE_PATHS_CHANGED"),
-            "${{ needs.detect.outputs.code_paths_changed }}",
-        )
-    )
-    for job in (
-        "fake-test-guard", "visual-regression", "operator-workspace-release",
-        "sr-only-hidden", "edit-mode-immediacy-surfaces",
-        "edit-mode-numbering-guards", "edit-mode-session-restore",
-    ):
-        expected.add(("test.yml", ("jobs", job, "if"), code_true))
     return expected
 
 
@@ -1694,14 +1663,6 @@ def test_extra_unrelated_authority_step_is_deliberately_forbidden(tmp_path):
         _workflow_action_contract(tmp_path)
 
 
-def test_version_consistency_summary_uses_positive_verdict_polarity():
-    workflow = (TestWorkflowContract.WORKFLOW_DIR / "test.yml").read_text(encoding="utf-8")
-    summary = workflow.split("- name: Summarize what this check did", 1)[1]
-    summary = summary.split("# ─── Fake-test guard", 1)[0]
-    assert 'elif [ "$CODE_PATHS_CHANGED" = "false" ]; then' in summary
-    assert "NOT run (inert machine-state change)" in summary
-
-
 # --- The published user-guide site has one path definition ------------------
 
 
@@ -1819,299 +1780,3 @@ class TestDocsSiteWorkflowContract:
                 f"{relative} is in DOCS_SITE_FILES but is not in the tree. "
                 f"A stale entry means a real site input is no longer tracked."
             )
-
-
-# The step-level condition a gate in the Operator Docs job may carry, and the
-# only one. The ratchets diff the pull request against its merge base; on a
-# push to dev or main `github.base_ref` is empty, so there is no base ref to
-# fetch and nothing to diff. Skipping a STEP does not skip the JOB, so the
-# required context still reports a conclusion on every event, which is the
-# property branch protection depends on. A step-level condition is therefore
-# safe here in a way a job-level one is not.
-PULL_REQUEST_ONLY = "github.event_name == 'pull_request'"
-
-# The gates the `Operator Docs` context is trusted to enforce, keyed by the
-# step `id:` the workflow gives each one. The value is the human description,
-# the accepted `run:` command prefixes, and the exact step-level `if:` that
-# gate is allowed to carry (`None` meaning it must carry none at all).
-#
-# The detect-secrets gate accepts two prefixes because the step deliberately
-# runs the BASE ref's copy of the script when it exists and falls back to
-# HEAD's only to bootstrap a base that predates the helper. Either branch is
-# a real invocation, so pinning one of them would turn a legitimate cleanup
-# of the other into a red build.
-#
-# This table is the pinned half. The half derived from the workflow is the set
-# of step ids the job's own run summary reports on, which
-# `test_gate_inventory_matches_the_run_summary` asserts is the same set: a
-# seventh gate, or a gate that moves out of this job, cannot be added or
-# removed without a deliberate edit here.
-OPERATOR_DOCS_GATES = {
-    "docs_check": (
-        "the link, terminology and screenshot check",
-        ("npm run docs:check",),
-        None,
-    ),
-    "em_dash_ratchet": (
-        "the em-dash ratchet",
-        ("python3 scripts/check_em_dashes.py",),
-        PULL_REQUEST_ONLY,
-    ),
-    "pii_ratchet": (
-        "the personal-identifier and ECM-credential ratchet",
-        ("python3 scripts/check_pii.py",),
-        PULL_REQUEST_ONLY,
-    ),
-    "secrets_ratchet": (
-        "the generic detect-secrets ratchet",
-        (
-            'python3 "$RUNNER_TEMP/check_secrets.py"',
-            "python3 scripts/check_secrets.py",
-        ),
-        PULL_REQUEST_ONLY,
-    ),
-    "binary_artifacts": (
-        "the added binary-artifact ratchet",
-        ("python3 scripts/check_binary_artifacts.py",),
-        PULL_REQUEST_ONLY,
-    ),
-    "site_build": (
-        "the strict published-site build",
-        ("mkdocs build --strict",),
-        None,
-    ),
-}
-
-# Job-level keys the `Operator Docs` job may declare. None of them can skip
-# the job, change the name it reports under, or hide its failure. Every other
-# key is refused by default, because the ways to break a required context are
-# open-ended and an allowlist fails on the ones nobody thought of:
-#
-#   * `if:` and `needs:` can leave the job SKIPPED, and a required context
-#     that never reports blocks the pull request with no admin bypass.
-#   * `strategy:` expands the context name into `Operator Docs (<value>)`.
-#     build.yml:codeql-analysis is the live proof: its matrix is why the two
-#     required contexts there are `CodeQL Analysis (python)` and
-#     `CodeQL Analysis (javascript-typescript)`, not `CodeQL Analysis`.
-#   * `uses:` makes it a reusable-workflow call, which reports as
-#     `Operator Docs / <inner job>`.
-#   * `continue-on-error: true` reports success no matter what failed.
-#
-# The last two rename or hollow the context rather than skipping it, which is
-# the same outcome for branch protection: the stored name never goes green.
-SAFE_OPERATOR_DOCS_JOB_KEYS = frozenset(
-    {
-        "name",
-        "runs-on",
-        "steps",
-        "permissions",
-        "timeout-minutes",
-        "env",
-        "defaults",
-        "container",
-    }
-)
-
-_STEP_OUTCOME_REFERENCE = re.compile(r"steps\.([A-Za-z0-9_-]+)\.outcome")
-
-
-class TestOperatorDocsRequiredContext:
-    """`Operator Docs` is a branch-protection required context on `dev`.
-
-    It carries six gates, two of them documentation correctness and four of
-    them security ratchets, and until this contract existed nothing stopped an
-    edit from skipping the job, renaming it, or moving a gate out of it. Any
-    of those wedges every pull request instead of failing one, because
-    protection on `dev` is classic with `enforce_admins=true`: a required name
-    that no job reports has no bypass.
-
-    Bead pb2s4 is why the strict site build is one of the gates: a broken link
-    passed `npm run docs:check`, failed `mkdocs build --strict`, and the
-    strict build only ran after the merge."""
-
-    WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test.yml"
-    JOB_ID = "operator-docs"
-    DISPLAY_NAME = "Operator Docs"
-
-    @staticmethod
-    def _operator_docs_job() -> dict:
-        import yaml
-
-        workflow = yaml.safe_load(
-            TestOperatorDocsRequiredContext.WORKFLOW.read_text(encoding="utf-8")
-        )
-        return (workflow.get("jobs") or {}).get(
-            TestOperatorDocsRequiredContext.JOB_ID
-        ) or {}
-
-    @staticmethod
-    def _step_with_id(job: dict, step_id: str) -> dict | None:
-        for step in job.get("steps") or []:
-            if (step or {}).get("id") == step_id:
-                return step
-        return None
-
-    @staticmethod
-    def _invokes(step: dict, prefixes: tuple[str, ...]) -> bool:
-        """Whether the step's `run:` actually invokes one of these commands.
-
-        Matching the raw `run:` text of the whole job would let a comment
-        mentioning the command, or the `echo` that names it in the step
-        summary, satisfy an assertion that the command runs. Both are present
-        in this job, so the distinction is not hypothetical. Comment lines are
-        dropped and the command must START the line."""
-        for line in str(step.get("run", "")).splitlines():
-            stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            if any(stripped.startswith(prefix) for prefix in prefixes):
-                return True
-        return False
-
-    def test_job_key_and_display_name_are_pinned(self):
-        """Both, because they fail differently.
-
-        GitHub matches a required status check by the DISPLAYED job name, so
-        `name:` is what branch protection stores and the only spelling that
-        can orphan the context. Deleting `name:` orphans it too: the job key
-        `operator-docs` becomes the displayed name. The key is pinned as well
-        because it is how every other assertion here finds the job, and
-        without it a renamed key would surface as six confusing "gate is
-        gone" failures instead of one accurate one."""
-        import yaml
-
-        jobs = (
-            yaml.safe_load(self.WORKFLOW.read_text(encoding="utf-8")).get("jobs") or {}
-        )
-        assert self.JOB_ID in jobs, (
-            f"the `{self.JOB_ID}` job is gone from test.yml. It reports the "
-            f"required status check {self.DISPLAY_NAME!r} on `dev`, so "
-            f"removing or renaming the job leaves protection waiting forever "
-            f"for a context nothing emits."
-        )
-        assert (jobs[self.JOB_ID] or {}).get("name") == self.DISPLAY_NAME, (
-            f"test.yml:{self.JOB_ID} no longer displays as "
-            f"{self.DISPLAY_NAME!r}. Branch protection stores the DISPLAYED "
-            f"name, so this rename silently orphans the required context and "
-            f"wedges every pull request. Change branch protection first, then "
-            f"this test, then the workflow."
-        )
-
-    def test_job_declares_only_keys_that_cannot_skip_or_rename_it(self):
-        """The catch-all for failure modes nobody enumerated.
-
-        `paths:`/`paths-ignore:` are not even valid at job level, so GitHub
-        would reject the workflow rather than run a filtered job, but they are
-        refused here too: an editor reaching for one should get an explanation
-        rather than a syntax error."""
-        declared = set(self._operator_docs_job().keys())
-        unsafe = sorted(declared - SAFE_OPERATOR_DOCS_JOB_KEYS)
-        assert not unsafe, (
-            f"test.yml:{self.JOB_ID} declares {unsafe}, which is not on the "
-            f"allowlist of job-level keys that are safe for a required "
-            f"status check. A required context must run on every event and "
-            f"report under exactly one unchanging name: `if:`/`needs:` can "
-            f"skip it, `strategy:` and `uses:` rename it, and "
-            f"`continue-on-error:` hollows it out. Any of those blocks every "
-            f"pull request on `dev`, where `enforce_admins` is true and there "
-            f"is no bypass. If the key is genuinely safe, add it to "
-            f"SAFE_OPERATOR_DOCS_JOB_KEYS with the reason it cannot skip, "
-            f"rename, or hollow the job."
-        )
-
-    def test_job_stays_ungated(self):
-        """Named assertions for the three keys that are actually reached for.
-
-        The allowlist above already refuses these. They are asserted
-        separately because a failure message that names the specific hole is
-        worth more than a generic one, and because gating this job would also
-        defeat its purpose: a Markdown-only change is exactly what it
-        exists to check."""
-        job = self._operator_docs_job()
-        assert "if" not in job, (
-            "the Operator Docs job gained a job-level `if:`. It reports a "
-            "required status check, and GitHub never reports a conclusion for "
-            "a job it skips, so any condition that can evaluate false wedges "
-            "every pull request. Gate the STEPS instead: a skipped step still "
-            "leaves the job reporting."
-        )
-        assert "needs" not in job, (
-            "the Operator Docs job gained a `needs:` dependency. Without an "
-            "explicit `!cancelled()` guard a job with `needs:` is SKIPPED "
-            "when its dependency fails, and a skipped required context never "
-            "reports. It runs unconditionally on purpose."
-        )
-        assert job.get("continue-on-error") is not True, (
-            "the Operator Docs job carries `continue-on-error: true`, so it "
-            "reports success whatever its gates found. A required check that "
-            "cannot go red is decorative."
-        )
-
-    def test_gate_inventory_matches_the_run_summary(self):
-        """The half of the gate list derived from the workflow itself.
-
-        The job's run summary reports one line per gate, each reading that
-        step's `outcome`, so the workflow states its own gate inventory. If
-        the two lists disagree, either a gate was added without deciding
-        whether the required context is now trusted to enforce it, or one was
-        deleted or moved to another job. Moving a gate out of a required
-        context is exactly as dangerous as deleting it: protection still shows
-        green and nothing runs the check."""
-        job = self._operator_docs_job()
-        reported = {
-            match
-            for scalar in _scalar_strings(job)
-            for match in _STEP_OUTCOME_REFERENCE.findall(scalar)
-        }
-        assert reported == set(OPERATOR_DOCS_GATES), (
-            f"the Operator Docs run summary reports on {sorted(reported)} but "
-            f"this contract pins {sorted(OPERATOR_DOCS_GATES)}. `Operator "
-            f"Docs` is a required status check, so its gate list is a "
-            f"branch-protection fact, not an implementation detail: adding, "
-            f"removing, or relocating a gate has to be a deliberate edit to "
-            f"OPERATOR_DOCS_GATES."
-        )
-
-    @pytest.mark.parametrize("step_id", sorted(OPERATOR_DOCS_GATES))
-    def test_gate_is_invoked_by_this_job(self, step_id):
-        description, prefixes, _condition = OPERATOR_DOCS_GATES[step_id]
-        step = self._step_with_id(self._operator_docs_job(), step_id)
-        assert step is not None, (
-            f"{description} (step id `{step_id}`) is no longer a step of the "
-            f"Operator Docs job. If it moved to another job, that job is not "
-            f"the required context: the gate stops blocking merges the moment "
-            f"it leaves this job, whether or not it still runs somewhere."
-        )
-        assert self._invokes(step, prefixes), (
-            f"the `{step_id}` step no longer runs any of {list(prefixes)}, so "
-            f"{description} is present in name only. A required check that "
-            f"reports on a command it does not run is worse than no check."
-        )
-
-    @pytest.mark.parametrize("step_id", sorted(OPERATOR_DOCS_GATES))
-    def test_gate_step_can_fail_the_job(self, step_id):
-        """Finding the command in the file is not enough.
-
-        `continue-on-error: true` swallows the failure and an unexpected `if:`
-        stops the step running, and either produces an `Operator Docs` that is
-        permanently green having checked nothing. Under branch protection that
-        is worse than the job being absent, because absent is visible."""
-        description, _prefixes, condition = OPERATOR_DOCS_GATES[step_id]
-        step = self._step_with_id(self._operator_docs_job(), step_id)
-        assert step is not None, (
-            f"{description} (step id `{step_id}`) is no longer a step of the "
-            f"Operator Docs job."
-        )
-        assert step.get("continue-on-error") is not True, (
-            f"{description} carries `continue-on-error: true`. Its failure "
-            f"would be swallowed and `Operator Docs` would report success "
-            f"having verified nothing."
-        )
-        assert step.get("if") == condition, (
-            f"{description} carries the condition {step.get('if')!r}, not "
-            f"{condition!r}. The only condition a gate here may carry is "
-            f"{PULL_REQUEST_ONLY!r}, and only because it has no merge base to "
-            f"diff on a push. Any other condition silently narrows what the "
-            f"required check covers; pin the exact new condition here rather "
-            f"than loosening the assertion."
-        )

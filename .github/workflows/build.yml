@@ -2,9 +2,10 @@ name: Build and Push Docker Image
 
 # ─── ONE SOURCE OF TRUTH PER REQUIRED CONTEXT (bead enhancedchannelmanager-5rwzy) ──
 #
-# This workflow owns two of the eight required status checks:
+# This workflow owns two of the four required status checks on `dev`:
 # `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)`,
-# both from the `codeql-analysis` matrix below.
+# both from the `codeql-analysis` matrix below. The other two, `Backend
+# Tests` and `Frontend Tests`, come from test.yml.
 #
 # The path filter that used to sit here is gone for the reason spelled out at
 # the top of test.yml: `docs-only-pass.yml` mirrored these two names to fill
@@ -445,33 +446,6 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # IaC Security Scanning
-  # NOT a required context; may skip at the job level (see security-scan-frontend).
-  iac-security-scan:
-    name: IaC Security Scan
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Run Checkov IaC scanner
-        uses: bridgecrewio/checkov-action@1246d92f57abae29d5db5f9aeeed2a9813e52d7d # v12
-        with:
-          directory: .
-          framework: dockerfile,github_actions
-          soft_fail: false
-          output_format: cli
-          download_external_modules: false
-          # Skip CKV2_GHA_1 - CodeQL requires security-events:write permission
-          # Skip CKV_DOCKER_3 - We use gosu in entrypoint to drop to non-root user after fixing volume permissions
-          # Skip CKV_DOCKER_8 - Same reason, entrypoint starts as root then switches to appuser
-          # Skip CKV_GHA_7 - flake-pr-comment.yml's workflow_dispatch.inputs.pr_number is an
-          #   intentional manual-run knob (which PR to re-post the flake comment on); it doesn't
-          #   influence build output, only which PR a read-then-comment job targets.
-          skip_check: CKV2_GHA_1,CKV_DOCKER_3,CKV_DOCKER_8,CKV_GHA_7
-
   # Each architecture is built once into an OCI archive. Verification jobs
   # consume that exact archive; publication later promotes it without rebuilding.
   build-amd64:
@@ -612,30 +586,6 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
-  trivy-scan:
-    name: Container Security Scan (Trivy)
-    runs-on: ubuntu-24.04
-    needs: [build-amd64]
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          name: ecm-amd64-candidate
-          path: /tmp
-      - name: Verify exact candidate identity
-        run: |
-          python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
-          test "$(skopeo --version)" = "skopeo version 1.13.3"
-          skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-archive:/tmp/trivy-ecm-amd64-scan.docker.tar
-      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          input: /tmp/trivy-ecm-amd64-scan.docker.tar
-          format: table
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: os,library
-          severity: 'CRITICAL,HIGH'
-
   trivy-scan-arm64:
     name: Container Security Scan (Trivy ARM64)
     runs-on: ubuntu-24.04-arm
@@ -704,39 +654,6 @@ jobs:
           vuln-type: os,library
           severity: 'CRITICAL,HIGH'
 
-  dast-scan:
-    name: DAST Security Scan
-    runs-on: ubuntu-latest
-    needs: [build-amd64]
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
-        with:
-          name: ecm-amd64-candidate
-          path: /tmp
-      - name: Verify and load exact candidate
-        run: |
-          python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
-          skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-daemon:ecm:dast-test
-      - name: Start candidate
-        run: |
-          docker run -d --name ecm-dast -p 6100:6100 -e DISPATCHARR_URL=http://localhost:9999 ecm:dast-test
-          for attempt in $(seq 1 30); do
-            curl -sf http://localhost:6100/api/health >/dev/null && exit 0
-            sleep 2
-          done
-          docker logs ecm-dast
-          exit 1
-      - name: Run OWASP ZAP baseline policy
-        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
-        with:
-          target: http://localhost:6100
-          rules_file_name: .zap/rules.tsv
-          allow_issue_writing: false
-          fail_action: true
-      - if: always()
-        run: docker logs ecm-dast || true; docker rm -f ecm-dast || true
-
   attest-image-candidates:
     name: Attest Verified Image Candidates
     runs-on: ubuntu-latest
@@ -749,11 +666,9 @@ jobs:
       - build-arm64
       - build-mcp-amd64
       - build-mcp-arm64
-      - trivy-scan
       - trivy-scan-arm64
       - trivy-scan-mcp-amd64
       - trivy-scan-mcp-arm64
-      - dast-scan
     if: >-
       always() && github.event_name == 'push'
       && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
@@ -761,11 +676,9 @@ jobs:
       && needs.build-arm64.result == 'success'
       && needs.build-mcp-amd64.result == 'success'
       && needs.build-mcp-arm64.result == 'success'
-      && needs.trivy-scan.result == 'success'
       && needs.trivy-scan-arm64.result == 'success'
       && needs.trivy-scan-mcp-amd64.result == 'success'
       && needs.trivy-scan-mcp-arm64.result == 'success'
-      && needs.dast-scan.result == 'success'
       && needs.security-scan-mcp.result == 'success'
     steps:
       - name: Bind digests and per-SHA SCA evidence

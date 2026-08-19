@@ -284,39 +284,18 @@ clause above still stands as a convention, but it is not machine-enforced.
 It relies on review, the same as any other style rule the guard doesn't
 reach.
 
-`scripts/check_em_dashes.py` runs in CI as a step of the **Operator Docs**
-job in `.github/workflows/test.yml`. There is exactly one copy: since bead
-`enhancedchannelmanager-5rwzy` that workflow runs on every pull request,
-including a Markdown-only one, so the duplicate that used to live in
-`docs-only-pass.yml` is gone. It scans Markdown under
-`docs/`, plus the top-level `README.md` / `CHANGELOG.md` / `CLAUDE.md`.
-Python and TypeScript were in its scan surface at initial rollout; the PO
-narrowed the scope to documentation only (bead
-`enhancedchannelmanager-3tflw`), so a code comment with an em-dash no
-longer fails CI.
+**Nothing enforces this rule any more.** `scripts/check_em_dashes.py` ran
+as a step of the `Operator Docs` job in `.github/workflows/test.yml`; both
+the script and the job were removed in the CI gate reduction. The rule stands
+as a convention held by review, like the quoted-content clause above.
 
-**It is a ratchet, not a cliff.** It fails only on lines a PR *adds*. The
-pre-existing violations already in the tree are tolerated and reported as a
-count, per the "add the guard, defer the cleanup" call on bead
-`enhancedchannelmanager-3tflw`. Run `python scripts/check_em_dashes.py --all`
-for the full cleanup inventory.
+Only U+2014 (`—`) is an em-dash for the purpose of this rule. En-dashes (`–`)
+and arrows (`→`) are not, and were never flagged. Fenced code blocks, inline
+code spans, link destinations and URLs were exempt and remain fair game.
 
-Only U+2014 (`—`) is flagged. En-dashes (`–`) and arrows (`→`) are not
-em-dashes and are never flagged. The exemptions above are implemented for
-Markdown: fenced code blocks, inline code spans, link destinations, and
-URLs are all skipped.
-
-If a line is genuinely quoted content the rule exempts and the scanner
-cannot tell, suppress it with `em-dash-ok: <reason>` on the **same line**,
-mirroring the `fake-test-ok` convention below. A bare `em-dash-ok` with no
-reason will be rejected at code review.
-
-Run it locally before pushing:
-
-```bash
-python scripts/check_em_dashes.py                     # vs origin/dev
-python scripts/check_em_dashes.py --paths docs/x.md   # one file, in full
-```
+`em-dash-ok: <reason>` markers left in the tree are inert: no scanner reads
+them. Leave them where they are rather than sweeping them out; if the guard
+comes back, they are the exemptions it will need.
 
 ---
 
@@ -779,8 +758,9 @@ should run and why) lives in
 ### Test validity / anti-patterns
 
 *Origin: bead `enhancedchannelmanager-ulp7q` (test-validity audit). The CI
-guard `scripts/check_fake_tests.py` flags the most obvious anti-patterns
-automatically; this rubric covers the broader class.*
+guard `scripts/check_fake_tests.py` used to flag the most obvious
+anti-patterns automatically; it was removed in the CI gate reduction, so this
+rubric is now the whole of the enforcement and it runs at review time.*
 
 #### The "would it bite?" bar
 
@@ -871,15 +851,15 @@ length assertion.
 Both tests are small, deterministic, and have zero always-true assertions.
 They are the template for new tests in this repo.
 
-#### CI guard
+#### No CI guard
 
-`scripts/check_fake_tests.py` runs in CI (see `.github/workflows/test.yml`)
-and fails on the two most unambiguous fake-test markers:
+`scripts/check_fake_tests.py` and its `Fake-Test Guard` job were removed in
+the CI gate reduction. Nothing now fails a pull request on the two markers it
+caught:
 
 - `assert True` in `backend/tests/` and `mcp-server/tests/`
 - `expect(true).toBe(true)` in `frontend/src/**/*.test.{ts,tsx}`
 
-If a site is a genuine intentional tautology (e.g., a third-party assertion
-helper that wraps `true`), suppress it with an inline comment on the **same
-line**: `# fake-test-ok: <reason>` (Python) or `// fake-test-ok: <reason>`
-(TypeScript). The guard skips lines containing `fake-test-ok`.
+Treat both as review-blocking anyway. `fake-test-ok: <reason>` markers already
+in the tree are inert; leave them in place as the record of which tautologies
+were judged genuine.

@@ -53,7 +53,8 @@ def _isolate_private_sidecar_rotation():
 # The key the ROUTER reads as already stored. An angle-bracket placeholder
 # rather than a credential-shaped literal: nothing here depends on its shape,
 # only on it being distinct from whatever the handler mints, so it follows the
-# placeholder half of the convention in ``tests/unit/test_check_pii.py``.
+# placeholder half of the convention in ``docs/pytest_conventions.md``
+# § "Credential Fixtures in Security Tests".
 STORED_KEY_PLACEHOLDER = "<stored-mcp-key-9kwzp8>"
 
 # The two halves of the credential lifecycle, exercised identically.

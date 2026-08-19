@@ -143,12 +143,6 @@ def test_policy_rejects_brittle_vulnerable_fixture_output_matcher(tmp_path):
             "immutable action",
         ),
         (
-            ".github/workflows/build.yml",
-            "fail_action: true",
-            "fail_action: false",
-            "DAST is configured fail-open",
-        ),
-        (
             "mcp-server/Dockerfile",
             "python:3.12-alpine@sha256:",
             "python:3.12-alpine # sha256:",

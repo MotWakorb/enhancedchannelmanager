@@ -42,7 +42,9 @@ does with it, not to the cheapest check it currently passes.
 
 ## Credential Fixtures in Security Tests
 
-A security test that needs a credential-shaped value (a token, a password, a webhook URL) will trip `scripts/check_secrets.py`, the pre-merge secrets ratchet, unless the fixture is built the way `backend/tests/unit/test_check_pii.py` already builds them. That file is the canonical example, and it says so in its own module docstring: fixtures are assembled from repeated or obviously patterned characters, so they carry the right SHAPE for the rule under test without ever resembling a real secret to a human reader or a scanner. It is full of credential shapes (a Telegram bot token, a Discord webhook, hex- and base64-looking values) and appears zero times in `.secrets.baseline`, so this is a proven convention, not a theory.
+A security test that needs a credential-shaped value (a token, a password, a webhook URL) should build the fixture from repeated or obviously patterned characters, so it carries the right SHAPE for the rule under test without ever resembling a real secret to a human reader or a scanner. `backend/tests/routers/test_9kwzp13_alert_method_masking.py` and `backend/tests/routers/test_gi4zn_standard_artifact_full_redaction.py` follow the convention and are the examples to copy.
+
+**This is now a convention, not a gate.** `scripts/check_secrets.py`, the pre-merge secrets ratchet, and its committed `.secrets.baseline` were removed in the CI gate reduction, along with `scripts/check_pii.py`. Nothing scans added lines for credential shapes any more; a real secret in a fixture will merge.
 
 Two techniques. Pick based on whether the value's exact shape is load-bearing for the test:
 
@@ -55,6 +57,6 @@ Two techniques. Pick based on whether the value's exact shape is load-bearing fo
   "password": "<synthetic-dispatcharr-password>"
   ```
 
-**The inline pragma will not save you, on purpose.** `scripts/check_secrets.py` runs `detect-secrets-hook` with `--disable-filter detect_secrets.filters.allowlist.is_line_allowlisted`, so a `# pragma: allowlist secret` comment does nothing, even though that pragma is exactly what detect-secrets' own failure output tells you to add. Disabling it is a deliberate, sound decision: a pragma is exactly what an attacker landing a real secret would also add. Don't spend time on it. Use one of the two techniques above instead.
+**Historical note on the inline pragma.** While the ratchet existed it ran `detect-secrets-hook` with `--disable-filter detect_secrets.filters.allowlist.is_line_allowlisted`, so a `# pragma: allowlist secret` comment did nothing, even though that pragma is exactly what detect-secrets' own failure output tells you to add. That was deliberate: a pragma is exactly what an attacker landing a real secret would also add. Existing fixtures still carry no pragmas for that reason. Use one of the two techniques above rather than adding one.
 
 **A clean-looking failure report can still be incomplete.** The gate prints `FAIL: possible secret finding or ambiguous baseline mutation.` plus the list of changed paths, never the actual finding, because findings must not be echoed into public CI logs. Separately, detect-secrets treats two identical-valued findings in the same file as a single finding, so a second or third occurrence of the same literal can go unlisted. Fixing only the lines the report names does not guarantee a green re-run: grep the file yourself for every occurrence of the value before pushing again. The `KeywordDetector` denylist regex also has no word boundary, so a field like `smtp_password` matches the generic `password` rule; searching for the literal field name will not find every hit either, search for the value instead.

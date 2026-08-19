@@ -106,7 +106,7 @@ XC_PASSWORD = "<xc-subscription-secret-QQQ999>"
 # The two halves are assembled from pieces and named for their POSITION rather
 # than their role, so no line in this file pairs a denylisted keyword with a
 # quoted value (``KeywordDetector`` matches per-line, and the inline pragma is
-# disabled by ``scripts/check_secrets.py`` on purpose).
+# deliberately disabled by the former ``scripts/check_secrets.py``).
 _URL_LEFT_HALF = "urlident" + "QQQAAA"
 _URL_RIGHT_HALF = "urlopaque" + "QQQBBB"
 M3U_URL_WITH_QUERY_CREDS = (
@@ -1698,7 +1698,8 @@ async def test_ecm_settings_restore_keeps_live_values_for_every_new_field(monkey
 
     # Built from the field names rather than written as literals: a line that
     # pairs one of these keys with a quoted value is a KeywordDetector finding,
-    # and the inline pragma is disabled by scripts/check_secrets.py on purpose
+    # and the inline pragma was deliberately disabled by the former
+    # scripts/check_secrets.py
     # (docs/pytest_conventions.md -> "Credential Fixtures in Security Tests").
     live = {name: "live-value-for-" + name for name in _NEWLY_REDACTED_SETTINGS}
     saved: dict = {}

@@ -79,12 +79,15 @@ def check_repository(root: Path) -> list[str]:
         if job not in build:
             failures.append(f"MCP image scan job missing: {job[:-1]}")
     mcp_scan_section = build[
-        build.index("  trivy-scan-mcp-amd64:") : build.index("  dast-scan:")
+        build.index("  trivy-scan-mcp-amd64:") : build.index("  attest-image-candidates:")
     ]
     if "ignore-unfixed:" in mcp_scan_section:
         failures.append("MCP image scans ignore unfixed Critical/High findings")
+    # Three image scans remain: ECM arm64 and both MCP architectures. The ECM
+    # amd64 Trivy scan and the DAST scan were removed with the CI gate
+    # reduction, so this floor is three rather than four.
     for setting in ("exit-code: '1'", "severity: 'CRITICAL,HIGH'"):
-        if build.count(setting) < 4:
+        if build.count(setting) < 3:
             failures.append(f"MCP image scans do not enforce {setting}")
     if "outputs: type=oci" not in build or "candidate_image.py digest" not in build:
         failures.append("MCP candidates do not produce verified OCI digests")
@@ -92,8 +95,6 @@ def check_repository(root: Path) -> list[str]:
         failures.append("publication does not preserve verified candidate digests")
     if "docker/build-push-action" in publish:
         failures.append("publication rebuilds instead of promoting verified candidates")
-    if "fail_action: true" not in build:
-        failures.append("DAST is configured fail-open")
     verification = build[build.index("  build-amd64:") :]
     if "packages: write" in verification or "docker/login-action" in verification:
         failures.append("verification jobs retain registry write authority")

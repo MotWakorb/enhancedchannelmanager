@@ -1,5 +1,15 @@
 # ADR-005: Code Security Gating Strategy (CodeQL Delta-Zero)
 
+> **Status note (CI gate reduction).** This ADR's own mandate is intact: the
+> four contexts it names (`Backend Tests`, `Frontend Tests`,
+> `CodeQL Analysis (python)`, `CodeQL Analysis (javascript-typescript)`) are
+> now the *entire* required set on `dev`. What has changed is the surrounding
+> pipeline the text below assumes: `dast-scan` and the ECM AMD64 `trivy-scan`
+> were deleted from `build.yml`, so the "unchanged by this ADR" statements
+> about DAST and container CVE coverage no longer hold. `build-amd64` and the
+> ARM64 / MCP Trivy scans survive.
+
+
 - **Status**: Accepted
 - **Date**: 2026-04-21 (proposed) / 2026-04-21 (accepted)
 - **Author**: IT Architect persona (on behalf of PO)

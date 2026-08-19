@@ -16,7 +16,6 @@ SCRIPT = Path(
     )
 )
 WORKFLOW = ROOT / ".github" / "workflows" / "release-cut-gate.yml"
-AUDIT_WORKFLOW = ROOT / ".github" / "workflows" / "security-governance-audit.yml"
 
 
 @pytest.fixture(scope="module")
@@ -124,37 +123,3 @@ def test_workflow_consumes_dedicated_authoritative_board_and_policy_helper():
     assert "scripts/release_gate_policy.py check-board" in workflow
     assert "--status open" not in workflow
     assert "gates skipped, passing" not in workflow
-
-
-def test_quarterly_audit_has_owner_visible_live_control_checks():
-    workflow = AUDIT_WORKFLOW.read_text(encoding="utf-8")
-    assert "1 1,4,7,10" in workflow
-    assert "Release Cut Gate" in workflow
-    assert "DAST Security Scan" in workflow
-    assert "vulnerability-alerts" in workflow
-    assert "secret-scanning/alerts?state=open" in workflow
-    assert "branches/beads" in workflow
-
-
-def test_dev_active_tests_workflow_invokes_governance_audit_for_exact_push_sha():
-    import yaml
-
-    audit = AUDIT_WORKFLOW.read_text(encoding="utf-8")
-    tests = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
-    audit_doc = yaml.load(audit, Loader=yaml.BaseLoader)
-    tests_doc = yaml.load(tests, Loader=yaml.BaseLoader)
-    assert set(audit_doc["on"]) == {"workflow_call", "schedule", "workflow_dispatch"}
-    call = tests_doc["jobs"]["security-governance-audit"]
-    assert call["uses"] == "./.github/workflows/security-governance-audit.yml"
-    assert call["if"] == "github.event_name == 'push' && github.ref == 'refs/heads/dev'"
-    assert call["permissions"] == {"contents": "read", "security-events": "read"}
-    assert "with" not in call  # local reusable calls inherit the caller SHA
-    for live_control in (
-        "branches/main/protection",
-        "branches/dev/protection",
-        "branches/beads",
-        "vulnerability-alerts",
-        "automated-security-fixes",
-        "secret-scanning/alerts?state=open",
-    ):
-        assert live_control in audit

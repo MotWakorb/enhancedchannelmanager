@@ -143,7 +143,7 @@ import { SettingsTab } from './SettingsTab';
 // Telegram issues `<bot id>:<exactly 35 characters>`. The 35 characters here
 // are just the alphabet followed by digits, and the value is assembled from
 // parts so no token-shaped literal exists on any single line. Same convention
-// as backend `tests/unit/test_check_pii.py`: keep the real SHAPE, look like
+// as `docs/pytest_conventions.md`: keep the real SHAPE, look like
 // nothing.
 
 const settingsBase = {

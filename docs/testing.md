@@ -30,9 +30,9 @@ This project has comprehensive test coverage at three levels.
 > **Writing a security test that needs a credential-shaped fixture** (a token,
 > password, or webhook URL)? See "Credential Fixtures in Security Tests" in
 > [`docs/pytest_conventions.md`](pytest_conventions.md) before you write the
-> literal. The secrets ratchet (`scripts/check_secrets.py`) will fail the
-> build otherwise, and the fix it suggests (an inline pragma) is deliberately
-> disabled.
+> literal. The convention there is now a convention only: the secrets ratchet
+> (`scripts/check_secrets.py`) that used to enforce it was removed with the CI
+> gate reduction, so nothing fails the build if you ignore it.
 
 Located in `backend/tests/`, run with `cd backend && ../.venv/bin/python -m pytest tests/ -q`
 
@@ -184,10 +184,11 @@ npm run test:e2e:report    # View test report
 > ```
 > Or skip it entirely with `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which
 > builds and serves the checked-out source on its own isolated preview port
-> (`127.0.0.1:4173`) and supplies that base URL itself. This is what the
+> (`127.0.0.1:4173`) and supplies that base URL itself. This is the mode the
 > `Screen-Reader-Only Rendering Guard`, `Operator Workspace Release Matrix`,
 > `Edit Mode Immediacy Surfaces Guard`, `Edit Mode Numbering Guards` and `Edit
-> Mode Session Restore Guard` CI jobs do, and none of them sets `E2E_BASE_URL`.
+> Mode Session Restore Guard` CI jobs used before those jobs were removed; it
+> is now how you run these specs by hand, and it sets no `E2E_BASE_URL`.
 
 ### Rendered-CSS regression guards
 
@@ -248,40 +249,28 @@ Two further browser guards, `control-box-size.spec.ts` and
 `test:css-guard:filter-select`) but no row in the table above. That gap predates
 this section's last revision and is recorded here rather than left invisible.
 
-**CI status: read this before assuming coverage.**
+**CI status: read this before assuming coverage. Every browser guard below
+is now manual-only.**
 
-- `sr-only-hidden.spec.ts` **runs in CI**, as the `Screen-Reader-Only
-  Rendering Guard` job in `.github/workflows/test.yml`. It uses
-  `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which builds the checked-out
-  source and serves it on an isolated preview port with no backend. The shell,
-  Dashboard and Settings all mount that way, so the assertion is reachable,
-  but only because `captureStorageState()` and `openApp()` in
-  `e2e/fixtures/css-guard.ts` state the auth posture themselves when
-  `E2E_EXACT_BUILD` is set. Before bead `enhancedchannelmanager-p388h` the app
-  rendered its shell on an unanswered auth probe, and this job relied on that
-  fail-open without saying so; the app now shows a "Cannot reach ECM" screen
-  instead, which is correct, so the fixture stubs the four posture routes
-  (`/api/auth/status`, `/api/auth/setup-required`, `/api/auth/me`,
-  `/api/session-start`) exactly as `e2e/operator-shell.spec.ts` and
-  `e2e/filter-select-ownership.spec.ts` already do on the same preview build.
-  No data endpoint is stubbed, so the routes render the same empty and error
-  states this guard has always measured.
-  The job is **not** in the required-check set. Making it required means
-  first converting it to the step-gated shape the required jobs use (see
-  "One source of truth per required check" below): it currently skips at the
-  job level on a documentation-only change, and GitHub counts a skipped job
-  as satisfying a required check.
-- `edit-mode-immediacy-surfaces.spec.ts`, `edit-mode-numbering-guards.spec.ts`
-  and `edit-mode-session-restore.spec.ts` **run in CI**, as the `Edit Mode
-  Immediacy Surfaces Guard`, `Edit Mode Numbering Guards` and `Edit Mode
-  Session Restore Guard` jobs in `.github/workflows/test.yml`. They can run
-  there for the same reason `sr-only-hidden.spec.ts` can: the preview build
-  needs no backend. **None of the three is in the required-check set**, and each
-  carries the same caveat as the screen-reader guard above, which is that it
-  gates at the job level on `code_paths_changed` and GitHub counts a skipped job
-  as satisfying a required check. Making any of them required means first
-  converting it to the step-gated shape. Until that happens, a red Edit Mode
-  guard does not block a merge; somebody has to read it.
+The CI gate reduction removed every Playwright job from
+`.github/workflows/test.yml` (`Visual Regression`, `Operator Workspace Release
+Matrix`, `Screen-Reader-Only Rendering Guard`, `Edit Mode Immediacy Surfaces
+Guard`, `Edit Mode Numbering Guards`, `Edit Mode Session Restore Guard`) and
+the two Playwright steps that had been bolted onto the `Frontend Tests` job.
+No surviving workflow installs a browser or invokes `playwright`.
+
+- `sr-only-hidden.spec.ts`, `edit-mode-immediacy-surfaces.spec.ts`,
+  `edit-mode-numbering-guards.spec.ts` and `edit-mode-session-restore.spec.ts`
+  **used to run in CI** and no longer do. The specs, their `npm` scripts and
+  `e2e/fixtures/css-guard.ts` are all unchanged, so they still run by hand
+  with `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which builds the
+  checked-out source and serves it on an isolated preview port with no
+  backend. Nothing runs them for you, and nothing reports when they go red.
+- `e2e/visual/modal-typography-inventory.spec.ts` and
+  `e2e/visual/heatmap.spec.ts` are likewise manual-only, via
+  `npm run test:visual` (`playwright.visual.config.ts`). There is no `npm`
+  script for the modal-typography inventory on its own; invoke it through the
+  config directly.
 - `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts`,
   `contrast-aa.spec.ts`, `cross-route-css-leak.spec.ts` and
   `control-typeface.spec.ts` are **manual-only**.
@@ -523,11 +512,17 @@ Do **not** lower the threshold in the config.
 
 ## One source of truth per required check
 
-`dev` branch protection requires eight status checks: `Backend Tests`,
-`Frontend Tests`, `MCP Server Tests`, `Semgrep Lint`, `Version Consistency`,
-`Operator Docs` (all from `.github/workflows/test.yml`), and
+`dev` branch protection requires four status checks: `Backend Tests` and
+`Frontend Tests` (from `.github/workflows/test.yml`), and
 `CodeQL Analysis (python)` / `CodeQL Analysis (javascript-typescript)` (the
-`codeql-analysis` matrix in `.github/workflows/build.yml`).
+`codeql-analysis` matrix in `.github/workflows/build.yml`). `main` requires
+those four plus `Release Cut Gate`.
+
+The set used to be eight. `Operator Docs`, `Version Consistency`,
+`Semgrep Lint` and `MCP Server Tests` were dropped from branch protection in
+the CI gate reduction; the first three were deleted along with the scripts
+they ran, and `MCP Server Tests` still runs in `test.yml` but no longer gates
+anything.
 
 **Invariant: each of those names is emitted by exactly one job, and that job
 runs on every pull request.**
@@ -571,12 +566,13 @@ of trusting the aggregate.
   reporting failure alongside a real one that passes blocks every mixed pull
   request. The answer is one emitter, not a louder second one.
 
-Jobs that are **not** required contexts (`Fake-Test Guard`, `Visual
-Regression`, `Operator Workspace Release Matrix`, `Screen-Reader-Only
-Rendering Guard`, `Edit Mode Immediacy Surfaces Guard`, `Edit Mode Numbering
-Guards`, `Edit Mode Session Restore Guard`, the image builds) do skip at the
-job level on a inert-only change. Promoting any of them to a required check
-means converting it to the step-gated shape first.
+Jobs that are **not** required contexts (the image builds and scans in
+`build.yml`) do skip at the job level on an inert-only change. Promoting any
+of them to a required check means converting it to the step-gated shape
+first. `MCP Server Tests` is the one non-required job in `test.yml` that keeps
+the always-run, step-gated shape anyway, because
+`publish-verified-dev-images` needs it and refuses to publish on a skipped
+dependency.
 
 `backend/tests/unit/test_classify_changed_paths.py` enforces all of this: it
 pins the classifier's accept/reject boundary and its fail-open behaviour, and
@@ -616,7 +612,7 @@ disabling its deploy.
 
 ### What a green required check actually ran
 
-Because six of the eight required checks gate their real work on
+Because all four required checks gate their real work on
 `code_paths_changed`, the check **name** is the same whether a suite ran or not.
 `Backend Tests` reads as "the backend tests ran" either way.
 
@@ -644,27 +640,21 @@ unparseable report. Argparse is the one exception: a malformed invocation
 exits 2 before the script's own code runs, which is a wiring bug rather than a
 runtime condition, and `continue-on-error` absorbs it either way.
 
-`mkdocs build --strict` runs on every pull request as a step in the
-**Operator Docs** job (bead `enhancedchannelmanager-pb2s4`). It used to run
-only after the merge, in `docs-pages.yml`, so a broken user-guide link merged
-green and surfaced as a failed Pages deploy on `dev`. It checks something
-disjoint from `npm run docs:check`: pb2s4 records a broken link that the
-first passed and the second caught. `Operator Docs` is deliberately ungated:
-it runs its full six gates unconditionally on every pull request, regardless
-of what changed, and it is a required context, so a failure in any of them
-blocks the merge directly.
+`mkdocs build --strict` **no longer runs at pull-request time.** It ran as a
+step of the `Operator Docs` job (bead `enhancedchannelmanager-pb2s4`), and
+that job was deleted in the CI gate reduction. The strict build survives only
+in `docs-pages.yml`, which runs after the merge to `dev`, so a broken
+user-guide link now merges green and surfaces as a failed Pages deploy, the
+exact failure mode pb2s4 was filed to remove. `npm run docs:check` is gone
+too, along with `scripts/check-operator-docs.mjs`.
 
-**That last point is why the required-context contract exists.** A required
+**The required-context contract still applies to what remains.** A required
 name that no job emits blocks every open pull request permanently, not just
 the one that broke it, because `enforce_admins` is true on `dev` and there is
-no admin bypass. `Operator Docs` is safe to require because its job shape
-cannot skip, rename, or hollow itself out: no job-level `if:`, no `paths:`
-filter, and the only step-level condition is the pull-request-only one the
-ratchets need. `backend/tests/unit/test_classify_changed_paths.py::TestOperatorDocsRequiredContext`
-pins that shape, along with the six-gate inventory the job's own run summary
-reports, so a later edit that would quietly weaken the check (an added path
-filter, a renamed job, a gate moved elsewhere, a `continue-on-error`) fails a
-required check instead of merging unnoticed.
+no admin bypass. `backend/tests/unit/test_classify_changed_paths.py::TestWorkflowContract`
+pins the four surviving names to the four jobs that emit them, in both
+directions: a required name no job emits fails, and so does a second job that
+starts emitting one.
 
 ## Container Freshness Check
 
