@@ -21,6 +21,8 @@ from config import (
     CONFIG_DIR,
     CONFIG_FILE,
     MCP_SERVICE_FILE,
+    MCP_SERVICE_FILENAME,
+    superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
 )
@@ -143,7 +145,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0125",
+    version="0.18.1-0126",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -543,7 +545,7 @@ from auth.dependencies import (
     token_matches_user_auth_epoch,
 )
 from auth.mcp_capabilities import is_mcp_route_allowed
-from auth.mcp_service import ensure_mcp_service_credentials, verify_mcp_service_claim
+from auth.mcp_service import load_mcp_service_credentials, verify_mcp_service_claim
 from models import User
 
 
@@ -589,13 +591,20 @@ async def auth_middleware(request: Request, call_next):
                 # to avoid a timing oracle on the static key (bd-1wq7z.24 (a));
                 # the truthiness guards on both operands keep compare_digest from
                 # ever seeing None (it raises on None) and reject an empty key.
-                credentials = ensure_mcp_service_credentials(MCP_SERVICE_FILE)
+                # Never raises: this runs on every non-exempt request, so a
+                # projection directory ECM cannot write must degrade the MCP
+                # principal, not 500 every authenticated request
+                # (…-04c0u.8). ``None`` means no sidecar principal exists, so
+                # the branch below is skipped and the request falls through to
+                # ordinary JWT handling — fail-closed.
+                credentials = load_mcp_service_credentials(MCP_SERVICE_FILE)
                 # The operator-disclosed key authenticates only the MCP
                 # listener. Return an explicit refusal (rather than treating it
                 # as a malformed JWT) so upgrades fail closed and are easy to
                 # diagnose without granting any backend principal.
                 if (
-                    credentials.backend_key
+                    credentials is not None
+                    and credentials.backend_key
                     and token
                     and hmac.compare_digest(token, credentials.backend_key)
                 ):
@@ -1092,8 +1101,49 @@ async def startup_event():
     # Materialize the private sidecar projection before the backend becomes
     # healthy. The MCP container waits on that health check, so its very first
     # tool call can authenticate after a fresh install or restart.
-    ensure_mcp_service_credentials(MCP_SERVICE_FILE)
-    logger.info("[MAIN] MCP sidecar backend credentials are ready")
+    # Must not raise: an exception out of a startup handler aborts the ASGI
+    # lifespan and uvicorn exits, so a projection directory ECM cannot write
+    # would take the entire application down rather than degrade the optional
+    # sidecar (…-04c0u.8). backend/entrypoint.sh prepares that directory while
+    # it is still root; this is the runtime backstop for a mount that changes
+    # afterwards.
+    if load_mcp_service_credentials(MCP_SERVICE_FILE) is None:
+        # The directory is named by the MCP_SECRETS_DIR variable rather than
+        # interpolated: it is derived from that environment read, which makes it
+        # a CodeQL clear-text-logging finding (alert 1905), and the operator who
+        # set the variable can act on its name just as well as on the resolved
+        # path. Same rule at the three auth.mcp_service log sites and in
+        # mcp-server/config.py; enforced by
+        # backend/tests/test_04c0u8_projection_paths_are_not_logged.py.
+        logger.error(
+            "[MAIN] MCP sidecar backend credentials are UNAVAILABLE — the MCP "
+            "sidecar cannot authenticate until the directory named by "
+            "MCP_SECRETS_DIR is writable by this account (it must hold %s)",
+            MCP_SERVICE_FILENAME,
+        )
+    else:
+        logger.info("[MAIN] MCP sidecar backend credentials are ready")
+
+    # SEC-07 — the pre-…-04c0u.8 private projection is not removed by the move.
+    _superseded_projection = superseded_mcp_service_projection()
+    if _superseded_projection is not None:
+        # The superseded path IS interpolated, and deliberately: the whole point
+        # of the warning is to name the exact file the operator should delete,
+        # and it is a CONFIG_DIR path built from a constant filename, so it is
+        # not derived from the MCP_SECRETS_DIR read (see
+        # config.superseded_mcp_service_projection, which builds it from
+        # MCP_SERVICE_FILENAME for exactly this reason). The live projection is
+        # named by file and variable instead, as everywhere else.
+        logger.warning(
+            "[MAIN] A superseded MCP credential file remains at %s. It "
+            "authenticates nothing — this backend reads only %s under the "
+            "directory named by MCP_SECRETS_DIR — but it is still secret "
+            "material in the config volume and host-side backups will capture "
+            "it. Delete it when convenient; ECM will not delete credential "
+            "material for you.",
+            _superseded_projection,
+            MCP_SERVICE_FILENAME,
+        )
 
     # Exit-path diagnostics (bd-0gt2i / GH #546): the loop exception handler
     # can only be installed once the event loop is running. Logs loudly on

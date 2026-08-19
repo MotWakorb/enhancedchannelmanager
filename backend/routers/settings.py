@@ -34,6 +34,7 @@ from config import (
     set_log_level,
     DispatcharrSettings,
     MCP_SERVICE_FILE,
+    MCP_SERVICE_FILENAME,
 )
 from dispatcharr_client import (
     DispatcharrClient,
@@ -2421,6 +2422,49 @@ async def reset_stats(_admin=RequireHumanAdminForStatisticsReset):
 # MCP API Key Management
 # ============================================================================
 
+def _rotate_private_projection_or_503() -> None:
+    """Rotate the private sidecar projection, or refuse with a named 503.
+
+    …-04c0u.8: an unusable projection must not raise out of a request path.
+    Unlike the liveness callers it must NOT degrade to a no-op — a rotation
+    that silently did not rotate would leave the operator believing a
+    superseded credential was dead — so this stays fail-loud, but as a
+    diagnosable 503 naming the projection and the repair rather than an
+    anonymous 500 with a stack trace. The public key in ``settings.json`` has
+    already been written at this point, exactly as before; only the response
+    shape changes.
+
+    Neither the log line nor the 503 body interpolates the resolved directory.
+    It is derived from the ``MCP_SECRETS_DIR`` environment read, which makes it
+    a CodeQL clear-text-logging finding (alert 1923,
+    ``py/clear-text-logging-sensitive-data``), and the operator who configured
+    that variable can act on its name and the filename just as well — which is
+    what the message and the 503 detail both give them. ``str(OSError)`` ends
+    with the path it failed on, so the exception is rendered by class and
+    ``strerror`` rather than interpolated whole. Enforced by
+    ``backend/tests/test_04c0u8_projection_paths_are_not_logged.py``.
+    """
+    try:
+        rotate_mcp_service_credentials(MCP_SERVICE_FILE)
+    except OSError as exc:
+        logger.error(
+            "[SETTINGS] MCP credential rotation failed: the directory named by "
+            "MCP_SECRETS_DIR is not writable, so %s was not replaced (%s: %s)",
+            MCP_SERVICE_FILENAME,
+            type(exc).__name__,
+            exc.strerror or "no error detail",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The MCP credential projection directory named by MCP_SECRETS_DIR "
+                f"is not writable, so {MCP_SERVICE_FILENAME} — the private sidecar "
+                "credentials — was not rotated. Repair the mount (chown it to the "
+                "container's PUID/PGID) and retry."
+            ),
+        ) from exc
+
+
 @router.post("/mcp-api-key")
 async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     """Generate a new MCP API key (replaces any existing key).
@@ -2452,7 +2496,7 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     settings = get_settings()
     settings.mcp_api_key = secrets.token_urlsafe(32)
     save_settings(settings)
-    rotate_mcp_service_credentials(MCP_SERVICE_FILE)
+    _rotate_private_projection_or_503()
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key generated")
     return {"mcp_api_key": settings.mcp_api_key}
@@ -2477,7 +2521,7 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     settings = get_settings()
     settings.mcp_api_key = ""
     save_settings(settings)
-    rotate_mcp_service_credentials(MCP_SERVICE_FILE)
+    _rotate_private_projection_or_503()
     clear_settings_cache()
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}

@@ -1535,15 +1535,17 @@ export async function getMCPStatus(): Promise<{
   reachable: boolean;
   status?: string;
   api_key_configured?: boolean;
-  // Self-diagnosing /health diagnostic (bd-ix1g6). Distinguishes the four
-  // ways a key can be missing so the Settings UI Server Status panel can
-  // explain WHY api_key_configured is false without operator shell access.
+  // Self-diagnosing /health diagnostic (bd-ix1g6). Distinguishes the ways a
+  // key can be missing so the Settings UI Server Status panel can explain WHY
+  // api_key_configured is false without operator shell access.
   // "ok" — key present and non-empty.
-  // "file_not_found" — /config/settings.json missing (volume mount issue).
-  // "invalid_json" — settings.json exists but is corrupted.
-  // "field_missing" — JSON valid but mcp_api_key field absent (legacy file).
-  // "field_empty" — field present but empty (no key generated / revoked).
-  api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
+  // "file_not_found" — the MCP credential projection is missing (volume issue).
+  // "invalid_key" — projection unreadable or ambiguous (…-04c0u.8).
+  // "field_empty" — projection present but empty (no key generated / revoked).
+  // "invalid_json" / "field_missing" — emitted only by pre-…-04c0u.8 sidecars
+  //   that still parsed settings.json; kept so a mixed-version deployment
+  //   still type-checks against the older image's payload.
+  api_key_status?: 'ok' | 'file_not_found' | 'invalid_key' | 'field_empty' | 'invalid_json' | 'field_missing';
   setup_hint?: string;
   tools_available?: number;
   resources_available?: number;

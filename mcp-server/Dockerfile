@@ -18,7 +18,7 @@ COPY . .
 RUN chown -R appuser:appgroup /app
 
 # Environment
-ENV CONFIG_DIR=/config
+ENV MCP_SECRETS_DIR=/run/secrets/ecm-mcp
 ENV ECM_URL=http://ecm:6100
 ENV MCP_PORT=6101
 ENV MCP_BIND_ADDRESS=127.0.0.1

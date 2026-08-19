@@ -45,17 +45,39 @@ services:
       - "6143:6143"
     volumes:
       - ./config:/config
+      # ECM writes MCP credential material here. This is the ONLY ECM-owned
+      # directory the AI-facing sidecar can see.
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp
     environment:
       - PUID=1000
       - PGID=1000
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
 
   ecm-mcp:
     image: ghcr.io/motwakorb/enhancedchannelmanager-mcp:latest
     ports:
       - "127.0.0.1:6101:6101"
     volumes:
-      - ./config:/config:ro
+      # Credential projection only. Do NOT mount /config here: the sidecar is
+      # the process most exposed to prompt injection, and a /config mount puts
+      # settings.json, auth_settings.json, the audit journal, TLS private keys
+      # and every stored backup one file read away from it.
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp:ro
+    # Must match ECM's PUID/PGID above: the projection is owner-only (0600) and
+    # the sidecar can read it only because it runs as the same account.
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
     environment:
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
       - ECM_URL=http://ecm:6100
       - MCP_PORT=6101
       # Container-internal bind; host publishing above remains loopback-only.
@@ -63,7 +85,19 @@ services:
     depends_on:
       ecm:
         condition: service_healthy
+
+volumes:
+  ecm-mcp-secrets:
 ```
+
+**Upgrading from an MCP sidecar that mounted `./config:/config:ro`.** Add the
+`ecm-mcp-secrets` volume and the `MCP_SECRETS_DIR` variable to *both* services
+as shown, then recreate. Recreating the containers alone is not enough. The
+sidecar images from v0.18.1 onward default `MCP_SECRETS_DIR` to
+`/run/secrets/ecm-mcp`, so without that volume the sidecar finds an empty
+directory and reports `api_key_status: file_not_found` permanently. Generate or
+regenerate the key under **Settings > MCP Integration** once the volume is in
+place; that is what publishes the projection.
 
 Or if you're building from source, use the MCP compose overlay:
 
@@ -212,7 +246,7 @@ Things you can ask Claude to do:
 > | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
 > | `mcp_api_key` | **ECM MCP static key:** clients present it in the `Authorization: Bearer` header. This is what the Generate / Regenerate button in Settings > MCP Integration writes. Query-string credentials are rejected. |
 >
-> When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias) — overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
+> When rotating an MCP key, use ECM Settings > MCP Integration. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias): overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). ECM projects only the MCP key into the sidecar's dedicated credential volume. If `/health` reports `api_key_configured: false`, its status distinguishes an absent (`file_not_found`), blank (`field_empty`), or malformed/unreadable (`invalid_key`) projection. Read it with `GET http://localhost:6101/health` on the Docker host.
 >
 > **Migration example.** A v0.17.0 `settings.json` from an operator hit by GH #273:
 > ```json

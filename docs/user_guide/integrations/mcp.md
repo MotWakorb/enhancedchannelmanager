@@ -27,6 +27,57 @@ do not assemble or publish the manifest manually.
 
 ---
 
+## Where the MCP credentials live
+
+ECM publishes MCP credential material into one dedicated directory, set by the
+`MCP_SECRETS_DIR` environment variable on the **ecm** service. It holds exactly
+two files, both written by ECM with mode `0600` and owned by `PUID`:`PGID`:
+
+| File | Contents |
+|-|-|
+| `api-key` | The public client key you paste into Claude Desktop or Claude Code. |
+| `mcp-service.json` | The sidecar's private backend principal key and its separate destructive-confirmation signing key. Never disclosed. |
+
+The MCP Compose overlay and the published-image recipe in the README both set
+`MCP_SECRETS_DIR=/run/secrets/ecm-mcp` and mount a dedicated `ecm-mcp-secrets`
+volume there: read-write for ECM, read-only for the sidecar. The sidecar
+mounts nothing else, so it cannot read `settings.json`, `auth_settings.json`,
+the audit journal, TLS private keys, or backups.
+
+**Without the overlay, `MCP_SECRETS_DIR` defaults to `CONFIG_DIR`.** That is
+deliberate: it keeps a newer ECM backend working under an older Compose file
+whose sidecar still reads `/config`. The consequence is that every deployment
+writes both files, and on a default deployment they land at
+`/config/api-key` and `/config/mcp-service.json`. **If you bind-mount a host
+directory at `/config`, `api-key` is a credential file sitting at its top
+level.** Exclude it from any host-side backup or sync that sweeps the whole
+directory, or move the projection somewhere else by setting `MCP_SECRETS_DIR`
+on the ecm service and mounting that path.
+
+If you do move it, `MCP_SECRETS_DIR` must name an absolute path that is a real
+directory: not a relative path, not a symbolic link, and not a system directory
+such as `/`, `/etc`, `/usr` or `/var`. The container entrypoint chowns and
+chmods that path as root before it drops privileges, and both operations follow
+a symbolic link to its target, so a link there would re-own whatever it points
+at. ECM refuses those shapes during preflight with a named error instead of
+acting on them.
+
+### After upgrading from v0.18.1 build 0123 or earlier
+
+Earlier builds kept `mcp-service.json` in `CONFIG_DIR`. Moving the projection
+does not remove the old copy, so `<CONFIG_DIR>/mcp-service.json` is left
+behind. It authenticates nothing, because the backend reads only the file
+under `MCP_SECRETS_DIR`. It is still secret material that a backup tool will
+capture. ECM logs a warning naming the file on every start and does **not**
+delete it, because deleting credential material on your behalf is
+irreversible. Delete it yourself once you have confirmed MCP is working:
+
+```bash
+docker compose exec ecm rm -f /config/mcp-service.json
+```
+
+---
+
 ## Choose your connection method
 
 ECM's MCP server is authenticated with a static API key (`mcp_api_key`) in an
@@ -412,15 +463,18 @@ docker exec ecm-ecm-mcp-1 curl -s http://localhost:6100/api/health
 ### MCP server online but "API key not configured"
 
 The MCP container's `/health` endpoint reports `api_key_configured: false`. ECM
-and the MCP container share the `/config` volume, and the MCP container reads
-`mcp_api_key` from `settings.json`. The most common causes:
+projects only MCP credential material through the dedicated `ecm-mcp-secrets`
+volume; the sidecar cannot read ECM's `/config` volume. The most common causes:
 
 - **No key generated yet.** Open Settings → MCP Integration and click Generate
   Key. The MCP `/health` endpoint surfaces a machine-readable `api_key_status`
-  (`file_not_found` / `invalid_json` / `field_missing` / `field_empty`) plus a
-  setup hint describing the exact cause.
-- **The two containers don't share the same `/config` volume.** Verify both
-  containers mount the same volume.
+  (`file_not_found` / `invalid_key` / `field_empty`) plus a setup hint
+  describing the exact cause.
+- **The projection volume is missing.** Verify both containers mount the
+  dedicated `ecm-mcp-secrets` volume as shown in `docker-compose.mcp.yml`.
+- **The two containers disagree on identity.** The projection is owner-only,
+  so `PUID`/`PGID` must be identical for `ecm` and `ecm-mcp`; a mismatch shows
+  up as `invalid_key` (public key) or `wrong_owner` (backend credentials).
 
 Diagnose:
 ```bash

@@ -1,7 +1,8 @@
 """Configuration for ECM MCP server.
 
-Reads the MCP API key from the shared /config/settings.json volume
-and ECM connection details from environment variables.
+Reads MCP credentials from a dedicated, read-only projection directory that
+contains nothing but MCP key material, and ECM connection details from
+environment variables. The sidecar never mounts ECM's ``/config`` volume.
 """
 import ipaddress
 import json
@@ -14,9 +15,33 @@ from urllib.parse import urlsplit
 
 logger = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(os.environ.get("CONFIG_DIR", "/config"))
-SETTINGS_FILE = CONFIG_DIR / "settings.json"
-MCP_SERVICE_FILE = CONFIG_DIR / "mcp-service.json"
+# Dedicated credential projection (enhancedchannelmanager-04c0u.8). ECM writes
+# only MCP key material here; the sidecar mounts this directory read-only and
+# has no access to settings.json, auth_settings.json, the journal, TLS keys, or
+# backups.
+#
+# The CONFIG_DIR fallback covers a version-skewed deployment, and covers it
+# only partly. ``mcp-service.json`` HAS lived in CONFIG_DIR since
+# …-04c0u.7, so a .8 sidecar pointed at CONFIG_DIR still finds the private
+# projection a pre-.8 backend wrote. ``api-key`` is new in .8 — a pre-.8
+# backend never wrote it, it kept the public key inside settings.json — so
+# against a pre-.8 backend the public key resolves to ``file_not_found`` until
+# that backend is upgraded. Upgrade the backend, not just the sidecar.
+#
+# ``or`` rather than a ``get`` default so an explicitly empty MCP_SECRETS_DIR=
+# in an .env resolves to CONFIG_DIR instead of Path("") -> the process CWD;
+# backend/config.py resolves the same variable the same way.
+MCP_SECRETS_DIR = Path(
+    os.environ.get("MCP_SECRETS_DIR") or os.environ.get("CONFIG_DIR", "/config")
+)
+# Public client credential — the key operators paste into MCP clients.
+_PUBLIC_KEY_FILENAME = "api-key"
+MCP_KEY_FILE = MCP_SECRETS_DIR / _PUBLIC_KEY_FILENAME
+# Private backend principal key + destructive-confirmation signing key. These
+# are separate secrets from the public key above and from each other
+# (enhancedchannelmanager-04c0u.7); the sidecar refuses a projection it does
+# not own or that is not owner-only.
+MCP_SERVICE_FILE = MCP_SECRETS_DIR / "mcp-service.json"
 
 # ECM backend URL (internal Docker network)
 ECM_URL = os.environ.get("ECM_URL", "http://ecm:6100")
@@ -186,7 +211,7 @@ MCP_ALLOWED_ORIGINS = get_mcp_allowed_origins()
 
 
 def get_mcp_api_key() -> str:
-    """Read the MCP API key from the shared settings.json file.
+    """Read the public MCP client key from the dedicated credential file.
 
     Re-reads from disk on every call so key rotation takes effect
     without restarting the MCP container.
@@ -250,54 +275,78 @@ def get_mcp_api_key_status() -> tuple[str, str]:
 
     Returns a ``(key, status)`` tuple, where ``status`` is one of:
 
-      ``"ok"``             — file exists, JSON valid, ``mcp_api_key`` present, non-empty.
-      ``"file_not_found"`` — ``/config/settings.json`` does not exist on the mounted volume.
-                              Most common deployment misconfiguration signature:
-                              MCP container's ``/config`` mount is empty, points
-                              at a different volume than ECM, or ECM has never
-                              written settings.json (user has never hit Save).
-      ``"invalid_json"``   — file exists but is not valid JSON (corrupted /
-                              partially-written / unrelated file at that path).
-      ``"field_missing"``  — JSON valid but does not contain ``mcp_api_key``
-                              (legacy settings.json predating the MCP feature,
-                              never re-saved). Equivalent to "field empty" in
-                              effect but a distinct symptom to report.
-      ``"field_empty"``    — ``mcp_api_key`` present in the JSON but value is
-                              an empty string (key was revoked, or never
-                              generated since ECM upgraded).
+      ``"ok"``             — file exists and contains one non-empty line.
+      ``"file_not_found"`` — the credential projection does not exist.
+      ``"invalid_key"``    — the projection is unreadable or contains multiple lines.
+      ``"field_empty"``    — the projected credential is empty (revoked/unconfigured).
 
-    The pre-bd-ix1g6 ``get_mcp_api_key()`` collapsed all four failure modes
+    The pre-bd-ix1g6 ``get_mcp_api_key()`` collapsed every failure mode
     into a single empty-string return, making it impossible for an operator
     to diagnose ``/health`` reporting ``api_key_configured: false`` without
     container shell access. This helper preserves that single-string return
     on the original API while letting ``/health`` surface the underlying
     cause to the operator-facing UI.
     """
-    if not SETTINGS_FILE.exists():
-        logger.warning("[MCP-CONFIG] Settings file not found at %s", SETTINGS_FILE)
+    try:
+        metadata = MCP_KEY_FILE.stat()
+    except FileNotFoundError:
+        # The projection path is deliberately NOT interpolated into this
+        # message. It is a filesystem path rather than credential material, so
+        # logging it is not a real disclosure — but it is derived from the
+        # MCP_SECRETS_DIR environment variable, which makes it a
+        # clear-text-logging finding on every scan (CodeQL alert 1894,
+        # py/clear-text-logging-sensitive-data). The operator configured the
+        # path, so naming the variable is as actionable and taints nothing.
+        logger.warning(
+            "[MCP-CONFIG] Credential projection %s not found under the "
+            "configured MCP_SECRETS_DIR mount",
+            _PUBLIC_KEY_FILENAME,
+        )
         return "", "file_not_found"
+    except OSError as exc:
+        logger.error("[MCP-CONFIG] Failed to inspect credential projection: %s", exc)
+        return "", "invalid_key"
+
+    # Same validation the private projection gets at
+    # get_mcp_backend_credentials_status(): regular file, owner-only, owned by
+    # this process. The two files are siblings in one directory written by the
+    # same producer under the same rules, so a reader is entitled to assume
+    # they are validated identically. Every rejection maps onto invalid_key —
+    # /health's documented "unreadable or malformed projection" — rather than
+    # widening the operator-facing status vocabulary; its setup_hint already
+    # names the PUID/PGID mismatch that produces a wrong owner.
+    if not stat.S_ISREG(metadata.st_mode):
+        logger.error("[MCP-CONFIG] Credential projection is not a regular file")
+        return "", "invalid_key"
+    if stat.S_IMODE(metadata.st_mode) != 0o600:
+        logger.error(
+            "[MCP-CONFIG] Credential projection is not owner-only (mode %o)",
+            stat.S_IMODE(metadata.st_mode),
+        )
+        return "", "invalid_key"
+    if metadata.st_uid != os.geteuid():
+        logger.error(
+            "[MCP-CONFIG] Credential projection is owned by uid %d, not %d — "
+            "ECM and the sidecar must share PUID/PGID",
+            metadata.st_uid,
+            os.geteuid(),
+        )
+        return "", "invalid_key"
 
     try:
-        raw = SETTINGS_FILE.read_text()
+        raw = MCP_KEY_FILE.read_text()
     except Exception as e:
-        # Permission denied / IO error reads as a file-read failure. We surface
-        # this as invalid_json rather than introducing a fifth status code —
-        # the user-facing remediation (re-mount, restart container) is the same
-        # and the log line below carries the specific exception class for
-        # operators who do have container access.
-        logger.error("[MCP-CONFIG] Failed to read settings file: %s", e)
-        return "", "invalid_json"
+        # Permission denied / IO error reads as a projection-read failure. The
+        # user-facing remediation (re-mount, regenerate) is the same, while the
+        # log line carries the specific exception class for operators.
+        logger.error("[MCP-CONFIG] Failed to read credential projection: %s", e)
+        return "", "invalid_key"
 
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as e:
-        logger.error("[MCP-CONFIG] settings.json is not valid JSON: %s", e)
-        return "", "invalid_json"
-
-    if "mcp_api_key" not in data:
-        return "", "field_missing"
-
-    key = data["mcp_api_key"] or ""
+    lines = raw.splitlines()
+    if len(lines) > 1:
+        logger.error("[MCP-CONFIG] Credential projection contains multiple lines")
+        return "", "invalid_key"
+    key = lines[0] if lines else ""
     if not key:
         return "", "field_empty"
     return key, "ok"

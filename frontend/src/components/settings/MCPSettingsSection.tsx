@@ -50,10 +50,11 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     tools_available?: number;
     // Self-diagnosing /health diagnostic (bd-ix1g6) — when reachable=true
     // but api_key_configured=false, api_key_status tells the operator WHY
-    // (file_not_found / invalid_json / field_missing / field_empty), and
-    // setup_hint carries a remediation matching the cause.
+    // (file_not_found / invalid_key / field_empty), and setup_hint carries a
+    // remediation matching the cause. The two settings.json-era values are
+    // still accepted from pre-…-04c0u.8 sidecar images.
     api_key_configured?: boolean;
-    api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
+    api_key_status?: 'ok' | 'file_not_found' | 'invalid_key' | 'field_empty' | 'invalid_json' | 'field_missing';
     setup_hint?: string;
   } | null>(null);
 
