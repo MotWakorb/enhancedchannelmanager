@@ -179,8 +179,15 @@ def _open_private_binary(path: Path):
 
     The explicit ``fchmod`` also repairs an existing destination whose mode was
     broader; relying on the process umask would protect only newly-created files.
+
+    ``O_NOFOLLOW`` is part of the guarantee, not decoration: without it a symlink
+    planted at the artifact path is FOLLOWED — measured — so the open truncates,
+    overwrites and ``fchmod(0600)``s the link's target instead of the artifact.
+    It requires prior local write access to the backups directory, so this is
+    hardening rather than a live path, but the flag is free and the failure it
+    prevents is silent.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, 0o600)
         return os.fdopen(fd, "wb")

@@ -385,9 +385,9 @@ export function BackupRestoreSection({ isAdmin }: Props) {
             it. */}
         <p className="backup-card-description">
           Backups saved on the server, in /config/backups/ — YAML exports and .zip artifacts
-          alike, however they were produced. A .zip here is either a DBAS artifact or a
-          pre-v0.18.0 full backup, and a full backup also carries TLS certificates and uploaded
-          files.
+          alike, however they were produced. A .zip here is either a DBAS artifact or a full
+          backup, and a full backup taken before v0.18.0 also carries TLS certificates and
+          uploaded files.
         </p>
         {loadingSaved ? (
           <div className="backup-loading">
@@ -488,12 +488,28 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <span className="material-icons">cloud_download</span>
           <h3>Create Full Backup</h3>
         </div>
+        {/* Bead enhancedchannelmanager-04c0u.13. Both strings described an
+            artifact this build no longer produces. The card promised TLS
+            certificates and M3U files; since BACKUP_DIRS narrowed to
+            ["uploads/logos"] the archive carries neither, and an operator who
+            rebuilt a container trusting that promise would find the TLS private
+            key permanently gone — there is no second copy. The warning named
+            "certificates" for the same reason. What IS still sensitive here is
+            real and unchanged: the archive is plaintext, and settings.json masks
+            credential-class fields by NAME, so it keeps the Dispatcharr
+            username. */}
         <p className="backup-card-description">
-          Download a full backup including settings, database, uploaded logos, TLS certificates, and M3U files.
+          Download a full backup of settings, the database, and uploaded logos. It does{' '}
+          <strong>not</strong> include TLS certificates or uploaded M3U files — copy
+          /config/tls and /config/m3u_uploads separately if you need them.
         </p>
         <div className="backup-sensitive-warning warning-level">
           <span className="material-icons">warning</span>
-          <span>This backup contains sensitive data including passwords and certificates.</span>
+          <span>
+            This backup contains sensitive data. It is plaintext and is not a redacted
+            artifact — it keeps your Dispatcharr username and any text you authored. Treat
+            the file as a secret.
+          </span>
         </div>
         {downloading ? (
           <div className="backup-loading">

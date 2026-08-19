@@ -77,7 +77,12 @@ class YamlBackupTask(TaskScheduler):
             # file with a broader mode is corrected rather than reused. The
             # descriptor is closed exactly once: by os.close only if fdopen
             # never took ownership of it, by the context manager otherwise.
-            fd = os.open(filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            # O_NOFOLLOW because this path, unlike save_backup, has no
+            # resolve()+relative_to check in front of it: without the flag a
+            # symlink planted here is followed and its target truncated.
+            fd = os.open(
+                filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+            )
             try:
                 os.fchmod(fd, 0o600)
                 backup_file = os.fdopen(fd, "w", encoding="utf-8")

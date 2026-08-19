@@ -574,6 +574,11 @@ _REDACT_KEYS = frozenset(
         "private_key",
         "auth_token",
         "bearer_token",
+        # No current writer puts a passphrase into alert_methods.config or
+        # task_schedules.parameters — DbasBackupTask.get_config deliberately
+        # omits it — so this closes the class against the NEXT writer rather
+        # than a measured exposure (bead …-04c0u.13 review).
+        "passphrase",
     }
 )
 
@@ -1102,8 +1107,16 @@ def _get_backup_filename() -> str:
 
 
 def _open_private_binary(path: Path):
-    """Open a local backup artifact for write and enforce owner-only access."""
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    """Open a local backup artifact for write and enforce owner-only access.
+
+    ``O_NOFOLLOW`` is part of the guarantee, not decoration: without it a symlink
+    planted at the artifact path is FOLLOWED — measured — so the open truncates,
+    overwrites and ``fchmod(0600)``s the link's target instead of the artifact.
+    It requires prior local write access to the backups directory, so this is
+    hardening rather than a live path, but the flag is free and the failure it
+    prevents is silent.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, 0o600)
         return os.fdopen(fd, "wb")
@@ -3626,6 +3639,46 @@ def _post_restore_account_notices() -> list[str]:
     return notices
 
 
+# Directory trees a legacy restore recreates that must NOT be world-readable, and
+# the modes they are recreated with. ``tls`` holds a private key; the loop below
+# does rmtree -> mkdir -> write_bytes at the process UMASK, so it CHOOSES the
+# mode rather than inheriting an existing one, and at the container's umask 002
+# that choice was 0775/0664. These are the same modes ``backend/tls/storage.py``
+# (``ensure_directory`` / ``save_certificate``) enforces when ECM writes the
+# tree itself, so a restored key is no more exposed than a freshly issued one.
+_RESTORED_DIR_MODES: dict[str, tuple[int, int]] = {
+    "tls": (0o700, 0o600),
+}
+
+
+def _apply_restored_directory_modes(dir_rel: str, dir_path: Path, names: list[str]) -> None:
+    """Tighten the permissions of a directory tree the restore just recreated.
+
+    A tree with no entry in :data:`_RESTORED_DIR_MODES` is left at the process
+    umask, which is correct for ``uploads/logos`` and ``m3u_uploads`` — those are
+    served content, not key material.
+
+    Args:
+        dir_rel: The tree's path relative to ``CONFIG_DIR``.
+        dir_path: The absolute directory just recreated.
+        names: The archive member names written into it.
+    """
+    modes = _RESTORED_DIR_MODES.get(dir_rel)
+    if modes is None:
+        return
+    dir_mode, file_mode = modes
+    try:
+        os.chmod(dir_path, dir_mode)
+        for name in names:
+            os.chmod(CONFIG_DIR / name, file_mode)
+    except OSError as e:
+        # Non-fatal: the files are restored and usable. Surface it loudly —
+        # material that should be owner-only is not.
+        logger.warning(
+            "[BACKUP] Could not tighten permissions on restored %s: %s", dir_rel, e
+        )
+
+
 def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     """Restore files from a validated backup zip."""
     restored = []
@@ -3667,7 +3720,15 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
             # Same for this instance's own accounts (bead …-gi4zn).
             _reassert_auth_rows_after_restore(prior_auth_rows)
 
-        # Restore directories — clear existing before writing
+        # Restore directories — clear existing before writing.
+        #
+        # The ``if dir_files:`` guard is load-bearing in BOTH directions, not a
+        # micro-optimization. A newly produced ZIP carries no ``tls/`` or
+        # ``m3u_uploads/`` member (BACKUP_DIRS), so without it every restore of a
+        # current artifact would rmtree the live TLS private key — the same data
+        # loss LEGACY_RESTORE_DIRS exists to prevent, arriving from the other
+        # side. Both halves are pinned by
+        # ``tests/routers/test_04c0u13_backup_confidentiality.py``.
         for dir_rel in LEGACY_RESTORE_DIRS:
             dir_path = CONFIG_DIR / dir_rel
             # Find files in this directory from the zip
@@ -3685,6 +3746,7 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(zf.read(name))
                     restored.append(name)
+                _apply_restored_directory_modes(dir_rel, dir_path, dir_files)
                 logger.info("[BACKUP] Restored %d files to %s", len(dir_files), dir_rel)
 
     finally:
@@ -4277,6 +4339,27 @@ def _gather_settings(include_credentials: bool = False) -> dict:
     for the opt-in passphrase-encrypted cred-carrying migration path. It is only
     ever True inside :func:`build_backup_artifact` when a passphrase is set; the
     review/portability YAML export path always redacts.
+
+    THE NAME MASK IS NOT SUFFICIENT ON ITS OWN (bead …-04c0u.13 review). It
+    matches FIELD NAMES, so a credential riding inside a URL VALUE under a name
+    no denylist covers went out in clear: ``url`` (the Dispatcharr address, whose
+    authority component accepts RFC 3986 userinfo), and equally ``emby_base_url`` /
+    ``jellyfin_base_url`` / ``plex_base_url`` / ``public_base_url``, any of which
+    an operator may have typed with a credential in it. :func:`build_yaml_export`
+    already ran :func:`_redact_credentials_deep` — and therefore
+    :func:`_scrub_credential_urls` — over its copy of this dict, so the LEGACY
+    ZIP producer (:func:`_create_backup_zip`) was the only caller reaching an
+    archive without it. Applying it here closes that one gap at the source rather
+    than at one producer, and is idempotent for the YAML path.
+
+    Restore is unaffected for the shape that matters:
+    :func:`_scrub_credential_urls` returns the WHOLE-VALUE sentinel when the
+    value IS the credential-bearing URL, which is the shape of every settings
+    field above, and :func:`_merge_settings_preserving_redacted` skips exactly
+    that value — so a restore keeps the working on-disk address instead of
+    overwriting it with a half-URL. Pinned by
+    ``tests/routers/test_04c0u13_backup_confidentiality.py::
+    test_a_restore_preserves_the_working_url_the_producer_redacted``.
     """
     settings = get_settings()
     data = settings.model_dump()
@@ -4285,6 +4368,11 @@ def _gather_settings(include_credentials: bool = False) -> dict:
         for key in _SETTINGS_CREDENTIAL_FIELDS:
             if key in data:
                 data[key] = REDACTED
+        for key, value in list(data.items()):
+            if isinstance(value, str):
+                scrubbed = _scrub_credential_urls(value)
+                if scrubbed is not None:
+                    data[key] = scrubbed
     return data
 
 
