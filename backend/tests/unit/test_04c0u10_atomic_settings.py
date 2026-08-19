@@ -12,10 +12,22 @@ Two groups of tests live here on purpose:
   temporary-file/atomic-replace write that arrived with the MCP credential
   rotation work. These are characterization tests: they pass before and after
   this bead, and exist so a later refactor cannot quietly drop the guarantee.
-* ``TestSerializedDurableWrite`` pins what this bead adds — deterministic
-  ``0600`` regardless of umask, the parent-directory fsync, and writer
-  serialization within and across processes. Each of these fails against the
-  pre-bead writer.
+
+  Which of them actually pins the atomic replace was measured, not assumed.
+  Mutating ``dev``'s writer to an in-place ``O_TRUNC`` write leaves
+  ``test_concurrent_writers_leave_one_complete_document`` green (5/5) and
+  ``test_independent_processes_each_write_a_complete_document`` green (3/3) —
+  both racing writers happen to produce a parseable document either way. The
+  mutant is killed by ``test_failed_replace_retains_last_known_good`` and
+  ``test_interrupted_write_retains_last_known_good``. Those two are the pin;
+  cite them, not the concurrency pair.
+* ``TestSerializedDurableWrite`` pins what this bead adds — a deterministic
+  ``0600`` regardless of umask, a parent-directory fsync ordered AFTER the
+  replace and unable to fail a save that already committed, writer
+  serialization within and across processes on a bounded wait rather than an
+  unbounded one, a lock file that cannot be turned into a chmod primitive or a
+  permanent wedge, and removal of the credential-bearing temporaries a killed
+  writer leaves behind.
 """
 
 import errno
@@ -27,6 +39,7 @@ import stat
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -127,6 +140,48 @@ class TestAlreadyGuaranteed:
         assert document["url"] == ""
         assert list(isolated_settings.parent.glob(".settings.json.*.tmp")) == []
 
+    def test_independent_processes_each_write_a_complete_document(self, tmp_path):
+        """Six real processes racing the same settings.json.
+
+        Characterization, not an added guarantee: measured green (3/3) against
+        ``dev``'s unlocked, non-atomic writer, because six racing writers of
+        the same short document happen to leave a parseable file either way.
+        It pins that the writer stays crash-safe and owner-only under real
+        multi-process load; the cross-process EXCLUSION this bead adds is
+        pinned by ``TestSerializedDurableWrite`` instead.
+        """
+        writer_source = """
+import sys
+from config import DispatcharrSettings, save_settings
+save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
+"""
+        environment = os.environ.copy()
+        environment["CONFIG_DIR"] = str(tmp_path)
+        environment["PYTHONPATH"] = str(BACKEND_ROOT)
+        processes = [
+            subprocess.Popen(
+                [sys.executable, "-c", writer_source, f"process-{index}"],
+                cwd=str(tmp_path),
+                env=environment,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for index in range(6)
+        ]
+        outcomes = []
+        for process in processes:
+            _stdout, stderr = process.communicate(timeout=120)
+            outcomes.append((process.returncode, stderr))
+
+        assert [code for code, _ in outcomes] == [0] * 6, outcomes
+        settings_file = tmp_path / "settings.json"
+        document = json.loads(settings_file.read_text())
+        assert document["mcp_api_key"] in {f"process-{index}" for index in range(6)}
+        assert document["url"] == ""
+        assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
+        assert list(tmp_path.glob(".settings.json.*.tmp")) == []
+
     def test_mcp_sidecar_observes_rotation_on_the_next_read(self, isolated_settings):
         """Cross-seam: the real sidecar reader against the real backend writer.
 
@@ -154,7 +209,14 @@ class TestAlreadyGuaranteed:
 
 
 class TestSerializedDurableWrite:
-    """What bead 04c0u.10 adds on top of the atomic replace."""
+    """What bead 04c0u.10 adds on top of the atomic replace.
+
+    Not every test here fails against the pre-bead writer — the ones covering
+    failure handling of machinery the pre-bead writer did not have (a rejected
+    directory fsync, an unchmoddable lock file) could not. They pin how the new
+    machinery must behave when it goes wrong, which is where a durability step
+    is most likely to make things worse than it found them.
+    """
 
     @pytest.mark.parametrize("umask_value", [0o000, 0o022, 0o077, 0o177, 0o200])
     def test_mode_is_exactly_owner_only_whatever_the_umask(
@@ -180,19 +242,64 @@ class TestSerializedDurableWrite:
     def test_parent_directory_is_fsynced_after_the_replace(
         self, monkeypatch, isolated_settings
     ):
-        """``os.replace`` is not crash-durable until the directory is synced."""
+        """``os.replace`` is not crash-durable until the directory is synced.
+
+        The ORDER is the whole point, so both operations go into one ordered
+        event list. An earlier version asserted only that a directory fsync
+        happened and which directory it was; moving the fsync to before the
+        replace — same directory, same single call — left it green, and a
+        directory fsync before the rename does not make the rename durable. A
+        crash between the two still loses it and resurrects the previous
+        credentials.
+        """
         real_fsync = os.fsync
-        synced_directories = []
+        real_replace = os.replace
+        events = []
 
         def record_fsync(fd):
             if stat.S_ISDIR(os.fstat(fd).st_mode):
-                synced_directories.append(os.stat(fd).st_ino)
+                events.append(("fsync-directory", os.stat(fd).st_ino))
             return real_fsync(fd)
 
+        def record_replace(source, destination):
+            result = real_replace(source, destination)
+            events.append(("replace", str(destination)))
+            return result
+
         monkeypatch.setattr(config.os, "fsync", record_fsync)
+        monkeypatch.setattr(config.os, "replace", record_replace)
         config.save_settings(_settings("durable-key"))
 
-        assert synced_directories == [isolated_settings.parent.stat().st_ino]
+        assert events == [
+            ("replace", str(isolated_settings)),
+            ("fsync-directory", isolated_settings.parent.stat().st_ino),
+        ]
+
+    def test_a_failing_directory_fsync_does_not_fail_a_committed_save(
+        self, monkeypatch, isolated_settings
+    ):
+        """A best-effort step placed after the commit point gets no vote.
+
+        By the time the directory is fsynced the rename has landed and every
+        reader — the MCP sidecar included — already sees the new credentials.
+        Letting an ``OSError`` out of there would show the operator a 500 for a
+        save that in fact succeeded, and would skip the cache assignment,
+        leaving ECM's in-memory view behind the file: the exact divergence this
+        bead exists to close.
+        """
+        config.save_settings(_settings("previous-key"))
+        real_fsync = os.fsync
+
+        def reject_directory_fsync(fd):
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError(errno.EINVAL, "synthetic directory fsync failure")
+            return real_fsync(fd)
+
+        monkeypatch.setattr(config.os, "fsync", reject_directory_fsync)
+        config.save_settings(_settings("rotated-key"))
+
+        assert _stored_key(isolated_settings) == "rotated-key"
+        assert _cached_value() == "rotated-key"
 
     def test_cache_agrees_with_disk_when_writers_interleave(
         self, monkeypatch, isolated_settings
@@ -238,8 +345,18 @@ class TestSerializedDurableWrite:
 
         assert _cached_value() == _stored_key(isolated_settings)
 
-    def test_a_peer_process_holding_the_lock_blocks_the_write(self, isolated_settings):
-        """Cross-process exclusion, proven against a real second process."""
+    def test_a_peer_process_holding_the_lock_defers_the_write(self, isolated_settings):
+        """Cross-process exclusion, proven against a real second process.
+
+        The writer defers to the peer rather than racing it — but only for the
+        bounded retry budget, which
+        ``test_a_lock_held_past_the_budget_fails_the_save_in_bounded_time``
+        pins. Waiting forever is not the intended behaviour: every
+        ``save_settings`` caller runs on the asyncio event loop, so an
+        unbounded wait stalls the whole loop, ``/api/health`` included, for as
+        long as some peer holds the lock. The 1.5s used below is deliberately
+        well inside the 5s budget.
+        """
         lock_path = isolated_settings.parent / ".settings.lock"
         holder_source = """
 import fcntl, os, sys
@@ -320,36 +437,103 @@ os.close(fd)
         finally:
             os.close(descriptor)
 
-    def test_independent_processes_each_write_a_complete_document(self, tmp_path):
-        """Six real processes racing the same settings.json."""
-        writer_source = """
-import sys
-from config import DispatcharrSettings, save_settings
-save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
-"""
-        environment = os.environ.copy()
-        environment["CONFIG_DIR"] = str(tmp_path)
-        environment["PYTHONPATH"] = str(BACKEND_ROOT)
-        processes = [
-            subprocess.Popen(
-                [sys.executable, "-c", writer_source, f"process-{index}"],
-                cwd=str(tmp_path),
-                env=environment,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-            )
-            for index in range(6)
-        ]
-        outcomes = []
-        for process in processes:
-            _stdout, stderr = process.communicate(timeout=120)
-            outcomes.append((process.returncode, stderr))
+    def test_a_lock_held_past_the_budget_fails_the_save_in_bounded_time(
+        self, monkeypatch, isolated_settings
+    ):
+        """Fail closed, loudly, in bounded time — never an unbounded stall.
 
-        assert [code for code, _ in outcomes] == [0] * 6, outcomes
-        settings_file = tmp_path / "settings.json"
-        document = json.loads(settings_file.read_text())
-        assert document["mcp_api_key"] in {f"process-{index}" for index in range(6)}
-        assert document["url"] == ""
-        assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
-        assert list(tmp_path.glob(".settings.json.*.tmp")) == []
+        Every ``save_settings`` caller runs on the asyncio event loop, so a
+        peer that holds ``.settings.lock`` indefinitely under a blocking
+        ``LOCK_EX`` would stall the entire loop — ``/api/health`` included —
+        for as long as it holds it. An indefinite holder would be an
+        indefinite total outage. The budget is shortened here so the test is
+        fast; what it pins is that a budget exists at all, that exhausting it
+        raises ``SettingsWriteTimeout`` rather than blocking, and that nothing
+        was written.
+        """
+        monkeypatch.setattr(config, "_SETTINGS_LOCK_ATTEMPTS", 3)
+        monkeypatch.setattr(config, "_SETTINGS_LOCK_RETRY_SECONDS", 0.01)
+        lock_path = isolated_settings.parent / ".settings.lock"
+        holder = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            # A separate open file description, so flock excludes it even
+            # though it lives in this same process.
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            started = time.monotonic()
+            with pytest.raises(config.SettingsWriteTimeout):
+                config.save_settings(_settings("never-written"))
+            elapsed = time.monotonic() - started
+        finally:
+            fcntl.flock(holder, fcntl.LOCK_UN)
+            os.close(holder)
+
+        assert elapsed < 2.0
+        assert not isolated_settings.exists()
+
+    def test_a_symlinked_lock_file_cannot_chmod_its_target(self, isolated_settings):
+        """``O_NOFOLLOW``: the lock's fchmod must not become a chmod primitive.
+
+        Without it, a symlink planted at ``.settings.lock`` is followed and the
+        ``fchmod(0o600)`` lands on whatever the link points at — an arbitrary
+        chmod of anything the ECM uid can reach.
+        """
+        lock_path = isolated_settings.parent / ".settings.lock"
+        victim = isolated_settings.parent / "victim.txt"
+        victim.write_text("not a lock file")
+        victim.chmod(0o644)
+        lock_path.symlink_to(victim)
+
+        with pytest.raises(OSError) as raised:
+            config.save_settings(_settings("hijack-key"))
+
+        assert raised.value.errno == errno.ELOOP
+        assert stat.S_IMODE(victim.stat().st_mode) == 0o644
+        assert not isolated_settings.exists()
+
+    def test_a_lock_file_owned_by_another_user_does_not_wedge_saves(
+        self, monkeypatch, isolated_settings
+    ):
+        """``EPERM`` from the lock's fchmod is tolerated, not fatal.
+
+        On a shared ``/config`` bind mount the lock file can already exist
+        owned by a different uid, and ``fchmod`` then returns ``EPERM`` on
+        every single save. Propagating it would make settings permanently
+        unsaveable. The flock works regardless of the file's mode, so the
+        tightening is best effort — while still applying wherever it can, which
+        is what keeps ``.settings.lock`` off the ``umask 0200`` -> ``0400`` ->
+        ``EACCES`` wedge that ``auth/settings.py``'s lock file still has.
+        """
+        real_fchmod = os.fchmod
+
+        def refuse_lock_fchmod(descriptor, mode):
+            if os.readlink(f"/proc/self/fd/{descriptor}").endswith(".settings.lock"):
+                raise PermissionError(errno.EPERM, "synthetic fchmod refusal")
+            return real_fchmod(descriptor, mode)
+
+        monkeypatch.setattr(config.os, "fchmod", refuse_lock_fchmod)
+        config.save_settings(_settings("shared-mount-key"))
+
+        assert _stored_key(isolated_settings) == "shared-mount-key"
+        assert stat.S_IMODE(isolated_settings.stat().st_mode) == 0o600
+
+    def test_orphaned_temporaries_are_swept(self, isolated_settings):
+        """A killed writer leaves a full credential snapshot with no sweeper.
+
+        ``save_settings`` unlinks its temporary in a ``finally``, but SIGKILL,
+        an OOM kill or power loss between the ``os.open`` and that ``finally``
+        leaves a complete, readable ``0600`` copy behind. After a rotation that
+        replaced a compromised key the orphan preserves the compromised key
+        indefinitely, so startup sweeps them under the write lock.
+        """
+        config.save_settings(_settings("current-key"))
+        orphan = isolated_settings.with_name(".settings.json.0123456789abcdef.tmp")
+        # Built through the same helper the other tests use rather than as a
+        # literal mapping: a ``"<keyword>": "literal"`` pair is what the
+        # generic secret ratchet reads as a hardcoded credential.
+        orphan.write_text(json.dumps(_settings("superseded-key").model_dump()))
+
+        assert config.sweep_orphaned_settings_temporaries() == 1
+
+        assert not orphan.exists()
+        assert _stored_key(isolated_settings) == "current-key"
+        assert config.sweep_orphaned_settings_temporaries() == 0

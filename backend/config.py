@@ -2,12 +2,14 @@ from contextlib import contextmanager
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, field_validator
+import errno
 import fcntl
 import json
 import os
 import logging
 import secrets
 import threading
+import time
 
 # Single source of truth for the dedup confidence floor per ADR-008 §D2.
 # Imported from the ``confidence_constants`` leaf module (NOT from
@@ -67,32 +69,110 @@ MCP_SERVICE_FILE = MCP_SECRETS_DIR / MCP_SERVICE_FILENAME
 # Writer serialization for settings.json (bead enhancedchannelmanager-04c0u.10),
 # mirroring the auth_settings.json pattern in ``auth/settings.py``.
 #
-# The in-process lock is the one that closes a demonstrated defect: sync routes
-# run in Starlette's threadpool, so two saves can interleave between the atomic
-# replace and the ``_cached_settings`` assignment. The thread that replaced the
-# file FIRST could assign the cache LAST, leaving ECM reporting an MCP API key
-# that is not the one the sidecar reads off disk. Holding the lock across both
-# makes the last writer to the file the last writer to the cache.
+# The FLOCK is what closes the demonstrated defect. It serializes the whole
+# replace-then-assign-the-cache sequence, so the writer that replaced the file
+# last is also the writer that leaves its settings in ``_cached_settings``.
+# Without it the writer that replaced the file FIRST could assign the cache
+# LAST, leaving ECM reporting an MCP API key that is not the one the sidecar
+# reads off disk. It is also the only mechanism here that reaches across
+# processes: the atomic replace stops readers seeing a torn document, it does
+# not stop two writers racing, and TLS mode really does run a second
+# ``main:app`` process against the same /config volume.
 #
-# The flock extends that serialization across processes, which the atomic
-# replace alone cannot do: replace stops readers seeing a torn document, not
-# two writers from racing. Re-entrant to match ``auth/settings.py`` and to stay
-# safe if a future caller saves while already holding it.
+# What the in-process RLOCK actually defends is narrower than the comment that
+# used to sit here claimed. That comment said "sync routes run in Starlette's
+# threadpool, so two saves can interleave"; that is not evidence-backed — no
+# sync route calls ``save_settings``, and ``task_engine`` dispatches
+# exclusively through ``asyncio.create_task``, so every caller today runs on
+# the asyncio event loop and the critical section contains no ``await``. The
+# RLock earns its place for two other reasons. First, the flock below is taken
+# with ``LOCK_NB`` on a bounded retry budget, so two savers in ONE process
+# would burn that budget against each other and one could time out on an
+# otherwise idle host; the RLock turns intra-process contention into an
+# ordered wait instead. Second, it keeps the sequence indivisible the moment a
+# caller does move onto a worker thread — which is where this blocking write
+# belongs (see the bounded-acquisition note on
+# ``_durable_settings_write_lock``).
 _settings_write_lock = threading.RLock()
 _SETTINGS_LOCK_NAME = ".settings.lock"
+
+# Bounded flock acquisition (50 x 100ms = 5s ceiling). Every ``save_settings``
+# caller runs on the asyncio event loop, so an unbounded ``LOCK_EX`` here does
+# not merely stall the save: it stalls the whole loop, ``/api/health``
+# included, for as long as some peer holds the lock. An indefinite holder
+# would be an indefinite total outage. Failing closed and loudly in bounded
+# time is the lesser harm.
+_SETTINGS_LOCK_ATTEMPTS = 50
+_SETTINGS_LOCK_RETRY_SECONDS = 0.1
+
+
+class SettingsWriteTimeout(TimeoutError):
+    """The settings write lock could not be acquired within the retry budget.
+
+    Surfaced by ``main.py`` as ``503`` with a ``Retry-After`` header: the save
+    did not happen, nothing was written, and retrying shortly is the right
+    client behaviour.
+    """
+
+
+def _acquire_settings_flock(lock_fd: int) -> None:
+    """Take the exclusive flock, or raise ``SettingsWriteTimeout``."""
+    for _attempt in range(_SETTINGS_LOCK_ATTEMPTS):
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError as error:
+            if error.errno not in (errno.EACCES, errno.EAGAIN):
+                raise
+            time.sleep(_SETTINGS_LOCK_RETRY_SECONDS)
+    raise SettingsWriteTimeout(
+        f"Could not acquire {_SETTINGS_LOCK_NAME} within "
+        f"{_SETTINGS_LOCK_ATTEMPTS * _SETTINGS_LOCK_RETRY_SECONDS:.1f}s"
+    )
 
 
 @contextmanager
 def _durable_settings_write_lock():
-    """Serialize settings.json writes across every process on the host."""
+    """Serialize settings.json writes across every process on the host.
+
+    NOT re-entrant, despite ``_settings_write_lock`` being an ``RLock``. An
+    flock belongs to the open file description, and this opens a FRESH
+    descriptor on every entry, so nesting two of these in one thread blocks
+    against itself. Worse, the RLock is taken first and held while the flock
+    blocks, so one nesting caller would wedge every settings save in the
+    process. Do not nest it. A caller that needs to save while already holding
+    it should get a ``_save_settings_locked`` split, the way
+    ``auth/settings.py`` exposes ``_save_auth_settings_locked``.
+    """
     lock_fd = None
     try:
         CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        # O_NOFOLLOW: without it a symlink planted at .settings.lock is
+        # followed and the fchmod below becomes an arbitrary-chmod primitive
+        # for anything the ECM uid can reach. With it the open fails loudly
+        # (ELOOP) instead.
         lock_fd = os.open(
-            CONFIG_FILE.parent / _SETTINGS_LOCK_NAME, os.O_CREAT | os.O_RDWR, 0o600
+            CONFIG_FILE.parent / _SETTINGS_LOCK_NAME,
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+            0o600,
         )
-        os.fchmod(lock_fd, 0o600)
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        # Best effort, and deliberately so. The chmod matters because O_CREAT's
+        # mode is narrowed by the caller's umask: under ``umask 0200`` the lock
+        # file would be created 0400 and every later acquisition would fail
+        # with EACCES — a permanent wedge (``auth/settings.py``'s
+        # .auth-settings.lock still has it). But when the lock file belongs to
+        # another uid on a shared /config mount, fchmod returns EPERM, and
+        # letting that propagate would fail every settings save permanently for
+        # the opposite reason. Log and continue: the flock still works.
+        try:
+            os.fchmod(lock_fd, 0o600)
+        except PermissionError:
+            logger.warning(
+                "[CONFIG] Could not tighten %s to 0600 (not owned by this user); "
+                "continuing with the existing mode",
+                _SETTINGS_LOCK_NAME,
+            )
+        _acquire_settings_flock(lock_fd)
         yield
     finally:
         if lock_fd is not None:
@@ -105,6 +185,77 @@ def _durable_settings_write_lock():
                     os.close(lock_fd)
                 except OSError:
                     logger.error("[CONFIG] Failed to close settings lock")
+
+
+def _fsync_parent_directory() -> None:
+    """Make the rename that just committed the save crash-durable.
+
+    ``os.replace`` is atomic but not durable: without this the rename can be
+    lost on a crash even though the file contents were fsynced, resurrecting
+    the previous credentials.
+
+    Deliberately best effort. This runs AFTER the commit point — the new
+    settings are already the ones any reader (including the MCP sidecar) will
+    see. Letting an ``OSError`` out of here would show the operator a 500 for a
+    save that in fact landed, and would skip the cache assignment that keeps
+    ECM's in-memory view consistent with the file, manufacturing the exact
+    divergence this bead exists to close. Directory fsync is rejected outright
+    on some filesystems (``EINVAL``); SQLite and Git both catch and log rather
+    than fail the operation on it.
+    """
+    directory_fd = None
+    try:
+        directory_fd = os.open(CONFIG_FILE.parent, os.O_RDONLY | os.O_DIRECTORY)
+        os.fsync(directory_fd)
+    except OSError as error:
+        logger.warning(
+            "[CONFIG] Could not fsync %s after saving settings (%s); the save "
+            "committed but the rename may not survive a host crash",
+            CONFIG_FILE.parent,
+            error,
+        )
+    finally:
+        if directory_fd is not None:
+            try:
+                os.close(directory_fd)
+            except OSError:
+                logger.error("[CONFIG] Failed to close settings directory handle")
+
+
+def sweep_orphaned_settings_temporaries() -> int:
+    """Delete ``.settings.json.*.tmp`` files a killed writer left behind.
+
+    ``save_settings`` unlinks its temporary in a ``finally``, but SIGKILL, an
+    OOM kill or power loss between ``os.open`` and that ``finally`` leaves a
+    complete, readable credential snapshot at 0600 with nothing to remove it.
+    After a rotation that replaced a compromised key, the orphan preserves the
+    compromised key on disk indefinitely.
+
+    Runs under the write lock, which is what makes it safe: no other ECM writer
+    can be mid-save while it is held, so every temporary visible here is an
+    orphan rather than a file in use. Returns the number removed. Best effort
+    throughout — a sweep failure must never keep ECM from starting.
+    """
+    removed = 0
+    try:
+        with _settings_write_lock, _durable_settings_write_lock():
+            for orphan in CONFIG_FILE.parent.glob(f".{CONFIG_FILE.name}.*.tmp"):
+                try:
+                    orphan.unlink()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    logger.warning("[CONFIG] Could not remove orphaned %s", orphan.name)
+                    continue
+                removed += 1
+                logger.warning(
+                    "[CONFIG] Removed orphaned settings temporary %s left by an "
+                    "interrupted save; it held a full credential snapshot",
+                    orphan.name,
+                )
+    except Exception:
+        logger.exception("[CONFIG] Orphaned settings temporary sweep failed")
+    return removed
 
 
 ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -941,6 +1092,28 @@ def load_settings() -> DispatcharrSettings:
             data = _migrate_dispatcharr_api_key(data)
             # Sanitize nulls to prevent Pydantic validation failures
             data = _sanitize_settings_data(data)
+            # KNOWN RESIDUAL (bead ...-04c0u.10): this read-parse-assign takes
+            # NO lock, so a load that started before a concurrent save can
+            # assign a pre-save value into the cache afterwards and leave it
+            # there. ``save_settings`` closes save-vs-save; this is
+            # load-vs-save, and ECM's own callers manufacture the window by
+            # calling ``clear_settings_cache()`` right after ``save_settings()``
+            # (routers/settings.py:1249+). ``auth/settings.py`` closes it by
+            # loading inside its lock AND revalidating an
+            # ``(st_ino, st_size, st_mtime_ns)`` signature; that pattern is what
+            # to copy here. Tracked as a follow-up bead, not fixed on this one.
+            #
+            # MERGE NOTE for bead ...-04c0u.8 (PR #889): that branch adds a
+            # SECOND ``_project_mcp_api_key`` call site immediately after this
+            # assignment. It is on this unlocked reader path, so a reader that
+            # started before a rotation can project the PRE-rotation key into
+            # MCP_KEY_FILE after the rotation already projected the new one,
+            # leaving the sidecar authenticating with a superseded credential
+            # ON DISK. Whoever merges second should not simply wrap it in the
+            # write lock: projecting from a possibly-stale read is questionable
+            # regardless of the lock. Either gate it on the signature recheck
+            # above, or drop the load-path projection and let the save path and
+            # startup own projection.
             _cached_settings = DispatcharrSettings(**data)
             try:
                 _project_mcp_api_key(_cached_settings.mcp_api_key)
@@ -975,6 +1148,10 @@ def save_settings(settings: DispatcharrSettings) -> None:
     bead enhancedchannelmanager-04c0u.10: the write is serialized in-process and
     across processes, and the parent directory is fsynced after the replace so
     the rename itself survives a crash. See ``_durable_settings_write_lock``.
+
+    Raises ``SettingsWriteTimeout`` when the cross-process lock stays held past
+    the bounded retry budget. Nothing is written in that case, and callers on
+    the event loop get a bounded failure instead of an unbounded stall.
     """
     global _cached_settings
 
@@ -1002,27 +1179,43 @@ def save_settings(settings: DispatcharrSettings) -> None:
                 with os.fdopen(descriptor, "w") as output:
                     output.write(settings_json)
                     output.flush()
+                    # O_CREAT's mode is narrowed by the caller's umask, which
+                    # would make the stored mode depend on the operator's
+                    # environment rather than on ECM. Set it explicitly, on the
+                    # descriptor and BEFORE the fsync, so the mode change is
+                    # part of the metadata the fsync commits and no path-based
+                    # operation is involved.
+                    os.fchmod(output.fileno(), 0o600)
                     os.fsync(output.fileno())
-                # O_CREAT's mode is narrowed by the caller's umask, which would
-                # make the stored mode depend on the operator's environment.
-                # Set it explicitly so the credentials file is always 0600.
-                os.chmod(temporary, 0o600)
                 os.replace(temporary, CONFIG_FILE)
-                # os.replace is atomic but not durable: without this the rename
-                # can be lost on a crash even though the file contents were
-                # fsynced, resurrecting the previous credentials.
-                directory_fd = os.open(CONFIG_FILE.parent, os.O_RDONLY | os.O_DIRECTORY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
+                _fsync_parent_directory()
             finally:
                 try:
                     temporary.unlink()
                 except FileNotFoundError:
                     pass
-            # Inside the lock: the thread that wrote the file last must also be
-            # the thread that leaves its settings in the cache.
+                except OSError:
+                    # Never let cleanup replace the real exception: on the
+                    # failure path this ``finally`` runs while a genuine error
+                    # is propagating, and a PermissionError raised here would
+                    # mask it.
+                    logger.error(
+                        "[CONFIG] Failed to remove temporary settings file %s", temporary
+                    )
+            # Inside the lock: the writer that wrote the file last must also be
+            # the writer that leaves its settings in the cache.
+            #
+            # MERGE NOTE for bead ...-04c0u.8 (PR #889). That branch inserts
+            # ``_project_mcp_api_key(settings.mcp_api_key)`` here. It must land
+            # INSIDE this lock and AFTER the cache assignment below — cache
+            # first, then projection. Inside, because outside the lock the
+            # projection races exactly the way the cache assignment did; after,
+            # because .8's own review found that a projection which raises must
+            # not leave the cache behind the file that is already durably
+            # replaced (.8 pins that with
+            # ``test_a_failed_projection_never_leaves_the_cache_behind_the_saved_file``).
+            # .8 adds a SECOND call site in ``load_settings`` as well; see the
+            # note there.
             #
             # Adopt the cache the instant the settings file is durable, BEFORE
             # projecting. The projection can fail for reasons unrelated to the
