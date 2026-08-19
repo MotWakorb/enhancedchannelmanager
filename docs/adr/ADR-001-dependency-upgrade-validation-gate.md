@@ -1,5 +1,21 @@
 # ADR-001: Dependency Upgrade Validation Gate
 
+> **Status note (CI gate reduction).** Two of the three gates this ADR adopted
+> survive; one does not. `DAST Security Scan` (`dast-scan`) and the Checkov
+> `IaC Security Scan` were removed from `.github/workflows/build.yml` by PO
+> decision, so **nothing boots the candidate image or runs an OWASP ZAP
+> baseline any more**. `build-amd64` and `Container Security Scan (Trivy)`
+> (`trivy-scan`) both survive, alongside their ARM64 and MCP counterparts: all
+> four published images are Trivy-scanned at CRITICAL/HIGH before
+> `attest-image-candidates` will attest them, and therefore before anything
+> publishes. What did NOT happen is this ADR's actual ask: the dependency-
+> manifest `paths-filter` trigger was never implemented, and none of these
+> jobs is a branch-protection required check. Branch protection on `dev`
+> requires four contexts (`Backend Tests`, `Frontend Tests`, and the two
+> `CodeQL Analysis` matrix legs). Everything below describes the decision as
+> taken, not the pipeline as it stands.
+
+
 - **Status**: Accepted (amended 2026-04-25 — per-week cadence rule removed)
 - **Date**: 2026-04-20 (proposed) / 2026-04-20 (accepted) / 2026-04-23 (scope clarification amended — see Scope below) / 2026-04-25 (per-week cadence rule excised — see Revision History)
 - **Author**: IT Architect persona (on behalf of PO)

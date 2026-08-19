@@ -97,11 +97,11 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 
 # App version for manifest (imported at call time to avoid circular imports).
 #
-# IMPORTANT (versioning.md touchpoint): APP_VERSION is a CI-enforced version
-# literal. scripts/check_version_consistency.py greps for the exact
-# ``APP_VERSION = "..."`` shape and fails the PR if it diverges from
-# frontend/package.json and backend/main.py. Do NOT rename it, change its
-# shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
+# IMPORTANT (versioning.md touchpoint): APP_VERSION is one of three version
+# literals that must agree with frontend/package.json and backend/main.py.
+# This is a CONVENTION, not an enforced guarantee: the CI job and
+# scripts/check_version_consistency.py that used to fail the PR on divergence
+# were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
 APP_VERSION = "0.18.1-0126"
 
@@ -393,9 +393,11 @@ _STANDARD_ARTIFACT_EXCLUDED: dict[str, str] = {
     "user_sessions": "Live session material plus the IP and user agent the operator administers from.",
     # Value on a continuation line, not because it is long but because
     # ``KeywordDetector`` matches PER LINE: a denylisted keyword in the key
-    # beside a quoted value on the same line is a detect-secrets finding, and
-    # ``scripts/check_secrets.py`` disables the inline ``allowlist secret``
-    # pragma on purpose so there is no way to annotate past it.
+    # beside a quoted value on the same line was a detect-secrets finding
+    # while ``scripts/check_secrets.py`` existed, and that guard deliberately
+    # disabled the inline ``allowlist secret`` pragma. The guard is gone; the
+    # shape below is kept because the reasoning still holds for a human
+    # reader.
     "password_reset_tokens": (
         "An account-recovery credential (token_hash), and the rows are useless "
         "without the accounts this artifact also does not carry."

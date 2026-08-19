@@ -48,13 +48,11 @@ So the mechanical confirmation happens at **[step 6a](#6a-confirm-the-bump-decis
 
 > **Why the order matters.** A version touchpoint is a source file. If you bump first and classify afterwards, the diff contains `frontend/package.json`, `backend/main.py` and `backend/routers/backup.py`, the verdict is `code_paths_changed=true`, and the bump has justified itself. Nothing downstream ever contradicts you, because by then the change really is a code change. That self-justifying loop is how 15 of 40 consecutive merged PRs carried a version bump for changes that were nothing but Markdown.
 
-Nothing downstream will ask an inert machine-state PR for a bump. `.github/workflows/test.yml` gates its build-advance step on `needs.detect.outputs.code_paths_changed != 'false'`, and `.claude/hooks/version-advance-guard.sh` skips the same check on the same verdict from the same script, announcing that it skipped. The `Version Consistency` required check still runs and still passes: it proves the three touchpoints **agree with each other**, and leaving all three untouched keeps them agreeing.
-
-If the hook announces a skip and you bump anyway, you have re-created the defect this carve-out exists to remove.
+Nothing downstream will ask an inert machine-state PR for a bump, and as of the CI gate reduction nothing checks the bump at all. The `Version Consistency` job, `scripts/check_version_advances.py`, `scripts/check_version_consistency.py` and the local `version-advance-guard` PreToolUse hook have all been removed. The rule below is now a **convention you follow by hand**; no check enforces it and no check will tell you that you got it wrong.
 
 #### 3b. Bump the three touchpoints (code changes only)
 
-The version literal is hand-edited in **three** files, and all three must move in lockstep. See [`docs/versioning.md`](versioning.md#touchpoints) → Touchpoints for the canonical list. CI enforces this via the `version-consistency` job (`scripts/check_version_consistency.py`) and fails the PR on divergence.
+The version literal is hand-edited in **three** files, and all three must move in lockstep. See [`docs/versioning.md`](versioning.md#touchpoints) → Touchpoints for the canonical list. **Nothing enforces this any more.** The `version-consistency` job and `scripts/check_version_consistency.py` were removed with the CI gate reduction, so a divergence between the three touchpoints now merges silently and surfaces later as a wrong version string in the UI, the backup artifact, or the published image marker.
 
 | File | Identifier to change |
 | --- | --- |
@@ -64,9 +62,11 @@ The version literal is hand-edited in **three** files, and all three must move i
 
 Bump all three to the same string, using bug fix build number format (e.g., `0.12.0-0014`).
 
-Verify locally before pushing. Run both checks, and both must pass:
+Verify locally before pushing. There is no consistency script any more, so read the three literals yourself and confirm they are byte-identical:
 ```bash
-python scripts/check_version_consistency.py   # must report all 3 agree
+grep -m1 '"version"' frontend/package.json
+grep -m1 'APP_VERSION' backend/routers/backup.py
+grep -m1 'version=' backend/main.py
 cd frontend && npm run build
 ```
 
@@ -86,9 +86,9 @@ Every user-facing change must also be recorded in [`CHANGELOG.md`](../CHANGELOG.
 
 ### 6. Commit and Open the PR
 
-`dev` branch protection requires PRs with 8 passing status checks (`enforce_admins=true`: no one bypasses, including the PO). Direct push to `dev` is rejected. Branch from current `origin/dev`, push the branch, open a PR, wait for the required checks, then merge.
+`dev` branch protection requires PRs with 4 passing status checks (`enforce_admins=true`: no one bypasses, including the PO). Direct push to `dev` is rejected. Branch from current `origin/dev`, push the branch, open a PR, wait for the required checks, then merge.
 
-Each of those 8 names is emitted by exactly one job, on every PR. If you ever see the same context reported twice on one commit, stop: that is bead `enhancedchannelmanager-5rwzy` recurring, and a permanently green duplicate can hide a real failure behind the aggregate view. See `docs/testing.md` section "One source of truth per required check".
+Each of those 4 names is emitted by exactly one job, on every PR. If you ever see the same context reported twice on one commit, stop: that is bead `enhancedchannelmanager-5rwzy` recurring, and a permanently green duplicate can hide a real failure behind the aggregate view. See `docs/testing.md` section "One source of truth per required check".
 
 ```bash
 # Branch from current origin/dev
@@ -119,10 +119,10 @@ git diff --name-only --no-renames -z origin/dev...HEAD | python3 scripts/classif
 
 | Verdict | What it means |
 | --- | --- |
-| `code_paths_changed=false` | No bump was needed and none is present. Go on to `gh pr create`; the ship guard will announce that it skipped the build-advance check. |
+| `code_paths_changed=false` | No bump was needed and none is present. Go on to `gh pr create`. |
 | `code_paths_changed=true` | This change needs a bump. If step 3b was skipped, go back and do it now: bump the three touchpoints, `git add` them, `git commit --amend --no-edit`, and re-run the command above. |
 
-`--no-renames` is not optional here. Without it `git diff --name-only` prints only the *destination* of a rename, so moving a source file to a `.md` path presents a changed-file set that is entirely Markdown. It is the flag `.claude/hooks/version-advance-guard.sh` uses for the same reason.
+`--no-renames` is not optional here. Without it `git diff --name-only` prints only the *destination* of a rename, so moving a source file to a `.md` path presents a changed-file set that is entirely Markdown. It is the same flag the `detect` jobs in `test.yml` and `build.yml` use, for the same reason.
 
 ```bash
 # Push and open the PR
@@ -131,21 +131,20 @@ gh pr create --base dev --head <feature-or-chore-branch> \
   --title "v0.x.x-xxxx: Brief description" \
   --body "Summary of the change and link to the bead."
 
-# Run `gh pr create` from the checkout being shipped. The local preflight hook
-# resolves the hook input's cwd before Bash executes; an inline
-# `cd <other-checkout> && gh pr create ...` cannot redirect that check and is
-# unsupported. Remove any branch worktree and check the branch out in the main
-# checkout before opening its PR.
+# Run `gh pr create` from the checkout being shipped. Remove any branch
+# worktree and check the branch out in the main checkout before opening its
+# PR. (The local `version-advance-guard` PreToolUse hook that used to police
+# this step was removed with the CI gate reduction.)
 
-# Wait for the 8 required checks AND for the PR to be mergeable.
+# Wait for the 4 required checks AND for the PR to be mergeable.
 # Do NOT use `gh pr checks <#> --watch` here: see "Read the gate, not just
 # the checks" below for why an all-green watch can still be unmergeable.
 gh pr view <#> --json statusCheckRollup,mergeable,mergeStateStatus --jq '
   ((.statusCheckRollup // [])[]
     | select((.name // .context) as $n
-        | ["Backend Tests","Frontend Tests","MCP Server Tests",
-           "CodeQL Analysis (python)","CodeQL Analysis (javascript-typescript)",
-           "Semgrep Lint","Version Consistency","Operator Docs"] | index($n))
+        | ["Backend Tests","Frontend Tests",
+           "CodeQL Analysis (python)","CodeQL Analysis (javascript-typescript)"]
+        | index($n))
     | "  \(.name // .context): \(.conclusion // .state // "PENDING")"),
   "  mergeable=\(.mergeable)  mergeStateStatus=\(.mergeStateStatus)"'
 
@@ -165,18 +164,18 @@ The required check names above are pulled from `gh api /repos/MotWakorb/enhanced
 
 #### Read the gate, not just the checks
 
-`gh pr checks <#> --watch` reports **check conclusions and nothing else**. It has no view of whether the branch actually merges, so a PR whose eight required checks are all green can still be sitting on a merge conflict, and the watch will report green right up to the moment `gh pr merge` refuses. That blind spot nearly landed a conflicted merge on 2026-08-10.
+`gh pr checks <#> --watch` reports **check conclusions and nothing else**. It has no view of whether the branch actually merges, so a PR whose four required checks are all green can still be sitting on a merge conflict, and the watch will report green right up to the moment `gh pr merge` refuses. That blind spot nearly landed a conflicted merge on 2026-08-10.
 
 Re-run the `gh pr view` command above until all three conditions hold:
 
-1. **Eight context lines appear.** Exactly eight, one per required name. A name that never appears is worse than a failing one: branch protection waits forever for a context no job emits, and `enforce_admins=true` means nobody can bypass it. If a required name is missing, stop and fix the workflow that should emit it, rather than waiting.
+1. **Four context lines appear.** Exactly four, one per required name. A name that never appears is worse than a failing one: branch protection waits forever for a context no job emits, and `enforce_admins=true` means nobody can bypass it. If a required name is missing, stop and fix the workflow that should emit it, rather than waiting.
 2. **Every one reads `SUCCESS`.** `PENDING`, `QUEUED` or `IN_PROGRESS` means keep polling. `FAILURE` means fix the branch. `SKIPPED` on a required context is a red flag, not a pass: GitHub counts a skipped job as satisfying the check, so a `SKIPPED` required context means a job skipped itself instead of gating its steps.
 3. **`mergeStateStatus` is `CLEAN`, or is `UNSTABLE` and you have read the failing non-required check and decided to accept it.** See "When `UNSTABLE` is the terminal state" below: `UNSTABLE` can be permanent, and the ship agent is required to drive the merge, so it needs a documented exit rather than a poll that never ends.
 
 | `mergeStateStatus` | What it means | What to do |
 | --- | --- | --- |
 | `CLEAN` | Required checks green, no conflict. | Merge. |
-| `UNSTABLE` | A non-required check is failing; the required eight are green. | Read the failing check, then decide. |
+| `UNSTABLE` | A non-required check is failing; the required four are green. | Read the failing check, then decide. |
 | `BLOCKED` | A required check is failing, missing, or a review is outstanding. | Do not merge. Find which one. |
 | `DIRTY` | Merge conflict with the base branch. | `git fetch origin && git merge origin/dev`, resolve, push. |
 | `BEHIND` | The branch is behind the base and the base requires up-to-date branches. | Update the branch from `origin/dev`. |
@@ -186,9 +185,7 @@ Re-run the `gh pr view` command above until all three conditions hold:
 
 ##### When `UNSTABLE` is the terminal state
 
-`UNSTABLE` means every required check is green and something else is red. Polling will not clear it. Several jobs on every PR are deliberately **not** required contexts, including `Fake-Test Guard`, `Visual Regression`, `Screen-Reader-Only Rendering Guard` and `Operator Workspace Release Matrix`. Any of them failing produces a permanent `UNSTABLE`.
-
-This matters most for `Visual Regression`, which is where the Playwright pixel-diff snapshot baselines live. A single changed pixel in a `.png` baseline fails that job and nothing else, so the PR sits at `UNSTABLE` forever until someone updates the baseline or judges the diff acceptable.
+`UNSTABLE` means every required check is green and something else is red. Polling will not clear it. After the CI gate reduction only one job on a PR is a non-required context: `MCP Server Tests`, which is kept for the sidecar coverage it provides rather than as a gate. It failing produces a permanent `UNSTABLE`.
 
 `CLAUDE.md` requires the ship agent to drive the merge, so "wait for `CLEAN`" is not a usable instruction here. The rule is:
 
@@ -199,13 +196,9 @@ This matters most for `Visual Regression`, which is where the Playwright pixel-d
 
 #### What a green check actually ran
 
-Six of the eight required checks gate their real work on `scripts/classify_changed_paths.py`: only approved root machine-generated `.beads` state can pass without running a suite. Every other path runs the suites. `Operator Docs` is not one of the six: it runs its full six gates unconditionally on every pull request, regardless of what changed. The check name is identical either way, so every required job writes one line to the run's **Summary** page saying which of the two happened.
+All four required checks gate their real work on `scripts/classify_changed_paths.py`: only approved root machine-generated `.beads` state can pass without running a suite. Every other path runs the suites. The check name is identical either way, so every required job writes one line to the run's **Summary** page saying which of the two happened.
 
 Read that summary before treating a green rollup as proof the suite passed. `gh run view <run-id>` links it, or open the run in the browser.
-
-#### `Operator Docs` can fail from a registry outage, not a defect
-
-`Operator Docs` installs `detect-secrets` and the mkdocs site dependencies from the network on every run. As an advisory job that was survivable: a registry blip failed the job, the PR sat at `UNSTABLE`, and a retry later in the day cleared it. As a required context it blocks the merge directly, with no admin bypass (`enforce_admins=true` on `dev`). If `Operator Docs` fails on a step that never reaches your change's own gates (`Install docs site dependencies`, `Install detect-secrets (pinned)`), read the step log before assuming the PR is broken: it may be PyPI or npm, not you. This is an accepted trade, not an oversight. There is no fallback dependency mirror today.
 
 #### Confirm the image published
 
@@ -470,11 +463,14 @@ git checkout -b chore/post-release-v0.17.0
 git merge origin/main --no-edit          # fast-forwards to the released state (dev is an ancestor of main)
 # Re-open the dev build counter: bump ALL THREE version touchpoints from "0.17.0"
 # (no suffix, inherited from main) to the next build-numbered version "0.17.1-0000"
-# (or the next planned minor's -0000). The Version Consistency check requires all three:
+# (or the next planned minor's -0000). All three must agree; nothing checks
+# this any more, so read them back by hand:
 #   - frontend/package.json        "version"
 #   - backend/main.py              FastAPI(version=...)
 #   - backend/routers/backup.py    APP_VERSION
-python3 scripts/check_version_consistency.py    # must report all 3 agree
+grep -m1 '"version"' frontend/package.json
+grep -m1 'version=' backend/main.py
+grep -m1 'APP_VERSION' backend/routers/backup.py
 git add frontend/package.json backend/main.py backend/routers/backup.py
 git commit -m "Post-release: back-sync dev + reopen build counter to 0.17.1-0000"
 git push -u origin chore/post-release-v0.17.0

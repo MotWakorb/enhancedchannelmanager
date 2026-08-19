@@ -19,9 +19,9 @@ The canonical version string lives in [`frontend/package.json`](../frontend/pack
 
 ## Touchpoints
 
-The version literal is hand-edited in **three** files. All three must move in lockstep on every bump. CI enforces this via `.github/workflows/test.yml` → `version-consistency` job, which runs [`scripts/check_version_consistency.py`](../scripts/check_version_consistency.py) and fails the PR on divergence.
+The version literal is hand-edited in **three** files. All three must move in lockstep on every bump. **Nothing enforces this.** The `version-consistency` job and `scripts/check_version_consistency.py` were removed in the CI gate reduction, so this is a convention held by review alone; a divergence between the three touchpoints merges silently.
 
-**Lockstep governs how you bump, not whether you bump.** A change containing only approved root machine-generated `.beads` state gets **no** bump: it carries no build to advance, and taking a build number a concurrent branch already holds is pure conflict. Every other path, including documentation, images, workflow support files, and beads configuration, is a code-gate input. [`scripts/classify_changed_paths.py`](../scripts/classify_changed_paths.py) is the arbiter. Decide with [`docs/shipping.md`](shipping.md#3a-first-decide-whether-this-change-gets-a-version-bump-at-all) → step 3a, and confirm it mechanically at [step 6a](shipping.md#6a-confirm-the-bump-decision-before-opening-the-pr), after the branch is committed. Do not run the classifier before the commit: with no branch diff to read it reports `code_paths_changed=true` for every change, which is an empty-input default rather than a verdict. Leaving all three touchpoints untouched keeps them agreeing, so the `version-consistency` job passes on an exempt machine-state PR exactly as it does on a bumped one.
+**Lockstep governs how you bump, not whether you bump.** A change containing only approved root machine-generated `.beads` state gets **no** bump: it carries no build to advance, and taking a build number a concurrent branch already holds is pure conflict. Every other path, including documentation, images, workflow support files, and beads configuration, is a code-gate input. [`scripts/classify_changed_paths.py`](../scripts/classify_changed_paths.py) is the arbiter. Decide with [`docs/shipping.md`](shipping.md#3a-first-decide-whether-this-change-gets-a-version-bump-at-all) → step 3a, and confirm it mechanically at [step 6a](shipping.md#6a-confirm-the-bump-decision-before-opening-the-pr), after the branch is committed. Do not run the classifier before the commit: with no branch diff to read it reports `code_paths_changed=true` for every change, which is an empty-input default rather than a verdict. Leaving all three touchpoints untouched keeps them agreeing, which is what the rule wants on an exempt machine-state PR.
 
 | File | Line shape | Read by | Why it exists |
 | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ The version literal is hand-edited in **three** files. All three must move in lo
 When you add a fourth touchpoint:
 
 1. Edit the file with the new literal in lockstep with the other three.
-2. Add it to `TOUCHPOINTS` in [`scripts/check_version_consistency.py`](../scripts/check_version_consistency.py) with a name + path + extractor function.
+2. Add it to the list below, and to any local tooling that reads the version. There is no longer a `TOUCHPOINTS` registry to update: the consistency checker that owned it was removed.
 3. Add a row to the table above so the next agent doing a manual bump sees the full surface.
 
 History of why this guard exists:

@@ -28,7 +28,7 @@ may call these routes; masking is what a permitted caller gets.
 
 CREDENTIAL FIXTURES. Values are angle-bracket placeholders per
 ``docs/pytest_conventions.md`` -> "Credential Fixtures in Security Tests":
-the ``SECRET`` regex in ``scripts/check_secrets.py`` has a ``(?=\\w+)``
+the ``SECRET`` regex in the former ``scripts/check_secrets.py`` had a ``(?=\\w+)``
 lookahead, so a value starting with ``<`` is never a scan candidate. The
 masking is keyed on the config KEY and never looks at the value, so nothing
 here depends on the fixtures having a realistic shape.

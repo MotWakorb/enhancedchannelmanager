@@ -117,15 +117,6 @@
       "file": "build.yml",
       "path": [
         "jobs",
-        "iac-security-scan",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main'))"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
         "build-amd64",
         "if"
       ],
@@ -162,21 +153,10 @@
       "file": "build.yml",
       "path": [
         "jobs",
-        "dast-scan",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "always()"
-    },
-    {
-      "file": "build.yml",
-      "path": [
-        "jobs",
         "attest-image-candidates",
         "if"
       ],
-      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.dast-scan.result == 'success' && needs.security-scan-mcp.result == 'success'"
+      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.security-scan-mcp.result == 'success'"
     },
     {
       "file": "docs-pages.yml",
@@ -387,72 +367,6 @@
       "file": "test.yml",
       "path": [
         "jobs",
-        "operator-docs",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "github.event_name == 'pull_request'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "operator-docs",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "github.event_name == 'pull_request'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "operator-docs",
-        "steps",
-        7,
-        "if"
-      ],
-      "value": "github.event_name == 'pull_request'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "operator-docs",
-        "steps",
-        8,
-        "if"
-      ],
-      "value": "github.event_name == 'pull_request'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "operator-docs",
-        "steps",
-        9,
-        "if"
-      ],
-      "value": "github.event_name == 'pull_request'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "operator-docs",
-        "steps",
-        11,
-        "if"
-      ],
-      "value": "always()"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
         "backend",
         "if"
       ],
@@ -782,7 +696,7 @@
         7,
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "test.yml",
@@ -793,7 +707,7 @@
         8,
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "test.yml",
@@ -804,46 +718,13 @@
         9,
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "frontend",
-        "steps",
-        10,
-        "if"
-      ],
       "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
     },
     {
       "file": "test.yml",
       "path": [
         "jobs",
-        "frontend",
-        "steps",
-        11,
-        "if"
-      ],
-      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "frontend",
-        "steps",
-        12,
-        "if"
-      ],
-      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "version-consistency",
+        "docs-link-check",
         "if"
       ],
       "value": "${{ !cancelled() }}"
@@ -852,183 +733,67 @@
       "file": "test.yml",
       "path": [
         "jobs",
-        "version-consistency",
+        "docs-link-check",
+        "steps",
+        0,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected == 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        1,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
         "steps",
         3,
         "if"
       ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false' && github.event_name == 'pull_request' && github.base_ref == 'dev'"
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
     },
     {
       "file": "test.yml",
       "path": [
         "jobs",
-        "version-consistency",
+        "docs-link-check",
         "steps",
         4,
         "if"
       ],
-      "value": "always()"
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
     },
     {
       "file": "test.yml",
       "path": [
         "jobs",
-        "fake-test-guard",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "visual-regression",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "visual-regression",
+        "docs-link-check",
         "steps",
         5,
         "if"
       ],
-      "value": "steps.playwright-cache.outputs.cache-hit != 'true'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "visual-regression",
-        "steps",
-        6,
-        "if"
-      ],
-      "value": "steps.playwright-cache.outputs.cache-hit == 'true'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "visual-regression",
-        "steps",
-        8,
-        "if"
-      ],
-      "value": "failure()"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "operator-workspace-release",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "operator-workspace-release",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "always()"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "sr-only-hidden",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "sr-only-hidden",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "failure()"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "edit-mode-immediacy-surfaces",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "edit-mode-immediacy-surfaces",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "failure()"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "edit-mode-numbering-guards",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "edit-mode-numbering-guards",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "failure()"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "edit-mode-session-restore",
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "edit-mode-session-restore",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "failure()"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "security-governance-audit",
-        "if"
-      ],
-      "value": "github.event_name == 'push' && github.ref == 'refs/heads/dev'"
+      "value": "always() && needs.detect.outputs.docs_site_affected != 'false'"
     },
     {
       "file": "test.yml",
@@ -1038,81 +803,6 @@
         "if"
       ],
       "value": "always() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped')"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
-        "if"
-      ],
-      "value": "${{ !cancelled() }}"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
-        "steps",
-        0,
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed == 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
-        "steps",
-        1,
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
-        "steps",
-        2,
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
-        "steps",
-        3,
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
-        "steps",
-        4,
-        "if"
-      ],
-      "value": "needs.detect.outputs.code_paths_changed != 'false'"
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
-        "steps",
-        5,
-        "if"
-      ],
-      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
     }
   ],
   "continue-on-error": [
@@ -1131,17 +821,6 @@
       "file": "test.yml",
       "path": [
         "jobs",
-        "operator-docs",
-        "steps",
-        11,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
         "backend",
         "steps",
         7,
@@ -1166,7 +845,7 @@
         "jobs",
         "frontend",
         "steps",
-        10,
+        7,
         "continue-on-error"
       ],
       "value": true
@@ -1175,18 +854,7 @@
       "file": "test.yml",
       "path": [
         "jobs",
-        "version-consistency",
-        "steps",
-        4,
-        "continue-on-error"
-      ],
-      "value": true
-    },
-    {
-      "file": "test.yml",
-      "path": [
-        "jobs",
-        "semgrep-lint",
+        "docs-link-check",
         "steps",
         5,
         "continue-on-error"

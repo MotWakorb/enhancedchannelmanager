@@ -45,10 +45,11 @@ import type { Browser, BrowserContext, Page } from '@playwright/test'
  *
  * `E2E_EXACT_BUILD=true` builds the checked-out source and serves it on an
  * isolated preview port with NO backend — that is what the flag means, and it
- * is the mode the `Screen-Reader-Only Rendering Guard` CI job runs in
- * (`.github/workflows/test.yml`, `docs/testing.md` § "Rendered-CSS regression
- * guards"). Every `/api` call fails there, including the two auth-posture
- * probes `ProtectedRoute` gates the whole app on.
+ * is the mode the `Screen-Reader-Only Rendering Guard` CI job used before that
+ * job was removed, and the mode these specs are still run by hand in
+ * (`docs/testing.md` § "Rendered-CSS regression guards"). Every `/api` call
+ * fails there, including the two auth-posture probes `ProtectedRoute` gates
+ * the whole app on.
  *
  * That used to render the app shell anyway, because `useAuthRequired()`
  * resolved an unanswered probe to "auth is not required" and the setup probe's

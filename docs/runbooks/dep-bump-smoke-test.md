@@ -25,7 +25,7 @@ Manual trigger. Run before opening or refreshing a PR that bumps any of:
 - `Dockerfile` / `Dockerfile.dev`
 - `mcp-server/requirements.txt`
 
-This complements the CI pre-merge gate (the `build-amd64` / `dast-scan` / `trivy-scan` jobs that ADR-001 extended to dep-bump PRs targeting `dev`). The local script catches the same class of failures *before* you push, saving a CI cycle.
+This complements what remains of the CI gate. `build-amd64` and all four Trivy scans (ECM amd64/arm64, MCP amd64/arm64) still run and still block publication. `dast-scan` was removed in the CI gate reduction, so **nothing boots the candidate image and exercises `/api/health` any more** — that is exactly what this script does locally, and the ADR-001 dependency-manifest trigger that would have run it pre-merge was never implemented either. **This script is now the only boot smoke test of a dependency bump, so run it.**
 
 ## Symptoms (what failure looks like)
 
@@ -96,7 +96,7 @@ This is a developer workflow check, not a paging condition. Escalation paths:
 
 Not applicable: this is a pre-merge gate, not an incident response. After every dep-bump merge:
 
-- [ ] Confirm the corresponding CI `build-amd64` / `dast-scan` / `trivy-scan` jobs were green on the PR (ADR-001 acceptance criterion 2).
+- [ ] Confirm the CI `build-amd64` and `trivy-scan` jobs were green. (`dast-scan`, the third job named by ADR-001 acceptance criterion 2, no longer exists.)
 - [ ] If the local script passed but CI failed: file a bead under `bd-6rrl5` capturing the divergence. That's an ADR-001 gap to close.
 - [ ] If you discovered a check that should be in the matrix but isn't, edit `scripts/smoke_test_dev_container.sh`, add a row to the matrix above, and update this runbook in the same PR.
 
@@ -133,5 +133,5 @@ Not applicable: this is a pre-merge gate, not an incident response. After every 
 ### Related
 
 - [ADR-001: Dependency Upgrade Validation Gate](../adr/ADR-001-dependency-upgrade-validation-gate.md): the contract this script implements
-- `.github/workflows/build.yml`: the CI counterpart (`build-amd64`, `dast-scan`, `trivy-scan` jobs)
+- `.github/workflows/build.yml`: the CI counterpart (`build-amd64`, `trivy-scan` and its three sibling scans; `dast-scan` was removed)
 - Epic: `enhancedchannelmanager-6rrl5`, dep-bump children that consume this script

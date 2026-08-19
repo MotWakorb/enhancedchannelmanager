@@ -20,11 +20,17 @@ name: Tests
 #   * GitHub treats a SKIPPED job as satisfying a required status check, so
 #     skipping the job is the same hole wearing a different hat.
 #
-# Jobs that are NOT required contexts may skip at the job level. They are
-# marked below. Adding one of them to branch protection without converting
-# it to step-gating reopens the hole; `backend/tests/unit/
-# test_classify_changed_paths.py` fails the PR if a required context ever
-# gains a second emitter or this workflow regains a path filter.
+# Jobs that are NOT required contexts may skip at the job level. Adding one
+# of them to branch protection without converting it to step-gating reopens
+# the hole; `backend/tests/unit/test_classify_changed_paths.py` fails the PR
+# if a required context ever gains a second emitter or this workflow regains
+# a path filter.
+#
+# `dev` requires four contexts: `Backend Tests` and `Frontend Tests` from
+# this workflow, and `CodeQL Analysis (python)` and
+# `CodeQL Analysis (javascript-typescript)` from build.yml. `MCP Server
+# Tests` runs here too and is not required; it is product coverage of the
+# sidecar, kept for what it tests rather than for what it gates.
 
 on:
   push:
@@ -68,220 +74,6 @@ jobs:
       - name: Classify the changed file set
         id: classify
         uses: ./.github/actions/classify-changed-paths
-
-  # ─── Operator Docs ────────────────────────────────────────────────────
-  # REQUIRED CONTEXT on `dev`, as `Operator Docs`. Read this before editing
-  # the job; the constraints below are not stylistic.
-  #
-  # Branch protection on `dev` is classic with enforce_admins=true, and it
-  # matches a required check by the DISPLAYED job name. GitHub reports no
-  # conclusion at all for a job it skips. So a required-context job that
-  # skips, or that reports under any other name, leaves protection waiting
-  # forever for a context nothing emits, and every open pull request wedges
-  # with no admin bypass. Failing one PR is a working guard; wedging all of
-  # them is an outage.
-  #
-  # Concretely, do NOT:
-  #   * add a job-level `if:` or `needs:` here (either can skip the job);
-  #   * add `strategy:` (a matrix renames the context to
-  #     `Operator Docs (<value>)`, exactly as it does for CodeQL Analysis in
-  #     build.yml) or convert it to a reusable-workflow `uses:` call (which
-  #     reports as `Operator Docs / <inner job>`);
-  #   * change `name:`, delete it, or rename the `operator-docs` job key;
-  #   * add `continue-on-error: true`, which makes it green regardless;
-  #   * add a path filter to this workflow (see the invariant at the top).
-  #
-  # Gating individual STEPS is fine and is how this job already works: a
-  # skipped step still leaves the job reporting a conclusion. The four
-  # ratchets below are pull-request-only for that reason.
-  #
-  # This job hosts six gates: `npm run docs:check`, the em-dash ratchet, the
-  # PII/ECM-credential ratchet, the detect-secrets ratchet, the
-  # binary-artifact ratchet, and `mkdocs build --strict`. Moving one out of
-  # this job silently removes it from the required check even if it still
-  # runs somewhere else.
-  #
-  # `backend/tests/unit/test_classify_changed_paths.py::
-  # TestOperatorDocsRequiredContext` fails the pull request on any of the
-  # above, so the branch cannot be wedged by an edit here. If you need to
-  # change one of these properties, change branch protection first, then that
-  # test, then this job.
-  #
-  # Deliberately UNGATED: a documentation-only change is precisely what this
-  # job checks, and this workflow runs on every event, so it needs no
-  # `detect` dependency at all. Until bead enhancedchannelmanager-5rwzy this
-  # job existed twice, once here and once in docs-only-pass.yml, with a "keep
-  # the step byte-identical" comment holding the two copies together. There
-  # is now one copy.
-  operator-docs:
-    name: Operator Docs
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          # Full history so the em-dash ratchet can find the PR's merge
-          # base. A shallow clone has no merge base to diff against.
-          fetch-depth: 0
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-      - name: Check links, terminology, and screenshots
-        id: docs_check
-        run: npm run docs:check
-
-      # ─── Em-dash ratchet (bead enhancedchannelmanager-3tflw) ─────────────
-      # docs/style_guide.md § "Prose Style (Docs and Comments)" bans the
-      # em-dash in documentation prose and code comments. It had no
-      # enforcement, and two documentation passes shipped 144 violations
-      # through two merged PRs without three reviewers noticing.
-      #
-      # RATCHET, NOT CLIFF: the guard fails only on lines the PR ADDS. The
-      # ~12k pre-existing violations are tolerated and reported as a count,
-      # per the PO's "add the guard, defer the cleanup" call.
-      #
-      # It lives in this job because a Markdown-only PR is exactly how the
-      # 144 violations arrived, and this job is the one that runs on such a
-      # PR. Since bead enhancedchannelmanager-5rwzy the whole workflow runs
-      # on every event, so there is a single copy of this step.
-      #
-      # Pull requests only: on a push to dev/main the merge commit's content
-      # was already checked on the PR, and there is no base ref to diff.
-      - name: Check for new em-dashes (ratchet)
-        id: em_dash_ratchet
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git fetch --no-tags origin "$BASE_REF"
-          python3 scripts/check_em_dashes.py --base-ref "origin/$BASE_REF"
-
-      # ─── PII + ECM credential ratchet ────────────────────────────────────
-      # This added-lines guard covers personal identifiers (il1xz) and ECM's
-      # application-specific credential shapes (h9av3). It cannot see history;
-      # a green run means only that this change adds no finding.
-      - name: Check for new personal identifiers and ECM credentials (ratchet)
-        id: pii_ratchet
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git fetch --no-tags origin "$BASE_REF"
-          python3 scripts/check_pii.py --base-ref "origin/$BASE_REF"
-
-      # ─── Published user-guide site build (beads pb2s4, t4d5w) ───────────
-      # `mkdocs build --strict` used to run only on a push to dev, in
-      # docs-pages.yml, AFTER the merge. A broken site therefore merged green
-      # and surfaced as a failed deploy on dev. Bead pb2s4 records a broken
-      # link that `npm run docs:check` passed and this build failed: the two
-      # check DISJOINT things, so this is additive, not redundant.
-      #
-      # It lives here rather than in a job of its own because the Operator
-      # Docs job is the one job that already runs on every event with no
-      # gating, and adding a job would put a new name on the checks list.
-      # Ungated on purpose: a link into the user guide can break from a page
-      # anywhere in the tree, so the classifier's site-path list is the wrong
-      # filter for the PR-time build.
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-          cache: 'pip'
-          cache-dependency-path: docs/requirements-docs.txt
-
-      - name: Install docs site dependencies
-        run: pip install -r docs/requirements-docs.txt
-
-      # General/provider-shaped layer. The committed baseline contains hashes,
-      # never values, and was audited before commit. ECM-specific credential
-      # shapes remain the preceding guard's responsibility.
-      - name: Install detect-secrets (pinned)
-        if: github.event_name == 'pull_request'
-        run: python3 -m pip install --quiet detect-secrets==1.5.0
-
-      - name: Check for new generic secrets (ratchet)
-        id: secrets_ratchet
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git fetch --no-tags origin "$BASE_REF"
-          if git cat-file -e "origin/$BASE_REF:scripts/check_secrets.py"; then
-            git show "origin/$BASE_REF:scripts/check_secrets.py" \
-              > "$RUNNER_TEMP/check_secrets.py"
-            python3 "$RUNNER_TEMP/check_secrets.py" \
-              --repo-root "$GITHUB_WORKSPACE" --base-ref "origin/$BASE_REF"
-          else
-            # One-time bootstrap: the base predates the helper. The candidate
-            # baseline must exactly equal a fresh scan of that base tree.
-            python3 scripts/check_secrets.py --base-ref "origin/$BASE_REF"
-          fi
-
-      # ─── Binary-artifact guard (bead enhancedchannelmanager-6mqn5) ──────
-      # The three ratchets above read added LINES. A ChaCha20-Poly1305
-      # ciphertext has no lines and a ZIP central directory has no lines, so
-      # none of them can see the artifact class this one covers: an
-      # `ECMBKENC`-encrypted ECM backup envelope carrying a live provider
-      # credential, copied into the repo working tree because Playwright's
-      # upload sandbox refuses any path outside the repository root. One
-      # drill left 2,321 such files totalling 3.1 GB untracked and unignored.
-      #
-      # The unit of inspection is therefore the added FILE, not the added
-      # line. Runs HEAD's copy of the script rather than the base's, matching
-      # the em-dash and PII ratchets above: pinning to the base would make a
-      # false-positive fix take two pull requests, and a guard whose false
-      # positives are expensive to fix is a guard that gets disabled. What
-      # base-pinning would have bought is bought instead by
-      # `backend/tests/unit/test_check_binary_artifacts.py::TestPolicyIsPinned`
-      # under the required `Backend Tests` context, so weakening the format
-      # list or the size ceilings fails a required check.
-      #
-      # Pull requests only, for the same reason as the ratchets above: a push
-      # to dev/main has no base ref to diff against.
-      - name: Check for added binary artifacts (ratchet)
-        id: binary_artifacts
-        if: github.event_name == 'pull_request'
-        env:
-          BASE_REF: ${{ github.base_ref }}
-        run: |
-          git fetch --no-tags origin "$BASE_REF"
-          python3 scripts/check_binary_artifacts.py --base-ref "origin/$BASE_REF"
-
-      - name: Build the published user-guide site (strict)
-        id: site_build
-        # --strict turns mkdocs warnings (broken internal links, missing nav
-        # targets, unreadable pages) into a non-zero exit.
-        run: mkdocs build --strict --site-dir _site
-
-      # Reports each step's real `outcome`, never a blanket claim that all
-      # three ran. Under `if: always()` this step also fires when an earlier
-      # step failed and the later ones never executed; an unset outcome
-      # renders as "did not run". A summary that overstates what happened
-      # would be the same defect this change exists to close.
-      - name: Summarize what this check did
-        # A run summary must never be the reason a required check reports
-        # red. If this step breaks, the conclusion the check is named for
-        # still stands.
-        continue-on-error: true
-        if: always()
-        env:
-          DOCS_CHECK: ${{ steps.docs_check.outcome }}
-          EM_DASH: ${{ steps.em_dash_ratchet.outcome }}
-          PII_RATCHET: ${{ steps.pii_ratchet.outcome }}
-          SECRETS_RATCHET: ${{ steps.secrets_ratchet.outcome }}
-          BINARY_ARTIFACTS: ${{ steps.binary_artifacts.outcome }}
-          SITE_BUILD: ${{ steps.site_build.outcome }}
-        run: |
-          {
-            echo "### Operator Docs"
-            echo "- \`npm run docs:check\` (links, terminology, screenshots): ${DOCS_CHECK:-did not run}"
-            echo "- em-dash ratchet (pull requests only): ${EM_DASH:-did not run}"
-            echo "- personal-identifier and ECM-credential ratchet (pull requests only): ${PII_RATCHET:-did not run}"
-            echo "- generic detect-secrets ratchet (pull requests only): ${SECRETS_RATCHET:-did not run}"
-            echo "- added binary-artifact ratchet (pull requests only): ${BINARY_ARTIFACTS:-did not run}"
-            echo "- \`mkdocs build --strict\` on the published user-guide site: ${SITE_BUILD:-did not run}"
-          } >> "$GITHUB_STEP_SUMMARY"
 
   # ─── Backend tests ────────────────────────────────────────────────────
   # REQUIRED CONTEXT. Always runs; the steps below are gated. See the
@@ -443,7 +235,9 @@ jobs:
   # points at mcp-server/.coveragerc which excludes tests/ from the
   # measurement (so self-coverage doesn't inflate the TOTAL).
   #
-  # REQUIRED CONTEXT. Always runs; the steps below are gated.
+  # NOT a required context on `dev`. It keeps the always-run, step-gated
+  # shape anyway because `publish-verified-dev-images` needs it and refuses
+  # to publish on a skipped dependency.
   mcp-server:
     name: MCP Server Tests
     runs-on: ubuntu-latest
@@ -581,6 +375,12 @@ jobs:
 
   # ─── Frontend lint / typecheck / unit tests ───────────────────────────
   # REQUIRED CONTEXT. Always runs; the steps below are gated.
+  #
+  # Lint, typecheck and vitest, and nothing else. No browser is installed and
+  # no Playwright spec runs here: `npx playwright install --with-deps chromium`
+  # hung for 2h35m on a dev run and has no business sitting on a required
+  # check. The modal-typography inventory spec and `playwright.visual.config.ts`
+  # still exist and are runnable by hand; they are simply not wired to CI.
   frontend:
     name: Frontend Tests
     runs-on: ubuntu-latest
@@ -616,10 +416,6 @@ jobs:
       - name: Install dependencies
         if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
-        run: npm ci
-
-      - name: Install Playwright test dependencies
-        if: needs.detect.outputs.code_paths_changed != 'false'
         run: npm ci
 
       - name: Lint (full repo, blocking)
@@ -660,17 +456,6 @@ jobs:
             --reporter=junit \
             --outputFile.junit=./junit.xml
 
-      - name: Install Chromium for modal typography inventory
-        if: needs.detect.outputs.code_paths_changed != 'false'
-        run: npx playwright install --with-deps chromium
-
-      - name: Live modal typography inventory (blocking)
-        id: modal_inventory
-        if: needs.detect.outputs.code_paths_changed != 'false'
-        env:
-          CI: '1'
-        run: npx playwright test --config=playwright.visual.config.ts e2e/visual/modal-typography-inventory.spec.ts
-
       - name: Summarize what this check did
         # A run summary must never be the reason a required check reports
         # red. If this step breaks, the conclusion the check is named for
@@ -681,9 +466,8 @@ jobs:
           LINT: ${{ steps.lint.outcome }}
           TYPECHECK: ${{ steps.typecheck.outcome }}
           VITEST: ${{ steps.vitest.outcome }}
-          MODAL_INVENTORY: ${{ steps.modal_inventory.outcome }}
         run: |
-          # Four separately-failing gates, so four separate outcomes. Lint
+          # Three separately-failing gates, so three separate outcomes. Lint
           # runs first: when it fails, typecheck and vitest never execute,
           # and a single line claiming all three ran would be false.
           {
@@ -694,7 +478,6 @@ jobs:
               --outcome "$VITEST"
             echo "- lint: ${LINT:-did not run}"
             echo "- typecheck: ${TYPECHECK:-did not run}"
-            echo "- live modal typography inventory: ${MODAL_INVENTORY:-did not run}"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage artifact
@@ -720,586 +503,104 @@ jobs:
           # flake-pr-comment aggregator.
           retention-days: 30
 
-  # ─── Version-bump consistency guard (bd-9rtlc) ────────────────────────
-  # The version string lives in three hand-edited files: frontend/package.json
-  # (canonical), backend/routers/backup.py (APP_VERSION), and backend/main.py
-  # (FastAPI version kwarg). Today's bump workflow requires updating all three
-  # in lockstep — and historically didn't (PR #277 caught backup.py at 0.16.0
-  # while package.json was 0.17.0-0027; the 9rtlc audit caught main.py at
-  # 0.16.0-0003 while package.json was 0.17.0-0033). This job fails the PR if
-  # the touchpoints disagree, so the next missed bump fails before merge
-  # instead of leaking divergence into dev. See docs/versioning.md →
-  # Touchpoints for the canonical list and bd-9rtlc for the audit history.
-  # REQUIRED CONTEXT. Always runs, and unlike the other four it runs its
-  # first check unconditionally: proving the three version touchpoints agree
-  # costs a checkout and is meaningful on any change. Only the ADVANCE gate
-  # is gated, preserving only the explicit inert-state exemption that replaced
-  # inherited from the workflow-level path filter.
-  version-consistency:
-    name: Version Consistency
+  # ─── Docs link check (advisory) ────────────────────────────────────────
+  # ADVISORY BY PO DECISION: a release blocks on the app being broken, not on
+  # a bad link. `Docs Link Check` is deliberately NOT a branch-protection
+  # required context, and deliberately NOT in `publish-verified-dev-images`'
+  # `needs:` below — adding it there would make a bad link stop publication,
+  # which is the opposite of the decision.
+  #
+  # It keeps the always-run, step-gated shape anyway. Advisory is about what
+  # the result is allowed to block, not about how the job is written: a
+  # job-level `if:` that can evaluate false renders as a pass in the checks
+  # rollup, so a reader scanning for red would see green on a run that built
+  # nothing. Gate the steps, and keep the job-level guard at `!cancelled()`
+  # so a failed `detect` cannot make this check disappear.
+  #
+  # The gate is `docs_site_affected`, not `code_paths_changed`: this job
+  # builds the published site, and that verdict is precisely "a changed path
+  # is an input the site is built from". Written `!= 'false'` like every other
+  # gate here, so an absent or empty output still builds.
+  #
+  # The Python and dependency setup mirrors the `build` job in
+  # docs-pages.yml on purpose — same '3.12', same
+  # `docs/requirements-docs.txt`, same `mkdocs build --strict`. If they drift,
+  # this check stops being a preview of the deploy and starts being a second
+  # opinion, which is worse than nothing.
+  #
+  # WHAT THIS DOES NOT BUY (bead enhancedchannelmanager-h2jjg): a link from a
+  # published page to a file `mkdocs.yml` excludes — `docs/adr/*.md` and the
+  # rest of the internal tree — is logged by mkdocs at INFO, not WARNING, so
+  # `--strict` exits 0 on it. Measured on mkdocs 1.6.1: the level is
+  # `min(logging.INFO, validation.links.not_found)` in
+  # `mkdocs/structure/pages.py`, so no `validation:` setting can raise it
+  # above INFO. This job catches links to files that do not exist. It does
+  # not catch links to files that exist but are not published, which is the
+  # shape of all 18 dead links h2jjg records.
+  docs-link-check:
+    name: Docs Link Check
     runs-on: ubuntu-latest
     needs: [detect]
     if: ${{ !cancelled() }}
     steps:
+      - name: Nothing the published site is built from changed
+        if: needs.detect.outputs.docs_site_affected == 'false'
+        run: |
+          echo "No changed path is an input to the mkdocs user-guide site."
+          echo "There are no published pages or links to re-check, so this"
+          echo "check passes without building the site. Any change under"
+          echo "docs/user_guide/, docs/index.md or mkdocs.yml builds it below."
+          echo "**Docs Link Check**: no site input changed, mkdocs was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout repository
+        if: needs.detect.outputs.docs_site_affected != 'false'
         uses: actions/checkout@v6
-        with:
-          # Full history so the build-advance step below can read the base
-          # branch's frontend/package.json via `git show origin/<base>:...`.
-          fetch-depth: 0
 
       - name: Setup Python
+        if: needs.detect.outputs.docs_site_affected != 'false'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: docs/requirements-docs.txt
 
-      - name: Verify version touchpoints agree
-        id: consistency
-        run: python scripts/check_version_consistency.py
+      - name: Install docs dependencies
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        run: pip install -r docs/requirements-docs.txt
 
-      # ─── Build-number ADVANCE gate (bead enhancedchannelmanager-w9irb) ──
-      # The consistency check above proves the three touchpoints MATCH; this
-      # step proves the canonical BUILD number strictly ADVANCED past the base
-      # branch — closing the failure mode where ~9 source PRs shipped to dev
-      # at 0.17.6-0084 with no bump, undetected. Additive: it does not weaken
-      # the consistency check.
-      #
-      # Scope / exemptions:
-      #   - Runs ONLY on pull_request events whose base is `dev`. A release-cut
-      #     PR targets `main` (base_ref=main) and is therefore skipped here;
-      #     the shared script *also* exempts a no-suffix (X.Y.Z) version as a
-      #     second safety net.
-      #   - Documentation-only PRs are exempt: they carry no build to advance.
-      #     That exemption used to come free from this workflow's path filter;
-      #     since bead enhancedchannelmanager-5rwzy it is explicit, via the
-      #     `detect` job. The job itself still runs and still proves the
-      #     touchpoints agree, so the required context is honest either way.
-      # The CHANGELOG [Unreleased] check inside the script is SOFT: it emits a
-      # ::warning:: annotation and never fails the job.
-      - name: Verify build number advances past base (PRs to dev only)
-        id: advance_gate
-        if: >-
-          needs.detect.outputs.code_paths_changed != 'false'
-          && github.event_name == 'pull_request'
-          && github.base_ref == 'dev'
-        run: |
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          python scripts/check_version_advances.py \
-            --baseline-ref "origin/${{ github.base_ref }}"
+      - name: Build site (strict)
+        id: mkdocs
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        # Identical to the docs-pages.yml deploy build. `--strict` turns
+        # mkdocs warnings into a non-zero exit, which is what makes a link to
+        # a nonexistent page fail here instead of shipping.
+        run: mkdocs build --strict --site-dir _site
 
-      # This is the one required check whose two halves can disagree about
-      # whether they ran, so the summary states each half separately.
       - name: Summarize what this check did
-        # A run summary must never be the reason a required check reports
-        # red. If this step breaks, the conclusion the check is named for
-        # still stands.
+        # A run summary must never be the reason a check reports red.
         continue-on-error: true
-        if: always()
+        if: always() && needs.detect.outputs.docs_site_affected != 'false'
         env:
-          CODE_PATHS_CHANGED: ${{ needs.detect.outputs.code_paths_changed }}
-          EVENT_NAME: ${{ github.event_name }}
-          BASE_REF: ${{ github.base_ref }}
-          CONSISTENCY: ${{ steps.consistency.outcome }}
-          ADVANCE: ${{ steps.advance_gate.outcome }}
+          MKDOCS: ${{ steps.mkdocs.outcome }}
         run: |
-          # The consistency half runs unconditionally but can still be
-          # unreached if checkout or setup-python failed, so it reports its
-          # own outcome too rather than being asserted.
           {
-            echo "**Version Consistency**:"
-            echo "- three version touchpoints agree: ${CONSISTENCY:-did not run}"
-            if [ "$EVENT_NAME" != "pull_request" ] || [ "$BASE_REF" != "dev" ]; then
-              echo "- build-number advance gate: does not apply to this event"
-            elif [ "$CODE_PATHS_CHANGED" = "false" ]; then
-              echo "- build-number advance gate: NOT run (inert machine-state change)"
-            else
-              echo "- build-number advance gate: ${ADVANCE:-did not run}"
-            fi
+            echo "**Docs Link Check** (advisory, not a required context):"
+            echo "- \`mkdocs build --strict\`: ${MKDOCS:-did not run}"
+            echo "- catches links to pages that do not exist; does NOT catch"
+            echo "  links to internal files excluded from the site."
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # ─── Fake-test guard (bd-ulp7q.9) ────────────────────────────────────────
-  # Fails the PR if `assert True` (Python) or `expect(true).toBe(true)`
-  # (TypeScript) appear in any test file. Both patterns always pass and
-  # provide zero regression signal — they are the canonical fake-test
-  # anti-pattern from the ulp7q audit.
-  #
-  # No Python deps needed: the script uses only stdlib (pathlib, re, sys).
-  # No Node deps needed: it scans the source tree with pathlib, no build step.
-  #
-  # Convention doc: docs/style_guide.md § "Test validity / anti-patterns".
-  # Suppression: add `# fake-test-ok: <reason>` (Python) or
-  # `// fake-test-ok: <reason>` (TypeScript) on the same line.
-  #
-  # NOT a required context, so it may skip at the job level. If it is ever
-  # added to branch protection, convert it to the step-gated shape the five
-  # required jobs use first: GitHub counts a skipped job as satisfying a
-  # required check.
-  fake-test-guard:
-    name: Fake-Test Guard
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Check for fake-test markers
-        run: python scripts/check_fake_tests.py
-
-  # ─── Visual regression (Playwright — bd-lln2x) ─────────────────────────
-  # Screenshots the Heatmap chart primitive in isolation and diffs against
-  # the committed baseline PNG, and renders the complete modal harness to
-  # enforce its live typography inventory. Catches the bd-yteek → bd-wdpve class of
-  # bug (label rotation that passes jsdom unit tests but renders
-  # incorrectly in real browsers). The fixture page boots from the Vite
-  # dev server with no backend dependency, so this job runs without a
-  # live ECM container — unlike the bd-2lw25-deferred E2E suite under
-  # `e2e/*.spec.ts`. Config: `playwright.visual.config.ts`.
-  #
-  # NOT a required context; may skip at the job level (see fake-test-guard).
-  visual-regression:
-    name: Visual Regression
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          # The repo-root package.json hosts @playwright/test; the
-          # frontend/ package.json hosts the Vite dev server that serves
-          # the fixture HTML. Both lockfiles feed the cache key.
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
-
-      - name: Install root dependencies (Playwright)
-        run: npm ci
-
-      - name: Install frontend dependencies (Vite + React)
-        working-directory: frontend
-        run: npm ci
-
-      # Cache Playwright browsers separately from npm — the binaries
-      # are large (~300 MB) and rotate independently of dep changes.
-      # Key includes the Playwright version so a version bump triggers
-      # a fresh download.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Install Playwright browsers (chromium only)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        # --with-deps installs the OS-level libs Chromium needs on
-        # ubuntu-latest. Only install chromium since the visual config
-        # has a single chromium project — installing firefox/webkit
-        # would triple the cache size for no test coverage.
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright system deps (cache hit path)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        # When browsers are cached the binaries are restored but the
-        # OS libs may not be — `install-deps` is idempotent and fast.
-        run: npx playwright install-deps chromium
-
-      - name: Run visual regression tests
-        env:
-          # CI=1 makes Playwright start its own dev server (vs. reusing
-          # an existing one) — see playwright.visual.config.ts comment
-          # on `reuseExistingServer`.
-          CI: '1'
-        run: npx playwright test --config=playwright.visual.config.ts
-
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-visual-report
-          path: |
-            playwright-report/
-            test-results-visual/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # ─── Operator workspace rendered release matrix (.14) ─────────────────
-  # NOT a required context; may skip at the job level (see fake-test-guard).
-  operator-workspace-release:
-    name: Operator Workspace Release Matrix
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix frontend ci
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Run exact rendered release matrix
-        run: |
-          E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/operator-shell.spec.ts \
-            --project=chromium \
-            --grep release:operator-workspace \
-            --workers=1 \
-            --retries=0 \
-            --reporter=github,html
-          node scripts/verify-operator-workspace-release-artifacts.mjs --require-icon-metadata
-        env:
-          PLAYWRIGHT_HTML_OPEN: never
-
-      - name: Upload named rendered evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: operator-workspace-release-matrix
-          path: |
-            test-results/
-            playwright-report/
-          if-no-files-found: error
-          retention-days: 14
-
-  # ─── Screen-reader-only rendering guard (bead enhancedchannelmanager-nraba) ──
-  # Fails the PR if a `.sr-only` / `.visually-hidden` region renders as
-  # ordinary visible text on a COLD context — the shape of bead
-  # enhancedchannelmanager-zncyv, where the utility was declared only in the
-  # lazily-loaded ChannelPipelineTab chunk while the Dashboard (eager) and
-  # Settings chunks rendered it, so both aria-live regions were visible copy
-  # (measured 1308x24 on the Dashboard) until the operator happened to open
-  # Channel Pipeline. All 16 tiers of
-  # frontend/src/cssAudits/sharedClassChunkLeak.audit.test.ts stayed green
-  # through the entire life of that bug: they model DUPLICATE declarations
-  # colliding, and `.sr-only` had exactly one declaration, so nothing ever
-  # collided.
-  #
-  # WHY THIS ONE SPEC AND NOT THE OTHER CSS GUARDS. It is the only one that
-  # runs without a live ECM container. E2E_EXACT_BUILD=true builds
-  # the checked-out source and serves it on an isolated preview port with no
-  # backend; the shell, Dashboard and Settings all mount that way, so the
-  # assertion is reachable. Mounting them needs the auth posture stated rather
-  # than probed, which `e2e/fixtures/css-guard.ts` does under this same flag —
-  # see its `stubAuthPostureWhenBackendless()`; without it the app correctly
-  # renders "Cannot reach ECM" (bead enhancedchannelmanager-p388h) and there is
-  # no shell to measure. `e2e/frozen-chrome.spec.ts`,
-  # `e2e/route-typography-scale.spec.ts` and `e2e/contrast-aa.spec.ts` walk
-  # every route, and Channel Manager's `.channels-pane` never mounts without an
-  # API — measured, not assumed. Those three plus
-  # `e2e/cross-route-css-leak.spec.ts` stay manual until bd-2lw25 lands a
-  # live-service CI environment. See docs/testing.md § "Rendered-CSS
-  # regression guards".
-  #
-  # NOT a required context; may skip at the job level (see fake-test-guard).
-  sr-only-hidden:
-    name: Screen-Reader-Only Rendering Guard
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          # The repo-root package.json hosts @playwright/test; frontend/ hosts
-          # the Vite build this spec serves. Both lockfiles feed the cache key.
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix frontend ci
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Run the screen-reader-only rendering guard
-        # E2E_START_SERVER + E2E_EXACT_BUILD build the checked-out source and
-        # serve it on 127.0.0.1:4173 — the checked-in bundle, not a possibly
-        # stale dev server. --workers=1 because the spec opens one cold
-        # browser context per route and a second worker only adds contention.
-        run: |
-          E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test e2e/sr-only-hidden.spec.ts \
-            --project=chromium \
-            --workers=1 \
-            --retries=0 \
-            --reporter=github,html
-        env:
-          PLAYWRIGHT_HTML_OPEN: never
-
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: sr-only-hidden-report
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # ─── Edit Mode immediacy surfaces (epic enhancedchannelmanager-r93hq) ──
-  # Fails the PR if one of the three Edit Mode surfaces that only a real
-  # browser can measure regresses:
-  #   1. `.selection-action-bar-shell` losing the `position: fixed` that
-  #      commit 165d00b3 moved onto it (or an ancestor establishing a
-  #      containing block, which reads as "fixed" in every computed style
-  #      while anchoring the bar to that ancestor instead of the viewport);
-  #   2. `.modal-footer:has(.irreversible-action-notice)` no longer giving the
-  #      warning its own line, so a 3-line notice is crammed in beside the
-  #      merge button it gates;
-  #   3. `.immediate-action-note` overlapping the menu items around it or
-  #      pushing its dropdown off-screen.
-  # jsdom does no layout, so the ~25 unit tests around these components pass
-  # in every one of those states. Proven red against all three mutations.
-  #
-  # WHY THIS ONE RUNS IN CI when frozen-chrome and friends do not: it stubs
-  # every /api call itself, so `.channels-pane` mounts with real rows on the
-  # backend-less E2E_EXACT_BUILD preview. That same stubbing is what makes it
-  # safe — it structurally refuses to start unless E2E_EXACT_BUILD and
-  # E2E_START_SERVER are both set, so it cannot be aimed at a live ECM, which
-  # matters because it drives Merge (deletes channels) and CSV Import.
-  #
-  # NOT a required context; may skip at the job level (see fake-test-guard).
-  edit-mode-immediacy-surfaces:
-    name: Edit Mode Immediacy Surfaces Guard
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix frontend ci
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Run the Edit Mode immediacy surfaces guard
-        run: npm run test:css-guard:edit-mode-immediacy -- --reporter=github,html
-        env:
-          PLAYWRIGHT_HTML_OPEN: never
-
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: edit-mode-immediacy-surfaces-report
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # ─── Edit Mode numbering safeguards (epic enhancedchannelmanager-r93hq) ─
-  # Fails the PR if Edit Mode's channel-numbering safeguards stop holding in a
-  # real browser (beads `-vdxbx` and `-ic884.2`):
-  #   1. staging a number another channel already holds must warn before it is
-  #      accepted, and the operator's acknowledgement must reach the server;
-  #   2. an Apply whose FINAL state collides must be refused — with the
-  #      anti-vacuity control that makes the refusal mean something: the same
-  #      page first applies a clean plan and the bulk-commit request is watched
-  #      going out, and only then is the colliding plan staged and the absence
-  #      of a request asserted.
-  # The unit suites prove each layer on its own side of that seam
-  # (`channelNumberPlan.test.ts`, `ChannelsPane.duplicateNumber.test.tsx`,
-  # `useEditMode.numberingPreflight.test.ts`); none of them crosses it, and a
-  # guard that only runs when somebody remembers to run it is documentation.
-  #
-  # Same safety property as the immediacy guard above: the spec stubs every
-  # /api call itself and THROWS at collection time unless E2E_EXACT_BUILD and
-  # E2E_START_SERVER are both set, so it cannot be aimed at an operator's live
-  # ECM — which matters, because it drives Apply.
-  #
-  # NOT a required context; may skip at the job level (see fake-test-guard).
-  edit-mode-numbering-guards:
-    name: Edit Mode Numbering Guards
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix frontend ci
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Run the Edit Mode numbering guards
-        run: npm run test:css-guard:edit-mode-numbering -- --reporter=github,html
-        env:
-          PLAYWRIGHT_HTML_OPEN: never
-
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: edit-mode-numbering-guards-report
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # ─── Edit Mode session restore (epic enhancedchannelmanager-r93hq) ─────
-  # Fails the PR if a staged ledger stops surviving a dead session, or starts
-  # surviving one it must not:
-  #   1. a ledger this operator left behind is offered, accounted for, and
-  #      restored into Edit Mode;
-  #   2. a ledger stamped with a DIFFERENT operator is never offered and is
-  #      gone from the store by the time the app has painted. Two operators
-  #      sharing a workstation is the case that matters — handing A's staged
-  #      edits to B means B Applies them under B's credentials and the journal
-  #      attributes every change to B.
-  # The seam is a real `sessionStorage` surviving a real page load, read on the
-  # first render of the real `App`; `stagedLedgerStorage.test.ts`,
-  # `useEditMode.sessionSurvival.test.ts` and `EditModeRestoreDialog.test.tsx`
-  # each prove one side of it and none of them crosses it.
-  #
-  # Same safety property as the two guards above: the spec stubs every /api
-  # call itself and THROWS at collection time unless E2E_EXACT_BUILD and
-  # E2E_START_SERVER are both set, so it cannot be aimed at a live ECM.
-  #
-  # NOT a required context; may skip at the job level (see fake-test-guard).
-  edit-mode-session-restore:
-    name: Edit Mode Session Restore Guard
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: needs.detect.outputs.code_paths_changed != 'false'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
-
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm --prefix frontend ci
-
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Run the Edit Mode session restore guard
-        run: npm run test:css-guard:edit-mode-session-restore -- --reporter=github,html
-        env:
-          PLAYWRIGHT_HTML_OPEN: never
-
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: edit-mode-session-restore-report
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
-  # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
-  # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call
-  # on a non-literal pattern. See docs/style_guide.md#regex for the
-  # full convention. Rule-level excludes cover backend/tests/** and
-  # backend/safe_regex.py; case-by-case exemptions are annotated inline
-  # with `# nosemgrep: no-bare-re-on-dynamic-pattern` + justification or
-  # a TODO(<bead-id>) pointer to a follow-up migration.
-  # REQUIRED CONTEXT. Always runs; the steps below are gated. `container:`
-  # cannot be made conditional, so an inert-only event still pulls the
-  # semgrep image and then does nothing. That is a few seconds of runner time
-  # in exchange for the context being emitted exactly once, which is the
-  # trade this design is built on.
-  # This workflow already exists on the default branch, so it is the active
-  # bridge that can invoke the governance workflow at the exact dev push SHA
-  # while that newly added workflow is not yet present on main.
-  security-governance-audit:
-    name: Security Governance Audit
-    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-    permissions:
-      contents: read
-      security-events: read
-    uses: ./.github/workflows/security-governance-audit.yml
-
+  # Publication rides on the test jobs that remain in this workflow. Every
+  # name below must be a job that still exists here: `needs:` naming a deleted
+  # job is a workflow-level error, and GitHub then runs nothing at all, so dev
+  # image publication would stop silently.
   publish-verified-dev-images:
     name: Publish Verified Dev Images
     needs:
-      - operator-docs
       - backend
       - mcp-server
       - frontend
-      - version-consistency
-      - fake-test-guard
-      - visual-regression
-      - operator-workspace-release
-      - sr-only-hidden
-      - edit-mode-immediacy-surfaces
-      - edit-mode-numbering-guards
-      - edit-mode-session-restore
-      - semgrep-lint
     if: >-
       always() && github.event_name == 'push' && github.ref == 'refs/heads/dev'
       && !contains(needs.*.result, 'failure')
@@ -1314,72 +615,3 @@ jobs:
       candidate_sha: ${{ github.sha }}
       candidate_branch: dev
       tests_attested: true
-  semgrep-lint:
-    name: Semgrep Lint
-    runs-on: ubuntu-latest
-    needs: [detect]
-    if: ${{ !cancelled() }}
-    # Pinned image tag — semgrep 1.160.x (matches the version used to
-    # author and validate the .semgrep.yml rule). Bump deliberately; the
-    # rule self-test under .semgrep/tests/ is the canary for regressions.
-    container:
-      image: returntocorp/semgrep:1.160.0
-    steps:
-      - name: Inert-only change, nothing for semgrep to scan
-        if: needs.detect.outputs.code_paths_changed == 'false'
-        run: |
-          echo "Every changed path is on the classifier's explicit inert allowlist."
-          echo "Neither backend/ nor .semgrep.yml changed, so this check"
-          echo "passes without running the scan."
-          echo "**Semgrep Lint**: inert machine-state change, the scan was NOT run." \
-            >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Checkout repository
-        if: needs.detect.outputs.code_paths_changed != 'false'
-        uses: actions/checkout@v6
-
-      - name: Validate Semgrep rule config
-        id: validate
-        if: needs.detect.outputs.code_paths_changed != 'false'
-        run: semgrep --validate --config .semgrep.yml
-
-      - name: Run Semgrep rule self-test
-        id: self_test
-        if: needs.detect.outputs.code_paths_changed != 'false'
-        # Runs the fixture file (`# ruleid:` / `# ok:` annotations) against
-        # the live .semgrep.yml so the test locks the rule's accept/reject
-        # boundary — if the rule drifts, the self-test fails before the
-        # backend scan runs.
-        run: |
-          semgrep --test \
-            --config .semgrep.yml \
-            .semgrep/tests/no-bare-re-on-dynamic-pattern.py
-
-      - name: Run Semgrep against backend/
-        id: scan
-        if: needs.detect.outputs.code_paths_changed != 'false'
-        run: |
-          # --error flag exits non-zero on any finding. The rule is
-          # severity: ERROR so any hit blocks the job.
-          semgrep --config .semgrep.yml --error backend/
-
-      - name: Summarize what this check did
-        # A run summary must never be the reason a required check reports
-        # red. If this step breaks, the conclusion the check is named for
-        # still stands.
-        continue-on-error: true
-        if: always() && needs.detect.outputs.code_paths_changed != 'false'
-        env:
-          VALIDATE: ${{ steps.validate.outcome }}
-          SELF_TEST: ${{ steps.self_test.outcome }}
-          SCAN: ${{ steps.scan.outcome }}
-        run: |
-          # Three sequential gates. A failed config validation stops the other
-          # two from executing, so each reports its own outcome rather than
-          # one line claiming all three ran.
-          {
-            echo "**Semgrep Lint**:"
-            echo "- validate .semgrep.yml: ${VALIDATE:-did not run}"
-            echo "- rule self-test: ${SELF_TEST:-did not run}"
-            echo "- scan backend/: ${SCAN:-did not run}"
-          } >> "$GITHUB_STEP_SUMMARY"

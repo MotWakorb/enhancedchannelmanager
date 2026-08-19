@@ -173,7 +173,6 @@ def test_workflows_separate_verification_from_publication():
     assert build.count("outputs: type=oci") == 4
     assert "steps.build.outputs.digest" not in build
     assert "verify-archive" in publish
-    assert "fail_action: true" in build
     assert "packages: write" not in build
 
 
@@ -198,8 +197,8 @@ def test_trivy_scans_converted_docker_archives_from_verified_oci_candidates():
     """Pinned Trivy accepts Docker archives, converted without rebuilding candidates."""
     workflow = (ROOT / ".github/workflows/build.yml").read_text(encoding="utf-8")
     assert workflow.count("skopeo version 1.13.3") == 4
-    assert workflow.count("candidate_image.py verify-archive ") >= 5
-    assert workflow.count("skopeo copy oci-archive:") == 5
+    assert workflow.count("candidate_image.py verify-archive ") >= 4
+    assert workflow.count("skopeo copy oci-archive:") == 4
     assert workflow.count("docker-archive:/tmp/trivy-") == 4
     assert workflow.count("input: /tmp/trivy-") == 4
     assert workflow.count("-scan.docker.tar") == 8
