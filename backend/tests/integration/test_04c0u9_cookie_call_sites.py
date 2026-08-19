@@ -20,9 +20,11 @@ source analysis with no I/O and now walks the whole backend rather than
 ``auth/routes.py`` alone.
 """
 
+import re
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
+from urllib.parse import urlsplit
 
 import pytest
 
@@ -322,6 +324,19 @@ async def test_logout_deletion_mirrors_issue_time_attributes(
 # ---------------------------------------------------------------------------
 
 
+def _sign_in_url(detail: str):
+    """The recovery address the refusal message directs the operator to.
+
+    Parsed rather than substring-matched, for the reason given on the twin
+    helper in ``backend/tests/unit/test_04c0u9_session_transport.py``: a
+    substring assertion on the URL also passes for a wrong port
+    (``:61430``) and for an attacker-suffixed host.
+    """
+    match = re.search(r"Sign in at (\S+) instead\.", detail)
+    assert match is not None, f"no sign-in directive in refusal message: {detail!r}"
+    return urlsplit(match.group(1))
+
+
 @pytest.mark.asyncio
 async def test_plaintext_login_is_refused_when_ecm_terminates_tls(
     async_client, admin_user, test_session, ecm_terminates_tls
@@ -342,7 +357,8 @@ async def test_plaintext_login_is_refused_when_ecm_terminates_tls(
 
     assert response.status_code == 403
     detail = response.json()["detail"]
-    assert "https://ecm.test:6143" in detail
+    sign_in = _sign_in_url(detail)
+    assert (sign_in.scheme, sign_in.netloc) == ("https", "ecm.test:6143")
     assert "ECM_ALLOW_HTTP_SESSION_COOKIES" in detail
     assert not _session_cookies(response)
     # Refused BEFORE the password is read, so no session row is created.

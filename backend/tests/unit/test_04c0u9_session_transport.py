@@ -8,8 +8,10 @@ plain-HTTP main process — is proved separately in
 """
 
 import logging
+import re
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 import pytest
 from starlette.requests import Request
@@ -349,6 +351,24 @@ def test_certificate_presence_comes_from_the_directory_the_listener_starts_from(
 # ---------------------------------------------------------------------------
 
 
+def _sign_in_url(detail: str):
+    """The recovery address the refusal message directs the operator to.
+
+    Extracted and parsed rather than substring-matched. ``"https://ecm.test:6143"
+    in detail`` also passes for ``https://ecm.test:61430`` and for
+    ``https://ecm.test:6143.attacker.test`` — both proven against this test —
+    so it cannot fail in the way the assertion claims, and the host and the
+    port are exactly what it exists to pin. Callers compare the parsed scheme
+    and netloc, which is the precise origin check CodeQL's
+    ``py/incomplete-url-substring-sanitization`` asks for; netloc rather than
+    ``hostname``/``port`` so a malformed authority fails as an assertion
+    instead of a ``ValueError`` out of :func:`urllib.parse.urlsplit`.
+    """
+    match = re.search(r"Sign in at (\S+) instead\.", detail)
+    assert match is not None, f"no sign-in directive in refusal message: {detail!r}"
+    return urlsplit(match.group(1))
+
+
 def test_plaintext_session_is_refused_when_ecm_terminates_tls(issued_tls_dir):
     with _Policy(_tls(enabled=True)):
         with pytest.raises(Exception) as excinfo:
@@ -357,7 +377,8 @@ def test_plaintext_session_is_refused_when_ecm_terminates_tls(issued_tls_dir):
     assert exc.status_code == 403
     # 403 and not 401: the SPA's fetchJson treats 401 as "refresh and retry",
     # which would swallow the message.
-    assert "https://ecm.test:6143" in exc.detail
+    sign_in = _sign_in_url(exc.detail)
+    assert (sign_in.scheme, sign_in.netloc) == ("https", "ecm.test:6143")
     assert "ECM_ALLOW_HTTP_SESSION_COOKIES" in exc.detail
 
 
