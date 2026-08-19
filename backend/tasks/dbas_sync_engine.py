@@ -142,15 +142,23 @@ SYNC_NEVER_CREDENTIAL_COLUMNS: frozenset[str] = frozenset(
     {"credentials", "credential_version", "token_revoked_at"}
 )
 
-# The CONFIG categories this bead (tjaey) syncs — topology config only. Channels
-# / streams / logos are bead kcxie; users are never (above). Each maps to an
-# EntityType via _SECTION_TO_ENTITY (the same table the archive decoder uses).
+# The CONFIG categories synced every cycle (bead tjaey) — topology config plus
+# the USER AGENTS a stream profile's ``user_agent`` FK resolves through (bead
+# …-hiacv; ADR-013 S9 lists user agents in the per-cycle config set). Channels /
+# streams / logos are bead kcxie; users are never (above) — a user AGENT is a
+# Dispatcharr playback-header record, an entirely different entity from a Django
+# USER, so adding it does not touch the D3 never-sync set. Each key maps to an
+# EntityType via _SECTION_TO_ENTITY (the same table the archive decoder uses),
+# and each needs a matching ImporterStep in sync_config_importer_steps(): a
+# gathered category with no step is never imported, and a step with no gathered
+# category is a no-op, so the two must be edited together.
 SYNC_CONFIG_CATEGORIES: frozenset[str] = frozenset(
     {
         "m3u_accounts",
         "epg_sources",
         "channel_groups",
         "channel_profiles",
+        "user_agents",
         "stream_profiles",
     }
 )
@@ -791,16 +799,14 @@ def sync_config_importer_steps(
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        # NOTE (bead …-lvfwd): this registry carries no USER_AGENT step, even
-        # though ADR-013 S9 lists user agents in the per-cycle config set. A
-        # stream profile carrying a ``user_agent`` FK therefore finds nothing in
-        # the USER_AGENT remap namespace and is skipped DEPENDENCY_UNRESOLVED
-        # rather than created. That is strictly safer than the previous
-        # behaviour (POST the source id — a 400 that failed the whole cycle, or
-        # a silent bind to whatever occupies that id on B), but it does mean a
-        # custom-user-agent stream profile does not sync. Wiring the USER_AGENT
-        # step in changes what a cycle mutates on B, so it is a separate,
-        # ADR-scoped decision — not a drive-by here.
+        # USER AGENTS before STREAM PROFILES (…-hiacv, mirroring the restore
+        # registry's ordering): a stream profile's ``user_agent`` FK resolves
+        # through the USER_AGENT remap namespace, so without this step every
+        # custom-user-agent stream profile was skipped DEPENDENCY_UNRESOLVED and
+        # never reached B. ADR-013 S9 lists user agents in the per-cycle config
+        # set; ``user_agents`` is in SYNC_CONFIG_CATEGORIES so the gather feeds
+        # this step. Distinct from the USERS category, which stays never-sync (D3).
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         # CHANNELS (+ embedded streams) after every config dependency.
         ImporterStep(

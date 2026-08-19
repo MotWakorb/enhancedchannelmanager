@@ -37,7 +37,8 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | EPG sources | Source URL and settings. Credentials are stripped; re-enter on B. |
 | Channel groups | Group names and ordering. |
 | Channel profiles | Profile definitions. |
-| Stream profiles | Profile definitions. |
+| User agents | The custom user-agent strings a stream profile plays through. Synced before stream profiles so a profile's user-agent link is re-pointed at B's copy. Distinct from user *accounts*, which are never synced. |
+| Stream profiles | Profile definitions, including their user-agent link. |
 | Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. |
 
 ### Opt-in per target
