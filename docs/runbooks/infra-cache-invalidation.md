@@ -92,7 +92,17 @@ curl -sS https://<public-host>/ | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | 
 curl -sS http://<origin-host>:<origin-port>/ | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | sort -u
 
 # Inside the container (ground truth):
-docker exec ecm-ecm-1 python3 -c "import os,urllib.request; port=os.environ.get('ECM_PORT','6100'); print(urllib.request.urlopen(f'http://localhost:{port}/', timeout=5).read().decode())" | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | sort -u
+# `urlopen` raises HTTPError on any non-2xx, so catch it: a degraded ECM still
+# serves index.html and still has to tell you which bundle it is serving.
+docker exec ecm-ecm-1 python3 -c "
+import os, urllib.error, urllib.request
+port = os.environ.get('ECM_PORT', '6100')
+try:
+    response = urllib.request.urlopen(f'http://localhost:{port}/', timeout=5)
+except urllib.error.HTTPError as error:
+    response = error
+print(response.read().decode())
+" | grep -oE '/assets/[a-zA-Z0-9_-]+\.(js|css)' | sort -u
 ```
 
 Decision tree:

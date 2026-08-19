@@ -97,7 +97,10 @@ server.
 ## Troubleshooting
 
 - **"Connection refused" on Test Connection**: verify your media server is
-  reachable from the ECM container. Try `docker exec ecm-ecm-1 wget -qO- <base_url>` to confirm network reach.
+  reachable from the ECM container. To confirm network reach, run
+  `docker exec ecm-ecm-1 python3 -c "import urllib.request; print(urllib.request.urlopen('<base_url>', timeout=5).read().decode())"`
+  (the ECM image ships no `curl` and no `wget`, so those answer
+  `executable file not found` rather than anything about your media server).
 - **"Unauthorized" on Test Connection**: regenerate the API key in your
   media server. For Plex, confirm you're using a server-local token.
 - **No usernames in Connected Clients**: confirm the integration is

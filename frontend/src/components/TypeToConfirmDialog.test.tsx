@@ -142,6 +142,41 @@ describe('TypeToConfirmDialog', () => {
     await waitFor(() => expect(opener).toHaveFocus());
   });
 
+  it('describes the dialog with the warning body, not only its title', () => {
+    // Focus lands on the confirmation input, so a screen reader announces the
+    // dialog name and the input's label and never reaches the warning
+    // paragraph. Without aria-describedby this is a confirmation that does not
+    // say what it is confirming (bead enhancedchannelmanager-04c0u.12).
+    render(
+      <TypeToConfirmDialog
+        title="Delete Saved Backup"
+        message={<>This permanently removes <strong>ecm-backup-2026.zip</strong> from the server.</>}
+        confirmText="ecm-backup-2026.zip"
+        onCancel={vi.fn()}
+        onConfirm={vi.fn()}
+      />
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'Delete Saved Backup' });
+    expect(dialog).toHaveAccessibleDescription(/permanently removes ecm-backup-2026\.zip/i);
+  });
+
+  it('gives stacked dialogs distinct description ids', () => {
+    render(
+      <>
+        <TypeToConfirmDialog title="First action" message="First warning." confirmText="FIRST" onCancel={vi.fn()} onConfirm={vi.fn()} />
+        <TypeToConfirmDialog title="Second action" message="Second warning." confirmText="SECOND" onCancel={vi.fn()} onConfirm={vi.fn()} />
+      </>
+    );
+
+    const first = screen.getByRole('dialog', { name: 'First action' });
+    const second = screen.getByRole('dialog', { name: 'Second action' });
+    expect(first.getAttribute('aria-describedby')).toBeTruthy();
+    expect(first.getAttribute('aria-describedby')).not.toBe(second.getAttribute('aria-describedby'));
+    expect(first).toHaveAccessibleDescription('First warning.');
+    expect(second).toHaveAccessibleDescription('Second warning.');
+  });
+
   it('shows a custom confirm label and disables inputs while busy', () => {
     render(
       <TypeToConfirmDialog

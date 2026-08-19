@@ -125,11 +125,17 @@ risk to your Emby server from this integration.
   always the same as from your desktop. To verify reach from the container:
 
   ```bash
-  docker exec ecm-ecm-1 wget -qO- http://192.168.1.50:8096/System/Info/Public
+  docker exec ecm-ecm-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://192.168.1.50:8096/System/Info/Public', timeout=5).read().decode())"
   ```
 
-  A JSON blob means the container can reach Emby; a hang or error means it
-  cannot (firewall, wrong hostname, Emby not on the container's network).
+  The ECM image ships no `curl` and no `wget`, so a `docker exec` into it that
+  calls either one answers `executable file not found`, which says nothing
+  about Emby. `python3` is always present; it is what runs ECM.
+
+  A JSON blob means the container can reach Emby. A `URLError` or a timeout
+  means it cannot (firewall, wrong hostname, Emby not on the container's
+  network). An `HTTPError` means something *did* answer, so the network is fine
+  and the port or path is wrong.
 - **Loopback and link-local addresses are rejected** by Test Connection as a
   safety measure: `localhost`, `127.0.0.1`, `::1`, and the cloud
   instance-metadata address `169.254.169.254` are blocked. Point ECM at

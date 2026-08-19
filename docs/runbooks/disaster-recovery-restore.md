@@ -4,9 +4,13 @@
 
 - **Severity**: P1 (complete configuration loss) / P2 (partial data loss, instance degraded)
 - **Owner**: SRE / Operator
-- **Last exercised**: 2026-08-18. Every command below was run against a live
-  ECM (`ecm-ecm-1`, build 0.18.1) and Dispatcharr 0.28.2, except the two
-  state-changing calls noted inline as *not executed*.
+- **Last exercised**: 2026-08-18 against a live ECM (`ecm-ecm-1`, build
+  `0.18.1-0116`) and Dispatcharr 0.28.2. What was actually run: Diagnosis
+  Steps 1, 3 and 5, and the log/database inspection block in Phase 1.1. Steps 2
+  and 4 read a backup artifact and that instance had none, so their commands are
+  unexercised against a real file. Every command that writes, deletes, or
+  authenticates against another system carries a `NOT EXECUTED` marker inline
+  (`grep -n 'NOT EXECUTED'` finds all of them); none of those was run.
 - **Related beads**: `enhancedchannelmanager-0i2vt` (epic), `enhancedchannelmanager-sxx9x` (this doc)
 - **Related ADR**: ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`)
 
@@ -31,10 +35,17 @@
 
 ## Diagnosis
 
+!!! note "Where these commands run"
+    `/config` is **inside the ECM container**, on the `ecm-config` volume that
+    `docker-compose.yml` declares. A default deployment gives it no host path at
+    all, so every `/config/...` command below is prefixed with `docker exec`.
+    Running one bare on the Docker host answers `No such file or directory`,
+    which mid-incident reads like the backups are gone.
+
 ### Step 1: Confirm you have a usable backup
 
 ```bash
-ls -lh /config/backups/ecm-backup-*.zip
+docker exec ecm-ecm-1 ls -lh /config/backups/ecm-backup-*.zip
 ```
 
 Expected: one or more `.zip` files sorted by timestamp. The most recent is the best candidate.
@@ -44,7 +55,8 @@ If no local backup exists, check your configured cloud destinations (S3 bucket, 
 ### Step 2: Verify the artifact integrity
 
 ```bash
-sha256sum -c /config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip.sha256
+docker exec -w /config/backups ecm-ecm-1 \
+  sha256sum -c ecm-backup-YYYY-MM-DD_HHMMSS.zip.sha256
 ```
 
 Expected output: `ecm-backup-YYYY-MM-DD_HHMMSS.zip: OK`
@@ -54,14 +66,31 @@ If the sidecar is absent or the hash does not match, the artifact is corrupted. 
 ### Step 3: Check ECM is running and can reach Dispatcharr
 
 ```bash
-docker exec ecm-ecm-1 python3 -c "import json,os,urllib.request; port=os.environ.get('ECM_PORT','6100'); print(json.dumps(json.load(urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=5)), indent=2))"
+docker exec ecm-ecm-1 python3 -c "
+import json, os, urllib.error, urllib.request
+port = os.environ.get('ECM_PORT', '6100')
+try:
+    response = urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=5)
+except urllib.error.HTTPError as error:
+    response = error   # a degraded readiness answer is a 503 carrying the same body
+print(response.status)
+print(json.dumps(json.load(response), indent=2))
+"
 ```
 
-!!! note "Why `python3` and not `curl`"
-    The ECM image ships no `curl` and no `wget`. `docker exec ecm-ecm-1 curl …`
-    fails with `executable file not found`, which during an incident reads like
-    a dead container. `python3` is always present (it is what runs ECM). The
-    backend listens on `ECM_PORT`, default `6100`. It has never served on `8080`.
+!!! note "Why `python3`, and why the `HTTPError` branch"
+    The ECM image ships no `curl` and no `wget`, so a `docker exec` into the ECM
+    container that calls either one fails with `executable file not found`,
+    which during an incident reads like a dead container. `python3` is always
+    present (it is what runs ECM). The backend listens on `ECM_PORT`, default
+    `6100`. It has never served on `8080`.
+
+    `urlopen` raises `HTTPError` on any non-2xx status, and `/api/health/ready`
+    answers **503** whenever a subcheck is degraded. That is the state named in
+    Symptoms above, and the reason you are running this step. Without the `except`
+    branch the command exits 1 with a traceback and prints no body at all, so the
+    `"dispatcharr"` field this step asks you to read never appears. `HTTPError`
+    is file-like, so reading the body off it needs nothing else.
 
 Expected: `"status": "ready"` with `"dispatcharr": {"status": "ok", …}`. This one
 call is also the Dispatcharr reachability check: ECM probes its **configured**
@@ -74,8 +103,7 @@ writes directly to the Dispatcharr API.
 ### Step 4: Determine if the artifact is encrypted
 
 ```bash
-python3 -c "
-import sys
+docker exec ecm-ecm-1 python3 -c "
 with open('/config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip','rb') as f:
     print('ENCRYPTED' if f.read(8)==b'ECMBKENC' else 'PLAINTEXT')
 "
@@ -117,6 +145,7 @@ Configuration Backup**. Or, from the Docker host, against ECM's published port
 (`ECM_PORT`, default `6100`):
 
 ```bash
+# NOT EXECUTED during the last exercise: this writes a new artifact.
 # Trigger a manual backup via the API. YOUR_TOKEN is an ECM administrator's
 # session token — a signed-in human. The MCP API key is refused here (403).
 curl -s -X POST http://localhost:6100/api/backup/save \
@@ -215,12 +244,14 @@ If validation fails, stop and use an older backup.
 Read the notes section. Common causes:
 - Dispatcharr returned an API error for a specific entity. Check Dispatcharr logs: `docker logs dispatcharr 2>&1 | tail -100`.
 - Network timeout. Confirm ECM-to-Dispatcharr connectivity by re-running the
-  Step 3 readiness command and reading its `"dispatcharr"` check. Do not probe a
-  hardcoded `dispatcharr:8080`. That host and port are wrong on every
-  deployment this runbook has been exercised against, and the name does not
-  resolve at all when ECM runs with `network_mode: host`. ECM's own probe uses
-  the Dispatcharr URL configured in **Settings → Dispatcharr Connection**, which
-  is the URL the restore actually writes to.
+  Step 3 readiness command and reading its `"dispatcharr"` check. Expect a
+  **503** here rather than a 200: that is the degraded answer, and the Step 3
+  command prints its body. Do not probe a hardcoded `dispatcharr:8080`. That
+  host and port are wrong on every deployment this runbook has been exercised
+  against, and the name does not resolve at all when ECM runs with
+  `network_mode: host`. ECM's own probe uses the Dispatcharr URL configured in
+  **Settings → Dispatcharr Connection**, which is the URL the restore actually
+  writes to.
 - Name conflict on the destination. If the destination has existing entities with conflicting names, the restore skips or fails them. Consider wiping the destination first if this is a fresh install.
 
 After resolving the cause, re-attempt from Phase 3.
@@ -229,23 +260,67 @@ After resolving the cause, re-attempt from Phase 3.
 
 The restore created some entities and could not roll them back. The report lists the entity IDs.
 
+Get the residue list from the restore report (displayed in the UI), then delete
+each listed entity via the Dispatcharr UI or API.
+
+**First, mint a Dispatcharr token.** `DISPATCHARR_TOKEN` is not something ECM
+shows you: ECM obtains one for itself by posting its stored Dispatcharr
+credentials to `/api/accounts/token/` (`backend/dispatcharr_client.py`) and never
+surfaces the result. Do the same by hand with the same operator credentials you
+set in **Settings → Dispatcharr Connection**:
+
 ```bash
-# Get the residue list from the restore report (displayed in the UI).
-# Manually delete each listed entity via the Dispatcharr UI or API.
+# NOT EXECUTED during the last exercise: this authenticates to Dispatcharr.
 # DISPATCHARR_URL is the value from ECM Settings → Dispatcharr Connection
 # (for example http://192.0.2.20:9191) — Dispatcharr's default port is 9191.
-# Example: delete a channel group by its destination ID.
-curl -s -X DELETE "$DISPATCHARR_URL/api/channels/groups/ID/" \
-  -H "Authorization: Bearer DISPATCHARR_TOKEN"
+DISPATCHARR_URL=http://192.0.2.20:9191
+read -r -p 'Dispatcharr username: ' DISPATCHARR_USER
+read -rs -p 'Dispatcharr password: ' DISPATCHARR_PASS; echo
+
+DISPATCHARR_TOKEN=$(curl -s -X POST "$DISPATCHARR_URL/api/accounts/token/" \
+  -H 'Content-Type: application/json' \
+  -d "{\"username\": \"$DISPATCHARR_USER\", \"password\": \"$DISPATCHARR_PASS\"}" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access"])')
 ```
 
-!!! warning "Check the response, not just the exit code"
-    Dispatcharr serves its web UI from the same origin, so a **mistyped API
-    path returns `200` with an HTML page** instead of `404`. `/api/channel-groups/`
-    is one such path: it looks like it worked and deletes nothing. The channel-group
-    route is `/api/channels/groups/`, which is what ECM itself calls. Confirm each
-    deletion returned JSON. `curl -s -o /dev/null -w '%{content_type}\n' ...`
-    must not print `text/html`.
+`read -rs` keeps the password off the terminal and out of shell history; typing
+it inline into the `curl` puts your Dispatcharr password in `~/.bash_history`.
+An empty `DISPATCHARR_TOKEN` means the login failed. Fix that before deleting
+anything, or every delete below will 401 while looking like it worked.
+
+**Then delete each residue entity**, checking the status code:
+
+```bash
+# NOT EXECUTED during the last exercise: this deletes Dispatcharr entities.
+# Example: delete a channel group by its destination ID.
+ID=123
+code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
+  "$DISPATCHARR_URL/api/channels/groups/$ID/" \
+  -H "Authorization: Bearer $DISPATCHARR_TOKEN")
+echo "DELETE -> $code"
+
+# Confirm absence: re-GET the id. 404 means it is gone.
+curl -s -o /dev/null -w 'GET -> %{http_code}\n' \
+  "$DISPATCHARR_URL/api/channels/groups/$ID/" \
+  -H "Authorization: Bearer $DISPATCHARR_TOKEN"
+```
+
+!!! warning "Check the status code and the re-GET, not the content type"
+    Dispatcharr serves its web UI from the same origin, so a **mistyped API path
+    returns `200` with an HTML page** instead of `404`. `/api/channel-groups/` is
+    one such path: it looks like it worked and deletes nothing. The channel-group
+    route is `/api/channels/groups/`, which is what ECM itself calls.
+
+    A content-type check does not separate success from failure here. Dispatcharr
+    is a Django REST Framework app: a wrong ID (404) and an expired or wrong token
+    (401/403) both answer `application/json` while deleting nothing, and a
+    *successful* `DELETE` answers **204 with no body and no content type at all**.
+    So read `%{http_code}`: `204` (or `200`) is the delete, `401`/`403` is your
+    token, `404` is the wrong ID or the wrong path, and anything `text/html`-ish
+    with `200` is the SPA fallback.
+
+    The re-`GET` is the part that actually proves absence. `404` on the re-`GET`
+    is the only evidence the entity is gone.
 
 Repeat for each listed entity type and ID. Once all residue is deleted, take a fresh local backup and retry the restore from Phase 3.
 
@@ -264,6 +339,7 @@ provider stream, then removes the leftover placeholders and the synthetic
 it is why you re-enter the provider credential before running it.
 
 ```bash
+# NOT EXECUTED during the last exercise: this starts a real M3U refresh.
 # YOUR_TOKEN is an ECM administrator's session token.
 curl -s -X POST http://localhost:6100/api/tasks/m3u_refresh/run \
   -H "Authorization: Bearer YOUR_TOKEN"

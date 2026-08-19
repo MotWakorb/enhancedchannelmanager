@@ -39,7 +39,7 @@ interface Props {
 
 export function AuthSettingsSection({ isAdmin }: Props) {
   const notifications = useNotifications();
-  const [, setSettings] = useState<AuthSettingsPublic | null>(null);
+  const [settings, setSettings] = useState<AuthSettingsPublic | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   // Scoped confirmation for the one setting on this page that can lock nobody
@@ -99,6 +99,9 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
     try {
       await api.updateAuthSettings(update);
+      // Move the persisted snapshot the confirmation gate reads. Without this
+      // the very next save re-prompts for a disable that already happened.
+      setSettings((previous) => (previous ? { ...previous, ...update } : previous));
       notifications.success('Authentication settings saved');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings';
@@ -113,13 +116,19 @@ export function AuthSettingsSection({ isAdmin }: Props) {
     notifications,
   ]);
 
+  // Confirm the *transition* into open mode, not the state of being in it.
+  // Gating on `!requireAuth` alone fired this dialog on every unrelated save
+  // while authentication was already off, which trains the operator to type
+  // the phrase without reading it — on precisely the instances that have the
+  // least protection left (bead enhancedchannelmanager-04c0u.12).
   const handleSave = useCallback(() => {
-    if (!requireAuth) {
+    const isDisablingAuth = (settings?.require_auth ?? true) && !requireAuth;
+    if (isDisablingAuth) {
       setConfirmDisableAuth(true);
       return;
     }
     void saveSettings();
-  }, [requireAuth, saveSettings]);
+  }, [settings, requireAuth, saveSettings]);
 
   if (!isAdmin) {
     return (
@@ -254,6 +263,13 @@ export function AuthSettingsSection({ isAdmin }: Props) {
               to use it — including every administrative page — without signing
               in. Existing accounts are kept, but they stop protecting anything
               until you turn this back on.
+              {' '}
+              This also removes most of what the MCP integration guide promises a
+              stolen MCP key cannot do: taking, downloading or restoring backups,
+              and creating or testing outbound destinations, become reachable
+              without any credential. Rotating the MCP key, changing TLS
+              certificate material, and administering accounts stay
+              administrator-only in this mode.
             </>
           }
           confirmText="DISABLE AUTHENTICATION"

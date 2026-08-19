@@ -8,6 +8,7 @@ interface ModalOverlayProps {
   role?: string;
   'aria-modal'?: boolean | 'true' | 'false';
   'aria-labelledby'?: string;
+  'aria-describedby'?: string;
   'data-testid'?: string;
   /**
    * Optional backdrop click handler. The overlay intentionally does NOT close on

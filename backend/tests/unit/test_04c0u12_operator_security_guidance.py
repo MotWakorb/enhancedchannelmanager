@@ -5,22 +5,38 @@ true*, so the two cannot drift apart silently. A doc that says "the MCP key
 cannot take a backup" is worthless the day that stops being enforced, and
 nothing else in the suite notices — the docs are not otherwise executable.
 
-These are deliberately NOT grep-for-a-word checks. Each one reads the live
-policy object (a route table, a capability set, a defaults dict, a constant)
-and asserts the document agrees with it. Changing the behavior fails these
-tests, which is the point: the failure is the reminder to change the prose.
+Each test reads a live object — a route table, a capability set, a dependency
+gate, a defaults dict, a dataclass, a port constant — and then asserts the
+document agrees with it. The prose half of that pairing is a substring search,
+necessarily; what makes it more than a grep is that it never stands alone.
+Changing the behavior fails these tests, which is the point: the failure is the
+reminder to change the prose.
+
+Two assertions are prose-only and honest about it:
+``test_every_documented_bullet_is_a_sentence_the_guide_actually_carries`` keeps
+the route mapping's keys pointing at real guide text, and the
+restored-account/legacy-ZIP tests check that the runbook still states in words
+what their live-object assertions prove.
 """
 
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 
 import pytest
 
+import routers.backup as backup_mod
+from auth.dependencies import (
+    RequireAdminIfEnabled,
+    RequireHumanAdminForServiceCredential,
+    RequireHumanAdminForTLSMaterial,
+    RequireHumanAdminIfEnabled,
+)
 from auth.mcp_capabilities import MCP_HUMAN_ONLY_ROUTES, is_mcp_route_allowed
+from auth.mcp_service import MCPServiceCredentials
 from dbas.importers.users import _CONSERVATIVE_PRIVILEGE_DEFAULTS
-from routers.backup import BACKUP_DIRS
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -35,6 +51,27 @@ def _read(relative: str) -> str:
     return (ROOT / relative).read_text(encoding="utf-8")
 
 
+def _prose(relative: str) -> str:
+    """Document text with emphasis markers and line wrapping flattened.
+
+    A sentence in these guides is wrapped at ~80 columns and carries ``**bold**``
+    inside it, so a literal substring search finds nothing and reports the
+    sentence missing. Like ``normalizedMarkdown`` in
+    ``scripts/check-operator-docs.mjs``, minus the underscore: these documents
+    name identifiers such as ``mcp_api_key``, and stripping ``_`` would make
+    every one of them unsearchable.
+    """
+    return re.sub(r"\s+", " ", re.sub(r"[*`~]", "", _read(relative)))
+
+
+# Fences are routinely indented here — inside `!!! danger` admonitions and
+# under numbered list items — so the delimiters must NOT be anchored at column
+# 0. An anchored version of this made every such block invisible, which is how
+# `docker exec … curl` survived in seven scanned files behind a passing guard.
+# `scripts/check-operator-docs.mjs` uses the same relaxed anchor.
+_FENCE = re.compile(r"^[ \t]*```[^\n]*\n(.*?)^[ \t]*```", re.MULTILINE | re.DOTALL)
+
+
 def _commands(relative: str) -> str:
     """Only the fenced code blocks — the lines an operator actually runs.
 
@@ -44,96 +81,191 @@ def _commands(relative: str) -> str:
     syntax trap: the guard would block the very sentence that prevents the
     mistake. Scan the executable spans instead.
     """
-    return "\n".join(re.findall(r"^```[^\n]*\n(.*?)^```", _read(relative), re.MULTILINE | re.DOTALL))
+    return "\n".join(_FENCE.findall(_read(relative)))
+
+
+def test_the_fence_scanner_reads_an_indented_block() -> None:
+    """Guard the guard: an anchored fence regex silently reads nothing.
+
+    Both live examples are in this repo's runbooks — a block nested in an
+    `!!! danger` admonition and one under a numbered list item.
+    """
+    indented = (
+        "!!! danger \"x\"\n\n    ```bash\n    admonition-command\n    ```\n"
+        "\n1. step\n\n   ```bash\n   list-item-command\n   ```\n"
+    )
+    found = "\n".join(_FENCE.findall(indented))
+    assert "admonition-command" in found
+    assert "list-item-command" in found
 
 
 # --------------------------------------------------------------------------
 # The MCP static key is a limited service credential, not an administrator.
 # --------------------------------------------------------------------------
 
-# Exactly the capabilities the operator guide promises are human-only. If a
-# route moves out of MCP_HUMAN_ONLY_ROUTES the guide is lying, and this fails.
-_DOCUMENTED_HUMAN_ONLY = [
-    # "taking, listing, downloading, deleting or restoring backups"
-    ("GET", "/api/backup/create"),
-    ("POST", "/api/backup/save"),
-    ("GET", "/api/backup/saved"),
-    ("GET", "/api/backup/saved/{filename}"),
-    ("DELETE", "/api/backup/saved/{filename}"),
-    ("POST", "/api/backup/restore"),
-    ("POST", "/api/backup/restore-saved"),
-    ("POST", "/api/backup/restore-dbas"),
-    ("POST", "/api/backup/restore-dbas-saved"),
-    ("POST", "/api/backup/restore-yaml"),
-    # "TLS certificate and private-key lifecycle, and the security settings blob"
-    ("POST", "/api/tls/upload-cert"),
-    ("POST", "/api/tls/configure"),
-    ("POST", "/api/tls/request-cert"),
-    ("POST", "/api/tls/renew"),
-    ("DELETE", "/api/tls/certificate"),
-    ("PATCH", "/api/settings/security"),
-    # "user, identity and authorization administration, including password change"
-    ("GET", "/api/auth/admin/users"),
-    ("PUT", "/api/auth/admin/users/{user_id}"),
-    ("DELETE", "/api/auth/admin/users/{user_id}"),
-    ("PUT", "/api/auth/admin/settings"),
-    ("POST", "/api/auth/change-password"),
-    ("PUT", "/api/auth/me"),
-    # "generating or revoking the MCP API key itself"
-    ("POST", "/api/settings/mcp-api-key"),
-    ("DELETE", "/api/settings/mcp-api-key"),
-    # "creating, changing, deleting or testing outbound destinations ...
-    #  and changing M3U or EPG source credentials"
-    ("POST", "/api/cloud-targets"),
-    ("PATCH", "/api/cloud-targets/{target_id}"),
-    ("DELETE", "/api/cloud-targets/{target_id}"),
-    ("POST", "/api/cloud-targets/test"),
-    ("POST", "/api/sync-targets"),
-    ("PUT", "/api/sync-targets/{target_id}"),
-    ("DELETE", "/api/sync-targets/{target_id}"),
-    ("POST", "/api/alert-methods/{method_id}/test"),
-    ("POST", "/api/m3u/accounts"),
-    ("PATCH", "/api/m3u/accounts/{account_id}"),
-    ("POST", "/api/epg/sources"),
-    ("PATCH", "/api/epg/sources/{source_id}"),
+# Every route the policy reserves, attributed to the bullet in the operator
+# guide that promises it. This is a two-way contract, and the second direction
+# is the one that was missing: the previous version enumerated 37 of the 56
+# reserved routes and only closed the "a route was added" direction, so
+# *removing* ("DELETE", "/api/alert-methods/{method_id}") from the policy left
+# this suite, the .4 suite and test_admin_gate_inventory.py all green while the
+# guide kept promising a stolen MCP key could not delete the operator's alert
+# method — the channel that would have told them about the compromise.
+_DOCUMENTED_HUMAN_ONLY: dict[str, tuple[tuple[str, str], ...]] = {
+    "taking, listing, downloading, deleting or restoring backups": (
+        ("GET", "/api/backup/create"),
+        ("POST", "/api/backup/save"),
+        ("GET", "/api/backup/saved"),
+        ("GET", "/api/backup/saved/{filename}"),
+        ("DELETE", "/api/backup/saved/{filename}"),
+        ("POST", "/api/backup/restore"),
+        ("POST", "/api/backup/restore-saved"),
+        ("POST", "/api/backup/restore-dbas"),
+        ("POST", "/api/backup/restore-dbas-saved"),
+        ("POST", "/api/backup/restore-yaml"),
+    ),
+    "TLS certificate and private-key lifecycle, and the security settings blob": (
+        ("GET", "/api/tls/settings"),
+        ("POST", "/api/tls/configure"),
+        ("POST", "/api/tls/request-cert"),
+        ("POST", "/api/tls/complete-challenge"),
+        ("POST", "/api/tls/upload-cert"),
+        ("POST", "/api/tls/renew"),
+        ("DELETE", "/api/tls/certificate"),
+        ("POST", "/api/tls/https/start"),
+        ("POST", "/api/tls/https/stop"),
+        ("POST", "/api/tls/https/restart"),
+        ("PATCH", "/api/settings/security"),
+    ),
+    "user, identity and authorization administration, including password change": (
+        ("GET", "/api/auth/admin/settings"),
+        ("PUT", "/api/auth/admin/settings"),
+        ("GET", "/api/auth/admin/users"),
+        ("GET", "/api/auth/admin/users/{user_id}"),
+        ("PUT", "/api/auth/admin/users/{user_id}"),
+        ("DELETE", "/api/auth/admin/users/{user_id}"),
+        ("GET", "/api/auth/identities"),
+        ("POST", "/api/auth/identities/link"),
+        ("DELETE", "/api/auth/identities/{identity_id}"),
+        ("PUT", "/api/auth/me"),
+        ("POST", "/api/auth/change-password"),
+    ),
+    "generating or revoking the MCP API key itself": (
+        ("POST", "/api/settings/mcp-api-key"),
+        ("DELETE", "/api/settings/mcp-api-key"),
+    ),
+    "creating, changing, deleting or testing outbound destinations, and "
+    "changing M3U or EPG source credentials": (
+        ("POST", "/api/cloud-targets"),
+        ("PATCH", "/api/cloud-targets/{target_id}"),
+        ("DELETE", "/api/cloud-targets/{target_id}"),
+        ("POST", "/api/cloud-targets/test"),
+        ("POST", "/api/cloud-targets/{target_id}/test"),
+        ("POST", "/api/sync-targets"),
+        ("PUT", "/api/sync-targets/{target_id}"),
+        ("DELETE", "/api/sync-targets/{target_id}"),
+        ("POST", "/api/alert-methods"),
+        ("PATCH", "/api/alert-methods/{method_id}"),
+        ("DELETE", "/api/alert-methods/{method_id}"),
+        ("POST", "/api/alert-methods/{method_id}/test"),
+        ("POST", "/api/m3u/accounts"),
+        ("PATCH", "/api/m3u/accounts/{account_id}"),
+        ("DELETE", "/api/m3u/accounts/{account_id}"),
+        ("POST", "/api/epg/sources"),
+        ("PATCH", "/api/epg/sources/{source_id}"),
+        ("DELETE", "/api/epg/sources/{source_id}"),
+        ("POST", "/api/epg/sources/{source_id}/sd-lineups"),
+        ("DELETE", "/api/epg/sources/{source_id}/sd-lineups"),
+        ("POST", "/api/epg/sources/{source_id}/sd-lineups/search"),
+    ),
+    "running the Channel Pipeline in one shot": (
+        ("POST", "/api/channel-pipeline/run"),
+    ),
+}
+
+_DOCUMENTED_ROUTES = [
+    (bullet, method, route)
+    for bullet, routes in _DOCUMENTED_HUMAN_ONLY.items()
+    for method, route in routes
 ]
 
 
-@pytest.mark.parametrize("method,route", _DOCUMENTED_HUMAN_ONLY)
-def test_capability_the_mcp_guide_calls_human_only_really_is(method, route) -> None:
+@pytest.mark.parametrize(
+    "bullet,method,route", _DOCUMENTED_ROUTES, ids=[f"{m} {r}" for _, m, r in _DOCUMENTED_ROUTES]
+)
+def test_capability_the_mcp_guide_calls_human_only_really_is(bullet, method, route) -> None:
     """Each capability the guide names is refused to the MCP principal."""
-    assert (method, route) in MCP_HUMAN_ONLY_ROUTES
+    assert (method, route) in MCP_HUMAN_ONLY_ROUTES, (
+        f"{MCP_GUIDE} promises this is human-only under the bullet {bullet!r}, "
+        "but the policy no longer reserves it"
+    )
     assert is_mcp_route_allowed(method, route) is False
 
 
-def test_mcp_guide_does_not_understate_the_reserved_surface() -> None:
-    """The guide's five bullets must still span every human-only prefix.
+def test_the_guide_and_the_policy_reserve_exactly_the_same_routes() -> None:
+    """Both directions, because only one of them was closed before.
 
-    A new human-only family (say ``/api/webhooks``) added to the policy without
-    a matching bullet would leave the guide quietly incomplete. Fail here so the
-    prose is updated with the policy.
+    An *added* human-only family with no bullet leaves the guide quietly
+    incomplete. A *removed* one leaves the guide actively wrong — it keeps
+    promising a stolen key cannot do something it now can — and a prefix-based
+    check cannot see that at all.
     """
-    documented_prefixes = (
-        "/api/backup/",
-        "/api/tls/",
-        "/api/settings/",
-        "/api/auth/",
-        "/api/cloud-targets",
-        "/api/sync-targets",
-        "/api/alert-methods",
-        "/api/m3u/accounts",
-        "/api/epg/sources",
-        "/api/channel-pipeline/run",
-    )
-    undocumented = sorted(
-        f"{method} {route}"
-        for method, route in MCP_HUMAN_ONLY_ROUTES
-        if not route.startswith(documented_prefixes)
-    )
+    documented = frozenset((method, route) for _, method, route in _DOCUMENTED_ROUTES)
+    undocumented = sorted(f"{m} {r}" for m, r in MCP_HUMAN_ONLY_ROUTES - documented)
+    unreserved = sorted(f"{m} {r}" for m, r in documented - MCP_HUMAN_ONLY_ROUTES)
     assert undocumented == [], (
-        "These routes are reserved to humans but no bullet in "
-        f"{MCP_GUIDE} covers them: {undocumented}"
+        f"reserved to humans but no bullet in {MCP_GUIDE} covers them: {undocumented}"
     )
+    assert unreserved == [], (
+        f"{MCP_GUIDE} promises these are human-only but the policy allows the "
+        f"MCP principal to reach them: {unreserved}"
+    )
+
+
+def test_every_documented_bullet_is_a_sentence_the_guide_actually_carries() -> None:
+    """The mapping's keys are guide text, not private labels.
+
+    Without this the mapping could drift into naming bullets the guide does not
+    have, and the equality test above would still pass.
+    """
+    guide = _prose(MCP_GUIDE)
+    missing = [
+        bullet
+        for bullet in _DOCUMENTED_HUMAN_ONLY
+        if not all(phrase in guide for phrase in bullet.split(", and "))
+    ]
+    assert missing == [], f"no bullet in {MCP_GUIDE} matches: {missing}"
+
+
+# The routes the guide's leak paragraph names as reachable with the key. These
+# are the household's viewing history: who watched what, from which IP, when.
+_VIEWING_HISTORY_ROUTES = [
+    ("GET", "/api/stats/watch-history"),
+    ("GET", "/api/stats/unique-viewers"),
+    ("GET", "/api/stats/unique-viewers-by-channel"),
+    ("GET", "/api/stats/top-watched"),
+    ("GET", "/api/stats/users/dispatcharr/{user_id}"),
+    ("GET", "/api/stats/users/emby/{emby_user_id}"),
+    ("GET", "/api/journal"),
+]
+
+
+@pytest.mark.parametrize("method,route", _VIEWING_HISTORY_ROUTES)
+def test_the_leak_paragraph_does_not_understate_what_the_key_reads(method, route) -> None:
+    """The guide says a stolen key reads the viewing history. It does.
+
+    Stated the strong way round on purpose: if one of these is later reserved
+    to humans, this fails and the paragraph gets narrowed rather than left
+    overstating the risk.
+    """
+    assert is_mcp_route_allowed(method, route) is True
+
+
+def test_watch_history_really_carries_and_filters_on_client_ip() -> None:
+    """"...from which IP" is the sharpest half of that claim; pin it."""
+    from routers.stats import get_watch_history
+
+    assert "ip_address" in inspect.signature(get_watch_history).parameters
 
 
 def test_the_mcp_key_still_reaches_ordinary_channel_automation() -> None:
@@ -148,10 +280,28 @@ def test_the_mcp_key_still_reaches_ordinary_channel_automation() -> None:
 
 
 def test_docs_state_the_three_credential_model() -> None:
-    guide = _read(MCP_GUIDE)
+    """The guide's table has one row per credential the system actually has.
+
+    Read the objects, not the sentence: the two credentials the operator never
+    handles are the fields of ``MCPServiceCredentials``, and the one they do
+    handle is the ``mcp_api_key`` setting. A fourth credential appearing (or one
+    of these being folded away) leaves the table wrong, and this fails.
+    """
+    from config import DispatcharrSettings
+
+    private = tuple(MCPServiceCredentials.__dataclass_fields__)
+    assert private == ("backend_key", "confirmation_key"), private
+    assert "mcp_api_key" in DispatcharrSettings.model_fields
+
+    guide = _prose(MCP_GUIDE)
     assert "three separate credentials" in guide
-    for credential in ("Sidecar backend key", "Confirmation key"):
-        assert credential in guide
+    # One table row per credential, each naming what it is for.
+    assert "mcp_api_key" in guide
+    assert "Sidecar backend key" in guide
+    assert "Confirmation key" in guide
+    # And the property that makes the split worth documenting: the key the
+    # operator holds is refused by the backend outright.
+    assert "the backend refuses it outright" in guide
 
 
 def test_destructive_mcp_tool_confirmation_ttl_matches_the_documented_five_minutes() -> None:
@@ -163,15 +313,97 @@ def test_destructive_mcp_tool_confirmation_ttl_matches_the_documented_five_minut
     assert "expires after 5 minutes" in _read(MCP_GUIDE)
 
 
+def _enforces_when_auth_disabled(dependency) -> bool:
+    """Read the flag off the live gate object, not off its source text."""
+    gate = dependency.dependency
+    closure = dict(zip(gate.__code__.co_freevars, (cell.cell_contents for cell in gate.__closure__)))
+    return closure["enforce_when_auth_disabled"]
+
+
+def test_the_guide_qualifies_the_capability_list_by_auth_mode() -> None:
+    """Most of the reserved list is only reserved while auth is required.
+
+    ``require_auth: false`` is a supported mode. The capability matrix runs
+    inside the middleware's ``require_auth and setup_complete`` branch, and the
+    gates behind the backup and outbound-destination bullets return ``None``
+    when authentication is off — so an unqualified "a stolen key cannot
+    exfiltrate a backup" is false in that mode, and contradicts
+    ``docs/auth_middleware.md``, which enumerates those same routes as open.
+    """
+    assert _enforces_when_auth_disabled(RequireAdminIfEnabled) is False
+    assert _enforces_when_auth_disabled(RequireHumanAdminIfEnabled) is False
+
+    # The bullets that DO survive auth-disabled, and are stated unqualified.
+    assert _enforces_when_auth_disabled(RequireHumanAdminForServiceCredential) is True
+    assert _enforces_when_auth_disabled(RequireHumanAdminForTLSMaterial) is True
+
+    # The backup surface is gated by the conditional pair, which is why the
+    # guide may not promise it unconditionally.
+    for handler in (backup_mod.create_backup, backup_mod.restore_backup):
+        gate = inspect.signature(handler).parameters["_admin"].default
+        assert gate in (RequireAdminIfEnabled, RequireHumanAdminIfEnabled)
+        assert _enforces_when_auth_disabled(gate) is False
+
+    guide = _prose(MCP_GUIDE)
+    assert "This list holds while ECM requires authentication" in guide
+    assert "docs/auth_middleware.md" in guide
+    assert "Three things hold in every mode" in guide
+
+    # The same caveat has to reach the operator where the decision is made, in
+    # the Disable Authentication dialog. That half is proven on the rendered
+    # dialog by "names the MCP-capability caveat that turning auth off removes"
+    # in frontend/src/components/settings/AuthSettingsSection.test.tsx; a text
+    # grep from here would be strictly weaker than the assertion that already
+    # exists there.
+
+
+def test_administrator_administration_survives_auth_being_disabled() -> None:
+    """The one "cannot" the guide still states unconditionally.
+
+    ``/api/auth/admin/*`` chains ``get_current_user`` with no auth-disabled
+    short-circuit, so "a stolen key cannot create an administrator" holds in
+    every mode. If that ever grows an ``if not require_auth: return`` escape,
+    the guide's unqualified sentence has to go with it.
+    """
+    from auth.routes import require_admin
+
+    source = inspect.getsource(require_admin)
+    assert "require_auth" not in source
+    assert "setup_complete" not in source
+    # It reaches the caller only through get_current_user, which validates in
+    # every mode; the parameter default is the live proof of that chaining.
+    dependency = inspect.signature(require_admin).parameters["user"].default
+    assert dependency.dependency.__name__ == "get_current_user"
+
+
 # --------------------------------------------------------------------------
 # ECM TLS does not protect the MCP sidecar.
 # --------------------------------------------------------------------------
 
 
 def test_tls_versus_mcp_transport_is_explicit_everywhere_it_matters() -> None:
-    assert "Enabling TLS in ECM does not protect MCP" in _read(MCP_GUIDE)
-    assert "ECM's own TLS setting does not protect MCP" in _read(README)
-    assert "does not encrypt MCP traffic" in _read(MCP_SETTINGS_GUIDE)
+    """Two listeners, two ports, one of which ECM's TLS setting never touches.
+
+    The warning is only worth reading if its numbers are right, so take them
+    from the code that defines them: ECM's HTTPS port from ``tls.settings`` and
+    the sidecar's from the sidecar's own config. If they ever converge, the
+    "separate process on its own port" framing needs rewriting and this fails.
+    """
+    from tls.settings import TLSSettings
+
+    https_port = TLSSettings().https_port
+    sidecar_config = (ROOT / "mcp-server" / "config.py").read_text(encoding="utf-8")
+    match = re.search(r"""MCP_PORT = int\(os\.environ\.get\("MCP_PORT", "(\d+)"\)\)""", sidecar_config)
+    assert match, "the sidecar no longer defines MCP_PORT where the docs point"
+    sidecar_port = int(match.group(1))
+    assert https_port != sidecar_port
+
+    guide = _prose(MCP_GUIDE)
+    assert "Enabling TLS in ECM does not protect MCP" in guide
+    assert f"default {https_port}" in guide, "the guide's ECM_HTTPS_PORT default is stale"
+    assert f"its own port ({sidecar_port})" in guide, "the guide's MCP port is stale"
+    assert "ECM's own TLS setting does not protect MCP" in _prose(README)
+    assert "does not encrypt MCP traffic" in _prose(MCP_SETTINGS_GUIDE)
 
 
 # --------------------------------------------------------------------------
@@ -230,8 +462,8 @@ def test_runbook_names_the_dispatcharr_channel_group_route_dispatcharr_actually_
     assert '"/api/channels/groups/"' in client
 
     commands = _commands(RUNBOOK)
-    assert "/api/channels/groups/ID/" in commands
-    assert "/api/channel-groups/ID" not in commands
+    assert "/api/channels/groups/" in commands
+    assert "/api/channel-groups/" not in commands
 
 
 # --------------------------------------------------------------------------
@@ -259,8 +491,16 @@ def test_legacy_zip_tls_coverage_is_stated_as_the_code_has_it() -> None:
     Stated as a capability ("can contain") rather than a guarantee, because the
     producer's directory list is what an in-flight branch narrows; the restore
     side is what the runbook's advice depends on and is unchanged.
+
+    So read the *restore* side. A branch that narrows the producer to
+    ``["uploads/logos"]`` moves the legacy restore list to
+    ``LEGACY_RESTORE_DIRS``; pinning ``BACKUP_DIRS`` would then fail this test
+    on a change it does not own and turn ``dev`` red for whichever PR merges
+    second. ``getattr`` reads whichever name the module currently publishes,
+    and both shapes satisfy the sentence the runbook actually depends on.
     """
-    assert "tls" in BACKUP_DIRS
+    restore_dirs = getattr(backup_mod, "LEGACY_RESTORE_DIRS", backup_mod.BACKUP_DIRS)
+    assert "tls" in restore_dirs
     runbook = _read(RUNBOOK)
     assert "can contain `tls/`" in runbook
     assert "TLS certificates are not part of a DBAS restore" in runbook

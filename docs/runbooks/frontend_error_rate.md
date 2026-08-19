@@ -48,7 +48,7 @@ A spike in `dropped_total{reason="rate_limited"}` while `client_errors_total` is
 **1. Pull the live `kind` × `release` breakdown.**
 
 ```bash
-docker exec ecm-ecm-1 sh -c 'curl -s http://localhost:8000/metrics' \
+docker exec ecm-ecm-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/metrics', timeout=5).read().decode())" \
   | grep '^ecm_client_errors_total'
 ```
 
@@ -80,7 +80,7 @@ Each line carries `kind`, `release`, `route`, and a scrubbed `msg`. Group by `ro
 **4. Check the dropped counter.**
 
 ```bash
-docker exec ecm-ecm-1 sh -c 'curl -s http://localhost:8000/metrics' \
+docker exec ecm-ecm-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/metrics', timeout=5).read().decode())" \
   | grep '^ecm_client_errors_dropped_total'
 ```
 

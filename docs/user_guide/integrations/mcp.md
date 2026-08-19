@@ -35,15 +35,76 @@ it outright.
     - generating or revoking the MCP API key itself;
     - creating, changing, deleting or **testing** outbound destinations
       (cloud-storage targets, sync targets, alert methods), and changing M3U or
-      EPG source credentials.
-
-    A stolen MCP key is still serious: it can read and modify your channel,
-    stream, EPG and pipeline configuration. It cannot exfiltrate a backup,
-    replace your TLS key, create an administrator, or use ECM as a credential
-    oracle against an outbound host.
+      EPG source credentials;
+    - running the Channel Pipeline in one shot (`POST /api/channel-pipeline/run`).
+      MCP reaches pipeline execution only through the mutation-free
+      prepare/commit pair described below.
 
     The list above is enforced by `MCP_HUMAN_ONLY_ROUTES` in
     `backend/auth/mcp_capabilities.py`.
+
+!!! warning "This list holds while ECM requires authentication"
+    The capability matrix is applied inside the backend's
+    `require_auth and setup_complete` branch, and the gates behind most of the
+    list (`RequireAdminIfEnabled`, `RequireHumanAdminIfEnabled`) allow the call
+    through when authentication is off. **With Settings → Authentication →
+    Require Authentication disabled (a supported mode), most of the list above
+    is reachable by anyone who can open a socket to ECM**, with or without a key.
+    `docs/auth_middleware.md` → "What `require_auth: false` permits" is the
+    authority on that mode and enumerates it; read it before turning
+    authentication off.
+
+    Three things hold in **every** mode, auth-disabled included:
+
+    - **The operator-facing `mcp_api_key` is never a backend credential.** ECM
+      refuses it with `403` before any route runs, so a stolen key cannot be
+      replayed straight at `/api/*` in any mode.
+    - **MCP-key rotation/revocation and the TLS certificate and private-key
+      lifecycle stay human-admin-only.** Those two gates carry
+      `enforce_when_auth_disabled=True`, so they keep enforcing once the
+      instance has an operator identity.
+    - **Administrator administration stays human-admin-only.**
+      `/api/auth/admin/*` chains `get_current_user`, which validates a token in
+      every mode, so a stolen key cannot create an administrator.
+
+    A stolen MCP key is serious in every mode: it can read and modify your
+    channel, stream, EPG and pipeline configuration, and it can read your
+    household's viewing history (below). While authentication is required it
+    additionally cannot exfiltrate a backup or use ECM as a credential oracle
+    against an outbound host; with authentication disabled, neither of those
+    limits applies to anyone on your network.
+
+!!! danger "What a leaked MCP key exposes, and what to do about it"
+    **The viewing history is the most sensitive thing the key reaches.** The MCP
+    principal is allowed `GET /api/stats/watch-history`, which returns
+    per-connection rows carrying an `ip_address` the caller can also filter by.
+    It is also allowed `/api/stats/unique-viewers`,
+    `/unique-viewers-by-channel`, `/top-watched`,
+    the per-user Dispatcharr and Emby stats routes, and `GET /api/journal`.
+    Together that is who in your household watched what, from which device, and
+    when. Rotating the key does not un-read any of it.
+
+    **Three properties of the key make a leak worse than it looks:**
+
+    - It **never expires**. It is valid until you rotate or revoke it.
+    - It is **one key shared by every client you configure**. There is no
+      per-client revocation: rotating to cut off one client cuts off all of
+      them, and you must re-enter the new key everywhere.
+    - A leak is **not detectable from ECM**. The sidecar's success log line
+      records only `auth_method=static_key`; no client IP, no client identity.
+      You cannot tell two clients apart, or a client from an attacker.
+
+    **If you believe the key leaked**, rotation is the first step, not the last:
+
+    1. Rotate the key (below) and re-enter it in every configured client.
+    2. Read `GET /api/journal` for the exposure window to see what was changed.
+    3. List your saved backups and delete any the attacker may have created.
+       An artifact taken with **Include credentials** is a credential file.
+    4. Re-verify channel, stream, EPG and Channel Pipeline configuration against
+       what you expect; a modification made with the key looks like your own.
+    5. If authentication was disabled during the window, treat everything in
+       `docs/auth_middleware.md` → "What `require_auth: false` permits" as
+       reachable too, not just the MCP surface.
 
 Destructive MCP tools additionally require two calls. The first is
 mutation-free: it resolves and shows you exactly what would be affected and

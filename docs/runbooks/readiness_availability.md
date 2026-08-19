@@ -43,7 +43,7 @@
 - Schema drift: compare `/api/health/schema` output to expected Alembic head.
 
 ### `dispatcharr` fails
-- Network: can the container reach Dispatcharr? `docker exec ecm-ecm-1 curl -sv <dispatcharr-url>/health`.
+- Network: can the container reach Dispatcharr? `docker exec ecm-ecm-1 python3 -c "import urllib.request; r = urllib.request.urlopen('<dispatcharr-url>/health', timeout=5); print(r.status, r.read().decode())"` (the ECM image has no `curl` and no `wget`).
 - Credentials: settings UI → Dispatcharr → verify token hasn't expired.
 - Dispatcharr itself down: check Dispatcharr's own health before blaming ECM.
 
