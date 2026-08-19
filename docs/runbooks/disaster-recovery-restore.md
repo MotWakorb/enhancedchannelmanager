@@ -42,10 +42,18 @@
     Running one bare on the Docker host answers `No such file or directory`,
     which mid-incident reads like the backups are gone.
 
+    `docker exec` starts your command directly: there is no shell in the
+    container to expand a wildcard. A bare `docker exec … ls /config/backups/*.zip`
+    is expanded by the shell **on the host**, where `/config` does not exist, so
+    it fails or is passed through literally and `ls` reports the pattern as
+    missing. That is the same false "the backups are gone" signal, one layer
+    down. Any `/config` command with a `*` in it therefore runs inside an
+    explicit `sh -c '…'`.
+
 ### Step 1: Confirm you have a usable backup
 
 ```bash
-docker exec ecm-ecm-1 ls -lh /config/backups/ecm-backup-*.zip
+docker exec ecm-ecm-1 sh -c 'ls -lh /config/backups/ecm-backup-*.zip'
 ```
 
 Expected: one or more `.zip` files sorted by timestamp. The most recent is the best candidate.
@@ -79,11 +87,14 @@ print(json.dumps(json.load(response), indent=2))
 ```
 
 !!! note "Why `python3`, and why the `HTTPError` branch"
-    The ECM image ships no `curl` and no `wget`, so a `docker exec` into the ECM
-    container that calls either one fails with `executable file not found`,
-    which during an incident reads like a dead container. `python3` is always
-    present (it is what runs ECM). The backend listens on `ECM_PORT`, default
-    `6100`. It has never served on `8080`.
+    The ECM image ships no `curl` and no `wget`. The command most operators
+    reach for first,
+    <!-- operator-docs:allow-unrunnable: quoted so the operator recognises it -->
+    `docker exec ecm-ecm-1 curl -s http://localhost:6100/api/health/ready`,
+    fails with `executable file not found`, which during an incident reads like
+    a dead container. `python3` is always present (it is what runs ECM). The
+    backend listens on `ECM_PORT`, default `6100`. It has never served on
+    `8080`.
 
     `urlopen` raises `HTTPError` on any non-2xx status, and `/api/health/ready`
     answers **503** whenever a subcheck is degraded. That is the state named in
@@ -273,18 +284,55 @@ set in **Settings → Dispatcharr Connection**:
 # NOT EXECUTED during the last exercise: this authenticates to Dispatcharr.
 # DISPATCHARR_URL is the value from ECM Settings → Dispatcharr Connection
 # (for example http://192.0.2.20:9191) — Dispatcharr's default port is 9191.
-DISPATCHARR_URL=http://192.0.2.20:9191
+export DISPATCHARR_URL=http://192.0.2.20:9191
 read -r -p 'Dispatcharr username: ' DISPATCHARR_USER
 read -rs -p 'Dispatcharr password: ' DISPATCHARR_PASS; echo
+export DISPATCHARR_USER DISPATCHARR_PASS
 
-DISPATCHARR_TOKEN=$(curl -s -X POST "$DISPATCHARR_URL/api/accounts/token/" \
-  -H 'Content-Type: application/json' \
-  -d "{\"username\": \"$DISPATCHARR_USER\", \"password\": \"$DISPATCHARR_PASS\"}" \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access"])')
+# Build the JSON body with python3 and stream it to curl as a config file on
+# stdin, so the password is never a command-line argument.
+DISPATCHARR_TOKEN=$(python3 <<'PY' | curl --config - -sS -X POST \
+  "$DISPATCHARR_URL/api/accounts/token/" -H 'Content-Type: application/json' \
+  | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    print(json.loads(raw)["access"])
+except Exception:
+    print(f"login failed; Dispatcharr answered: {raw[:200]!r}", file=sys.stderr)
+'
+import json, os
+body = json.dumps({"username": os.environ["DISPATCHARR_USER"],
+                   "password": os.environ["DISPATCHARR_PASS"]})
+print('data = "%s"' % body.replace("\\", "\\\\").replace('"', '\\"'))
+PY
+)
+
+# The password is no longer needed. Do not leave it in the environment.
+unset DISPATCHARR_PASS
 ```
 
-`read -rs` keeps the password off the terminal and out of shell history; typing
-it inline into the `curl` puts your Dispatcharr password in `~/.bash_history`.
+!!! warning "Why the password goes through stdin and not `-d`"
+    `read -rs` keeps the password off the terminal and out of shell history, but
+    that is only half of it. A password interpolated into `curl -d "{…}"` lands
+    in the process's argument list, which on Linux is **world-readable** at
+    `/proc/<pid>/cmdline` for as long as the request runs, so any other local
+    account can read it. `curl --config -` takes the same body off stdin
+    instead, which nothing outside the process can see. This is the shape
+    `docs/runbooks/mcp-release-verification.md` already uses for the MCP key.
+
+    `python3` builds the JSON rather than the shell, because a password
+    containing `"` or `\` (both are legal) produces malformed JSON when pasted
+    into a shell-quoted literal. Dispatcharr answers that with a `400`, and the
+    old one-line extractor met it with a Python traceback rather than the empty
+    token this runbook tells you to expect.
+
+    `export` puts the credential in the environment, which is readable only by
+    your own account (`/proc/<pid>/environ` is mode 0400), not by every local
+    user. `unset DISPATCHARR_PASS` as soon as the token is minted. The token
+    itself is a bearer credential too: `unset DISPATCHARR_TOKEN` when you are
+    finished, or close the shell.
+
 An empty `DISPATCHARR_TOKEN` means the login failed. Fix that before deleting
 anything, or every delete below will 401 while looking like it worked.
 
@@ -293,16 +341,17 @@ anything, or every delete below will 401 while looking like it worked.
 ```bash
 # NOT EXECUTED during the last exercise: this deletes Dispatcharr entities.
 # Example: delete a channel group by its destination ID.
+# `printf` is a shell builtin, so the token is not a separate process's argv
+# either; curl reads the header off stdin exactly as it read the body above.
 ID=123
-code=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
-  "$DISPATCHARR_URL/api/channels/groups/$ID/" \
-  -H "Authorization: Bearer $DISPATCHARR_TOKEN")
-echo "DELETE -> $code"
+printf 'header = "Authorization: Bearer %s"\n' "$DISPATCHARR_TOKEN" | \
+  curl --config - -sS -o /dev/null -w 'DELETE -> %{http_code}\n' \
+    -X DELETE "$DISPATCHARR_URL/api/channels/groups/$ID/"
 
 # Confirm absence: re-GET the id. 404 means it is gone.
-curl -s -o /dev/null -w 'GET -> %{http_code}\n' \
-  "$DISPATCHARR_URL/api/channels/groups/$ID/" \
-  -H "Authorization: Bearer $DISPATCHARR_TOKEN"
+printf 'header = "Authorization: Bearer %s"\n' "$DISPATCHARR_TOKEN" | \
+  curl --config - -sS -o /dev/null -w 'GET -> %{http_code}\n' \
+    "$DISPATCHARR_URL/api/channels/groups/$ID/"
 ```
 
 !!! warning "Check the status code and the re-GET, not the content type"

@@ -266,10 +266,12 @@ export function AuthSettingsSection({ isAdmin }: Props) {
               {' '}
               This also removes most of what the MCP integration guide promises a
               stolen MCP key cannot do: taking, downloading or restoring backups,
-              and creating or testing outbound destinations, become reachable
-              without any credential. Rotating the MCP key, changing TLS
-              certificate material, and administering accounts stay
-              administrator-only in this mode.
+              and creating, changing or deleting outbound destinations, become
+              reachable without any credential. Testing an outbound destination
+              does not. That, along with rotating the MCP key and changing TLS
+              certificate material, stays administrator-only once this instance
+              has an operator identity. Account administration stays closed to
+              anonymous callers and to the MCP key itself in this mode.
             </>
           }
           confirmText="DISABLE AUTHENTICATION"

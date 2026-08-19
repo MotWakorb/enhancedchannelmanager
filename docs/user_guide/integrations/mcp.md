@@ -54,25 +54,43 @@ it outright.
     authority on that mode and enumerates it; read it before turning
     authentication off.
 
-    Three things hold in **every** mode, auth-disabled included:
+    Four things hold in **every** mode, auth-disabled included:
 
     - **The operator-facing `mcp_api_key` is never a backend credential.** ECM
       refuses it with `403` before any route runs, so a stolen key cannot be
-      replayed straight at `/api/*` in any mode.
+      replayed straight at `/api/*` in any mode. This one has no preconditions:
+      the refusal happens before the `require_auth` branch is even consulted.
     - **MCP-key rotation/revocation and the TLS certificate and private-key
       lifecycle stay human-admin-only.** Those two gates carry
       `enforce_when_auth_disabled=True`, so they keep enforcing once the
       instance has an operator identity.
-    - **Administrator administration stays human-admin-only.**
-      `/api/auth/admin/*` chains `get_current_user`, which validates a token in
-      every mode, so a stolen key cannot create an administrator.
+    - **Outbound connection tests stay human-admin-only.** *Testing* a
+      cloud-storage target, sync target or alert method is gated by
+      `RequireHumanAdminForOutboundTest`, which also carries
+      `enforce_when_auth_disabled=True`, again once the instance has an
+      operator identity. These are the verbs that make ECM spend a stored
+      credential against a host the caller names and report the upstream
+      verdict back. Note that *creating, changing and deleting* those same
+      destinations is **not** in this group; see below.
+    - **Anonymous administrator administration stays blocked.**
+      `/api/auth/admin/*` chains `get_current_user`, which rejects a request
+      carrying no token in every mode, so a caller off the network cannot create
+      an administrator. This is narrower than it may read: `require_admin`
+      checks `is_admin` alone, and with authentication disabled the capability
+      matrix that normally keeps the sidecar's *private* backend key out of
+      these routes is not applied. The guarantee is against the
+      operator-facing `mcp_api_key` (refused outright, first bullet) and against
+      anonymous callers. It is not a guarantee against every credential ECM
+      issues.
 
     A stolen MCP key is serious in every mode: it can read and modify your
     channel, stream, EPG and pipeline configuration, and it can read your
     household's viewing history (below). While authentication is required it
-    additionally cannot exfiltrate a backup or use ECM as a credential oracle
-    against an outbound host; with authentication disabled, neither of those
-    limits applies to anyone on your network.
+    additionally cannot exfiltrate a backup, and it cannot create or change an
+    outbound destination. With authentication disabled, those two limits stop
+    applying to anyone on your network. The credential-oracle limit does not
+    follow them: running a connection test against a stored credential stays
+    administrator-only in both modes.
 
 !!! danger "What a leaked MCP key exposes, and what to do about it"
     **The viewing history is the most sensitive thing the key reaches.** The MCP

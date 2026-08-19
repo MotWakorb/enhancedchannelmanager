@@ -30,6 +30,8 @@ import pytest
 import routers.backup as backup_mod
 from auth.dependencies import (
     RequireAdminIfEnabled,
+    RequireHumanAdminForNotificationCredential,
+    RequireHumanAdminForOutboundTest,
     RequireHumanAdminForServiceCredential,
     RequireHumanAdminForTLSMaterial,
     RequireHumanAdminIfEnabled,
@@ -67,7 +69,7 @@ def _prose(relative: str) -> str:
 # Fences are routinely indented here — inside `!!! danger` admonitions and
 # under numbered list items — so the delimiters must NOT be anchored at column
 # 0. An anchored version of this made every such block invisible, which is how
-# `docker exec … curl` survived in seven scanned files behind a passing guard.
+# `docker exec … curl` survived in five indented blocks behind a passing guard.
 # `scripts/check-operator-docs.mjs` uses the same relaxed anchor.
 _FENCE = re.compile(r"^[ \t]*```[^\n]*\n(.*?)^[ \t]*```", re.MULTILINE | re.DOTALL)
 
@@ -347,7 +349,48 @@ def test_the_guide_qualifies_the_capability_list_by_auth_mode() -> None:
     guide = _prose(MCP_GUIDE)
     assert "This list holds while ECM requires authentication" in guide
     assert "docs/auth_middleware.md" in guide
-    assert "Three things hold in every mode" in guide
+    assert "Four things hold in every mode" in guide
+
+
+def test_outbound_connection_tests_survive_auth_being_disabled() -> None:
+    """The credential-oracle limit is the one that DOES hold with auth off.
+
+    An earlier draft of the guide, and of the Disable Authentication dialog,
+    said the opposite: it listed "creating or **testing** outbound
+    destinations" together as becoming reachable without a credential. Testing
+    does not. ``RequireHumanAdminForOutboundTest`` carries
+    ``enforce_when_auth_disabled=True`` (bead 2u4e0), subject to the same
+    "once the instance has an operator identity" carve-out as the other two
+    surviving gates.
+
+    Nothing pinned this, which is exactly why the one wrong sentence was the
+    wrong one: the sibling test above reads four gates off their closures and
+    this gate was not among them. Read it off the live objects here, and read
+    the split off the routers, so neither half can drift.
+    """
+    assert _enforces_when_auth_disabled(RequireHumanAdminForOutboundTest) is True
+
+    # ...and the WRITE verbs on the same routers deliberately do not, which is
+    # what makes the guide's split a real distinction rather than hedging.
+    assert _enforces_when_auth_disabled(RequireAdminIfEnabled) is False
+    assert _enforces_when_auth_disabled(RequireHumanAdminForNotificationCredential) is False
+
+    import routers.alert_methods as alert_methods_mod
+    import routers.cloud_targets as cloud_targets_mod
+
+    tested = (
+        cloud_targets_mod.test_cloud_target_inline,
+        cloud_targets_mod.test_cloud_target,
+        alert_methods_mod.test_alert_method,
+    )
+    for handler in tested:
+        gate = inspect.signature(handler).parameters["_admin"].default
+        assert gate is RequireHumanAdminForOutboundTest, handler.__name__
+        assert _enforces_when_auth_disabled(gate) is True, handler.__name__
+
+    guide = _prose(MCP_GUIDE)
+    assert "Outbound connection tests stay human-admin-only" in guide
+    assert "credential-oracle limit does not follow them" in guide
 
     # The same caveat has to reach the operator where the decision is made, in
     # the Disable Authentication dialog. That half is proven on the rendered
@@ -357,23 +400,52 @@ def test_the_guide_qualifies_the_capability_list_by_auth_mode() -> None:
     # exists there.
 
 
-def test_administrator_administration_survives_auth_being_disabled() -> None:
-    """The one "cannot" the guide still states unconditionally.
+def test_administrator_administration_is_claimed_only_for_who_it_holds_against() -> None:
+    """The admin-administration guarantee, stated to exactly its real extent.
 
     ``/api/auth/admin/*`` chains ``get_current_user`` with no auth-disabled
-    short-circuit, so "a stolen key cannot create an administrator" holds in
-    every mode. If that ever grows an ``if not require_auth: return`` escape,
-    the guide's unqualified sentence has to go with it.
+    short-circuit, so a caller presenting NO token is refused in every mode, and
+    the operator-facing ``mcp_api_key`` is refused before any route runs. Those
+    two are what the guide may promise.
+
+    What it may NOT promise is "human-admin-only, full stop". ``require_admin``
+    checks ``user.is_admin`` and nothing else, and ``get_current_user`` answers
+    the sidecar's private backend key with ``_build_mcp_service_principal()``,
+    which sets ``is_admin=True``. The only thing keeping that principal out is
+    the capability matrix, and ``backend/main.py`` applies it strictly inside
+    ``if auth_settings.require_auth and auth_settings.setup_complete:``. So with
+    authentication off, the service principal is an unrestricted administrator
+    on these routes. The earlier unqualified sentence read as a guarantee
+    against every credential ECM issues.
+
+    This test therefore pins the SHAPE of the claim, not a reproduction: if
+    ``require_admin`` ever grows a real principal check, the guide can be
+    widened again — and this test is where that gets noticed.
     """
     from auth.routes import require_admin
 
     source = inspect.getsource(require_admin)
     assert "require_auth" not in source
     assert "setup_complete" not in source
-    # It reaches the caller only through get_current_user, which validates in
-    # every mode; the parameter default is the live proof of that chaining.
+    # It reaches the caller only through get_current_user, which refuses an
+    # unauthenticated request in every mode; the parameter default is the live
+    # proof of that chaining.
     dependency = inspect.signature(require_admin).parameters["user"].default
     assert dependency.dependency.__name__ == "get_current_user"
+
+    # The narrowing is required as long as this stays true: no principal check.
+    assert "is_mcp_service_principal" not in source
+    assert "is_admin" in source
+
+    guide = _prose(MCP_GUIDE)
+    assert "Anonymous administrator administration stays blocked" in guide
+    assert "not a guarantee against every credential ECM issues" in guide
+    # And the reason the mcp_api_key half holds unconditionally: the refusal is
+    # ahead of the require_auth branch, not inside it.
+    main_source = _read("backend/main.py")
+    refusal = main_source.index("cannot authenticate to the backend")
+    branch = main_source.index("if auth_settings.require_auth and auth_settings.setup_complete:")
+    assert refusal < branch
 
 
 # --------------------------------------------------------------------------

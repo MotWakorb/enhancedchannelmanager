@@ -156,6 +156,25 @@ describe('AuthSettingsSection', () => {
       expect(dialog).toHaveTextContent(/backup/i);
     });
 
+    it('does not claim outbound connection tests open up when auth is disabled', async () => {
+      // `RequireHumanAdminForOutboundTest` carries `enforce_when_auth_disabled=True`
+      // (backend/auth/dependencies.py), so POST /api/cloud-targets/test,
+      // /api/cloud-targets/{id}/test and /api/alert-methods/{id}/test keep
+      // refusing in this mode. Listing "testing" alongside "creating" told the
+      // operator a credential oracle had opened that had not. The write verbs
+      // on those same routers run on RequireAdminIfEnabled /
+      // RequireHumanAdminForNotificationCredential, which do NOT enforce, so
+      // the two halves have to be stated separately.
+      await disableAuthAndSave();
+
+      const dialog = await screen.findByRole('dialog', { name: /disable authentication/i });
+      expect(dialog).toHaveTextContent(/creating, changing or deleting outbound destinations/i);
+      expect(dialog).toHaveTextContent(/Testing an outbound destination does not/i);
+      // The surviving gates hold only once the instance has an operator
+      // identity — the same caveat the MCP guide carries on them.
+      expect(dialog).toHaveTextContent(/once this instance has an operator identity/i);
+    });
+
     it('does not re-confirm on every save once authentication is already off', async () => {
       // Gating on `!requireAuth` rather than on the transition made the dialog
       // fire on every unrelated save while auth was off — habituation training
