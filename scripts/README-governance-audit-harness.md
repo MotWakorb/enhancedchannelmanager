@@ -25,8 +25,12 @@ invoke by hand:
 python3 -m pytest backend/tests/unit/test_governance_audit_behavior.py -q
 ```
 
-It skips itself if `bash` or `jq` is unavailable. Both are present on
-`ubuntu-latest`.
+It does *not* skip itself if `bash` or `jq` is unavailable: a module-level
+`assert` errors the collection instead, matching `test_classify_changed_paths.py`.
+A skipped enforcement test is a green one, and these scenarios are the only
+behavioural enforcement of the audit's credential model — if the runner image
+ever drops either tool, `Backend Tests` must go red rather than quietly report
+success on nothing.
 
 The stub records every `gh` invocation and the `GH_TOKEN` it saw, which is how
 the tests assert that the beads-branch read stays on the built-in token and the

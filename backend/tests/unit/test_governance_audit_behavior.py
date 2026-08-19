@@ -41,10 +41,15 @@ EVIDENCE_STEP = "Record audit evidence"
 
 REPO = "MotWakorb/enhancedchannelmanager"
 
-pytestmark = pytest.mark.skipif(
-    not (shutil.which("bash") and shutil.which("jq")),
-    reason="the governance-audit scenario harness needs bash and jq",
-)
+# These scenarios are the only *behavioural* enforcement of the audit's
+# credential model, so a missing tool must fail the run rather than skip it: a
+# skipped enforcement test is a green one, and `Backend Tests` would report
+# success with every scenario silently unrun. Same rule, and same wording, as
+# `test_classify_changed_paths.py`'s `jq` binding.
+BASH = shutil.which("bash")
+assert BASH is not None, "bash is a required, non-skippable workflow-contract dependency"
+JQ = shutil.which("jq")
+assert JQ is not None, "jq is a required, non-skippable workflow-contract dependency"
 
 
 # ─── Fixture payloads ──────────────────────────────────────────────────────
@@ -224,7 +229,7 @@ def run_step(
     environment.update(env or {})
 
     process = subprocess.run(
-        ["bash", "-c", step["run"]],
+        [BASH, "-c", step["run"]],
         cwd=workdir,
         env=environment,
         capture_output=True,
