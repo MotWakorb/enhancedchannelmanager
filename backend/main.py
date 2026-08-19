@@ -21,6 +21,7 @@ from config import (
     CONFIG_DIR,
     CONFIG_FILE,
     MCP_SERVICE_FILE,
+    MCP_SERVICE_FILENAME,
     superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
@@ -1107,10 +1108,18 @@ async def startup_event():
     # it is still root; this is the runtime backstop for a mount that changes
     # afterwards.
     if load_mcp_service_credentials(MCP_SERVICE_FILE) is None:
+        # The directory is named by the MCP_SECRETS_DIR variable rather than
+        # interpolated: it is derived from that environment read, which makes it
+        # a CodeQL clear-text-logging finding (alert 1905), and the operator who
+        # set the variable can act on its name just as well as on the resolved
+        # path. Same rule at the three auth.mcp_service log sites and in
+        # mcp-server/config.py; enforced by
+        # backend/tests/test_04c0u8_projection_paths_are_not_logged.py.
         logger.error(
             "[MAIN] MCP sidecar backend credentials are UNAVAILABLE — the MCP "
-            "sidecar cannot authenticate until %s is writable by this account",
-            MCP_SERVICE_FILE.parent,
+            "sidecar cannot authenticate until the directory named by "
+            "MCP_SECRETS_DIR is writable by this account (it must hold %s)",
+            MCP_SERVICE_FILENAME,
         )
     else:
         logger.info("[MAIN] MCP sidecar backend credentials are ready")
@@ -1118,14 +1127,22 @@ async def startup_event():
     # SEC-07 — the pre-…-04c0u.8 private projection is not removed by the move.
     _superseded_projection = superseded_mcp_service_projection()
     if _superseded_projection is not None:
+        # The superseded path IS interpolated, and deliberately: the whole point
+        # of the warning is to name the exact file the operator should delete,
+        # and it is a CONFIG_DIR path built from a constant filename, so it is
+        # not derived from the MCP_SECRETS_DIR read (see
+        # config.superseded_mcp_service_projection, which builds it from
+        # MCP_SERVICE_FILENAME for exactly this reason). The live projection is
+        # named by file and variable instead, as everywhere else.
         logger.warning(
             "[MAIN] A superseded MCP credential file remains at %s. It "
-            "authenticates nothing — this backend reads only %s — but it is "
-            "still secret material in the config volume and host-side backups "
-            "will capture it. Delete it when convenient; ECM will not delete "
-            "credential material for you.",
+            "authenticates nothing — this backend reads only %s under the "
+            "directory named by MCP_SECRETS_DIR — but it is still secret "
+            "material in the config volume and host-side backups will capture "
+            "it. Delete it when convenient; ECM will not delete credential "
+            "material for you.",
             _superseded_projection,
-            MCP_SERVICE_FILE,
+            MCP_SERVICE_FILENAME,
         )
 
     # Exit-path diagnostics (bd-0gt2i / GH #546): the loop exception handler

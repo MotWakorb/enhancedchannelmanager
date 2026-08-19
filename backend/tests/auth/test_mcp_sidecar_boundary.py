@@ -343,7 +343,13 @@ class TestCredentialRotationRefusesLoudlyButCleanly:
     superseded credential was dead — strictly worse than failing. It stays
     fail-loud; what changes is that it no longer raises ``OSError`` out of the
     request path (…-04c0u.8 invariant) but refuses with a 503 that names the
-    directory and the repair.
+    projection and the repair.
+
+    It names them by ``MCP_SECRETS_DIR`` and filename rather than by resolved
+    path: the path is derived from that environment read and reaches a logger
+    on the same branch, which CodeQL flags as clear-text logging of sensitive
+    data. ``test_04c0u8_projection_paths_are_not_logged.py`` pins the property;
+    what this class pins is that the refusal stayed loud and repairable.
     """
 
     def test_an_unwritable_projection_is_a_named_503_not_a_raw_oserror(
@@ -364,7 +370,11 @@ class TestCredentialRotationRefusesLoudlyButCleanly:
             projection_dir.chmod(0o700)
 
         assert raised.value.status_code == 503
-        assert str(projection_dir) in raised.value.detail
+        assert str(projection_dir) not in raised.value.detail
+        assert "MCP_SECRETS_DIR" in raised.value.detail
+        assert "mcp-service.json" in raised.value.detail
+        assert "not rotated" in raised.value.detail
+        assert "PUID/PGID" in raised.value.detail
 
     def test_a_writable_projection_still_rotates(self, tmp_path: Path):
         import routers.settings as settings_router

@@ -21,6 +21,8 @@ from pathlib import Path
 
 from fastapi import HTTPException, Request
 
+from config import MCP_SERVICE_FILENAME
+
 logger = logging.getLogger(__name__)
 
 MCP_CLAIM_HEADER = "X-ECM-MCP-Claim"
@@ -34,6 +36,20 @@ _credential_lock = threading.Lock()
 # between two concurrent first failures costs at most one duplicate traceback,
 # which is the thing being bounded, not a correctness property.
 _projection_failure_reported = False
+
+
+def _failure_reason(exc: BaseException) -> str:
+    """Render an exception without the filename it carries.
+
+    ``str(OSError)`` ends with the path the call failed on, so interpolating the
+    exception object itself would put the ``MCP_SECRETS_DIR``-derived projection
+    path back into the message the surrounding code deliberately keeps it out
+    of. The class and ``strerror`` are the whole diagnostic — "PermissionError:
+    Permission denied" — and the file is already named by the message.
+    """
+    if isinstance(exc, OSError):
+        return f"{type(exc).__name__}: {exc.strerror or 'no error detail'}"
+    return f"{type(exc).__name__}: {exc}"
 
 
 @dataclass(frozen=True)
@@ -84,27 +100,39 @@ def load_mcp_service_credentials(path: Path) -> MCPServiceCredentials | None:
         # broken projection is a full or failing disk, which more logging makes
         # worse. The first failure of an episode carries the traceback; the
         # rest are DEBUG one-liners until the projection recovers.
+        #
+        # None of these three lines interpolates the projection path. It is a
+        # filesystem path rather than credential material, so logging it is not
+        # a real disclosure — but it is derived from the MCP_SECRETS_DIR
+        # environment read, which makes it a clear-text-logging finding on
+        # every CodeQL scan (alerts 1920-1922, py/clear-text-logging-sensitive-
+        # data; the same rule ``mcp-server/config.py`` follows for alert 1894).
+        # The operator configured the directory, so naming the file and the
+        # variable is as actionable and taints nothing. Enforced by
+        # ``backend/tests/test_04c0u8_projection_paths_are_not_logged.py``.
         if not _projection_failure_reported:
             _projection_failure_reported = True
             logger.exception(
-                "[MCP-AUTH] MCP sidecar credential projection at %s is unusable; "
-                "the MCP service principal is unavailable until it is repaired. "
-                "Further failures are logged at DEBUG until it recovers",
-                path.parent,
+                "[MCP-AUTH] MCP sidecar credential projection %s is unusable "
+                "under the directory named by MCP_SECRETS_DIR; the MCP service "
+                "principal is unavailable until it is repaired. Further "
+                "failures are logged at DEBUG until it recovers",
+                MCP_SERVICE_FILENAME,
             )
         else:
             logger.debug(
-                "[MCP-AUTH] MCP sidecar credential projection at %s is still "
-                "unusable: %s",
-                path.parent,
-                exc,
+                "[MCP-AUTH] MCP sidecar credential projection %s is still "
+                "unusable under the directory named by MCP_SECRETS_DIR: %s",
+                MCP_SERVICE_FILENAME,
+                _failure_reason(exc),
             )
         return None
     if _projection_failure_reported:
         _projection_failure_reported = False
         logger.info(
-            "[MCP-AUTH] MCP sidecar credential projection at %s recovered",
-            path.parent,
+            "[MCP-AUTH] MCP sidecar credential projection %s under the "
+            "directory named by MCP_SECRETS_DIR recovered",
+            MCP_SERVICE_FILENAME,
         )
     return credentials
 

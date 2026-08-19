@@ -44,12 +44,22 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 # in an ``.env`` resolves to CONFIG_DIR instead of ``Path("")`` → the process
 # CWD; mcp-server/config.py resolves the same variable the same way.
 MCP_SECRETS_DIR = Path(os.environ.get("MCP_SECRETS_DIR") or CONFIG_DIR)
+# The bare filenames are kept as their own constants, separate from the resolved
+# paths, so log lines can name the file an operator has to repair without
+# interpolating anything derived from the ``MCP_SECRETS_DIR`` environment read.
+# CodeQL treats that read as a sensitive source (the identifier matches its
+# heuristic), so a resolved path reaching a logger is a
+# ``py/clear-text-logging-sensitive-data`` finding on every scan — see
+# ``backend/tests/test_04c0u8_projection_paths_are_not_logged.py``, and
+# ``mcp-server/config.py`` for the sidecar's copy of the same rule.
+MCP_KEY_FILENAME = "api-key"
+MCP_SERVICE_FILENAME = "mcp-service.json"
 # Public client credential the operator hands to MCP clients.
-MCP_KEY_FILE = MCP_SECRETS_DIR / "api-key"
+MCP_KEY_FILE = MCP_SECRETS_DIR / MCP_KEY_FILENAME
 # Private sidecar-to-backend credentials (enhancedchannelmanager-04c0u.7): a
 # distinct backend principal key plus a distinct destructive-confirmation
 # signing key. Never derived from, and never merged with, the public key above.
-MCP_SERVICE_FILE = MCP_SECRETS_DIR / "mcp-service.json"
+MCP_SERVICE_FILE = MCP_SECRETS_DIR / MCP_SERVICE_FILENAME
 
 
 ALLOWED_URL_SCHEMES = {"http", "https"}
@@ -1053,7 +1063,14 @@ def superseded_mcp_service_projection() -> Path | None:
     """
     if MCP_SECRETS_DIR == CONFIG_DIR:
         return None
-    superseded = CONFIG_DIR / MCP_SERVICE_FILE.name
+    # ``CONFIG_DIR / MCP_SERVICE_FILENAME``, never ``MCP_SERVICE_FILE.name``:
+    # the returned path is a CONFIG_DIR path with a constant filename and never
+    # depended on ``MCP_SECRETS_DIR``, but taking the name off the resolved
+    # path made it MCP_SECRETS_DIR-derived anyway — which put the caller's
+    # startup warning on the clear-text-logging alert list for a value that is
+    # not sensitive. The caller needs to name the exact file to delete, so the
+    # value is de-tainted at the source rather than dropped from the message.
+    superseded = CONFIG_DIR / MCP_SERVICE_FILENAME
     return superseded if superseded.is_file() else None
 
 
