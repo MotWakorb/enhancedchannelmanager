@@ -34,6 +34,7 @@ from tls.settings import (
     tls_settings_load_failed,
 )
 from tls.storage import CertificateStorage
+from tls.https_server import https_server_manager
 from database import get_session
 from models import User, UserSession, PasswordResetToken
 from .password import verify_password, hash_password, validate_password
@@ -454,11 +455,46 @@ def _ecm_terminates_tls() -> bool:
     Fails CLOSED on an unreadable ``tls_settings.json``: ``load_tls_settings``
     degrades to ``enabled=False`` there, and reading that as "TLS is off" would
     emit cleartext-replayable cookies while the HTTPS listener kept serving.
+    "Unreadable" includes a ``tls_settings.json`` that cannot even be
+    ``stat``-ed — an ``EACCES`` on the config directory used to be swallowed
+    into "there is no file", which failed OPEN; ``tls.settings._config_file_
+    stamp`` now distinguishes absence from every other ``OSError``. Enforced by
+    ``tests/unit/test_04c0u9_tls_settings_cache.py::
+    test_a_stat_failure_that_is_not_absence_is_a_load_failure``.
+
+    This drives the cookie ATTRIBUTE. It deliberately does NOT decide the
+    refusal on its own — see :func:`_https_listener_evidence`.
     """
     if tls_settings_load_failed():
         return True
     tls_settings = get_tls_settings()
     return bool(tls_settings.enabled and CertificateStorage(TLS_DIR).has_certificate())
+
+
+def _https_listener_evidence() -> bool:
+    """Positive evidence that an HTTPS listener of ECM's own is serving.
+
+    ``_ecm_terminates_tls`` above answers "assume TLS is on unless we can see
+    that it is off". That is right for the cookie ATTRIBUTE — a ``Secure``
+    cookie on a plaintext instance is discarded, which is a lesser harm than a
+    replayable one — and disproportionate for REFUSING to mint a session at all.
+    Coupled to it, one unreadable ``tls_settings.json`` became a 403 on login,
+    dispatcharr_login AND refresh, on an instance that may never have enabled
+    TLS; the stored break-glass flag is unreachable behind the same failure
+    (``load_tls_settings`` degrades to defaults), so recovery needed
+    ``ECM_ALLOW_HTTP_SESSION_COOKIES`` plus a container restart, i.e. shell
+    access. The trigger was one non-atomic ``write_text`` away.
+
+    So the refusal additionally requires something observable: the key material
+    ``tls/https_server.py`` spawns uvicorn from (it checks exactly
+    ``CertificateStorage(TLS_DIR).has_certificate()``), or that subprocess
+    actually running. A corrupt settings file WITH key material still refuses —
+    that is the case where the listener is probably up and the pre-activation
+    replay is live. A corrupt settings file with no key material does not.
+    """
+    if CertificateStorage(TLS_DIR).has_certificate():
+        return True
+    return bool(https_server_manager.is_running)
 
 
 # Once per process, re-armed by ``_reset_session_transport_log_state`` in tests.
@@ -496,6 +532,47 @@ def _warn_break_glass_suppression() -> None:
     )
 
 
+def _break_glass_open() -> bool:
+    """True when either operator escape hatch is open (stored flag or env var)."""
+    return bool(
+        get_tls_settings().allow_http_session_cookies
+        or break_glass_environment_override()
+    )
+
+
+def break_glass_is_downgrading() -> bool:
+    """True when an open break-glass hatch is actually costing protection.
+
+    THE single definition of "session cookies are travelling in cleartext
+    because of the escape hatch". Two surfaces read it and they must not be
+    able to disagree: the WARN in :func:`_session_transport` below, and the
+    ``session_cookies_plaintext`` field of ``GET /api/tls/status``, which is the
+    only gate on the TLS Settings banner.
+
+    They did disagree. The status field required ECM's OWN TLS
+    (``enabled and has_certificate()``), so on a reverse-proxy deployment —
+    ``public_base_url`` an ``https://`` origin, ECM's own TLS off — with
+    break-glass on, cookies were issued WITHOUT ``Secure``, the log said so, and
+    the API reported ``false`` while the banner never rendered and the checkbox
+    looked harmless. That is precisely the population the break-glass reorder in
+    :func:`_session_transport` exists to serve.
+
+    The condition is "the hatch is open AND something would otherwise have
+    protected these cookies", not "the hatch is open": with no TLS and no https
+    origin the cookies are non-``Secure`` either way, and reporting a hazard
+    there would put a permanent banner and a permanent WARN on every plain-HTTP
+    install. Pinned by
+    ``tests/unit/test_04c0u9_session_transport.py::
+    test_the_downgrade_verdict_is_the_same_one_the_warning_uses``.
+    """
+    if not _break_glass_open():
+        return False
+    return (
+        get_public_base_url().lower().startswith("https://")
+        or _ecm_terminates_tls()
+    )
+
+
 def _session_transport(request: Request) -> _SessionTransport:
     """Decide session-cookie transport policy from trusted local state.
 
@@ -530,10 +607,7 @@ def _session_transport(request: Request) -> _SessionTransport:
     this connection still wins over everything, so break-glass can never
     downgrade a real HTTPS session.
     """
-    tls_settings = get_tls_settings()
-    break_glass = bool(
-        tls_settings.allow_http_session_cookies or break_glass_environment_override()
-    )
+    break_glass = _break_glass_open()
 
     if request.url.scheme.lower() == "https":
         return _SessionTransport(secure=True, refuse_plaintext=False, break_glass=break_glass)
@@ -542,10 +616,10 @@ def _session_transport(request: Request) -> _SessionTransport:
     tls_active = _ecm_terminates_tls()
 
     if break_glass:
-        # Only warn when the hatch actually changed the answer. With no TLS and
-        # no https origin the cookies would be non-Secure regardless, and a
-        # warning there would be noise on every plain-HTTP install.
-        if proxy_https or tls_active:
+        # Only warn when the hatch actually changed the answer, and decide that
+        # through the SAME function GET /api/tls/status reports the verdict
+        # from, so the log and the API cannot contradict each other.
+        if break_glass_is_downgrading():
             _warn_break_glass_suppression()
         return _SessionTransport(secure=False, refuse_plaintext=False, break_glass=True)
 
@@ -554,8 +628,16 @@ def _session_transport(request: Request) -> _SessionTransport:
 
     # ECM terminates TLS and this arrived in cleartext: protect the cookie AND
     # refuse to mint a session at all (see ``refuse_plaintext``).
+    #
+    # The two are not the same predicate. ``secure`` fails closed on an
+    # unreadable tls_settings.json; the refusal additionally demands positive
+    # evidence of a listener, so a filesystem fault on an instance that never
+    # enabled TLS cannot become a permanent login lockout. See
+    # ``_https_listener_evidence``.
     return _SessionTransport(
-        secure=tls_active, refuse_plaintext=tls_active, break_glass=False
+        secure=tls_active,
+        refuse_plaintext=tls_active and _https_listener_evidence(),
+        break_glass=False,
     )
 
 

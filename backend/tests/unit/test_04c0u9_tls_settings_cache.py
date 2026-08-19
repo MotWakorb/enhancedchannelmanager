@@ -26,14 +26,17 @@ UNPATCHED.
 """
 
 import json
+import os
+import stat
 
 import pytest
 from starlette.requests import Request
 
 import auth.routes as auth_routes
 import tls.settings as tls_settings_module
-from auth.routes import _auth_cookie_secure
+from auth.routes import _auth_cookie_secure, _require_secure_session_transport
 from tls.settings import (
+    TLSSettings,
     clear_tls_settings_cache,
     get_tls_settings,
     save_tls_settings,
@@ -176,3 +179,112 @@ def test_repairing_the_config_file_clears_the_load_failure(config_root):
 
     assert get_tls_settings().enabled is True
     assert tls_settings_load_failed() is False
+
+
+# ---------------------------------------------------------------------------
+# The save is atomic, and the rename is what makes st_ino do any work
+# ---------------------------------------------------------------------------
+
+
+def test_a_save_replaces_the_file_by_rename(config_root):
+    """Round-2 remediation, and it fixes two things at once.
+
+    ``TLS_CONFIG_FILE.write_text(...)`` truncates in place, so a disk-full or a
+    container kill mid-write left a truncated or zero-byte ``tls_settings.json``
+    behind — which loads as a hard parse failure, and a parse failure is what
+    the cookie-transport policy fails closed on. Writing a temporary file and
+    ``os.replace``-ing it means the old file stays visible in full until the new
+    one is complete.
+
+    Truncate-in-place also kept the inode forever, so the ``st_ino`` leg of the
+    cache key — documented on ``_config_file_stamp`` as the component that
+    survives a same-size, same-mtime replacement — never changed on an ordinary
+    save and the key silently reduced to ``(st_mtime_ns, st_size)``, which a
+    coarse-granularity mount can fail to distinguish.
+    """
+    settings = TLSSettings(enabled=True, mode="manual")
+    assert save_tls_settings(settings) is True
+    first = (config_root / "tls_settings.json").stat().st_ino
+
+    settings.allow_http_session_cookies = True
+    assert save_tls_settings(settings) is True
+    second = (config_root / "tls_settings.json").stat().st_ino
+
+    assert second != first
+    assert json.loads((config_root / "tls_settings.json").read_text())[
+        "allow_http_session_cookies"
+    ] is True
+
+
+def test_a_save_leaves_no_temporary_file_behind(config_root):
+    assert save_tls_settings(TLSSettings(enabled=True)) is True
+    assert sorted(p.name for p in config_root.iterdir()) == ["tls", "tls_settings.json"]
+
+
+def test_the_replaced_file_is_still_owner_only(config_root):
+    """The file holds DNS-provider credentials in clear, and the startup probe
+    fails the instance if the mode is not 0600."""
+    assert save_tls_settings(TLSSettings(enabled=True)) is True
+    mode = stat.S_IMODE((config_root / "tls_settings.json").stat().st_mode)
+    assert mode == 0o600
+
+
+# ---------------------------------------------------------------------------
+# "Cannot stat it" is not "it is not there"
+# ---------------------------------------------------------------------------
+
+
+def _http_request_denied_stat(config_root, monkeypatch):
+    real_stat = os.stat
+    target = str(config_root / "tls_settings.json")
+
+    def _denied(path, *args, **kwargs):
+        if str(path) == target:
+            raise PermissionError(13, "Permission denied")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", _denied)
+    clear_tls_settings_cache()
+
+
+def test_a_stat_failure_that_is_not_absence_is_a_load_failure(config_root, monkeypatch):
+    """``_config_file_stamp`` swallowed every ``OSError`` into "no file".
+
+    An ``EACCES`` on the config directory therefore failed OPEN — defaults,
+    ``enabled=False``, ``_tls_settings_load_failed`` cleared — while a running
+    HTTPS subprocess kept serving, and the plain-HTTP port silently resumed
+    issuing non-``Secure`` session cookies. That is the exact exposure this bead
+    exists to close, and the docstring on ``_ecm_terminates_tls`` claimed the
+    opposite.
+    """
+    _issue_certificate(config_root)
+    _write_settings_as_another_process(config_root, enabled=True)
+    assert get_tls_settings().enabled is True
+
+    _http_request_denied_stat(config_root, monkeypatch)
+
+    assert get_tls_settings().enabled is False
+    assert tls_settings_load_failed() is True
+    assert _auth_cookie_secure(_http_request()) is True
+
+
+def test_a_missing_file_is_still_just_a_missing_file(config_root):
+    """The narrowing must not turn a first run into a load failure."""
+    assert get_tls_settings().enabled is False
+    assert tls_settings_load_failed() is False
+
+
+def test_an_unreadable_config_with_no_key_material_still_signs_in(config_root):
+    """The two round-2 changes meet here.
+
+    Failing closed on the STAT failure above is only proportionate because the
+    refusal now needs positive evidence of TLS termination. Without key material
+    on disk there is no listener to protect, so the operator is not locked out
+    of an instance that never had TLS.
+    """
+    (config_root / "tls_settings.json").write_text("{ this is not json")
+
+    assert get_tls_settings().enabled is False
+    assert tls_settings_load_failed() is True
+    assert _auth_cookie_secure(_http_request()) is True
+    _require_secure_session_transport(_http_request())

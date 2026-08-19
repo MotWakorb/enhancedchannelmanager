@@ -152,10 +152,14 @@ Dispatcharr sign-in and token refresh all answer `403` there with a message nami
 HTTPS address, rather than appearing to succeed and then failing on the next request.
 Session cookies are `Secure`, `HttpOnly` and `SameSite=Lax`.
 
-**Turning TLS on signs everyone out once.** Activating TLS (with a certificate already
-present) revokes every existing browser session, so a browser still holding a
-pre-activation cookie cannot keep replaying it on the HTTP port. Everyone, including
-the administrator who made the change, signs in again over HTTPS.
+**Turning TLS on signs everyone out once.** The moment ECM starts terminating TLS, every
+existing browser session is revoked, so a browser still holding a pre-activation cookie
+cannot keep replaying it. Everyone, including the administrator who made the change,
+signs in again over HTTPS. That moment is wherever it actually happens: switching TLS on
+when a certificate is already present, issuing or completing a Let's Encrypt
+certificate, uploading one manually, or a manual renewal that issues the first
+certificate. Switching TLS on *before* any certificate exists is not activation and
+signs nobody out, because you still need the UI to finish issuing.
 
 Reverse proxy deployments should set the canonical `public_base_url` to an `https://`
 origin. ECM's own policy code does not consult `X-Forwarded-Proto`, `X-Forwarded-Host`
@@ -172,8 +176,10 @@ only on a trusted network and close them the moment HTTPS is repaired. Both work
 regardless of whether `public_base_url` is set.
 
 1. **If you can still sign in over HTTPS**, enable **Emergency recovery: allow
-   authenticated sessions over HTTP** in Settings › TLS. While it is on, the TLS panel
-   shows a plaintext-session warning banner and ECM logs a warning.
+   authenticated sessions over HTTP** in Settings › TLS. While it is actually costing you
+   protection (ECM's own TLS is on, or `public_base_url` is an `https://` origin), the
+   TLS panel shows a plaintext-session warning banner and ECM logs a warning. On a
+   plain-HTTP install with neither, the hatch changes nothing and both stay quiet.
 2. **If you cannot sign in at all**, stop ECM, set
    `ECM_ALLOW_HTTP_SESSION_COOKIES=true` on the ECM container, and restart it. ECM logs
    a warning at startup for as long as it is set. Sign in through HTTP only long enough

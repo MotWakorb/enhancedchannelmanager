@@ -201,17 +201,38 @@ _cached_tls_stamp: Optional[tuple] = None
 _tls_settings_load_failed: bool = False
 
 
+# Returned instead of a stat tuple when the file cannot be stat-ed for a reason
+# OTHER than absence. Compares equal to itself, so it caches like any other
+# stamp, and is distinguishable from ``None`` ("there is genuinely no file").
+_STAMP_UNREADABLE = ("<unreadable>",)
+
+
 def _config_file_stamp() -> Optional[tuple]:
     """Cheap identity of ``tls_settings.json``, or None when it is absent.
 
-    Inode is included so a replace-by-rename (which a backup restore does)
-    invalidates the cache even if the new file lands with the same size and a
-    coincident mtime.
+    Inode is included so a replace-by-rename — which a backup restore does, and
+    which ``save_tls_settings`` below now does on every save — invalidates the
+    cache even if the new file lands with the same size and a coincident mtime.
+
+    "Absent" means ``ENOENT`` and nothing else. A bare ``except OSError`` here
+    reported an ``EACCES`` on the config directory as "no file", which made
+    ``load_tls_settings`` clear ``_tls_settings_load_failed`` and hand back
+    ``enabled=False`` — failing OPEN, so the plain-HTTP port silently resumed
+    issuing non-``Secure`` session cookies while a running HTTPS subprocess kept
+    serving. Every other ``OSError`` is "we cannot tell", which security callers
+    must be able to fail closed on.
     """
     try:
         st = os.stat(TLS_CONFIG_FILE)
-    except OSError:
+    except FileNotFoundError:
         return None
+    except OSError as e:
+        logger.error(
+            "[TLS-SETTINGS] Cannot stat %s (%s: %s); treating TLS state as "
+            "UNKNOWN rather than absent.",
+            TLS_CONFIG_FILE, type(e).__name__, e,
+        )
+        return _STAMP_UNREADABLE
     return (st.st_mtime_ns, st.st_size, st.st_ino)
 
 
@@ -286,7 +307,11 @@ def load_tls_settings() -> TLSSettings:
 
     logger.info("[TLS-SETTINGS] Loading TLS settings from %s", TLS_CONFIG_FILE)
 
-    if stamp is not None:
+    if stamp is _STAMP_UNREADABLE:
+        # ``_config_file_stamp`` already logged the errno. There is nothing to
+        # parse, but this is emphatically not the no-file case.
+        _tls_settings_load_failed = True
+    elif stamp is not None:
         try:
             data = json.loads(TLS_CONFIG_FILE.read_text())
             _cached_tls_settings = TLSSettings(**data)
@@ -325,9 +350,9 @@ def load_tls_settings() -> TLSSettings:
         # make a security decision read ``tls_settings_load_failed()`` and fail
         # closed rather than reading ``enabled=False`` as "TLS is off".
         logger.error(
-            "[TLS-SETTINGS] %s exists but could not be read; falling back to "
-            "defaults. TLS-dependent security policy will assume TLS is ACTIVE "
-            "until the file is repaired.",
+            "[TLS-SETTINGS] %s could not be read; falling back to defaults. "
+            "TLS-dependent security policy will assume TLS is ACTIVE until the "
+            "file is repaired.",
             TLS_CONFIG_FILE,
         )
     else:
@@ -336,8 +361,43 @@ def load_tls_settings() -> TLSSettings:
     return _cached_tls_settings
 
 
+def _write_config_atomically(settings_json: str) -> None:
+    """Write ``tls_settings.json`` so a failed write cannot truncate it.
+
+    ``TLS_CONFIG_FILE.write_text(...)`` truncates in place: a disk-full or a
+    container kill part-way through left a truncated or zero-byte file, which
+    the loader reports as a hard failure — and a load failure is what the
+    session-cookie policy fails closed on. The temporary file carries the
+    owner-only mode BEFORE the rename, so the credentials in it are never
+    briefly group- or world-readable, and ``fsync`` runs before the rename so
+    the rename cannot be ordered ahead of the data.
+
+    ``os.replace`` is also what gives the ``st_ino`` leg of the cache key in
+    ``_config_file_stamp`` anything to do: an in-place write kept the inode
+    forever, reducing the key to ``(st_mtime_ns, st_size)``.
+    """
+    # PID-qualified so two processes saving at once cannot share a temp file.
+    tmp_path = TLS_CONFIG_FILE.with_name(f".{TLS_CONFIG_FILE.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(settings_json)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Explicit: os.open's mode argument is masked by umask.
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, TLS_CONFIG_FILE)
+    finally:
+        # A no-op on the success path; os.replace consumed the name.
+        tmp_path.unlink(missing_ok=True)
+
+
 def save_tls_settings(settings: TLSSettings) -> bool:
     """Save TLS settings to file. Returns True if successful.
+
+    The write goes through a temporary file and ``os.replace`` — see
+    :func:`_write_config_atomically` for why a truncating write here was a
+    security problem and not only a durability one.
 
     The saving process's own cache is refreshed to the value it just wrote and
     re-stamped to the file it wrote, so the very next read in this process does
@@ -355,9 +415,9 @@ def save_tls_settings(settings: TLSSettings) -> bool:
 
     try:
         settings_json = json.dumps(settings.model_dump(), indent=2)
-        TLS_CONFIG_FILE.write_text(settings_json)
-        # Restrictive permissions on settings file (contains API tokens)
-        os.chmod(TLS_CONFIG_FILE, 0o600)
+        # Restrictive permissions on settings file (contains API tokens) are
+        # applied to the temporary file before it is renamed into place.
+        _write_config_atomically(settings_json)
         _cached_tls_settings = settings
         _cached_tls_stamp = _config_file_stamp()
         _tls_settings_load_failed = False

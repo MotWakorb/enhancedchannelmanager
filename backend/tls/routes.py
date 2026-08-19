@@ -79,6 +79,8 @@ from auth import (
     RequireHumanAdminForOutboundTest,
     RequireHumanAdminForTLSMaterial,
 )
+# Session-cookie transport policy lives in auth; this router only REPORTS it.
+from auth.routes import break_glass_is_downgrading
 
 from .redaction import redact_secret_values
 from .settings import (
@@ -134,6 +136,74 @@ def _redact_request(request, text: str) -> str:
         request.aws_access_key_id,
         request.aws_secret_access_key,
     ))
+
+
+def _tls_termination_active() -> bool:
+    """True when ECM's own HTTPS listener is configured to terminate TLS.
+
+    Exactly the two conditions ``tls/https_server.py`` starts uvicorn from
+    (``settings.enabled`` and ``CertificateStorage(TLS_DIR).has_certificate()``),
+    which is also the notion of "ECM terminates TLS" that
+    ``auth.routes._ecm_terminates_tls`` decides session-cookie policy from. The
+    one deliberate difference is that function's fail-closed leg for an
+    unreadable ``tls_settings.json``: cookie policy must assume TLS is on when
+    it cannot tell, but an ACTIVATION is a transition that has to be observed
+    positively, and "we could not read the file" is evidence of neither side of
+    it. The two are pinned in agreement over the enabled x issued matrix by
+    ``tests/unit/test_04c0u9_session_transport.py::
+    test_the_activation_and_cookie_policy_predicates_agree``.
+    """
+    settings = get_tls_settings()
+    return bool(settings.enabled and CertificateStorage(TLS_DIR).has_certificate())
+
+
+def _revoke_sessions_on_tls_activation(session: Session, was_terminating: bool) -> str:
+    """Cut every browser session that predates the start of TLS termination.
+
+    Bead 04c0u.9 remediation, stated as an invariant rather than as the route
+    that first demonstrated it: NO session that predates TLS termination
+    survives it, by ANY activation route. Without that, a jar holding a
+    PRE-activation, non-``Secure`` ``refresh_token`` keeps that token valid for
+    the remaining 7 days, and a token captured in cleartext before activation is
+    replayable against the brand-new HTTPS listener and can be rotated forward
+    indefinitely. Signing in once over HTTPS overwrites the pair, so this bites
+    exactly the operator who bookmarked the HTTP port and never revisits over
+    HTTPS. Revocation is the only control against pre-activation capture:
+    ``auth.routes._require_secure_session_transport`` closes the HTTP port to
+    NEW sessions, not to ones already minted.
+
+    Callers pass ``was_terminating`` captured BEFORE they touched settings or
+    key material; this rereads the predicate after. Four routes can move it:
+    ``/configure`` (flips ``enabled``), ``/request-cert`` and
+    ``/complete-challenge`` (land the certificate an already-``enabled``
+    instance was waiting for), ``/upload-cert`` (does both at once) and
+    ``/renew`` (issues a first certificate if none exists). The background
+    renewal task cannot: ``tls/renewal.py::check_and_renew_certificate``
+    returns early on ``not storage.has_certificate()``, so it can only replace
+    a certificate on an instance that is already terminating TLS.
+
+    ``auth_epoch`` is bumped as well as the rows revoked: the row revocation
+    kills the refresh token, the epoch bump kills the up-to-30-minute access
+    token already minted and sitting in the same jar. Returns the operator
+    message fragment, empty when this was not an activation.
+    """
+    if was_terminating or not _tls_termination_active():
+        return ""
+
+    revoked = session.query(UserSession).filter(
+        UserSession.is_revoked.is_(False),
+    ).update({UserSession.is_revoked: True}, synchronize_session=False)
+    session.query(User).update(
+        {User.auth_epoch: User.auth_epoch + 1}, synchronize_session=False
+    )
+    session.commit()
+    logger.warning(
+        "[TLS] TLS activated: revoked %d browser session(s) so no "
+        "pre-activation cookie can be replayed. Everyone must sign in again "
+        "over HTTPS.",
+        revoked,
+    )
+    return " All existing sign-ins were ended; sign in again over HTTPS."
 
 
 router = APIRouter(prefix="/api/tls", tags=["TLS"])
@@ -281,11 +351,13 @@ async def get_tls_status(_admin=RequireAdminIfEnabled):
         https_server_running=https_server_manager.is_running,
         allow_http_session_cookies=settings.allow_http_session_cookies,
         http_session_cookies_env_override=break_glass_environment_override(),
-        session_cookies_plaintext=(
-            (settings.allow_http_session_cookies or break_glass_environment_override())
-            and settings.enabled
-            and storage.has_certificate()
-        ),
+        # Not recomputed here (bead 04c0u.9 round-2 remediation): this reports
+        # the verdict ``auth.routes`` actually applies to session cookies, and
+        # is the same call the WARN there is gated on. The local reconstruction
+        # this replaced required ECM's OWN TLS, so it read False — and the
+        # banner never rendered — on the reverse-proxy deployments where
+        # break-glass really was stripping ``Secure``.
+        session_cookies_plaintext=break_glass_is_downgrading(),
     )
 
     # Get certificate info if exists
@@ -363,7 +435,7 @@ async def configure_tls(
     in over HTTPS.
     """
     settings = get_tls_settings()
-    was_enabled = settings.enabled
+    was_terminating = _tls_termination_active()
     previous_break_glass = settings.allow_http_session_cookies
 
     # Update settings
@@ -415,39 +487,7 @@ async def configure_tls(
 
     save_tls_settings(settings)
 
-    # Revoke every existing browser session when TLS is switched ON with key
-    # material already present (bead 04c0u.9 remediation).
-    #
-    # Without this, a jar holding a PRE-activation, non-``Secure``
-    # ``refresh_token`` keeps sending it to the plain-HTTP port for the
-    # remaining 7 days, and a token captured in cleartext before activation can
-    # be rotated forward indefinitely. Signing in once over HTTPS overwrites the
-    # pair, so this bites exactly the operator who bookmarked the HTTP port and
-    # never revisits over HTTPS. The bead's criterion — "HTTP cannot receive
-    # authenticated cookies after TLS activation" — is not met for existing
-    # sessions until they are cut.
-    #
-    # ``auth_epoch`` is bumped as well as the session rows revoked: the row
-    # revocation kills the refresh token, the epoch bump kills the up-to-30-
-    # minute access token that is already minted and in the same jar.
-    revoked_message = ""
-    if request.enabled and not was_enabled and CertificateStorage(TLS_DIR).has_certificate():
-        revoked = session.query(UserSession).filter(
-            UserSession.is_revoked.is_(False),
-        ).update({UserSession.is_revoked: True}, synchronize_session=False)
-        session.query(User).update(
-            {User.auth_epoch: User.auth_epoch + 1}, synchronize_session=False
-        )
-        session.commit()
-        logger.warning(
-            "[TLS] TLS activated: revoked %d browser session(s) so no "
-            "pre-activation cookie can be replayed over the HTTP port. "
-            "Everyone must sign in again over HTTPS.",
-            revoked,
-        )
-        revoked_message = (
-            " All existing sign-ins were ended; sign in again over HTTPS."
-        )
+    revoked_message = _revoke_sessions_on_tls_activation(session, was_terminating)
 
     # Start or stop HTTPS server based on enabled state
     https_message = ""
@@ -477,7 +517,10 @@ async def configure_tls(
 
 
 @router.post("/request-cert", response_model=CertificateRequestResponse)
-async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
+async def request_certificate(
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
+):
     """
     Request a new certificate from Let's Encrypt using DNS-01 challenge.
 
@@ -490,11 +533,17 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
     against the provider API, mints a private key, and writes both the key and
     the certificate to /config/tls/. Certificate-material lifecycle, hence the
     human-admin tier.
+
+    bead 04c0u.9 remediation: on the ACME flow this is where TLS termination
+    BEGINS — ``/configure`` switched ``enabled`` on earlier, while no
+    certificate existed — so pre-activation sessions are cut here. See
+    :func:`_revoke_sessions_on_tls_activation`.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
 
     settings = get_tls_settings()
+    was_terminating = _tls_termination_active()
 
     if not settings.enabled:
         raise HTTPException(400, "TLS is not enabled")
@@ -538,6 +587,8 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
             settings.cert_expires_at = result.expires_at.isoformat()
             save_tls_settings(settings)
 
+            revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
             # Start HTTPS server
             https_msg = ""
             if settings.enabled:
@@ -550,7 +601,7 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
 
             return CertificateRequestResponse(
                 success=True,
-                message=f"Certificate issued successfully.{https_msg}",
+                message=f"Certificate issued successfully.{https_msg}{revoked_msg}",
                 cert_expires_at=result.expires_at.isoformat(),
             )
 
@@ -623,6 +674,10 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
                         settings.cert_issuer = info.issuer
                     save_tls_settings(settings)
 
+                    revoked_msg = _revoke_sessions_on_tls_activation(
+                        session, was_terminating
+                    )
+
                     # Start HTTPS server
                     https_msg = ""
                     if settings.enabled:
@@ -635,7 +690,7 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
 
                     return CertificateRequestResponse(
                         success=True,
-                        message=f"Certificate issued successfully.{https_msg}",
+                        message=f"Certificate issued successfully.{https_msg}{revoked_msg}",
                         cert_expires_at=result.expires_at.isoformat(),
                     )
                 else:
@@ -669,7 +724,10 @@ async def request_certificate(_admin=RequireHumanAdminForTLSMaterial):
 
 
 @router.post("/complete-challenge", response_model=CertificateRequestResponse)
-async def complete_dns_challenge(_admin=RequireHumanAdminForTLSMaterial):
+async def complete_dns_challenge(
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
+):
     """
     Complete a pending DNS-01 challenge.
 
@@ -677,11 +735,16 @@ async def complete_dns_challenge(_admin=RequireHumanAdminForTLSMaterial):
 
     bead 9kwzp.11: the second half of the issuance above, and it is the half
     that actually saves the certificate and key. Same tier for the same reason.
+
+    bead 04c0u.9 remediation: it is therefore also where TLS termination begins
+    on the manual-DNS ACME flow, so pre-activation sessions are cut here. See
+    :func:`_revoke_sessions_on_tls_activation`.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
 
     settings = get_tls_settings()
+    was_terminating = _tls_termination_active()
 
     # Verify DNS record exists
     logger.debug("[TLS] Verifying DNS record...")
@@ -722,6 +785,8 @@ async def complete_dns_challenge(_admin=RequireHumanAdminForTLSMaterial):
                 settings.cert_issuer = info.issuer
             save_tls_settings(settings)
 
+            revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
             # Start HTTPS server
             https_msg = ""
             if settings.enabled:
@@ -734,7 +799,7 @@ async def complete_dns_challenge(_admin=RequireHumanAdminForTLSMaterial):
 
             return CertificateRequestResponse(
                 success=True,
-                message=f"Certificate issued successfully.{https_msg}",
+                message=f"Certificate issued successfully.{https_msg}{revoked_msg}",
                 cert_expires_at=result.expires_at.isoformat(),
             )
         else:
@@ -763,6 +828,7 @@ async def upload_certificate(
     key_file: UploadFile = File(...),
     chain_file: UploadFile = File(None),
     _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
 ):
     """
     Upload a certificate and private key manually.
@@ -775,7 +841,13 @@ async def upload_certificate(
     the HTTPS server serving it. It is the sharpest route in the router — an
     attacker-supplied key pair becomes the operator's transport identity — and
     it previously carried no dependency at all.
+
+    bead 04c0u.9 remediation: it is the WHOLE manual activation flow in one
+    call — it sets ``enabled``, lands the key material and starts the listener —
+    so pre-activation sessions are cut here. See
+    :func:`_revoke_sessions_on_tls_activation`.
     """
+    was_terminating = _tls_termination_active()
     try:
         cert_content = await cert_file.read()
         key_content = await key_file.read()
@@ -807,6 +879,8 @@ async def upload_certificate(
             settings.domain = validation.domains[0]
         save_tls_settings(settings)
 
+        revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
         # Start HTTPS server
         https_msg = ""
         start_success, start_error = await https_server_manager.start()
@@ -818,7 +892,7 @@ async def upload_certificate(
 
         return {
             "success": True,
-            "message": f"Certificate uploaded successfully.{https_msg}",
+            "message": f"Certificate uploaded successfully.{https_msg}{revoked_msg}",
             "subject": validation.subject,
             "issuer": validation.issuer,
             "expires_at": validation.not_after.isoformat(),
@@ -838,7 +912,10 @@ async def upload_certificate(
 
 
 @router.post("/renew")
-async def trigger_renewal(_admin=RequireHumanAdminForTLSMaterial):
+async def trigger_renewal(
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
+):
     """
     Manually trigger certificate renewal.
 
@@ -847,11 +924,17 @@ async def trigger_renewal(_admin=RequireHumanAdminForTLSMaterial):
 
     bead 9kwzp.11: renewal replaces the live key pair and restarts HTTPS with
     it, driving the stored DNS credentials to do so. Same class as issuance.
+
+    bead 04c0u.9 remediation: unlike the background renewal task, this route
+    does NOT require an existing certificate — ``renew_certificate()`` will
+    issue a first one on an ``enabled`` instance that has none, which is an
+    activation. See :func:`_revoke_sessions_on_tls_activation`.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
 
     settings = get_tls_settings()
+    was_terminating = _tls_termination_active()
 
     if not settings.enabled:
         raise HTTPException(400, "TLS is not enabled")
@@ -862,6 +945,8 @@ async def trigger_renewal(_admin=RequireHumanAdminForTLSMaterial):
     result = await renew_certificate()
 
     if result.success:
+        revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
         # Restart HTTPS server to load new certificate
         https_msg = ""
         if https_server_manager.is_running:
@@ -874,7 +959,7 @@ async def trigger_renewal(_admin=RequireHumanAdminForTLSMaterial):
 
         return {
             "success": True,
-            "message": f"Certificate renewed successfully.{https_msg}",
+            "message": f"Certificate renewed successfully.{https_msg}{revoked_msg}",
             "expires_at": result.expires_at.isoformat(),
         }
     else:

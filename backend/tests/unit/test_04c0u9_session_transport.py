@@ -22,6 +22,7 @@ from auth.routes import (
     _require_secure_session_transport,
     _reset_session_transport_log_state,
     _set_auth_cookies,
+    break_glass_is_downgrading,
 )
 from tls.settings import break_glass_environment_override
 
@@ -249,6 +250,53 @@ def test_break_glass_is_silent_when_it_suppresses_nothing(empty_tls_dir, caplog)
     assert not [r for r in caplog.records if "Break-glass is ON" in r.getMessage()]
 
 
+@pytest.mark.parametrize(
+    "public_base_url, enabled, expected",
+    [
+        # A reverse-proxy deployment: ECM's own TLS is OFF, the operator
+        # declared an https origin, and break-glass is downgrading the cookies
+        # that origin would otherwise have protected.
+        ("https://ecm.example.test", False, True),
+        # ECM's own TLS.
+        ("", True, True),
+        # Neither: the cookies would be non-Secure with or without the hatch,
+        # so there is nothing for the hatch to be blamed for.
+        ("", False, False),
+    ],
+)
+def test_the_downgrade_verdict_is_the_same_one_the_warning_uses(
+    tmp_path, monkeypatch, caplog, public_base_url, enabled, expected
+):
+    """``GET /api/tls/status`` and the WARN must not be able to disagree.
+
+    They did. The status field required ECM's OWN TLS
+    (``enabled and has_certificate()``) while the WARN accepts an https
+    ``public_base_url`` too — so on a reverse-proxy deployment with break-glass
+    on, the log said the hatch was downgrading live sessions, the API said
+    ``session_cookies_plaintext: false``, the banner never rendered and the UI
+    looked unchecked. That is exactly the population the break-glass reorder in
+    ``_session_transport`` was made to serve.
+    """
+    tls_dir = tmp_path / "tls"
+    tls_dir.mkdir()
+    if enabled:
+        (tls_dir / "cert.pem").write_text("certificate fixture")
+        (tls_dir / "key.pem").write_text("private-key fixture")
+    monkeypatch.setattr(auth_routes, "TLS_DIR", tls_dir)
+
+    with _Policy(
+        _tls(enabled=enabled, allow_http_session_cookies=True),
+        public_base_url=public_base_url,
+    ):
+        with caplog.at_level(logging.WARNING, logger="auth.routes"):
+            assert _auth_cookie_secure(_request("http")) is False
+            verdict = break_glass_is_downgrading()
+
+    warned = bool([r for r in caplog.records if "Break-glass is ON" in r.getMessage()])
+    assert verdict is expected
+    assert warned is expected
+
+
 # ---------------------------------------------------------------------------
 # Fail-closed and single-source-of-truth for "the certificate exists"
 # ---------------------------------------------------------------------------
@@ -339,6 +387,87 @@ def test_plaintext_refusal_predicate_stays_narrow(
 def test_plaintext_refusal_does_not_fire_without_ecm_tls(empty_tls_dir):
     with _Policy(_tls()):
         _require_secure_session_transport(_request("http"))
+
+
+def test_an_unreadable_settings_file_does_not_lock_login_out(empty_tls_dir):
+    """A filesystem fault must not become a permanent, total login lockout.
+
+    ``tls_settings.json`` failing to parse makes ``_ecm_terminates_tls`` answer
+    True — correctly, for the cookie ATTRIBUTE, which must fail closed. Wiring
+    the REFUSAL to the same answer was the disproportionate half: on an instance
+    that never enabled TLS there is no HTTPS listener to fall back to, so a
+    truncated or zero-byte file — one disk-full or one container kill during a
+    settings save away — turned into a 403 on login, dispatcharr_login AND
+    refresh, with the stored break-glass flag unreachable behind the same
+    failure (``load_tls_settings`` degrades to defaults) and only
+    ``ECM_ALLOW_HTTP_SESSION_COOKIES`` plus a restart to recover.
+    """
+    with _Policy(_tls(), load_failed=True):
+        # Still fails closed on the cookie attribute.
+        assert _auth_cookie_secure(_request("http")) is True
+        # ...and still mints the session rather than 403ing.
+        _require_secure_session_transport(_request("http"))
+
+
+def test_an_unreadable_settings_file_still_refuses_when_key_material_exists(
+    issued_tls_dir,
+):
+    """The refusal needs positive evidence, and cert.pem/key.pem are evidence.
+
+    ``tls/https_server.py`` spawns uvicorn on exactly
+    ``CertificateStorage(TLS_DIR).has_certificate()``, so a corrupt settings
+    file next to real key material is the case where the listener probably IS
+    serving — and the pre-activation replay this refusal exists to stop is
+    live.
+    """
+    with _Policy(_tls(), load_failed=True):
+        with pytest.raises(Exception) as excinfo:
+            _require_secure_session_transport(_request("http"))
+    assert excinfo.value.status_code == 403
+
+
+def test_a_running_https_listener_is_evidence_on_its_own(empty_tls_dir):
+    """Second positive signal, for key material deleted out from under a live
+    listener."""
+    with _Policy(_tls(), load_failed=True), patch(
+        "auth.routes.https_server_manager", new=SimpleNamespace(is_running=True)
+    ):
+        with pytest.raises(Exception) as excinfo:
+            _require_secure_session_transport(_request("http"))
+    assert excinfo.value.status_code == 403
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("issued", [False, True])
+def test_the_activation_and_cookie_policy_predicates_agree(
+    tmp_path, monkeypatch, enabled, issued
+):
+    """Anti-drift for the two copies of "ECM terminates TLS".
+
+    ``tls.routes._tls_termination_active`` decides when an activation happened
+    and therefore when to revoke pre-activation sessions;
+    ``auth.routes._ecm_terminates_tls`` decides whether the cookies those
+    sessions carry must be ``Secure``. If they drift, sessions survive an
+    activation they should not have survived, or are cut on a save that changed
+    nothing. Their one intended difference — the fail-closed leg for an
+    unreadable ``tls_settings.json`` — is held out here on purpose.
+    """
+    import tls.routes as tls_routes
+
+    tls_dir = tmp_path / "tls"
+    tls_dir.mkdir()
+    if issued:
+        (tls_dir / "cert.pem").write_text("certificate fixture")
+        (tls_dir / "key.pem").write_text("private-key fixture")
+    monkeypatch.setattr(auth_routes, "TLS_DIR", tls_dir)
+    monkeypatch.setattr(tls_routes, "TLS_DIR", tls_dir)
+
+    tls = _tls(enabled=enabled)
+    with patch("auth.routes.get_tls_settings", return_value=tls), \
+            patch("tls.routes.get_tls_settings", return_value=tls), \
+            patch("auth.routes.tls_settings_load_failed", return_value=False):
+        assert tls_routes._tls_termination_active() is auth_routes._ecm_terminates_tls()
+        assert tls_routes._tls_termination_active() is (enabled and issued)
 
 
 # ---------------------------------------------------------------------------

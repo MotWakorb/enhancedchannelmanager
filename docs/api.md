@@ -1560,13 +1560,23 @@ the HTTP listener does not establish or refresh authenticated browser sessions:
 `POST /api/auth/login`, `POST /api/auth/dispatcharr/login` and `POST /api/auth/refresh`
 answer `403` there with a message naming the HTTPS address and both recovery options.
 The refusal is scoped to exactly that configuration: ECM terminating TLS, break-glass
-closed, a cleartext request, and no `https://` `public_base_url`. A reverse-proxy
-deployment is unaffected.
+closed, a cleartext request, no `https://` `public_base_url`, and positive evidence of
+an HTTPS listener (`cert.pem`/`key.pem` present, or the listener running). A
+reverse-proxy deployment is unaffected, and neither is an instance whose
+`tls_settings.json` has become unreadable without ever having had a certificate.
+Cookies still carry `Secure` there, but sign-in is not refused, so a filesystem fault
+cannot lock every account out.
 
-`POST /api/tls/configure` revokes every existing `UserSession` and bumps every user's
-`auth_epoch` when it switches `enabled` from false to true with a certificate already
-present, so a browser holding a pre-activation non-`Secure` `refresh_token` cannot keep
-replaying it on the HTTP port. This is a one-time forced sign-out.
+**Activation revokes pre-activation sessions.** Whenever an instance goes from not
+terminating TLS to terminating it, every existing `UserSession` is revoked and every
+user's `auth_epoch` is bumped, so a browser holding a pre-activation non-`Secure`
+`refresh_token` cannot keep replaying it. This is a one-time forced sign-out and it
+applies to every route that can cause the transition: `POST /api/tls/configure`
+(switching `enabled` on with a certificate already present), `POST /api/tls/request-cert`
+and `POST /api/tls/complete-challenge` (landing the certificate an already-enabled
+instance was waiting for), `POST /api/tls/upload-cert` (which does both at once) and
+`POST /api/tls/renew` (which will issue a first certificate if none exists). Enabling
+TLS before any certificate exists is not an activation and does not revoke anything.
 
 **Break-glass.** `allow_http_session_cookies` is an explicit setting exposed by
 `GET /api/tls/settings` and `POST /api/tls/configure`; a locked-out operator can
@@ -1577,7 +1587,12 @@ session theft, so they must be disabled once HTTPS is repaired. Both are reporte
 `GET /api/tls/status` as `allow_http_session_cookies`,
 `http_session_cookies_env_override` and `session_cookies_plaintext`, and ECM logs a
 warning at startup, on the first cookie the hatch downgrades, and whenever
-`POST /api/tls/configure` changes the stored flag.
+`POST /api/tls/configure` changes the stored flag. `session_cookies_plaintext` is true
+whenever either hatch is open **and** something would otherwise have protected the
+cookies (ECM's own TLS or an `https://` `public_base_url`). That is the same condition
+the downgrade warning is emitted on, so the log and the API cannot disagree.
+It stays false on a plain-HTTP install with no proxy and no TLS, where the hatch costs
+nothing.
 
 On `POST /api/tls/configure`, `allow_http_session_cookies` is **preserve-on-omit**: a
 request that does not carry the field leaves the stored value unchanged. A client that

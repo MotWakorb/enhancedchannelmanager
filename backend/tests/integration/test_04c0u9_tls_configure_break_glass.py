@@ -57,6 +57,11 @@ def tls_config_root(tmp_path, monkeypatch):
     # ``tls.routes`` binds TLS_DIR by value at import.
     import tls.routes as tls_routes
     monkeypatch.setattr(tls_routes, "TLS_DIR", tls_dir)
+    # So does ``auth.routes``, and ``GET /api/tls/status`` now reports the
+    # session-cookie verdict through the auth-side predicate, so the relocation
+    # has to reach that copy too or the status field reads the real /config.
+    import auth.routes as auth_routes
+    monkeypatch.setattr(auth_routes, "TLS_DIR", tls_dir)
 
     clear_tls_settings_cache()
     yield config_dir
@@ -266,6 +271,47 @@ async def test_status_is_quiet_when_no_hatch_is_open(async_client, tls_config_ro
     assert body["session_cookies_plaintext"] is False
 
 
+@pytest.mark.asyncio
+async def test_status_reports_plaintext_cookies_behind_a_reverse_proxy(
+    async_client, tls_config_root
+):
+    """ECM's own TLS is OFF here, and the cookies are still being downgraded.
+
+    ``public_base_url`` is an https origin, so without break-glass the cookies
+    would carry ``Secure``. The field used to require ECM's own TLS, so it read
+    False on exactly this deployment: the backend WARNED that live sessions were
+    being downgraded while the API said they were not and the banner — which is
+    gated entirely on this field — never rendered.
+    """
+    _store(enabled=False, mode="manual", allow_http_session_cookies=True)
+
+    with _AsAdmin(), patch(
+        "auth.routes.get_public_base_url", return_value="https://ecm.example.test"
+    ):
+        body = (await async_client.get("/api/tls/status")).json()
+
+    assert body["allow_http_session_cookies"] is True
+    assert body["session_cookies_plaintext"] is True
+
+
+@pytest.mark.asyncio
+async def test_status_is_quiet_on_a_bare_http_install_with_the_hatch_open(
+    async_client, tls_config_root
+):
+    """No TLS and no https origin: the hatch changes nothing, same as the WARN.
+
+    Reporting True here would put a permanent banner on every plain-HTTP
+    install, which is the noise the WARN suppression exists to avoid.
+    """
+    _store(enabled=False, mode="manual", allow_http_session_cookies=True)
+
+    with _AsAdmin(), patch("auth.routes.get_public_base_url", return_value=""):
+        body = (await async_client.get("/api/tls/status")).json()
+
+    assert body["allow_http_session_cookies"] is True
+    assert body["session_cookies_plaintext"] is False
+
+
 # ---------------------------------------------------------------------------
 # Activating TLS revokes pre-activation sessions
 # ---------------------------------------------------------------------------
@@ -374,3 +420,182 @@ async def test_enabling_tls_before_a_certificate_exists_does_not_revoke_sessions
     assert test_session.query(UserSession).filter(
         UserSession.id == row.id
     ).one().is_revoked is False
+
+
+# ---------------------------------------------------------------------------
+# ...on EVERY activation route, not only POST /configure
+# ---------------------------------------------------------------------------
+#
+# Round-2 remediation. The revocation above was keyed to ``POST /configure``
+# flipping ``enabled``, which is not where TLS activates on either flow an
+# operator actually takes:
+#
+# * ACME — ``enabled`` is switched on FIRST, while ``has_certificate()`` is
+#   still false (deliberately, see the test above: cutting sessions there would
+#   log the operator out of the UI they need to finish issuing). Termination
+#   begins later, when ``/request-cert`` or ``/complete-challenge`` lands the
+#   certificate.
+# * Manual — ``/upload-cert`` sets ``enabled = True`` itself and starts the
+#   listener, and never went near ``/configure``.
+#
+# So the criterion is stated as a property and not as the ``/configure``
+# reproduction: NO session that predates TLS termination survives it, by any
+# route. The predicate is the same one ``auth.routes._ecm_terminates_tls``
+# reads, so "termination began" here and "cookies must be Secure" there cannot
+# drift apart.
+
+
+def _real_key_pair(cn: str = "ecm.test"):
+    """A genuine self-signed EC certificate and its key, both PEM.
+
+    ``/upload-cert`` runs ``validate_pair`` and ``save_certificate`` runs it
+    again, so the fixture files the other tests write would be rejected before
+    the handler ever reached the code under test. EC rather than RSA: key
+    generation is the slow part of this file otherwise.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before((now - timedelta(days=1)).replace(tzinfo=None))
+        .not_valid_after((now + timedelta(days=365)).replace(tzinfo=None))
+        .add_extension(
+            x509.SubjectAlternativeName([x509.DNSName(cn)]), critical=False
+        )
+        .sign(key, hashes.SHA256())
+    )
+    return (
+        cert.public_bytes(serialization.Encoding.PEM),
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ),
+    )
+
+
+def _upload_files(cert_pem: bytes, key_pem: bytes) -> dict:
+    return {
+        "cert_file": ("cert.pem", cert_pem, "application/x-pem-file"),
+        "key_file": ("key.pem", key_pem, "application/x-pem-file"),
+    }
+
+
+@pytest.mark.asyncio
+async def test_uploading_a_certificate_revokes_existing_sessions(
+    async_client, test_session, tls_config_root
+):
+    """The manual flow activates TLS here and nowhere else.
+
+    ``/upload-cert`` sets ``enabled = True``, saves the key material and starts
+    the listener in one call. Before this, every pre-activation non-``Secure``
+    ``refresh_token`` survived that transition and stayed replayable against the
+    brand-new HTTPS listener for the remaining 7 days.
+    """
+    _store(enabled=False, mode="letsencrypt")
+    row = _seed_session(test_session, user_id=9414)
+    epoch_before = test_session.query(User).filter(User.id == 9414).one().auth_epoch
+    cert_pem, key_pem = _real_key_pair()
+
+    with _AsAdmin():
+        response = await async_client.post(
+            "/api/tls/upload-cert", files=_upload_files(cert_pem, key_pem)
+        )
+
+    assert response.status_code == 200, response.text
+    assert "sign in again over HTTPS" in response.json()["message"]
+
+    test_session.expire_all()
+    assert test_session.query(UserSession).filter(
+        UserSession.id == row.id
+    ).one().is_revoked is True
+    assert test_session.query(User).filter(
+        User.id == 9414
+    ).one().auth_epoch == epoch_before + 1
+
+
+@pytest.mark.asyncio
+async def test_replacing_a_certificate_while_tls_is_live_does_not_revoke_sessions(
+    async_client, test_session, tls_config_root
+):
+    """Narrowness, same as the ``/configure`` case: only the transition cuts.
+
+    Re-uploading on an instance that is already terminating TLS is a routine
+    certificate rotation. Every session in the jar was minted with ``Secure``
+    already, so there is nothing to cut and logging everyone out would be a
+    self-inflicted outage.
+    """
+    _issue_certificate(tls_config_root)
+    _store(enabled=True, mode="manual")
+    row = _seed_session(test_session, user_id=9415)
+    cert_pem, key_pem = _real_key_pair()
+
+    with _AsAdmin():
+        response = await async_client.post(
+            "/api/tls/upload-cert", files=_upload_files(cert_pem, key_pem)
+        )
+
+    assert response.status_code == 200, response.text
+    assert "sign in again over HTTPS" not in response.json()["message"]
+    test_session.expire_all()
+    assert test_session.query(UserSession).filter(
+        UserSession.id == row.id
+    ).one().is_revoked is False
+
+
+@pytest.mark.asyncio
+async def test_completing_an_acme_challenge_revokes_existing_sessions(
+    async_client, test_session, tls_config_root
+):
+    """The ACME flow activates here, long after ``/configure`` ran.
+
+    ``enabled`` was switched on while no certificate existed — which does NOT
+    revoke, by design — so this call is the moment the instance starts
+    terminating TLS.
+    """
+    _store(enabled=True, mode="letsencrypt", domain="ecm.test")
+    row = _seed_session(test_session, user_id=9416)
+    epoch_before = test_session.query(User).filter(User.id == 9416).one().auth_epoch
+    cert_pem, key_pem = _real_key_pair()
+
+    from datetime import datetime, timedelta
+    from types import SimpleNamespace
+
+    acme = MagicMock()
+    acme.initialize = AsyncMock(return_value=True)
+    acme.complete_challenge = AsyncMock(return_value=SimpleNamespace(
+        success=True,
+        cert_pem=cert_pem,
+        key_pem=key_pem,
+        chain_pem=None,
+        expires_at=datetime.utcnow() + timedelta(days=90),
+        error=None,
+    ))
+
+    with _AsAdmin(), \
+            patch("tls.routes._acme_available", True), \
+            patch("tls.routes.ACMEClient", return_value=acme):
+        response = await async_client.post("/api/tls/complete-challenge")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["success"] is True
+
+    test_session.expire_all()
+    assert test_session.query(UserSession).filter(
+        UserSession.id == row.id
+    ).one().is_revoked is True
+    assert test_session.query(User).filter(
+        User.id == 9416
+    ).one().auth_epoch == epoch_before + 1
