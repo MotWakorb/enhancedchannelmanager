@@ -1,6 +1,6 @@
 # DBAS round-trip test environment
 
-A pinned, **throwaway** Dispatcharr instance + production-shaped seed tooling so
+A **throwaway** Dispatcharr instance on `latest` + production-shaped seed tooling so
 the ECM ↔ Dispatcharr DBAS round-trip success signal (epic
 `enhancedchannelmanager-0i2vt`) can be tested against a **live** Dispatcharr
 instead of mocks.
@@ -58,8 +58,16 @@ docker-compose.yml/.mcp.yml) or the operator's live Dispatcharr.
   that is baked-in build metadata and has misled three engineers on this work.
   Checksum the deployed files instead (see the HANDOVER verification table).
 
-`docker-compose.dbas-test.yml` — the single-instance stack — still defaults to
-`0.26.0` and was **out of scope** for `xvuk1`. Treat its default as stale.
+This covers **all three** compose files in this directory —
+`docker-compose.dbas-test.yml` (single instance),
+`docker-compose.dbas-sync-test.yml` (A + B) and
+`docker-compose.xc-provider.yml` (P). None of them carries a hand-maintained
+version pin any more; do not reinstate one.
+
+`.env.example` no longer sets `DISPATCHARR_VERSION` either. Note that
+`docker compose` auto-loads `.env` from this directory for **every** compose
+file here, so a stray value in a local `.env` pins the sync stack and the XC
+provider too — not just the file you think you are running.
 
 ---
 
@@ -67,20 +75,24 @@ docker-compose.yml/.mcp.yml) or the operator's live Dispatcharr.
 
 ```bash
 cd tests/dbas-test-env
-cp .env.example .env            # optional: customize version/ports/creds
+cp .env.example .env            # optional: customize ports/creds (NOT the version)
+docker compose -p dbas-testenv -f docker-compose.dbas-test.yml pull   # if you mean to be current
 
 docker compose -p dbas-testenv -f docker-compose.dbas-test.yml up -d
 # wait for the web healthcheck (GET /api/core/version/) to go healthy:
 docker compose -p dbas-testenv -f docker-compose.dbas-test.yml ps
 ```
 
-## Validate the pinned version's behaviors
+## Validate the running version's behaviors
 
 This is the ground-truth probe — confirms the 0.23.0-era behaviors ECM encodes
-still hold at the pinned version, and records the response shapes the CI fake
-must reproduce:
+still hold on whatever `latest` currently resolves to, and records the response
+shapes the CI fake must reproduce. **Read and record the version first**; the
+probe's result is meaningless without it:
 
 ```bash
+curl -s http://localhost:9591/api/core/version/     # record this with the result
+
 DBAS_TEST_BASE_URL=http://localhost:9591 \
 DBAS_TEST_ADMIN_USER=ecmtest DBAS_TEST_ADMIN_PASS=ecmtestpass \
 python3 validate-version-behaviors.py
@@ -112,24 +124,27 @@ docker compose -p dbas-testenv -f docker-compose.dbas-test.yml down -v
 
 ---
 
-## First-bring-up validation checklist (do this once per version bump)
+## First-bring-up validation checklist (do this on every platform move)
 
-The compose env vars and the edge-supplement endpoint/field names are
-**best-effort against the pinned 0.26.0 schema** and must be confirmed on first
-real bring-up. None of this could be live-verified at authoring time (no
+Because this stack tracks `latest`, "once per version bump" is not a thing you
+get told about — re-run this checklist whenever `docker compose pull` brings
+something new down, and record the version it ran against. The compose env vars
+and the edge-supplement endpoint/field names were **best-effort against the
+0.26.0 schema** this file used to pin and must be confirmed against the running
+image. None of this could be live-verified at authoring time (no
 Dispatcharr reachable from the authoring sandbox).
 
 - [ ] **Seed-admin env names.** Confirm `DISPATCHARR_SUPERUSER_USERNAME` /
       `DISPATCHARR_SUPERUSER_PASSWORD` actually create the first admin on the
-      pinned image. If not, do the first-run wizard once, then capture a
+      running image. If not, do the first-run wizard once, then capture a
       snapshot so the admin is baked into the seed.
-- [ ] **`entrypoint.celery.sh` path** exists in the pinned image
+- [ ] **`entrypoint.celery.sh` path** exists in the running image
       (`/app/docker/entrypoint.celery.sh`).
 - [ ] **`validate-version-behaviors.py` runs clean** — any WARN is a drift
       finding to route to the importer authors.
 - [ ] **Edge-supplement endpoints** (`/api/channels/groups/`,
       `/api/channels/streams/`, `/api/accounts/users/`) and the privilege
-      fields (`is_superuser`/`is_staff`/`user_level`) match the pinned schema.
+      fields (`is_superuser`/`is_staff`/`user_level`) match the running schema.
 - [ ] **Snapshot table names** in `capture-snapshot.sh` manifest query reflect
       the real schema (the row-count query is schema-introspecting, so it's
       tolerant, but eyeball the manifest).
@@ -1037,7 +1052,7 @@ row below was re-run on the **2026-08-20 0.29.0 rebuild** — this is not the
 | Claim | How it was checked |
 |---|---|
 | Every node is on `0.29.0` | `GET /api/core/version/` on A (`:9601`), B (`:9602`) and P (`:9603`) each returned `{"version":"0.29.0"}`. The image behind all three is `ghcr.io/dispatcharr/dispatcharr:latest` = `3621ebe3`, digest `sha256:df768adc…`, and `docker pull` confirmed docker.io and ghcr.io agree on that digest. |
-| The compose default really is `latest`, and the override really works | `docker compose config` resolves `ghcr.io/dispatcharr/dispatcharr:latest` with no variable set, and `ghcr.io/dispatcharr/dispatcharr:0.28.2` with `DISPATCHARR_VERSION=0.28.2` — both poles, both files. Then proven live: B was reset with **no flag** and came back `0.29.0`, which is exactly the failure the old `0.26.0` default caused. |
+| The compose default really is `latest`, and the override really works | `docker compose config` resolves `ghcr.io/dispatcharr/dispatcharr:latest` with no variable set, and `ghcr.io/dispatcharr/dispatcharr:0.28.2` with `DISPATCHARR_VERSION=0.28.2` — both poles, all three files. Then proven live: B was reset with **no flag** and came back `0.29.0`, which is exactly the failure the old `0.26.0` default caused. |
 | ECM runs `origin/dev` `dd77d587` | **Not** `/api/version` (baked-in build metadata; it has misled three engineers). Two passes, both `sha256sum` inside the container against `git show dd77d587:<path>`: **243 non-test `backend/**.py` → 243 OK / 0 MISMATCH / 0 ABSENT**, and **all 698 `backend/**.py` including tests → 698 OK / 0 MISMATCH / 0 ABSENT**, with **0** `.py` files in `/app` that are not in the ref. (The retired build's "244" counted `backend/test_dispatcharr_api.py`, a top-level test file this filter excludes: 243 + 1 = 244, reconciled.) |
 | …and that checksum harness can actually fail | Two known-bad runs, exit status captured directly rather than through a pipe. (1) Compared against `b0e0a5ad`, 30 first-parent commits back → **48 MISMATCH**, harness exit 1. (2) A byte appended to `/app/main.py` in the live container → **exactly 1 MISMATCH** on `main.py`, harness exit 1; restored → **243 OK**, exit 0. (A previous attempt to use the parent commit `b867538a` as the known-bad was **vacuous** — `dd77d587` is its merge commit, so 0 files differ. Vacuous known-bads are the failure this table exists to prevent.) |
 | The Dispatcharr client used to build all this could report failure | Smoke-tested against four poles before use: known-good returns real JSON; a nonexistent path, an unreachable host, and a wrong password each raise loudly. It never degrades an error into "0 rows". |
@@ -1156,5 +1171,7 @@ the writer receives is unspent.
 - **Playwright was not exercised on this rebuild**, so unlike the first build
   there is no rendered-browser evidence in the table above. The ECM API was
   proven live (count 59) but nothing rendered a page.
-- **`docker-compose.dbas-test.yml`, the single-instance stack, still defaults to
-  `0.26.0`.** It was out of scope for `xvuk1` and nothing here validates it.
+- **`docker-compose.dbas-test.yml`, the single-instance stack, now defaults to
+  `latest` too** (PO decision, same bead), but it was **not stood up** on this
+  platform — only its resolved config was checked. Its first bring-up on 0.29.0
+  is unvalidated; run the first-bring-up checklist above.
