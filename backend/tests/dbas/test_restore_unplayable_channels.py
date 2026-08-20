@@ -729,3 +729,301 @@ async def test_the_report_json_names_every_channel_the_note_points_at():
     # than promising "named channel" with no way to find them.
     note = next(n for n in payload["notes"] if "cannot play" in n)
     assert "stream_reattach_details" in note
+
+
+# ---------------------------------------------------------------------------
+# 2d. THE 15g1j CASE — a channel holding NOTHING is the emptiest unplayable
+#
+# The same fusion as kcfru, one step earlier. ``_rebind_from_archive`` opened
+# each channel with::
+#
+#     current_ids = current_by_channel.get(dest_channel_id)
+#     if not current_ids:
+#         continue
+#
+# The guard is RIGHT that there is nothing to rebind on a channel holding no
+# streams. It was also skipping the VERDICT, so a destination channel with zero
+# streams — which self-evidently cannot play — never reached
+# ``record_stream_reattach_needed`` and scored 0 in
+# ``channels_with_no_playable_stream``.
+#
+# The verdict itself had the matching hole: it asked "is some slot unplayable",
+# which is vacuously FALSE for a channel holding no slots at all. Both halves
+# are pinned below, because either one alone still hides the channel.
+#
+# REACHABILITY, established from ``dbas/importers/channels.py`` and MEASURED on
+# the sync round-trip harness rather than assumed. Three routes reach a remapped
+# destination channel with an empty stream list, and they are NOT all the same
+# event:
+#
+#   UNDELIVERED — the archive carried streams and the destination has none.
+#   * ``_attach_streams`` pass 2 ``continue``s without a PATCH when every
+#     synthesize failed and ``ordered_ids`` came out empty.
+#   * the same pass's ``update_channel`` can raise, which is recorded as an
+#     UPSTREAM_API_ERROR against STREAM and leaves the created channel empty.
+#
+#   FAITHFUL — the archive carried no streams, so none were owed.
+#   * ``_plan_streams`` returns early for an archive channel carrying no
+#     ``streams`` ("A channel with no archived streams produces no plan"). The
+#     sync round-trip harness's default source seeds exactly this
+#     (``{"name": "CNN", "channel_number": 5, "streams": []}``), so this is the
+#     COMMON route, not the corner.
+#
+# The invariant these tests state — the zero-stream case is one EXAMPLE of it —
+# is: every destination channel the restore failed to leave playable is counted
+# and named, whether it holds only placeholders, only URL-less streams, or none
+# of the streams the archive said it should have, and regardless of which run
+# created them. A channel that holds nothing because nothing was owed is a
+# faithful replica and is deliberately NOT in that population; the control
+# below pins it, and the note's own remedy is why.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_destination_channel_holding_no_streams_is_counted_unplayable():
+    """Zero slots is the emptiest possible "no playable stream".
+
+    The archive channel HAS a stream, so the destination is a channel the
+    restore meant to populate and did not — the ``_attach_streams`` shapes above.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    # A real, URL-bearing stream exists on the destination — it is simply not
+    # bound to this channel. Nothing about the DESTINATION'S stream inventory
+    # may excuse a channel that holds none of it.
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 900, "name": "Somewhere Else", "url": "http://p/else", "m3u_account": 1}
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 201, "name": "Stranded News", "streams": []}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    await rebind_placeholder_streams(
+        allow_fuzzy=True,
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {"id": 101, "name": "Stranded News",
+             "streams": [{"id": 7, "name": "Stranded News HD"}]}
+        ],
+    )
+
+    assert report.channels_with_no_playable_stream == 1
+    assert report.channels_needing_stream_reattach == 1
+
+    # NAMED, not merely counted — the operator has to know which channel.
+    detail = report.stream_reattach_details[0]
+    assert detail.name == "Stranded News"
+    assert detail.channel_id == 201
+    assert detail.has_playable_stream is False
+    # It holds nothing, so there is no placeholder name to list. The row says
+    # so rather than inventing one.
+    assert detail.placeholder_streams == []
+
+    # And the note fires and points at the array holding the name.
+    note = next(n for n in report.notes if "cannot play" in n)
+    assert "stream_reattach_details" in note
+
+    assert compute_outcome(
+        report=report, failure_occurred=False, rollback=None
+    ) == RestoreOutcome.COMPLETED_WITH_FAILURES
+
+
+@pytest.mark.asyncio
+async def test_reporting_an_empty_channel_writes_nothing_to_the_destination():
+    """The guard's ORIGINAL purpose survives: no rebind work, only a verdict.
+
+    The empty channel now reaches ``_rebind_one_channel`` instead of being
+    skipped before it, so this pins the property that makes that safe: the slot
+    loop has no slots to walk, ``rebound`` stays 0, and the core returns ABOVE
+    its ``update_channel``. Counting is a read and must stay one.
+
+    MUTATION-TESTED, and the first attempt proved nothing: an ``if current_ids:``
+    branch in the caller was mutated to ``if True:`` and the ENTIRE dbas suite
+    stayed green, because the core is inert on an empty list either way. The
+    branch was removed as the duplicate it was. The mutant that this assertion
+    DOES kill is the one aimed at the property actually being relied on —
+    deleting ``if not outcome.rebound: return outcome`` from the core, so an
+    empty channel is PATCHed with an empty stream list.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 900, "name": "Stranded News HD", "url": "http://p/hd", "m3u_account": 1}
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 201, "name": "Stranded News", "streams": []}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    await rebind_placeholder_streams(
+        allow_fuzzy=True,
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        # The archived stream would match id 900 outright on Tier-1 name — so a
+        # fix that ran the matcher here WOULD write, and this assertion catches
+        # it rather than passing by luck.
+        archive_channels=[
+            {"id": 101, "name": "Stranded News",
+             "streams": [{"id": 7, "name": "Stranded News HD"}]}
+        ],
+    )
+
+    client.update_channel.assert_not_awaited()
+    client.delete_stream.assert_not_awaited()
+    assert report.channels_with_no_playable_stream == 1
+
+
+@pytest.mark.asyncio
+async def test_a_stream_less_source_channel_is_not_reported_on_the_replica():
+    """A channel the ARCHIVE has no streams for arrives empty because it was
+    empty — the replica is FAITHFUL, and nothing was undelivered.
+
+    The counter means "the restore did not deliver a channel that plays", so it
+    needs something to have been undelivered. Reporting this shape would tell
+    the operator, in the report's own words, to "attach a real stream" to a
+    channel whose source has none — i.e. to make the replica DIVERGE from the
+    source, on every unattended cycle, forever.
+
+    NOT hypothetical, and the reason this control exists: the cross-instance
+    sync round-trip harness seeds exactly this channel
+    (``{"name": "CNN", "channel_number": 5, "streams": []}`` in
+    ``tests/fixtures/sync_harness.py`` — the default ``seeded_source()``), and an
+    earlier revision of this fix that counted every empty channel turned all ten
+    of that suite's keystone scenarios from ``success`` into
+    ``completed_with_failures`` for a replication that had lost nothing.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {"results": []}
+    client.get_channels.return_value = {
+        "results": [{"id": 55, "name": "Placeholder Slot", "streams": []}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 9, 55)
+
+    await rebind_placeholder_streams(
+        allow_fuzzy=True,
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[{"id": 9, "name": "Placeholder Slot", "streams": []}],
+    )
+
+    assert report.channels_with_no_playable_stream == 0
+    assert report.stream_reattach_details == []
+    assert report.notes == []
+    assert compute_outcome(
+        report=report, failure_occurred=False, rollback=None
+    ) == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_the_empty_channel_verdict_is_the_same_on_every_cycle():
+    """kcfru's invariant, applied here: the verdict is a function of the
+    DESTINATION'S state alone.
+
+    An empty channel is empty on the cycle that left it that way AND on every
+    unattended cycle after, when the ledger is empty and nothing was created.
+    A single-apply assertion is what let kcfru through.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    async def _cycle(ledgered: bool) -> RestoreReport:
+        client = _client()
+        client.get_streams.return_value = {"results": []}
+        client.get_channels.return_value = {
+            "results": [{"id": 201, "name": "Stranded News", "streams": []}]
+        }
+        report = RestoreReport(is_dry_run=False)
+        ledger = RollbackLedger(restore_id="t")
+        if ledgered:
+            # A placeholder this run created and then swept — the ledger is the
+            # only thing that differs between the two cycles.
+            ledger.record_created(EntityType.STREAM, 500, "Stranded News HD")
+        remap = IdRemapTable()
+        remap.add(EntityType.CHANNEL, 101, 201)
+        await rebind_placeholder_streams(
+            allow_fuzzy=True,
+            client=client,
+            report=report,
+            ledger=ledger,
+            remap=remap,
+            archive_channels=[
+                {"id": 101, "name": "Stranded News",
+                 "streams": [{"id": 7, "name": "Stranded News HD"}]}
+            ],
+        )
+        return report
+
+    creating = await _cycle(ledgered=True)
+    steady = await _cycle(ledgered=False)
+
+    assert creating.channels_with_no_playable_stream == 1
+    assert steady.channels_with_no_playable_stream == 1
+    assert [d.name for d in steady.stream_reattach_details] == ["Stranded News"]
+
+
+@pytest.mark.asyncio
+async def test_a_channel_absent_from_the_destination_is_not_named_as_empty():
+    """"No streams" and "no channel" are different, and only one is this
+    pass's to report.
+
+    ``current_by_channel.get`` returns ``None`` when the remapped id is not on
+    the destination at all — the channel importer already recorded that as a
+    create failure. Naming it here would put a channel id in
+    ``stream_reattach_details`` that an operator cannot open. This is the
+    control that stops the fix being "delete the guard".
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client = _client()
+    client.get_streams.return_value = {"results": []}
+    # The remap points at 201; the destination has no such channel.
+    client.get_channels.return_value = {
+        "results": [{"id": 999, "name": "Unrelated", "streams": []}]
+    }
+
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="t")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+
+    await rebind_placeholder_streams(
+        allow_fuzzy=True,
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=[
+            {"id": 101, "name": "Vanished",
+             "streams": [{"id": 7, "name": "Vanished HD"}]}
+        ],
+    )
+
+    assert [d.name for d in report.stream_reattach_details] == []
+    assert report.channels_with_no_playable_stream == 0
