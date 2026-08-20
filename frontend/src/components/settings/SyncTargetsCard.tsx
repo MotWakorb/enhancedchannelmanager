@@ -19,6 +19,13 @@ import './SyncTargetsCard.css';
  * preview (confirm_apply:false). Only after a successful preview does an
  * explicit, confirm-gated "Apply" (confirm_apply:true) become available — apply
  * is a source-wins overwrite of B, so we make the operator confirm it.
+ *
+ * `result.success` is the ONLY thing that unlocks Apply, which makes the
+ * backend's TaskResult the whole safety mechanism. It has to be trustworthy: a
+ * preview that could not read B used to arrive here as success=true with
+ * would-create counts derived purely from A (bead …-jqfxm), so the card offered
+ * Apply for a destination nobody had reached. The backend now fails such a
+ * preview; this card needs no extra check, only to keep gating on `success`.
  */
 
 /** Tri-state badge derived from SyncTarget.last_outcome. */
@@ -217,8 +224,13 @@ export function SyncTargetsCard() {
             'Sync Preview (dry run)',
           );
         } else {
+          // `message` before `error`: `message` is the backend's operator-facing
+          // sentence ("could not read the destination it describes — …"), while
+          // `error` is a machine code (SYNC_DESTINATION_UNREADABLE). Showing the
+          // code first told an operator that something failed without telling
+          // them what, which is half of what a false-green instrument costs.
           notifications.error(
-            result.error || result.message || 'Preview failed',
+            result.message || result.error || 'Preview failed',
             'Sync Preview (dry run)',
           );
         }
@@ -261,7 +273,8 @@ export function SyncTargetsCard() {
           await loadTargets();
         } else {
           notifications.error(
-            result.error || result.message || 'Apply failed',
+            // Sentence before code — see the preview branch above.
+            result.message || result.error || 'Apply failed',
             'Cross-Instance Sync',
           );
         }

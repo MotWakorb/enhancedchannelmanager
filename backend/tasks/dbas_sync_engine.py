@@ -82,11 +82,22 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import inspect
 import logging
 import posixpath
 import time
 from pathlib import Path
 from typing import Optional
+
+# EXCEPTION TYPES ONLY — this module opens no socket. The destination readback
+# gate below has to tell an operator whether B refused the credentials,
+# rate-limited the request, or could not be reached at all, and those arrive as
+# httpx exception classes raised by the SSRF-pinned client dbas_sync_client
+# built. Deliberately `from httpx import <errors>` rather than `import httpx`:
+# the name ``httpx`` never enters this namespace, so no client or request class
+# is reachable from here and the module's ONLY outbound path stays
+# make_remote_client's chokepointed transport.
+from httpx import HTTPStatusError, RequestError, TimeoutException  # ssrf-ok: error classes only, no I/O
 
 import journal
 from dbas.channel_reattach import reattach_epg_links
@@ -123,6 +134,7 @@ from routers.backup import (
     _gather_dispatcharr_sections,
     _redact_credentials_deep,
 )
+from security.ssrf import SSRFError
 from tasks.dbas_sync_client import make_remote_client, sync_freshness_reason
 
 logger = logging.getLogger(__name__)
@@ -1094,6 +1106,156 @@ async def _no_deferred_apply(*, deferred: list[dict], client) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Destination readability (bead …-jqfxm) — the preview must have READ B.
+# ---------------------------------------------------------------------------
+
+# The probe endpoint. It must be an AUTHENTICATED read (an unauthenticated
+# liveness ping would answer "the box is up" to a question about credentials),
+# and it must be cheap — channel groups are a handful of rows even on a large
+# instance, and the plan reads them anyway a moment later.
+_DESTINATION_PROBE = "get_channel_groups"
+
+# Everything the destination is ASKED, as opposed to told. Only reads need
+# watching: a failed WRITE already lands in its category's ``failed`` counter
+# and drives the orchestrator's rollback, whereas a failed READ is swallowed by
+# every importer's ``except Exception: existing = []`` fallback and silently
+# becomes "the destination is empty".
+_DESTINATION_READ_PREFIX = "get_"
+
+
+def _describe_destination_error(exc: BaseException) -> str:
+    """Turn a destination-read exception into a sanitized operator sentence.
+
+    Credential hygiene (the same rule ``dispatcharr_client._request`` documents):
+    an httpx error's own text can embed the request URL, and that URL can carry a
+    token — so this NEVER interpolates ``str(exc)``. Only the HTTP status code
+    and the exception's CLASS name reach the message, which is plenty to tell an
+    operator whether to fix credentials, wait, or check the network.
+
+    The 401/403 vs 429 split is load-bearing: B's Dispatcharr rate-limits
+    ``/api/accounts/token/`` at 3/min per IP, so back-to-back cycles produce 429s
+    that have nothing to do with the credentials. Reporting one as the other
+    would send an operator to rotate perfectly good passwords (or to wait out a
+    limiter that will never clear a genuinely wrong password).
+    """
+    if isinstance(exc, SSRFError):
+        return (
+            "the destination is blocked by this instance's outbound SSRF policy"
+        )
+    if isinstance(exc, HTTPStatusError):
+        status = exc.response.status_code
+        if status == 429:
+            return (
+                "the destination rate-limited this request (HTTP 429) — this is "
+                "NOT a credential problem; wait for its limit window to clear "
+                "and retry"
+            )
+        if status in (401, 403):
+            return (
+                "authentication to the destination was rejected (HTTP %d) — "
+                "check the sync target's credentials on this instance" % status
+            )
+        if status >= 500:
+            return "the destination returned a server error (HTTP %d)" % status
+        return "the destination returned HTTP %d" % status
+    if isinstance(exc, TimeoutException):
+        return "the destination did not respond in time (%s)" % type(exc).__name__
+    if isinstance(exc, RequestError):
+        # Connection refused, DNS failure and a TLS handshake refusal all arrive
+        # here as some ConnectError flavour — the class name is the distinction
+        # an operator can act on without leaking the URL.
+        return "the destination could not be reached (%s)" % type(exc).__name__
+    return "the destination could not be read (%s)" % type(exc).__name__
+
+
+async def destination_read_reason(client) -> Optional[str]:
+    """Probe the destination ONCE and return why it is unreadable, or ``None``.
+
+    The fail-closed gate this bead exists for. Deliberately shaped like
+    :func:`sync_freshness_reason` — a reason string aborts, ``None`` proceeds —
+    because it is the same kind of gate: a precondition checked before any work,
+    whose failure must stop the cycle rather than colour a result afterwards.
+
+    Two things it buys beyond honesty:
+
+    * **Fail-fast.** Without it, an unauthenticated cycle runs all seven config
+      steps, each of which re-enters ``DispatcharrClient._login`` because no
+      access token was ever obtained — seven ``POST /api/accounts/token/`` in a
+      few seconds against an endpoint limited to 3/min. Live validation caught
+      exactly that: seven 401/429s in B's log for one preview. One probe, one
+      login attempt.
+    * **No plan.** A cycle that cannot read B never gathers or redacts A's
+      config, so an unreachable destination costs nothing.
+    """
+    probe = getattr(client, _DESTINATION_PROBE, None)
+    if probe is None:  # pragma: no cover - defensive; every client has it
+        return None
+    try:
+        await probe()
+    except Exception as exc:  # noqa: BLE001 - every failure class is a refusal
+        return _describe_destination_error(exc)
+    return None
+
+
+class _ReadObservingClient:
+    """Wrap the dest-B client so a FAILED destination read cannot go unnoticed.
+
+    :func:`destination_read_reason` proves the destination was readable when the
+    cycle started. It cannot prove every read the cycle then makes succeeded —
+    and each importer degrades its own failed read to ``existing = []``, which
+    the report renders as "would create N" (a statement about the SOURCE wearing
+    the destination's clothes). B restarting mid-cycle, one endpoint answering
+    500, or a token expiring against a rate-limited refresh all land there.
+
+    So the client handed to the orchestrator records every read that raised.
+    Nothing is suppressed or retried — the importers' own fallbacks still run,
+    the run still completes — but :attr:`read_failures` is non-empty afterwards
+    and the report is marked unreadable, which is what stops a preview built on
+    a half-read destination from unlocking Apply.
+
+    A transparent proxy rather than a subclass: the client is constructed by
+    :func:`make_remote_client` (Fernet decrypt + SSRF-pinned transport) and must
+    not be rebuilt here, and every attribute other than the wrapped reads passes
+    straight through.
+    """
+
+    def __init__(self, inner) -> None:
+        # Bypass __getattr__ for our own state (anything not set here routes to
+        # the wrapped client).
+        object.__setattr__(self, "_inner", inner)
+        object.__setattr__(self, "read_failures", [])
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._inner, name)
+        if not name.startswith(_DESTINATION_READ_PREFIX) or not callable(attr):
+            return attr
+
+        async def _observed_read(*args, **kwargs):
+            try:
+                result = attr(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                return result
+            except Exception as exc:  # noqa: BLE001 - observe, never swallow
+                self.read_failures.append((name, _describe_destination_error(exc)))
+                raise
+
+        return _observed_read
+
+
+def _mark_destination_unread(report: RestoreReport, reason: str) -> None:
+    """Stamp the "I never read the destination" marker and say so in the notes.
+
+    One writer so the marker and the operator-facing note can never disagree,
+    and so a second failure never overwrites the first (the first refusal is the
+    one that explains the rest).
+    """
+    if report.destination_unreadable is None:
+        report.destination_unreadable = reason
+    report.notes.append("destination not read: %s" % reason)
+
+
+# ---------------------------------------------------------------------------
 # run_sync — the engine entrypoint.
 # ---------------------------------------------------------------------------
 
@@ -1218,6 +1380,17 @@ async def run_sync(
             logger.warning("[SYNC] Aborting sync for %s: %s", target_label, reason)
             report = RestoreReport(is_dry_run=not confirm_apply)
             report.notes.append("sync aborted: %s" % reason)
+            # This cycle stopped BEFORE a client existed, so it read nothing of
+            # the destination. Without the marker the aborted preview reaches
+            # the task wrapper as an ordinary dry run — is_dry_run=True,
+            # outcome=None — which that wrapper reads as a success and the
+            # Settings card reads as "Apply is now safe" (bead …-jqfxm). In
+            # production the task's own fire-time gate catches this first; this
+            # is the defence-in-depth copy, and it must not be the honest one's
+            # weak twin.
+            _mark_destination_unread(
+                report, "the cycle aborted before reading it — %s" % reason
+            )
             _journal_sync_run(
                 sync_target, report, confirm_apply=confirm_apply, aborted_reason=reason
             )
@@ -1225,6 +1398,34 @@ async def run_sync(
 
     # --- 2. Remote dest-B client (SSRF-guarded). ---
     client = make_remote_client(sync_target)
+
+    # --- 2b. Destination-readback gate (…-jqfxm) — fail-closed BEFORE any
+    # work. Every count this run will publish is a claim about the destination,
+    # so the destination has to answer one authenticated question first. A
+    # refusal aborts exactly like the freshness gate: no plan gathered, no
+    # writes, journalled, and a report that can never read as success. ---
+    unread_reason = await destination_read_reason(client)
+    if unread_reason is not None:
+        logger.warning(
+            "[SYNC] Aborting sync for %s — destination unreadable: %s",
+            target_label, unread_reason,
+        )
+        report = RestoreReport(is_dry_run=not confirm_apply)
+        report.notes.append("sync aborted: %s" % unread_reason)
+        _mark_destination_unread(report, unread_reason)
+        _journal_sync_run(
+            sync_target,
+            report,
+            confirm_apply=confirm_apply,
+            aborted_reason=unread_reason,
+        )
+        return report
+
+    # From here on the orchestrator talks to the destination through a wrapper
+    # that NOTICES a failed read (the importers' own fallbacks turn one into
+    # "the destination is empty"). Reads still behave exactly as before; the
+    # wrapper only remembers.
+    client = _ReadObservingClient(client)
 
     # --- 3. Redacted live-source plan (config categories, never users). The
     # logos slice is per-target OPT-IN (sync_logos, default off — 7ipq2.1);
@@ -1259,6 +1460,16 @@ async def run_sync(
 
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
     _apply_name_conflict_details(result, excluded_name_conflicts)
+
+    # --- 4c. A read that failed AFTER the gate still means the report describes
+    # a destination it did not fully read (…-jqfxm). The importer that hit it
+    # already carried on with "existing = []", so the counts for that category
+    # are the source's, not the destination's — name the category so an operator
+    # can see which part of the diff is fiction. ---
+    for read_name, read_reason in client.read_failures:
+        _mark_destination_unread(
+            result, "%s could not be read — %s" % (read_name, read_reason)
+        )
 
     # The conflict details above land AFTER run_restore computed the tri-state
     # outcome, so without this re-check an APPLY with source-side name

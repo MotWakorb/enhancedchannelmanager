@@ -931,6 +931,35 @@ class RestoreReport(BaseModel):
         ),
     )
 
+    # THE "I never read the destination" marker (bead …-jqfxm). Every count in
+    # this report is a claim ABOUT the destination — "would create 24" means
+    # "B does not have these 24". But each importer degrades a failed
+    # destination read to ``existing = []`` ("B is empty"), so a run that could
+    # not authenticate to B produced exactly the same shape as a run against an
+    # empty B: a full would-create plan with zero failures. Live validation of
+    # the cross-instance sync measured that against a WRONG PASSWORD — a green
+    # preview, an unlocked Apply button, and seven 401/429s in B's log that no
+    # surface mentioned.
+    #
+    # So: whenever a run could not read the destination it claims to describe —
+    # credentials rejected, rate-limited, unreachable, TLS/DNS/SSRF refused, a
+    # 5xx, or aborted before any read happened — this carries the sanitized
+    # reason, and NOTHING may report the run as a success. Deliberately NOT a
+    # category ``failed`` counter: a dry run's ``failed`` legitimately carries
+    # source-side CONFLICTs (duplicate names, ambiguous null channel numbers)
+    # that are facts about the SOURCE and do not mean the destination went
+    # unread. Sanitized (status code + error class, never a URL, body or
+    # credential). ADDITIVE optional — no CONTRACT_VERSION bump.
+    destination_unreadable: str | None = Field(
+        default=None,
+        description=(
+            "Set when the run could NOT read the destination it claims to "
+            "describe (auth rejected, rate-limited, unreachable, or aborted "
+            "before any read). A report carrying this is never a success, and "
+            "its counts describe the source, not the destination. No secrets."
+        ),
+    )
+
     started_at: datetime | None = Field(default=None)
     completed_at: datetime | None = Field(default=None)
     # Free-form, sanitized operator notes (e.g. "users category opted out",

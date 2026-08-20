@@ -158,6 +158,32 @@ describe('SyncTargetsCard', () => {
     });
   });
 
+  it('a preview that could not read the destination does NOT offer Apply', async () => {
+    // Bead …-jqfxm: the backend fails a preview it could not read B for. The
+    // card must keep the Apply affordance hidden — offering it is what turned a
+    // false-green preview into an operator overwriting a destination nobody had
+    // reached — and must show the sentence, not the machine code.
+    (api.runTask as Mock).mockResolvedValue({
+      success: false,
+      error: 'SYNC_DESTINATION_UNREADABLE',
+      message:
+        'Cross-instance sync preview could not read the destination it ' +
+        'describes — authentication to the destination was rejected (HTTP 401).',
+    });
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+
+    await waitFor(() => expect(api.runTask).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(notify.error).toHaveBeenCalled());
+    expect(screen.queryByTestId('sync-target-apply-7')).not.toBeInTheDocument();
+    expect(notify.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not read the destination'),
+      'Sync Preview (dry run)',
+    );
+  });
+
   it('Apply (after preview) runs with confirm_apply: true', async () => {
     (api.runTask as Mock).mockResolvedValue({ success: true, message: 'preview ok' });
     await renderCard([TARGET]);
