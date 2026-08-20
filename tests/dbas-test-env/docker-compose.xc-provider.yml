@@ -1,0 +1,155 @@
+# =============================================================================
+# DOCUMENTATION tier — Dispatcharr "P", an XTREAM CODES provider for instance A
+# =============================================================================
+#
+# Purpose
+# -------
+# The user guide needs screenshots of ECM managing an Xtream Codes M3U account
+# whose fields (expiry, active/max connections, category list) are REAL. Rather
+# than hand-rolling a fake XC server, this stands up a third Dispatcharr — "P" —
+# and uses Dispatcharr's OWN XC server implementation (`xc_player_api` /
+# `xc_panel_api` / `get.php` / `xmltv.php`, wired in `dispatcharr/urls.py`).
+# P ingests a plain M3U + XMLTV from the `provider-northwind` nginx service and
+# then re-serves that lineup over XC. Instance A subscribes to P as an
+# `account_type = XC` account, so every XC field ECM renders was produced by a
+# genuine XC implementation.
+#
+#   provider-northwind (nginx, static M3U/XMLTV/logos)
+#        -> P  (Dispatcharr, ingests as STANDARD, re-serves as XC)
+#             -> A (Dispatcharr, subscribes as XC)   [docker-compose.dbas-sync-test.yml]
+#                  -> B (Dispatcharr, sync destination)
+#
+# Isolation contract (NON-NEGOTIABLE)
+# -----------------------------------
+#   * Project name:  -p dbas-xc-provider
+#   * Host ports: P web 9603, P pg 5448 — clear of ECM (6100/6143/6101/6300),
+#     the operator's live Dispatcharr (9191), the single-instance stack
+#     (9591/5436) and the A/B sync stack (9601/5446, 9602/5447).
+#   * Joins the EXISTING `dbas-sync-testenv_default` network as an external
+#     network so A can reach P at `http://dispatcharr-p-web:9191`. Bring the
+#     A/B stack up FIRST — this file does not create that network.
+#   * Everything is throwaway. Tear down with `-v`.
+#
+# The nginx document root is a GENERATED fixture — build it first with
+#   python3 northwind-fixture.py <dir>
+# and point NORTHWIND_FIXTURE_DIR at it (see the README HANDOVER section).
+# =============================================================================
+
+name: dbas-xc-provider
+
+services:
+  # ---------------------------------------------------------------------------
+  # The static origin: playlist.m3u, epg.xml and 53 channel logos over plain
+  # HTTP. Reachable from P (and from A) as `http://provider-northwind/`.
+  # ---------------------------------------------------------------------------
+  provider-northwind:
+    image: nginx:alpine
+    restart: "no"
+    volumes:
+      - ${NORTHWIND_FIXTURE_DIR:?set NORTHWIND_FIXTURE_DIR to the generated fixture dir}:/usr/share/nginx/html:ro
+    networks:
+      default:
+        aliases:
+          - provider-northwind
+
+  # ---------------------------------------------------------------------------
+  # Dispatcharr P — the Xtream Codes provider.
+  # ---------------------------------------------------------------------------
+  dispatcharr-p-web:
+    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.28.2}
+    restart: "no"
+    ports:
+      - "${DBAS_XC_P_HTTP_PORT:-9603}:9191"
+    depends_on:
+      dispatcharr-p-db:
+        condition: service_healthy
+      dispatcharr-p-redis:
+        condition: service_healthy
+    volumes:
+      - dbas-xc-p-data:/data
+    environment:
+      - DISPATCHARR_ENV=modular
+      - POSTGRES_HOST=dispatcharr-p-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-p-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      default:
+        aliases:
+          - dispatcharr-p-web
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9191/api/core/version/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  dispatcharr-p-celery:
+    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.28.2}
+    restart: "no"
+    entrypoint: ["/app/docker/entrypoint.celery.sh"]
+    depends_on:
+      dispatcharr-p-db:
+        condition: service_healthy
+      dispatcharr-p-redis:
+        condition: service_healthy
+      dispatcharr-p-web:
+        condition: service_started
+    volumes:
+      - dbas-xc-p-data:/data
+    environment:
+      - DISPATCHARR_ENV=modular
+      - DISPATCHARR_PORT=9191
+      - POSTGRES_HOST=dispatcharr-p-db
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+      - REDIS_HOST=dispatcharr-p-redis
+      - REDIS_PORT=6379
+      - DISPATCHARR_LOG_LEVEL=info
+      - DJANGO_SETTINGS_MODULE=dispatcharr.settings
+      - PYTHONUNBUFFERED=1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  dispatcharr-p-db:
+    image: postgres:17
+    restart: "no"
+    ports:
+      - "${DBAS_XC_P_PG_PORT:-5448}:5432"
+    environment:
+      - POSTGRES_DB=dispatcharr
+      - POSTGRES_USER=dispatch
+      - POSTGRES_PASSWORD=secret
+    volumes:
+      - dbas-xc-p-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dispatch -d dispatcharr"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  dispatcharr-p-redis:
+    image: redis:7
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+networks:
+  default:
+    name: dbas-sync-testenv_default
+    external: true
+
+volumes:
+  dbas-xc-p-data:
+  dbas-xc-p-pg:
