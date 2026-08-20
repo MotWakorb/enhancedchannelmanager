@@ -33,8 +33,8 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 
 | Category | Notes |
 |-|-|
-| M3U accounts | Source URL and settings. Credentials are stripped; re-enter on B. |
-| EPG sources | Source URL and settings. Credentials are stripped; re-enter on B. |
+| M3U accounts | Source URL and settings. Credentials are stripped; re-enter on B. **If the credentials are embedded in the URL itself** — a plain-M3U playlist URL of the form `…/get.php?username=…&password=…` — then the address cannot be separated from the secret, so the whole URL is left blank on B and you re-enter the URL rather than just a password. An **Xtream Codes** account is not affected here: Dispatcharr keeps its server URL and its credentials in separate fields, so the URL crosses and only the password needs re-entering. Either way the run summary names the account. |
+| EPG sources | Source URL and settings. Credentials are stripped; re-enter on B. The same URL-embedded-credentials case applies, and it is the common one: an Xtream Codes guide URL (`xmltv.php?username=…&password=…`) arrives on B blank, the source shows **No URL provided**, and until you re-enter it every channel that guide feeds has no programme data on B. |
 | Channel groups | Group names and ordering. |
 | Channel profiles | Profile definitions. |
 | User agents | The custom user-agent strings an M3U account fetches with and a stream profile plays through. Synced first, before both, so each one's user-agent link is re-pointed at B's copy. Distinct from user *accounts*, which are never synced. |
@@ -169,6 +169,15 @@ A channel on A has no channel number, and B already has a channel with the same 
 ### B has credentials for sources that A can't provide
 
 Expected. Credentials are intentionally not synced. Log into B and re-enter them manually. Sync will not overwrite B's credentials. It only sends redacted (credential-stripped) definitions.
+
+### Most of B's channels have no programme data, and B's EPG source says "No URL provided"
+
+Expected on an **Xtream Codes** provider, and the run tells you: the summary reads
+`… ; 1 source(s) need their URL re-entered (the address carried the credentials, so it could not be copied); N channel(s) restored without an EPG link`.
+
+An Xtream Codes guide URL authenticates by putting the username and password *in the URL*. Sync cannot ship the address without shipping the secret with it, so it ships neither — which leaves the source on B with nowhere to fetch from, and every channel that guide feeds without programme data. A guide URL that carries **no** credential (a plain XMLTV file, for instance) is unaffected and arrives intact, which is why some of B's channels usually still have their guide.
+
+**Resolution:** on B, open the named EPG source, paste in the full guide URL including its credentials, and refresh it. On the next cycle the channels relink to it on their own — you do not need to re-run anything on A. To seed B with working URLs from the start instead, do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
 
 ### The "Allow insecure TLS" warning
 
