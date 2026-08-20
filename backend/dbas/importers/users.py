@@ -65,6 +65,19 @@ MANDATORY security policy (spike ``tsfv0``, live-confirmed vs Dispatcharr
    under api_key mode (Dispatcharr 0.23.0+ throttles password-mode login at
    3/min IP-shared, breaking multi-call password-mode restore).
 
+9. **The ``channel_profiles`` FK is REMAPPED, never forwarded raw** (bead
+   ``enhancedchannelmanager-if05f``). ``channel_profiles`` is a LIST of
+   ChannelProfile primary keys — 0.28.2's ``UserSerializer`` declares it
+   ``PrimaryKeyRelatedField(many=True)`` and it is WRITABLE on create — and the
+   destination assigns its own profile ids. Forwarding the source's raw pks
+   bound the restored user to whatever profiles happened to occupy those ids on
+   the destination: a SILENT WRONG BINDING, not the loud ``400`` the M3U
+   account's scalar FKs produced. Every entry is now rewritten through the
+   ``CHANNEL_PROFILE`` remap namespace, which the step registries populate
+   BEFORE the USER step runs. See :func:`_plan_channel_profiles` for what
+   happens to an entry that does not resolve — and why an all-unresolvable list
+   SKIPS the user instead of degrading it.
+
 Integration with the restore contracts (bead ``kxuj2``): results go into the
 shared :class:`~dbas.restore_contracts.RestoreReport`
 (``EntityType.USER`` category), and every created user is recorded in the
@@ -82,6 +95,7 @@ from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
     FailureReason,
+    IdRemapTable,
     RestoreReport,
     RollbackLedger,
     SkipDetail,
@@ -120,6 +134,20 @@ _DROPPED_KEYS = frozenset(
         "date_joined",
     }
 )
+
+# The ONE foreign key a Dispatcharr 0.28.2 User carries into another restored
+# entity (bead …-if05f). Deliberately NOT in ``_DROPPED_KEYS``: that set is for
+# keys that are never meaningful on a create, whereas this one is RESOLVED
+# through the ``CHANNEL_PROFILE`` remap namespace — see
+# ``_plan_channel_profiles``. Verified against a live 0.28.2 ``/api/schema/``:
+# the User-create writable set is username / email / user_level / password /
+# channel_profiles / custom_properties / avatar_config / stream_limit /
+# is_staff / is_superuser / last_login / date_joined / first_name / last_name,
+# and ``channel_profiles`` is the only relational field among them
+# (``custom_properties`` holds nav-item name strings, ``avatar_config`` a style
+# dict — neither carries an entity id).
+_CHANNEL_PROFILES_FK = "channel_profiles"
+
 
 # Conservative, NON-privileged defaults forced onto every restored user. These
 # OVERRIDE whatever the archive claimed (policy item 2). ``user_level`` 0 is the
@@ -168,7 +196,118 @@ def _sanitize(message: str) -> str:
     return (message or "").strip()
 
 
-def _build_create_payload(archive_user: dict, write_fields: set[str]) -> dict:
+def _resolve_channel_profiles(source_value, remap: IdRemapTable) -> tuple[list[int], list]:
+    """Rewrite ONE archived ``channel_profiles`` list into destination ids.
+
+    Args:
+        source_value: The archive's raw value for the field. 0.28.2 serializes a
+            list of integer ChannelProfile pks; anything else is treated as
+            carrying no resolvable membership.
+        remap: The shared :class:`IdRemapTable`.
+
+    Returns:
+        ``(resolved_dest_ids, unresolved_source_entries)``. Destination ids are
+        de-duplicated and keep their first-seen order, so the payload is
+        deterministic when two source profiles adopt the same destination row.
+        An entry that is not an int, or whose pk has no ``CHANNEL_PROFILE``
+        mapping, lands in ``unresolved_source_entries`` and NEVER in the payload
+        — a raw source pk is never sent upstream.
+    """
+    if not isinstance(source_value, list):
+        # ``None`` is "no membership recorded" and needs no report; any other
+        # non-list shape is unresolvable material we refuse to forward.
+        return ([], [] if source_value is None else [source_value])
+
+    resolved: list[int] = []
+    unresolved: list = []
+    for entry in source_value:
+        if isinstance(entry, bool) or not isinstance(entry, int):
+            # Reject bools and non-ints outright rather than coercing: int(True)
+            # is 1, which would silently bind profile id 1.
+            try:
+                source_id = int(str(entry))
+            except (TypeError, ValueError):
+                unresolved.append(entry)
+                continue
+        else:
+            source_id = entry
+        dest_id = remap.resolve(EntityType.CHANNEL_PROFILE, source_id)
+        if dest_id is None:
+            unresolved.append(source_id)
+            continue
+        dest_id = int(dest_id)
+        if dest_id not in resolved:
+            resolved.append(dest_id)
+    return (resolved, unresolved)
+
+
+def _plan_channel_profiles(
+    archive_user: dict, write_fields: set[str], remap: IdRemapTable
+) -> tuple[list[int] | None, list, bool]:
+    """Decide what this user's ``channel_profiles`` FK becomes on the destination.
+
+    Bead ``…-if05f``. ``channel_profiles`` is a LIST-VALUED foreign key into the
+    ChannelProfile table, and the destination assigns its own profile ids. The
+    importer used to forward the source's raw pks, which bound the restored user
+    to whatever profiles happened to occupy those ids on the destination — a
+    silent wrong binding, invisible in a report that said ``created``.
+
+    THE UNRESOLVABLE-ENTRY DECISION, and why it is not the sibling's decision.
+    The M3U account's scalar ``user_agent`` FK (bead ``…-9h6cv``) drops the
+    field and keeps the row, because an account without an agent falls back to a
+    safe default. That reasoning does NOT transfer wholesale here, because an
+    EMPTY ``channel_profiles`` list is not a safe default in Dispatcharr 0.28.2 —
+    it means UNRESTRICTED. Five separate code paths (``apps/output/views.py``
+    M3U + channel-group + XC listings, ``apps/output/epg.py``,
+    ``apps/timeshift/views.py``, ``apps/proxy/live_proxy/views.py``) branch on
+    ``user.channel_profiles.count() == 0`` and, when it is zero, drop profile
+    filtering entirely: "If user has ALL profiles or NO profiles, give
+    unrestricted access". ``Channel.user_level`` defaults to 0 and restored users
+    are forced to ``user_level`` 0, so the unfiltered branch shows them the whole
+    default lineup. So the disposition splits:
+
+    * **Some entries resolve** -> send the RESOLVED SUBSET and drop the rest.
+      The restored user's visibility is a subset of what the archive granted, so
+      the degradation can only ever NARROW access. Reported, never silent.
+    * **A non-empty list resolves to NOTHING** -> the user is SKIPPED
+      ``DEPENDENCY_UNRESOLVED`` and never created. Creating it would send an
+      empty list, which Dispatcharr reads as unrestricted — turning a
+      profile-scoped archive user into an unscoped destination user. That is a
+      privilege WIDENING, which policy item 2 forbids, so the category fails
+      closed on it exactly as it does everywhere else.
+    * **The archive's list is genuinely empty** -> unrestricted was what the
+      archive said, so an empty list is faithful. Not a degradation.
+
+    The field is only in play when the DESTINATION accepts it: if
+    ``channel_profiles`` is absent from the parsed User-create write fields, the
+    allowlist in :func:`_build_create_payload` never admits it, there is no
+    binding to get wrong, and this returns "not in play" rather than skipping
+    users for a field the destination would ignore.
+
+    Returns:
+        ``(resolved, unresolved, membership_lost)``. ``resolved`` is ``None``
+        when the field is not in play (destination does not accept it, or the
+        archive record has no such key); otherwise the destination-id list to
+        send. ``membership_lost`` is ``True`` only for the all-unresolvable case
+        above, and is the caller's signal to SKIP the user.
+    """
+    if _CHANNEL_PROFILES_FK not in write_fields:
+        return (None, [], False)
+    if _CHANNEL_PROFILES_FK not in archive_user:
+        return (None, [], False)
+
+    resolved, unresolved = _resolve_channel_profiles(
+        archive_user.get(_CHANNEL_PROFILES_FK), remap
+    )
+    membership_lost = bool(unresolved) and not resolved
+    return (resolved, unresolved, membership_lost)
+
+
+def _build_create_payload(
+    archive_user: dict,
+    write_fields: set[str],
+    resolved_channel_profiles: list[int] | None,
+) -> dict:
     """Build the create_user payload from an archive user record (ALLOWLIST).
 
     Keys are admitted only when they are BOTH (a) in the destination's parsed
@@ -180,21 +319,38 @@ def _build_create_payload(archive_user: dict, write_fields: set[str]) -> dict:
     bad keys (bead l1p4p, follow-up 2). The privilege fields are then forced to
     the conservative non-privileged defaults regardless of the archive.
 
-    The result NEVER carries a password, a hash, or an elevated privilege flag.
+    THE ``channel_profiles`` FK (bead ``…-if05f``). The archive's raw list of
+    SOURCE ChannelProfile pks is unconditionally removed here and replaced with
+    ``resolved_channel_profiles`` — the destination ids
+    :func:`_plan_channel_profiles` produced. The removal is unconditional so the
+    raw list cannot reach the wire through any path, including a caller that
+    forgot to plan it (in which case the field is simply absent, never wrong).
+
+    The result NEVER carries a password, a hash, an elevated privilege flag, or
+    a source-side foreign key.
 
     Args:
         archive_user: One user record from the export archive.
         write_fields: The destination's writable User-create field names.
+        resolved_channel_profiles: Destination ChannelProfile ids from
+            :func:`_plan_channel_profiles`, or ``None`` when the field is not in
+            play (the key is then absent from the payload entirely).
 
     Returns:
-        The create payload — schema-known, non-secret keys plus the forced
-        conservative privilege defaults.
+        The create payload — schema-known, non-secret keys, the remapped
+        ``channel_profiles`` list, plus the forced conservative privilege
+        defaults.
     """
     payload = {
         k: v
         for k, v in archive_user.items()
         if k in write_fields and k not in _DROPPED_KEYS
     }
+    # Never forward a SOURCE profile pk: strip first, then re-add only what the
+    # CHANNEL_PROFILE remap resolved.
+    payload.pop(_CHANNEL_PROFILES_FK, None)
+    if resolved_channel_profiles is not None:
+        payload[_CHANNEL_PROFILES_FK] = list(resolved_channel_profiles)
     payload.update(_CONSERVATIVE_PRIVILEGE_DEFAULTS)
     return payload
 
@@ -265,6 +421,7 @@ async def import_users(
     selected: bool,
     report: RestoreReport,
     ledger: RollbackLedger,
+    remap: IdRemapTable,
     is_dry_run: bool = False,
     persist_ledger: Callable[[], None] | None = None,
 ) -> None:
@@ -280,6 +437,11 @@ async def import_users(
             ``EntityType.USER`` category.
         ledger: The shared :class:`RollbackLedger`; each created user is recorded
             for compensating deletes.
+        remap: The shared :class:`IdRemapTable`, READ for the ``CHANNEL_PROFILE``
+            namespace (policy item 9). REQUIRED, not optional: both step
+            registries import CHANNEL_PROFILE before USER precisely so this
+            namespace is populated here, and a call that could omit it would
+            silently degrade every profile-scoped user.
         is_dry_run: When ``True``, no user is created — the importer only reports
             ``would_create`` / ``would_skip`` so the operator sees the plan.
         persist_ledger: Optional durable-flush callback (wired by the
@@ -348,6 +510,64 @@ async def import_users(
             _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, archive_user.get("id"), is_dry_run)
             continue
 
+        # Policy 9 — resolve the LIST-VALUED channel_profiles FK BEFORE the
+        # dry-run branch, so the preview and the apply reach the same verdict
+        # (the dry-run/apply parity contract). Pure; issues no request.
+        resolved_profiles, unresolved_profiles, membership_lost = (
+            _plan_channel_profiles(archive_user, write_fields, remap)
+        )
+        if membership_lost:
+            # FAIL CLOSED (…-if05f). Every archived profile is missing here, so
+            # the only list we could send is empty — and Dispatcharr reads an
+            # empty channel_profiles as UNRESTRICTED, which would widen this
+            # user's access rather than restore it. Skip instead.
+            logger.warning(
+                "[DBAS-USERS] Skipping archive user '%s' — none of its %d channel "
+                "profile(s) exist on this destination, and creating it without "
+                "them would grant unrestricted channel access.",
+                label,
+                len(unresolved_profiles),
+            )
+            report.notes.append(
+                "%s: '%s' was NOT restored — none of the channel profiles it was "
+                "limited to exist on this destination, and Dispatcharr treats a "
+                "user with no profiles as having unrestricted access. Restore "
+                "the channel profiles first, then re-run this category."
+                % (CATEGORY_LABEL, label)
+            )
+            _skip(
+                cat,
+                SkipReason.DEPENDENCY_UNRESOLVED,
+                label,
+                archive_user.get("id"),
+                is_dry_run,
+            )
+            continue
+
+        if unresolved_profiles:
+            # DEGRADED, not failed: at least one profile resolved, so the user is
+            # created with a NARROWER scope than the archive granted. Never
+            # silent — same idiom as the M3U account's dropped FKs (…-9h6cv /
+            # …-g8tyd). Reported on BOTH the preview and the apply.
+            logger.warning(
+                "[DBAS-USERS] User '%s' references %d channel profile(s) that are "
+                "not on this destination; it is restored with the %d that are.",
+                label,
+                len(unresolved_profiles),
+                len(resolved_profiles),
+            )
+            report.notes.append(
+                "%s: '%s' was limited to %d channel profile(s) that do not exist "
+                "on this destination, so it was restored with only the %d that "
+                "do. Re-assign the missing profiles if this user should see more."
+                % (
+                    CATEGORY_LABEL,
+                    label,
+                    len(unresolved_profiles),
+                    len(resolved_profiles),
+                )
+            )
+
         if is_dry_run:
             cat.would_create += 1
             continue
@@ -355,8 +575,11 @@ async def import_users(
         # Policy 1 + 2 — payload is an allowlist (schema write-fields ∩ archive),
         # omits the archive's password/hash, forces non-privileged. The password
         # travels as a separate argument so it can never be confused with, or
-        # sourced from, archive material.
-        payload = _build_create_payload(archive_user, write_fields)
+        # sourced from, archive material. Policy 9 — channel_profiles carries
+        # DESTINATION ids, never the archive's.
+        payload = _build_create_payload(
+            archive_user, write_fields, resolved_profiles
+        )
         generated_password = _generate_password()
         try:
             created = await client.create_user(payload, password=generated_password)

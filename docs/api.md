@@ -1658,7 +1658,7 @@ The artifact's `journal.db` member additionally carries only an allowlist of con
 - `is_dry_run: true` → `would_*` counts are populated; `created/updated/skipped/failed` are zero.
 - `is_dry_run: false` → `created/updated/skipped/failed` counts are populated.
 - `outcome` is `null` on a dry-run (a plan has no realized outcome). On an apply: `success`, `completed_with_failures`, `partial_failed_rolled_back`, or `failed_rollback_incomplete`.
-- `completed_with_failures` means the restore ran to completion and **nothing was rolled back**, but at least one row in a non-fatal category failed (only `dispatcharr_users` is non-fatal). The applied state stands; the failed rows are counted in their category's `failed` / `failure_details`.
+- `completed_with_failures` means the restore ran to completion and **nothing was rolled back**, but the result is not clean. Two independent triggers: at least one row in a non-fatal category failed (only `dispatcharr_users` is non-fatal; the failed rows are counted in their category's `failed` / `failure_details`), **or** an apply finished with `channels_with_no_playable_stream` above zero — a channel restored holding no URL-bearing stream at all cannot play, which is mixed state even though every row succeeded and the counts read clean. Either way the applied state stands.
 - `logo_misses` is an aggregate count of logos that could not be matched or applied.
 
 #### Error responses

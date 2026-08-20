@@ -37,14 +37,15 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | EPG sources | Source URL and settings. Credentials are stripped; re-enter on B. |
 | Channel groups | Group names and ordering. |
 | Channel profiles | Profile definitions. |
-| Stream profiles | Profile definitions. |
+| User agents | The custom user-agent strings an M3U account fetches with and a stream profile plays through. Synced first, before both, so each one's user-agent link is re-pointed at B's copy. Distinct from user *accounts*, which are never synced. |
+| Stream profiles | Profile definitions, including their user-agent link. |
 | Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. |
 
 ### Opt-in per target
 
 | Category | Notes |
 |-|-|
-| Logos | Off by default. Enable a target's `sync_logos` flag (API/MCP) to replicate locally-hosted logo files each cycle. Only logos B is missing are uploaded (matched by id, name, then filename), streamed one file at a time; sync never deletes or bulk-clears B's existing logos. |
+| Logos | Off by default. Enable a target's `sync_logos` flag (API/MCP) to replicate A's logos each cycle. Covers both sources: the files in ECM's own `/config/uploads/logos/` and the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives). Where both describe the same logo, Dispatcharr's copy is the one that travels. Only logos B is missing are uploaded (matched by id, name, then filename), fetched and uploaded one image at a time; sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. |
 
 ### Never synced
 
@@ -52,6 +53,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 |-|-|
 | **Users** | Continuous one-way push of `users` would overwrite B's privilege flags and could lock out B's operator. This exclusion is permanent and code-enforced. It cannot be configured away. |
 | **Credentials** | M3U passwords, EPG passwords, API tokens. Redacted before transmission to avoid streaming live secrets on a recurring schedule. Migrate secrets via encrypted backup. |
+| **Server groups** | Dispatcharr's server groups — the grouping that makes several M3U accounts share one provider's connection limit. ECM has no server-group category, so a group cannot be created on B and an account's assignment cannot be re-pointed at one. An account that belongs to a server group on A is created on B without one; the sync report names the account so you can re-assign it on B. Create the server group on B yourself if the accounts sharing it need a shared connection limit. |
 
 ---
 
@@ -138,6 +140,27 @@ Common causes:
 - **Credentials rotated/revoked**: if B's API credentials changed after the sync schedule was set up, ECM aborts the run at the credential-freshness check. Edit the sync target, update the credentials, save, and trigger a manual sync.
 - **Target disabled**: check the **Enable** toggle on the target. A disabled target never runs.
 - **Partial-apply loop**: the sync runs but a category keeps failing on apply (not B unreachable, but a recurring mix/rollback). Pull the most recent sync report from the task history; identify the failing category.
+
+### The sync reports "Completed with Warnings"
+
+The sync ran, wrote its changes to B, and rolled nothing back — but the result
+was not clean, so ECM does not call it a success. The most common reason is a
+channel on B left holding **no playable stream**: the channel exists, but not one
+of the streams attached to it has a URL behind it, so playing it fails. The
+notification and the task-history entry name how many channels are affected;
+the sync report in task history names each one.
+
+**Resolution:** attach a real stream to each named channel on B, or fix the
+matching problem on A (usually a stream that A's provider no longer carries) and
+re-sync.
+
+This is a warning, not a failure — nothing was undone, and everything else in the
+run was applied. If a target has a shortfall you already know about and accept,
+turn off **Warning** alerts for that target's sync task in the scheduled-task
+alert settings. That silences the external alert (email/Discord/Telegram) while
+leaving the outcome, the in-app notification and the task history honest. Do not
+expect the target row to show a full sync timestamp for such a run: only a clean
+success records "B was current as of this time".
 
 ### Conflict on a channel with no channel number
 

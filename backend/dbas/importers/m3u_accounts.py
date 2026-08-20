@@ -54,6 +54,38 @@ fall-through (no strategy hits) returns ``None``; the caller treats that as
 unresolved and never guesses a destination id.
 
 ----------------------------------------------------------------------------
+THE ``user_agent`` FK (bead ``…-9h6cv``)
+----------------------------------------------------------------------------
+
+An M3U account's ``user_agent`` is a FOREIGN KEY to a Dispatcharr user-agent
+row, not a header string, and the destination assigns that row its own id. The
+create payload therefore rewrites it through the ``USER_AGENT`` remap namespace
+(:func:`_resolve_user_agent_fk`); the step registries import USER_AGENT BEFORE
+M3U_ACCOUNT so the namespace is populated when this importer runs. When the FK
+cannot be resolved the field is DROPPED and the account is still created — see
+:func:`_build_create_payload` for why this diverges from the stream-profile
+sibling's skip-``DEPENDENCY_UNRESOLVED`` convention.
+
+----------------------------------------------------------------------------
+THE ``server_group`` FK (bead ``…-g8tyd``)
+----------------------------------------------------------------------------
+
+An M3U account's ``server_group`` is ALSO a foreign key — to a Dispatcharr
+``ServerGroup`` row whose id the destination assigns itself — and it is
+serialized on GET, so it reaches the create payload. Unlike ``user_agent`` there
+is no namespace to translate it through: ECM's DBAS has no ``ServerGroup``
+entity category and no ServerGroup importer, so nothing on the destination
+corresponds to A's pk. The field is therefore ALWAYS DROPPED
+(:func:`_drop_server_group_fk`), and the drop is reported.
+
+The INVARIANT both cases serve: no importer forwards a source-side foreign key
+to the destination without either resolving it through its remap namespace or
+deliberately dropping it with a recorded reason. ``user_agent`` and
+``server_group`` are the only two FKs on 0.28.2's
+``M3UAccountSerializer.Meta.fields``; ``stream_profile`` is a model FK but is
+NOT serialized, so it never reaches an archive.
+
+----------------------------------------------------------------------------
 DEFERRED AUTO-SYNC (the CRITICAL ordering pattern)
 ----------------------------------------------------------------------------
 
@@ -147,8 +179,19 @@ _NON_CREATE_KEYS = frozenset(
     }
 )
 
-# All keys dropped before issuing the create.
+# All keys dropped before issuing the create. The ``user_agent`` FK is NOT in
+# this set — it is remapped in place (or dropped when unresolvable); see
+# ``_resolve_user_agent_fk``.
 _DROPPED_CREATE_KEYS = _SOURCE_ID_KEYS | _NON_CREATE_KEYS
+
+# The FK an M3U account carries into a Dispatcharr user-agent row (bead …-9h6cv).
+_USER_AGENT_FK = "user_agent"
+
+# The FK an M3U account carries into a Dispatcharr ``ServerGroup`` row (bead
+# …-g8tyd). Deliberately NOT in ``_DROPPED_CREATE_KEYS``: that set is for keys
+# that are never meaningful on a create, whereas this one is dropped as a
+# reported DEGRADATION — see ``_drop_server_group_fk``.
+_SERVER_GROUP_FK = "server_group"
 
 # Credential markers scrubbed from any operator-facing failure message. An
 # upstream error body can echo a server_url; we never let it through.
@@ -254,13 +297,97 @@ def resolve_group(
     return None
 
 
-def _build_create_payload(archive_account: dict) -> tuple[dict, list[str]]:
+def _resolve_user_agent_fk(
+    archive_account: dict, remap: IdRemapTable
+) -> tuple[bool, int | None]:
+    """Resolve the account's optional ``user_agent`` FK through the remap table.
+
+    Returns ``(resolved, dest_id)``:
+
+    - No FK (absent / None): ``(True, None)`` — the account uses Dispatcharr's
+      default agent; nothing to resolve.
+    - FK present and remapped: ``(True, dest_id)``.
+    - FK present but unmapped (or not an int): ``(False, None)`` — the caller
+      DROPS the field; a stale source pk is never sent upstream.
+    """
+    source_agent = archive_account.get(_USER_AGENT_FK)
+    if source_agent is None:
+        return (True, None)
+    try:
+        source_agent_id = int(source_agent)
+    except (TypeError, ValueError):
+        return (False, None)
+    dest_id = remap.resolve(EntityType.USER_AGENT, source_agent_id)
+    if dest_id is None:
+        return (False, None)
+    return (True, dest_id)
+
+
+def _drop_server_group_fk(payload: dict) -> bool:
+    """Remove the account's ``server_group`` FK from the create payload.
+
+    ``server_group`` is a foreign key to a Dispatcharr ``ServerGroup`` row whose
+    id the DESTINATION assigns itself. There is no ``ServerGroup`` entity
+    category and no ServerGroup importer in ECM's DBAS, so no remap namespace
+    can translate A's pk — the field can only be DROPPED. Dispatcharr declares
+    the column ``null=True, blank=True, on_delete=SET_NULL``, so an account
+    without one is valid; forwarding a stale pk is not (live B answered
+    ``400 {"server_group": ["Invalid pk \"20\" - object does not exist."]}``).
+
+    Returns ``True`` only when a NON-NULL FK was actually removed — that is the
+    degradation the caller reports. An absent or null ``server_group`` is the
+    common shape and is left exactly as it is (``None`` is a legal value the
+    destination accepts), so it is neither dropped nor reported.
+    """
+    source_group = payload.get(_SERVER_GROUP_FK)
+    if source_group is None:
+        return False
+    payload.pop(_SERVER_GROUP_FK)
+    return True
+
+
+def _build_create_payload(
+    archive_account: dict, remap: IdRemapTable
+) -> tuple[dict, list[str], bool, bool]:
     """Build the create_m3u_account payload from an archive account record.
 
     Drops the archive source id, the embedded ``channel_groups`` settings list
     (reconciled and deferred separately), and read-only/derived fields. Keeps the
     credential fields (server_url/username/password) — they MUST be recreated for
     the account to function — but they are NEVER logged or reported.
+
+    THE ``user_agent`` FK (bead ``…-9h6cv``). ``user_agent`` is a FOREIGN KEY to
+    a Dispatcharr user-agent row whose id the DESTINATION assigns itself, not a
+    header string. This importer used to forward source-A's raw pk verbatim, so a
+    live B answered ``400 {"user_agent": ["Invalid pk \\"4\\" - object does not
+    exist."]}`` — and because M3U_ACCOUNT is a FATAL failure category, the whole
+    apply rolled back and NOTHING synced. The FK is now rewritten in place to the
+    destination id through the ``USER_AGENT`` remap namespace (which the step
+    registries populate BEFORE this importer runs).
+
+    UNRESOLVABLE => DROP THE FIELD, KEEP THE ACCOUNT. The sibling convention for
+    stream profiles (``importers/groups_profiles``) is to skip the whole row
+    ``DEPENDENCY_UNRESOLVED``. That is right for a stream profile, which is a
+    LEAF. An M3U account is the ROOT of the Phase-2 chain — EPG sources, channel
+    groups, channels and streams all resolve through it — so skipping it cascades
+    a whole-tree ``DEPENDENCY_UNRESOLVED`` for the sake of one optional field
+    that Dispatcharr already has a default for. The account is created without
+    the agent and the degradation is reported (never silent): the operator
+    re-selects one agent instead of losing the entire replica.
+
+    THE ``server_group`` FK (bead ``…-g8tyd``). ``server_group`` is a SECOND
+    foreign key on the same record — to a Dispatcharr ``ServerGroup`` row, which
+    groups M3U accounts that share provider credentials so they share
+    credential-scoped connection counters. It is serialized on GET, so A's raw pk
+    reached the create payload and B answered ``400 {"server_group": ["Invalid pk
+    \"20\" - object does not exist."]}`` — the same total-blast-radius rollback
+    as the ``user_agent`` case. There is no ``ServerGroup`` entity category and no
+    ServerGroup importer, so unlike ``user_agent`` there is nothing to remap
+    through: the field is ALWAYS DROPPED. ``ServerGroup`` carries no
+    configuration of its own (a unique ``name`` and nothing else; the stream
+    limits come from each account profile's ``max_streams``), so the replica
+    loses a grouping label it can be given back in one action, not settings. The
+    drop is reported like its sibling, never silent.
 
     A STANDARD (redact-by-default) artifact carries the ``***REDACTED***``
     placeholder in place of each credential. Writing that through produced an XC
@@ -271,14 +398,27 @@ def _build_create_payload(archive_account: dict) -> tuple[dict, list[str]]:
     is unaffected.
 
     Returns:
-        ``(payload, redacted_fields)`` — the create payload, and the credential
-        field NAMES that were stripped (never their values) so the caller can
-        report them as a post-restore action item.
+        ``(payload, redacted_fields, user_agent_resolved, server_group_dropped)``
+        — the create payload; the credential field NAMES that were stripped
+        (never their values) so the caller can report them as a post-restore
+        action item; whether the ``user_agent`` FK resolved (``False`` only when
+        it was present and could not be remapped, in which case the field has
+        been dropped); and whether a NON-NULL ``server_group`` FK was dropped.
     """
     payload = {
         k: v for k, v in archive_account.items() if k not in _DROPPED_CREATE_KEYS
     }
-    return strip_redaction_sentinels(payload)
+    user_agent_resolved, dest_agent_id = _resolve_user_agent_fk(archive_account, remap)
+    if _USER_AGENT_FK in payload:
+        if user_agent_resolved:
+            # None is preserved as None: a free-standing account stays on the
+            # destination's default agent.
+            payload[_USER_AGENT_FK] = dest_agent_id
+        else:
+            payload.pop(_USER_AGENT_FK)
+    server_group_dropped = _drop_server_group_fk(payload)
+    stripped, redacted_fields = strip_redaction_sentinels(payload)
+    return stripped, redacted_fields, user_agent_resolved, server_group_dropped
 
 
 def _extract_group_settings(archive_account: dict) -> dict | None:
@@ -473,7 +613,48 @@ async def import_m3u_accounts(
             )
             continue
 
-        payload, redacted_fields = _build_create_payload(archive_account)
+        (
+            payload,
+            redacted_fields,
+            user_agent_resolved,
+            server_group_dropped,
+        ) = _build_create_payload(archive_account, remap)
+        if not user_agent_resolved:
+            # DEGRADED, not failed (…-9h6cv): the account is still created — see
+            # _build_create_payload for why an M3U account is not skipped the way
+            # its stream-profile sibling is. Reported on BOTH the preview and the
+            # apply so the two agree. Name only; never a credential.
+            logger.warning(
+                "[DBAS-M3U] Account '%s' references a user agent that is not on "
+                "this destination; the account is restored WITHOUT it and falls "
+                "back to the default agent.",
+                label,
+            )
+            report.notes.append(
+                "M3U account '%s': its custom user agent is not on this "
+                "destination, so the account was created without one and uses "
+                "the default agent. Re-select an agent if the provider requires "
+                "a specific one." % label
+            )
+
+        if server_group_dropped:
+            # DEGRADED, not failed (…-g8tyd). Same disposition as the user_agent
+            # sibling above, for a different reason: there is no ServerGroup
+            # remap namespace to resolve through at all, so the FK can only be
+            # dropped. Reported on BOTH the preview and the apply so the two
+            # agree. Name only; never a credential.
+            logger.warning(
+                "[DBAS-M3U] Account '%s' belongs to a server group that does "
+                "not exist on this destination; the account is restored "
+                "WITHOUT one.",
+                label,
+            )
+            report.notes.append(
+                "M3U account '%s': its server group does not exist on this "
+                "destination and cannot be recreated by a sync, so the account "
+                "was created without one. Re-assign it to a server group if it "
+                "shares provider connection limits with other accounts." % label
+            )
 
         if is_dry_run:
             cat.would_create += 1

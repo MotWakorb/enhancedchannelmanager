@@ -601,6 +601,7 @@ async def run_restore(
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
     channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
+    allow_fuzzy_stream_match: bool = True,
 ) -> RestoreReport:
     """Run a full restore: pre-flight → ordered apply → rollback-on-failure.
 
@@ -653,6 +654,32 @@ async def run_restore(
             and logo exactly as the operator has them; ``OVERWRITE`` applies the
             archive's. On an empty destination every channel is created and the
             two are indistinguishable.
+        allow_fuzzy_stream_match: The stream-matching policy for the WHOLE run —
+            whether the matcher's Tier-4 fuzzy rung is admitted. It must be the
+            same value the ``steps`` registry was built with, because the
+            post-create rebind (step 3c) is a second matcher pass over the same
+            archived streams; a run whose importers are floored at Tier-3 and
+            whose rebind is not does not have a stream-matching policy at all
+            (bead ``…-efvyg``). Both production callers state it rather than
+            inherit it:
+
+            * the ARCHIVE RESTORE (``tasks.dbas_restore``) passes ``True`` — the
+              value :func:`dbas.importers.channels.import_channels` already uses
+              on that path, and the one the ``…-2o0cz`` rebind was designed
+              around: on a fresh restore the destination has no provider streams
+              at channel-import time, so the rebind is where essentially ALL of
+              a restore's matching actually happens. Flooring it would strand
+              restored channels on placeholders — the P0 this pass exists to fix.
+            * the CROSS-INSTANCE SYNC (``tasks.dbas_sync_engine``) passes the
+              per-``SyncTarget`` ``fuzzy_stream_matching`` flag (default OFF),
+              the enforcement point for spike ``xp6mp`` ruling 1b.
+
+            ``True`` is the default only so the many call sites that never reach
+            the rebind (dry-runs, registries with no channels step) need not
+            restate a policy they do not exercise; the value is REQUIRED at
+            :func:`dbas.placeholder_rebind.rebind_placeholder_streams`, the
+            boundary that consumes it, where omission was what made the defect
+            silent.
 
     Returns:
         The :class:`RestoreReport` with its tri-state ``outcome`` set.
@@ -879,7 +906,8 @@ async def run_restore(
         report.mark_stream_health_unpredicted()
     elif not failure_occurred:
         await _rebind_placeholders(plan=plan, client=client, report=report,
-                                   ledger=ledger, remap=remap)
+                                   ledger=ledger, remap=remap,
+                                   allow_fuzzy=allow_fuzzy_stream_match)
 
     # --- 4. Outcome. ---
     # A DRY-RUN is a plan, not a realized restore — it has no outcome (kxuj2
@@ -925,6 +953,7 @@ async def _rebind_placeholders(
     report: RestoreReport,
     ledger: RollbackLedger,
     remap: object,
+    allow_fuzzy: bool,
 ) -> None:
     """Run the post-refresh placeholder rebind, containing any error.
 
@@ -932,6 +961,12 @@ async def _rebind_placeholders(
     :func:`_default_deferred_apply_fn`). The pass is post-create cleanup on an
     otherwise-successful restore, so an error here is logged and noted — it never
     turns a successful restore into a rollback.
+
+    ``allow_fuzzy`` is threaded, never defaulted (bead ``…-efvyg``): the rebind
+    is a matcher pass like the channels importer's, so it runs under the SAME
+    stream-matching policy this run's importers ran under. See
+    :func:`run_restore`'s ``allow_fuzzy_stream_match`` for where that policy
+    comes from on each path.
     """
     from dbas.placeholder_rebind import rebind_placeholder_streams
 
@@ -946,6 +981,7 @@ async def _rebind_placeholders(
             ledger=ledger,
             remap=remap,
             archive_channels=archive_channels,
+            allow_fuzzy=allow_fuzzy,
         )
     except Exception:  # noqa: BLE001 - best-effort post-create cleanup
         logger.warning(
@@ -1079,24 +1115,33 @@ def default_importer_steps() -> list[ImporterStep]:
 
     Ordering (dependency-driven, ADR-012 D-table):
 
-      * M3U accounts first (defers auto-sync to the final phase) — everything
+      * user agents FIRST (bead ``…-9h6cv``) — a leaf that resolves nothing,
+        and the namespace BOTH the M3U account's and the stream profile's
+        ``user_agent`` FK resolve through. Anything ahead of it meets an empty
+        namespace.
+      * M3U accounts next (defers auto-sync to the final phase) — everything
         downstream remaps ``m3u_account`` FKs through it.
-      * EPG sources second, WITH the bounded EPG-data download wait
+      * EPG sources next, WITH the bounded EPG-data download wait
         (:func:`_epg_step_with_download_wait`) so Dispatcharr has EPG rows
         before channels are created.
       * channel groups / channel profiles / stream profiles before channels —
         they populate the IdRemapTable namespaces the channels importer resolves.
-      * user agents BEFORE stream profiles (bead ``…-lvfwd``): a stream profile's
-        ``user_agent`` FK remaps through the USER_AGENT namespace, so the agents
-        must already be restored — the reverse order POSTed a raw source id and
-        aborted the whole restore on a fresh destination.
+        The stream profiles' ``user_agent`` FK is why the agents lead the list
+        (bead ``…-lvfwd``): the reverse order POSTed a raw source id and aborted
+        the whole restore on a fresh destination. Bead ``…-9h6cv`` found the M3U
+        account carries the same FK, so the agents moved ahead of it too.
       * settings (core settings / comskip) before channels (config in place
         before the big entity category), then ECM's OWN settings.json — a
         SEPARATE category (bead …-dfkbn item 4), because the drill's report said
         ``settings updated=7`` while ECM's ``user_timezone`` and
         ``stats_poll_interval`` silently reverted: that count was Dispatcharr's
         namespace, and ECM's own blob had no importer at all.
-      * users before channels (the l1p4p slot; unchanged).
+      * users before channels (the l1p4p slot; unchanged) — and AFTER channel
+        profiles, which is now load-bearing rather than incidental: a user's
+        ``channel_profiles`` list is a LIST-VALUED FK remapped through the
+        CHANNEL_PROFILE namespace (bead ``…-if05f``). Both registries already
+        ordered profiles ahead of users; moving USER above CHANNEL_PROFILE would
+        meet an empty namespace and skip every profile-scoped user.
       * channels, then DVR rules (a DVR rule's ``channel`` FK remaps through the
         just-populated ``EntityType.CHANNEL`` namespace), then logos LAST
         (attach to the created channels; slow streaming uploads at the tail).
@@ -1114,13 +1159,19 @@ def default_importer_steps() -> list[ImporterStep]:
     """
     s = _importer_step_builders()
     return [
+        # USER AGENTS FIRST (…-9h6cv). A user agent resolves nothing through the
+        # remap, while BOTH the M3U account and the stream profile carry a
+        # ``user_agent`` FK that resolves through the USER_AGENT namespace
+        # (lvfwd for the profile, 9h6cv for the account). Ordering agents ahead
+        # of every consumer is the only arrangement in which no consumer meets an
+        # empty namespace. It also puts the agents FIRST in the rollback ledger,
+        # so a compensating rollback deletes the accounts/profiles that reference
+        # them before the agents themselves.
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(s["epg"])),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        # USER AGENTS before STREAM PROFILES (lvfwd): a stream profile's
-        # ``user_agent`` FK resolves through the USER_AGENT remap namespace.
-        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
         # ECM's OWN settings.json (…-dfkbn item 4) — a DIFFERENT namespace from
@@ -1312,6 +1363,9 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             selected=_selected(ctx, EntityType.USER),
             report=ctx.report,
             ledger=ctx.ledger,
+            # …-if05f: a user's channel_profiles list is remapped through the
+            # CHANNEL_PROFILE namespace, which the step above this one populates.
+            remap=ctx.remap,
             is_dry_run=ctx.is_dry_run,
             persist_ledger=ctx.flush_ledger,
         )
@@ -1536,14 +1590,14 @@ def dry_run_importer_steps() -> list[ImporterStep]:
     """
     s = _importer_step_builders()
     return [
+        # Same FK ordering as the apply registry (lvfwd, …-9h6cv) — a preview
+        # that ordered these differently would promise an M3U-account or
+        # stream-profile outcome the apply cannot deliver.
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        # Same FK ordering as the apply registry (lvfwd) — a preview that ordered
-        # these differently would promise a stream-profile count the apply cannot
-        # deliver.
-        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
         # ECM's OWN settings.json (…-dfkbn item 4) — a DIFFERENT namespace from

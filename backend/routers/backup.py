@@ -103,7 +103,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0126"
+APP_VERSION = "0.18.1-0127"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1779,16 +1779,6 @@ async def _fetch_source_logos(client=None) -> list[dict]:
     return [logo for logo in (logos or []) if isinstance(logo, dict)]
 
 
-async def _fetch_source_logo_index() -> dict[str, dict]:
-    """Basename -> ``{"id", "name"}`` index of the SOURCE Dispatcharr logos.
-
-    Thin wrapper over :func:`_fetch_source_logos` +
-    :func:`_build_source_logo_index` for callers that need only the index and do
-    their own listing lifetime (the sync engine's metadata-only logo gather).
-    """
-    return _build_source_logo_index(await _fetch_source_logos())
-
-
 def _build_source_logo_index(logos: list[dict]) -> dict[str, dict]:
     """Index SOURCE Dispatcharr logo rows by URL basename.
 
@@ -1831,7 +1821,7 @@ def _gather_logo_binary_subtree(
         each via zf.write(), which streams from disk, never buffering all logos
         in RAM).
       - ``metadata`` is the inventory written to binary/metadata.json. When
-        ``source_logo_index`` (see :func:`_fetch_source_logo_index`) resolves a
+        ``source_logo_index`` (see :func:`_build_source_logo_index`) resolves a
         file's basename, the entry also carries the SOURCE Dispatcharr logo
         ``id`` (+ display ``name``) — the correlation the restore decoder
         attaches to each logo record so the importer's affected-channel lookup

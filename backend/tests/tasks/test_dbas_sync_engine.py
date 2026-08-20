@@ -20,13 +20,14 @@ These tests mock BOTH the source-A client (the local gather) and the dest-B clie
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from dbas.preflight import ImportPlan, PlanCategory
-from dbas.restore_contracts import EntityType, FailureReason, RestoreOutcome
+from dbas.restore_contracts import EntityType, FailureReason, RestoreOutcome, SkipReason
 from routers import backup as backup_mod
 from tasks import dbas_sync_engine as engine
 from tasks.dbas_sync_engine import (
@@ -73,6 +74,11 @@ def _source_client() -> MagicMock:
     client.get_stream_profiles = AsyncMock(
         return_value=[{"id": 40, "name": "Proxy Profile", "command": "ffmpeg"}]
     )
+    # User agents ARE a per-cycle config category (ADR-013 S9, bead …-hiacv).
+    # Wired empty here so the shared fixture exercises the real gather without
+    # changing what the pre-existing convergence/idempotency tests assert; the
+    # populated case has its own fixtures below.
+    client.get_user_agents = AsyncMock(return_value=[])
     # A users getter is wired but MUST NEVER be assembled into the sync plan (D3).
     client.get_users = AsyncMock(
         return_value=[{"id": 99, "username": "admin", "is_superuser": True}]
@@ -94,12 +100,14 @@ def _empty_dest_client() -> AsyncMock:
     client.get_channel_groups = AsyncMock(return_value=[])
     client.get_channel_profiles = AsyncMock(return_value=[])
     client.get_stream_profiles = AsyncMock(return_value=[])
+    client.get_user_agents = AsyncMock(return_value=[])
     # Create calls echo back a dest id so the ledger/remap stay coherent.
     client.create_m3u_account = AsyncMock(return_value={"id": 101, "name": "Provider A"})
     client.create_epg_source = AsyncMock(return_value={"id": 110, "name": "EPG One"})
     client.create_channel_group = AsyncMock(return_value={"id": 120, "name": "News"})
     client.create_channel_profile = AsyncMock(return_value={"id": 130, "name": "Default Profile"})
     client.create_stream_profile = AsyncMock(return_value={"id": 140, "name": "Proxy Profile"})
+    client.create_user_agent = AsyncMock(return_value={"id": 150, "name": "Custom UA"})
     return client
 
 
@@ -119,12 +127,14 @@ def _converged_dest_client() -> AsyncMock:
     client.get_stream_profiles = AsyncMock(
         return_value=[{"id": 540, "name": "Proxy Profile", "command": "ffmpeg"}]
     )
+    client.get_user_agents = AsyncMock(return_value=[])
     # Create methods present but expected UNUSED on a converged run.
     client.create_m3u_account = AsyncMock(return_value={"id": 9, "name": "x"})
     client.create_epg_source = AsyncMock(return_value={"id": 9, "name": "x"})
     client.create_channel_group = AsyncMock(return_value={"id": 9, "name": "x"})
     client.create_channel_profile = AsyncMock(return_value={"id": 9, "name": "x"})
     client.create_stream_profile = AsyncMock(return_value={"id": 9, "name": "x"})
+    client.create_user_agent = AsyncMock(return_value={"id": 9, "name": "x"})
     return client
 
 
@@ -161,11 +171,12 @@ def test_never_sync_constant_contains_users():
 
 
 def test_config_categories_exclude_users_channels_streams_logos():
-    """The CONFIG set stays topology-config-only — channels are a SEPARATE set
-    (kcxie), users/logos are never in either."""
+    """The CONFIG set stays topology-config-only (M3U/EPG/groups/profiles plus the
+    USER AGENTS a stream profile's FK resolves through — bead …-hiacv) — channels
+    are a SEPARATE set (kcxie), users/logos are never in either."""
     assert SYNC_CONFIG_CATEGORIES == frozenset(
         {"m3u_accounts", "epg_sources", "channel_groups",
-         "channel_profiles", "stream_profiles"}
+         "channel_profiles", "stream_profiles", "user_agents"}
     )
     assert "users" not in SYNC_CONFIG_CATEGORIES
     # Channels are NOT a config category — they are gathered separately (kcxie).
@@ -188,6 +199,202 @@ def test_all_categories_add_channels_but_never_logos_or_users():
     # Users are never synced (D3).
     assert "users" not in SYNC_ALL_CATEGORIES
     assert SYNC_ALL_CATEGORIES.isdisjoint(SYNC_NEVER_CATEGORIES)
+
+
+# ---------------------------------------------------------------------------
+# USER AGENTS in the per-cycle set (bead …-hiacv). ADR-013 S9 lists user agents
+# in the config categories synced every cycle; before this bead the gather never
+# fetched them AND the sync step registry carried no USER_AGENT step, so every
+# stream profile with a ``user_agent`` FK was skipped DEPENDENCY_UNRESOLVED.
+# ---------------------------------------------------------------------------
+
+
+def test_config_categories_include_user_agents():
+    """S9 lists user agents in the per-cycle config set — and they are NOT users."""
+    assert "user_agents" in SYNC_CONFIG_CATEGORIES
+    # A user AGENT is a different entity from a Django USER. Wiring the former
+    # must not widen the permanently-never-synced set (ADR-013 S3 / D3).
+    assert "users" not in SYNC_CONFIG_CATEGORIES
+    assert "users" in SYNC_NEVER_CATEGORIES
+    assert SYNC_CONFIG_CATEGORIES.isdisjoint(SYNC_NEVER_CATEGORIES)
+
+
+def _step_index(steps, entity_type) -> int:
+    """Index of ``entity_type`` in an ordered ImporterStep list (-1 when absent)."""
+    for i, step in enumerate(steps):
+        if step.entity_type == entity_type:
+            return i
+    return -1
+
+
+def test_sync_registry_imports_user_agents_before_stream_profiles():
+    """The sync registry carries a USER_AGENT step, ordered BEFORE STREAM_PROFILE
+    so a stream profile's ``user_agent`` FK resolves through a populated remap."""
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    steps = sync_config_importer_steps()
+    agents = _step_index(steps, EntityType.USER_AGENT)
+    profiles = _step_index(steps, EntityType.STREAM_PROFILE)
+
+    assert agents >= 0, "sync registry carries no USER_AGENT step"
+    assert profiles >= 0, "sync registry carries no STREAM_PROFILE step"
+    assert agents < profiles, (
+        "USER_AGENT must be imported before STREAM_PROFILE — the FK resolves "
+        "through the USER_AGENT remap namespace"
+    )
+    # D3 stays intact: the sync registry never imports the users category.
+    assert _step_index(steps, EntityType.USER) == -1
+
+
+def test_sync_and_restore_registries_agree_on_agent_before_profile():
+    """Ordering parity: both registries are fed by the SAME
+    ``_importer_step_builders`` callables, so an ordering divergence between them
+    is exactly how this defect arose. Assert the relationship, in both."""
+    from dbas.restore_orchestrator import default_importer_steps
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    for label, steps in (
+        ("restore", default_importer_steps()),
+        ("sync", sync_config_importer_steps()),
+    ):
+        agents = _step_index(steps, EntityType.USER_AGENT)
+        profiles = _step_index(steps, EntityType.STREAM_PROFILE)
+        assert agents >= 0, f"{label} registry carries no USER_AGENT step"
+        assert profiles >= 0, f"{label} registry carries no STREAM_PROFILE step"
+        assert agents < profiles, (
+            f"{label} registry imports USER_AGENT after STREAM_PROFILE"
+        )
+
+
+def _source_client_with_custom_user_agent() -> MagicMock:
+    """Source A: one custom user agent, and a stream profile whose ``user_agent``
+    FK points at it — the exact shape that used to skip DEPENDENCY_UNRESOLVED."""
+    client = _source_client()
+    client.get_user_agents = AsyncMock(
+        return_value=[{"id": 50, "name": "Custom UA", "user_agent": "ECM/1.0"}]
+    )
+    client.get_stream_profiles = AsyncMock(
+        return_value=[
+            {"id": 40, "name": "Proxy Profile", "command": "ffmpeg",
+             "user_agent": 50},
+        ]
+    )
+    return client
+
+
+@pytest.mark.asyncio
+async def test_run_sync_creates_user_agent_and_its_stream_profile_on_empty_b(tmp_path):
+    """INVARIANT (…-hiacv): nothing the ratified per-cycle set says is synced may
+    be skipped DEPENDENCY_UNRESOLVED. The custom-user-agent stream profile is one
+    example — it must be CREATED on B, with the FK rewritten to B's agent id."""
+    src = _source_client_with_custom_user_agent()
+    dest = _empty_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(),
+            ledger_dir=tmp_path,
+        )
+
+    # The agent itself was created on B.
+    dest.create_user_agent.assert_awaited()
+    assert report.category(EntityType.USER_AGENT).created == 1
+
+    # And the profile that depends on it was CREATED — not skipped.
+    dest.create_stream_profile.assert_awaited()
+    profile_cat = report.category(EntityType.STREAM_PROFILE)
+    assert profile_cat.created == 1
+    assert profile_cat.failed == 0
+    # The unresolved FK is recorded as a SKIP (SkipReason), not a failure — the
+    # detail list to assert on is skip_details, and asserting on failure_details
+    # instead is a false-green (proven: that form passed against the broken code).
+    assert not any(
+        d.reason == SkipReason.DEPENDENCY_UNRESOLVED
+        for d in profile_cat.skip_details
+    )
+
+    # The FK on the wire is B's agent id (150), never A's source id (50).
+    payload = dest.create_stream_profile.await_args.args[0]
+    assert payload["user_agent"] == 150
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_fk_repoints_at_b_own_user_agent(tmp_path):
+    """When B ALREADY has the agent under the same name at a DIFFERENT id, the
+    profile's FK must be re-pointed at B's id — never A's, and never skipped."""
+    src = _source_client_with_custom_user_agent()
+    dest = _empty_dest_client()
+    # B holds the same agent by name, but under its own id.
+    dest.get_user_agents = AsyncMock(
+        return_value=[{"id": 950, "name": "Custom UA", "user_agent": "ECM/1.0"}]
+    )
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(),
+            ledger_dir=tmp_path,
+        )
+
+    # The agent is adopted, not duplicated.
+    dest.create_user_agent.assert_not_called()
+    assert report.category(EntityType.USER_AGENT).created == 0
+
+    # The profile still creates, bound to B's agent id.
+    dest.create_stream_profile.assert_awaited()
+    payload = dest.create_stream_profile.await_args.args[0]
+    assert payload["user_agent"] == 950
+    assert report.category(EntityType.STREAM_PROFILE).created == 1
+
+
+@pytest.mark.asyncio
+async def test_no_category_skipped_dependency_unresolved_on_empty_b(tmp_path):
+    """The invariant stated directly: after a cycle over the ratified per-cycle
+    category set, NO category reports a DEPENDENCY_UNRESOLVED skip/failure."""
+    src = _source_client_with_custom_user_agent()
+    dest = _empty_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(),
+            ledger_dir=tmp_path,
+        )
+
+    offenders = [
+        (cat.entity_type, d.label)
+        for cat in report.categories
+        for d in list(cat.skip_details) + list(cat.failure_details)
+        if d.reason
+        in (SkipReason.DEPENDENCY_UNRESOLVED, FailureReason.DEPENDENCY_UNRESOLVED)
+    ]
+    assert offenders == [], f"DEPENDENCY_UNRESOLVED after sync: {offenders}"
+
+
+@pytest.mark.asyncio
+async def test_plan_carries_user_agents_but_never_users(tmp_path):
+    """The gather now fetches user agents into the plan — and still never users."""
+    src = _source_client_with_custom_user_agent()
+
+    with patch.object(backup_mod, "get_client", return_value=src):
+        plan = await build_live_source_plan()
+
+    agent_cat = next(
+        (c for c in plan.categories if c.entity_type == EntityType.USER_AGENT), None
+    )
+    assert agent_cat is not None, "sync plan carries no USER_AGENT category"
+    assert [e.get("name") for e in agent_cat.entities] == ["Custom UA"]
+    # D3 is untouched: users are still never assembled.
+    assert EntityType.USER not in {c.entity_type for c in plan.categories}
 
 
 # ---------------------------------------------------------------------------
@@ -1022,6 +1229,243 @@ async def test_run_sync_logos_apply_uploads_misses_skips_matches(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# DISPATCHARR-HOSTED logo bytes on the sync path (bead …-cfxml).
+#
+# Dispatcharr is ECM's source of truth for logos: a logo uploaded through ECM's
+# own Logo Manager is written to DISPATCHARR's ``/data/logos/``, and ECM's own
+# ``/config/uploads/logos/`` holds at most a stale mirror. Bead …-xb58a taught
+# the BACKUP builder to fetch those bytes; until this bead the sync gather read
+# only ECM's upload directory, so a replica received whatever happened to sit
+# there and nothing else.
+#
+# INVARIANT under test: after a cycle with ``sync_logos`` on, B holds every logo
+# A can serve, regardless of whether the bytes live in ECM's upload dir or are
+# hosted by Dispatcharr — and the gather never holds more than one logo's bytes
+# at a time (D8). The two-stale-files case on the live instance is one example
+# of that property, not the specification.
+# ---------------------------------------------------------------------------
+
+
+def _png_bytes() -> bytes:
+    """A minimal, magic-byte-valid 1x1 PNG (what the importer will accept)."""
+    import base64 as _b64mod
+
+    return _b64mod.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+        "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+
+# (url, id, name) for logos whose bytes ONLY Dispatcharr can supply: the url is
+# a path inside Dispatcharr's own volume, not an absolute http(s) CDN address,
+# so there is nothing for the restore/sync path to re-point at.
+_HOSTED_LOGOS = (
+    ("/data/logos/nbc.png", 91, "NBC"),
+    ("/data/logos/abc.png", 92, "ABC"),
+)
+
+
+def _source_client_with_hosted_logos(*, hosted=_HOSTED_LOGOS, fetch=None) -> MagicMock:
+    """A source-A client whose Dispatcharr logos are HOSTED, with a byte fetch."""
+    client = _source_client()
+    client.get_all_logos_paginated = AsyncMock(
+        return_value=[
+            {"id": logo_id, "name": name, "url": url} for url, logo_id, name in hosted
+        ]
+    )
+
+    async def _default_fetch(logo_id):
+        return _png_bytes()
+
+    client.fetch_logo_image = AsyncMock(side_effect=fetch or _default_fetch)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_plan_carries_hosted_logos_from_an_empty_upload_dir(tmp_path):
+    """The gather reaches Dispatcharr-hosted logos even when ECM's own upload
+    directory has nothing in it — the whole point of this bead. Records stay
+    METADATA-ONLY: no ``content_b64`` in the plan and NO image fetched at gather
+    time (D8 — bytes hydrate lazily, one missed logo at a time)."""
+    src = _source_client_with_hosted_logos()
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    cat = plan.category(EntityType.LOGO)
+    assert {e["filename"] for e in cat.entities} == {"nbc.png", "abc.png"}
+    assert {e["id"] for e in cat.entities} == {91, 92}
+    for entity in cat.entities:
+        assert "content_b64" not in entity
+    src.fetch_logo_image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_sync_uploads_hosted_logo_bytes_to_the_replica(tmp_path):
+    """Opt-in apply: every Dispatcharr-hosted logo reaches B with its real image
+    bytes, fetched from A one at a time, and the destructive bulk-delete still
+    never fires."""
+    png = _png_bytes()
+    src = _source_client_with_hosted_logos()
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    uploaded = {
+        call.args[1]: call.args[2] for call in dest.upload_logo_file.await_args_list
+    }
+    assert uploaded == {"nbc.png": png, "abc.png": png}
+    assert report.category(EntityType.LOGO).created == 2
+    dest.bulk_delete_logos.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_hosted_bytes_supersede_the_stale_ecm_local_copy(tmp_path):
+    """A file in ECM's upload dir that correlates BY BASENAME to a hosted
+    Dispatcharr logo is a stale mirror of the authoritative bytes. Exactly one
+    record may claim that source id (two would collide through the LOGO remap
+    and one would be skipped as ALREADY_EXISTS_IDENTICAL — a claim of sameness
+    about bytes that are not the same), and the winner is Dispatcharr's."""
+    _seed_logo_files(tmp_path, files=("cnn.png",))
+    fresh = _png_bytes() + b"FRESH-DISPATCHARR-BYTES"
+
+    async def _fetch(logo_id):
+        return fresh
+
+    src = _source_client_with_hosted_logos(
+        hosted=(("/data/logos/cnn.png", 77, "CNN Logo"),), fetch=_fetch
+    )
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.upload_logo_file.assert_awaited_once()
+    args = dest.upload_logo_file.await_args.args
+    assert args[1] == "cnn.png"  # no id-suffixed collision name
+    assert args[2] == fresh  # the AUTHORITATIVE bytes, not the stale local file
+    assert report.category(EntityType.LOGO).created == 1
+
+
+@pytest.mark.asyncio
+async def test_hosted_logo_bytes_are_fetched_one_at_a_time(tmp_path):
+    """D8: fetch -> upload -> release, repeat. Never fetch-all-then-upload, which
+    would hold the whole logo set in memory (the failure mode bead …-drc55 is
+    open about on the restore side)."""
+    events: list[tuple[str, object]] = []
+
+    async def _fetch(logo_id):
+        events.append(("fetch", logo_id))
+        return _png_bytes()
+
+    src = _source_client_with_hosted_logos(fetch=_fetch)
+    dest = _dest_client_with_logos()
+
+    async def _upload(name, filename, content, content_type):
+        events.append(("upload", filename))
+        return {"id": 9000 + len(events), "name": name}
+
+    dest.upload_logo_file = AsyncMock(side_effect=_upload)
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert events == [
+        ("fetch", 91),
+        ("upload", "nbc.png"),
+        ("fetch", 92),
+        ("upload", "abc.png"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_hosted_logo_fetch_budget_bounds_one_unattended_cycle(
+    tmp_path, monkeypatch
+):
+    """Sync runs on a SCHEDULE, unattended, so the byte fetch carries a per-cycle
+    wall-clock budget the backup builder does not have (open bead …-sj32h). Once
+    it is spent the remaining logos are honest misses this cycle; the next cycle
+    re-attempts them (the ones already uploaded now MATCH), so the target still
+    converges instead of the tail never syncing at all."""
+    monkeypatch.setattr(engine, "_LOGO_FETCH_BUDGET_SECONDS", 0.0)
+    src = _source_client_with_hosted_logos()
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    # The first fetch always runs (the budget starts when it does); the second is
+    # refused rather than left to run unbounded.
+    assert src.fetch_logo_image.await_count == 1
+    assert dest.upload_logo_file.await_count == 1
+    cat = report.category(EntityType.LOGO)
+    assert cat.created == 1
+    assert cat.failed == 1
+
+
+@pytest.mark.asyncio
+async def test_hosted_logo_fetch_cannot_hang_the_cycle(tmp_path, monkeypatch):
+    """A per-fetch wall-clock bound: the Dispatcharr client passes ``timeout=None``
+    through to httpx, which means NO timeout, so one unanswered logo request
+    would otherwise stall a scheduled cycle forever."""
+    monkeypatch.setattr(engine, "_LOGO_FETCH_TIMEOUT_SECONDS", 0.01)
+
+    async def _hang(logo_id):
+        await asyncio.sleep(30)
+
+    src = _source_client_with_hosted_logos(
+        hosted=(("/data/logos/nbc.png", 91, "NBC"),), fetch=_hang
+    )
+    dest = _dest_client_with_logos()
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await asyncio.wait_for(
+            run_sync(
+                target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+            ),
+            timeout=10,
+        )
+
+    dest.upload_logo_file.assert_not_called()
+    assert report.category(EntityType.LOGO).failed == 1
+
+
+# ---------------------------------------------------------------------------
 # Persisted sync state (bead 7ipq2.2 — live-validation finding): the DBA-ruled
 # sync_targets columns (last_full_sync_at / last_outcome, migration 0024) were
 # never stamped by any code path — the operator status surface stayed NULL
@@ -1100,3 +1544,329 @@ async def test_run_sync_partial_apply_stamps_outcome_but_not_full_sync_time(tmp_
     assert report.outcome != RestoreOutcome.SUCCESS
     assert target.last_outcome == report.outcome.value
     assert target.last_full_sync_at is None
+
+
+# ---------------------------------------------------------------------------
+# The M3U account's own ``user_agent`` FK (bead …-9h6cv).
+#
+# ``importers/m3u_accounts`` forwarded A's raw ``user_agent`` pk to B, and the
+# registry ran M3U_ACCOUNT five steps BEFORE USER_AGENT so the remap namespace
+# was empty anyway. Live, B answered
+# ``400 {"user_agent": ["Invalid pk \"4\" - object does not exist."]}``; because
+# M3U_ACCOUNT is a FATAL failure category the apply rolled back and NOTHING
+# synced. Both halves are needed — ordering alone still forwards the raw pk,
+# and the remap alone resolves against an empty namespace.
+#
+# INVARIANT: no importer forwards a source-side FK to the destination without
+# resolving it through its remap namespace, on any category, at any ordering.
+# ---------------------------------------------------------------------------
+
+
+def test_sync_registry_imports_user_agents_before_m3u_accounts():
+    """An M3U account's ``user_agent`` FK resolves through the USER_AGENT remap
+    namespace, so the agents step must precede the accounts step."""
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    steps = sync_config_importer_steps()
+    agents = _step_index(steps, EntityType.USER_AGENT)
+    accounts = _step_index(steps, EntityType.M3U_ACCOUNT)
+
+    assert agents >= 0, "sync registry carries no USER_AGENT step"
+    assert accounts >= 0, "sync registry carries no M3U_ACCOUNT step"
+    assert agents < accounts, (
+        "USER_AGENT must be imported before M3U_ACCOUNT — an account's "
+        "user_agent FK resolves through the USER_AGENT remap namespace"
+    )
+
+
+def test_every_registry_imports_user_agents_before_m3u_accounts():
+    """Ordering parity across ALL THREE registries fed by the same
+    ``_importer_step_builders`` callables — the sync registry, the restore apply
+    registry, and the restore dry-run registry. A divergence between two of them
+    is exactly how the sibling defect (…-hiacv) arose."""
+    from dbas.restore_orchestrator import default_importer_steps, dry_run_importer_steps
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    for label, steps in (
+        ("sync", sync_config_importer_steps()),
+        ("restore-apply", default_importer_steps()),
+        ("restore-dry-run", dry_run_importer_steps()),
+    ):
+        agents = _step_index(steps, EntityType.USER_AGENT)
+        accounts = _step_index(steps, EntityType.M3U_ACCOUNT)
+        assert agents >= 0, f"{label} registry carries no USER_AGENT step"
+        assert accounts >= 0, f"{label} registry carries no M3U_ACCOUNT step"
+        assert agents < accounts, (
+            f"{label} registry imports USER_AGENT after M3U_ACCOUNT"
+        )
+        # The …-hiacv relationship still holds in the same list.
+        profiles = _step_index(steps, EntityType.STREAM_PROFILE)
+        assert profiles >= 0, f"{label} registry carries no STREAM_PROFILE step"
+        assert agents < profiles, (
+            f"{label} registry imports USER_AGENT after STREAM_PROFILE"
+        )
+
+
+def _source_client_with_custom_agent_on_the_m3u_account() -> MagicMock:
+    """Source A: an M3U account whose ``user_agent`` FK points at a custom agent
+    — the exact shape that aborted the whole apply with a 400."""
+    client = _source_client()
+    client.get_user_agents = AsyncMock(
+        return_value=[
+            {"id": 4, "name": "XDMRU Custom Agent",
+             "user_agent": "XDMRU-Probe/1.0"},
+        ]
+    )
+    client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 1, "name": "Provider A", "password": SECRET_M3U_PASSWORD,
+             "username": "operator", "user_agent": 4},
+        ]
+    )
+    return client
+
+
+def _strict_dest_client() -> AsyncMock:
+    """Dest B, empty, that VALIDATES the ``user_agent`` FK the way Dispatcharr
+    does — an unknown pk is a 400, not a silent accept.
+
+    A permissive mock would let a stale pk through and turn this test green
+    against the broken code.
+    """
+    client = _empty_dest_client()
+    client.create_user_agent = AsyncMock(
+        return_value={"id": 150, "name": "XDMRU Custom Agent"}
+    )
+    known_agent_ids = {150}
+
+    async def _create(payload):
+        agent = payload.get("user_agent")
+        if agent is not None and agent not in known_agent_ids:
+            raise RuntimeError(
+                'Dispatcharr 400: {"user_agent": ["Invalid pk \\"%s\\" - object '
+                'does not exist."]}' % agent
+            )
+        return {"id": 101, "name": payload.get("name")}
+
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_m3u_account_with_a_custom_user_agent_is_created_on_b(tmp_path):
+    """The reproduction, as a cycle: an account carrying a custom user agent
+    CREATES on B with the FK rewritten to B's agent id — no 400, no rollback."""
+    src = _source_client_with_custom_agent_on_the_m3u_account()
+    dest = _strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    account_cat = report.category(EntityType.M3U_ACCOUNT)
+    assert account_cat.created == 1
+    # An unresolved FK on this path is a FAILURE (FailureReason), recorded in
+    # ``failure_details`` — the M3U create raises and the importer classifies it.
+    # Asserting on ``skip_details`` here would be a false green: the broken code
+    # records nothing there either.
+    assert account_cat.failed == 0, (
+        "M3U create failed: %s"
+        % [(d.reason, d.message) for d in account_cat.failure_details]
+    )
+    # The FK on the wire is B's agent id (150), never A's source pk (4).
+    payload = dest.create_m3u_account.await_args.args[0]
+    assert payload["user_agent"] == 150
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_a_custom_user_agent_no_longer_rolls_the_whole_cycle_back(tmp_path):
+    """Blast-radius pin. The defect was not 'the account is missing its agent',
+    it was 'the ENTIRE apply rolls back and nothing syncs'. Every other category
+    must reach B on a cycle whose account carries a custom agent."""
+    src = _source_client_with_custom_agent_on_the_m3u_account()
+    dest = _strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.create_epg_source.assert_awaited()
+    dest.create_channel_group.assert_awaited()
+    dest.create_channel_profile.assert_awaited()
+    dest.create_stream_profile.assert_awaited()
+    assert not any(
+        "rollback" in note.lower() for note in report.notes
+    ), f"the cycle rolled back; notes={report.notes}"
+    assert report.outcome == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_account_still_created_when_its_agent_cannot_be_resolved(tmp_path):
+    """DECISION (…-9h6cv), stated as a test: an M3U account whose ``user_agent``
+    cannot be resolved is created WITHOUT the field rather than skipped
+    DEPENDENCY_UNRESOLVED like its stream-profile sibling.
+
+    An M3U account is the ROOT of the Phase-2 chain — EPG sources, groups,
+    channels and streams all hang off it — and Dispatcharr falls back to its
+    default agent when the field is unset. Skipping the account would cascade a
+    whole-tree DEPENDENCY_UNRESOLVED for a field the account works without. The
+    degradation is reported in ``report.notes``, never silent."""
+    # A's account points at agent 4, but A's own agent list does not carry it
+    # (deleted between the two gathers), so the USER_AGENT namespace has no 4.
+    src = _source_client()
+    src.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 1, "name": "Provider A", "password": SECRET_M3U_PASSWORD,
+             "username": "operator", "user_agent": 4},
+        ]
+    )
+    dest = _strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    account_cat = report.category(EntityType.M3U_ACCOUNT)
+    assert account_cat.created == 1
+    assert account_cat.failed == 0
+    assert not any(
+        d.reason == SkipReason.DEPENDENCY_UNRESOLVED
+        for d in account_cat.skip_details
+    )
+    payload = dest.create_m3u_account.await_args.args[0]
+    assert "user_agent" not in payload
+    assert any("Provider A" in note for note in report.notes)
+
+
+# ---------------------------------------------------------------------------
+# The M3U account's ``server_group`` FK (bead …-g8tyd) — the whole cycle.
+#
+# Same shape as the ``user_agent`` defect (…-9h6cv) with no remap namespace to
+# resolve through: Dispatcharr 0.28.2 has a ``ServerGroup`` table, but ECM's
+# DBAS has no ServerGroup entity category and no ServerGroup importer, so A's
+# pk cannot be translated. It is DROPPED instead.
+#
+# Live on the disposable stack, an account carrying A's ``server_group`` pk 20
+# made B answer ``400 {"server_group": ["Invalid pk \"20\" - object does not
+# exist."]}``; M3U_ACCOUNT is a FATAL failure category, so the apply rolled back
+# (``partial_failed_rolled_back``) and NOTHING synced. The identical payload
+# with ``server_group`` removed answered ``201``.
+# ---------------------------------------------------------------------------
+
+
+def _source_client_with_a_server_group_on_the_m3u_account() -> MagicMock:
+    """Source A: an M3U account assigned to a ServerGroup — the exact shape that
+    aborted the whole apply with a 400.
+
+    pk 20 is deliberately outside the destination's ServerGroup range (the live
+    B has no server groups at all, and ECM never creates any). A pk that happened
+    to alias an unrelated destination row would produce a FALSE GREEN.
+    """
+    client = _source_client()
+    client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 1, "name": "Provider A", "password": SECRET_M3U_PASSWORD,
+             "username": "operator", "server_group": 20},
+        ]
+    )
+    return client
+
+
+def _server_group_strict_dest_client() -> AsyncMock:
+    """Dest B, empty, that VALIDATES the ``server_group`` FK the way Dispatcharr
+    does — ANY non-null pk is a 400, because B has no ServerGroup rows and ECM
+    has no importer that could create one.
+
+    A permissive mock would let the stale pk through and turn these tests green
+    against the broken code.
+    """
+    client = _empty_dest_client()
+
+    async def _create(payload):
+        group = payload.get("server_group")
+        if group is not None:
+            raise RuntimeError(
+                'Dispatcharr 400: {"server_group": ["Invalid pk \\"%s\\" - object '
+                'does not exist."]}' % group
+            )
+        return {"id": 101, "name": payload.get("name")}
+
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_m3u_account_in_a_server_group_is_created_on_b(tmp_path):
+    """The reproduction, as a cycle: an account assigned to a ServerGroup on A
+    CREATES on B with the FK dropped — no 400, no rollback."""
+    src = _source_client_with_a_server_group_on_the_m3u_account()
+    dest = _server_group_strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    account_cat = report.category(EntityType.M3U_ACCOUNT)
+    assert account_cat.created == 1
+    # An unresolved FK on this path is a FAILURE (FailureReason) recorded in
+    # ``failure_details`` — the M3U create raises and the importer classifies it.
+    # Asserting on ``skip_details`` here would be a false green: the broken code
+    # records nothing there either.
+    assert account_cat.failed == 0, (
+        "M3U create failed: %s"
+        % [(d.reason, d.message) for d in account_cat.failure_details]
+    )
+    payload = dest.create_m3u_account.await_args.args[0]
+    assert "server_group" not in payload, (
+        "source pk %r reached the destination" % payload.get("server_group")
+    )
+    assert report.outcome == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_a_server_group_no_longer_rolls_the_whole_cycle_back(tmp_path):
+    """Blast-radius pin. The defect was not 'the account lost its server group',
+    it was 'the ENTIRE apply rolls back and nothing syncs'. Every other category
+    must reach B on a cycle whose account is assigned to a server group."""
+    src = _source_client_with_a_server_group_on_the_m3u_account()
+    dest = _server_group_strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.create_epg_source.assert_awaited()
+    dest.create_channel_group.assert_awaited()
+    dest.create_channel_profile.assert_awaited()
+    dest.create_stream_profile.assert_awaited()
+    assert not any(
+        "rollback" in note.lower() for note in report.notes
+    ), f"the cycle rolled back; notes={report.notes}"
+    assert report.outcome == RestoreOutcome.SUCCESS
+    # The degradation is reported, never silent.
+    assert any(
+        "Provider A" in note and "server group" in note.lower()
+        for note in report.notes
+    ), f"no operator note named the degraded account; notes={report.notes}"

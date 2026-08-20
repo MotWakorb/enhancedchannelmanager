@@ -534,12 +534,33 @@ class DbasSyncTask(TaskScheduler):
         - APPLY with a clean ``SUCCESS`` outcome              -> ``success=True``.
         - APPLY with a mixed/rolled-back outcome              -> ``success=False``
           (partial — tri-state discipline: NEVER success on mixed state).
+        - EITHER mode carrying ``destination_unreadable``     -> ``success=False``
+          (bead ``…-jqfxm``), whatever the counts say.
+
+        That last rule is why the dry-run branch above is not simply "a preview
+        always succeeded". A preview's counts are claims ABOUT the destination —
+        "would create 24" means "B does not have these 24" — and a run that
+        could not read B produces exactly the shape of a run against an EMPTY B,
+        because every importer degrades a failed read to ``existing = []``. Live
+        validation measured that against a wrong password: ``outcome=success,
+        would create 24, failed 0`` while B logged seven 401/429s, and the
+        Settings card duly offered Apply (it gates on ``result.success``). A
+        preview that never read the destination is a failed preview.
+
+        ``success=False`` is not one severity. A run that FINISHED and left real,
+        kept state is DEGRADED, and is declared as such through
+        ``completed_degraded`` so the task engine alerts it as a ``warning``
+        rather than the red "Task Failed" (bead ``…-daziw``, PO decision
+        2026-08-19). See :meth:`_degraded_not_failed`.
         """
         from dbas.restore_contracts import RestoreOutcome
 
         is_dry_run = bool(report.is_dry_run)
         outcome = report.outcome.value if report.outcome else "dry_run"
-        succeeded = is_dry_run or report.outcome == RestoreOutcome.SUCCESS
+        unreadable = getattr(report, "destination_unreadable", None)
+        succeeded = unreadable is None and (
+            is_dry_run or report.outcome == RestoreOutcome.SUCCESS
+        )
 
         self._set_progress(
             current=1, total=1,
@@ -566,6 +587,18 @@ class DbasSyncTask(TaskScheduler):
             observability.record_sync_full_success(self.sync_target_id)
 
         message = self._summary_message(report, is_dry_run, outcome)
+        if unreadable is not None:
+            # Replace the counts entirely rather than append to them: "would
+            # create 24" is not a true sentence with a caveat attached, it is a
+            # sentence about the SOURCE, and leaving it in the operator's line
+            # is how a false green survives a fix.
+            message = (
+                "Cross-instance sync %s could not read the destination it "
+                "describes — %s. No counts are reported because they would "
+                "describe this instance, not the sync target." % (
+                    "preview" if is_dry_run else "run", unreadable,
+                )
+            )
         logger.info(
             "[DBAS_SYNC] Sync task complete (mode=%s, outcome=%s, %d categories)",
             "dry-run" if is_dry_run else "apply", outcome, len(report.categories),
@@ -580,8 +613,13 @@ class DbasSyncTask(TaskScheduler):
         counts = self._counts_from_report(report, is_dry_run)
         return TaskResult(
             success=succeeded,
+            completed_degraded=self._degraded_not_failed(report, is_dry_run),
             message=message,
-            error=None if succeeded else "SYNC_%s" % outcome.upper(),
+            error=(
+                None if succeeded
+                else "SYNC_DESTINATION_UNREADABLE" if unreadable is not None
+                else "SYNC_%s" % outcome.upper()
+            ),
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
             total_items=counts.total_items,
@@ -641,6 +679,52 @@ class DbasSyncTask(TaskScheduler):
         )
 
     @staticmethod
+    def _degraded_not_failed(report, is_dry_run: bool) -> bool:
+        """True when the sync RAN TO COMPLETION and rolled nothing back.
+
+        Bead ``…-daziw``, PO decision 2026-08-19. Such a run is a WARNING, not a
+        red "Task Failed": target B carries the applied state, and the summary
+        names the shortfall. The task declares the state here; ``task_engine``
+        maps state to alert severity
+        (:attr:`task_scheduler.TaskResult.completed_degraded`).
+
+        WHY SYNC SHARES THE RESTORE'S RULE INSTEAD OF DEFINING ITS OWN. Sync
+        already shared the outcome downgrade — it runs the same orchestrator, so
+        an apply that leaves a channel with no playable stream has ALWAYS come
+        back ``COMPLETED_WITH_FAILURES`` here. What it did not share was the
+        severity, because this method did not exist: the same degraded run
+        alerted ``warning`` from a restore and ``error`` / "Task Failed" from a
+        sync. A sync-specific definition of success was explicitly NOT chosen —
+        it would recreate the bug in the path that runs unattended and
+        repeatedly, which is where nobody is watching to catch it by hand.
+        Alert VOLUME is handled at the alert layer instead: ``warning`` carries a
+        per-task opt-out (``ScheduledTask.alert_on_warning``), so an operator
+        with a known, accepted shortfall can silence the alert WITHOUT the code
+        reporting success for an instance that cannot play a channel.
+
+        The condition is the OUTCOME
+        (:attr:`~dbas.restore_contracts.RestoreOutcome.is_degraded_not_failed`),
+        never the particular shortfall — see that property for what keying on
+        the shortfall instead cost the restore path (bead ``…-cwmid``).
+
+        A DRY RUN is never degraded: it has no realized outcome, and a preview
+        that PREDICTS a shortfall predicted it — nothing was applied to be
+        unplayable. A run that failed before reaching the engine returns through
+        :meth:`_fail` and never arrives here, so it keeps the error branch.
+
+        NOR is a run that could not read the destination (bead ``…-jqfxm``).
+        "Degraded" means the run finished and B carries real, kept state the
+        operator can reason about. A run that never got an answer out of B knows
+        neither what B carries nor what it applied — that is the error branch,
+        not a warning an operator can opt out of.
+        """
+        if is_dry_run or report.outcome is None:
+            return False
+        if getattr(report, "destination_unreadable", None) is not None:
+            return False
+        return report.outcome.is_degraded_not_failed
+
+    @staticmethod
     def _summary_message(report, is_dry_run: bool, outcome: str) -> str:
         if is_dry_run:
             total_create = sum(c.would_create for c in report.categories)
@@ -661,12 +745,25 @@ class DbasSyncTask(TaskScheduler):
         total_created = sum(c.created for c in report.categories)
         total_updated = sum(c.updated for c in report.categories)
         total_failed = sum(c.failed for c in report.categories)
-        return (
+        summary = (
             "Sync %s: created %d, updated %d, failed %d across %d categories" % (
                 outcome, total_created, total_updated, total_failed,
                 len(report.categories),
             )
         )
+        # The placeholder populations are the ONE shortfall the counts above
+        # cannot express: every row succeeded, so a degraded sync would
+        # otherwise alert "failed 0" and name nothing an operator can act on
+        # (…-daziw). Rendered by the RESTORE task's builder rather than a second
+        # copy of it, so the two surfaces cannot describe the same two counters
+        # differently. Imported locally — module scope would make the two task
+        # modules import-time circular.
+        from tasks.dbas_restore import DbasRestoreTask
+
+        phrases = DbasRestoreTask.stream_reattach_phrases(report)
+        if phrases:
+            summary += "; " + "; ".join(phrases)
+        return summary
 
     def _fail(
         self, started_at: datetime, message: str, *, error: Optional[str] = None
