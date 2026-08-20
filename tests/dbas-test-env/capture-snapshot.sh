@@ -31,6 +31,12 @@
 # Output: tests/dbas-test-env/seed/dispatcharr-seed.sql.gz
 #         tests/dbas-test-env/seed/SNAPSHOT_MANIFEST.txt  (row counts + meta)
 #
+# The manifest stamps the Dispatcharr version READ from the running instance
+# (GET /api/core/version/, via DBAS_SNAPSHOT_BASE_URL / DBAS_TEST_BASE_URL, else
+# http://localhost:${DBAS_TEST_HTTP_PORT:-9591}). This directory tracks
+# `dispatcharr:latest`, so there is nothing to pin; if the endpoint cannot be
+# read the manifest says "unknown" rather than stamping a guess.
+#
 # NOTE: the .sql.gz snapshot is intentionally NOT committed (see seed/.gitignore)
 # — it is large and machine-local. The MANIFEST and the loader scripts ARE the
 # committed, reviewable artifacts. Regenerate the snapshot on demand.
@@ -63,6 +69,35 @@ dump_via_testenv_container() {
     pg_dump -U dispatch -d dispatcharr --no-owner --no-privileges --clean --if-exists
 }
 
+# Read the Dispatcharr version from the RUNNING instance. This directory tracks
+# `dispatcharr:latest` (PO decision, bead enhancedchannelmanager-xvuk1), so there
+# is no version to hardcode — a stamped guess would mislabel every snapshot.
+# Prints the version, or the literal string "unknown (could not read <url>)" so
+# that "did not run" stays distinguishable from a real value. Never invents one.
+read_dispatcharr_version() {
+  local url="${DBAS_SNAPSHOT_BASE_URL:-${DBAS_TEST_BASE_URL:-http://localhost:${DBAS_TEST_HTTP_PORT:-9591}}}"
+  url="${url%/}/api/core/version/"
+  local body version
+  if ! body="$(curl -fsS --max-time 10 "${url}" 2>/dev/null)"; then
+    echo "unknown (could not read ${url})"
+    return 0
+  fi
+  version="$(printf '%s' "${body}" \
+    | python3 -c 'import json,sys
+try:
+    p = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+v = p.get("version") if isinstance(p, dict) else (p if isinstance(p, str) else None)
+if not isinstance(v, str) or not v.strip():
+    sys.exit(1)
+print(v.strip())' 2>/dev/null)" || {
+    echo "unknown (no version field at ${url})"
+    return 0
+  }
+  printf '%s\n' "${version}"
+}
+
 echo "[capture] mode=${MODE} -> ${OUT}"
 case "${MODE}" in
   live)     dump_via_psql_env       | gzip -9 > "${OUT}" ;;
@@ -71,11 +106,13 @@ case "${MODE}" in
 esac
 
 # Build a reviewable manifest (row counts of the round-trip-relevant tables).
-# Table names below are best-effort; adjust to the pinned schema on first run.
+# Table names below are best-effort; adjust to the running schema on first run.
+DISPATCHARR_VERSION_READ="$(read_dispatcharr_version)"
+echo "[capture] dispatcharr version (read from the instance): ${DISPATCHARR_VERSION_READ}"
 {
   echo "# Dispatcharr DBAS seed snapshot manifest"
   echo "# captured: $(date -u +%Y-%m-%dT%H:%M:%SZ)  mode=${MODE}"
-  echo "# dispatcharr version pin: ${DISPATCHARR_VERSION:-0.26.0}"
+  echo "# dispatcharr version (READ from the running instance, not a pin): ${DISPATCHARR_VERSION_READ}"
   echo "# file: $(basename "${OUT}")  size: $(du -h "${OUT}" | cut -f1)"
   echo "#"
   echo "# Row counts (the categories the round-trip must reproduce):"

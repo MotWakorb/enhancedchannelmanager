@@ -58,11 +58,31 @@ docker-compose.yml/.mcp.yml) or the operator's live Dispatcharr.
   that is baked-in build metadata and has misled three engineers on this work.
   Checksum the deployed files instead (see the HANDOVER verification table).
 
-This covers **all three** compose files in this directory —
-`docker-compose.dbas-test.yml` (single instance),
-`docker-compose.dbas-sync-test.yml` (A + B) and
-`docker-compose.xc-provider.yml` (P). None of them carries a hand-maintained
-version pin any more; do not reinstate one.
+State it as an invariant, not a file list — the compose files were three
+examples of the property, not the whole of it:
+
+> **No live default anywhere in `tests/dbas-test-env/` (or the docs describing
+> it) pins a Dispatcharr version. The default is always `latest`, and anything
+> that needs to know the version READS it from the running instance's version
+> endpoint and records what it saw.**
+
+What that covers today, all swept 2026-08-20:
+
+| Where | Was | Now |
+|---|---|---|
+| `docker-compose.dbas-test.yml` | `:${DISPATCHARR_VERSION:-0.26.0}` (x2) | `ghcr.io/…:${DISPATCHARR_VERSION:-latest}` |
+| `docker-compose.dbas-sync-test.yml` | `:${DISPATCHARR_VERSION:-0.26.0}` (x2) | same |
+| `docker-compose.xc-provider.yml` | `:${DISPATCHARR_VERSION:-0.28.2}` (x2) | same |
+| `.env.example` | `DISPATCHARR_VERSION=0.26.0` | commented out — and note `docker compose` auto-loads `.env` here for **every** compose file, so a stray value pins all three stacks |
+| `validate-version-behaviors.py` | `EXPECTED_VERSION = os.environ.get(…, "0.26.0")`, asserted | reads the version, stamps it on the report, and **hard-fails** if it cannot |
+| `capture-snapshot.sh` | stamped `version pin: ${DISPATCHARR_VERSION:-0.26.0}` into every manifest | stamps the version it actually read, or the literal `unknown (…)` — never a guess |
+| `seed/edge_supplement.py` | prose asserting a "pinned 0.26.0 schema" | prose pointing at the running schema |
+| `docs/testing/dbas-test-env.md` | a "Version pin" table + bump procedure | a version-policy section carrying this invariant |
+
+Remaining mentions of `0.26.0` / `0.28.2` in this directory are **history or
+opt-in override examples** — a past validation run, the retired default being
+described as retired, or a commented-out `DISPATCHARR_VERSION=0.28.2` showing
+how to reproduce an old finding. None of them is a live default.
 
 `.env.example` no longer sets `DISPATCHARR_VERSION` either. Note that
 `docker compose` auto-loads `.env` from this directory for **every** compose
@@ -91,12 +111,21 @@ shapes the CI fake must reproduce. **Read and record the version first**; the
 probe's result is meaningless without it:
 
 ```bash
-curl -s http://localhost:9591/api/core/version/     # record this with the result
-
 DBAS_TEST_BASE_URL=http://localhost:9591 \
 DBAS_TEST_ADMIN_USER=ecmtest DBAS_TEST_ADMIN_PASS=ecmtestpass \
 python3 validate-version-behaviors.py
 ```
+
+The probe reads `GET /api/core/version/` itself, prints
+`[summary] VALIDATED AGAINST DISPATCHARR <version> at <url>`, and **exits 2
+without reporting any shape** if it cannot read a version — so a recorded
+response shape can never be attributed to the wrong platform. Quote that
+summary line with any result.
+
+To assert a version deliberately (only when reproducing an old finding), set
+the opt-in `DBAS_EXPECT_VERSION`; a mismatch is a loud `WARN`, not a silent
+pass. It is unset by default, which is what keeps the probe from carrying a
+pin.
 
 ## Seed production-shaped data + edge cases
 

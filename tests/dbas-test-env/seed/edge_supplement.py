@@ -37,8 +37,12 @@ Usage:
 
 This script is idempotent-ish: it tags everything it creates with an
 "[ECM-EDGE]" marker so a re-run can find/skip existing edge objects. It is
-written defensively — endpoints/fields are best-effort against the pinned
-0.26.0 schema and MUST be validated on first real bring-up (see README).
+written defensively — endpoints/fields are best-effort and MUST be validated
+against the RUNNING schema on every platform move (see README). There is no
+version to check them against here: `tests/dbas-test-env/` tracks
+`dispatcharr:latest` (PO decision, bead enhancedchannelmanager-xvuk1), so read
+the version from `GET /api/core/version/` and record it with whatever you
+find. These fields were last shaped against the 0.26.0 schema.
 """
 from __future__ import annotations
 
@@ -54,7 +58,7 @@ PASS = os.environ.get("DBAS_TEST_ADMIN_PASS", "ecmtestpass")
 MARKER = "[ECM-EDGE]"
 
 # Field-length probe for MAX-LENGTH case. Dispatcharr names are typically
-# varchar(255); we go right to the edge. Adjust if the pinned schema differs.
+# varchar(255); we go right to the edge. Adjust if the running schema differs.
 MAX_NAME = (MARKER + " ") + ("X" * (255 - len(MARKER) - 1))
 
 UNICODE_NAMES = [
@@ -112,7 +116,7 @@ def create_foreign_admin(token: str) -> None:
         print("[edge] +foreign admin (D11 lockout guard) created")
     else:
         print(f"[edge] ! foreign admin not created ({status}): {payload} "
-              "-- verify /api/accounts/users/ path + privilege fields on pinned schema")
+              "-- verify /api/accounts/users/ path + privilege fields on the running schema")
 
 
 def main() -> int:
@@ -133,7 +137,7 @@ def main() -> int:
     if dup_group:
         # Two streams with the SAME name in the same group => the .14 4-tier
         # matcher must disambiguate. (Stream-create path/fields vary by version;
-        # validate against pinned 0.26.0 — see README.)
+        # validate against the RUNNING instance, not a pin — see README.)
         for i in (1, 2):
             status, payload = _req("POST", "/api/channels/streams/", token, {
                 "name": f"{MARKER} Duplicate Stream",
@@ -145,7 +149,8 @@ def main() -> int:
     # 5. Foreign-admin lockout guard (D11)
     create_foreign_admin(token)
 
-    print("[edge] supplement complete (validate field/endpoint names vs pinned schema)")
+    print("[edge] supplement complete (validate field/endpoint names vs the "
+          "RUNNING schema — read GET /api/core/version/ and record it)")
     return 0
 
 
