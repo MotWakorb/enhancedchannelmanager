@@ -1136,7 +1136,12 @@ def default_importer_steps() -> list[ImporterStep]:
         ``settings updated=7`` while ECM's ``user_timezone`` and
         ``stats_poll_interval`` silently reverted: that count was Dispatcharr's
         namespace, and ECM's own blob had no importer at all.
-      * users before channels (the l1p4p slot; unchanged).
+      * users before channels (the l1p4p slot; unchanged) — and AFTER channel
+        profiles, which is now load-bearing rather than incidental: a user's
+        ``channel_profiles`` list is a LIST-VALUED FK remapped through the
+        CHANNEL_PROFILE namespace (bead ``…-if05f``). Both registries already
+        ordered profiles ahead of users; moving USER above CHANNEL_PROFILE would
+        meet an empty namespace and skip every profile-scoped user.
       * channels, then DVR rules (a DVR rule's ``channel`` FK remaps through the
         just-populated ``EntityType.CHANNEL`` namespace), then logos LAST
         (attach to the created channels; slow streaming uploads at the tail).
@@ -1358,6 +1363,9 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             selected=_selected(ctx, EntityType.USER),
             report=ctx.report,
             ledger=ctx.ledger,
+            # …-if05f: a user's channel_profiles list is remapped through the
+            # CHANNEL_PROFILE namespace, which the step above this one populates.
+            remap=ctx.remap,
             is_dry_run=ctx.is_dry_run,
             persist_ledger=ctx.flush_ledger,
         )

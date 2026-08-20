@@ -843,7 +843,7 @@ async def test_user_create_sends_a_password_through_the_real_client_seam():
     at that seam, not in the importer.
     """
     from dbas.importers.users import import_users
-    from dbas.restore_contracts import RestoreReport, RollbackLedger
+    from dbas.restore_contracts import IdRemapTable, RestoreReport, RollbackLedger
     from dispatcharr_client import DispatcharrClient
 
     sent = {}
@@ -873,6 +873,7 @@ async def test_user_create_sends_a_password_through_the_real_client_seam():
         selected=True,
         report=RestoreReport(is_dry_run=False),
         ledger=RollbackLedger(restore_id="test-restore"),
+        remap=IdRemapTable(),
     )
 
     assert sent["path"] == "/api/accounts/users/"

@@ -33,6 +33,7 @@ from dbas.importers.users import import_users, UsersCapabilityError
 from dbas.restore_contracts import (
     EntityType,
     FailureReason,
+    IdRemapTable,
     RestoreReport,
     RollbackLedger,
     SkipReason,
@@ -86,6 +87,19 @@ def _ledger():
     return RollbackLedger(restore_id="test-restore")
 
 
+def _remap(channel_profiles: dict[int, int] | None = None) -> IdRemapTable:
+    """An IdRemapTable, optionally pre-loaded with CHANNEL_PROFILE mappings.
+
+    Bead …-if05f. The USER step runs AFTER the CHANNEL_PROFILE step in both
+    registries, so by the time this importer runs the namespace holds every
+    profile the run created or adopted. These tests hand it in directly.
+    """
+    remap = IdRemapTable()
+    for source_id, dest_id in (channel_profiles or {}).items():
+        remap.add(EntityType.CHANNEL_PROFILE, source_id, dest_id)
+    return remap
+
+
 # ---------------------------------------------------------------------------
 # Opt-in gating
 # ---------------------------------------------------------------------------
@@ -102,6 +116,7 @@ async def test_category_skipped_when_not_selected():
     await import_users(
         archive_users=[{"id": 5, "username": "alice", "is_superuser": True}],
         client=client,
+        remap=_remap(),
         selected=False,
         report=report,
         ledger=ledger,
@@ -134,6 +149,7 @@ async def test_capability_check_fails_closed_when_password_hash_write_field_pres
         await import_users(
             archive_users=[{"id": 5, "username": "alice"}],
             client=client,
+        remap=_remap(),
             selected=True,
             report=report,
             ledger=ledger,
@@ -159,6 +175,7 @@ async def test_capability_check_fails_closed_when_schema_unparseable():
         await import_users(
             archive_users=[{"id": 5, "username": "alice"}],
             client=client,
+        remap=_remap(),
             selected=True,
             report=report,
             ledger=ledger,
@@ -177,6 +194,7 @@ async def test_capability_check_passes_with_normal_schema():
     await import_users(
         archive_users=[{"id": 5, "username": "alice"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -207,6 +225,7 @@ async def test_colliding_username_does_not_touch_operator():
     await import_users(
         archive_users=[{"id": 999, "username": "admin", "is_superuser": True}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -241,6 +260,7 @@ async def test_operator_matched_by_subject_not_by_archive_id():
             {"id": 50, "username": "operator"},  # username match -> preserved
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -283,6 +303,7 @@ async def test_archive_superuser_bit_not_trusted():
             }
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -324,6 +345,7 @@ async def test_archive_password_and_hash_never_forwarded():
             }
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -356,6 +378,7 @@ async def test_create_sends_a_generated_password():
     await import_users(
         archive_users=[{"id": 5, "username": "alice"}, {"id": 6, "username": "bob"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=_report(),
         ledger=_ledger(),
@@ -386,6 +409,7 @@ async def test_generated_password_never_reaches_the_report_or_the_ledger():
     await import_users(
         archive_users=[{"id": 5, "username": "alice"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -409,6 +433,7 @@ async def test_generated_password_never_logged(caplog):
         await import_users(
             archive_users=[{"id": 5, "username": "alice"}],
             client=client,
+        remap=_remap(),
             selected=True,
             report=_report(),
             ledger=_ledger(),
@@ -438,6 +463,7 @@ async def test_force_reset_flagged():
             {"id": 6, "username": "bob"},
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -468,6 +494,7 @@ async def test_existing_non_operator_username_skipped_already_exists():
     await import_users(
         archive_users=[{"id": 5, "username": "existing_user"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -525,6 +552,7 @@ async def test_ledger_flushed_to_disk_before_each_subsequent_create():
             {"id": 7, "username": "carol"},
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -556,6 +584,7 @@ async def test_no_persist_callback_does_not_crash():
     await import_users(
         archive_users=[{"id": 5, "username": "alice"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -593,6 +622,7 @@ async def test_payload_drops_keys_not_in_schema_write_fields():
             }
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -621,6 +651,7 @@ async def test_payload_still_drops_secret_keys_present_in_schema():
             {"id": 5, "username": "alice", "password": "hunter2", "is_superuser": True},
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -654,6 +685,7 @@ async def test_failure_message_masks_echoed_secret():
     await import_users(
         archive_users=[{"id": 5, "username": "alice"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -683,6 +715,7 @@ async def test_create_conflict_recorded_as_failure_conflict():
     await import_users(
         archive_users=[{"id": 5, "username": "racy"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -713,6 +746,7 @@ async def test_rollback_ledger_records_each_created_user():
             {"id": 6, "username": "bob"},
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -752,6 +786,7 @@ async def test_report_and_ledger_carry_no_secret_material():
             {"id": 7, "username": "dup_user", "password_hash": "SECRET_HASH"},  # exists
         ],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -778,6 +813,7 @@ async def test_dry_run_does_not_create_but_reports_would_create():
     await import_users(
         archive_users=[{"id": 5, "username": "alice"}],
         client=client,
+        remap=_remap(),
         selected=True,
         report=report,
         ledger=ledger,
@@ -789,3 +825,351 @@ async def test_dry_run_does_not_create_but_reports_would_create():
     assert cat.would_create == 1
     assert cat.created == 0
     assert ledger.entries == []
+
+
+# ---------------------------------------------------------------------------
+# 9. THE ``channel_profiles`` LIST-VALUED FK (bead …-if05f)
+#
+# ``channel_profiles`` is a LIST of ChannelProfile primary keys, WRITABLE on
+# User create (confirmed against a live Dispatcharr 0.28.2 ``/api/schema/``:
+# ``{"type": "array", "items": {"type": "integer"}}``, and
+# ``UserSerializer.channel_profiles = PrimaryKeyRelatedField(many=True)``). The
+# destination assigns its own profile ids, so forwarding the source's raw pks
+# bound the restored user to whatever profiles happened to occupy those ids —
+# a SILENT WRONG BINDING, not the loud 400 the M3U account's scalar FKs gave.
+#
+# EVERY test below asserts on the RESULTING BINDING (the exact list in the
+# create payload), never on the absence of an error: the broken code raised
+# nothing. Source pks are deliberately chosen OUTSIDE the destination's id
+# range, or pointing at a differently-NAMED destination profile, so a
+# pass-through implementation cannot alias its way to a green (…-9h6cv).
+# ---------------------------------------------------------------------------
+
+
+_PROFILE_SCHEMA_FIELDS = {"username", "email", "channel_profiles"}
+
+
+def _sent_payload(client):
+    """The payload dict handed to ``create_user`` on the first (only) create."""
+    return client.create_user.await_args_list[0].args[0]
+
+
+@pytest.mark.asyncio
+async def test_channel_profiles_are_remapped_to_destination_ids():
+    """The list is rewritten pk-by-pk through the CHANNEL_PROFILE namespace.
+
+    Source pks 901/902 exist on NO destination (B's profile ids here are 4 and
+    7), so a pass-through would either 400 or bind nothing — but the bug's real
+    shape is the aliasing case in the next test. Here we pin the happy path: the
+    payload carries the DESTINATION ids, in the archive's order.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+    report = _report()
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice", "channel_profiles": [901, 902]}
+        ],
+        client=client,
+        remap=_remap({901: 4, 902: 7}),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    payload = _sent_payload(client)
+    assert payload["channel_profiles"] == [4, 7]
+    assert 901 not in payload["channel_profiles"]
+    assert 902 not in payload["channel_profiles"]
+    assert report.category(EntityType.USER).created == 1
+
+
+@pytest.mark.asyncio
+async def test_a_source_pk_that_aliases_a_different_destination_profile_is_never_sent():
+    """The FALSE-GREEN trap, made explicit (…-9h6cv).
+
+    The archive user is limited to SOURCE profile 3 ("Kids"). The destination
+    also HAS a profile with id 3 — but it is "Adults", an unrelated row; "Kids"
+    landed on the destination as id 11. Forwarding the raw pk therefore succeeds
+    upstream and binds the user to the WRONG profile, with the report still
+    saying ``created``. Only an assertion on the resulting binding catches it.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+
+    await import_users(
+        archive_users=[{"id": 5, "username": "alice", "channel_profiles": [3]}],
+        client=client,
+        # source "Kids" id 3 -> destination "Kids" id 11. Destination id 3 is
+        # "Adults" and must never be bound.
+        remap=_remap({3: 11}),
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+    )
+
+    assert _sent_payload(client)["channel_profiles"] == [11]
+
+
+@pytest.mark.asyncio
+async def test_duplicate_source_profiles_collapse_to_one_destination_id():
+    """Two source profiles adopted by the same destination row bind once.
+
+    Deterministic and order-stable — the payload is not allowed to depend on how
+    many source rows happened to map onto a shared destination profile.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice", "channel_profiles": [901, 902, 903]}
+        ],
+        client=client,
+        remap=_remap({901: 4, 902: 4, 903: 7}),
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+    )
+
+    assert _sent_payload(client)["channel_profiles"] == [4, 7]
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_profile_entry_is_dropped_and_the_user_is_still_created():
+    """PARTIAL loss: send the resolved subset, drop the rest, report it.
+
+    Dropping an entry can only NARROW what the restored user can see (the
+    remaining list is a subset of the archive's grant), which is the safe
+    direction for this security-sensitive category. The user is still worth
+    creating; the degradation is reported, never silent.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+    report = _report()
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice", "channel_profiles": [901, 902]}
+        ],
+        client=client,
+        remap=_remap({901: 4}),  # 902 is not on the destination at all
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    payload = _sent_payload(client)
+    assert payload["channel_profiles"] == [4]
+    assert 902 not in payload["channel_profiles"]
+    cat = report.category(EntityType.USER)
+    assert cat.created == 1
+    assert cat.skipped == 0
+    # Structure: this degradation is a report.notes entry (the established idiom
+    # for a "created, but less than the archive asked for" outcome — …-9h6cv /
+    # …-g8tyd), NOT a skip_detail and NOT a failure_detail.
+    assert cat.skip_details == []
+    assert cat.failure_details == []
+    assert any(
+        "alice" in note and "channel profile" in note for note in report.notes
+    )
+
+
+@pytest.mark.asyncio
+async def test_user_is_skipped_when_none_of_its_channel_profiles_resolve():
+    """TOTAL loss FAILS CLOSED — the user is not created at all.
+
+    Dispatcharr 0.28.2 reads an EMPTY ``channel_profiles`` as UNRESTRICTED, not
+    as "no access": five paths (``apps/output/views.py`` M3U + group + XC
+    listings, ``apps/output/epg.py``, ``apps/timeshift/views.py``,
+    ``apps/proxy/live_proxy/views.py``) branch on
+    ``user.channel_profiles.count() == 0`` and drop profile filtering entirely.
+    So creating this user with the empty list that is all we could resolve would
+    turn a profile-scoped archive user into an UNSCOPED destination user — a
+    privilege widening, which policy item 2 forbids. Skip instead.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+    report = _report()
+    ledger = _ledger()
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice", "channel_profiles": [901, 902]}
+        ],
+        client=client,
+        remap=_remap(),  # the CHANNEL_PROFILE namespace is empty
+        selected=True,
+        report=report,
+        ledger=ledger,
+    )
+
+    client.create_user.assert_not_awaited()
+    cat = report.category(EntityType.USER)
+    assert cat.created == 0
+    assert cat.skipped == 1
+    # Structure: a SkipDetail with SkipReason.DEPENDENCY_UNRESOLVED, plus a
+    # report.notes line. Not a FailureDetail — nothing was attempted upstream.
+    assert cat.skip_details[0].reason == SkipReason.DEPENDENCY_UNRESOLVED
+    assert cat.skip_details[0].label == "alice"
+    assert cat.skip_details[0].source_export_id == 5
+    assert cat.failure_details == []
+    assert ledger.entries == []
+    assert any("alice" in note and "unrestricted" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_an_archive_user_with_no_profiles_is_restored_unrestricted_and_unreported():
+    """An EMPTY archive list is faithful, not a degradation.
+
+    The archive said "unrestricted"; sending an empty list reproduces exactly
+    that. Nothing was lost, so nothing is reported and nothing is skipped.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+    report = _report()
+
+    await import_users(
+        archive_users=[{"id": 5, "username": "alice", "channel_profiles": []}],
+        client=client,
+        remap=_remap(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    assert _sent_payload(client)["channel_profiles"] == []
+    cat = report.category(EntityType.USER)
+    assert cat.created == 1
+    assert cat.skipped == 0
+    assert not any("channel profile" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_channel_profiles_is_never_sent_when_the_destination_does_not_accept_it():
+    """A destination whose User-create schema has no ``channel_profiles``.
+
+    The allowlist already drops the key, so there is no binding to get wrong and
+    no reason to skip the user over a field the destination would ignore.
+    """
+    client = _client(schema_fields={"username", "email"})
+    report = _report()
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice", "channel_profiles": [901, 902]}
+        ],
+        client=client,
+        remap=_remap(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    payload = _sent_payload(client)
+    assert "channel_profiles" not in payload
+    cat = report.category(EntityType.USER)
+    assert cat.created == 1
+    assert cat.skipped == 0
+    assert not any("channel profile" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_dry_run_previews_the_same_skip_the_apply_performs():
+    """Dry-run / apply parity for the total-loss skip.
+
+    The preview must not promise a user the apply will refuse to create. The
+    resolution is pure, so it runs on both sides of the branch.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+    report = RestoreReport(is_dry_run=True)
+
+    await import_users(
+        archive_users=[
+            {"id": 5, "username": "alice", "channel_profiles": [901]},
+            {"id": 6, "username": "bob", "channel_profiles": [902]},
+        ],
+        client=client,
+        remap=_remap({902: 7}),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    client.create_user.assert_not_awaited()
+    cat = report.category(EntityType.USER)
+    assert cat.would_create == 1  # bob
+    assert cat.would_skip == 1  # alice — her only profile is missing
+    assert cat.skip_details[0].label == "alice"
+    assert cat.skip_details[0].reason == SkipReason.DEPENDENCY_UNRESOLVED
+
+
+@pytest.mark.asyncio
+async def test_a_non_integer_profile_entry_is_treated_as_unresolvable():
+    """Junk in the list never becomes a binding, and never crashes the category.
+
+    ``True`` is deliberately included: ``int(True)`` is ``1``, so a coercing
+    implementation would silently bind destination profile 1.
+    """
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+    report = _report()
+
+    await import_users(
+        archive_users=[
+            {
+                "id": 5,
+                "username": "alice",
+                "channel_profiles": [901, True, None, "abc", {"id": 902}],
+            }
+        ],
+        client=client,
+        remap=_remap({901: 4, 1: 1}),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    assert _sent_payload(client)["channel_profiles"] == [4]
+    assert report.category(EntityType.USER).created == 1
+    assert any("alice" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_the_orchestrator_users_step_hands_the_importer_the_shared_remap():
+    """WIRING: drive the orchestrator's OWN users step, not the importer directly.
+
+    A remap resolved perfectly inside the importer proves nothing if the step
+    registry never passes one (the dead-code failure mode this branch has hit
+    before). This goes through ``_importer_step_builders()`` — the exact
+    callable both the apply and the dry-run registries are built from — with the
+    CHANNEL_PROFILE namespace populated the way the step ahead of it would leave
+    it, and asserts the resulting BINDING.
+    """
+    from dbas.preflight import ImportPlan, PlanCategory
+    from dbas.restore_orchestrator import ApplyContext, _importer_step_builders
+
+    client = _client(schema_fields=_PROFILE_SCHEMA_FIELDS)
+    remap = _remap({901: 4, 902: 7})
+    ctx = ApplyContext(
+        plan=ImportPlan(
+            manifest={"schema_version": 1},
+            categories=[
+                PlanCategory(
+                    entity_type=EntityType.USER,
+                    entities=[
+                        {
+                            "id": 5,
+                            "username": "alice",
+                            "channel_profiles": [901, 902],
+                        }
+                    ],
+                    selected=True,
+                )
+            ],
+        ),
+        client=client,
+        report=_report(),
+        ledger=_ledger(),
+        remap=remap,
+        is_dry_run=False,
+    )
+
+    await _importer_step_builders()["users"](ctx)
+
+    assert _sent_payload(client)["channel_profiles"] == [4, 7]
