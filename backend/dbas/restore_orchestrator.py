@@ -1483,6 +1483,12 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                     remap=ctx.remap,
                     archive_profiles=_entities(ctx, EntityType.CHANNEL_PROFILE),
                     archive_channels=archive_channels,
+                    # Only the fail-closed path reads this (bead …-38c5a): a
+                    # profile whose archived record never said what it enabled
+                    # has its THIS-RUN-CREATED memberships disabled rather than
+                    # left on Dispatcharr's enable-everything default, and a
+                    # pre-existing channel's membership is left to the operator.
+                    created_source_ids=ctx.created_channel_source_ids,
                     is_dry_run=ctx.is_dry_run,
                 )
         return None

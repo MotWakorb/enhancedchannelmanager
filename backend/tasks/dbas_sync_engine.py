@@ -106,7 +106,7 @@ from typing import Optional
 from httpx import HTTPStatusError, RequestError, TimeoutException  # ssrf-ok: error classes only, no I/O
 
 import journal
-from dbas.channel_reattach import reattach_epg_links
+from dbas.channel_reattach import reattach_epg_links, reattach_profile_memberships
 from dbas.preflight import (
     CHANNEL_FK_FIELDS,
     ImportPlan,
@@ -937,6 +937,41 @@ def _sync_channels_step(*, allow_fuzzy_stream_match: bool) -> ImporterCallable:
             is_dry_run=ctx.is_dry_run,
             allow_channel_tvg_id_fallback=False,
         )
+        # Channel-profile MEMBERSHIP (bead …-38c5a). Dispatcharr adds every new
+        # channel to EVERY profile ENABLED (0.29.0
+        # ``apps/channels/api_views.py`` — ``channel_profile_ids`` omitted means
+        # "all profiles", and ``ChannelProfileMembership.enabled`` defaults
+        # True), so a profile that exists to SHOW SIX CHANNELS AND HIDE
+        # FIFTY-THREE arrives on the replica showing all fifty-nine unless the
+        # source's selection is re-asserted here.
+        #
+        # This is the same pass the archive-restore registry runs
+        # (``restore_orchestrator``); it was simply never wired into the sync
+        # path, so the enablement was gathered (``ChannelProfileSerializer.
+        # channels`` is the ENABLED-channel list on 0.28.2 AND 0.29.0) and then
+        # dropped on the floor. Measured 2026-08-20 on 0.29.0: source
+        # 'Kids & Family' 6/59 enabled, replica 59/59, from a cycle that
+        # reported ``success, created 134, failed 0``.
+        #
+        # Gated on the CHANNEL_PROFILE category exactly as the restore registry
+        # gates it: with profiles absent from the plan no archived profile
+        # resolves through the remap, and re-asserting a selection this cycle
+        # was never asked to touch would be the widening failure's mirror image.
+        #
+        # Runs on a DRY RUN too, PATCHing nothing — a preview that cannot say
+        # "this cycle is about to expose 53 channels your profile hides" is
+        # silent at the only point the operator can still act.
+        profile_cat = ctx.plan.category(EntityType.CHANNEL_PROFILE)
+        if profile_cat is not None and profile_cat.selected:
+            await reattach_profile_memberships(
+                client=ctx.client,
+                report=ctx.report,
+                remap=ctx.remap,
+                archive_profiles=list(profile_cat.entities),
+                archive_channels=list(cat.entities) if cat else [],
+                created_source_ids=ctx.created_channel_source_ids,
+                is_dry_run=ctx.is_dry_run,
+            )
         return None
 
     return _channels

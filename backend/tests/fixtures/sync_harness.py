@@ -251,6 +251,18 @@ class StatefulDispatcharrFake:
         # Every bulk_delete_logos invocation is recorded so tests can pin the
         # sync-path invariant: the destructive pre-step NEVER fires (ADR-013 S9).
         self.bulk_logo_delete_calls: list[list[int]] = []
+        # Channel-profile MEMBERSHIP, modelled the way Dispatcharr models it
+        # (0.29.0 ``apps/channels``): ``ChannelProfileMembership.enabled``
+        # defaults to ``True``; the ``post_save`` signal on ChannelProfile
+        # bulk-creates a row for every existing channel, and the channel-create
+        # view bulk-creates a row on every existing profile with
+        # ``enabled=True`` whenever ``channel_profile_ids`` is omitted — which
+        # is what every ECM create does. So on a real instance a membership is
+        # "ENABLED unless something explicitly disabled it", and only the
+        # exceptions need storing. Modelling it this way is what makes the
+        # enable-everything DEFAULT — the thing bead …-38c5a is about — real in
+        # the harness instead of an assumption.
+        self.disabled_memberships: set[tuple[int, int]] = set()
 
         # Optional write-fault injection: a callable invoked at the start of every
         # mutating call with (method_name, payload). If it raises, the fake raises
@@ -348,7 +360,21 @@ class StatefulDispatcharrFake:
     # ----- channel profiles ------------------------------------------------
 
     async def get_channel_profiles(self) -> list:
-        return self.channel_profiles.list()
+        # ``ChannelProfileSerializer.channels`` is the list of ENABLED channel
+        # ids — re-confirmed on 0.29.0 (``get_channels`` filters
+        # ``enabled=True``, and the ``enabled_memberships`` prefetch it prefers
+        # carries the same filter). Absence from this list IS the exclusion.
+        channel_ids = list(self.channels.rows)
+        rows = []
+        for row in self.channel_profiles.list():
+            profile_id = row.get("id")
+            row["channels"] = [
+                cid
+                for cid in channel_ids
+                if (profile_id, cid) not in self.disabled_memberships
+            ]
+            rows.append(row)
+        return rows
 
     async def create_channel_profile(self, data: dict) -> dict:
         self._check_fault("create_channel_profile", data)
@@ -360,12 +386,80 @@ class StatefulDispatcharrFake:
 
     async def delete_channel_profile(self, profile_id: int) -> None:
         self.channel_profiles.delete(profile_id)
+        self._forget_memberships(profile_id=profile_id)
 
     async def update_profile_channel(
         self, profile_id: int, channel_id: int, data: dict
     ) -> dict:
-        # Profile-membership toggle — best-effort, no store of its own here.
-        return {"success": True}
+        """``PATCH /api/channels/profiles/<p>/channels/<c>/`` — APPLIED.
+
+        Models 0.29.0's ``UpdateChannelMembershipAPIView.patch``: the membership
+        row is CREATED when absent, then the payload's ``enabled`` is applied;
+        an unknown profile or channel is a 404 (``get_object_or_404``). It used
+        to return ``{"success": True}`` and store nothing, which meant a test
+        could only ever assert that the call was MADE — never what the
+        destination profile ended up enabling. That is exactly the blind spot
+        bead …-38c5a's defect lived in.
+        """
+        self._check_fault(
+            "update_profile_channel",
+            {"profile_id": profile_id, "channel_id": channel_id, **(data or {})},
+        )
+        if profile_id not in self.channel_profiles.rows:
+            raise FakeNotFoundError("channel_profile", profile_id)
+        if channel_id not in self.channels.rows:
+            raise FakeNotFoundError("channel", channel_id)
+        enabled = bool((data or {}).get("enabled", True))
+        if enabled:
+            self.disabled_memberships.discard((profile_id, channel_id))
+        else:
+            self.disabled_memberships.add((profile_id, channel_id))
+        return {"channel": channel_id, "enabled": enabled}
+
+    def _forget_memberships(
+        self, *, profile_id: int | None = None, channel_id: int | None = None
+    ) -> None:
+        """Drop the membership exceptions a deleted row cascades away."""
+        self.disabled_memberships = {
+            (pid, cid)
+            for (pid, cid) in self.disabled_memberships
+            if not (
+                (profile_id is not None and pid == profile_id)
+                or (channel_id is not None and cid == channel_id)
+            )
+        }
+
+    def set_membership(self, profile_id: int, channel_id: int, enabled: bool) -> None:
+        """Seed one membership directly (test setup; no fault hook, no 404)."""
+        if enabled:
+            self.disabled_memberships.discard((profile_id, channel_id))
+        else:
+            self.disabled_memberships.add((profile_id, channel_id))
+
+    def enabled_channel_names(self, profile_name: str) -> set:
+        """The channel NAMES one profile ENABLES on this instance.
+
+        The cross-instance assertion surface: A's ids and B's ids never
+        coincide, so "the replica enables exactly what the source enables" can
+        only be stated by name. Raises rather than returning an empty set when
+        the profile is absent — an assertion that silently compares two empty
+        sets is the false green this helper exists to prevent.
+        """
+        key = _norm_name(profile_name)
+        profile_id = None
+        for row_id, row in self.channel_profiles.rows.items():
+            if _name_key(row) == key:
+                profile_id = row_id
+                break
+        if profile_id is None:
+            raise AssertionError(
+                "no channel profile named %r on %s" % (profile_name, self.label)
+            )
+        return {
+            str(row.get("name"))
+            for row_id, row in self.channels.rows.items()
+            if (profile_id, row_id) not in self.disabled_memberships
+        }
 
     # ----- stream profiles -------------------------------------------------
 
@@ -407,6 +501,7 @@ class StatefulDispatcharrFake:
 
     async def delete_channel(self, channel_id: int) -> None:
         self.channels.delete(channel_id)
+        self._forget_memberships(channel_id=channel_id)
 
     # ----- users (NEVER synced, but the rollback dispatch references the
     #        compensator unconditionally) -----------------------------------

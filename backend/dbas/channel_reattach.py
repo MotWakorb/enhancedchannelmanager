@@ -169,6 +169,8 @@ from dbas.archive_keys import (
 from dbas.restore_contracts import (
     ChannelReattachMode,
     EntityType,
+    FailureDetail,
+    FailureReason,
     IdRemapTable,
     LogoMissChannel,
     ReattachPopulation,
@@ -785,6 +787,7 @@ async def reattach_profile_memberships(
     remap: IdRemapTable,
     archive_profiles: list[dict],
     archive_channels: list[dict],
+    created_source_ids: set[int] | None = None,
     is_dry_run: bool = False,
 ) -> int:
     """Re-assert each archived profile's channel selection on the destination.
@@ -792,8 +795,36 @@ async def reattach_profile_memberships(
     For every restored channel, the membership is PATCHed to the archived
     ``enabled`` state. Dispatcharr's single-membership endpoint
     (``PATCH /api/channels/profiles/<p>/channels/<c>/``) CREATES the row when it
-    is absent (0.28.2 ``apps/channels/api_views.py``), so this works whether the
+    is absent (0.28.2 ``apps/channels/api_views.py``, re-read on 0.29.0 —
+    ``UpdateChannelMembershipAPIView.patch`` still creates the missing row at
+    ``enabled=False`` and then applies the payload), so this works whether the
     channel create already added it or not.
+
+    A CHANNEL PROFILE IS A RESTRICTION, so the degraded direction is not
+    symmetric (bead ``…-38c5a``; the same fail-closed reasoning bead ``…-if05f``
+    established for a user's ``channel_profiles`` list). Every way this pass can
+    fail to assert a membership leaves Dispatcharr's enable-everything create
+    default standing, which is the MAXIMUM exposure — so each of them is either
+    corrected toward fewer enabled channels or counted where an operator will
+    see it:
+
+    * **The archive does not say what the profile enabled** (no ``channels``
+      key at all, as opposed to an empty list, which is a real "nothing is
+      enabled" selection). There is no faithful answer, so this DISABLES the
+      memberships THIS run created — undoing the enable-everything side effect
+      of our own channel creates, never touching a membership an operator set
+      on a pre-existing destination channel — and names the profile in
+      ``report.notes``. It used to ``continue`` silently, which handed the
+      destination an unrestricted copy of a restricting profile.
+    * **A membership PATCH the destination refuses** (B rate-limits, so a 429
+      here is an ordinary operational event). The channel is left enabled and
+      there is nothing this pass can do about it, so it is recorded as a
+      CHANNEL_PROFILE failure — ``failed`` + a :class:`FailureDetail` — the same
+      structure ``dbas/importers/channels.py`` uses for the same event. That
+      forbids a SUCCESS outcome. It does NOT trigger a rollback: this pass runs
+      inside the CHANNEL step, whose own category is what the orchestrator
+      checks, and rolling a whole cycle back over one throttled PATCH would cost
+      more than it saved.
 
     Only channels THIS restore resolved are touched: a channel that already
     existed on the destination and is not in the archive keeps whatever
@@ -822,6 +853,9 @@ async def reattach_profile_memberships(
         remap: The shared :class:`IdRemapTable` (``CHANNEL`` + ``CHANNEL_PROFILE``).
         archive_profiles: The CHANNEL_PROFILE records from the export archive.
         archive_channels: The CHANNEL records from the export archive.
+        created_source_ids: The source ids of the channels THIS run created.
+            Used only by the fail-closed path above, to keep it from touching a
+            membership on a channel that already existed on the destination.
         is_dry_run: Report the drift without PATCHing any membership.
 
     Returns:
@@ -832,8 +866,12 @@ async def reattach_profile_memberships(
 
     for archive_profile in archive_profiles or []:
         enabled_sources = _archived_enabled_channels(archive_profile)
-        if enabled_sources is None:
-            continue
+        # FAIL CLOSED. "The archive never said" is not "the archive said
+        # everything" — see the docstring. Treat the selection as empty and
+        # restrict the correction to the channels this run created.
+        selection_unknown = enabled_sources is None
+        if selection_unknown:
+            enabled_sources = set()
         source_profile_id = _as_int(archive_profile.get("id"))
         dest_profile_id = (
             remap.resolve(EntityType.CHANNEL_PROFILE, source_profile_id)
@@ -861,6 +899,14 @@ async def reattach_profile_memberships(
             dest_channel_id = remap.resolve(EntityType.CHANNEL, source_channel_id)
             if dest_channel_id is None:
                 continue
+            if selection_unknown and (
+                created_source_ids is None
+                or source_channel_id not in created_source_ids
+            ):
+                # Not ours to close down: this channel already existed on the
+                # destination and its membership is whatever the operator made
+                # it, not a side effect of this run.
+                continue
             label = _channel_label(archive_channel)
             should_be_enabled = source_channel_id in enabled_sources
             if is_dry_run:
@@ -886,6 +932,32 @@ async def reattach_profile_memberships(
                     profile_label,
                     type(exc).__name__,
                 )
+                # COUNTED, not swallowed. A refused DISABLE leaves the channel
+                # enabled — the fail-open outcome this pass exists to prevent —
+                # and a refused ENABLE leaves the destination's own membership
+                # unasserted. Either way the archived selection is NOT on the
+                # destination, so the run must not report a clean success.
+                # Fetched lazily so a pass that reports nothing does not
+                # materialize an empty CHANNEL_PROFILE block on the report.
+                profile_cat = report.category(EntityType.CHANNEL_PROFILE)
+                profile_cat.failed += 1
+                profile_cat.failure_details.append(
+                    FailureDetail(
+                        reason=FailureReason.UPSTREAM_API_ERROR,
+                        label=profile_label,
+                        message=(
+                            "could not set channel '%s' %s in this profile (%s); "
+                            "the destination profile does not match the source's "
+                            "channel selection."
+                            % (
+                                label,
+                                "enabled" if should_be_enabled else "disabled",
+                                type(exc).__name__,
+                            )
+                        ),
+                        source_export_id=source_profile_id,
+                    )
+                )
                 continue
             asserted += 1
             if not should_be_enabled:
@@ -893,6 +965,23 @@ async def reattach_profile_memberships(
                 # and the archive says it was excluded — the drift that turned a
                 # 9-of-12 profile into a 12-of-12 one.
                 disabled_names.append(label)
+
+        if selection_unknown:
+            logger.warning(
+                "[DBAS-REATTACH] Channel profile '%s' carried no channel "
+                "selection; %d membership(s) this run created were DISABLED "
+                "rather than left on Dispatcharr's enable-everything default.",
+                profile_label,
+                len(disabled_names),
+            )
+            report.notes.append(
+                "channel profile '%s' arrived without its channel selection, so "
+                "the %d membership(s) this run created were disabled rather than "
+                "left enabled — a profile is a restriction, and guessing "
+                "'everything' would have widened it. Re-apply the profile's "
+                "channel selection on the destination."
+                % (profile_label, len(disabled_names))
+            )
 
         report.record_profile_membership_drift(
             name=profile_label,

@@ -715,3 +715,177 @@ async def test_logo_slice_off_by_default_b_logos_untouched(tmp_path):
     assert dest.logo_names() == set()
     cat = report.category(EntityType.LOGO)
     assert cat.created == 0 and cat.would_create == 0
+
+
+# ---------------------------------------------------------------------------
+# (i) CHANNEL-PROFILE MEMBERSHIP — the replica must enable EXACTLY what the
+#     source enables, never more (bead enhancedchannelmanager-38c5a).
+#
+# A channel profile is a RESTRICTION. Measured 2026-08-20 on Dispatcharr 0.29.0
+# against the documentation environment, after ONE apply-mode cycle that
+# reported ``success, created 134, failed 0``:
+#
+#     source A    'Kids & Family'    6 of 59 channels ENABLED
+#     replica B   'Kids & Family'   59 of 59 channels ENABLED
+#
+# The profile ROW crossed and every counter said so; the SELECTION did not, and
+# the replica inverted the profile's purpose by failing OPEN. These tests
+# therefore assert on B's RESULTING MEMBERSHIP STATE — never on the profile
+# count (2 on both sides while broken) and never on the absence of a failure
+# (``failed 0`` while broken).
+# ---------------------------------------------------------------------------
+
+
+def _restricting_profile_source():
+    """A source-A whose 'Kids & Family' profile enables 2 of its 6 channels.
+
+    The doc environment's 6-of-59 shape, scaled down. ``seeded_source`` already
+    supplies 'CNN' and the unrestricted 'Default Profile', so the restriction
+    sits beside a profile that legitimately enables everything — a fix that
+    disabled indiscriminately would break that one and be caught here.
+    """
+    source = StatefulDispatcharrFake.seeded_source()
+    for name, number in (
+        ("Sprout Junction", 400),
+        ("Cartoon Cove", 401),
+        ("Nightscreen Thrillers", 303),
+        ("Ringside", 209),
+        ("Capitol Report", 102),
+    ):
+        source.channels.create(
+            {"name": name, "channel_number": number, "streams": []}
+        )
+    profile = source.channel_profiles.create({"name": "Kids & Family"})
+    kids = {"Sprout Junction", "Cartoon Cove"}
+    for channel_id, row in source.channels.rows.items():
+        if row.get("name") not in kids:
+            source.set_membership(profile["id"], channel_id, False)
+    return source
+
+
+@pytest.mark.asyncio
+async def test_a_restricting_profile_arrives_on_b_still_restricting(tmp_path):
+    """B's 'Kids & Family' enables exactly the channels A's does — no more."""
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+    assert source.enabled_channel_names("Kids & Family") == {
+        "Sprout Junction",
+        "Cartoon Cove",
+    }
+
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    # The counters an operator reads are ALL clean, exactly as the live run's
+    # were — which is why they cannot be the assertion.
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert report.category(EntityType.CHANNEL_PROFILE).created == 2
+    assert report.category(EntityType.CHANNEL_PROFILE).failed == 0
+
+    # THE INVARIANT, read off B's membership state.
+    assert dest.enabled_channel_names("Kids & Family") == source.enabled_channel_names(
+        "Kids & Family"
+    )
+    # Stated in the direction that matters: never MORE than the source.
+    assert dest.enabled_channel_names("Kids & Family") <= source.enabled_channel_names(
+        "Kids & Family"
+    )
+    # A profile that legitimately enables everything still enables everything.
+    assert dest.enabled_channel_names("Default Profile") == source.enabled_channel_names(
+        "Default Profile"
+    )
+    # The correction away from Dispatcharr's enable-everything create default is
+    # COUNTED, so the operator can see the profile was about to widen.
+    assert report.profile_membership_drift == 4
+
+
+@pytest.mark.asyncio
+async def test_a_second_cycle_leaves_the_restriction_in_place(tmp_path):
+    """Idempotency for the SELECTION, not just for the rows.
+
+    The membership pass never reads B's current state, so a second cycle
+    re-asserts the same selection. The property that matters is that it lands on
+    the same answer rather than drifting open one cycle at a time.
+    """
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(source=source, dest=dest)
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert dest.enabled_channel_names("Kids & Family") == {
+        "Sprout Junction",
+        "Cartoon Cove",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_profile_selection_fails_closed_on_b(tmp_path):
+    """A profile whose archived selection cannot be read must NOT arrive open.
+
+    ``ChannelProfileSerializer.channels`` is the enabled-channel list on 0.28.2
+    and (re-confirmed) on 0.29.0, so its ABSENCE means the source never told us
+    what the profile enables. The degraded direction is FEWER channels enabled,
+    never all of them: the memberships this cycle CREATED are turned off, and
+    the profile is named in the report.
+    """
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    real_get = source.get_channel_profiles
+
+    async def _profiles_without_their_selection():
+        rows = await real_get()
+        for row in rows:
+            row.pop("channels", None)
+        return rows
+
+    source.get_channel_profiles = _profiles_without_their_selection
+
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    # Fail CLOSED: nothing this cycle created is left enabled in either profile.
+    assert dest.enabled_channel_names("Kids & Family") == set()
+    assert dest.enabled_channel_names("Default Profile") == set()
+    # And loudly — a silent fail-closed is the same reporting defect wearing a
+    # different sign.
+    assert any("channel selection" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_a_membership_b_refuses_to_disable_is_reported_not_swallowed(tmp_path):
+    """A DISABLE that B rejects is the fail-open outcome — it must be counted.
+
+    B rate-limits, so a 429 on a membership PATCH is a real operational event.
+    Before this it produced one WARNING log line and no counter at all: the
+    channel stayed ENABLED (Dispatcharr's create default) and the cycle still
+    reported a clean success. Asserted on the CHANNEL_PROFILE category's
+    ``failed`` / ``failure_details`` — the ``FailureReason`` structure, the same
+    place ``dbas/importers/channels.py`` records a membership PATCH failure —
+    NOT on ``skip_details`` and NOT on a top-level ``RestoreReport`` int.
+    """
+    from dbas.restore_contracts import FailureReason
+
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    def _throttle_the_disables(method, payload):
+        if method == "update_profile_channel" and payload.get("enabled") is False:
+            raise _http_status_error(429, "Request was throttled.")
+
+    dest.inject_fault(_throttle_the_disables)
+
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    cat = report.category(EntityType.CHANNEL_PROFILE)
+    assert cat.failed == 4  # the four channels 'Kids & Family' excludes
+    assert {d.reason for d in cat.failure_details} == {FailureReason.UPSTREAM_API_ERROR}
+    # B kept them enabled — we cannot fix what B refuses — but the run no longer
+    # claims to have succeeded, and no rollback was triggered by it.
+    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert dest.enabled_channel_names("Kids & Family") == dest.enabled_channel_names(
+        "Default Profile"
+    )
