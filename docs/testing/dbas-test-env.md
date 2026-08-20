@@ -20,24 +20,50 @@ the EPG download wait, the `is_active` workaround, `/api/accounts/users/me/`),
 which are exactly the behaviors Phase 2 has to *validate*. A mock that re-states
 our assumptions can never falsify them.
 
-This environment provides a **live, pinned** Dispatcharr to test against, so the
+This environment provides a **live** Dispatcharr to test against, so the
 round-trip can be exercised for real before the importers
 (`.10`/`.11`/`.14`/`.15`/`.18`/`l1p4p`) ship.
 
-## Version pin
+## Version policy — this environment tracks `latest`
+
+**PO decision, bead `enhancedchannelmanager-xvuk1`:** `tests/dbas-test-env/`
+tracks `dispatcharr:latest` **literally**. There is no pinned version and no
+bump procedure, because there is nothing to bump.
 
 | What | Value | Source |
 |------|-------|--------|
-| Pinned image | `dispatcharr/dispatcharr:0.26.0` | operator's live instance |
+| Image | `ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}` | all three compose files in `tests/dbas-test-env/` |
+| Registry | `ghcr.io` | the registry the operator's production Dispatcharr pulls from, so the test env and production resolve the same artifact |
 | Behavioral floor in ECM code | `0.23.0+` | `config.py` throttle; `auth/providers/dispatcharr.py` users/me |
-| Version-detect endpoint | `GET /api/core/version/` | spike `tsfv0` |
-| 0.26.0 digest (2026-06-07) | `sha256:9275b0c1f5319a84b412af6839a1364ef25b61d8d6ff0d2130a6c2b2504a8b07` | Docker Hub |
+| Version-detect endpoint | `GET /api/core/version/` | spike `tsfv0` — **read it, every run** |
+| Override (opt-in) | `DISPATCHARR_VERSION=<old>` | only to deliberately reproduce an old finding |
 
-ECM encodes a 0.23.0+ **floor**; 0.26.0 is the **target**. The
-`validate-version-behaviors.py` probe re-checks the 0.23.0-era behaviors against
-0.26.0. They may have shifted across 0.24–0.26. **Bump procedure:** when the
-operator upgrades, change `DISPATCHARR_VERSION` in
-`tests/dbas-test-env/.env`, re-run the validator, refresh the digest comment.
+ECM encodes a 0.23.0+ **floor**; whatever `latest` currently resolves to is the
+**target**. The invariant that replaces the old pin:
+
+> **No live default anywhere in `tests/dbas-test-env/` — or in this document —
+> pins a Dispatcharr version. The default is always `latest`, and anything that
+> needs to know the version READS it from the running instance's version
+> endpoint and records what it saw.**
+
+Three consequences worth stating plainly:
+
+- **`:latest` is only as fresh as your last pull.** `docker compose up` reuses a
+  locally-cached `latest`; run `docker compose ... pull` when you mean to be
+  current, then re-read every version endpoint.
+- **`docker compose` auto-loads `.env` from that directory for every compose
+  file in it.** A stray `DISPATCHARR_VERSION` in a local `.env` pins all three
+  stacks, not just the one you are running. `.env.example` ships it commented
+  out for exactly this reason.
+- **A result that cannot name its platform is not a result.** Quote the version
+  you read alongside any finding. `validate-version-behaviors.py` hard-fails
+  rather than reporting probe results it cannot attribute, and
+  `capture-snapshot.sh` stamps the version it read into the snapshot manifest
+  (or the literal word `unknown` — never a guess).
+
+As of 2026-08-20, `latest` was Dispatcharr **0.29.0** (image `3621ebe3`, digest
+`sha256:df768adc…`, identical on docker.io and ghcr.io). That is a recorded
+observation, not a pin — re-read it rather than trusting this line.
 
 ## Topology: why modular, not all-in-one
 
@@ -101,17 +127,20 @@ Standing up postgres+redis+celery per PR is too slow for the per-PR gate. The
 fast path is a **faithful Dispatcharr fake** for unit/integration runs. The
 hard rule (acceptance criterion #3):
 
-> A CI fake **must be validated against the live/pinned instance**. A fake that
-> just re-encodes our assumptions is worth nothing. It's the same trap as the
+> A CI fake **must be validated against the live instance**, and the recorded
+> shapes must name the version they were captured from. A fake that just
+> re-encodes our assumptions is worth nothing. It's the same trap as the
 > current mocks.
 
 ### Validation approach (specified; full fake to be built in a follow-up)
 
 1. **Ground truth = the live probe.** `validate-version-behaviors.py` runs
-   against the pinned 0.26.0 stack and records, for each behavior ECM depends
-   on, the **real response shape**: version-detect payload, `users/me` (+ the
-   `/api/accounts/me/` fallback), login-throttle 429, and the M3U-refresh /
-   EPG-import / streams / logos list shapes.
+   against the live stack, **reads the running version and stamps it on the
+   report**, and records, for each behavior ECM depends on, the **real response
+   shape**: version-detect payload, `users/me` (+ the `/api/accounts/me/`
+   fallback), login-throttle 429, and the M3U-refresh / EPG-import / streams /
+   logos list shapes. It exits non-zero if it cannot read the version, so a
+   shape can never be recorded without an attributable platform.
 2. **Contract test pins the fake to ground truth.** The CI fake (successor to
    `mock_dispatcharr.py`) gets a **contract test** that asserts its responses
    match the recorded live shapes for those same endpoints. The contract
@@ -119,11 +148,13 @@ hard rule (acceptance criterion #3):
 3. **Two-tier gate:**
    - **Per-PR (fast):** importer tests run against the validated fake.
    - **Nightly / pre-merge-to-`dev` (slow, full):** the same importer round-trip
-     runs against the **live pinned stack** from this directory. Drift between
-     the two tiers fails the slow gate and flags the fake as stale.
-4. **Re-validate on version bump.** The contract fixtures are re-captured and
-   the fake updated whenever `DISPATCHARR_VERSION` changes: the fake is never
-   allowed to drift silently from the pinned reality.
+     runs against the **live stack** from this directory. Drift between the two
+     tiers fails the slow gate and flags the fake as stale.
+4. **Re-validate on every platform move.** Because the tag floats, nothing
+   announces a bump — the contract fixtures are re-captured and the fake updated
+   whenever a `pull` brings down a new image, and each fixture set records the
+   version it was captured from. The fake is never allowed to drift silently
+   from live reality.
 
 This keeps the per-PR loop fast **and** keeps the fake honest: the fake's
 correctness is *derived from* the live instance, never *assumed*.
@@ -196,7 +227,8 @@ prerequisite; none of this could be live-validated at authoring time):
       env names, `entrypoint.celery.sh` path, modular env vars, snapshot tables).
       Those are still **authored-not-live-validated**: close
       `tests/dbas-test-env/README.md` → "First-bring-up validation checklist"
-      against a live 0.26.0 BEFORE trusting the two-stack.
+      against a live instance BEFORE trusting the two-stack, recording the
+      version that instance reported.
 - [ ] **Bring up `docker-compose.dbas-sync-test.yml`** (`-p dbas-sync-testenv`)
       and confirm A (9601) + B (9602) both reach `healthy`, with B reachable from
       A at `http://dispatcharr-b-web:9191` (the `SyncTarget.base_url` analogue).
