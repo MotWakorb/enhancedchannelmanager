@@ -57,6 +57,7 @@ lazy ``%``-formatted logging; no secrets in any log line.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -66,6 +67,14 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# A real 1x1 PNG. The logos importer decodes and validates the bytes it is
+# handed, so a hosted-logo fetch has to return an image an image library
+# accepts, not a placeholder string.
+_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +257,9 @@ class StatefulDispatcharrFake:
         # Logos (bead 7ipq2.1): keyed by normalized name — the importer's tier-2
         # match key, and the natural key upload_logo_file writes under.
         self.logos = _Store("logo", _name_key, id_base=id_base + 800)
+        # What ``fetch_logo_image`` serves for a HOSTED logo — a real 1x1 PNG,
+        # the smallest thing the logos importer's post-decode validator accepts.
+        self.hosted_logo_bytes: bytes = _PNG_BYTES
         # Every bulk_delete_logos invocation is recorded so tests can pin the
         # sync-path invariant: the destructive pre-step NEVER fires (ADR-013 S9).
         self.bulk_logo_delete_calls: list[list[int]] = []
@@ -537,6 +549,21 @@ class StatefulDispatcharrFake:
             {"name": name, "url": "/data/logos/%s" % filename}
         )
 
+    async def fetch_logo_image(self, logo_id: int) -> Optional[bytes]:
+        """``GET /api/channels/logos/<id>/cache/`` — the hosted logo's BYTES.
+
+        A Dispatcharr-HOSTED logo (a ``url`` naming a path inside Dispatcharr's
+        own volume, which is what ECM's Logo Manager writes) has its image bytes
+        NOWHERE ELSE: not in ECM's ``uploads/logos`` dir, not in the plan. Bead
+        ``…-cfxml`` taught the sync gather to fetch them from here, one at a
+        time, at import time (D8). Modelling that read is what lets a test drive
+        the real hosted path end to end instead of the ECM-local file path,
+        which is the one shape the live defect never took.
+        """
+        if logo_id not in self.logos.rows:
+            return None
+        return self.hosted_logo_bytes
+
     async def delete_logo(self, logo_id: int) -> None:
         # Real compensating delete (rollback target for an uploaded logo);
         # 404 (FakeNotFoundError) when already gone — the rollback's
@@ -555,6 +582,46 @@ class StatefulDispatcharrFake:
     def logo_names(self) -> set:
         """Normalized logo names on this instance — the logo convergence key."""
         return {_name_key(r) for r in self.logos.list()}
+
+    def channel_logo_name(self, channel_name: str) -> Optional[str]:
+        """The NAME of the logo one channel points at on THIS instance.
+
+        The cross-instance assertion surface for the channel→logo BINDING (bead
+        ``…-xgbjm``). A's logo ids and B's logo ids never coincide, so "the
+        replica's channel carries the CORRESPONDING logo" is only sayable by
+        NAME — asserting on the id would pass for a fix that forwarded A's id
+        onto a B row that happens to share the number.
+
+        ``None`` means the channel carries no logo, which is the broken state
+        this helper was written to catch. Two conditions RAISE instead, because
+        both are distinct failures that must never read as "no logo":
+
+        * the channel is absent — an assertion comparing two ``None``s from two
+          missing channels is the false green ``enabled_channel_names`` guards
+          against for the same reason;
+        * the channel's ``logo_id`` names a logo THIS instance does not have —
+          a DANGLING binding, which is exactly what forwarding a source id at
+          create time would produce.
+        """
+        row = None
+        for candidate in self.channels.rows.values():
+            if str(candidate.get("name")) == channel_name:
+                row = candidate
+                break
+        if row is None:
+            raise AssertionError(
+                "no channel named %r on %s" % (channel_name, self.label)
+            )
+        logo_id = row.get("logo_id")
+        if logo_id is None:
+            return None
+        logo = self.logos.rows.get(logo_id)
+        if logo is None:
+            raise AssertionError(
+                "channel %r on %s points at logo id=%r, which does not exist "
+                "there (a dangling binding)" % (channel_name, self.label, logo_id)
+            )
+        return str(logo.get("name"))
 
     # ----- state snapshot (the convergence assertion surface) --------------
 

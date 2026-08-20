@@ -1870,3 +1870,83 @@ async def test_a_server_group_no_longer_rolls_the_whole_cycle_back(tmp_path):
         "Provider A" in note and "server group" in note.lower()
         for note in report.notes
     ), f"no operator note named the degraded account; notes={report.notes}"
+
+
+# ---------------------------------------------------------------------------
+# The channel->logo binding pass is gated on CHANNEL as well as LOGO
+# (bead enhancedchannelmanager-xgbjm, guarding against …-lngo5's shape).
+# ---------------------------------------------------------------------------
+
+
+def _logo_step_context(*, channel_selected: bool, logo_selected: bool = True):
+    """An ApplyContext carrying one archived logo and one channel that uses it."""
+    from dbas.restore_contracts import IdRemapTable, RestoreReport, RollbackLedger
+    from dbas.restore_orchestrator import ApplyContext
+
+    plan = ImportPlan(
+        manifest={"schema_version": 1},
+        categories=[
+            PlanCategory(
+                entity_type=EntityType.CHANNEL,
+                entities=[{"id": 90001, "name": "Archived Channel", "logo_id": 90002}],
+                selected=channel_selected,
+            ),
+            PlanCategory(
+                entity_type=EntityType.LOGO,
+                entities=[{"id": 90002, "name": "Archived Logo"}],
+                selected=logo_selected,
+            ),
+        ],
+    )
+    return ApplyContext(
+        plan=plan,
+        client=AsyncMock(),
+        report=RestoreReport(is_dry_run=False),
+        ledger=RollbackLedger(restore_id="test"),
+        remap=IdRemapTable(),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "channel_selected, logo_selected, should_run",
+    [(True, True, True), (False, True, False), (True, False, False)],
+)
+async def test_logo_binding_pass_needs_both_categories(
+    channel_selected, logo_selected, should_run
+):
+    """The binding pass runs only when BOTH CHANNEL and LOGO are selected.
+
+    Bead ``…-lngo5`` is an OPEN defect of exactly this shape on the RESTORE
+    side: its logo reattach guards on LOGO alone while ``_entities()`` returns
+    the archived channels regardless of selection, so a CHANNEL-deselected run
+    classifies every archived channel against an EMPTY remap. Wiring a binding
+    pass into the sync path without the CHANNEL half of the gate would give that
+    defect a second home. The state is not producible through ``run_sync``
+    today (``build_live_source_plan`` always appends CHANNEL selected), which is
+    precisely why the gate has to be pinned HERE, at the step, rather than
+    inferred from a caller that could change.
+    """
+    from dbas.restore_contracts import ChannelReattachMode
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    step = next(
+        s for s in sync_config_importer_steps() if s.entity_type == EntityType.LOGO
+    )
+    ctx = _logo_step_context(
+        channel_selected=channel_selected, logo_selected=logo_selected
+    )
+
+    with patch.object(engine, "import_logos", new=AsyncMock(return_value=None)), \
+         patch.object(engine, "reattach_channel_logos", new=AsyncMock()) as reattach:
+        await step.importer(ctx)
+
+    assert reattach.await_count == (1 if should_run else 0)
+    if should_run:
+        kwargs = reattach.await_args.kwargs
+        # Source-wins: a replica's branding is the source's, and the channels
+        # are MATCHED rather than created on every cycle after the first.
+        assert kwargs["mode"] == ChannelReattachMode.OVERWRITE
+        assert kwargs["archive_channels"] == ctx.plan.category(
+            EntityType.CHANNEL
+        ).entities

@@ -71,7 +71,12 @@ AND the bytes of every DISPATCHARR-HOSTED logo, fetched from Dispatcharr at
 hydration time. Dispatcharr is ECM's source of truth for logos, so before that
 a replica received only whatever happened to sit in A's upload directory. The
 fetches are wall-clock bounded per fetch and per cycle, because unlike a backup
-this runs unattended on a schedule.
+this runs unattended on a schedule. Bead ``…-xgbjm`` closed the other half: the
+bytes crossing is not the same as the CHANNEL-TO-LOGO BINDING crossing, and for
+a while only the first did — B's Logo Manager showed the synced logo as UNUSED
+while every channel on B carried ``logo_id`` null. The LOGO step now runs the
+same post-create reattach pass the archive-restore registry runs, which is what
+its LAST position in the registry exists to make possible.
 
 Users NEVER sync (D3). The deferred auto-sync / EPG-download phase is **not** run
 per cycle (S9) — the step registry passes a deferred-apply no-op to the
@@ -106,7 +111,11 @@ from typing import Optional
 from httpx import HTTPStatusError, RequestError, TimeoutException  # ssrf-ok: error classes only, no I/O
 
 import journal
-from dbas.channel_reattach import reattach_epg_links, reattach_profile_memberships
+from dbas.channel_reattach import (
+    reattach_channel_logos,
+    reattach_epg_links,
+    reattach_profile_memberships,
+)
 from dbas.preflight import (
     CHANNEL_FK_FIELDS,
     ImportPlan,
@@ -129,6 +138,7 @@ from dbas.restore_orchestrator import (
     ImporterCallable,
     ImporterStep,
     _importer_step_builders,
+    _would_create_logo_ids,
     new_restore_id,
     run_restore,
 )
@@ -1054,6 +1064,11 @@ class _LogoFetchBudget:
 def _sync_logos_step() -> ImporterCallable:
     """Build the LOGOS importer step for the sync path (bead 7ipq2.1).
 
+    Two halves, and the replica needs both: ``import_logos`` puts the logo BYTES
+    on B, and :func:`~dbas.channel_reattach.reattach_channel_logos` puts the
+    channel-to-logo BINDING back (bead …-xgbjm) — without the second, B holds the
+    right image files and every channel on it reads ``logo_id`` null.
+
     Reuses the UNCHANGED ``import_logos`` with two sync-specific bindings:
 
     * ``clear_existing=False`` — HARD-CODED, not a parameter. The destructive
@@ -1079,7 +1094,7 @@ def _sync_logos_step() -> ImporterCallable:
         if cat is None:
             return None  # target did not opt into logo sync — nothing to do.
         channel_cat = ctx.plan.category(EntityType.CHANNEL)
-        await import_logos(
+        logo_result = await import_logos(
             archive_logos=list(cat.entities),
             client=ctx.client,
             selected=bool(cat.selected),
@@ -1091,6 +1106,69 @@ def _sync_logos_step() -> ImporterCallable:
             archive_channels=list(channel_cat.entities) if channel_cat else [],
             content_provider=budget.load,
         )
+        # Channel -> LOGO BINDING (bead …-xgbjm). Bead …-cfxml got the logo
+        # BYTES across; the binding stayed behind, so the replica held the right
+        # image FILES with no channel using them — B's Logo Manager showed the
+        # synced logo as UNUSED while every channel on B carried logo_id null.
+        # It is the most VISIBLE difference between primary and replica: it is
+        # what an operator sees first on opening B.
+        #
+        # ``logo_id`` is a SOURCE id, so ``importers/channels.py`` drops it from
+        # the create payload (``_NON_REMAPPABLE_FK_KEYS``) — correctly, because
+        # forwarding A's id would either 400 or silently bind an unrelated
+        # destination row. This is the second half: re-derive the reference on B
+        # and PATCH it back. Same pass the archive-restore registry already runs
+        # (``restore_orchestrator._logos``), never wired into the sync path —
+        # exactly the shape ``reattach_profile_memberships`` had before …-38c5a.
+        #
+        # WHY IT RUNS HERE, AND WHY THE LOGO STEP STAYS LAST. The pass needs BOTH
+        # remap namespaces populated: CHANNEL (filled by the channels step,
+        # earlier in this registry) and LOGO (filled by ``import_logos``, three
+        # lines up). Last position is what makes that true. Moving LOGO ahead of
+        # CHANNEL to bind at create time would break it twice over — the pass
+        # would meet an empty CHANNEL remap, and so would the logo-miss
+        # drill-down that names the affected channels per missed logo (bead
+        # …-cm9bi, ``import_logos(archive_channels=...)``). The ordering is a
+        # precondition of this fix, not an obstacle to it.
+        #
+        # SOURCE-WINS (``OVERWRITE``), matching the EPG-link pass on this same
+        # path. ``sync_logos`` is opt-in and defaults OFF (bead …-8gnik owns the
+        # control), so the realistic sequence is: cycles run, B gets its lineup,
+        # THEN the flag goes on. By then every channel on B already exists and is
+        # MATCHED rather than created, so under PRESERVE this pass would bind
+        # nothing, on that cycle or any later one, and the new control would look
+        # broken. A replica's branding is the source's by definition.
+        #
+        # Gated on the CHANNEL category as well as LOGO. The pass operates on
+        # channels, so it needs the channel population to be meaningful: with
+        # channels absent from the plan no archived channel resolves through the
+        # remap and every one of them would be classified against an empty one.
+        # That mismatch is a live defect on the RESTORE side (bead …-lngo5,
+        # unreachable there today and left to that bead); this gate is what keeps
+        # the sync path from becoming its second home.
+        #
+        # Runs on a DRY RUN too, PATCHing nothing and recording no miss — and it
+        # counts the logos the preview knows the apply would CREATE (bead
+        # …-dgnms): on a fresh replica nothing matches, so that set is the whole
+        # population, and without it the preview reports 0 for an apply that
+        # binds every channel.
+        if (
+            cat.selected
+            and channel_cat is not None
+            and channel_cat.selected
+        ):
+            await reattach_channel_logos(
+                client=ctx.client,
+                report=ctx.report,
+                remap=ctx.remap,
+                archive_channels=list(channel_cat.entities),
+                created_source_ids=ctx.created_channel_source_ids,
+                mode=ChannelReattachMode.OVERWRITE,
+                is_dry_run=ctx.is_dry_run,
+                # Coerced defensively: ``import_logos`` is stubbed in several
+                # suites, and a stub's return value is not a LogoImportResult.
+                would_create_logo_source_ids=_would_create_logo_ids(logo_result),
+            )
         return None
 
     return _logos
@@ -1151,9 +1229,15 @@ def sync_config_importer_steps(
             EntityType.CHANNEL,
             _sync_channels_step(allow_fuzzy_stream_match=allow_fuzzy_stream_match),
         ),
-        # LOGOS LAST (restore-registry ordering parity: channels populate the
-        # CHANNEL remap the logo-miss drill-down reads). Structurally a no-op
-        # unless the plan carries a LOGO category (per-target sync_logos opt-in).
+        # LOGOS LAST (restore-registry ordering parity). Last position is load
+        # bearing in two directions: channels populate the CHANNEL remap that
+        # BOTH the logo-miss drill-down (…-cm9bi) and the channel->logo binding
+        # pass (…-xgbjm) read, and the binding pass additionally needs the LOGO
+        # remap this step's own importer fills. A channel therefore cannot carry
+        # a logo id at CREATE time — it is bound afterwards, here — and moving
+        # LOGO ahead of CHANNEL to try would break both readers at once.
+        # Structurally a no-op unless the plan carries a LOGO category
+        # (per-target sync_logos opt-in).
         ImporterStep(EntityType.LOGO, _sync_logos_step()),
     ]
 
