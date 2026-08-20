@@ -220,7 +220,7 @@ second half is what a fresh target consists of entirely.
 | Value | Meaning |
 |---|---|
 | `success` | every selected entity created/updated/skipped cleanly; nothing failed; no compensation needed |
-| `completed_with_failures` | the restore ran to completion and **nothing was rolled back**, but at least one entity in a non-fatal category failed. The applied state is real and kept; the failed rows are counted in their category |
+| `completed_with_failures` | the restore ran to completion and **nothing was rolled back**, but the result is not clean. Two independent triggers: at least one entity in a non-fatal category failed (the failed rows are counted in their category), **or** an apply finished with `channels_with_no_playable_stream` above zero — a channel restored holding not one URL-bearing stream cannot play, and that is mixed state even though every row succeeded (bead `…-daziw`). Either way the applied state is real and kept |
 | `partial_failed_rolled_back` | at least one failure in a fatal category; compensating rollback ran and removed **every** created entity (404-on-delete counts as removed); instance back to pre-restore state |
 | `failed_rollback_incomplete` | a fatal failure occurred **and** the rollback could not fully undo it (a non-404 delete error); instance indeterminate; ledger residue surfaced for manual cleanup |
 

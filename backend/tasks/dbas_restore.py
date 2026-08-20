@@ -484,7 +484,11 @@ class DbasRestoreTask(TaskScheduler):
         :class:`dbas.restore_contracts.RestoreOutcome.COMPLETED_WITH_FAILURES`
         already means exactly "ran to completion and NOTHING was rolled back",
         for either of its two triggers — a non-fatal category's failed row, or a
-        channel left with no playable stream.
+        channel left with no playable stream. The test is
+        :attr:`~dbas.restore_contracts.RestoreOutcome.is_degraded_not_failed`,
+        SHARED with ``tasks.dbas_sync``: the cross-instance sync builds its own
+        TaskResult from the same reports, and a second copy of this rule is how
+        it came to announce "Task Failed" for a run this one calls a warning.
 
         daziw's original form keyed on ``channels_with_no_playable_stream`` and
         excluded any run with a failed row, which inverted the severity ordering
@@ -499,11 +503,9 @@ class DbasRestoreTask(TaskScheduler):
         indeterminate outcomes, an orchestration error, and any dry run's
         failure mode.
         """
-        from dbas.restore_contracts import RestoreOutcome
-
-        if not is_apply or report.is_dry_run:
+        if not is_apply or report.is_dry_run or report.outcome is None:
             return False
-        return report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+        return report.outcome.is_degraded_not_failed
 
     @staticmethod
     def _counts_from_report(report, is_apply: bool) -> RestoreCounts:
@@ -531,8 +533,13 @@ class DbasRestoreTask(TaskScheduler):
         )
 
     @staticmethod
-    def _stream_reattach_phrases(report) -> list[str]:
+    def stream_reattach_phrases(report) -> list[str]:
         """Name the placeholder populations WITHOUT overstating either (…-daziw).
+
+        PUBLIC, unlike its sibling builders: ``tasks.dbas_sync`` renders the same
+        two counters into the cross-instance sync's summary, and one wording for
+        one pair of counters is the point — a second copy is how the two paths
+        came to describe the same run differently in the first place.
 
         Two different facts, previously reported as one:
 
@@ -660,7 +667,7 @@ class DbasRestoreTask(TaskScheduler):
         # correctly, so they are rendered together rather than as two rows of the
         # generic table below. They are NULL (not predicted) on a preview, so the
         # tense question does not arise for them.
-        parts.extend(DbasRestoreTask._stream_reattach_phrases(report))
+        parts.extend(DbasRestoreTask.stream_reattach_phrases(report))
         # Channel->group drift reads differently depending on whether the mode
         # also reconciled it, so it too gets a builder rather than a template.
         parts.extend(

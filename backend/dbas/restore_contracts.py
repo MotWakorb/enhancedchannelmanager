@@ -204,6 +204,39 @@ class RestoreOutcome(str, Enum):
     PARTIAL_FAILED_ROLLED_BACK = "partial_failed_rolled_back"
     FAILED_ROLLBACK_INCOMPLETE = "failed_rollback_incomplete"
 
+    @property
+    def is_degraded_not_failed(self) -> bool:
+        """True when the run FINISHED and left real, kept state (…-daziw/…-cwmid).
+
+        The ONE definition of "degraded, not failed", so the two task wrappers
+        that build a ``TaskResult`` from a restore report — ``tasks.dbas_restore``
+        and ``tasks.dbas_sync`` — cannot disagree about which runs are a
+        ``warning`` and which are the red "Task Failed". They DID disagree: the
+        restore learned the rule with this bead and the cross-instance sync,
+        running on the same orchestrator and sharing the outcome downgrade, kept
+        announcing "Task Failed" for a run whose only shortfall was a channel
+        left unable to play (PO decision 2026-08-19).
+
+        Keyed on the OUTCOME rather than on any particular shortfall, because
+        :attr:`COMPLETED_WITH_FAILURES` already MEANS "ran to completion and
+        NOTHING was rolled back", for either of its two triggers. Bead
+        ``…-cwmid`` measured what keying on the shortfall instead costs: a
+        restore where 12 of 12 channels could not play alerted ``warning`` while
+        one unwritable logo — a deliberately NON-FATAL category — alerted
+        ``error``, inverting the severity ordering for triage.
+
+        ``error`` therefore stays reserved for what it describes: the two
+        rolled-back / indeterminate outcomes, where the caller either got
+        nothing it asked for or cannot tell what it got.
+
+        NOT a statement about dry runs: a preview has no realized outcome to
+        degrade, and each caller guards that before asking (a predicted
+        shortfall is a prediction, not a failure). Enforced by
+        ``tests/tasks/test_dbas_restore_unplayable_alert.py`` and
+        ``tests/tasks/test_dbas_sync_unplayable_alert.py``.
+        """
+        return self is RestoreOutcome.COMPLETED_WITH_FAILURES
+
 
 class ChannelReattachMode(str, Enum):
     """What the post-create reattach passes do to channels this restore did NOT create.

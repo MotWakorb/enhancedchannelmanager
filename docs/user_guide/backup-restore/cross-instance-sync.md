@@ -140,6 +140,27 @@ Common causes:
 - **Target disabled**: check the **Enable** toggle on the target. A disabled target never runs.
 - **Partial-apply loop**: the sync runs but a category keeps failing on apply (not B unreachable, but a recurring mix/rollback). Pull the most recent sync report from the task history; identify the failing category.
 
+### The sync reports "Completed with Warnings"
+
+The sync ran, wrote its changes to B, and rolled nothing back — but the result
+was not clean, so ECM does not call it a success. The most common reason is a
+channel on B left holding **no playable stream**: the channel exists, but not one
+of the streams attached to it has a URL behind it, so playing it fails. The
+notification and the task-history entry name how many channels are affected;
+the sync report in task history names each one.
+
+**Resolution:** attach a real stream to each named channel on B, or fix the
+matching problem on A (usually a stream that A's provider no longer carries) and
+re-sync.
+
+This is a warning, not a failure — nothing was undone, and everything else in the
+run was applied. If a target has a shortfall you already know about and accept,
+turn off **Warning** alerts for that target's sync task in the scheduled-task
+alert settings. That silences the external alert (email/Discord/Telegram) while
+leaving the outcome, the in-app notification and the task history honest. Do not
+expect the target row to show a full sync timestamp for such a run: only a clean
+success records "B was current as of this time".
+
 ### Conflict on a channel with no channel number
 
 A channel on A has no channel number, and B already has a channel with the same name and also no number. ECM cannot safely decide these are the same channel. **Resolution:** assign a channel number to the channel on A, then re-sync.
