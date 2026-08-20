@@ -503,8 +503,12 @@ def test_dry_run_registry_wires_all_importers():
         EntityType.LOGO,
     ):
         assert entity_type in wired, f"{entity_type} not wired in dry-run registry"
-    # Order mirrors the hard Phase-2 sequence: M3U first, logos last.
+    # Order mirrors the hard Phase-2 sequence: M3U ahead of everything that
+    # remaps an ``m3u_account`` FK, logos last. USER_AGENT precedes M3U because
+    # an account's own ``user_agent`` FK remaps through that namespace
+    # (bead …-9h6cv), so the pin is the RELATION, not the index.
     order = [s.entity_type for s in steps]
-    assert order[0] == EntityType.M3U_ACCOUNT
+    assert order.index(EntityType.M3U_ACCOUNT) < order.index(EntityType.EPG_SOURCE)
+    assert order.index(EntityType.USER_AGENT) < order.index(EntityType.M3U_ACCOUNT)
     assert order[-1] == EntityType.LOGO
     assert order.index(EntityType.CHANNEL_GROUP) < order.index(EntityType.CHANNEL)

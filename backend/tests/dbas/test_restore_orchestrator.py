@@ -690,8 +690,12 @@ def test_default_importer_steps_order_and_wiring():
 
     steps = default_importer_steps()
     order = [s.entity_type for s in steps]
-    # Hard dependency ordering.
-    assert order[0] == EntityType.M3U_ACCOUNT
+    # Hard dependency ordering. M3U leads every category that remaps an
+    # ``m3u_account`` FK; USER_AGENT leads M3U because an account's own
+    # ``user_agent`` FK remaps through that namespace (bead …-9h6cv), so this is
+    # pinned as a RELATION rather than as index 0.
+    assert order.index(EntityType.M3U_ACCOUNT) < order.index(EntityType.EPG_SOURCE)
+    assert order.index(EntityType.USER_AGENT) < order.index(EntityType.M3U_ACCOUNT)
     assert order.index(EntityType.EPG_SOURCE) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.CHANNEL_GROUP) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.CHANNEL_PROFILE) < order.index(EntityType.CHANNEL)
@@ -699,7 +703,8 @@ def test_default_importer_steps_order_and_wiring():
     assert order.index(EntityType.USER_AGENT) < order.index(EntityType.CHANNEL)
     # lvfwd — a stream profile's ``user_agent`` FK remaps through the USER_AGENT
     # namespace, so user agents MUST be restored first. Reversing these two
-    # aborted the whole restore on a fresh Dispatcharr (400 "Invalid pk").
+    # aborted the whole restore on a fresh Dispatcharr (400 "Invalid pk"). The
+    # M3U account carries the same FK (…-9h6cv), pinned above.
     assert order.index(EntityType.USER_AGENT) < order.index(EntityType.STREAM_PROFILE)
     assert order.index(EntityType.SETTINGS) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.USER) < order.index(EntityType.CHANNEL)

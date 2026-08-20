@@ -1544,3 +1544,209 @@ async def test_run_sync_partial_apply_stamps_outcome_but_not_full_sync_time(tmp_
     assert report.outcome != RestoreOutcome.SUCCESS
     assert target.last_outcome == report.outcome.value
     assert target.last_full_sync_at is None
+
+
+# ---------------------------------------------------------------------------
+# The M3U account's own ``user_agent`` FK (bead …-9h6cv).
+#
+# ``importers/m3u_accounts`` forwarded A's raw ``user_agent`` pk to B, and the
+# registry ran M3U_ACCOUNT five steps BEFORE USER_AGENT so the remap namespace
+# was empty anyway. Live, B answered
+# ``400 {"user_agent": ["Invalid pk \"4\" - object does not exist."]}``; because
+# M3U_ACCOUNT is a FATAL failure category the apply rolled back and NOTHING
+# synced. Both halves are needed — ordering alone still forwards the raw pk,
+# and the remap alone resolves against an empty namespace.
+#
+# INVARIANT: no importer forwards a source-side FK to the destination without
+# resolving it through its remap namespace, on any category, at any ordering.
+# ---------------------------------------------------------------------------
+
+
+def test_sync_registry_imports_user_agents_before_m3u_accounts():
+    """An M3U account's ``user_agent`` FK resolves through the USER_AGENT remap
+    namespace, so the agents step must precede the accounts step."""
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    steps = sync_config_importer_steps()
+    agents = _step_index(steps, EntityType.USER_AGENT)
+    accounts = _step_index(steps, EntityType.M3U_ACCOUNT)
+
+    assert agents >= 0, "sync registry carries no USER_AGENT step"
+    assert accounts >= 0, "sync registry carries no M3U_ACCOUNT step"
+    assert agents < accounts, (
+        "USER_AGENT must be imported before M3U_ACCOUNT — an account's "
+        "user_agent FK resolves through the USER_AGENT remap namespace"
+    )
+
+
+def test_every_registry_imports_user_agents_before_m3u_accounts():
+    """Ordering parity across ALL THREE registries fed by the same
+    ``_importer_step_builders`` callables — the sync registry, the restore apply
+    registry, and the restore dry-run registry. A divergence between two of them
+    is exactly how the sibling defect (…-hiacv) arose."""
+    from dbas.restore_orchestrator import default_importer_steps, dry_run_importer_steps
+    from tasks.dbas_sync_engine import sync_config_importer_steps
+
+    for label, steps in (
+        ("sync", sync_config_importer_steps()),
+        ("restore-apply", default_importer_steps()),
+        ("restore-dry-run", dry_run_importer_steps()),
+    ):
+        agents = _step_index(steps, EntityType.USER_AGENT)
+        accounts = _step_index(steps, EntityType.M3U_ACCOUNT)
+        assert agents >= 0, f"{label} registry carries no USER_AGENT step"
+        assert accounts >= 0, f"{label} registry carries no M3U_ACCOUNT step"
+        assert agents < accounts, (
+            f"{label} registry imports USER_AGENT after M3U_ACCOUNT"
+        )
+        # The …-hiacv relationship still holds in the same list.
+        profiles = _step_index(steps, EntityType.STREAM_PROFILE)
+        assert profiles >= 0, f"{label} registry carries no STREAM_PROFILE step"
+        assert agents < profiles, (
+            f"{label} registry imports USER_AGENT after STREAM_PROFILE"
+        )
+
+
+def _source_client_with_custom_agent_on_the_m3u_account() -> MagicMock:
+    """Source A: an M3U account whose ``user_agent`` FK points at a custom agent
+    — the exact shape that aborted the whole apply with a 400."""
+    client = _source_client()
+    client.get_user_agents = AsyncMock(
+        return_value=[
+            {"id": 4, "name": "XDMRU Custom Agent",
+             "user_agent": "XDMRU-Probe/1.0"},
+        ]
+    )
+    client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 1, "name": "Provider A", "password": SECRET_M3U_PASSWORD,
+             "username": "operator", "user_agent": 4},
+        ]
+    )
+    return client
+
+
+def _strict_dest_client() -> AsyncMock:
+    """Dest B, empty, that VALIDATES the ``user_agent`` FK the way Dispatcharr
+    does — an unknown pk is a 400, not a silent accept.
+
+    A permissive mock would let a stale pk through and turn this test green
+    against the broken code.
+    """
+    client = _empty_dest_client()
+    client.create_user_agent = AsyncMock(
+        return_value={"id": 150, "name": "XDMRU Custom Agent"}
+    )
+    known_agent_ids = {150}
+
+    async def _create(payload):
+        agent = payload.get("user_agent")
+        if agent is not None and agent not in known_agent_ids:
+            raise RuntimeError(
+                'Dispatcharr 400: {"user_agent": ["Invalid pk \\"%s\\" - object '
+                'does not exist."]}' % agent
+            )
+        return {"id": 101, "name": payload.get("name")}
+
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_m3u_account_with_a_custom_user_agent_is_created_on_b(tmp_path):
+    """The reproduction, as a cycle: an account carrying a custom user agent
+    CREATES on B with the FK rewritten to B's agent id — no 400, no rollback."""
+    src = _source_client_with_custom_agent_on_the_m3u_account()
+    dest = _strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    account_cat = report.category(EntityType.M3U_ACCOUNT)
+    assert account_cat.created == 1
+    # An unresolved FK on this path is a FAILURE (FailureReason), recorded in
+    # ``failure_details`` — the M3U create raises and the importer classifies it.
+    # Asserting on ``skip_details`` here would be a false green: the broken code
+    # records nothing there either.
+    assert account_cat.failed == 0, (
+        "M3U create failed: %s"
+        % [(d.reason, d.message) for d in account_cat.failure_details]
+    )
+    # The FK on the wire is B's agent id (150), never A's source pk (4).
+    payload = dest.create_m3u_account.await_args.args[0]
+    assert payload["user_agent"] == 150
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_a_custom_user_agent_no_longer_rolls_the_whole_cycle_back(tmp_path):
+    """Blast-radius pin. The defect was not 'the account is missing its agent',
+    it was 'the ENTIRE apply rolls back and nothing syncs'. Every other category
+    must reach B on a cycle whose account carries a custom agent."""
+    src = _source_client_with_custom_agent_on_the_m3u_account()
+    dest = _strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.create_epg_source.assert_awaited()
+    dest.create_channel_group.assert_awaited()
+    dest.create_channel_profile.assert_awaited()
+    dest.create_stream_profile.assert_awaited()
+    assert not any(
+        "rollback" in note.lower() for note in report.notes
+    ), f"the cycle rolled back; notes={report.notes}"
+    assert report.outcome == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_account_still_created_when_its_agent_cannot_be_resolved(tmp_path):
+    """DECISION (…-9h6cv), stated as a test: an M3U account whose ``user_agent``
+    cannot be resolved is created WITHOUT the field rather than skipped
+    DEPENDENCY_UNRESOLVED like its stream-profile sibling.
+
+    An M3U account is the ROOT of the Phase-2 chain — EPG sources, groups,
+    channels and streams all hang off it — and Dispatcharr falls back to its
+    default agent when the field is unset. Skipping the account would cascade a
+    whole-tree DEPENDENCY_UNRESOLVED for a field the account works without. The
+    degradation is reported in ``report.notes``, never silent."""
+    # A's account points at agent 4, but A's own agent list does not carry it
+    # (deleted between the two gathers), so the USER_AGENT namespace has no 4.
+    src = _source_client()
+    src.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 1, "name": "Provider A", "password": SECRET_M3U_PASSWORD,
+             "username": "operator", "user_agent": 4},
+        ]
+    )
+    dest = _strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    account_cat = report.category(EntityType.M3U_ACCOUNT)
+    assert account_cat.created == 1
+    assert account_cat.failed == 0
+    assert not any(
+        d.reason == SkipReason.DEPENDENCY_UNRESOLVED
+        for d in account_cat.skip_details
+    )
+    payload = dest.create_m3u_account.await_args.args[0]
+    assert "user_agent" not in payload
+    assert any("Provider A" in note for note in report.notes)

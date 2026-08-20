@@ -1079,17 +1079,21 @@ def default_importer_steps() -> list[ImporterStep]:
 
     Ordering (dependency-driven, ADR-012 D-table):
 
-      * M3U accounts first (defers auto-sync to the final phase) — everything
+      * user agents FIRST (bead ``…-9h6cv``) — a leaf that resolves nothing,
+        and the namespace BOTH the M3U account's and the stream profile's
+        ``user_agent`` FK resolve through. Anything ahead of it meets an empty
+        namespace.
+      * M3U accounts next (defers auto-sync to the final phase) — everything
         downstream remaps ``m3u_account`` FKs through it.
-      * EPG sources second, WITH the bounded EPG-data download wait
+      * EPG sources next, WITH the bounded EPG-data download wait
         (:func:`_epg_step_with_download_wait`) so Dispatcharr has EPG rows
         before channels are created.
       * channel groups / channel profiles / stream profiles before channels —
         they populate the IdRemapTable namespaces the channels importer resolves.
-      * user agents BEFORE stream profiles (bead ``…-lvfwd``): a stream profile's
-        ``user_agent`` FK remaps through the USER_AGENT namespace, so the agents
-        must already be restored — the reverse order POSTed a raw source id and
-        aborted the whole restore on a fresh destination.
+        The stream profiles' ``user_agent`` FK is why the agents lead the list
+        (bead ``…-lvfwd``): the reverse order POSTed a raw source id and aborted
+        the whole restore on a fresh destination. Bead ``…-9h6cv`` found the M3U
+        account carries the same FK, so the agents moved ahead of it too.
       * settings (core settings / comskip) before channels (config in place
         before the big entity category), then ECM's OWN settings.json — a
         SEPARATE category (bead …-dfkbn item 4), because the drill's report said
@@ -1114,13 +1118,19 @@ def default_importer_steps() -> list[ImporterStep]:
     """
     s = _importer_step_builders()
     return [
+        # USER AGENTS FIRST (…-9h6cv). A user agent resolves nothing through the
+        # remap, while BOTH the M3U account and the stream profile carry a
+        # ``user_agent`` FK that resolves through the USER_AGENT namespace
+        # (lvfwd for the profile, 9h6cv for the account). Ordering agents ahead
+        # of every consumer is the only arrangement in which no consumer meets an
+        # empty namespace. It also puts the agents FIRST in the rollback ledger,
+        # so a compensating rollback deletes the accounts/profiles that reference
+        # them before the agents themselves.
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(s["epg"])),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        # USER AGENTS before STREAM PROFILES (lvfwd): a stream profile's
-        # ``user_agent`` FK resolves through the USER_AGENT remap namespace.
-        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
         # ECM's OWN settings.json (…-dfkbn item 4) — a DIFFERENT namespace from
@@ -1536,14 +1546,14 @@ def dry_run_importer_steps() -> list[ImporterStep]:
     """
     s = _importer_step_builders()
     return [
+        # Same FK ordering as the apply registry (lvfwd, …-9h6cv) — a preview
+        # that ordered these differently would promise an M3U-account or
+        # stream-profile outcome the apply cannot deliver.
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        # Same FK ordering as the apply registry (lvfwd) — a preview that ordered
-        # these differently would promise a stream-profile count the apply cannot
-        # deliver.
-        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         ImporterStep(EntityType.SETTINGS, s["settings"]),
         # ECM's OWN settings.json (…-dfkbn item 4) — a DIFFERENT namespace from

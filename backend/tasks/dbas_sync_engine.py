@@ -1020,7 +1020,9 @@ def sync_config_importer_steps(
 
     Reuses :func:`dbas.restore_orchestrator._importer_step_builders` (the SAME
     callables that back the archive apply + dry-run registries) for the config
-    categories so there is no second importer path, then appends the CHANNELS
+    categories so there is no second importer path — including its USER_AGENT-
+    first ordering, which both the M3U and stream-profile ``user_agent`` FKs
+    depend on (…-9h6cv) — then appends the CHANNELS
     step (bead kcxie) after every config dependency — groups/profiles/M3U — and
     the LOGOS step (bead 7ipq2.1) LAST. The LOGOS step is a structural no-op
     unless the plan carries a LOGO category (the per-target ``sync_logos``
@@ -1041,20 +1043,25 @@ def sync_config_importer_steps(
     """
     s = _importer_step_builders()
     return [
-        # M3U first (EPG sources resolve their m3u_account FK through the remap
-        # M3U writes). defers=False: the deferred auto-sync phase is suppressed.
+        # USER AGENTS FIRST (…-9h6cv, mirroring the restore registry's ordering).
+        # A user agent is a leaf — it resolves nothing through the remap — while
+        # BOTH the M3U account and the stream profile carry a ``user_agent`` FK
+        # that resolves through the USER_AGENT namespace. Running agents last
+        # left that namespace empty: every custom-user-agent stream profile was
+        # skipped DEPENDENCY_UNRESOLVED (…-hiacv), and an M3U account forwarded
+        # A's raw pk, so B answered 400 "Invalid pk" and — M3U_ACCOUNT being a
+        # FATAL failure category — the whole cycle rolled back (…-9h6cv).
+        # ADR-013 S9 lists user agents in the per-cycle config set;
+        # ``user_agents`` is in SYNC_CONFIG_CATEGORIES so the gather feeds this
+        # step. Distinct from the USERS category, which stays never-sync (D3).
+        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        # M3U before EPG (EPG sources resolve their m3u_account FK through the
+        # remap M3U writes). defers=False: the deferred auto-sync phase is
+        # suppressed.
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=False),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
-        # USER AGENTS before STREAM PROFILES (…-hiacv, mirroring the restore
-        # registry's ordering): a stream profile's ``user_agent`` FK resolves
-        # through the USER_AGENT remap namespace, so without this step every
-        # custom-user-agent stream profile was skipped DEPENDENCY_UNRESOLVED and
-        # never reached B. ADR-013 S9 lists user agents in the per-cycle config
-        # set; ``user_agents`` is in SYNC_CONFIG_CATEGORIES so the gather feeds
-        # this step. Distinct from the USERS category, which stays never-sync (D3).
-        ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
         # CHANNELS (+ embedded streams) after every config dependency.
         ImporterStep(

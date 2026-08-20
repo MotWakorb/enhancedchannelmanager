@@ -106,6 +106,7 @@ def _remap(**kwargs):
     name_to_type = {
         "channel_group": EntityType.CHANNEL_GROUP,
         "m3u_account": EntityType.M3U_ACCOUNT,
+        "user_agent": EntityType.USER_AGENT,
     }
     for name, mapping in kwargs.items():
         for src, dest in mapping.items():
@@ -940,3 +941,190 @@ async def test_an_already_existing_account_is_not_an_action_item():
     )
 
     assert report.credentials_needing_reentry == 0
+
+
+# ---------------------------------------------------------------------------
+# The ``user_agent`` FK (bead …-9h6cv). An M3U account's ``user_agent`` is a
+# FOREIGN KEY to a Dispatcharr user-agent row, whose id the destination assigns
+# itself. Forwarding A's raw pk made B answer
+# ``400 {"user_agent": ["Invalid pk \"4\" - object does not exist."]}``, and
+# because M3U_ACCOUNT is a FATAL failure category the whole apply rolled back
+# and nothing synced at all.
+#
+# INVARIANT under test: no source-side FK reaches the destination unresolved.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_agent_fk_is_rewritten_to_the_destination_id():
+    """The account's ``user_agent`` FK is resolved through the USER_AGENT remap
+    namespace; the wire payload carries B's id, never A's source pk."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://p/a",
+            "user_agent": 4,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(user_agent={4: 77}),
+    )
+
+    assert captured["user_agent"] == 77, (
+        "the raw source pk was forwarded instead of the remapped destination id"
+    )
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+
+
+@pytest.mark.asyncio
+async def test_null_user_agent_is_preserved_and_needs_no_remap():
+    """The overwhelmingly common shape — no custom agent — is untouched: the
+    field stays null, the account is created, and nothing is noted."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": None}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert captured["user_agent"] is None
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+    assert report.notes == []
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_user_agent_drops_the_field_and_still_creates():
+    """When the FK cannot be resolved the account is STILL created — with the
+    ``user_agent`` field DROPPED, never a stale source pk.
+
+    Deliberately different from the stream-profile sibling, which skips
+    DEPENDENCY_UNRESOLVED: a stream profile is a leaf, an M3U account is the ROOT
+    of the Phase-2 chain (EPG sources, groups, channels and streams all hang off
+    it), and Dispatcharr falls back to its default agent when the field is unset.
+    Skipping the account would cascade a whole-tree DEPENDENCY_UNRESOLVED for a
+    field the account works without."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),  # USER_AGENT namespace empty
+    )
+
+    assert "user_agent" not in captured, (
+        "an unresolvable FK must be dropped, never sent upstream as a stale pk"
+    )
+    cat = report.category(EntityType.M3U_ACCOUNT)
+    assert cat.created == 1
+    assert cat.failed == 0
+    assert cat.skipped == 0
+    assert not any(
+        d.reason == SkipReason.DEPENDENCY_UNRESOLVED for d in cat.skip_details
+    )
+
+
+@pytest.mark.asyncio
+async def test_dropped_user_agent_is_a_visible_operator_note():
+    """Dropping the field is a DEGRADATION, so it is reported — never silent."""
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": 4}],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert any(
+        "Provider A" in note and "user agent" in note.lower()
+        for note in report.notes
+    ), f"no operator note named the degraded account; notes={report.notes}"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_also_reports_the_unresolvable_user_agent():
+    """The PREVIEW must not promise what the apply will not deliver: the same
+    note appears on a dry-run, which creates nothing."""
+    report = _report(is_dry_run=True)
+    client = _client()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+        is_dry_run=True,
+    )
+
+    client.create_m3u_account.assert_not_awaited()
+    assert report.category(EntityType.M3U_ACCOUNT).would_create == 1
+    assert any("Provider A" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_user_agent_note_carries_no_credential_material():
+    """The degradation note names the account only — never a server_url,
+    username or password."""
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://provider/playlist?token=abc123",
+            "username": "operator",
+            "password": "hunter2",
+            "user_agent": 4,
+        }],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    blob = " ".join(report.notes)
+    assert "hunter2" not in blob
+    assert "operator" not in blob
+    assert "abc123" not in blob
+    assert "provider/playlist" not in blob

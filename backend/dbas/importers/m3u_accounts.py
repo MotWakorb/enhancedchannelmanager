@@ -54,6 +54,19 @@ fall-through (no strategy hits) returns ``None``; the caller treats that as
 unresolved and never guesses a destination id.
 
 ----------------------------------------------------------------------------
+THE ``user_agent`` FK (bead ``…-9h6cv``)
+----------------------------------------------------------------------------
+
+An M3U account's ``user_agent`` is a FOREIGN KEY to a Dispatcharr user-agent
+row, not a header string, and the destination assigns that row its own id. The
+create payload therefore rewrites it through the ``USER_AGENT`` remap namespace
+(:func:`_resolve_user_agent_fk`); the step registries import USER_AGENT BEFORE
+M3U_ACCOUNT so the namespace is populated when this importer runs. When the FK
+cannot be resolved the field is DROPPED and the account is still created — see
+:func:`_build_create_payload` for why this diverges from the stream-profile
+sibling's skip-``DEPENDENCY_UNRESOLVED`` convention.
+
+----------------------------------------------------------------------------
 DEFERRED AUTO-SYNC (the CRITICAL ordering pattern)
 ----------------------------------------------------------------------------
 
@@ -147,8 +160,13 @@ _NON_CREATE_KEYS = frozenset(
     }
 )
 
-# All keys dropped before issuing the create.
+# All keys dropped before issuing the create. The ``user_agent`` FK is NOT in
+# this set — it is remapped in place (or dropped when unresolvable); see
+# ``_resolve_user_agent_fk``.
 _DROPPED_CREATE_KEYS = _SOURCE_ID_KEYS | _NON_CREATE_KEYS
+
+# The FK an M3U account carries into a Dispatcharr user-agent row (bead …-9h6cv).
+_USER_AGENT_FK = "user_agent"
 
 # Credential markers scrubbed from any operator-facing failure message. An
 # upstream error body can echo a server_url; we never let it through.
@@ -254,13 +272,60 @@ def resolve_group(
     return None
 
 
-def _build_create_payload(archive_account: dict) -> tuple[dict, list[str]]:
+def _resolve_user_agent_fk(
+    archive_account: dict, remap: IdRemapTable
+) -> tuple[bool, int | None]:
+    """Resolve the account's optional ``user_agent`` FK through the remap table.
+
+    Returns ``(resolved, dest_id)``:
+
+    - No FK (absent / None): ``(True, None)`` — the account uses Dispatcharr's
+      default agent; nothing to resolve.
+    - FK present and remapped: ``(True, dest_id)``.
+    - FK present but unmapped (or not an int): ``(False, None)`` — the caller
+      DROPS the field; a stale source pk is never sent upstream.
+    """
+    source_agent = archive_account.get(_USER_AGENT_FK)
+    if source_agent is None:
+        return (True, None)
+    try:
+        source_agent_id = int(source_agent)
+    except (TypeError, ValueError):
+        return (False, None)
+    dest_id = remap.resolve(EntityType.USER_AGENT, source_agent_id)
+    if dest_id is None:
+        return (False, None)
+    return (True, dest_id)
+
+
+def _build_create_payload(
+    archive_account: dict, remap: IdRemapTable
+) -> tuple[dict, list[str], bool]:
     """Build the create_m3u_account payload from an archive account record.
 
     Drops the archive source id, the embedded ``channel_groups`` settings list
     (reconciled and deferred separately), and read-only/derived fields. Keeps the
     credential fields (server_url/username/password) — they MUST be recreated for
     the account to function — but they are NEVER logged or reported.
+
+    THE ``user_agent`` FK (bead ``…-9h6cv``). ``user_agent`` is a FOREIGN KEY to
+    a Dispatcharr user-agent row whose id the DESTINATION assigns itself, not a
+    header string. This importer used to forward source-A's raw pk verbatim, so a
+    live B answered ``400 {"user_agent": ["Invalid pk \\"4\\" - object does not
+    exist."]}`` — and because M3U_ACCOUNT is a FATAL failure category, the whole
+    apply rolled back and NOTHING synced. The FK is now rewritten in place to the
+    destination id through the ``USER_AGENT`` remap namespace (which the step
+    registries populate BEFORE this importer runs).
+
+    UNRESOLVABLE => DROP THE FIELD, KEEP THE ACCOUNT. The sibling convention for
+    stream profiles (``importers/groups_profiles``) is to skip the whole row
+    ``DEPENDENCY_UNRESOLVED``. That is right for a stream profile, which is a
+    LEAF. An M3U account is the ROOT of the Phase-2 chain — EPG sources, channel
+    groups, channels and streams all resolve through it — so skipping it cascades
+    a whole-tree ``DEPENDENCY_UNRESOLVED`` for the sake of one optional field
+    that Dispatcharr already has a default for. The account is created without
+    the agent and the degradation is reported (never silent): the operator
+    re-selects one agent instead of losing the entire replica.
 
     A STANDARD (redact-by-default) artifact carries the ``***REDACTED***``
     placeholder in place of each credential. Writing that through produced an XC
@@ -271,14 +336,25 @@ def _build_create_payload(archive_account: dict) -> tuple[dict, list[str]]:
     is unaffected.
 
     Returns:
-        ``(payload, redacted_fields)`` — the create payload, and the credential
-        field NAMES that were stripped (never their values) so the caller can
-        report them as a post-restore action item.
+        ``(payload, redacted_fields, user_agent_resolved)`` — the create payload,
+        the credential field NAMES that were stripped (never their values) so the
+        caller can report them as a post-restore action item, and whether the
+        ``user_agent`` FK resolved (``False`` only when it was present and could
+        not be remapped, in which case the field has been dropped).
     """
     payload = {
         k: v for k, v in archive_account.items() if k not in _DROPPED_CREATE_KEYS
     }
-    return strip_redaction_sentinels(payload)
+    user_agent_resolved, dest_agent_id = _resolve_user_agent_fk(archive_account, remap)
+    if _USER_AGENT_FK in payload:
+        if user_agent_resolved:
+            # None is preserved as None: a free-standing account stays on the
+            # destination's default agent.
+            payload[_USER_AGENT_FK] = dest_agent_id
+        else:
+            payload.pop(_USER_AGENT_FK)
+    stripped, redacted_fields = strip_redaction_sentinels(payload)
+    return stripped, redacted_fields, user_agent_resolved
 
 
 def _extract_group_settings(archive_account: dict) -> dict | None:
@@ -473,7 +549,26 @@ async def import_m3u_accounts(
             )
             continue
 
-        payload, redacted_fields = _build_create_payload(archive_account)
+        payload, redacted_fields, user_agent_resolved = _build_create_payload(
+            archive_account, remap
+        )
+        if not user_agent_resolved:
+            # DEGRADED, not failed (…-9h6cv): the account is still created — see
+            # _build_create_payload for why an M3U account is not skipped the way
+            # its stream-profile sibling is. Reported on BOTH the preview and the
+            # apply so the two agree. Name only; never a credential.
+            logger.warning(
+                "[DBAS-M3U] Account '%s' references a user agent that is not on "
+                "this destination; the account is restored WITHOUT it and falls "
+                "back to the default agent.",
+                label,
+            )
+            report.notes.append(
+                "M3U account '%s': its custom user agent is not on this "
+                "destination, so the account was created without one and uses "
+                "the default agent. Re-select an agent if the provider requires "
+                "a specific one." % label
+            )
 
         if is_dry_run:
             cat.would_create += 1
