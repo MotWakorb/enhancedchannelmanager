@@ -1750,3 +1750,123 @@ async def test_account_still_created_when_its_agent_cannot_be_resolved(tmp_path)
     payload = dest.create_m3u_account.await_args.args[0]
     assert "user_agent" not in payload
     assert any("Provider A" in note for note in report.notes)
+
+
+# ---------------------------------------------------------------------------
+# The M3U account's ``server_group`` FK (bead …-g8tyd) — the whole cycle.
+#
+# Same shape as the ``user_agent`` defect (…-9h6cv) with no remap namespace to
+# resolve through: Dispatcharr 0.28.2 has a ``ServerGroup`` table, but ECM's
+# DBAS has no ServerGroup entity category and no ServerGroup importer, so A's
+# pk cannot be translated. It is DROPPED instead.
+#
+# Live on the disposable stack, an account carrying A's ``server_group`` pk 20
+# made B answer ``400 {"server_group": ["Invalid pk \"20\" - object does not
+# exist."]}``; M3U_ACCOUNT is a FATAL failure category, so the apply rolled back
+# (``partial_failed_rolled_back``) and NOTHING synced. The identical payload
+# with ``server_group`` removed answered ``201``.
+# ---------------------------------------------------------------------------
+
+
+def _source_client_with_a_server_group_on_the_m3u_account() -> MagicMock:
+    """Source A: an M3U account assigned to a ServerGroup — the exact shape that
+    aborted the whole apply with a 400.
+
+    pk 20 is deliberately outside the destination's ServerGroup range (the live
+    B has no server groups at all, and ECM never creates any). A pk that happened
+    to alias an unrelated destination row would produce a FALSE GREEN.
+    """
+    client = _source_client()
+    client.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {"id": 1, "name": "Provider A", "password": SECRET_M3U_PASSWORD,
+             "username": "operator", "server_group": 20},
+        ]
+    )
+    return client
+
+
+def _server_group_strict_dest_client() -> AsyncMock:
+    """Dest B, empty, that VALIDATES the ``server_group`` FK the way Dispatcharr
+    does — ANY non-null pk is a 400, because B has no ServerGroup rows and ECM
+    has no importer that could create one.
+
+    A permissive mock would let the stale pk through and turn these tests green
+    against the broken code.
+    """
+    client = _empty_dest_client()
+
+    async def _create(payload):
+        group = payload.get("server_group")
+        if group is not None:
+            raise RuntimeError(
+                'Dispatcharr 400: {"server_group": ["Invalid pk \\"%s\\" - object '
+                'does not exist."]}' % group
+            )
+        return {"id": 101, "name": payload.get("name")}
+
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_m3u_account_in_a_server_group_is_created_on_b(tmp_path):
+    """The reproduction, as a cycle: an account assigned to a ServerGroup on A
+    CREATES on B with the FK dropped — no 400, no rollback."""
+    src = _source_client_with_a_server_group_on_the_m3u_account()
+    dest = _server_group_strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    account_cat = report.category(EntityType.M3U_ACCOUNT)
+    assert account_cat.created == 1
+    # An unresolved FK on this path is a FAILURE (FailureReason) recorded in
+    # ``failure_details`` — the M3U create raises and the importer classifies it.
+    # Asserting on ``skip_details`` here would be a false green: the broken code
+    # records nothing there either.
+    assert account_cat.failed == 0, (
+        "M3U create failed: %s"
+        % [(d.reason, d.message) for d in account_cat.failure_details]
+    )
+    payload = dest.create_m3u_account.await_args.args[0]
+    assert "server_group" not in payload, (
+        "source pk %r reached the destination" % payload.get("server_group")
+    )
+    assert report.outcome == RestoreOutcome.SUCCESS
+
+
+@pytest.mark.asyncio
+async def test_a_server_group_no_longer_rolls_the_whole_cycle_back(tmp_path):
+    """Blast-radius pin. The defect was not 'the account lost its server group',
+    it was 'the ENTIRE apply rolls back and nothing syncs'. Every other category
+    must reach B on a cycle whose account is assigned to a server group."""
+    src = _source_client_with_a_server_group_on_the_m3u_account()
+    dest = _server_group_strict_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    dest.create_epg_source.assert_awaited()
+    dest.create_channel_group.assert_awaited()
+    dest.create_channel_profile.assert_awaited()
+    dest.create_stream_profile.assert_awaited()
+    assert not any(
+        "rollback" in note.lower() for note in report.notes
+    ), f"the cycle rolled back; notes={report.notes}"
+    assert report.outcome == RestoreOutcome.SUCCESS
+    # The degradation is reported, never silent.
+    assert any(
+        "Provider A" in note and "server group" in note.lower()
+        for note in report.notes
+    ), f"no operator note named the degraded account; notes={report.notes}"

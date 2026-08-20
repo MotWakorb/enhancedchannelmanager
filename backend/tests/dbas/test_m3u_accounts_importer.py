@@ -46,6 +46,9 @@ The Dispatcharr client is mocked at the importer module level
 (``dbas.importers.m3u_accounts``); the importer is exercised with an AsyncMock
 client.
 """
+import json
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock
 
@@ -1128,3 +1131,285 @@ async def test_user_agent_note_carries_no_credential_material():
     assert "operator" not in blob
     assert "abc123" not in blob
     assert "provider/playlist" not in blob
+
+
+# ---------------------------------------------------------------------------
+# The ``server_group`` FK (bead …-g8tyd). An M3U account's ``server_group`` is a
+# FOREIGN KEY to a Dispatcharr ``ServerGroup`` row, whose id the destination
+# assigns itself — the same shape as the ``user_agent`` defect (…-9h6cv), with
+# one difference that decides the fix: there is NO ServerGroup entity category
+# and NO ServerGroup importer, so there is no remap namespace to resolve
+# through. The FK is therefore DROPPED, never forwarded.
+#
+# Live on Dispatcharr 0.28.2, an account carrying A's ``server_group`` pk 20
+# made B answer
+# ``400 {"server_group": ["Invalid pk \"20\" - object does not exist."]}``, and
+# because M3U_ACCOUNT is a FATAL failure category the whole apply rolled back
+# (``partial_failed_rolled_back``) and nothing synced. The identical payload with
+# ``server_group`` removed answered ``201``.
+#
+# INVARIANT under test: no source-side FK reaches the destination unresolved —
+# every one is either remapped or deliberately dropped with a recorded reason.
+# ``server_group`` is one example of that property, not the specification.
+# ---------------------------------------------------------------------------
+
+_V0282_SERVER_GROUP_ACCOUNT = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "bd_g8tyd"
+    / "dispatcharr_v0282_m3u_account_server_group.json"
+)
+
+# Every FK an M3U account carries into another Dispatcharr table on the CREATE
+# payload, per 0.28.2's ``M3UAccountSerializer.Meta.fields``. ``user_agent`` is
+# remapped (…-9h6cv); ``server_group`` is dropped (…-g8tyd). A new FK added to
+# the payload without a disposition here fails the invariant test below.
+_ACCOUNT_FK_KEYS = ("user_agent", "server_group")
+
+
+@pytest.mark.asyncio
+async def test_server_group_fk_is_never_forwarded_to_the_destination():
+    """The account's ``server_group`` FK is DROPPED from the create payload.
+
+    A's ServerGroup ids mean nothing on B, and there is no ServerGroup remap
+    namespace to translate them through, so the only safe disposition is to omit
+    the field: Dispatcharr's column is nullable (``on_delete=SET_NULL``,
+    ``null=True, blank=True``) and the account works without it.
+    """
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://p/a",
+            # 20 is deliberately outside the destination's ServerGroup range —
+            # the live B has none at all. A pk that happened to alias an
+            # unrelated destination row would make this assertion pass against
+            # broken code (the …-9h6cv false-green).
+            "server_group": 20,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert "server_group" not in captured, (
+        "source-side server_group pk %r was forwarded to the destination"
+        % captured.get("server_group")
+    )
+
+
+@pytest.mark.asyncio
+async def test_dropped_server_group_still_creates_the_account():
+    """DECISION (…-g8tyd), stated as a test: the account is created WITHOUT the
+    field rather than skipped ``DEPENDENCY_UNRESOLVED``.
+
+    Same reasoning as its ``user_agent`` sibling: an M3U account is the ROOT of
+    the Phase-2 chain, so skipping it cascades a whole-tree
+    ``DEPENDENCY_UNRESOLVED`` for one optional grouping label. Asserted on
+    ``created`` / ``failure_details`` / ``skip_details`` explicitly — this
+    subsystem records conditions in three different structures and asserting on
+    the wrong one passes against broken code.
+
+    The client VALIDATES the FK the way Dispatcharr 0.28.2 does. A permissive
+    mock would accept the stale pk and turn this test green against the broken
+    code — the create would succeed and ``created == 1`` either way.
+    """
+    async def _strict_create(payload):
+        if payload.get("server_group") is not None:
+            raise RuntimeError(
+                'Dispatcharr 400: {"server_group": ["Invalid pk \"%s\" - object '
+                'does not exist."]}' % payload["server_group"]
+            )
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_strict_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": 20}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    cat = report.category(EntityType.M3U_ACCOUNT)
+    assert cat.created == 1
+    assert cat.failed == 0
+    assert cat.failure_details == []
+    assert cat.skipped == 0
+    assert not any(
+        d.reason == SkipReason.DEPENDENCY_UNRESOLVED for d in cat.skip_details
+    )
+
+
+@pytest.mark.asyncio
+async def test_dropped_server_group_is_a_visible_operator_note():
+    """Dropping the field is a DEGRADATION, so it is reported — never silent.
+
+    Asserted on ``report.notes``, the idiom …-9h6cv established for this case
+    (NOT ``skip_details`` or ``failure_details``, which stay empty here).
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": 20}],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert any(
+        "Provider A" in note and "server group" in note.lower()
+        for note in report.notes
+    ), f"no operator note named the degraded account; notes={report.notes}"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_also_reports_the_dropped_server_group():
+    """The PREVIEW must not promise what the apply will not deliver: the same
+    note appears on a dry-run, which creates nothing."""
+    report = _report(is_dry_run=True)
+    client = _client()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": 20}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+        is_dry_run=True,
+    )
+
+    client.create_m3u_account.assert_not_awaited()
+    assert report.category(EntityType.M3U_ACCOUNT).would_create == 1
+    assert any(
+        "Provider A" in note and "server group" in note.lower()
+        for note in report.notes
+    ), f"the preview stayed silent about the drop; notes={report.notes}"
+
+
+@pytest.mark.asyncio
+async def test_null_server_group_is_untouched_and_notes_nothing():
+    """The overwhelmingly common shape — no server group — is not a degradation:
+    the field stays null, the account is created, and nothing is noted."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": None}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert captured["server_group"] is None
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+    assert report.notes == []
+
+
+@pytest.mark.asyncio
+async def test_server_group_note_carries_no_credential_material():
+    """The degradation note names the account only — never a server_url,
+    username or password."""
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://provider/playlist?token=abc123",
+            "username": "operator",
+            "password": "hunter2",
+            "server_group": 20,
+        }],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    # Guard the guard: an EMPTY notes list would satisfy every "not in" below
+    # while the degradation went entirely unreported.
+    assert any("Provider A" in note for note in report.notes), (
+        f"nothing was reported, so this scrub check proves nothing; "
+        f"notes={report.notes}"
+    )
+    blob = " ".join(report.notes)
+    assert "hunter2" not in blob
+    assert "operator" not in blob
+    assert "abc123" not in blob
+    assert "provider/playlist" not in blob
+
+
+@pytest.mark.asyncio
+async def test_no_source_side_fk_survives_into_a_real_0282_create_payload():
+    """THE INVARIANT, over a RECORDED Dispatcharr 0.28.2 response.
+
+    The fixture is the verbatim ``GET /api/m3u/accounts/4/`` body from the
+    disposable A instance — the exact shape that made B answer
+    ``400 {"server_group": ["Invalid pk \\"20\\" - object does not exist."]}``.
+    A hand-built dict cannot catch a field this importer has never heard of; a
+    recorded one can.
+
+    For EVERY foreign key an M3U account carries, the value that reaches the
+    destination is never the source-side pk: it is either absent, null, or a
+    destination id the remap produced.
+    """
+    archive_account = json.loads(_V0282_SERVER_GROUP_ACCOUNT.read_text())
+    assert archive_account["server_group"] == 20, "fixture lost its populated FK"
+
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, "name": payload.get("name")}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+
+    await import_m3u_accounts(
+        archive_accounts=[archive_account],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+        # Empty: no namespace can resolve either FK, which is the worst case.
+        remap=_remap(),
+    )
+
+    for fk in _ACCOUNT_FK_KEYS:
+        source_pk = archive_account.get(fk)
+        if source_pk is None:
+            continue
+        assert captured.get(fk) != source_pk, (
+            "%s forwarded source pk %r to the destination — every FK must be "
+            "remapped or dropped" % (fk, source_pk)
+        )

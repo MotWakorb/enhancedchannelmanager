@@ -1,0 +1,57 @@
+{
+  "account_type": "STD",
+  "all_expirations": [],
+  "auto_enable_new_groups_live": true,
+  "auto_enable_new_groups_series": true,
+  "auto_enable_new_groups_vod": true,
+  "channel_groups": [],
+  "created_at": "2026-08-20T05:15:25.379547Z",
+  "cron_expression": "",
+  "custom_properties": {
+    "auto_enable_new_groups_live": true,
+    "auto_enable_new_groups_series": true,
+    "auto_enable_new_groups_vod": true,
+    "enable_vod": false
+  },
+  "earliest_expiration": null,
+  "enable_vod": false,
+  "exp_date": null,
+  "file_path": null,
+  "filters": [],
+  "id": 4,
+  "is_active": false,
+  "last_message": null,
+  "locked": false,
+  "max_streams": 0,
+  "name": "XDMRU SG Probe",
+  "password": "",
+  "priority": 0,
+  "profiles": [
+    {
+      "account": {
+        "account_type": "STD",
+        "id": 4,
+        "is_xtream_codes": false,
+        "name": "XDMRU SG Probe"
+      },
+      "current_viewers": 0,
+      "custom_properties": {},
+      "exp_date": null,
+      "id": 4,
+      "is_active": true,
+      "is_default": true,
+      "max_streams": 0,
+      "name": "XDMRU SG Probe Default",
+      "replace_pattern": "$1",
+      "search_pattern": "^(.*)$"
+    }
+  ],
+  "refresh_interval": 0,
+  "server_group": 20,
+  "server_url": "http://provider.invalid/playlist.m3u",
+  "stale_stream_days": 7,
+  "status": "idle",
+  "updated_at": null,
+  "user_agent": null,
+  "username": null
+}

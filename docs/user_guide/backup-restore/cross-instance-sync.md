@@ -53,6 +53,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 |-|-|
 | **Users** | Continuous one-way push of `users` would overwrite B's privilege flags and could lock out B's operator. This exclusion is permanent and code-enforced. It cannot be configured away. |
 | **Credentials** | M3U passwords, EPG passwords, API tokens. Redacted before transmission to avoid streaming live secrets on a recurring schedule. Migrate secrets via encrypted backup. |
+| **Server groups** | Dispatcharr's server groups — the grouping that makes several M3U accounts share one provider's connection limit. ECM has no server-group category, so a group cannot be created on B and an account's assignment cannot be re-pointed at one. An account that belongs to a server group on A is created on B without one; the sync report names the account so you can re-assign it on B. Create the server group on B yourself if the accounts sharing it need a shared connection limit. |
 
 ---
 
