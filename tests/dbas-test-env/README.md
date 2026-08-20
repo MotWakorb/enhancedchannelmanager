@@ -33,6 +33,36 @@ docker-compose.yml/.mcp.yml) or the operator's live Dispatcharr.
 
 ---
 
+## Version policy — the test env tracks `dispatcharr:latest`
+
+**PO decision, bead `enhancedchannelmanager-xvuk1`:** this directory tracks
+`dispatcharr:latest` **literally**. Not a pinned version bumped by hand.
+
+- `docker-compose.dbas-sync-test.yml` (A + B) and `docker-compose.xc-provider.yml`
+  (P) both default to `ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}`.
+  `ghcr.io` is the registry the operator's production Dispatcharr pulls from, so
+  the test env and production resolve the same artifact.
+- **Latest is the default so nobody has to remember a flag.** The old
+  `DISPATCHARR_VERSION=0.28.2` instructions are gone; do not reinstate them.
+- **To reproduce an old finding deliberately**, pass the override:
+  `DISPATCHARR_VERSION=0.28.2 docker compose ... up -d`.
+- `:latest` is only as fresh as your last pull — `docker compose ... pull` first
+  when you mean to be current.
+- **Every validation run reads and reports the version it actually ran against**,
+  from `GET /api/core/version/` on each node. Tracking a floating tag means the
+  platform can move mid-flight: it did on 2026-08-20, when `latest` went from
+  `0.28.2` (image `1f55137b`) to `0.29.0` (image `3621ebe3`,
+  digest `sha256:df768adc…`, identical on docker.io and ghcr.io). **A run that
+  cannot name its Dispatcharr is not a result.**
+- **Do not read `/api/version`'s `git_commit` as proof of what is running** —
+  that is baked-in build metadata and has misled three engineers on this work.
+  Checksum the deployed files instead (see the HANDOVER verification table).
+
+`docker-compose.dbas-test.yml` — the single-instance stack — still defaults to
+`0.26.0` and was **out of scope** for `xvuk1`. Treat its default as stale.
+
+---
+
 ## Bring it up
 
 ```bash
@@ -274,16 +304,18 @@ production ECM is never repointed.
 
 ```bash
 cd tests/dbas-test-env
-DISPATCHARR_VERSION=0.28.2 docker compose -p dbas-sync-testenv \
+docker compose -p dbas-sync-testenv \
   -f docker-compose.dbas-sync-test.yml up -d
 # A = http://127.0.0.1:9601 (in-cluster: dispatcharr-a-web:9191)
 # B = http://127.0.0.1:9602 (in-cluster: dispatcharr-b-web:9191)
 ```
 
-> **GOTCHA (0.28.2, still true):** `DISPATCHARR_SUPERUSER_*` in the compose file
-> is **not honored**. Both instances come up showing the first-run "Create your
+> **GOTCHA (0.28.2 and 0.29.0 — re-confirmed 2026-08-20):**
+> `DISPATCHARR_SUPERUSER_*` in the compose file is **not honored**, on the
+> modular stack too. Both instances come up showing the first-run "Create your
 > Super User Account" wizard at `/login`. Complete it in the browser on each —
-> that is the intended UI-driven path and it takes ten seconds.
+> that is the intended UI-driven path and it takes ten seconds — or run
+> `createsuperuser` non-interactively (see the `DJANGO_SECRET_KEY` gotcha).
 
 ### 2. A fake provider both instances can reach
 
@@ -551,9 +583,27 @@ docker image rm ecm-xdmru:<sha>     # optional
 
 ---
 
-# HANDOVER — the documentation environment (bead `enhancedchannelmanager-gk4d0`)
+# HANDOVER — the documentation environment (beads `gk4d0`, `xvuk1`)
 
-**BUILT 2026-08-20.** Everything below is live and disposable. This section is
+**BUILT 2026-08-20. REBUILT FROM SCRATCH 2026-08-20 on Dispatcharr 0.29.0**
+(bead `enhancedchannelmanager-xvuk1`) — the first build was on 0.28.2, which
+`latest` has moved past. Every count, id and md5 below was re-measured on the
+rebuild; where the two builds differ it is called out.
+
+**THE PLATFORM THIS WAS BUILT AND MEASURED ON:**
+
+| Node | `GET /api/core/version/` | Image |
+|---|---|---|
+| Dispatcharr A (source) | `0.29.0` | `ghcr.io/dispatcharr/dispatcharr:latest` = `3621ebe3` |
+| Dispatcharr B (destination) | `0.29.0` | same |
+| Dispatcharr P (XC provider) | `0.29.0` | same |
+| ECM (`ecm-docenv`) | `origin/dev` `dd77d587` | `ecm-docenv:dd77d587` |
+
+`latest` resolved to digest `sha256:df768adc…`, identical on docker.io and
+ghcr.io. Read the version endpoint again yourself before you shoot anything —
+the tag floats, and a screenshot that cannot name its platform is not evidence.
+
+Everything below is live and disposable. This section is
 the contract between the QA engineer who built the environment and the
 technical writer who will screenshot it — it is not a user guide, and it does
 not tell you what to write.
@@ -605,10 +655,12 @@ real one in "just to see how it looks".
 | **provider-northwind** (nginx origin) | *no host port* | `http://provider-northwind/` | `dbas-xc-provider-provider-northwind-1` | none |
 
 Postgres ports, if you ever need them: A `5446`, B `5447`, P `5448`. All three
-Dispatcharr instances run **0.28.2**.
+Dispatcharr instances run **0.29.0** (see the table at the top of this section).
 
 ECM's own config volume is `ecm-docenv-config`; the image is
-`ecm-docenv:dd77d587`. The nginx document root is a **generated** fixture at
+`ecm-docenv:dd77d587`. ECM's first-run setup is already complete and it is
+already pointed at A (`http://dispatcharr-a-web:9191`, password auth,
+`ecmtest-a`). The nginx document root is a **generated** fixture at
 `/home/lecaptainc/ecm-docenv-fixture` (see "Regenerating the fixture" below) —
 it is deliberately outside the repo and is not committed.
 
@@ -620,6 +672,12 @@ Read back from A after its first XC refresh, harvested from P's real XC API:
 status "Active" | exp_date 2026-11-18 (90 days from first auth)
 active_cons "0" | max_connections "4" | allowed_output_formats ["ts","mp4"]
 ```
+
+Re-measured on 0.29.0: `player_api.php` with the right credentials returns
+exactly that; `get_live_categories` → 7, `get_live_streams` → 53,
+`get_vod_streams` / `get_series` → `[]`, `xmltv.php` → 200 / ~756 KB,
+`get.php?type=m3u_plus` → 200 / ~13.7 KB. A wrong password and no credentials
+both return **HTTP 401** `{"error":"Unauthorized"}`.
 
 `max_connections` is 4 because P's `northwind-demo` user has `stream_limit = 4`
 — change the user on P if you want a different number in the shot.
@@ -671,51 +729,76 @@ Regional       850 Northern Counties · 851 Coastal Region One · 852 Valley Pub
 
 ### Everything else on A
 
+> **The ids below are from the 2026-08-20 0.29.0 rebuild and are LOWER than
+> the ones the first build recorded** (the first build created and deleted
+> objects on the way, so its ids had gaps). If a doc or bead quotes M3U account
+> `6`, EPG source `2` or logo `61`, it is quoting the retired 0.28.2 build.
+
 | Thing | Count | Names / ids |
 |---|---|---|
-| M3U accounts | 3 | id 6 **`Northwind IPTV (Xtream Codes)`** (`account_type = XC`, `server_url http://dispatcharr-p-web:9191`, user `northwind-demo`, 53 streams); id 7 `Northwind Local Affiliates (Standard M3U)` (`STD`, 6 streams); id 1 `custom` (Dispatcharr's locked built-in) |
-| EPG sources | 2 | id 2 `Northwind IPTV EPG (Xtream Codes)` — 2,937 programmes / 53 channels; id 3 `Northwind Local XMLTV` — 421 programmes / 6 channels |
-| Channel profiles | 2 | id 2 `Living Room` (all 59 channels); id 3 `Kids & Family` (6 channels — the Kids group only) |
-| Stream profiles | 6 | 5 Dispatcharr built-ins + id 8 `Northwind Direct (ffmpeg)`, which references the custom user agent |
-| User agents | 4 | 3 built-ins (TiviMate, VLC, Chrome) + id 22 `Northwind Set-Top Box` (`NorthwindSTB/2.4 (Linux; documentation-environment)`) |
-| Logos | 60 | 59 remote-URL logos from the provider feed, **plus id 61 `Meridian News (hosted on Dispatcharr)`** |
+| M3U accounts | 3 | id 2 **`Northwind IPTV (Xtream Codes)`** (`account_type = XC`, `server_url http://dispatcharr-p-web:9191`, user `northwind-demo`, 53 streams); id 3 `Northwind Local Affiliates (Standard M3U)` (`STD`, 6 streams); id 1 `custom` (Dispatcharr's locked built-in) |
+| EPG sources | 2 | id 1 `Northwind IPTV EPG (Xtream Codes)` — 2,884 programmes / 53 channels; id 2 `Northwind Local XMLTV` — 421 programmes / 6 channels |
+| Channel profiles | 2 | id 1 `Living Room` (all 59 channels); id 2 `Kids & Family` (6 channels — the Kids group only) |
+| Stream profiles | 6 | 5 Dispatcharr built-ins (ids 1-5) + id 6 `Northwind Direct (ffmpeg)`, which references the custom user agent |
+| User agents | 4 | 3 built-ins (ids 1-3: TiviMate, VLC, Chrome) + id 4 `Northwind Set-Top Box` (`NorthwindSTB/2.4 (Linux; documentation-environment)`) |
+| Logos | 60 | 59 remote-URL logos from the provider feed, **plus id 60 `Meridian News (hosted on Dispatcharr)`** |
+| Channel groups | 10 | id 1 `Default Group` (0 channels) + ids 2-10 in lineup order: News, Sports, Movies, Kids, Documentary, Entertainment, Music, Local, Regional |
 | Server groups | 0 | — |
+| Output profiles | 2 | ids 1-2, `Media Server (AC3 Audio)` and `Web Player (AAC Audio)` — Dispatcharr built-ins on 0.28.2 **and** 0.29.0. The first build never recorded these; they are not new |
 | Dispatcharr users | 1 | `ecmtest-a` |
 
-**The Dispatcharr-hosted logo** is id 61, bound to channel **100 Meridian
+The XC EPG programme count moves with the clock: the fixture XMLTV covers 3 days
+from 00:00 UTC, and P's `xmltv.php` re-serves only the window it still holds, so
+2,884 today is not a contradiction of the 2,937 the first build saw.
+
+**The Dispatcharr-hosted logo** is id 60, bound to channel **100 Meridian
 News**. Its bytes live in **A's own** `/data/logos/meridian-news-hosted.png`
-(md5 `3ba03ea3c50f92ec7a8873e7f5b751b9`) — not in ECM's `/config/uploads/logos/`,
-which is empty and must stay that way. That distinction is the whole point of
-bead `cfxml`; if you re-upload a logo, upload it through **A's** Logo Manager.
+(md5 `f7e3278711ad164d1fd9c1e6324d81bc`, 7,180 bytes — the fixture's
+`logos/meridian-news.png` uploaded verbatim; the retired build's copy was a
+re-encode, md5 `3ba03ea3…`) — not in ECM's `/config/uploads/logos/`, which is
+empty and must stay that way. That distinction is the whole point of bead
+`cfxml`; if you re-upload a logo, upload it through **A's** Logo Manager.
 
 ## What is on instance P (you will rarely need to open it)
 
 53 channels / 53 streams / 8 groups (7 populated + `Default Group`), all with
-logos and all linked to EPG. One STD M3U account `Northwind Origin Feed`
-reading the nginx `playlist.m3u`, one EPG source `Northwind XMLTV` (3,608
-programmes), one custom user agent `Northwind Fixture Agent`, and two users:
-the admin `ecmtest-p` and the XC-facing `northwind-demo`.
+logos and all linked to EPG, numbered exactly as A numbers them (100-107,
+200-209, 300-308, 400-405, 500-506, 600-607, 700-704). One STD M3U account
+id 2 `Northwind Origin Feed` reading the nginx `playlist.m3u`, one EPG source
+id 1 `Northwind XMLTV` (3,608 programmes / 53 channels), one custom user agent
+id 4 `Northwind Fixture Agent`, and two users: the admin `ecmtest-p` (id 1) and
+the XC-facing `northwind-demo` (id 2, `stream_limit = 4`, `user_level = 1`,
+`custom_properties.xc_password`).
 
 P exists only to be a believable provider. The writer's screenshots are of ECM
 and, where the guide needs them, of A and B.
 
 ## Instance B — the sync destination, currently EMPTY
 
-B is reset and holds the fresh-0.28.2 baseline, **which is not zero of
-everything** — record these as "empty" when captioning:
+B was reset **after** the 0.29.0 fidelity measurement below and holds the
+fresh-0.29.0 baseline, **which is not zero of everything** — record these as
+"empty" when captioning. Every number here was read straight out of B's
+Postgres, not from an API:
 
 ```
 0 channels · 0 streams · 0 channel groups · 0 channel profiles · 0 logos
-0 EPG sources · 0 server groups
+0 EPG sources · 0 server groups · 0 EPG programmes
 3 user agents (ids 1-3: TiviMate, VLC, Chrome)
 5 stream profiles (ids 1-5: ffmpeg, streamlink, Proxy, Redirect, VLC)
+2 output profiles (ids 1-2: Media Server (AC3 Audio), Web Player (AAC Audio))
 1 M3U account (id 1, `custom`, Dispatcharr's locked built-in)
 1 user (`ecmtest-b`)
 ```
 
 Those id ranges matter: an artifact that lands on B with an id **outside** 1-3
-(user agents) or 1-5 (stream profiles) is one the sync created, not one that
-was already there.
+(user agents), 1-5 (stream profiles) or 1 (M3U accounts) is one the sync
+created, not one that was already there. Note `Default Group` is **not**
+present on a fresh instance — it appears the moment something creates an M3U
+account, so its arrival on B is a sync side effect, not a pre-existing row.
+
+**The destination is unspent.** The one apply-mode run recorded below was
+followed by a full container+volume reset, so nothing on B has been written by
+a sync.
 
 **No sync target exists in ECM.** That is deliberate — creating it is part of
 the workflow you are documenting, so you get to walk and shoot that path
@@ -726,11 +809,11 @@ yourself. Point it at `http://dispatcharr-b-web:9191` with B's credentials.
 You will want a clean destination more than once. From `tests/dbas-test-env`:
 
 ```bash
-DISPATCHARR_VERSION=0.28.2 docker compose -p dbas-sync-testenv \
+docker compose -p dbas-sync-testenv \
   -f docker-compose.dbas-sync-test.yml \
   rm -sf dispatcharr-b-web dispatcharr-b-celery dispatcharr-b-db dispatcharr-b-redis
 docker volume rm dbas-sync-testenv_dbas-sync-b-data dbas-sync-testenv_dbas-sync-b-pg
-DISPATCHARR_VERSION=0.28.2 docker compose -p dbas-sync-testenv \
+docker compose -p dbas-sync-testenv \
   -f docker-compose.dbas-sync-test.yml up -d \
   dispatcharr-b-db dispatcharr-b-redis dispatcharr-b-web dispatcharr-b-celery
 
@@ -744,11 +827,13 @@ docker exec dbas-sync-testenv-dispatcharr-b-web-1 sh -c '
   python manage.py createsuperuser --noinput'
 ```
 
-**`DISPATCHARR_VERSION=0.28.2` is not optional.** The compose file's default is
-`0.26.0`; omit the variable and B silently comes back a minor version behind A,
-which is a different (out-of-scope) test matrix. This bit the build — B came up
-0.26.0 on the first reset and had to be torn down again. Confirm with
-`curl -s http://127.0.0.1:9602/api/core/version/` every time.
+**Pass no version flag.** The compose default is `latest`, which is what A and
+P are running, so a bare reset brings B back on the same platform they are on.
+Confirm it anyway — `curl -s http://127.0.0.1:9602/api/core/version/` — and
+record the answer with whatever you measured. (This used to read
+"`DISPATCHARR_VERSION=0.28.2` is not optional", because the old default was
+`0.26.0` and a reset silently came back a minor version behind A. That default
+is gone; the instruction is now the opposite one.)
 
 After a reset, ECM's existing sync target still points at B correctly, but B's
 JWT changed — the next run re-authenticates on its own.
@@ -756,13 +841,26 @@ JWT changed — the next run re-authenticates on its own.
 ## Traps — read before you spend an hour on one of these
 
 **1. B throttles `/api/accounts/token/` to roughly 3 requests per minute.**
+**Re-measured on 0.29.0, 2026-08-20 — it carried over, do not assume it stays
+that way.** Sequential token POSTs: requests 1-3 returned `200`, request 4
+returned `429` `{"detail":"Request was throttled. Expected available in 57
+seconds."}`. 0.29.0 ships a NEW `apps/accounts/throttling.py`, so this is a
+re-implementation that happens to land on the same rate — re-measure it after
+every platform move rather than quoting this paragraph.
+
 Pace anything that authenticates against B, and cache the token rather than
 re-authenticating per request. A self-inflicted `429` surfaces as
 `partial_failed_rolled_back` and has been misread as a code failure twice. One
-operation at a time; never reset B while a run is in flight.
+operation at a time; never reset B while a run is in flight. The same throttle
+is live on A and P — a script that re-authenticates per process (rather than
+caching the token to disk) will trip it against P during a fixture rebuild.
 
-**2. A fresh Dispatcharr can import an entire playlist as ONE stream.** This
-cost real time during the build. Dispatcharr caches its settings groups in
+**2. A fresh Dispatcharr can import an entire playlist as ONE stream.**
+**Still live on 0.29.0 — confirmed 2026-08-20 on ALL THREE fresh instances.**
+Immediately after first boot, A, B and P each had `m3u_hash_key: "url"` in
+Postgres and `m3u_hash_key: ""` in the Redis cache. Bust the cache on every
+fresh instance **before the first M3U refresh**; it is a required build step,
+not a rescue. This cost real time during the first build. Dispatcharr caches its settings groups in
 Redis, and on a first boot the `stream_settings` group can be cached **before**
 the migration writes it — so `m3u_hash_key` reads as `""` instead of `"url"`,
 `"".split(",")` yields `[""]`, the per-stream hash payload is the empty dict,
@@ -788,12 +886,13 @@ publishes `epg_channel_id` as the **channel number** (`"100"`, `"101"`, …), no
 `meridian-news.northwind.example`. So on A, the 53 XC channels have
 `tvg_id = "100"`-style ids and match **P's XC XMLTV**
 (`http://dispatcharr-p-web:9191/xmltv.php?username=…&password=…`), which is
-exactly what EPG source id 2 points at. The 6 Standard-M3U channels keep the
+exactly what EPG source id 1 points at (id 2 on the retired 0.28.2 build).
+**Re-confirmed on 0.29.0.** The 6 Standard-M3U channels keep the
 real slug ids and match `local-epg.xml`. Do not "fix" A by pointing the XC
 lineup at `http://provider-northwind/epg.xml` — nothing will match.
 
 **4. Dispatcharr returns `403`, not `404`, for an API path that does not
-exist.** `/api/m3u/accounts/6/refresh/` and
+exist.** `/api/m3u/accounts/2/refresh/` and
 `/api/channels/channels/from-stream/bulk` (no trailing slash) both answer 403
 and look like a permissions problem. The real routes are
 `/api/m3u/refresh/<account_id>/` and
@@ -821,6 +920,18 @@ whole page for it, not just the Channels pane.
 **10. Dispatcharr's bulk channel creation is asynchronous.** The POST returns a
 `task_id` immediately; poll `/api/channels/channels/` until the count settles
 rather than reading the response as the result.
+
+**11. SCREENSHOT HAZARD — Dispatcharr's sidebar renders the host's REAL PUBLIC
+IP.** A previous capture of B included it. Nothing in CI can catch this: a byte
+scanner cannot see pixels (bead `enhancedchannelmanager-wfz8z`, where a live
+`mcp_api_key` was found inside a committed image, invisible to gitleaks,
+detect-secrets and GitHub secret scanning alike). **Suppress or crop it on
+EVERY capture of B and of P**, and check A too. Crop the sidebar out, or blank
+the element in devtools before the shot — do not rely on noticing it later.
+
+**12. `/api/version`'s `git_commit` is baked-in build metadata, not what is
+running.** It has misled three engineers on this work. Prove the deployed tree
+by checksum instead — see the verification table at the end of this section.
 
 ## Regenerating the fixture
 
@@ -854,8 +965,8 @@ If the host reboots, or containers with `RestartPolicy=no` get stopped:
 ```bash
 cd tests/dbas-test-env
 
-# A and B (pin the version — see trap 1):
-DISPATCHARR_VERSION=0.28.2 docker compose -p dbas-sync-testenv \
+# A and B (no version flag — the compose default is `latest`):
+docker compose -p dbas-sync-testenv \
   -f docker-compose.dbas-sync-test.yml up -d
 
 # P and the nginx origin (joins A/B's network, so bring A/B up FIRST):
@@ -868,6 +979,30 @@ until curl -fsS http://127.0.0.1:6400/api/health/ready >/dev/null; do sleep 3; d
 ```
 
 All persistent state is in named volumes, so nothing needs rebuilding.
+
+**A bare `up -d` reuses the locally-cached `latest`.** That is deliberate — it
+keeps a cold restart from silently moving the platform under a screenshot run in
+progress. When you *do* mean to be current, pull first and then re-read every
+version endpoint:
+
+```bash
+docker compose -p dbas-sync-testenv -f docker-compose.dbas-sync-test.yml pull
+NORTHWIND_FIXTURE_DIR=/home/lecaptainc/ecm-docenv-fixture \
+  docker compose -p dbas-xc-provider -f docker-compose.xc-provider.yml pull
+for port in 9601 9602 9603; do curl -s "http://127.0.0.1:$port/api/core/version/"; echo; done
+```
+
+If ECM's container is gone rather than merely stopped, this is the run line it
+was created with:
+
+```bash
+docker run -d --name ecm-docenv \
+  --network dbas-sync-testenv_default \
+  -p 127.0.0.1:6400:6400 \
+  -e ECM_PORT=6400 -e ECM_HTTPS_PORT=6443 -e CONFIG_DIR=/config -e PUID=1000 -e PGID=1000 \
+  -v ecm-docenv-config:/config \
+  ecm-docenv:dd77d587
+```
 
 ## Tearing the whole thing down
 
@@ -895,39 +1030,122 @@ environment.
 
 ## What was verified when this was built, and how
 
-Recorded so a later reader can tell a checked claim from an assumed one.
+Recorded so a later reader can tell a checked claim from an assumed one. Every
+row below was re-run on the **2026-08-20 0.29.0 rebuild** — this is not the
+0.28.2 table carried forward.
 
 | Claim | How it was checked |
 |---|---|
-| ECM runs `origin/dev` `dd77d587` | **Not** `/api/version` (that is baked-in build metadata and has misled three engineers). All **244** non-test `backend/**.py` files were sha256'd inside the container against `git show dd77d587:<path>`: **244 OK, 0 mismatched, 0 absent.** |
-| …and that checksum harness can actually fail | Two known-bad runs. Compared against an older revision (29 differing files) → **29 MISMATCH**. Then a byte was appended to `/app/main.py` in the live container → **exactly 1 MISMATCH**, restored → back to 244/244. (A first attempt to use the parent commit `b867538a` as the known-bad was **vacuous** — `dd77d587` is its merge commit, so 0 files differ and the check had no signal. Vacuous known-bads are the failure this table exists to prevent.) |
-| A's account really is XC | Read `account_type` from **A's Postgres directly** (`select account_type from m3u_m3uaccount`) → `XC`, not from a serializer that could be defaulting. Cross-checked in ECM's own UI: the M3U Manager renders the badge **`XtreamCodes`** on account 6 and **`Standard M3U`** on account 7. |
-| P is a genuine XC server | `player_api.php` with correct credentials returns a real `user_info` (auth 1, Active, exp_date, active_cons, max_connections); with a wrong password and with no credentials it returns **HTTP 401** `{"error":"Unauthorized"}`. Both poles from the same endpoint. `get_live_categories` → 7, `get_live_streams` → 53, `xmltv.php` → 200/776 KB, `get.php` → 200/13.7 KB. |
-| The A→B sync path works with an XC account in the mix | **Dry-run preview only** — no writes to B. Wrong password → `success=False`, `SYNC_DESTINATION_UNREADABLE`. Correct password → `success=True`, *"would create 78, update 0, skip 9, 0 conflict(s) across 9 categories"*. B re-read afterwards: still **0 channels / 0 streams / 0 groups / 0 logos / 0 EPG sources.** The temporary sync target and all 6 resulting notifications were then deleted, so ECM has no sync history for you to work around. (ECM's own scheduled tasks — the M3U Change Monitor in particular — keep producing routine notifications; those are normal, not leftovers. Clear them before a notifications screenshot with `DELETE /api/notifications?read_only=false`.) |
-| The Dispatcharr client used to build all this could report failure | Smoke-tested before use: known-good returns real JSON and exits 0; a nonexistent path and an unreachable host both exit **1** loudly. It never degrades an error into "0 rows". |
-| nginx is serving what we think | Real files return 200 with non-zero sizes; a bogus path returns **404** — checked again after the fixture was relocated. |
-| Playwright is pointed at a live app | Navigating to a dead port errors before any real page was read. The Channel Manager then rendered **"59 channels"** and all 9 Northwind groups. |
-| The committed generator matches the live fixture | `playlist.m3u`, `local.m3u` and all **59** logos compare byte-identical; the two XMLTV files match on the same UTC day. |
-| Production is untouched | `ecm-ecm-1` and `ecm-ecm-mcp-1` still `Exited`, with `FinishedAt` timestamps predating this session and no `StartedAt` since. Production `dispatcharr` still `Up`, unchanged, on `dispatcharr-green_default` — a different network from `dbas-sync-testenv_default`. |
+| Every node is on `0.29.0` | `GET /api/core/version/` on A (`:9601`), B (`:9602`) and P (`:9603`) each returned `{"version":"0.29.0"}`. The image behind all three is `ghcr.io/dispatcharr/dispatcharr:latest` = `3621ebe3`, digest `sha256:df768adc…`, and `docker pull` confirmed docker.io and ghcr.io agree on that digest. |
+| The compose default really is `latest`, and the override really works | `docker compose config` resolves `ghcr.io/dispatcharr/dispatcharr:latest` with no variable set, and `ghcr.io/dispatcharr/dispatcharr:0.28.2` with `DISPATCHARR_VERSION=0.28.2` — both poles, both files. Then proven live: B was reset with **no flag** and came back `0.29.0`, which is exactly the failure the old `0.26.0` default caused. |
+| ECM runs `origin/dev` `dd77d587` | **Not** `/api/version` (baked-in build metadata; it has misled three engineers). Two passes, both `sha256sum` inside the container against `git show dd77d587:<path>`: **243 non-test `backend/**.py` → 243 OK / 0 MISMATCH / 0 ABSENT**, and **all 698 `backend/**.py` including tests → 698 OK / 0 MISMATCH / 0 ABSENT**, with **0** `.py` files in `/app` that are not in the ref. (The retired build's "244" counted `backend/test_dispatcharr_api.py`, a top-level test file this filter excludes: 243 + 1 = 244, reconciled.) |
+| …and that checksum harness can actually fail | Two known-bad runs, exit status captured directly rather than through a pipe. (1) Compared against `b0e0a5ad`, 30 first-parent commits back → **48 MISMATCH**, harness exit 1. (2) A byte appended to `/app/main.py` in the live container → **exactly 1 MISMATCH** on `main.py`, harness exit 1; restored → **243 OK**, exit 0. (A previous attempt to use the parent commit `b867538a` as the known-bad was **vacuous** — `dd77d587` is its merge commit, so 0 files differ. Vacuous known-bads are the failure this table exists to prevent.) |
+| The Dispatcharr client used to build all this could report failure | Smoke-tested against four poles before use: known-good returns real JSON; a nonexistent path, an unreachable host, and a wrong password each raise loudly. It never degrades an error into "0 rows". |
+| The DB reader could report failure | The counters below come from `psql` against A's and B's Postgres directly, no API in the path. A bogus table name produces `ERROR: relation ... does not exist` in the cell, not `0`. Its B column went from all-zero to non-zero across the apply and back to all-zero after the reset, so it is not structurally stuck. |
+| A's account really is XC | Read `account_type` from **A's Postgres directly** (`select id, name, account_type from m3u_m3uaccount`) → id 2 `XC`, id 3 `STD`, id 1 `STD` — not from a serializer that could be defaulting. |
+| **The XC server side survived the 0.29.0 bump** | `dispatcharr/urls.py` still routes `player_api.php` → `xc_player_api`, `panel_api.php` → `xc_panel_api`, `get.php` → `xc_get`, `xmltv.php` → `xc_xmltv`, all still defined in `apps/output/views.py`. The module changed between versions but the surface the provider design depends on did not move, and 0.29.0 *added* XC coverage (`apps/output/tests/test_xc_series_info.py`, `test_xc_vod_info.py`). Then proven live, both poles: `player_api.php` with the right credentials returns a real `user_info` (auth 1, Active, `exp_date` 2026-11-18, `active_cons` 0, `max_connections` 4); a wrong password and no credentials each return **HTTP 401** `{"error":"Unauthorized"}`. `get_live_categories` → 7, `get_live_streams` → 53, `xmltv.php` → 200 / 755,706 bytes, `get.php?type=m3u_plus` → 200 / 13,719 bytes. |
+| nginx is serving what we think | From inside P: `playlist.m3u` 200/12,587, `local.m3u` 200/1,499, `epg.xml` 200/1,089,386, a logo 200/7,180 — and a bogus path **404**. Both poles. |
+| The committed generator reproduces the fixture | `northwind-fixture.py` was re-run into a wiped directory and produced 53 + 6 channels and **59** logos, the same lineup the handover captions. |
+| ECM is actually talking to A | `/api/health/ready` reports `dispatcharr: reachable (HTTP 200)`; `GET /api/channels` returns **count 59**. Login was proven both poles: correct password 200, wrong password **401**. |
+| Production is untouched | `ecm-ecm-1` and `ecm-ecm-mcp-1` are still `exited`, `FinishedAt 2026-08-20T03:12`, with no `StartedAt` after it. Production `dispatcharr` is still `Up` on `dispatcharr-green_default` — a different network from `dbas-sync-testenv_default` — on image id `1f55137b`, which it has held since `03:13`. |
+
+### The 0.29.0 replica-fidelity measurement (epic `enhancedchannelmanager-f5a5j`)
+
+Epic `f5a5j` was diagnosed on 0.28.2 and explicitly requires re-confirmation
+before any member is treated as diagnosed. **This is that re-confirmation, taken
+on 0.29.0.** One apply-mode run, `A → B`, sync target `sync_logos: true`,
+`confirm_apply: true`, `cloud_credential_version: 1`. What the run reported:
+
+```
+outcome success | 146 items | created 134 | updated 0 | failed 0 | skipped 12 | 3.7s
+
+category            created  updated  skipped  failed
+user_agent                1        0        3       0   (3x already_exists_identical)
+m3u_account               2        0        1       0   (custom, already_exists_identical)
+epg_source                2        0        0       0
+channel_group             7        0        3       0   (3x already_exists_name_match)
+channel_profile           2        0        0       0
+stream_profile            1        0        5       0   (5x already_exists_identical)
+channel                  59        0        0       0
+stream                   59        0        0       0
+logo                      1        0        0       0
+```
+
+Both databases read directly afterwards (`psql`, no API in the path):
+
+```
+                          A      B
+channels                 59     59
+streams                  59     59
+groups                   10     10
+channel profiles          2      2
+EPG sources               2      2
+channels with an EPG link 59      6
+channels with a logo     59      0
+logos present at all     60      1
+```
+
+EPG source `url`, both sides:
+
+```
+A  1 | Northwind IPTV EPG (Xtream Codes) | http://dispatcharr-p-web:9191/xmltv.php?username=northwind-demo&password=not-a-real-password
+A  2 | Northwind Local XMLTV             | http://provider-northwind/local-epg.xml
+B  1 | Northwind IPTV EPG (Xtream Codes) | <EMPTY>
+B  2 | Northwind Local XMLTV             | http://provider-northwind/local-epg.xml
+```
+
+**The 0.28.2 finding reproduces exactly on 0.29.0**: the credential-bearing XC
+URL is stripped to empty on the destination while the credential-free one
+crosses intact. B's EPG source 1 is left in `status = error`, *"No URL provided
+and no valid local file exists"*.
+
+What else the direct read showed, all of it measured, none of it fixed here:
+
+- **Channel → logo binding does not cross** (bead `xgbjm`, still open). 59
+  channels on A carry a `logo_id`; **0** on B.
+- **Only 1 of A's 60 logo records landed on B** — the Dispatcharr-hosted one.
+  A's other 59 are remote-URL logos and no record was created for them. The
+  retired 0.28.2 note said "logo records and bytes land on B"; on this run they
+  did not. Treat that older sentence as superseded, not as a regression claim —
+  the two runs differed in `sync_logos` and are not a controlled comparison.
+- **EPG programme data does not cross, and B's sources are not re-imported.**
+  B ends with 6 `epg_epgdata` rows and **0** `epg_programdata` rows. Its usable
+  source imported before any channel was linked, so it still reports *"No
+  channels mapped"*.
+- **Channel-profile membership *enablement* does not cross.** A: `Living Room`
+  59/59 enabled, `Kids & Family` **6**/59 enabled. B: `Living Room` 59/59,
+  `Kids & Family` **59**/59. Both profiles arrive with all 59 channels enabled,
+  so the destination's `Kids & Family` is not the profile the source has.
+- **Provider attribution does not cross.** All 59 streams on B hang off a
+  synthesized 4th M3U account, `ECM Custom Streams (DBAS restore)` (`STD`, empty
+  `server_url`) — not off the replicated XC account (id 2) or STD account
+  (id 3), both of which arrive but hold 0 streams.
+- **`Default Group` on B is a sync side effect.** A fresh instance has zero
+  channel groups; the group appears once an M3U account is created, and the run
+  then reports it as `already_exists_name_match`.
+
+**B was reset to empty immediately after this measurement** (container + volume
+destroyed, superuser re-created, `stream_settings` cache busted), the temporary
+sync target was deleted, and ECM's notifications were cleared. The destination
+the writer receives is unspent.
 
 ### What this environment does NOT cover
 
-- **No apply-mode sync has been run.** Only a dry-run preview. The first real
-  A→B apply will be the writer's, which is the intent — but it means the apply
-  path has not been exercised *with an XC account on A* by anyone yet. The
-  preview says it plans 78 creates across 9 categories; if the apply disagrees,
-  that is new information, not a known-good regression.
-- **The channel→logo binding does not cross the sync** (bead
-  `enhancedchannelmanager-xgbjm`, still open). Logo records and bytes land on B,
-  but every synced channel there shows `logo_id null` and B's Logo Manager reads
-  `UNUSED`. Do not write the guide as though it works.
+- **The apply path has now been exercised once, by QA, and B was reset after.**
+  The writer's own apply will be the first one whose output is documented. The
+  numbers above are what to expect; a disagreement is new information.
 - **VOD and Series are empty.** P serves `get_vod_streams` / `get_series` as
   empty lists, so ECM's VOD surfaces have nothing to show. Populating them was
-  out of scope.
+  out of scope — note that 0.29.0 added real VOD/series work
+  (`apps/vod/image_proxy.py`, `vod_...0005_movie_is_adult`), so this is a bigger
+  gap on this platform than it was on 0.28.2.
 - **No stream actually plays.** The `.ts` URLs in the fixture are 404s — nginx
-  serves no `/stream/` directory. Everything about lineup management,
-  EPG, profiles and sync is real; anything that requires a live video
-  transport (probing, bitrate, playback) is not.
+  serves no `/stream/` directory. Everything about lineup management, EPG,
+  profiles and sync is real; anything that requires a live video transport
+  (probing, bitrate, playback) is not.
+- **No screenshots were taken on this rebuild.** Re-shooting the guide is bead
+  `enhancedchannelmanager-x4eoi`, which resumes after this. Read trap 11 before
+  the first capture.
 - **ECM's first-run walkthrough has already been completed here.** The admin
   account exists and the Dispatcharr connection is set. If you need to shoot
   Getting Started from a genuinely blank ECM, do it against a throwaway second
@@ -935,3 +1153,8 @@ Recorded so a later reader can tell a checked claim from an assumed one.
   `docker rm -f ecm-docenv && docker volume rm ecm-docenv-config` then re-run
   the `docker run` from "Bringing the environment back up" with a fresh volume —
   but you will then have to re-create the admin and re-point it at A.
+- **Playwright was not exercised on this rebuild**, so unlike the first build
+  there is no rendered-browser evidence in the table above. The ECM API was
+  proven live (count 59) but nothing rendered a page.
+- **`docker-compose.dbas-test.yml`, the single-instance stack, still defaults to
+  `0.26.0`.** It was out of scope for `xvuk1` and nothing here validates it.

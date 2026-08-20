@@ -30,6 +30,26 @@
 #     A/B stack up FIRST — this file does not create that network.
 #   * Everything is throwaway. Tear down with `-v`.
 #
+# Version — TRACKS `latest` LITERALLY (PO decision, bead
+# enhancedchannelmanager-xvuk1)
+# -----------------------------------------------------------------------------
+# P runs `ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}`, the
+# same default as the A/B stack, so A, B and P are the same artifact unless you
+# deliberately override. ghcr.io is the registry production pulls from.
+#
+#   * Override only to reproduce an old finding:
+#       DISPATCHARR_VERSION=0.28.2 docker compose -p dbas-xc-provider ... up -d
+#   * `:latest` is only as fresh as your last pull — `docker compose ... pull`
+#     first when you mean to be current.
+#   * Every validation run MUST read and report the version it ran against:
+#       curl -s http://127.0.0.1:9603/api/core/version/
+#
+# P depends on Dispatcharr implementing the XC SERVER side. Re-confirm that on
+# any platform bump before assuming the provider design survives:
+#   docker run --rm --entrypoint sh ghcr.io/dispatcharr/dispatcharr:latest -c \
+#     'grep -c xc_player_api /app/dispatcharr/urls.py /app/apps/output/views.py'
+# Confirmed present on 0.29.0 (bead enhancedchannelmanager-xvuk1).
+#
 # The nginx document root is a GENERATED fixture — build it first with
 #   python3 northwind-fixture.py <dir>
 # and point NORTHWIND_FIXTURE_DIR at it (see the README HANDOVER section).
@@ -56,7 +76,7 @@ services:
   # Dispatcharr P — the Xtream Codes provider.
   # ---------------------------------------------------------------------------
   dispatcharr-p-web:
-    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.28.2}
+    image: ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}
     restart: "no"
     ports:
       - "${DBAS_XC_P_HTTP_PORT:-9603}:9191"
@@ -91,7 +111,7 @@ services:
       start_period: 60s
 
   dispatcharr-p-celery:
-    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.28.2}
+    image: ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}
     restart: "no"
     entrypoint: ["/app/docker/entrypoint.celery.sh"]
     depends_on:

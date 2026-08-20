@@ -25,11 +25,26 @@
 # fully-isolated stacks. A = the sync SOURCE, B = the sync DESTINATION (managed
 # replica). One-way only (A -> B); B never writes back to A (ADR-013 S3).
 #
-# Version pin — same as the single-instance stack
-# -----------------------------------------------
-# Both instances pin Dispatcharr ${DISPATCHARR_VERSION:-0.26.0} (the operator's
-# live version). Mixed-version A/B sync is a SEPARATE matrix dimension and is out
-# of scope for this scaffold — A and B are the SAME version here.
+# Version — TRACKS `latest` LITERALLY (PO decision, bead
+# enhancedchannelmanager-xvuk1)
+# -----------------------------------------------------------------------------
+# Both instances run `ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}`.
+# `latest` is the DEFAULT so nobody has to remember a flag, and ghcr.io is the
+# registry the operator's production Dispatcharr actually pulls from, so the test
+# env and production resolve the same artifact.
+#
+#   * To deliberately reproduce an OLD finding, pass the override explicitly:
+#       DISPATCHARR_VERSION=0.28.2 docker compose -p dbas-sync-testenv ... up -d
+#   * `:latest` is only as fresh as your last pull. `docker compose up` reuses a
+#     locally-cached `latest`; run `docker compose ... pull` first when you mean
+#     to be current.
+#   * BECAUSE the tag floats, every validation run MUST read and report the
+#     version it actually ran against:
+#       curl -s http://127.0.0.1:9601/api/core/version/
+#     A run that cannot name its Dispatcharr is not a result.
+#
+# Mixed-version A/B sync is a SEPARATE matrix dimension and is out of scope for
+# this scaffold — A and B are the SAME version here.
 #
 # Isolation contract (NON-NEGOTIABLE — must never touch ecm-ecm-1 OR the single-
 # instance dbas-testenv stack)
@@ -49,13 +64,13 @@
 name: dbas-sync-testenv
 
 x-dispatcharr-web: &dispatcharr-web-base
-  image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+  image: ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}
   restart: "no"
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
 x-dispatcharr-celery: &dispatcharr-celery-base
-  image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+  image: ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}
   restart: "no"
   entrypoint: ["/app/docker/entrypoint.celery.sh"]
   extra_hosts:
