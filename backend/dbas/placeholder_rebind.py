@@ -173,9 +173,13 @@ WHAT IT DOES
 1. Read the placeholder ids this run created from the shared
    :class:`~dbas.restore_contracts.RollbackLedger` (``EntityType.STREAM``). Only
    streams THIS restore synthesized are ever touched — never a pre-existing one.
-2. Re-fetch the destination's streams and partition them: the placeholders, and
-   the REAL candidates (everything else that carries a URL). A stream with no URL
-   is never a rebind target — it is exactly the thing we are rebinding away from.
+2. Re-fetch the destination's streams and build TWO sets from them, because
+   WRITE AUTHORITY and DETECTION are different questions (bead ``…-kcfru``, and
+   see its section below). The REAL candidates — everything this run did NOT
+   synthesize that carries a URL — are the only things a slot may be rebound
+   ONTO. The playable ids — EVERY stream that carries a URL, whoever made it —
+   are what step 5's verdict is taken against. A stream with no URL is in
+   neither: it is exactly the thing we are rebinding away from.
 3. For each restored channel, re-run the SAME 4-tier matcher over the real
    candidates, one slot per archived stream in archived order. A hit takes the
    real id; a miss keeps the placeholder so the channel is never left with fewer
@@ -211,11 +215,61 @@ restore. Run 4 measured it twice: a repeat restore over an already-stranded
 that answered HTTP 500 on playback.
 
 The verdict is now taken for EVERY restored channel, from what it is ACTUALLY
-left holding, against ``candidate_ids`` — the real, URL-bearing destination
-streams. Who created a bad slot is irrelevant to whether the channel plays. A
-slot that is not a candidate is named from the destination's own stream list, so
-a prior run's placeholder gets its real name rather than ``<unknown>``. A channel
-whose every slot IS a candidate is healthy and is not reported at all.
+left holding, against ``playable_ids`` — every URL-bearing destination stream.
+Who created a bad slot is irrelevant to whether the channel plays. A slot that
+streams nothing is named from the destination's own stream list, so a prior run's
+placeholder gets its real name rather than ``<unknown>``. A channel whose every
+slot streams something is healthy and is not reported at all.
+
+----------------------------------------------------------------------------
+DETECTION AND WRITE AUTHORITY ARE DIFFERENT SETS (bead ``…-kcfru``, xdmru
+two-instance validation 2026-08-20)
+----------------------------------------------------------------------------
+
+The section above is the right principle; step 2 quietly broke it in the other
+direction, because ONE set was doing TWO jobs. ``candidates`` is the match-TARGET
+set — it excludes this run's ledgered placeholder ids so a slot can never be
+rebound onto a placeholder — and the playability verdict was read straight off
+it. So "this run created it" silently meant "it cannot play".
+
+That is only invisible while every synthesized placeholder is URL-less, which is
+the REDACTED artifact. :mod:`dbas.custom_stream_fallback` builds each placeholder
+from the orphan record and forwards its ``url`` (it drops only ``id`` / ``pk`` /
+``m3u_account``), so a FULL-fidelity archive — which is what CROSS-INSTANCE SYNC
+carries — synthesizes URL-BEARING streams that stream exactly what the source
+streams. Sync target ``XDMRU B`` measured the consequence on five consecutive
+cycles::
+
+    run  9 (01:17:53)  created 18  channels_with_no_playable_stream: 6
+    run 11 (01:19:56)  created  0  channels_with_no_playable_stream: 0
+    run 13, 21, 22     created  0  channels_with_no_playable_stream: 0
+
+B's six channels held the SAME six stream ids under the synthetic account for all
+five, each carrying A's own provider URL. Playback decided which reading was
+honest, by fetching rather than inferring::
+
+    A /proxy/ts/stream/1e946091-…  ->  HTTP 200, 188 bytes
+    B /proxy/ts/stream/bb66da76-…  ->  HTTP 200, 188 bytes
+
+B plays. The creating cycle was crying wolf, and every cycle after it was right
+by accident — the same stream was judged twice and got opposite answers purely on
+whether the current run's ledger happened to hold it.
+
+The two concerns are now two sets, and the split is the fix:
+
+* ``candidates`` — WRITE AUTHORITY. Unchanged, and still ledger-scoped: only a
+  stream this run did NOT synthesize, carrying a URL, may be rebound onto, and
+  only ledgered ids are ever rebound away from or deleted. Widening THIS is the
+  obvious wrong fix — it would let a run mutate streams it did not create.
+* ``playable_ids`` — DETECTION. Read-only and UNSCOPED: every URL-bearing
+  destination stream, whoever made it. Nothing is written from it.
+
+The invariant it buys, which a single-apply test cannot check and which is why
+the regression tests run the pass TWICE: the verdict is a function of the
+DESTINATION'S STATE alone. Two cycles over an unchanged destination return the
+same answer. A channel that streams nothing downgrades EVERY cycle, not just the
+one that stranded it — an unattended schedule must not go green over a replica
+that has stopped playing.
 
 ----------------------------------------------------------------------------
 THE RESIDUE (bead ``…-dgnms``, drill runs 2026-08-05-run4 AND run5)
@@ -672,9 +726,11 @@ async def _rebind_from_archive(
     )
 
     all_streams = await _fetch_all(client, client.get_streams)
-    # REAL candidates = everything this run did NOT synthesize that carries a
-    # URL. A URL-less stream can never be a rebind target: playability is the
-    # entire point of this pass.
+    # WRITE AUTHORITY — the match-TARGET set. Everything this run did NOT
+    # synthesize that carries a URL. Both conditions earn their place: a URL-less
+    # stream can never be a rebind target (playability is the entire point of
+    # this pass), and this run's own placeholders are excluded so no slot is ever
+    # rebound onto one. STAYS SCOPED.
     candidates = [
         s
         for s in all_streams
@@ -682,15 +738,35 @@ async def _rebind_from_archive(
     ]
     if not candidates:
         logger.warning(
-            "[DBAS-REBIND] No URL-bearing provider streams on the destination; "
-            "every restored channel still depends on its placeholder(s)."
+            "[DBAS-REBIND] No URL-bearing provider stream this run could rebind "
+            "onto; every slot keeps whatever it is already bound to."
         )
-    # The playability test (bead …-daziw): a channel PLAYS if any id it is left
-    # holding is one of these. Free here — it is the candidate set this pass
-    # already built — and it is the ONLY honest way to answer "can this channel
-    # play", because a slot that is not one of this run's placeholders is not
-    # necessarily a URL-bearing stream (a PRIOR restore's placeholder is neither).
-    candidate_ids = {cid for s in candidates if (cid := _as_int(s.get("id"))) is not None}
+    # DETECTION — the playability test (beads …-daziw / …-kcfru), and a SEPARATE
+    # set from the one above on purpose. A channel PLAYS if any id it is left
+    # holding carries a URL. WHO created that stream is irrelevant to whether it
+    # streams anything, so this set is UNSCOPED: every URL-bearing destination
+    # stream is in it, including the placeholders this run just synthesized.
+    #
+    # It used to be read off ``candidates``, which made the verdict depend on
+    # provenance — one set doing two jobs. ``custom_stream_fallback`` builds each
+    # placeholder from the orphan record and forwards its ``url``, so a
+    # FULL-fidelity archive synthesizes URL-BEARING streams that play exactly
+    # what the source plays. The xdmru two-instance validation measured the
+    # consequence on an unattended schedule: cycle 1 reported
+    # ``channels_with_no_playable_stream: 6``, every later cycle reported ``0``,
+    # and NOTHING about the destination changed between them — the six streams
+    # simply stopped being in the current run's ledger. Both readings cannot be
+    # right; fetching decided it (A and B answered HTTP 200 / 188 bytes on the
+    # same channel), so the creating cycle was the one crying wolf.
+    #
+    # A REDACTED archive strips the url, so those placeholders stream nothing and
+    # are absent from this set on EVERY cycle — the downgrade the operator is
+    # paged on is unchanged, and now holds in steady state too.
+    playable_ids = {
+        sid
+        for s in all_streams
+        if s.get("url") and (sid := _as_int(s.get("id"))) is not None
+    }
 
     # EVERY destination stream id -> its operator-facing name, for the detail
     # rows. Keyed over all_streams rather than only this run's placeholders so a
@@ -778,16 +854,18 @@ async def _rebind_from_archive(
         # this loop never reached keeps its fetched list, which is still current.
         final_by_channel[dest_channel_id] = list(final_ids)
 
-        # THE VERDICT (beads …-daziw / …-oebpv). Taken from ``final_ids`` — what
-        # the channel is ACTUALLY left holding — and keyed on ``candidate_ids``,
-        # the real URL-bearing destination streams. Deliberately NOT keyed on
-        # this run's placeholders: a channel stranded by an EARLIER restore holds
-        # none of them and used to escape the verdict entirely while returning
-        # HTTP 500 on playback. A channel whose every slot is a candidate is
-        # healthy and is not reported at all.
-        non_playable_ids = [sid for sid in final_ids if sid not in candidate_ids]
+        # THE VERDICT (beads …-daziw / …-oebpv / …-kcfru). Taken from
+        # ``final_ids`` — what the channel is ACTUALLY left holding — and keyed
+        # on ``playable_ids``, EVERY URL-bearing destination stream. Provenance
+        # does not appear on either side of this test, in either direction: a
+        # channel stranded by an EARLIER restore used to escape the verdict
+        # entirely while returning HTTP 500 (…-oebpv), and a channel on a
+        # URL-BEARING stream THIS run synthesized used to be condemned by it
+        # while playing perfectly (…-kcfru). A channel whose every slot streams
+        # something is healthy and is not reported at all.
+        non_playable_ids = [sid for sid in final_ids if sid not in playable_ids]
         if non_playable_ids:
-            has_playable = any(slot_id in candidate_ids for slot_id in final_ids)
+            has_playable = any(slot_id in playable_ids for slot_id in final_ids)
             result.still_placeholder.append(label)
             if not has_playable:
                 result.unplayable.append(label)

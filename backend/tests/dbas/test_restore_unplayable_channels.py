@@ -414,6 +414,191 @@ async def test_a_fully_healthy_channel_is_not_reported_at_all():
 
 
 # ---------------------------------------------------------------------------
+# 2c. THE kcfru CASE — the verdict may not depend on WHICH RUN made the stream
+#
+# Cross-instance sync runs unattended on a schedule, so the same destination
+# state is judged over and over. Measured on the two-instance xdmru validation
+# (2026-08-20, ECM 0.18.1-0127, Dispatcharr 0.28.2), sync-target "XDMRU B":
+#
+#   run 9  (01:17:53) created 18 entities -> channels_with_no_playable_stream: 6
+#   run 11 (01:19:56) same 6 channels, same 6 streams -> 0
+#   run 13 (01:21:04) same -> 0
+#   run 21 (01:54:02) same -> 0
+#   run 22 (01:54:17) same -> 0
+#
+# NOTHING about B changed between run 9 and run 11: its six channels were bound
+# to the same six stream ids throughout, all under the synthetic
+# "ECM Custom Streams (DBAS restore)" account, and every one of them carries the
+# SOURCE's own url verbatim -- ``custom_stream_fallback._build_stream_payload``
+# forwards every archived key except ``id`` / ``pk`` / ``m3u_account``, so a
+# synthesized stream built from a FULL-fidelity archive is URL-bearing and
+# streams exactly what A streams. Verified by fetching, not inferred:
+#
+#   A /proxy/ts/stream/1e946091-... -> HTTP 200, 188 bytes
+#   B /proxy/ts/stream/bb66da76-... -> HTTP 200, 188 bytes
+#
+# So B plays, run 11+ told the truth, and run 9's "6" was the FALSE reading.
+#
+# CAUSE: one set was doing two jobs. ``candidates`` is the match-TARGET set, and
+# it excludes this run's ledgered ids for a real reason -- a slot must never be
+# rebound onto a placeholder. The playability verdict then read ``candidate_ids``
+# off that same set, so "this run created it" silently meant "it cannot play".
+# Detection is now taken from ``playable_ids``: every URL-bearing destination
+# stream, whoever made it. Write authority is untouched and still ledger-scoped.
+#
+# THE INVARIANT, which is why both tests below run the pass TWICE: the verdict is
+# a function of the DESTINATION'S STATE alone. Two cycles over an unchanged
+# destination must return the same answer, whichever of them created the stream.
+# A single-apply test cannot see this defect -- it is what let it through.
+# ---------------------------------------------------------------------------
+
+
+def _xdmru_destination(*, stream_url: str | None):
+    """B exactly as the xdmru validation left it, for ONE sync cycle.
+
+    One channel holding ONE stream under the synthetic custom-stream account,
+    and nothing else on the destination: the sync path suppresses per-cycle
+    provider auto-sync (ADR-013 S9), so B's own "XDMRU Provider" account
+    ingested nothing and the synthesized stream is the only stream there. That
+    is the real shape, measured -- B held exactly 6 streams, all on account 4.
+
+    Args:
+        stream_url: The url the synthesized stream carries. A full-fidelity
+            archive hands the fallback the source stream's own url, so it is
+            URL-BEARING and plays; a redacted archive strips it, so it is
+            URL-less and does not.
+
+    Returns:
+        ``(client, archive_channels)``.
+    """
+    client = _client()
+    client.get_streams.return_value = {
+        "results": [
+            {"id": 6, "name": "XDMRU News One", "url": stream_url, "m3u_account": 4},
+        ]
+    }
+    client.get_channels.return_value = {
+        "results": [{"id": 6, "name": "XDMRU News One", "streams": [6]}]
+    }
+    archive_channels = [
+        {"id": 1, "name": "XDMRU News One",
+         "streams": [{"id": 1, "name": "XDMRU News One", "url": stream_url,
+                      "m3u_account": 2}]}
+    ]
+    return client, archive_channels
+
+
+async def _one_cycle(*, stream_url: str | None, is_creating_cycle: bool):
+    """Run the pass over :func:`_xdmru_destination` once; return the report.
+
+    Args:
+        stream_url: Forwarded to :func:`_xdmru_destination`.
+        is_creating_cycle: ``True`` models the cycle that SYNTHESIZED the stream
+            -- its id is in this run's ledger and in the STREAM remap. ``False``
+            models every later cycle: the channel already exists, the matcher
+            resolves its archived stream onto the stream that is already there,
+            nothing is synthesized, and the ledger is EMPTY.
+
+    Returns:
+        ``(report, client)`` -- the client so a caller can assert on what the
+        cycle WROTE as well as on what it reported.
+    """
+    from dbas.placeholder_rebind import rebind_placeholder_streams
+
+    client, archive_channels = _xdmru_destination(stream_url=stream_url)
+    report = RestoreReport(is_dry_run=False)
+    ledger = RollbackLedger(restore_id="cycle")
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 1, 6)
+    if is_creating_cycle:
+        ledger.record_created(EntityType.STREAM, 6, "XDMRU News One")
+        ledger.record_created(
+            EntityType.M3U_ACCOUNT, 4, "ECM Custom Streams (DBAS restore)"
+        )
+        remap.add(EntityType.STREAM, 1, 6)
+
+    await rebind_placeholder_streams(
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        archive_channels=archive_channels,
+    )
+    return report, client
+
+
+@pytest.mark.asyncio
+async def test_a_url_bearing_synthesized_stream_reads_the_same_on_every_cycle():
+    """The xdmru red proof: run 9 said 6 unplayable, runs 11-22 said 0.
+
+    Same destination, same stream ids, same urls -- the only difference is which
+    run's ledger holds them. B answered HTTP 200 on playback throughout, so the
+    honest answer is PLAYABLE on BOTH cycles, and the outcome is SUCCESS on both.
+
+    Before the fix this test fails on the FIRST cycle, which is the one that
+    over-reported. The steady-state cycle was already right here; asserting only
+    on it would have proved nothing.
+    """
+    creating, creating_client = await _one_cycle(
+        stream_url="http://provider-xdmru/stream/news-one.ts", is_creating_cycle=True
+    )
+    steady, _ = await _one_cycle(
+        stream_url="http://provider-xdmru/stream/news-one.ts", is_creating_cycle=False
+    )
+
+    assert creating.channels_with_no_playable_stream == 0
+    assert steady.channels_with_no_playable_stream == 0
+    # THE INVARIANT, stated as the equality it is.
+    assert (
+        creating.channels_with_no_playable_stream
+        == steady.channels_with_no_playable_stream
+    )
+    assert (
+        creating.channels_needing_stream_reattach
+        == steady.channels_needing_stream_reattach
+        == 0
+    )
+    for report in (creating, steady):
+        assert compute_outcome(
+            report=report, failure_occurred=False, rollback=None
+        ) == RestoreOutcome.SUCCESS
+
+    # WRITE AUTHORITY IS UNTOUCHED, and this is the half that must not move.
+    # The tempting fix is to widen ``candidates`` -- let the pass see its own
+    # placeholders -- and it is DESTRUCTIVE, not merely wrong: the stream would
+    # match ITSELF, the slot would count as rebound, the channel would be PATCHed
+    # for nothing, and it would then fall out of ``still_referenced`` and be
+    # DELETED out from under the channel still bound to it. Nothing in the suite
+    # caught that mutant before these two assertions.
+    creating_client.update_channel.assert_not_awaited()
+    creating_client.delete_stream.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_url_less_placeholder_downgrades_the_outcome_on_every_cycle():
+    """The other half of the invariant, and the one the operator is paged on.
+
+    A redacted archive strips the stream url, so the synthesized stream really
+    does stream nothing. That channel cannot play on the cycle that created it
+    OR on any cycle after it, and BOTH must report
+    ``COMPLETED_WITH_FAILURES`` -- an unattended schedule must not go green over
+    a replica that has stopped playing. Steady state is part of the property,
+    not an extension of it.
+    """
+    creating, _ = await _one_cycle(stream_url=None, is_creating_cycle=True)
+    steady, _ = await _one_cycle(stream_url=None, is_creating_cycle=False)
+
+    for report in (creating, steady):
+        assert report.channels_with_no_playable_stream == 1
+        assert report.stream_reattach_details[0].name == "XDMRU News One"
+        assert report.stream_reattach_details[0].has_playable_stream is False
+        assert any("NO playable stream" in note for note in report.notes)
+        assert compute_outcome(
+            report=report, failure_occurred=False, rollback=None
+        ) == RestoreOutcome.COMPLETED_WITH_FAILURES
+
+
+# ---------------------------------------------------------------------------
 # 3. Dry runs are predictions, not failures
 # ---------------------------------------------------------------------------
 
