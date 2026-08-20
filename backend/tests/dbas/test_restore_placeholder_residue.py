@@ -80,6 +80,7 @@ async def _rebind(client, *, ledger=None, remap=None, archive_channels=None):
     from dbas.placeholder_rebind import rebind_placeholder_streams
 
     return await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=RestoreReport(is_dry_run=False),
         ledger=ledger if ledger is not None else RollbackLedger(restore_id="t"),

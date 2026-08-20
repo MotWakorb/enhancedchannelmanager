@@ -85,6 +85,7 @@ async def test_a_channel_whose_every_slot_is_a_placeholder_is_counted_unplayable
     remap.add(EntityType.CHANNEL, 101, 201)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -133,6 +134,7 @@ async def test_a_failed_patch_leaves_the_channel_unplayable_and_says_so():
     remap.add(EntityType.CHANNEL, 101, 201)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -171,6 +173,7 @@ async def test_the_ixdaw_leftover_placeholder_case_stays_a_success():
     client, report, ledger, remap, archive_channels = _kera_drill_fixture()
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -239,6 +242,7 @@ async def test_a_channel_stranded_by_an_earlier_run_is_still_counted_unplayable(
     remap.add(EntityType.CHANNEL, 101, 12)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -303,6 +307,7 @@ async def test_a_stranded_channel_is_seen_even_when_this_run_made_no_placeholder
     remap.add(EntityType.CHANNEL, 101, 12)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -348,6 +353,7 @@ async def test_a_stranded_slot_beside_a_real_stream_still_reports_playable():
     remap.add(EntityType.CHANNEL, 101, 12)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -395,6 +401,7 @@ async def test_a_fully_healthy_channel_is_not_reported_at_all():
     remap.add(EntityType.CHANNEL, 101, 12)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -518,6 +525,7 @@ async def _one_cycle(*, stream_url: str | None, is_creating_cycle: bool):
         remap.add(EntityType.STREAM, 1, 6)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -700,6 +708,7 @@ async def test_the_report_json_names_every_channel_the_note_points_at():
     remap.add(EntityType.CHANNEL, 101, 201)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,

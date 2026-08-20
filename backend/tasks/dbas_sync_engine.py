@@ -48,7 +48,13 @@ collision-safe floor applied for the continuous-sync context:
   opt-in per ``SyncTarget`` via ``fuzzy_stream_matching`` (default off); when on,
   a fuzzy hit is flagged LOW-CONFIDENCE in ``report.notes``, never a silent
   ``updated``. The flag threads from the target row into ``import_channels`` via
-  its ``allow_fuzzy_stream_match`` parameter.
+  its ``allow_fuzzy_stream_match`` parameter — AND into ``run_restore``'s
+  parameter of the same name, which is what carries it to the post-create
+  placeholder rebind. Both, always: the rebind is a SECOND matcher pass over the
+  same archived streams, and for a while it was the half that silently ignored
+  the flag (bead ``…-efvyg``), so a target with fuzzy OFF still had a channel
+  bound to a wrong-but-similar destination stream while the cycle reported
+  success. The floor is a property of the CYCLE, not of one importer.
 
 LOGOS are OPT-IN per target (bead ``7ipq2.1``), not per-cycle-unconditional
 (ADR-013 S9): the logos importer carries a DESTRUCTIVE ``clear_existing``
@@ -1442,7 +1448,12 @@ async def run_sync(
 
     # --- 4. Restore (reused orchestrator) — dry-run default, source-wins apply. ---
     # The per-target fuzzy-stream-matching opt-in (default off) threads into the
-    # channels step; off => the stream matcher floors at Tier-3 exact (ruling 1b).
+    # channels step AND into the orchestrator, which runs a SECOND matcher pass
+    # (the post-create placeholder rebind) after the importers finish. Both must
+    # get it: passing it only to the step left the rebind on its own default and
+    # a target with the flag OFF was still fuzzy-rebound onto a wrong-but-similar
+    # stream, reported as SUCCESS (bead …-efvyg). Off => the stream matcher
+    # floors at Tier-3 exact, everywhere in the cycle (ruling 1b).
     allow_fuzzy = bool(getattr(sync_target, "fuzzy_stream_matching", False))
     report = RestoreReport(is_dry_run=not confirm_apply)
     ledger = RollbackLedger(restore_id=new_restore_id())
@@ -1456,6 +1467,7 @@ async def run_sync(
         confirm_apply=confirm_apply,
         deferred_apply_fn=_no_deferred_apply,  # ADR-013 S9 — suppress per-cycle defer.
         ledger_dir=ledger_dir,
+        allow_fuzzy_stream_match=allow_fuzzy,
     )
 
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---

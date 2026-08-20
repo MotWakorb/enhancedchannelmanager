@@ -601,6 +601,7 @@ async def run_restore(
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
     channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
+    allow_fuzzy_stream_match: bool = True,
 ) -> RestoreReport:
     """Run a full restore: pre-flight → ordered apply → rollback-on-failure.
 
@@ -653,6 +654,32 @@ async def run_restore(
             and logo exactly as the operator has them; ``OVERWRITE`` applies the
             archive's. On an empty destination every channel is created and the
             two are indistinguishable.
+        allow_fuzzy_stream_match: The stream-matching policy for the WHOLE run —
+            whether the matcher's Tier-4 fuzzy rung is admitted. It must be the
+            same value the ``steps`` registry was built with, because the
+            post-create rebind (step 3c) is a second matcher pass over the same
+            archived streams; a run whose importers are floored at Tier-3 and
+            whose rebind is not does not have a stream-matching policy at all
+            (bead ``…-efvyg``). Both production callers state it rather than
+            inherit it:
+
+            * the ARCHIVE RESTORE (``tasks.dbas_restore``) passes ``True`` — the
+              value :func:`dbas.importers.channels.import_channels` already uses
+              on that path, and the one the ``…-2o0cz`` rebind was designed
+              around: on a fresh restore the destination has no provider streams
+              at channel-import time, so the rebind is where essentially ALL of
+              a restore's matching actually happens. Flooring it would strand
+              restored channels on placeholders — the P0 this pass exists to fix.
+            * the CROSS-INSTANCE SYNC (``tasks.dbas_sync_engine``) passes the
+              per-``SyncTarget`` ``fuzzy_stream_matching`` flag (default OFF),
+              the enforcement point for spike ``xp6mp`` ruling 1b.
+
+            ``True`` is the default only so the many call sites that never reach
+            the rebind (dry-runs, registries with no channels step) need not
+            restate a policy they do not exercise; the value is REQUIRED at
+            :func:`dbas.placeholder_rebind.rebind_placeholder_streams`, the
+            boundary that consumes it, where omission was what made the defect
+            silent.
 
     Returns:
         The :class:`RestoreReport` with its tri-state ``outcome`` set.
@@ -879,7 +906,8 @@ async def run_restore(
         report.mark_stream_health_unpredicted()
     elif not failure_occurred:
         await _rebind_placeholders(plan=plan, client=client, report=report,
-                                   ledger=ledger, remap=remap)
+                                   ledger=ledger, remap=remap,
+                                   allow_fuzzy=allow_fuzzy_stream_match)
 
     # --- 4. Outcome. ---
     # A DRY-RUN is a plan, not a realized restore — it has no outcome (kxuj2
@@ -925,6 +953,7 @@ async def _rebind_placeholders(
     report: RestoreReport,
     ledger: RollbackLedger,
     remap: object,
+    allow_fuzzy: bool,
 ) -> None:
     """Run the post-refresh placeholder rebind, containing any error.
 
@@ -932,6 +961,12 @@ async def _rebind_placeholders(
     :func:`_default_deferred_apply_fn`). The pass is post-create cleanup on an
     otherwise-successful restore, so an error here is logged and noted — it never
     turns a successful restore into a rollback.
+
+    ``allow_fuzzy`` is threaded, never defaulted (bead ``…-efvyg``): the rebind
+    is a matcher pass like the channels importer's, so it runs under the SAME
+    stream-matching policy this run's importers ran under. See
+    :func:`run_restore`'s ``allow_fuzzy_stream_match`` for where that policy
+    comes from on each path.
     """
     from dbas.placeholder_rebind import rebind_placeholder_streams
 
@@ -946,6 +981,7 @@ async def _rebind_placeholders(
             ledger=ledger,
             remap=remap,
             archive_channels=archive_channels,
+            allow_fuzzy=allow_fuzzy,
         )
     except Exception:  # noqa: BLE001 - best-effort post-create cleanup
         logger.warning(

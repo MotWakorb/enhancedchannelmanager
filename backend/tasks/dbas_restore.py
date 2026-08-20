@@ -378,6 +378,14 @@ class DbasRestoreTask(TaskScheduler):
                     remap=plan.existing_remap or IdRemapTable(),
                     confirm_apply=True,
                     channel_reattach_mode=self.channel_reattach_mode,
+                    # STATED, not inherited (bead …-efvyg). The archive-restore
+                    # path matches on the FULL 4-tier ladder: this is the value
+                    # ``import_channels`` already runs under here, and the
+                    # post-create rebind is where a restore does essentially all
+                    # of its matching (the destination has no provider streams
+                    # yet at channel-import time). The Tier-3 floor belongs to
+                    # the cross-instance SYNC path (ruling 1b), not to this one.
+                    allow_fuzzy_stream_match=True,
                 )
             else:
                 # The preview MUST run under the SAME mode the apply will, or it

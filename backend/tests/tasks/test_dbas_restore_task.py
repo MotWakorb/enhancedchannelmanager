@@ -128,6 +128,28 @@ class TestDryRunDefault:
         assert apply.await_args.kwargs["confirm_apply"] is True
         assert result.details["is_dry_run"] is False
 
+    async def test_apply_states_the_archive_restores_full_ladder_policy(self, tmp_path):
+        """The archive restore STATES ``allow_fuzzy_stream_match=True``.
+
+        Bead ``…-efvyg``. Restore and cross-instance sync share this
+        orchestrator, and they do NOT share a stream-matching policy: sync is
+        floored at Tier-3 by ruling 1b, while a restore's post-create rebind is
+        where essentially all of its matching happens (the destination has no
+        provider streams at channel-import time), so flooring it would strand
+        restored channels on placeholders — the ``…-2o0cz`` P0. This pins the
+        value at the CALL SITE, because a value equal to the signature default
+        is exactly the kind that gets quietly dropped and then quietly changed.
+        """
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=True)
+
+        apply = AsyncMock(return_value=_apply_report())
+        with patch("dbas.restore_orchestrator.run_restore", apply), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            await task.execute()
+
+        assert apply.await_args.kwargs["allow_fuzzy_stream_match"] is True
+
     async def test_apply_failure_outcome_marks_task_failed(self, tmp_path):
         art = _write_artifact(tmp_path)
         task = _make_task(art, confirm_apply=True)

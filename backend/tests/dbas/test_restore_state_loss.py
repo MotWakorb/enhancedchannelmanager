@@ -273,6 +273,7 @@ async def test_placeholder_streams_are_rebound_to_real_provider_streams():
     ]
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -323,6 +324,7 @@ async def test_rebind_preserves_order_and_never_drops_an_already_matched_stream(
     remap.add(EntityType.STREAM, 7, 500)  # only the ORPHAN is remapped
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -370,6 +372,7 @@ async def test_channels_that_still_cannot_play_are_counted_and_named():
     remap.add(EntityType.CHANNEL, 101, 201)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -473,6 +476,7 @@ async def test_two_slots_matching_the_same_stream_never_patch_a_duplicate_id():
     client, report, ledger, remap, archive_channels = _kera_drill_fixture()
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -511,6 +515,7 @@ async def test_a_colliding_sibling_never_costs_the_uniquely_matched_slot():
     client, report, ledger, remap, archive_channels = _kera_drill_fixture()
 
     result = await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -537,6 +542,7 @@ async def test_archived_order_survives_a_skipped_duplicate():
     client, report, ledger, remap, archive_channels = _kera_drill_fixture()
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,
@@ -578,6 +584,7 @@ async def test_a_slot_never_claims_an_id_a_real_stream_already_holds():
     remap.add(EntityType.STREAM, 7, 500)
 
     await rebind_placeholder_streams(
+        allow_fuzzy=True,
         client=client,
         report=report,
         ledger=ledger,

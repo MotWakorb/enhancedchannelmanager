@@ -650,7 +650,7 @@ async def rebind_placeholder_streams(
     ledger: RollbackLedger,
     remap: IdRemapTable,
     archive_channels: list[dict],
-    allow_fuzzy: bool = True,
+    allow_fuzzy: bool,
 ) -> RebindResult:
     """Re-run the stream matcher against the now-materialized provider streams.
 
@@ -675,7 +675,21 @@ async def rebind_placeholder_streams(
             the embedded ``streams`` the matcher re-runs over.
         allow_fuzzy: Whether the matcher may use its Tier-4 fuzzy rung. Mirrors
             the channels importer's flag so the rebind never matches more loosely
-            than the original attach did.
+            than the original attach did. **REQUIRED — deliberately no default**
+            (bead ``…-efvyg``). It used to default to ``True``, and
+            ``restore_orchestrator._rebind_placeholders`` simply never passed it:
+            a sync target with ``fuzzy_stream_matching`` OFF had its floor
+            honoured by the importer and silently discarded here, so the rebind
+            re-ran the FULL ladder and bound the replica's ``XDMRU News One`` to
+            the destination stream ``XDMRU News Two`` while the cycle reported
+            SUCCESS. An omission that yields a WRONG binding cannot be allowed to
+            look like a normal call, so there is nothing to omit: every caller
+            states its policy or gets a ``TypeError``. The BEHAVIOUR is pinned by
+            ``tests/tasks/test_sync_fuzzy_flag_reaches_rebind.py``; the
+            required-ness itself is structural and no test enforces it
+            (mutation-tested — putting the ``= True`` default back kills nothing,
+            because every caller now passes the argument), so do not restore a
+            default on the assumption the suite would catch it.
 
     Returns:
         A :class:`RebindResult` describing what changed.
