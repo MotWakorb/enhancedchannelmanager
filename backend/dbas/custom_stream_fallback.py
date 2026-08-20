@@ -57,6 +57,7 @@ import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
+from credential_sentinel import REDACTION_SENTINEL
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -271,6 +272,14 @@ async def synthesize_custom_streams(
             continue
 
         cat.created += 1
+        # Bead …-msqf7: an Xtream Codes stream URL authenticates by path segment,
+        # so the redactor cuts the credential OUT of the address rather than
+        # dropping the address. What lands is a stream that names where it
+        # pointed and cannot play until the destination has its own provider
+        # account. Reported here rather than at redaction time because this is
+        # the point where it is known to have actually reached the destination.
+        if REDACTION_SENTINEL in str(payload.get("url") or ""):
+            report.record_stream_url_redacted(label=label, stream_id=dest_id)
         result.created_stream_ids.append(dest_id)
         ledger.record_created(EntityType.STREAM, dest_id, label)
         src_int = _as_int_or_none(source_export_id)

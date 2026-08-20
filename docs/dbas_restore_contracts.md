@@ -128,6 +128,7 @@ ECM settings had reverted. All are additive optional: no `CONTRACT_VERSION` bump
 | `channels_with_no_playable_stream` | `stream_reattach_details` (rows with `has_playable_stream: false`) | `record_stream_reattach_needed` | the SUBSET above left with NO URL-bearing stream at all — **the channel cannot play**. Non-zero on an apply forces `outcome: completed_with_failures` (bead `…-daziw`) |
 | `epg_links_unrestored` | `epg_link_miss_details` | `record_epg_link_unrestored` | no destination EPG row carried the channel's archived `tvg_id` |
 | `profile_membership_drift` | `profile_membership_drift_details` | `record_profile_membership_drift` | channels the restore had to flip back to the archived selection (Dispatcharr enables every new channel in every profile) |
+| `stream_urls_redacted` | `stream_url_redaction_details` | `record_stream_url_redacted` | streams created with the provider credentials cut out of their URL (bead `…-msqf7`). An Xtream Codes stream address IS the credential (`/live/<user>/<pass>/<id>.ts`), so the credential segments become the sentinel and the rest of the address crosses — the stream lands naming where it pointed and cannot play until the destination has its own provider account |
 
 `streams_rebound` is the informational counterpart to the first: how many
 placeholder bindings the rebind pass DID resolve onto a real provider stream.
@@ -191,6 +192,7 @@ above split into two groups, and they answer differently:
 | `profile_membership_drift` | **predicted.** The flip set is the restored channels the archived profile EXCLUDES, computed from the archive and the remap the same run already populated. Preview N == apply N |
 | `channels_needing_stream_reattach` | **`null` — not predicted** |
 | `channels_with_no_playable_stream` | **`null` — not predicted** |
+| `stream_urls_redacted` | never recorded — the recorder fires on a successful `create_stream`, which a preview does not perform |
 | `streams_rebound` | `0`, and that is literally true: a preview rebinds nothing |
 
 The two `null`s are the honest answer, not a gap. The pass that writes them

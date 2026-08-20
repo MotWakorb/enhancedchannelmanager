@@ -637,6 +637,20 @@ class DbasRestoreTask(TaskScheduler):
             "%d channel(s) restored without an EPG link",
             "%d channel(s) would be restored without an EPG link",
         ),
+        # Bead …-msqf7. An Xtream Codes stream URL carries the provider's
+        # username and password in its PATH, so the address cannot be carried
+        # without them: the credential segments are replaced and the stream
+        # lands naming where it pointed but unable to play. The operator's next
+        # action is to give the destination its own provider account — which is
+        # not the same action as re-typing a password into an empty field, so it
+        # is not the same clause.
+        (
+            "stream_urls_redacted",
+            "%d stream(s) restored without a playable URL "
+            "(it carried the provider's credentials)",
+            "%d stream(s) would be restored without a playable URL "
+            "(it carried the provider's credentials)",
+        ),
         (
             "profile_membership_drift",
             "%d profile membership(s) corrected",

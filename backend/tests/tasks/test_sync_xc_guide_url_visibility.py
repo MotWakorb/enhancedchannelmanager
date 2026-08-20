@@ -135,18 +135,20 @@ def test_only_the_credential_bearing_guide_url_is_stripped():
         # No credential anywhere — the address must survive, or every restored
         # source would be left pointing nowhere.
         ("http://provider-northwind/local-epg.xml", False),
-        # PATH-SEGMENT credentials. NOT recognized, by design and by the
-        # limitation ``routers.backup._url_carries_credentials``'s own docstring
-        # states: no general rule separates ``/u/p/`` from an ordinary path
-        # without guessing, and guessing costs the operator an address the
-        # restore needs. This row is why bead ``…-v7d37`` shape (a) — "carry the
-        # URL with only the credential COMPONENTS redacted" — is BLOCKED rather
-        # than merely unattempted. The moment the whole-value rule stops
-        # applying, the surviving remainder of a URL that carries credentials in
-        # BOTH its query and its path would reach the destination with the path
-        # half intact. Whether real XC providers emit that shape is the question
-        # the PO's real-provider sample has to answer; it cannot be settled from
-        # a fixture.
+        # PATH-SEGMENT credentials, with NO credential values supplied. Still not
+        # recognized, and that remains correct: no GENERAL rule separates
+        # ``/u/p/`` from an ordinary path without guessing, and guessing costs
+        # the operator an address the restore needs.
+        #
+        # ANSWERED SINCE, by bead ``…-msqf7``. The real-provider sample this row
+        # was waiting for came back: every one of that provider's 1.4 million
+        # stream URLs carries the pair in path segments, so the shape is not
+        # hypothetical. The fix is not a general rule — it is a LITERAL match
+        # against the values the source instance holds, passed in as
+        # ``secrets``/``identities``. With them supplied this same URL IS
+        # rewritten; see
+        # ``tests/tasks/test_msqf7_stream_url_credential_leak.py``. This row pins
+        # the UNPARAMETERIZED default, which every other caller still gets.
         ("http://p.test:9191/xmltv/u/p/guide.xml", False),
     ],
 )

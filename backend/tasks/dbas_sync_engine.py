@@ -137,6 +137,7 @@ from dbas.importers.logos import import_logos
 from routers import backup as backup_mod
 from routers.backup import (
     BACKUP_SCHEMA_VERSION,
+    _collect_credential_values,
     _gather_dispatcharr_sections,
     _redact_credentials_deep,
 )
@@ -654,10 +655,30 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # the local Dispatcharr is unavailable — never a crash.
     sections = await _gather_dispatcharr_sections(set(SYNC_CONFIG_CATEGORIES))
 
+    # Harvest the credential VALUES off the RAW gather, BEFORE anything is
+    # redacted (bead …-msqf7). The key-name denylist cannot see a credential that
+    # is a PATH SEGMENT of a stream url — a real Xtream Codes provider puts the
+    # account's username and password there in every one of its stream URLs — but
+    # the values are right here in ``m3u_accounts``, so they can be matched
+    # LITERALLY rather than guessed at structurally.
+    #
+    # The union of every account's credentials is used, not the owning account's:
+    # the FK association IS available at this point (``m3u_account`` is still on
+    # each raw stream row; it is only dropped later, at payload-build time), but
+    # depending on it would leave a stream whose FK is null or unresolvable
+    # unprotected, and one provider's password leaking through another provider's
+    # URL is the same defect.
+    known_secrets, known_identities = _collect_credential_values(sections)
+
     # Redact to topology-only BEFORE the rows enter the plan — one shared denylist,
     # every category, no plaintext path (D2). preserve_keys is intentionally empty:
     # sync NEVER carries credentials, unlike the opt-in migration artifact (u81kh).
-    redacted_sections = _redact_credentials_deep(sections, preserve_keys=frozenset())
+    redacted_sections = _redact_credentials_deep(
+        sections,
+        preserve_keys=frozenset(),
+        known_secrets=known_secrets,
+        known_identities=known_identities,
+    )
 
     categories: list[PlanCategory] = []
     for section_key, entity_type in _SECTION_TO_ENTITY.items():
@@ -676,9 +697,18 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # — the matcher's Tier-1 identity — is NOT a redact key and survives, so the
     # stream floor still works on the wire. The CHANNEL category is appended LAST
     # so it applies after every config dependency (groups/profiles/M3U) is created.
+    #
+    # ``known_secrets`` is what stops "survives" meaning "carries the provider's
+    # username and password" for an XC account (bead …-msqf7): the credential
+    # SEGMENTS of the url become the sentinel and the rest of the address — host,
+    # kind marker, stream id — crosses intact, so the matcher keeps a usable
+    # identity and the operator keeps a visible one.
     channels = await _gather_live_channels()
     redacted_channels = _redact_credentials_deep(
-        {"channels": channels}, preserve_keys=frozenset()
+        {"channels": channels},
+        preserve_keys=frozenset(),
+        known_secrets=known_secrets,
+        known_identities=known_identities,
     )
     channel_rows = redacted_channels.get("channels") if isinstance(redacted_channels, dict) else None
     channel_entities = (

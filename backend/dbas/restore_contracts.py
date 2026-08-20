@@ -528,6 +528,27 @@ class EpgLinkMissDetail(BaseModel):
     )
 
 
+class StreamUrlRedactionDetail(BaseModel):
+    """One stream created with the provider credentials cut out of its URL (…-msqf7).
+
+    A real Xtream Codes provider serves every live stream at
+    ``/live/<user>/<pass>/<id>.ts`` — the credential IS part of the address, so
+    the address cannot be carried without it. The redactor replaces those path
+    segments with the sentinel and the rest of the URL crosses intact, which
+    means the destination holds a stream that names where it pointed and cannot
+    play until the destination's own provider account supplies a credential.
+
+    That is a post-restore ACTION ITEM, not a failure — the stream was created
+    and the outcome is unaffected — and it is exactly the class of shortfall the
+    …-6pilh / …-dfkbn drills proved a clean ``success, 0 failures`` can hide.
+    """
+
+    stream_id: int | None = Field(
+        default=None, description="Destination stream id, when upstream returned one."
+    )
+    label: str = Field(description="Operator-facing stream name — never a secret.")
+
+
 # Upper bound on how many channel NAMES a ReattachPopulation carries per list.
 # The counts are exact; the name lists are illustrative and must not turn a
 # routine merge report into a five-thousand-entry payload.
@@ -865,6 +886,18 @@ class RestoreReport(BaseModel):
         description="Placeholder stream bindings swapped for a real provider stream.",
     )
 
+    # Streams created with the provider credentials cut out of their URL
+    # (…-msqf7). Counts STREAMS, tracking ``len(stream_url_redaction_details)``.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    stream_urls_redacted: int = Field(
+        default=0,
+        description="Streams created without a playable URL — it carried a credential.",
+    )
+    stream_url_redaction_details: list[StreamUrlRedactionDetail] = Field(
+        default_factory=list,
+        description="Which streams lost the credential half of their URL (…-msqf7).",
+    )
+
     # Channels restored without their guide link (…-dfkbn item 2).
     epg_links_unrestored: int = Field(
         default=0,
@@ -1197,6 +1230,19 @@ class RestoreReport(BaseModel):
             return
         self.channels_needing_stream_reattach = None
         self.channels_with_no_playable_stream = None
+
+    def record_stream_url_redacted(
+        self, *, label: str, stream_id: int | None = None
+    ) -> None:
+        """Record ONE stream created without the credential half of its URL (…-msqf7).
+
+        Written through ONE recorder, like every action-item pair above, so the
+        aggregate and the drill-down cannot drift.
+        """
+        self.stream_url_redaction_details.append(
+            StreamUrlRedactionDetail(stream_id=stream_id, label=label)
+        )
+        self.stream_urls_redacted = len(self.stream_url_redaction_details)
 
     def record_epg_link_unrestored(
         self,
