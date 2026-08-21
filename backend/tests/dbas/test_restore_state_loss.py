@@ -1090,6 +1090,127 @@ async def test_non_default_profile_membership_does_not_widen_to_all_channels():
 
 
 @pytest.mark.asyncio
+async def test_a_profile_that_never_said_what_it_enabled_fails_closed():
+    """No ``channels`` key means the archive never said — so do not say "all".
+
+    ``ChannelProfileSerializer.channels`` is the ENABLED-channel list on 0.28.2
+    and on 0.29.0 (``get_channels`` filters ``enabled=True``; the
+    ``enabled_memberships`` prefetch carries the same filter), so its ABSENCE is
+    "unknown", never "everything". This branch used to ``continue``, which left
+    the destination profile on Dispatcharr's enable-everything create default —
+    a restriction arriving unrestricted (bead …-38c5a; the fail-closed rule bead
+    …-if05f established).
+
+    Note the distinction the code turns on and this test pins: an EMPTY list is
+    a real "nothing is enabled" selection and is honoured as one; a MISSING key
+    is the unknown this test covers.
+    """
+    from dbas.channel_reattach import reattach_profile_memberships
+
+    client = _client()
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    for src, dest in ((101, 201), (102, 202)):
+        remap.add(EntityType.CHANNEL, src, dest)
+    remap.add(EntityType.CHANNEL_PROFILE, 5, 905)
+
+    await reattach_profile_memberships(
+        client=client,
+        report=report,
+        remap=remap,
+        archive_profiles=[{"id": 5, "name": "Drill Subset"}],  # no "channels" key
+        archive_channels=[{"id": 101, "name": "A"}, {"id": 102, "name": "B"}],
+        created_source_ids={101, 102},
+    )
+
+    calls = {
+        (c.args[0], c.args[1]): c.args[2]
+        for c in client.update_profile_channel.await_args_list
+    }
+    assert calls == {(905, 201): {"enabled": False}, (905, 202): {"enabled": False}}
+    assert report.profile_membership_drift == 2
+    assert any("without its channel selection" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_the_fail_closed_path_leaves_a_pre_existing_channel_alone():
+    """Failing closed undoes OUR side effect, never the operator's choice.
+
+    Dispatcharr auto-enables a channel in every profile as a side effect of the
+    channel CREATE, so turning that off for a channel this run created takes
+    nothing away. A channel that already existed on the destination carries a
+    membership the operator set, and an unreadable archive is no licence to
+    switch it off — the fail-closed direction must not become a second way to
+    lose destination state.
+    """
+    from dbas.channel_reattach import reattach_profile_memberships
+
+    client = _client()
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    for src, dest in ((101, 201), (102, 202)):
+        remap.add(EntityType.CHANNEL, src, dest)
+    remap.add(EntityType.CHANNEL_PROFILE, 5, 905)
+
+    await reattach_profile_memberships(
+        client=client,
+        report=report,
+        remap=remap,
+        archive_profiles=[{"id": 5, "name": "Drill Subset"}],  # no "channels" key
+        archive_channels=[{"id": 101, "name": "A"}, {"id": 102, "name": "B"}],
+        # 102 was matched on the destination, not created by this run.
+        created_source_ids={101},
+    )
+
+    calls = {
+        (c.args[0], c.args[1]): c.args[2]
+        for c in client.update_profile_channel.await_args_list
+    }
+    assert calls == {(905, 201): {"enabled": False}}
+    assert (905, 202) not in calls
+    assert report.profile_membership_drift == 1
+
+
+@pytest.mark.asyncio
+async def test_a_membership_the_destination_refuses_is_counted_not_swallowed():
+    """A refused DISABLE is the fail-open outcome, so it must reach the report.
+
+    Asserted on the CHANNEL_PROFILE category's ``failed`` +
+    ``failure_details``/``FailureReason`` — the structure
+    ``dbas/importers/channels.py`` already uses for a membership PATCH failure —
+    NOT on ``skip_details``/``SkipReason`` and NOT on a top-level
+    ``RestoreReport`` int. Before this the event produced one WARNING log line
+    and no counter anywhere, so a throttled destination (B rate-limits) left a
+    profile wide open behind a clean ``failed 0``.
+    """
+    from dbas.channel_reattach import reattach_profile_memberships
+    from dbas.restore_contracts import FailureReason
+
+    client = _client()
+    client.update_profile_channel.side_effect = RuntimeError("throttled")
+
+    report = RestoreReport(is_dry_run=False)
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL, 101, 201)
+    remap.add(EntityType.CHANNEL_PROFILE, 5, 905)
+
+    await reattach_profile_memberships(
+        client=client,
+        report=report,
+        remap=remap,
+        archive_profiles=[{"id": 5, "name": "Drill Subset", "channels": []}],
+        archive_channels=[{"id": 101, "name": "A"}],
+    )
+
+    cat = report.category(EntityType.CHANNEL_PROFILE)
+    assert cat.failed == 1
+    assert cat.failure_details[0].reason == FailureReason.UPSTREAM_API_ERROR
+    assert cat.failure_details[0].label == "Drill Subset"
+    # Nothing was flipped, so nothing is claimed as flipped.
+    assert report.profile_membership_drift == 0
+
+
+@pytest.mark.asyncio
 async def test_profile_membership_reports_nothing_when_already_correct():
     """No drift is reported when the archived membership is all-channels."""
     from dbas.channel_reattach import reattach_profile_memberships

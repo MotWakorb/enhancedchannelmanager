@@ -141,8 +141,13 @@ shapes of this, and only one of them is an outage:
 - **The channel plays.** It kept its real streams and is holding one
   leftover placeholder in one slot. The report counts it under
   `channels_needing_stream_reattach` and names it in
-  `stream_reattach_details` with `has_playable_stream: true`. The
-  restore still reports success. This is untidy, not broken.
+  `stream_reattach_details` with `has_playable_stream: true`. This is
+  untidy, not broken, and it never on its own stops the restore reporting
+  success. (The run can still report **completed with failures** for a
+  different reason — a channel that cannot play at all, a stream whose
+  address lost its credentials, a channel that arrived without its guide
+  link, or a logo that could not be reinstated. A leftover placeholder on
+  a channel that plays is not one of them.)
 - **The channel errors on playback.** Nothing on it is a real stream.
   The report counts it under "channel(s) have NO playable stream"
   (`channels_with_no_playable_stream`), names it in
@@ -238,9 +243,9 @@ answer that question.
 | Per-category `would_create` / `would_update` / `would_skip` | Accurate. Measured against a matching apply, these matched exactly, category by category. |
 | `logo_reattach` and `epg_link_reattach` splits | Predicted, and they match the apply. |
 | `profile_membership_drift` | Predicted, and it matches the apply exactly. |
-| `channels_needing_stream_reattach` and `channels_with_no_playable_stream` | **Not predicted.** Both read `null` on a dry run. |
+| `channels_needing_stream_reattach`, `channels_with_no_playable_stream` and `stream_urls_redacted` | **Not predicted.** All three read `null` on a dry run. |
 
-**What `null` means here.** These two counters are written by the pass
+**What `null` means here.** These three counters are written by the pass
 that reattaches channels to real provider streams, and that pass matches
 against streams the restore's own deferred M3U refresh materializes. A
 preview performs no refresh, so it has nothing to look at. `null` says

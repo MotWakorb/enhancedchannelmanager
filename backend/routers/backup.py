@@ -22,7 +22,7 @@ import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 import yaml
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -103,7 +103,7 @@ BACKUP_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0132"
+APP_VERSION = "0.18.1-0133"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -573,6 +573,13 @@ _REDACT_KEYS = frozenset(
 # ``_REDACT_KEYS`` denylist because the M3U/EPG/settings categories legitimately
 # carry an operator-typed instance ``url`` that the restore needs; URL handling
 # for streams is therefore scoped to the producer that emits them.
+#
+# THE ARTIFACT IS NOT THE ONLY PRODUCER, and assuming it was is how bead …-msqf7
+# happened. Cross-instance SYNC gathers channels WITH their embedded streams
+# (``tasks.dbas_sync_engine._gather_live_channels``) and carries the stream
+# ``url`` deliberately — it is the stream matcher's Tier-1 identity. That
+# producer is covered by the VALUE rule instead
+# (:func:`_rewrite_known_credential_segments`), not by this field set.
 _STREAM_CREDENTIAL_FIELDS = frozenset({"url", "custom_url", "stream_hash"})
 
 # The IDENTITY half of a THIRD-PARTY provider credential (bead …-gi4zn).
@@ -723,26 +730,79 @@ def _find_urls_in_text(value: str) -> list[str]:
         pos = body.end()
 
 
-def _url_carries_credentials(candidate: str) -> bool:
+def _collect_credential_values(obj) -> tuple[frozenset[str], frozenset[str]]:
+    """Harvest the credential VALUES a RAW payload holds, split by which half.
+
+    The key-name rules (:data:`_REDACT_KEYS` / :data:`_PROVIDER_IDENTITY_KEYS`)
+    already know which keys carry a secret. Reading their VALUES off the payload
+    BEFORE it is redacted turns a key-name denylist into a set of literal strings
+    that can then be recognized wherever else they appear — which is what makes
+    the path-segment rule below a literal match rather than a guess (bead
+    …-msqf7).
+
+    Harvesting by the SAME key sets the redactor uses is deliberate: a new
+    credential-bearing key added to either denylist starts contributing its value
+    here automatically, so the two rules cannot drift apart on what counts as a
+    credential.
+
+    Args:
+        obj: A RAW (un-redacted) gathered payload — dict, list or scalar.
+
+    Returns:
+        ``(secrets, identities)``. ``secrets`` are the AUTHENTICATING half
+        (:data:`_REDACT_KEYS` — password, token, …); ``identities`` are the
+        IDENTIFYING half (:data:`_PROVIDER_IDENTITY_KEYS` — username). Empty,
+        blank and sentinel values are excluded: an empty secret would match every
+        empty path segment, and the sentinel is already the replacement.
+    """
+    secrets: set[str] = set()
+    identities: set[str] = set()
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                klower = key.lower() if isinstance(key, str) else None
+                if isinstance(value, str) and value and value != REDACTED:
+                    if klower in _REDACT_KEYS:
+                        secrets.add(value)
+                    elif klower in _PROVIDER_IDENTITY_KEYS:
+                        identities.add(value)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(obj)
+    return frozenset(secrets), frozenset(identities - secrets)
+
+
+def _url_carries_credentials(
+    candidate: str, secrets: frozenset = frozenset()
+) -> bool:
     """True when a URL embeds a credential in its userinfo or query string.
 
     A URL with neither is left ALONE — the restore needs the address to recreate
     the account or source at all, and blanket-redacting URL fields would leave
     every restored provider with nowhere to point.
 
-    WHAT THIS DOES NOT COVER, stated so the next reader does not read it as
-    exhaustive: an Xtream Codes STREAM url carries its credential in PATH
-    SEGMENTS (``/live/<user>/<pass>/<id>.ts``), which no general rule can
-    distinguish from an ordinary path without guessing — and guessing here costs
-    the operator a URL the restore needs. That shape is handled at the producer
-    instead: the channels producer never emits a stream url at all
-    (:data:`_STREAM_CREDENTIAL_FIELDS` / ``_safe_embedded_stream``, bead
-    …-7i8rf), pinned by
-    ``tests/routers/test_0i2vt_backup_artifact.py::
-    test_embedded_stream_url_never_in_artifact``. No other producer emits one.
+    Two rules, one by NAME and one by VALUE. The name rule
+    (:data:`_URL_CREDENTIAL_QUERY_KEYS`) catches the conventional
+    ``?username=…&password=…`` shape. The value rule catches a provider that
+    names its parameters something the denylist does not list (``?u=…&p=…``) by
+    recognizing the credential VALUE itself — available because the source
+    instance knows its own credentials (:func:`_collect_credential_values`).
+
+    PATH-SEGMENT credentials are NOT this function's job — a URL that carries one
+    is REWRITTEN rather than replaced whole, so it is handled by
+    :func:`_rewrite_known_credential_segments`. Returning True here means "this
+    address cannot be carried at all", which for a stream URL would cost the
+    replica the stream.
 
     Args:
         candidate: A single URL-shaped string.
+        secrets: Known credential values, from
+            :func:`_collect_credential_values`. Empty (the default) leaves only
+            the name rule, which is the pre-existing behaviour.
 
     Returns:
         True when the URL carries a credential and must not enter a standard
@@ -761,14 +821,106 @@ def _url_carries_credentials(candidate: str) -> bool:
     # Blank values are dropped (parse_qsl default): ``?username=`` with nothing
     # after it carries no credential and must not cost the operator the address.
     return any(
-        key.lower() in _URL_CREDENTIAL_QUERY_KEYS for key, _ in parse_qsl(parts.query)
+        key.lower() in _URL_CREDENTIAL_QUERY_KEYS or value in secrets
+        for key, value in parse_qsl(parts.query)
     )
 
 
-def _scrub_credential_urls(value: str):
+def _rewrite_known_credential_segments(
+    candidate: str, secrets: frozenset, identities: frozenset
+) -> Optional[str]:
+    """Replace path segments that LITERALLY carry a known credential.
+
+    THE SHAPE THIS EXISTS FOR (bead …-msqf7, measured against a real Xtream Codes
+    provider on 2026-08-20). Every one of the 1,409,363 stream URLs in that
+    provider's playlist put the account's username and password in path
+    segments — ``/live/<user>/<pass>/<id>.ts`` and the ``movie`` / ``series``
+    variants — while the SAME provider authenticated its guide endpoint by query
+    string. Neither the key-name denylist (a stream's key is ``url``) nor
+    :func:`_url_carries_credentials` could see it, so the pair crossed to a sync
+    destination intact, on every scheduled cycle, while the run reported that
+    credentials had been stripped.
+
+    WHY THIS IS NOT THE GUESSING THE OLD DOCSTRING REFUSED. It is still true that
+    no GENERAL rule separates ``/live/u/p/1.ts`` from an ordinary path. This rule
+    is not general: it compares each segment against the values the source
+    instance ACTUALLY holds, raw and percent-decoded. A path is rewritten because
+    it contains this operator's password, not because it looks like it might
+    contain someone's.
+
+    THE PASSWORD IS THE GATE, and that is the whole of the false-positive
+    defence. A URL is only rewritten once one of its segments carries a known
+    SECRET; only then is the IDENTITY half redacted alongside it. Without that
+    gate an operator whose XC username happened to be a structural path word
+    (``live``, ``movie``, ``news``) would have every URL on the instance mangled,
+    including credential-free ones belonging to other providers. With it, a
+    username collision can only occur inside a URL already proven to carry the
+    password — where the address needs the operator's attention regardless, so
+    the extra sentinel costs nothing.
+
+    WHAT THE REPLICA GETS. The scheme, host, port, kind marker and stream id all
+    survive; only the credential segments become the sentinel. Blanking the value
+    instead would reproduce bead …-v7d37's outcome one layer down — a replica
+    holding streams with nowhere to point and no record of where they pointed.
+    The destination reports the rewrite as a post-restore action item
+    (``RestoreReport.stream_urls_redacted``) rather than absorbing it silently.
+
+    Args:
+        candidate: A single URL-shaped string.
+        secrets: Known credential values (the authenticating half).
+        identities: Known identity values (the identifying half).
+
+    Returns:
+        The rewritten URL, or ``None`` when no segment matched and the value must
+        be left byte-identical.
+    """
+    if not secrets:
+        return None
+    try:
+        parts = urlsplit(candidate)
+    except ValueError:
+        return None
+    if not parts.scheme or not parts.netloc or "/" not in parts.path:
+        return None
+
+    def carries(segment: str, values: frozenset) -> bool:
+        # CONTAINMENT, not equality, and the whole segment then goes. A provider
+        # that decorates the credential segment (``/<pass>-hd/``) is still
+        # handing over the password, so equality would let it through; and a
+        # segment that carries the password is not an address component worth
+        # preserving byte-for-byte, so there is nothing to gain from splicing
+        # only the matched run out of it. Whole-segment replacement is also the
+        # only well-defined answer for a percent-encoded match, where the
+        # matched span exists in the DECODED string and has no single
+        # corresponding span in the encoded one.
+        #
+        # ``unquote`` never raises. A credential holding URL-reserved characters
+        # arrives percent-encoded, and ``p%40ss`` is the same secret as ``p@ss``,
+        # so an escape must not be a way through.
+        return any(v in segment or v in unquote(segment) for v in values)
+
+    segments = parts.path.split("/")
+    if not any(carries(seg, secrets) for seg in segments):
+        return None
+    rewritten = [
+        REDACTED if carries(seg, secrets) or carries(seg, identities) else seg
+        for seg in segments
+    ]
+    if rewritten == segments:
+        return None
+    return urlunsplit(
+        (parts.scheme, parts.netloc, "/".join(rewritten), parts.query, parts.fragment)
+    )
+
+
+def _scrub_credential_urls(
+    value: str,
+    secrets: frozenset = frozenset(),
+    identities: frozenset = frozenset(),
+):
     """Remove credentials embedded in URL VALUES, or return ``None`` if clean.
 
-    Two shapes, because the right restore-side behaviour differs:
+    Three shapes, because the right restore-side behaviour differs:
 
     * The value IS a credential-bearing URL (an M3U ``server_url``, an EPG
       ``url``). The WHOLE value becomes the sentinel, so the restore recognizes
@@ -777,9 +929,30 @@ def _scrub_credential_urls(value: str):
       ``credential_reentry_details``.
     * The value CONTAINS one (a status message quoting a failed request). Only
       the URL substring is replaced, so the operator keeps the diagnostic.
+    * The value carries a KNOWN credential in a PATH SEGMENT (an Xtream Codes
+      stream url). Only those segments are replaced
+      (:func:`_rewrite_known_credential_segments`) — the address survives,
+      because a stream url that cannot be carried at all costs the replica the
+      stream (bead …-msqf7).
+
+    THE WHOLE-VALUE RULE WINS. A URL carrying credentials in BOTH its query and
+    its path loses the whole value: it is replaced by the sentinel, and the path
+    half can never survive on the coat-tails of a partial rewrite. That was the
+    exact regression bead …-v7d37 feared from relaxing the whole-value rule, and
+    it is pinned by
+    ``tests/tasks/test_msqf7_stream_url_credential_leak.py::
+    test_a_url_carrying_the_credential_in_both_query_and_path_loses_the_whole_value``.
+    The ``url in dirty`` skip below states that precedence at the point it is
+    decided; it is not load-bearing on its own, because the whole-value
+    substitution runs first and leaves a rewrite nothing to match.
 
     Args:
         value: Any string value from a gathered payload.
+        secrets: Known credential values, from
+            :func:`_collect_credential_values`. Empty (the default) disables the
+            path-segment rule entirely, so every existing caller is unchanged.
+        identities: Known identity values, redacted only inside a URL the
+            ``secrets`` gate has already opened.
 
     Returns:
         The scrubbed string, or ``None`` when the value carries no URL
@@ -788,14 +961,23 @@ def _scrub_credential_urls(value: str):
     if "://" not in value:
         return None
     found = _find_urls_in_text(value)
-    dirty = [url for url in found if _url_carries_credentials(url)]
-    if not dirty:
+    dirty = [url for url in found if _url_carries_credentials(url, secrets)]
+    rewrites: dict[str, str] = {}
+    for url in found:
+        if url in dirty or url in rewrites:
+            continue
+        rewritten = _rewrite_known_credential_segments(url, secrets, identities)
+        if rewritten is not None:
+            rewrites[url] = rewritten
+    if not dirty and not rewrites:
         return None
-    if len(dirty) == 1 and value.strip() == dirty[0]:
+    if not rewrites and len(dirty) == 1 and value.strip() == dirty[0]:
         return REDACTED
     scrubbed = value
     for url in dirty:
         scrubbed = scrubbed.replace(url, REDACTED)
+    for url, rewritten in rewrites.items():
+        scrubbed = scrubbed.replace(url, rewritten)
     return scrubbed
 
 
@@ -804,6 +986,8 @@ def _redact_credentials_deep(
     preserve_keys: frozenset = frozenset(),
     exempt_identity_keys: frozenset = frozenset(),
     scrub_credential_urls: bool = True,
+    known_secrets: frozenset = frozenset(),
+    known_identities: frozenset = frozenset(),
 ):
     """Recursively replace any value whose key (case-insensitive) is in the
     shared :data:`_REDACT_KEYS` denylist with the REDACTED sentinel.
@@ -843,6 +1027,16 @@ def _redact_credentials_deep(
     without re-entry. It is a separate parameter rather than derived from
     ``preserve_keys`` because rule 3 does not key off names at all, so there is
     no key set that could express it.
+
+    ``known_secrets`` / ``known_identities`` extend rule 3 to the one credential
+    carrier neither a key name nor a URL's structure can reveal: a PATH SEGMENT
+    (bead …-msqf7). They are the literal values the caller harvested off the RAW
+    payload with :func:`_collect_credential_values`, so the match is against what
+    this instance actually holds rather than against a pattern. Both default to
+    empty, which makes the rule a no-op — every caller that does not opt in keeps
+    byte-identical behaviour. See
+    :func:`_rewrite_known_credential_segments` for why the secret half gates the
+    identity half.
     """
     identity_keys = _PROVIDER_IDENTITY_KEYS - exempt_identity_keys
     denied = _REDACT_KEYS | identity_keys
@@ -860,18 +1054,28 @@ def _redact_credentials_deep(
                 out[key] = value
             else:
                 out[key] = _redact_credentials_deep(
-                    value, preserve_keys, exempt_identity_keys, scrub_credential_urls
+                    value,
+                    preserve_keys,
+                    exempt_identity_keys,
+                    scrub_credential_urls,
+                    known_secrets,
+                    known_identities,
                 )
         return out
     if isinstance(obj, list):
         return [
             _redact_credentials_deep(
-                item, preserve_keys, exempt_identity_keys, scrub_credential_urls
+                item,
+                preserve_keys,
+                exempt_identity_keys,
+                scrub_credential_urls,
+                known_secrets,
+                known_identities,
             )
             for item in obj
         ]
     if scrub_credential_urls and isinstance(obj, str):
-        scrubbed = _scrub_credential_urls(obj)
+        scrubbed = _scrub_credential_urls(obj, known_secrets, known_identities)
         if scrubbed is not None:
             return scrubbed
     return obj

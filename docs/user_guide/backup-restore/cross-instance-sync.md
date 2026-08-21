@@ -33,19 +33,19 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 
 | Category | Notes |
 |-|-|
-| M3U accounts | Source URL and settings. Credentials are stripped; re-enter on B. |
-| EPG sources | Source URL and settings. Credentials are stripped; re-enter on B. |
+| M3U accounts | Source URL and settings. Credentials are stripped; re-enter on B. **If the credentials are embedded in the URL itself** — a plain-M3U playlist URL of the form `…/get.php?username=…&password=…` — then the address cannot be separated from the secret, so the whole URL is left blank on B and you re-enter the URL rather than just a password. An **Xtream Codes** account is not affected here: Dispatcharr keeps its server URL and its credentials in separate fields, so the URL crosses and only the password needs re-entering. Either way the run summary names the account. |
+| EPG sources | Source URL and settings. Credentials are stripped; re-enter on B. The same URL-embedded-credentials case applies, and it is the common one: an Xtream Codes guide URL (`xmltv.php?username=…&password=…`) arrives on B blank, the source shows **No URL provided**, and until you re-enter it every channel that guide feeds has no programme data on B. |
 | Channel groups | Group names and ordering. |
 | Channel profiles | Profile definitions. |
 | User agents | The custom user-agent strings an M3U account fetches with and a stream profile plays through. Synced first, before both, so each one's user-agent link is re-pointed at B's copy. Distinct from user *accounts*, which are never synced. |
 | Stream profiles | Profile definitions, including their user-agent link. |
-| Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. |
+| Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. **A stream URL that carries the provider's credentials in its path** — the Xtream Codes `…/live/<username>/<password>/<id>.ts` form, and its `movie` / `series` variants — arrives on B with those two path segments replaced by `***REDACTED***`. The address is still there, so you can see where the stream pointed, but it will not play until B has its own provider account. The run summary names the count. A stream URL that carries no credential crosses byte-identical. On B every synced stream is filed under a single account named `ECM Custom Streams (DBAS restore)`, **not** under the replicated provider account it comes from — see [that section below](#on-b-every-synced-stream-belongs-to-an-account-called-ecm-custom-streams-dbas-restore) for why and what to do about it. |
 
 ### Opt-in per target
 
 | Category | Notes |
 |-|-|
-| Logos | Off by default. Enable a target's `sync_logos` flag (API/MCP) to replicate A's logos each cycle. Covers both sources: the files in ECM's own `/config/uploads/logos/` and the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives). Where both describe the same logo, Dispatcharr's copy is the one that travels. Only logos B is missing are uploaded (matched by id, name, then filename), fetched and uploaded one image at a time; sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. |
+| Logos | Off by default. Each target row on the Cross-Instance Sync card carries a **Logos off / Logos on** toggle next to its enable/disable switch; click it to turn logo replication on for that target. The setting is stored on the target, so it survives a reload and applies to that target's later runs. Covers all three places a logo can live: the files in ECM's own `/config/uploads/logos/`, the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives), and the ones your provider supplies as a web address — which on an Xtream Codes lineup is usually nearly all of them. The first two travel as image files; the third travels as the address itself, so B points at the same picture A does without either instance re-hosting it. Where two of them describe the same logo, the one holding real image bytes is the one that travels. Only logos B is missing are created (matched by id, name, then filename); sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. A provider address that carries your account's username or password is **not** copied: it would hand B a credential, and once the credential is stripped the address no longer loads, so that logo is reported as a miss with the channels it affected instead. |
 
 ### Never synced
 
@@ -169,6 +169,65 @@ A channel on A has no channel number, and B already has a channel with the same 
 ### B has credentials for sources that A can't provide
 
 Expected. Credentials are intentionally not synced. Log into B and re-enter them manually. Sync will not overwrite B's credentials. It only sends redacted (credential-stripped) definitions.
+
+### Most of B's channels have no programme data, and B's EPG source says "No URL provided"
+
+Expected on an **Xtream Codes** provider, and the run tells you: the summary reads
+`… ; 1 source(s) need their URL re-entered (the address carried the credentials, so it could not be copied); N channel(s) restored without an EPG link`.
+
+An Xtream Codes guide URL authenticates by putting the username and password *in the URL*. Sync cannot ship the address without shipping the secret with it, so it ships neither — which leaves the source on B with nowhere to fetch from, and every channel that guide feeds without programme data. A guide URL that carries **no** credential (a plain XMLTV file, for instance) is unaffected and arrives intact, which is why some of B's channels usually still have their guide.
+
+**Resolution:** on B, open the named EPG source, paste in the full guide URL including its credentials, and refresh it. On the next cycle the channels relink to it on their own — you do not need to re-run anything on A. To seed B with working URLs from the start instead, do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
+
+### B's streams show `***REDACTED***` in their URL and will not play
+
+Expected on an **Xtream Codes** provider, and the run tells you twice. It does not
+report success: the outcome is **completed with failures**, and the summary reads
+
+`… ; N channel(s) have NO playable stream; … ; N stream(s) restored without a playable URL (it carried the provider's credentials)`
+
+Each affected channel is named in the run's stream-reattach detail, so you can see
+exactly which parts of the lineup are down rather than counting them yourself. A
+channel that still plays — because it kept a stream that carries no credential —
+is not listed.
+
+**Both counts repeat on every cycle until you fix it, and they stop the cycle after
+you do.** They describe what B is holding right now, not what the cycle happened to
+write, so a scheduled sync keeps telling you as long as the streams are still
+unplayable — and goes quiet on its own once B has its own provider account. The same
+is true of the "needs credentials re-entered" line: it names an account that is on B
+and still has no password, so it stops the first cycle after you enter one.
+
+An Xtream Codes stream URL puts the username and password in the address itself — `http://provider/live/<username>/<password>/<id>.ts` — so the credential *is* part of the address. Sync replaces those two path segments and carries the rest, which is why B's stream shows something like `http://provider/live/***REDACTED***/***REDACTED***/1234.ts`: you can see which provider and which stream it was, and no secret of yours has been copied onto B.
+
+This is deliberate. Cross-instance sync never puts a provider credential on the wire, and B may be a machine at a different site or trust level — a recurring schedule that kept re-sending your subscription password would be a standing exposure, not a convenience. A stream URL that carries **no** credential (a plain-M3U provider's direct URL, for instance) crosses byte-identical and plays immediately.
+
+**Resolution:** give B its own copy of the provider. Two steps, and neither is destructive:
+
+1. On B, open the matching M3U account, re-enter the credentials, and refresh it. B now ingests the provider's real stream URLs. They arrive **alongside** the redacted ones rather than replacing them, so B briefly holds two copies of every stream and your channels are still on the unplayable copy. Nothing you can see has changed yet — that is expected, and step 2 is what finishes it.
+2. Let one more sync cycle run (or force one). It re-matches every channel onto the real streams B just ingested, correctly attributed to your own provider account, and deletes the redacted stand-ins it is no longer using.
+
+Measured end to end on a 59-channel replica: after step 1 the channels were still on
+the 53 redacted stand-ins; after step 2 all 53 were bound to the real provider account
+and every redacted stand-in was gone, with the run back to reporting success.
+
+> **This used to need a third step** — manually deleting the `ECM Custom Streams (DBAS restore)`
+> account between 1 and 2, because the re-match preferred the redacted stand-in over the
+> real stream and would not let go of it. It no longer does, so **do not delete that
+> account by hand**; on a B that is also a *restore* destination it can hold stand-ins
+> that other channels are still using.
+
+To skip all of this, seed B with working URLs from the start: do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
+
+### On B, every synced stream belongs to an account called "ECM Custom Streams (DBAS restore)"
+
+Expected, and worth knowing before it surprises you. Open B's M3U Manager after a sync and you will see the provider accounts sync replicated — your Xtream Codes account, your Standard M3U account — each showing **no streams**, plus a fourth account named `ECM Custom Streams (DBAS restore)` holding **all** of them.
+
+Sync does not make B fetch from your providers. Re-triggering every provider's playlist download on B on each cycle would hammer them and is deliberately not done, so B has no stream of its own to attach a replicated channel to. Sync therefore creates each stream directly and files it under that one account, which exists precisely to hold streams that have no provider account on the destination to belong to.
+
+The consequence to plan around: **B's account list does not tell you which provider supplies which stream.** Read that from A, which is the instance actually talking to your providers. B's copy is a mirror of A's lineup, not an independent subscriber.
+
+If you follow the [two-step resolution above](#bs-streams-show-redacted-in-their-url-and-will-not-play) for each of your providers, B's streams end up under your real provider accounts and sync deletes the stand-ins it no longer needs — that is the tidiest state B can be in, and it is worth doing once on a replica you intend to keep. The account itself only disappears once nothing is left under it, so it can legitimately linger holding the stand-ins for a provider you have not re-credentialed on B yet.
 
 ### The "Allow insecure TLS" warning
 

@@ -4299,7 +4299,21 @@ export type RestoreSkipReason =
   | 'excluded_by_operator'
   | 'current_admin_preserved'
   | 'unsupported_in_this_version'
-  | 'dependency_unresolved';
+  /**
+   * A dependency the run WAS asked to deliver is not on the destination, so the
+   * entity was never created. A LOSS: its aggregate,
+   * `entities_blocked_by_dependency`, downgrades the outcome (bead 4mkoe).
+   */
+  | 'dependency_unresolved'
+  /**
+   * The same missing dependency, when the operator EXCLUDED the category it
+   * lives in and this row is a LINK INTO that category (bead 4mkoe) — an
+   * archived channel's membership of a channel profile the restore was told to
+   * leave out. Never a loss: the absence is what the operator asked for, and
+   * naming it would fire on every unattended cycle forever. Render it as an
+   * ordinary no-op beside `excluded_by_operator`, never as a problem.
+   */
+  | 'dependency_deselected';
 
 /** Why an entity failed to apply. */
 export type RestoreFailureReason =
@@ -4455,6 +4469,13 @@ export interface RestoreReport {
    * — those channels CANNOT PLAY, and an apply that reports any of them
    * resolves to `completed_with_failures`, never `success`.
    *
+   * One of FIVE counters that carry that weight (beads posm1 / 4mkoe): an apply
+   * is also `completed_with_failures` when `stream_urls_redacted`,
+   * `epg_links_unrestored`, `logo_misses` or `entities_blocked_by_dependency`
+   * is above zero — each of them means the replica is missing something the
+   * source had. Do not render any one of them as the reason for the outcome;
+   * read `outcome` itself.
+   *
    * `null` on a dry run, for the same reason as the field above (bead dgnms).
    */
   channels_with_no_playable_stream?: number | null;
@@ -4464,6 +4485,19 @@ export interface RestoreReport {
   streams_rebound?: number;
   /** Channels whose archived EPG link could not be reattached (bead dfkbn). */
   epg_links_unrestored?: number;
+  /**
+   * Archived entities never created because something they reference is not on
+   * the destination (bead 4mkoe) — a degraded backup that lost the dependency's
+   * whole category, a collision that stopped it being created, or a selection
+   * that kept the dependants and dropped the dependency.
+   *
+   * Counts only the GENUINE half. A skip whose missing dependency lives in a
+   * category the operator DESELECTED, and which is itself a link into that
+   * category, carries `SkipReason.DEPENDENCY_DESELECTED` and is never counted
+   * here — that absence is exactly what the operator asked for. The named
+   * drill-down is each category's `skip_details`.
+   */
+  entities_blocked_by_dependency?: number;
   /** Which channels restored with no EPG link, and the tvg_id that missed. */
   epg_link_miss_details?: EpgLinkMissDetail[];
   /**
@@ -5157,6 +5191,12 @@ export interface SyncTarget {
   enabled: boolean;
   insecure: boolean;
   fuzzy_stream_matching: boolean;
+  /**
+   * Per-target logo-replication opt-in. Default OFF and it stays OFF (ADR-013
+   * S9): the logos importer carries a streaming-upload cost S9 judged wrong to
+   * run every interval. The card offers a toggle; nothing flips it implicitly.
+   */
+  sync_logos: boolean;
   credential_version: number;
   token_revoked_at?: string | null;
   last_full_sync_at?: string | null;
@@ -5174,6 +5214,8 @@ export interface SyncTargetCreateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
+  /** Omit to take the backend default (OFF) — see `SyncTarget.sync_logos`. */
+  sync_logos?: boolean;
 }
 
 /**
@@ -5188,6 +5230,7 @@ export interface SyncTargetUpdateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
+  sync_logos?: boolean;
 }
 
 export async function listSyncTargets(): Promise<SyncTarget[]> {

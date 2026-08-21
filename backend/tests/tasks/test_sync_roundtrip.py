@@ -34,7 +34,7 @@ import json
 
 import pytest
 
-from dbas.restore_contracts import EntityType, RestoreOutcome
+from dbas.restore_contracts import ChannelReattachMode, EntityType, RestoreOutcome
 from tests.fixtures.sync_harness import (
     StatefulDispatcharrFake,
     SyncHarness,
@@ -715,3 +715,674 @@ async def test_logo_slice_off_by_default_b_logos_untouched(tmp_path):
     assert dest.logo_names() == set()
     cat = report.category(EntityType.LOGO)
     assert cat.created == 0 and cat.would_create == 0
+
+
+# ---------------------------------------------------------------------------
+# (i) CHANNEL-PROFILE MEMBERSHIP — the replica must enable EXACTLY what the
+#     source enables, never more (bead enhancedchannelmanager-38c5a).
+#
+# A channel profile is a RESTRICTION. Measured 2026-08-20 on Dispatcharr 0.29.0
+# against the documentation environment, after ONE apply-mode cycle that
+# reported ``success, created 134, failed 0``:
+#
+#     source A    'Kids & Family'    6 of 59 channels ENABLED
+#     replica B   'Kids & Family'   59 of 59 channels ENABLED
+#
+# The profile ROW crossed and every counter said so; the SELECTION did not, and
+# the replica inverted the profile's purpose by failing OPEN. These tests
+# therefore assert on B's RESULTING MEMBERSHIP STATE — never on the profile
+# count (2 on both sides while broken) and never on the absence of a failure
+# (``failed 0`` while broken).
+# ---------------------------------------------------------------------------
+
+
+def _restricting_profile_source():
+    """A source-A whose 'Kids & Family' profile enables 2 of its 6 channels.
+
+    The doc environment's 6-of-59 shape, scaled down. ``seeded_source`` already
+    supplies 'CNN' and the unrestricted 'Default Profile', so the restriction
+    sits beside a profile that legitimately enables everything — a fix that
+    disabled indiscriminately would break that one and be caught here.
+    """
+    source = StatefulDispatcharrFake.seeded_source()
+    for name, number in (
+        ("Sprout Junction", 400),
+        ("Cartoon Cove", 401),
+        ("Nightscreen Thrillers", 303),
+        ("Ringside", 209),
+        ("Capitol Report", 102),
+    ):
+        source.channels.create(
+            {"name": name, "channel_number": number, "streams": []}
+        )
+    profile = source.channel_profiles.create({"name": "Kids & Family"})
+    kids = {"Sprout Junction", "Cartoon Cove"}
+    for channel_id, row in source.channels.rows.items():
+        if row.get("name") not in kids:
+            source.set_membership(profile["id"], channel_id, False)
+    return source
+
+
+@pytest.mark.asyncio
+async def test_a_restricting_profile_arrives_on_b_still_restricting(tmp_path):
+    """B's 'Kids & Family' enables exactly the channels A's does — no more."""
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+    assert source.enabled_channel_names("Kids & Family") == {
+        "Sprout Junction",
+        "Cartoon Cove",
+    }
+
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    # The counters an operator reads are ALL clean, exactly as the live run's
+    # were — which is why they cannot be the assertion.
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert report.category(EntityType.CHANNEL_PROFILE).created == 2
+    assert report.category(EntityType.CHANNEL_PROFILE).failed == 0
+
+    # THE INVARIANT, read off B's membership state.
+    assert dest.enabled_channel_names("Kids & Family") == source.enabled_channel_names(
+        "Kids & Family"
+    )
+    # Stated in the direction that matters: never MORE than the source.
+    assert dest.enabled_channel_names("Kids & Family") <= source.enabled_channel_names(
+        "Kids & Family"
+    )
+    # A profile that legitimately enables everything still enables everything.
+    assert dest.enabled_channel_names("Default Profile") == source.enabled_channel_names(
+        "Default Profile"
+    )
+    # The correction away from Dispatcharr's enable-everything create default is
+    # COUNTED, so the operator can see the profile was about to widen.
+    assert report.profile_membership_drift == 4
+
+
+@pytest.mark.asyncio
+async def test_a_second_cycle_leaves_the_restriction_in_place(tmp_path):
+    """Idempotency for the SELECTION, not just for the rows.
+
+    The membership pass never reads B's current state, so a second cycle
+    re-asserts the same selection. The property that matters is that it lands on
+    the same answer rather than drifting open one cycle at a time.
+    """
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(source=source, dest=dest)
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert dest.enabled_channel_names("Kids & Family") == {
+        "Sprout Junction",
+        "Cartoon Cove",
+    }
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_profile_selection_fails_closed_on_b(tmp_path):
+    """A profile whose archived selection cannot be read must NOT arrive open.
+
+    ``ChannelProfileSerializer.channels`` is the enabled-channel list on 0.28.2
+    and (re-confirmed) on 0.29.0, so its ABSENCE means the source never told us
+    what the profile enables. The degraded direction is FEWER channels enabled,
+    never all of them: the memberships this cycle CREATED are turned off, and
+    the profile is named in the report.
+    """
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    real_get = source.get_channel_profiles
+
+    async def _profiles_without_their_selection():
+        rows = await real_get()
+        for row in rows:
+            row.pop("channels", None)
+        return rows
+
+    source.get_channel_profiles = _profiles_without_their_selection
+
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    # Fail CLOSED: nothing this cycle created is left enabled in either profile.
+    assert dest.enabled_channel_names("Kids & Family") == set()
+    assert dest.enabled_channel_names("Default Profile") == set()
+    # And loudly — a silent fail-closed is the same reporting defect wearing a
+    # different sign.
+    assert any("channel selection" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_a_membership_b_refuses_to_disable_is_reported_not_swallowed(tmp_path):
+    """A DISABLE that B rejects is the fail-open outcome — it must be counted.
+
+    B rate-limits, so a 429 on a membership PATCH is a real operational event.
+    Before this it produced one WARNING log line and no counter at all: the
+    channel stayed ENABLED (Dispatcharr's create default) and the cycle still
+    reported a clean success. Asserted on the CHANNEL_PROFILE category's
+    ``failed`` / ``failure_details`` — the ``FailureReason`` structure, the same
+    place ``dbas/importers/channels.py`` records a membership PATCH failure —
+    NOT on ``skip_details`` and NOT on a top-level ``RestoreReport`` int.
+    """
+    from dbas.restore_contracts import FailureReason
+
+    source = _restricting_profile_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    def _throttle_the_disables(method, payload):
+        if method == "update_profile_channel" and payload.get("enabled") is False:
+            raise _http_status_error(429, "Request was throttled.")
+
+    dest.inject_fault(_throttle_the_disables)
+
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    cat = report.category(EntityType.CHANNEL_PROFILE)
+    assert cat.failed == 4  # the four channels 'Kids & Family' excludes
+    assert {d.reason for d in cat.failure_details} == {FailureReason.UPSTREAM_API_ERROR}
+    # B kept them enabled — we cannot fix what B refuses — but the run no longer
+    # claims to have succeeded, and no rollback was triggered by it.
+    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert dest.enabled_channel_names("Kids & Family") == dest.enabled_channel_names(
+        "Default Profile"
+    )
+
+
+# ---------------------------------------------------------------------------
+# (j) CHANNEL → LOGO BINDING — the replica's channel must carry the replica's
+#     OWN logo (bead enhancedchannelmanager-xgbjm).
+#
+# Bead ``…-cfxml`` (merged in PR #904) got the logo BYTES across: the final
+# two-instance validation measured md5 38ee6912d90992cf51bc9ea306e413f7
+# identical on A, on B's disk, and over both APIs' cache endpoints. Read off
+# destination B rather than off a run report, the remaining half was:
+#
+#     B's Logo Manager   'XDMRU Hosted Logo'   usage UNUSED
+#     every channel on B                       logo_id null
+#     source A's channel 'XDMRU News One'      logo 1
+#
+# So the replica held the right image FILE with no channel using it — the most
+# visible difference between primary and replica, and what an operator sees
+# first on opening B.
+#
+# ``logo_id`` is a SOURCE id, so the channels importer drops it from the create
+# payload — correctly; forwarding it would bind an unrelated destination row.
+# The pass that puts it back, ``channel_reattach.reattach_channel_logos``, was
+# wired into the archive-restore registry only, exactly as
+# ``reattach_profile_memberships`` was before bead …-38c5a.
+#
+# THE ASSERTION SURFACE. These tests read WHICH LOGO B'S CHANNEL POINTS AT, BY
+# NAME (``channel_logo_name``). Never the logo COUNT (right on both sides while
+# broken), never ``failed == 0`` (clean while broken), and never an id — a
+# source logo id that happens to alias an unrelated row on the destination is
+# the false green this whole branch kept re-learning, so the fixtures below
+# plant a DECOY on B at the exact id A's logo carries.
+# ---------------------------------------------------------------------------
+
+_DECOY_LOGO_NAME = "Decoy Logo — Not The One A Uses"
+
+
+def _channel_with_a_hosted_logo():
+    """A source-A whose 'CNN' channel carries a DISPATCHARR-HOSTED logo.
+
+    Hosted (a ``url`` naming a path inside Dispatcharr's own volume) rather than
+    an ECM-local file, because that is the shape the live defect took and the
+    shape bead …-cfxml taught the gather to fetch: the bytes exist only on A and
+    only Dispatcharr can supply them.
+    """
+    source = StatefulDispatcharrFake.seeded_source()
+    logo = source.logos.create(
+        {"name": "XDMRU Hosted Logo", "url": "/data/logos/xdmru.png"}
+    )
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = logo["id"]
+    return source, logo
+
+
+def _dest_with_a_decoy_at(source_logo_id: int):
+    """An empty dest-B carrying an UNRELATED logo at A's logo id.
+
+    The false-green guard. Without it, a "fix" that forwarded A's ``logo_id``
+    verbatim would either dangle harmlessly or — on a real destination whose id
+    ranges overlap — silently bind the wrong image, and an id-based assertion
+    would call both of those a pass. With it, the wrong answer has a NAME and
+    the name-based assertion says which wrong answer it got.
+    """
+    dest = StatefulDispatcharrFake.empty_dest()
+    dest.logos.rows[source_logo_id] = {
+        "id": source_logo_id,
+        "name": _DECOY_LOGO_NAME,
+        "url": "/data/logos/decoy.png",
+    }
+    return dest
+
+
+@pytest.mark.asyncio
+async def test_a_channel_with_a_logo_on_a_carries_bs_own_logo_on_b(tmp_path):
+    """THE INVARIANT: B's channel points at B's copy of A's logo, by name."""
+    source, source_logo = _channel_with_a_hosted_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    # The counters an operator reads are clean — which is why they cannot be
+    # the assertion. The live run that produced this bead reported exactly this.
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert report.category(EntityType.CHANNEL).failed == 0
+    assert report.category(EntityType.LOGO).failed == 0
+
+    # THE INVARIANT, read off B by NAME.
+    assert dest.channel_logo_name("CNN") == source.channel_logo_name("CNN")
+    assert dest.channel_logo_name("CNN") == "XDMRU Hosted Logo"
+
+    # ... bound through B's OWN id, never A's — the decoy is what A's id names
+    # on B, and B's channel must not be pointing at it.
+    dest_channel = next(
+        row for row in dest.channels.rows.values() if row.get("name") == "CNN"
+    )
+    assert dest_channel["logo_id"] != source_logo["id"]
+    assert dest.logos.rows[dest_channel["logo_id"]]["name"] == "XDMRU Hosted Logo"
+
+    # The decoy is untouched: this pass binds, it never edits B's logo rows.
+    assert dest.logos.rows[source_logo["id"]]["name"] == _DECOY_LOGO_NAME
+
+
+@pytest.mark.asyncio
+async def test_logo_sync_enabled_after_the_channels_already_replicated(tmp_path):
+    """The operator flow bead …-8gnik will actually produce, and the reason the
+    sync path binds SOURCE-WINS rather than preserving.
+
+    ``sync_logos`` defaults OFF and has no UI, so the realistic sequence is:
+    cycles run, B gets its lineup, THEN the flag goes on. By that point every
+    channel on B already exists and is MATCHED, not created — so a pass that
+    only touched channels this cycle created would bind nothing at all, forever,
+    and the operator would see the new control do nothing. Same source-wins call
+    the sibling EPG-link pass on this path already makes.
+    """
+    source, source_logo = _channel_with_a_hosted_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    # Cycle 1: logos OFF. B gets the channel; no logo crosses.
+    logos_off = SyncHarness(source=source, dest=dest, target=make_sync_target())
+    await logos_off.run(confirm_apply=True, ledger_dir=tmp_path)
+    assert dest.channel_logo_name("CNN") is None
+
+    # Cycle 2: the operator turns logos ON. B's channel already exists.
+    logos_on = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await logos_on.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert dest.channel_logo_name("CNN") == "XDMRU Hosted Logo"
+
+
+@pytest.mark.asyncio
+async def test_the_binding_is_stable_across_cycles(tmp_path):
+    """A second cycle lands on the same answer rather than drifting.
+
+    Idempotency for the BINDING, not just for the rows: cycle 2 matches B's
+    now-present logo instead of uploading it, so it re-resolves through the
+    remap's MATCH path rather than its CREATE path — a fix that only populated
+    the remap on a create would bind on cycle 1 and unbind on cycle 2.
+    """
+    source, source_logo = _channel_with_a_hosted_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+    first_binding = dest.channel_logo_name("CNN")
+
+    second = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert second.category(EntityType.LOGO).created == 0  # matched, not re-created
+    assert dest.channel_logo_name("CNN") == first_binding == "XDMRU Hosted Logo"
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_predicts_the_binding_and_writes_nothing(tmp_path):
+    """The preview reports the population split and PATCHes nothing.
+
+    On a FRESH target nothing matches, so every logo is a would-CREATE with no
+    destination id yet — the state bead …-dgnms measured as a preview reporting
+    0 for an apply that reattached 11. The split has to count it anyway, and B
+    must still be untouched afterwards.
+    """
+    source, source_logo = _channel_with_a_hosted_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=False, ledger_dir=tmp_path)
+
+    # ``logo_reattach`` is a NON-OPTIONAL ReattachPopulation with a default, so
+    # "the pass ran" cannot be asserted as ``is not None``. The MODE is the
+    # honest discriminator: the sync path binds source-wins, and the default is
+    # PRESERVE, so an OVERWRITE mode here means this pass — not the default —
+    # produced the split.
+    assert report.logo_reattach.mode == ChannelReattachMode.OVERWRITE
+    assert report.logo_reattach.created_channels == 1
+    # Nothing was written: B has no channel at all, and its logo surface is
+    # still just the decoy.
+    assert dest.channels.rows == {}
+    assert dest.logo_names() == {_DECOY_LOGO_NAME.lower()}
+
+
+@pytest.mark.asyncio
+async def test_a_logo_b_never_received_is_a_named_miss_not_a_silent_null(tmp_path):
+    """A binding that cannot be made is COUNTED and the channel is NAMED.
+
+    HONEST ABOUT WHAT THIS PROVES: it was GREEN before the fix — the logos
+    importer's own miss path (bead …-cm9bi) already named the channel. It is
+    here as an INTERACTION guard, and the load-bearing half is the last
+    assertion: the reattach pass records its own miss under a SYNTHETIC label
+    (``logo #N (archived)``), and ``record_logo_miss`` is supposed to absorb
+    that into the importer's existing row rather than let a second, worse-named
+    row appear beside it. That absorb is only exercised once both halves run.
+    """
+    source, source_logo = _channel_with_a_hosted_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+    # A's Dispatcharr cannot serve the bytes, so the logo is never created on B
+    # and there is nothing for the channel to point at.
+    source.hosted_logo_bytes = None
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert dest.channel_logo_name("CNN") is None
+    # ``logo_misses`` is a top-level INT aggregate; the channel NAMES live in
+    # ``logo_miss_details[].channels[].name``. Asserting on the int alone would
+    # not prove the affected channel was named, and asserting on
+    # ``skip_details``/``failure_details`` would be the wrong structure
+    # entirely — a logo miss is neither.
+    assert report.logo_misses >= 1
+    affected = {
+        channel.name
+        for miss in report.logo_miss_details
+        for channel in miss.channels
+    }
+    assert "CNN" in affected
+    # ONE row, under the operator-facing NAME — not a second synthetic
+    # ``logo #N (archived)`` row contributed by the reattach pass.
+    assert [detail.label for detail in report.logo_miss_details] == [
+        "XDMRU Hosted Logo"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_logos_off_leaves_bs_channel_logos_alone(tmp_path):
+    """The default target (``sync_logos`` OFF) binds nothing.
+
+    Bead …-8gnik owns the toggle and its default OFF; this pass must not reach
+    across either. Green before the fix as well as after — it is a REGRESSION
+    guard on the opt-in boundary, not a demonstration of the defect.
+    """
+    source, source_logo = _channel_with_a_hosted_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(source=source, dest=dest, target=make_sync_target())
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert dest.channel_logo_name("CNN") is None
+    # The pass did not run: its split is the untouched default, and the MODE is
+    # still PRESERVE rather than the source-wins OVERWRITE this path binds with.
+    assert report.logo_reattach.mode == ChannelReattachMode.PRESERVE
+    assert report.logo_reattach.created_channels == 0
+    assert report.logo_reattach.existing_channels == 0
+    assert report.logo_reattach.preserved_channels == 0
+    assert dest.logos.rows[source_logo["id"]]["name"] == _DECOY_LOGO_NAME
+
+
+# ---------------------------------------------------------------------------
+# (k) REMOTE-URL LOGOS — the third, disjoint storage shape (bead …-sgrez).
+#
+# The gather built the LOGO category from TWO sources: files under ECM's own
+# ``/config/uploads/logos/`` and the DISPATCHARR-HOSTED bytes bead …-cfxml
+# added. A logo whose ``url`` is an ABSOLUTE http(s) address is in NEITHER set,
+# so it produced no plan record at all — not a miss, not a failure, nothing.
+# Measured on source A of the documentation environment, 2026-08-20:
+#
+#     A logos total=60   remote-url=59   Dispatcharr-hosted=1
+#     e.g. id 1 'Meridian News'  http://dispatcharr-p-web:9191/api/…/cache/
+#
+# So sync replicated ONE LOGO IN SIXTY, and it took bead …-xgbjm making the
+# bindings cross for the run to start saying so ('58 logo(s) could not be
+# reinstated' where it had silently said 0).
+#
+# THE INVARIANT under test: a channel that shows a logo on A shows the
+# CORRESPONDING logo on B, whatever the logo's storage shape. The 1-of-60 count
+# is one example of that property, not the specification — so the tests below
+# drive a MIXED population (remote + hosted) rather than the remote shape alone.
+#
+# The assertion surface is bead …-xgbjm's: WHICH LOGO B'S CHANNEL POINTS AT, BY
+# NAME, with a DECOY planted on B at the exact id A's logo carries.
+# ---------------------------------------------------------------------------
+
+_REMOTE_LOGO_URL = "http://cdn.northwind.example/logos/cnn.png"
+
+
+def _channel_with_a_remote_url_logo():
+    """A source-A whose 'CNN' channel carries a REMOTE-URL logo.
+
+    The shape an XC-sourced instance actually holds: the provider hands over a
+    ``tvg-logo`` address and Dispatcharr stores the URL, never the bytes. There
+    is nothing to upload and nothing to fetch — Dispatcharr's Logo model IS
+    ``{name, url}``, so the replica is restored by pointing at the same address.
+    """
+    source = StatefulDispatcharrFake.seeded_source()
+    logo = source.logos.create({"name": "Northwind CNN", "url": _REMOTE_LOGO_URL})
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = logo["id"]
+    return source, logo
+
+
+@pytest.mark.asyncio
+async def test_a_channel_with_a_remote_url_logo_carries_bs_own_logo_on_b(tmp_path):
+    """THE INVARIANT for the remote shape: B's channel points at B's copy, by
+    name, and B's copy carries the SAME address A points at."""
+    source, source_logo = _channel_with_a_remote_url_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    # The logo came BACK, so it is not an operator-facing loss.
+    assert report.logo_misses == 0
+
+    # THE INVARIANT, read off B by NAME.
+    assert dest.channel_logo_name("CNN") == source.channel_logo_name("CNN")
+    assert dest.channel_logo_name("CNN") == "Northwind CNN"
+
+    # ... bound through B's OWN id, never A's — the decoy is what A's id names
+    # on B, and B's channel must not be pointing at it.
+    dest_channel = next(
+        row for row in dest.channels.rows.values() if row.get("name") == "CNN"
+    )
+    assert dest_channel["logo_id"] != source_logo["id"]
+    assert dest.logos.rows[dest_channel["logo_id"]]["name"] == "Northwind CNN"
+    # B's row points at the SAME address A's does — that is what makes the
+    # replica show the same picture.
+    assert dest.logos.rows[dest_channel["logo_id"]]["url"] == _REMOTE_LOGO_URL
+
+    # The decoy is untouched.
+    assert dest.logos.rows[source_logo["id"]]["name"] == _DECOY_LOGO_NAME
+
+
+@pytest.mark.asyncio
+async def test_every_storage_shape_crosses_in_one_cycle(tmp_path):
+    """A MIXED population — the specification, not the 1-of-60 reproduction.
+
+    One remote-URL logo and one Dispatcharr-hosted logo on two different
+    channels. Both channels must show their own logo on B in the SAME cycle: a
+    fix that handled the remote shape by displacing the hosted one would pass a
+    remote-only test and still lose a logo.
+    """
+    source = StatefulDispatcharrFake.seeded_source()
+    remote = source.logos.create({"name": "Northwind CNN", "url": _REMOTE_LOGO_URL})
+    hosted = source.logos.create(
+        {"name": "XDMRU Hosted Logo", "url": "/data/logos/xdmru.png"}
+    )
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = remote["id"]
+    source.channels.create(
+        {"name": "BBC", "channel_number": 6, "streams": [], "logo_id": hosted["id"]}
+    )
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert report.logo_misses == 0
+    assert dest.channel_logo_name("CNN") == "Northwind CNN"
+    assert dest.channel_logo_name("BBC") == "XDMRU Hosted Logo"
+    # B holds BOTH, and never fetched bytes it had no business fetching: the
+    # remote row is a pointer, the hosted row is an upload.
+    assert dest.logos.rows[
+        next(
+            rid for rid, r in dest.logos.rows.items() if r["name"] == "Northwind CNN"
+        )
+    ]["url"] == _REMOTE_LOGO_URL
+
+
+@pytest.mark.asyncio
+async def test_the_remote_binding_is_stable_across_cycles(tmp_path):
+    """Cycle 2 matches B's now-present row rather than creating a second one."""
+    source, source_logo = _channel_with_a_remote_url_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+    first = dest.channel_logo_name("CNN")
+
+    second = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert second.category(EntityType.LOGO).created == 0  # matched, not re-created
+    assert dest.channel_logo_name("CNN") == first == "Northwind CNN"
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_predicts_the_remote_create_and_writes_nothing(tmp_path):
+    """The preview must predict what the apply will DO (bead …-dgnms's lesson,
+    applied to the sync path): a would-CREATE, and B untouched."""
+    source, source_logo = _channel_with_a_remote_url_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=False, ledger_dir=tmp_path)
+
+    assert report.category(EntityType.LOGO).would_create == 1
+    assert report.logo_misses == 0
+    assert report.logo_reattach.mode == ChannelReattachMode.OVERWRITE
+    assert report.logo_reattach.created_channels == 1
+    assert dest.channels.rows == {}
+    assert dest.logo_names() == {_DECOY_LOGO_NAME.lower()}
+
+
+# ---------------------------------------------------------------------------
+# (k2) CREDENTIAL INTERACTION — bead …-msqf7 closed the hole where a real XC
+# provider's username and password crossed to the replica inside every stream
+# URL, as PATH SEGMENTS. A logo url is a provider-supplied address on exactly
+# the same instances, so COPYING one to B is a new route to the same hole.
+#
+# THE RULE: a logo URL that carries a credential is NOT handed to B. The address
+# is not usable once its credential segments are the sentinel — it would give
+# the operator a channel whose logo silently 404s, which the logos importer
+# already rules is "strictly worse than an honest miss" — so the record travels
+# WITHOUT a url and the operator is told, by name, which logo did not come back.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_credential_bearing_logo_url_never_reaches_the_replica(tmp_path):
+    """The XC path-segment shape …-msqf7 measured, on a logo url this time."""
+    source = StatefulDispatcharrFake.seeded_source()
+    account = next(iter(source.m3u_accounts.rows.values()))
+    account["username"] = "northwind-demo"
+    account["password"] = "not-a-real-password"
+    logo = source.logos.create(
+        {
+            "name": "Leaky Logo",
+            "url": "http://provider.example/live/northwind-demo/"
+                   "not-a-real-password/logos/cnn.png",
+        }
+    )
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = logo["id"]
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    # NOTHING on B carries either half of the credential, anywhere.
+    blob = json.dumps(
+        [dict(r) for r in dest.logos.rows.values()], default=str
+    )
+    assert "not-a-real-password" not in blob
+    assert "northwind-demo" not in blob
+
+    # And the operator is TOLD, by name, rather than the logo vanishing. The
+    # miss aggregate is a top-level int; the channel names live in
+    # ``logo_miss_details[].channels[].name``.
+    assert report.logo_misses >= 1
+    assert "Leaky Logo" in {d.label for d in report.logo_miss_details}
+    affected = {
+        channel.name
+        for miss in report.logo_miss_details
+        for channel in miss.channels
+    }
+    assert "CNN" in affected
+
+
+@pytest.mark.asyncio
+async def test_a_query_string_credential_logo_url_never_reaches_the_replica(tmp_path):
+    """The other carrier shape: ``?username=…&password=…`` in the query."""
+    source = StatefulDispatcharrFake.seeded_source()
+    logo = source.logos.create(
+        {
+            "name": "Leaky Query Logo",
+            "url": "http://provider.example/logo.php?username=u1&password=p1",
+        }
+    )
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = logo["id"]
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    blob = json.dumps([dict(r) for r in dest.logos.rows.values()], default=str)
+    assert "password=p1" not in blob
+    assert "username=u1" not in blob
+    assert report.logo_misses >= 1
+    assert "Leaky Query Logo" in {d.label for d in report.logo_miss_details}

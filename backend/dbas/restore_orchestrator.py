@@ -500,27 +500,133 @@ async def run_rollback(
 # ---------------------------------------------------------------------------
 
 
+def _record_run_scope(plan: ImportPlan, remap: object) -> None:
+    """Tell the shared remap which categories this run was asked to carry.
+
+    Bead ``…-4mkoe``. The scope is what makes ``IdRemapTable.resolve`` returning
+    ``None`` readable: a namespace the operator EXCLUDED was never going to be
+    populated, while one that was in scope and is still empty means the replica
+    is missing something it was asked for. Recorded from the SAME
+    ``category(...).selected`` reading the importer wiring uses, so a category
+    absent from the plan reads as excluded in both places.
+
+    Tolerates a ``remap`` without the method (the parameter is typed loosely to
+    avoid an import cycle, and tests pass stand-ins): the classification then
+    falls back to its fail-loud default and reports every unresolved dependency.
+
+    Args:
+        plan: The restore plan carrying the operator's per-category selection.
+        remap: The shared ``IdRemapTable`` threaded through every importer.
+    """
+    recorder = getattr(remap, "record_run_scope", None)
+    if recorder is None:
+        return
+    recorder({cat.entity_type for cat in plan.categories if cat.selected})
+
+
 def _report_has_failures(report: RestoreReport) -> bool:
     """True when any category in the report recorded at least one failure."""
     return any(cat.failed > 0 for cat in report.categories)
 
 
-def _report_has_unplayable_channels(report: RestoreReport) -> bool:
-    """True when an APPLY left a channel with no URL-bearing stream (…-daziw).
+def _report_has_delivery_shortfall(report: RestoreReport) -> bool:
+    """True when an APPLY produced a replica missing something the source had.
 
-    Keyed on ``channels_with_no_playable_stream``, NEVER on
-    ``channels_needing_stream_reattach``. The latter counts channels holding at
-    least one placeholder SLOT, and the ``…-ixdaw`` fix (v0.18.1-0026)
-    deliberately produces exactly that on a channel that keeps its real streams
-    and plays fine — downgrading on it would false-fail an instance where every
-    channel works.
+    THE PROPERTY, not a list of cases (beads ``…-daziw`` → ``…-posm1``):
+
+        A run never presents as an unqualified SUCCESS when the replica it
+        produced is missing something the source had and the run was asked to
+        carry.
+
+    The membership test and the reasoning for every inclusion and every
+    exclusion live on :data:`RestoreReport.DELIVERY_SHORTFALL_FIELDS`, which is
+    the single declaration this function reads. Two of its exclusions are load-
+    bearing enough to repeat here, because both have already been implemented
+    wrongly once:
+
+    * NEVER ``channels_needing_stream_reattach``. It counts channels holding at
+      least one placeholder SLOT, and the ``…-ixdaw`` fix (v0.18.1-0026)
+      deliberately produces exactly that on a channel that keeps its real
+      streams and plays fine — downgrading on it would false-fail an instance
+      where every channel works.
+    * NEVER a faithful absence (bead ``…-15g1j``). A channel whose SOURCE has no
+      EPG link, no logo and no stream has lost nothing; the literal reading of
+      the invariant turned all ten keystone round-trip scenarios red for
+      replications that had lost nothing.
 
     A DRY RUN can never trigger this: a preview that predicts a shortfall is a
-    prediction, not a failure, and nothing was applied to be unplayable.
+    prediction, not a failure, and nothing was applied to be missing.
     """
     if report.is_dry_run:
         return False
-    return (report.channels_with_no_playable_stream or 0) > 0
+    return bool(report.delivery_shortfalls())
+
+
+def outcome_for_unread_destination(report: RestoreReport) -> RestoreOutcome | None:
+    """The outcome a REALIZED run that never read its destination must carry.
+
+    THE PROPERTY (bead ``…-bj442``), of which a wrong password is one example:
+
+        A realized cycle that could not read the destination it describes
+        records an outcome no consumer can read as success — and records the
+        SAME one everywhere, because this is the only place that decides it.
+
+    Bead ``…-jqfxm`` established the FACT
+    (:attr:`RestoreReport.destination_unreadable`) and acted on it in
+    ``tasks.dbas_sync``, which corrected what the operator is TOLD.
+    ``report.outcome`` was not part of that decision, so every surface that
+    RECORDS the run — the task-history ``details.outcome`` row an API or MCP
+    consumer reads, the ``sync_outbound`` journal row, and the persisted
+    ``sync_targets.last_outcome`` / ``last_full_sync_at`` columns — kept reading
+    ``success`` for a cycle that never read the destination it claims to
+    describe. Measured at ``02c2a312``: a confirmed apply whose readback gate
+    passed and whose M3U category read then returned 503 recorded
+    ``outcome=success``, ``last_outcome="success"`` and a fresh
+    ``last_full_sync_at``, with every category ``failed`` at 0 — because every
+    importer degrades a failed destination read to ``existing = []``.
+
+    A SIBLING OF THE DELIVERY-SHORTFALL SET, NEVER A MEMBER OF IT.
+    :attr:`RestoreReport.DELIVERY_SHORTFALL_FIELDS` means "the source had this
+    and the replica does not": a LOSS from a cycle that RAN, whose applied state
+    is real, kept and reasonable-about, and every member of it resolves to
+    ``COMPLETED_WITH_FAILURES`` — which
+    :attr:`RestoreOutcome.is_degraded_not_failed` maps to a ``warning`` carrying
+    a per-task opt-out. An unread destination is not that. Nothing was lost; the
+    cycle never read the thing it describes, so it knows neither what the
+    destination carries nor what it applied. Bead ``…-jqfxm`` deliberately
+    treats that as an ERROR, so making it a shortfall member would downgrade a
+    hard failure into an opt-out-able warning — the inverse of the defect.
+
+    WHY ``FAILED_ROLLBACK_INCOMPLETE`` and not one of the other three. It is the
+    only value that means INDETERMINATE — "the caller cannot tell what it got" —
+    which is exactly the state ``…-jqfxm`` describes. ``SUCCESS`` and
+    ``COMPLETED_WITH_FAILURES`` both assert the run finished and left state the
+    operator can reason about; ``PARTIAL_FAILED_ROLLED_BACK`` asserts the
+    instance is back to its pre-restore state. All three are claims ABOUT the
+    destination, and a run that could not read it cannot make one.
+    ``tasks.dbas_sync_engine`` already resolves a no-rollback, no-residue
+    source-side name conflict to this same value.
+
+    THE ``…-cwmid`` PROPERTY IS PRESERVED: this returns an OUTCOME and nothing
+    else. Severity is still read off the outcome alone
+    (:attr:`RestoreOutcome.is_degraded_not_failed`), so no condition is ever
+    consulted for one and no condition can reorder the severities.
+
+    A DRY RUN gets ``None``: a preview has no realized outcome to record (the
+    ``…-kxuj2`` contract) and nothing was applied to be indeterminate. The
+    marker still fails the preview at the task layer, which is ``…-jqfxm``'s
+    half and is unchanged.
+
+    Args:
+        report: The restore report, carrying the ``…-jqfxm`` marker or not.
+
+    Returns:
+        The forced :class:`RestoreOutcome`, or ``None`` when the run read its
+        destination (or is a preview) and the ordinary decision stands.
+    """
+    if report.is_dry_run or report.destination_unreadable is None:
+        return None
+    return RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
 
 
 def compute_outcome(
@@ -539,21 +645,36 @@ def compute_outcome(
     * ``COMPLETED_WITH_FAILURES`` — the apply never decided to abort, so nothing
       was rolled back and the applied state stands, but the result is not clean.
       Either rows DID fail in a :data:`NON_FATAL_FAILURE_CATEGORIES` category
-      (bead ``…-y65si``), or the apply finished with at least one channel left
-      holding NOT ONE URL-bearing stream (bead ``…-daziw``). The second case has
-      clean per-category counts and is still not a success: a channel that
-      cannot play is mixed state, and the drill measured exactly that behind a
-      reported ``success … created 32, failed 0``. Nothing is rolled back — the
-      applied state is real and worth keeping.
+      (bead ``…-y65si``), or the apply produced a replica MISSING SOMETHING THE
+      SOURCE HAD — any member of
+      :data:`RestoreReport.DELIVERY_SHORTFALL_FIELDS` (beads ``…-daziw``,
+      ``…-posm1``). The second case has clean per-category counts and is still
+      not a success: the drill measured a lineup where not one channel could
+      play behind a reported ``success … created 32, failed 0``, and the
+      cross-instance sync measured 53 of 59 replica channels landing with no
+      guide link and every logo binding lost behind ``success … failed 0``.
+      Nothing is rolled back — the applied state is real and worth keeping.
+
+      The trigger is the SET, never which member fired. Bead ``…-cwmid`` had to
+      undo a narrower keying after a drill measured the severity ordering
+      inverted; every member resolves to this one outcome, and severity is
+      decided from the outcome alone
+      (:attr:`RestoreOutcome.is_degraded_not_failed`).
     * ``PARTIAL_FAILED_ROLLED_BACK`` — a fatal failure occurred, a rollback ran,
       and it was COMPLETE (every created entity deleted or confirmed 404-gone).
-    * ``FAILED_ROLLBACK_INCOMPLETE`` — a fatal failure occurred and the rollback
-      could not fully undo (non-404 delete error, or a type with no
-      compensator). The worst state; reported loudly.
+    * ``FAILED_ROLLBACK_INCOMPLETE`` — the INDETERMINATE state, reported loudly.
+      Either a fatal failure occurred and the rollback could not fully undo it
+      (non-404 delete error, or a type with no compensator), or the run could
+      not read the destination it describes and therefore knows neither what
+      that destination carries nor what it applied (bead ``…-bj442``, keyed on
+      :attr:`RestoreReport.destination_unreadable`). The second trigger DOMINATES
+      every other reading below, because the counts a run gets from a
+      destination it could not read describe the source; see
+      :func:`outcome_for_unread_destination`.
 
     Args:
         report: The shared restore report (its per-category failure counts and
-            its unplayable-channel aggregate are independent signals that the
+            its delivery-shortfall aggregates are independent signals that the
             result is not clean).
         failure_occurred: Whether the apply phase raised / decided to roll back.
         rollback: The rollback result, or ``None`` if no rollback ran.
@@ -561,11 +682,27 @@ def compute_outcome(
     Returns:
         The :class:`RestoreOutcome`.
     """
+    # A run that never read the destination it describes is indeterminate, and
+    # that dominates every other reading of the counts — the counts themselves
+    # are the SOURCE's, because each importer degrades a failed destination read
+    # to "the destination is empty" (bead ``…-bj442``). Decided here rather than
+    # compensated for at the task layer so that ONE decision feeds the task
+    # result, the task-history row, the journal row and the persisted per-target
+    # state. Sibling of the delivery-shortfall set, never a member of it — see
+    # :func:`outcome_for_unread_destination` for why, and for why the rolled-back
+    # verdicts are overridden too (they are claims about a destination this run
+    # could not read).
+    forced = outcome_for_unread_destination(report)
+    if forced is not None:
+        return forced
+
     mixed = failure_occurred or _report_has_failures(report)
     if not mixed:
-        # Nothing FAILED, but a restored channel that cannot play is still mixed
-        # state — the applied lineup does not do the one thing it exists to do.
-        if _report_has_unplayable_channels(report):
+        # Nothing FAILED, but a replica missing something the source had is
+        # still mixed state — the applied lineup does not do the one thing it
+        # exists to do, whether what it lost was a playable stream, a guide
+        # link or its branding.
+        if _report_has_delivery_shortfall(report):
             return RestoreOutcome.COMPLETED_WITH_FAILURES
         return RestoreOutcome.SUCCESS
 
@@ -721,6 +858,14 @@ async def run_restore(
 
     if plan_is_dry_run := report.is_dry_run:
         logger.info("[DBAS-RESTORE] Dry-run: pre-flight passed; no apply performed.")
+
+    # Hand the shared remap this run's SCOPE (bead …-4mkoe). This is the only
+    # place that holds both the plan and the table every importer resolves
+    # through, which is why it is recorded here rather than threaded into five
+    # importer signatures. Without it a remap answers "was this category ever
+    # going to be populated?" with "I was not told", and every unresolved
+    # dependency is reported as a loss — the fail-loud default, on purpose.
+    _record_run_scope(plan, remap)
 
     # Per-create durable flush: on a real apply, persist the shared ledger after
     # each ``record_created`` (importers call ``ctx.flush_ledger()``); on a
@@ -1483,6 +1628,12 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
                     remap=ctx.remap,
                     archive_profiles=_entities(ctx, EntityType.CHANNEL_PROFILE),
                     archive_channels=archive_channels,
+                    # Only the fail-closed path reads this (bead …-38c5a): a
+                    # profile whose archived record never said what it enabled
+                    # has its THIS-RUN-CREATED memberships disabled rather than
+                    # left on Dispatcharr's enable-everything default, and a
+                    # pre-existing channel's membership is left to the operator.
+                    created_source_ids=ctx.created_channel_source_ids,
                     is_dry_run=ctx.is_dry_run,
                 )
         return None

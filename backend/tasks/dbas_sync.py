@@ -547,6 +547,17 @@ class DbasSyncTask(TaskScheduler):
         Settings card duly offered Apply (it gates on ``result.success``). A
         preview that never read the destination is a failed preview.
 
+        ON A REALIZED APPLY THE MARKER RULE IS NOW REDUNDANT HERE, and
+        deliberately kept: ``compute_outcome`` folds it into the OUTCOME (bead
+        ``…-bj442`` — :func:`dbas.restore_orchestrator.outcome_for_unread_destination`),
+        so the apply arrives already carrying ``FAILED_ROLLBACK_INCOMPLETE`` and
+        the clause below cannot be what makes it fail. What the clause still
+        covers on its own is the case an outcome cannot express: a DRY RUN, whose
+        realized outcome is ``None`` by contract — both the preview whose
+        destination read failed and the cycle the freshness / readback gate
+        aborted before ``run_restore`` ever ran. That is why it stays a check on
+        the marker rather than on the outcome.
+
         ``success=False`` is not one severity. A run that FINISHED and left real,
         kept state is DEGRADED, and is declared as such through
         ``completed_degraded`` so the task engine alerts it as a ``warning``
@@ -716,11 +727,20 @@ class DbasSyncTask(TaskScheduler):
         "Degraded" means the run finished and B carries real, kept state the
         operator can reason about. A run that never got an answer out of B knows
         neither what B carries nor what it applied — that is the error branch,
-        not a warning an operator can opt out of.
+        not a warning an operator can opt out of. That rule USED TO BE A SECOND
+        CONDITION READ HERE, and bead ``…-bj442`` removed it rather than leaving
+        it beside the outcome: ``compute_outcome`` now resolves an unread
+        destination to ``FAILED_ROLLBACK_INCOMPLETE``
+        (:func:`dbas.restore_orchestrator.outcome_for_unread_destination`), which
+        ``is_degraded_not_failed`` already answers ``False`` for. Keeping the
+        condition here would have re-created exactly what ``…-cwmid`` measured
+        and undid — a severity keyed on a condition rather than on the outcome —
+        and the point of moving the decision was that ONE decision feeds every
+        surface. Pinned by
+        ``tests/tasks/test_bj442_unread_destination_outcome.py``
+        ::``test_severity_is_still_read_off_the_outcome_alone``.
         """
         if is_dry_run or report.outcome is None:
-            return False
-        if getattr(report, "destination_unreadable", None) is not None:
             return False
         return report.outcome.is_degraded_not_failed
 
@@ -735,13 +755,15 @@ class DbasSyncTask(TaskScheduler):
             # null-channel-number collision) — surface it here too so this
             # message never disagrees with the numeric failed_count badge.
             total_conflict = sum(c.failed for c in report.categories)
+            from tasks.dbas_restore import DbasRestoreTask
+
             return (
                 "Sync dry-run complete: would create %d, update %d, skip %d, "
                 "%d conflict(s) across %d categories" % (
                     total_create, total_update, total_skip, total_conflict,
                     len(report.categories),
                 )
-            )
+            ) + DbasRestoreTask._credential_reentry_suffix(report, is_preview=True)
         total_created = sum(c.created for c in report.categories)
         total_updated = sum(c.updated for c in report.categories)
         total_failed = sum(c.failed for c in report.categories)
@@ -751,19 +773,36 @@ class DbasSyncTask(TaskScheduler):
                 len(report.categories),
             )
         )
-        # The placeholder populations are the ONE shortfall the counts above
-        # cannot express: every row succeeded, so a degraded sync would
-        # otherwise alert "failed 0" and name nothing an operator can act on
-        # (…-daziw). Rendered by the RESTORE task's builder rather than a second
-        # copy of it, so the two surfaces cannot describe the same two counters
-        # differently. Imported locally — module scope would make the two task
-        # modules import-time circular.
+        # EVERY post-restore action item, not just the placeholder populations:
+        # the counts above cannot express any of them, because every row
+        # succeeded. A degraded sync would otherwise alert "failed 0" and name
+        # nothing an operator can act on (…-daziw). Rendered by the RESTORE
+        # task's builder rather than a second copy of it, so the two surfaces
+        # cannot describe the same counters differently. Imported locally —
+        # module scope would make the two task modules import-time circular.
+        #
+        # THIS USED TO CALL ``stream_reattach_phrases`` DIRECTLY, which is the
+        # narrower of the two builders, and that is bead
+        # ``enhancedchannelmanager-v7d37``. The restore path has named credential
+        # re-entry, unreinstated logos, EPG-link losses and channel-group drift
+        # since ``…-6pilh``/``…-dfkbn``; the sync path rendered only the
+        # placeholder clause, so every OTHER shortfall fell off the one line an
+        # unattended scheduled run produces. Measured on Dispatcharr 0.29.0: an
+        # apply that stripped an Xtream Codes guide URL (the credentials are IN
+        # the URL, so redaction takes the whole address) left 53 of 59 replica
+        # channels with no EPG link and reported "Sync success: created 133,
+        # updated 0, failed 0 across 9 categories" (re-measured live against the
+        # doc environment on 2026-08-20) — while the same report
+        # already carried ``epg_links_unrestored: 53`` and a
+        # ``credential_reentry_details`` row naming the source and its ``url``.
+        #
+        # The OUTCOME is deliberately not touched here: whether a lost EPG link
+        # should downgrade a run past SUCCESS is bead ``…-posm1``'s decision
+        # (…-cwmid measured a severity inversion from keying that narrowly).
+        # This makes the success QUALIFIED; posm1 decides whether it stays one.
         from tasks.dbas_restore import DbasRestoreTask
 
-        phrases = DbasRestoreTask.stream_reattach_phrases(report)
-        if phrases:
-            summary += "; " + "; ".join(phrases)
-        return summary
+        return summary + DbasRestoreTask._credential_reentry_suffix(report)
 
     def _fail(
         self, started_at: datetime, message: str, *, error: Optional[str] = None

@@ -637,12 +637,109 @@ class DbasRestoreTask(TaskScheduler):
             "%d channel(s) restored without an EPG link",
             "%d channel(s) would be restored without an EPG link",
         ),
+        # Bead …-msqf7. An Xtream Codes stream URL carries the provider's
+        # username and password in its PATH, so the address cannot be carried
+        # without them: the credential segments are replaced and the stream
+        # lands naming where it pointed but unable to play. The operator's next
+        # action is to give the destination its own provider account — which is
+        # not the same action as re-typing a password into an empty field, so it
+        # is not the same clause.
+        (
+            "stream_urls_redacted",
+            "%d stream(s) restored without a playable URL "
+            "(it carried the provider's credentials)",
+            "%d stream(s) would be restored without a playable URL "
+            "(it carried the provider's credentials)",
+        ),
         (
             "profile_membership_drift",
             "%d profile membership(s) corrected",
             "%d profile membership(s) would be corrected",
         ),
+        # Bead …-4mkoe. The entity was not created at all, because something it
+        # references is not on the destination — a degraded backup that lost the
+        # dependency's whole category, a collision that stopped it being created,
+        # or a selection that left it out while its dependants were kept. The
+        # clause names the shape rather than the entity type because every
+        # importer can produce it; the per-category ``skip_details`` name which
+        # rows they were. A skip whose dependency the operator DESELECTED is
+        # recorded ``DEPENDENCY_DESELECTED``, never counted here, and never
+        # reaches this clause.
+        (
+            "entities_blocked_by_dependency",
+            "%d archived item(s) were not restored — something they depend on is "
+            "not on the destination",
+            "%d archived item(s) would not be restored — something they depend on "
+            "is not on the destination",
+        ),
     )
+
+    # Credential FIELD NAMES that carry the ADDRESS as well as the secret, so
+    # losing one costs the operator something a password prompt cannot recover
+    # (bead ``enhancedchannelmanager-v7d37``). An Xtream Codes guide URL
+    # authenticates by ``?username=…&password=…``, so the redactor — which
+    # cannot separate the secret from the address — strips the WHOLE value and
+    # the destination source is left with nowhere to point. Measured on 0.29.0:
+    # 53 of 59 replica channels arrived with no EPG link because of exactly this,
+    # while the 6 channels behind a credential-free guide URL kept theirs.
+    #
+    # "N account(s) need credentials re-entered" is the WRONG sentence for that
+    # entity — there is no password field to fill in, and the operator cannot
+    # even see what the source used to point at. These field names get their own
+    # clause naming the address as the thing to restore.
+    _ADDRESS_CREDENTIAL_FIELDS = frozenset({"url", "server_url"})
+
+    @staticmethod
+    def _credential_reentry_phrases(report) -> list[str]:
+        """Split the credential action item by WHAT the entity actually lost.
+
+        Two clauses, because the operator's next action differs: a stripped
+        ``password`` is re-typed into a field that is visibly empty, while a
+        stripped ``url`` leaves nothing on screen to re-type INTO and no record
+        of the address (bead ``…-v7d37``).
+
+        The split reads :attr:`RestoreReport.credential_reentry_details` — the
+        only structure that knows which FIELD was lost — but the count it must
+        add up to is the top-level ``credentials_needing_reentry`` aggregate, so
+        entities the aggregate counts without a detail row still get described.
+        Whatever the details do not explain falls to the generic clause rather
+        than off the message: under-reporting is the defect this whole suffix
+        exists to prevent.
+
+        Both clauses are tense-neutral (bead ``…-juu3c``): each states work the
+        operator still has to do, which is equally true of a preview and of an
+        apply.
+
+        Args:
+            report: The :class:`RestoreReport` to summarize.
+
+        Returns:
+            Zero, one, or two clauses, address-first.
+        """
+        total = getattr(report, "credentials_needing_reentry", 0) or 0
+        if total <= 0:
+            return []
+        details = getattr(report, "credential_reentry_details", None) or []
+        address = sum(
+            1
+            for detail in details
+            if any(
+                str(field).lower() in DbasRestoreTask._ADDRESS_CREDENTIAL_FIELDS
+                for field in (getattr(detail, "fields", None) or [])
+            )
+        )
+        address = min(address, total)
+        phrases: list[str] = []
+        if address:
+            phrases.append(
+                "%d source(s) need their URL re-entered (the address carried "
+                "the credentials, so it could not be copied)" % address
+            )
+        if total - address:
+            phrases.append(
+                "%d account(s) need credentials re-entered" % (total - address)
+            )
+        return phrases
 
     @staticmethod
     def _credential_reentry_suffix(report, *, is_preview: bool = False) -> str:
@@ -663,14 +760,12 @@ class DbasRestoreTask(TaskScheduler):
             is_preview: Whether this suffix is being appended to a DRY-RUN
                 summary. When true the action items are rendered in the future
                 tense, because a preview changed nothing (bead ``…-juu3c``).
-                ``credentials_needing_reentry`` is unaffected — "N account(s)
-                need credentials re-entered" is already an is/will-be statement
-                that is true of both a preview and an apply.
+                The credential clauses are unaffected — both
+                :meth:`_credential_reentry_phrases` renders are already
+                is/will-be statements, true of a preview and an apply alike.
         """
         parts: list[str] = []
-        credentials = getattr(report, "credentials_needing_reentry", 0) or 0
-        if credentials > 0:
-            parts.append("%d account(s) need credentials re-entered" % credentials)
+        parts.extend(DbasRestoreTask._credential_reentry_phrases(report))
         # The two placeholder populations need each other's counts to read
         # correctly, so they are rendered together rather than as two rows of the
         # generic table below. They are NULL (not predicted) on a preview, so the

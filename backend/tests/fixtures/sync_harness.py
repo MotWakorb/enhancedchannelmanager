@@ -57,6 +57,7 @@ lazy ``%``-formatted logging; no secrets in any log line.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -66,6 +67,14 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# A real 1x1 PNG. The logos importer decodes and validates the bytes it is
+# handed, so a hosted-logo fetch has to return an image an image library
+# accepts, not a placeholder string.
+_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +257,24 @@ class StatefulDispatcharrFake:
         # Logos (bead 7ipq2.1): keyed by normalized name — the importer's tier-2
         # match key, and the natural key upload_logo_file writes under.
         self.logos = _Store("logo", _name_key, id_base=id_base + 800)
+        # What ``fetch_logo_image`` serves for a HOSTED logo — a real 1x1 PNG,
+        # the smallest thing the logos importer's post-decode validator accepts.
+        self.hosted_logo_bytes: bytes = _PNG_BYTES
         # Every bulk_delete_logos invocation is recorded so tests can pin the
         # sync-path invariant: the destructive pre-step NEVER fires (ADR-013 S9).
         self.bulk_logo_delete_calls: list[list[int]] = []
+        # Channel-profile MEMBERSHIP, modelled the way Dispatcharr models it
+        # (0.29.0 ``apps/channels``): ``ChannelProfileMembership.enabled``
+        # defaults to ``True``; the ``post_save`` signal on ChannelProfile
+        # bulk-creates a row for every existing channel, and the channel-create
+        # view bulk-creates a row on every existing profile with
+        # ``enabled=True`` whenever ``channel_profile_ids`` is omitted — which
+        # is what every ECM create does. So on a real instance a membership is
+        # "ENABLED unless something explicitly disabled it", and only the
+        # exceptions need storing. Modelling it this way is what makes the
+        # enable-everything DEFAULT — the thing bead …-38c5a is about — real in
+        # the harness instead of an assumption.
+        self.disabled_memberships: set[tuple[int, int]] = set()
 
         # Optional write-fault injection: a callable invoked at the start of every
         # mutating call with (method_name, payload). If it raises, the fake raises
@@ -348,7 +372,21 @@ class StatefulDispatcharrFake:
     # ----- channel profiles ------------------------------------------------
 
     async def get_channel_profiles(self) -> list:
-        return self.channel_profiles.list()
+        # ``ChannelProfileSerializer.channels`` is the list of ENABLED channel
+        # ids — re-confirmed on 0.29.0 (``get_channels`` filters
+        # ``enabled=True``, and the ``enabled_memberships`` prefetch it prefers
+        # carries the same filter). Absence from this list IS the exclusion.
+        channel_ids = list(self.channels.rows)
+        rows = []
+        for row in self.channel_profiles.list():
+            profile_id = row.get("id")
+            row["channels"] = [
+                cid
+                for cid in channel_ids
+                if (profile_id, cid) not in self.disabled_memberships
+            ]
+            rows.append(row)
+        return rows
 
     async def create_channel_profile(self, data: dict) -> dict:
         self._check_fault("create_channel_profile", data)
@@ -360,12 +398,80 @@ class StatefulDispatcharrFake:
 
     async def delete_channel_profile(self, profile_id: int) -> None:
         self.channel_profiles.delete(profile_id)
+        self._forget_memberships(profile_id=profile_id)
 
     async def update_profile_channel(
         self, profile_id: int, channel_id: int, data: dict
     ) -> dict:
-        # Profile-membership toggle — best-effort, no store of its own here.
-        return {"success": True}
+        """``PATCH /api/channels/profiles/<p>/channels/<c>/`` — APPLIED.
+
+        Models 0.29.0's ``UpdateChannelMembershipAPIView.patch``: the membership
+        row is CREATED when absent, then the payload's ``enabled`` is applied;
+        an unknown profile or channel is a 404 (``get_object_or_404``). It used
+        to return ``{"success": True}`` and store nothing, which meant a test
+        could only ever assert that the call was MADE — never what the
+        destination profile ended up enabling. That is exactly the blind spot
+        bead …-38c5a's defect lived in.
+        """
+        self._check_fault(
+            "update_profile_channel",
+            {"profile_id": profile_id, "channel_id": channel_id, **(data or {})},
+        )
+        if profile_id not in self.channel_profiles.rows:
+            raise FakeNotFoundError("channel_profile", profile_id)
+        if channel_id not in self.channels.rows:
+            raise FakeNotFoundError("channel", channel_id)
+        enabled = bool((data or {}).get("enabled", True))
+        if enabled:
+            self.disabled_memberships.discard((profile_id, channel_id))
+        else:
+            self.disabled_memberships.add((profile_id, channel_id))
+        return {"channel": channel_id, "enabled": enabled}
+
+    def _forget_memberships(
+        self, *, profile_id: int | None = None, channel_id: int | None = None
+    ) -> None:
+        """Drop the membership exceptions a deleted row cascades away."""
+        self.disabled_memberships = {
+            (pid, cid)
+            for (pid, cid) in self.disabled_memberships
+            if not (
+                (profile_id is not None and pid == profile_id)
+                or (channel_id is not None and cid == channel_id)
+            )
+        }
+
+    def set_membership(self, profile_id: int, channel_id: int, enabled: bool) -> None:
+        """Seed one membership directly (test setup; no fault hook, no 404)."""
+        if enabled:
+            self.disabled_memberships.discard((profile_id, channel_id))
+        else:
+            self.disabled_memberships.add((profile_id, channel_id))
+
+    def enabled_channel_names(self, profile_name: str) -> set:
+        """The channel NAMES one profile ENABLES on this instance.
+
+        The cross-instance assertion surface: A's ids and B's ids never
+        coincide, so "the replica enables exactly what the source enables" can
+        only be stated by name. Raises rather than returning an empty set when
+        the profile is absent — an assertion that silently compares two empty
+        sets is the false green this helper exists to prevent.
+        """
+        key = _norm_name(profile_name)
+        profile_id = None
+        for row_id, row in self.channel_profiles.rows.items():
+            if _name_key(row) == key:
+                profile_id = row_id
+                break
+        if profile_id is None:
+            raise AssertionError(
+                "no channel profile named %r on %s" % (profile_name, self.label)
+            )
+        return {
+            str(row.get("name"))
+            for row_id, row in self.channels.rows.items()
+            if (profile_id, row_id) not in self.disabled_memberships
+        }
 
     # ----- stream profiles -------------------------------------------------
 
@@ -407,6 +513,7 @@ class StatefulDispatcharrFake:
 
     async def delete_channel(self, channel_id: int) -> None:
         self.channels.delete(channel_id)
+        self._forget_memberships(channel_id=channel_id)
 
     # ----- users (NEVER synced, but the rollback dispatch references the
     #        compensator unconditionally) -----------------------------------
@@ -432,6 +539,21 @@ class StatefulDispatcharrFake:
     async def get_all_logos_paginated(self, page_size: int = 500) -> list:
         return self.logos.list()
 
+    async def create_logo(self, data: dict) -> dict:
+        """``POST /api/channels/logos/`` — create a logo from a ``{name, url}``.
+
+        The re-create-BY-URL path (``importers.logos._create_logo_from_url``).
+        A logo whose ``url`` is an absolute http(s) address has no bytes to
+        upload: Dispatcharr's Logo model IS ``{name, url}``, so the replica's
+        row is restored by pointing at the same address. Modelling this write is
+        what lets a test drive the REMOTE-url logo shape (bead …-sgrez) — on a
+        real XC-sourced instance the overwhelming majority — end to end.
+        """
+        self._check_fault("create_logo", dict(data))
+        return self.logos.create(
+            {"name": data.get("name"), "url": data.get("url")}
+        )
+
     async def upload_logo_file(
         self, name: str, filename: str, data: bytes, content_type: str
     ) -> dict:
@@ -441,6 +563,21 @@ class StatefulDispatcharrFake:
         return self.logos.create(
             {"name": name, "url": "/data/logos/%s" % filename}
         )
+
+    async def fetch_logo_image(self, logo_id: int) -> Optional[bytes]:
+        """``GET /api/channels/logos/<id>/cache/`` — the hosted logo's BYTES.
+
+        A Dispatcharr-HOSTED logo (a ``url`` naming a path inside Dispatcharr's
+        own volume, which is what ECM's Logo Manager writes) has its image bytes
+        NOWHERE ELSE: not in ECM's ``uploads/logos`` dir, not in the plan. Bead
+        ``…-cfxml`` taught the sync gather to fetch them from here, one at a
+        time, at import time (D8). Modelling that read is what lets a test drive
+        the real hosted path end to end instead of the ECM-local file path,
+        which is the one shape the live defect never took.
+        """
+        if logo_id not in self.logos.rows:
+            return None
+        return self.hosted_logo_bytes
 
     async def delete_logo(self, logo_id: int) -> None:
         # Real compensating delete (rollback target for an uploaded logo);
@@ -460,6 +597,46 @@ class StatefulDispatcharrFake:
     def logo_names(self) -> set:
         """Normalized logo names on this instance — the logo convergence key."""
         return {_name_key(r) for r in self.logos.list()}
+
+    def channel_logo_name(self, channel_name: str) -> Optional[str]:
+        """The NAME of the logo one channel points at on THIS instance.
+
+        The cross-instance assertion surface for the channel→logo BINDING (bead
+        ``…-xgbjm``). A's logo ids and B's logo ids never coincide, so "the
+        replica's channel carries the CORRESPONDING logo" is only sayable by
+        NAME — asserting on the id would pass for a fix that forwarded A's id
+        onto a B row that happens to share the number.
+
+        ``None`` means the channel carries no logo, which is the broken state
+        this helper was written to catch. Two conditions RAISE instead, because
+        both are distinct failures that must never read as "no logo":
+
+        * the channel is absent — an assertion comparing two ``None``s from two
+          missing channels is the false green ``enabled_channel_names`` guards
+          against for the same reason;
+        * the channel's ``logo_id`` names a logo THIS instance does not have —
+          a DANGLING binding, which is exactly what forwarding a source id at
+          create time would produce.
+        """
+        row = None
+        for candidate in self.channels.rows.values():
+            if str(candidate.get("name")) == channel_name:
+                row = candidate
+                break
+        if row is None:
+            raise AssertionError(
+                "no channel named %r on %s" % (channel_name, self.label)
+            )
+        logo_id = row.get("logo_id")
+        if logo_id is None:
+            return None
+        logo = self.logos.rows.get(logo_id)
+        if logo is None:
+            raise AssertionError(
+                "channel %r on %s points at logo id=%r, which does not exist "
+                "there (a dangling binding)" % (channel_name, self.label, logo_id)
+            )
+        return str(logo.get("name"))
 
     # ----- state snapshot (the convergence assertion surface) --------------
 

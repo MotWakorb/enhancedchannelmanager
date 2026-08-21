@@ -219,12 +219,19 @@ def _channel_label(archive_channel: dict) -> str:
     return str(name) if name else "<unknown>"
 
 
-def _build_create_payload(archive_channel: dict, remap: IdRemapTable) -> dict:
+def _build_create_payload(
+    archive_channel: dict, remap: IdRemapTable
+) -> tuple[dict | None, EntityType | None]:
     """Build the create_channel payload, rewriting remappable FK ids to dest ids.
 
-    Returns the payload on success, or ``None`` if a remappable FK reference could
-    not be resolved through ``remap`` (the channel must then be skipped
-    ``DEPENDENCY_UNRESOLVED`` rather than created with a stale archive id).
+    Returns ``(payload, None)`` on success, or ``(None, entity_type)`` naming the
+    FK namespace that could not be resolved through ``remap`` (the channel must
+    then be skipped rather than created with a stale archive id).
+
+    NAMING THE UNRESOLVED NAMESPACE is what lets the caller classify the skip
+    (bead ``…-4mkoe``): "which category was I waiting on" is the question that
+    separates a dependency the operator excluded from one that was in scope and
+    is still missing, and only this function knows the answer.
 
     Drops the archive's source id, the non-remappable FK fields (logo/epg, owned
     by other beads), and the embedded/derived non-create keys (notably the
@@ -241,9 +248,9 @@ def _build_create_payload(archive_channel: dict, remap: IdRemapTable) -> dict:
             continue
         dest_id = remap.resolve(entity_type, int(source_id))
         if dest_id is None:
-            return None
+            return None, entity_type
         payload[field] = dest_id
-    return payload
+    return payload, None
 
 
 def _existing_channel_key(channel: dict) -> tuple:
@@ -489,15 +496,28 @@ async def import_channels(
                     )
             continue
 
-        # FK remap: rewrite remappable FK ids; unresolved => DEPENDENCY_UNRESOLVED.
-        payload = _build_create_payload(archive_channel, remap)
+        # FK remap: rewrite remappable FK ids; unresolved => the channel is not
+        # created. A CHANNEL is a first-class entity the operator selected, so
+        # this is a LOSS even when the category its FK points at was deselected —
+        # ``record_dependency_unresolved`` reaches that verdict from
+        # ``recorded_under != dependency`` rather than from a special case here.
+        payload, unresolved_type = _build_create_payload(archive_channel, remap)
         if payload is None:
-            logger.info(
-                "[DBAS-CHANNELS] Channel '%s' skipped — an FK dependency is "
-                "unresolved (not yet restored).",
-                label,
+            reason = report.record_dependency_unresolved(
+                recorded_under=EntityType.CHANNEL,
+                dependency=unresolved_type,
+                label=label,
+                remap=remap,
+                is_dry_run=is_dry_run,
+                source_export_id=source_id,
             )
-            _skip(cat, SkipReason.DEPENDENCY_UNRESOLVED, label, source_id, is_dry_run)
+            logger.info(
+                "[DBAS-CHANNELS] Channel '%s' skipped (%s) — its %s dependency "
+                "is not on the destination.",
+                label,
+                reason.value,
+                unresolved_type.value,
+            )
             continue
 
         if is_dry_run:
@@ -809,12 +829,21 @@ async def _reattach_profiles(
     """Reattach each restored channel to its archived channel-profile memberships.
 
     For each membership, resolve the destination profile id through the
-    IdRemapTable (``EntityType.CHANNEL_PROFILE``). An unresolved profile is
-    recorded ``DEPENDENCY_UNRESOLVED`` under the CHANNEL_PROFILE category and the
-    membership is NOT applied (no guessed id). A reattach upstream error is
+    IdRemapTable (``EntityType.CHANNEL_PROFILE``). An unresolved profile means
+    the membership is NOT applied (no guessed id). A reattach upstream error is
     recorded ``UPSTREAM_API_ERROR``.
+
+    THE ONE PRODUCER ON THIS PASS THAT CARRIES BOTH HALVES of bead ``…-4mkoe``,
+    and by volume the loudest: a membership is a LINK INTO the CHANNEL_PROFILE
+    category, and it is recorded under that category rather than under CHANNEL
+    for exactly that reason. With profiles DESELECTED every membership of every
+    channel is unresolvable by construction — the absence is what the operator
+    asked for, it would recur on every unattended cycle forever, and it is
+    recorded ``DEPENDENCY_DESELECTED`` and never counted as a shortfall. With
+    profiles SELECTED, the same row means a profile the run WAS asked to deliver
+    is not there, which is a real loss. The decision is
+    ``RestoreReport.record_dependency_unresolved``'s, not this function's.
     """
-    prof_cat = report.category(EntityType.CHANNEL_PROFILE)
     for archive_channel, dest_channel_id in reattach_queue:
         label = _channel_label(archive_channel)
         for membership in _profile_memberships(archive_channel):
@@ -825,19 +854,20 @@ async def _reattach_profiles(
                 EntityType.CHANNEL_PROFILE, int(source_profile_id)
             )
             if dest_profile_id is None:
-                logger.info(
-                    "[DBAS-CHANNELS] Channel '%s' profile membership skipped — "
-                    "profile (source id %s) not in remap (dependency unresolved).",
-                    label,
-                    source_profile_id,
+                reason = report.record_dependency_unresolved(
+                    recorded_under=EntityType.CHANNEL_PROFILE,
+                    dependency=EntityType.CHANNEL_PROFILE,
+                    label=label,
+                    remap=remap,
+                    is_dry_run=False,
+                    source_export_id=int(source_profile_id),
                 )
-                prof_cat.skipped += 1
-                prof_cat.skip_details.append(
-                    SkipDetail(
-                        reason=SkipReason.DEPENDENCY_UNRESOLVED,
-                        label=label,
-                        source_export_id=int(source_profile_id),
-                    )
+                logger.info(
+                    "[DBAS-CHANNELS] Channel '%s' profile membership skipped "
+                    "(%s) — profile (source id %s) is not on the destination.",
+                    label,
+                    reason.value,
+                    source_profile_id,
                 )
                 continue
             enabled = bool(membership.get("enabled", True))
@@ -846,6 +876,7 @@ async def _reattach_profiles(
                     dest_profile_id, dest_channel_id, {"enabled": enabled}
                 )
             except Exception as exc:
+                prof_cat = report.category(EntityType.CHANNEL_PROFILE)
                 prof_cat.failed += 1
                 prof_cat.failure_details.append(
                     FailureDetail(

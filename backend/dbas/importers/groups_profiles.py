@@ -263,13 +263,16 @@ def _sanitize_failure(exc: Exception, noun: str) -> str:
 
 def _build_create_payload(
     archive_row: dict, config: CategoryConfig, remap: IdRemapTable
-) -> dict | None:
+) -> tuple[dict | None, EntityType | None]:
     """Build a create payload dict, rewriting any remappable FK ids to dest ids.
 
-    Returns the payload on success, or ``None`` if a remappable FK reference could
-    not be resolved through ``remap`` (the row must then be skipped
-    ``DEPENDENCY_UNRESOLVED`` rather than created with a stale archive id). Drops
-    the archive source id and the embedded/read-only non-create keys.
+    Returns ``(payload, None)`` on success, or ``(None, entity_type)`` naming the
+    FK namespace that could not be resolved through ``remap`` (the row must then
+    be skipped rather than created with a stale archive id). Drops the archive
+    source id and the embedded/read-only non-create keys.
+
+    The namespace is named so the caller can classify the skip (bead ``…-4mkoe``)
+    instead of guessing which category the row was waiting on.
     """
     dropped = _SOURCE_ID_KEYS | _NON_CREATE_KEYS
     payload = {k: v for k, v in archive_row.items() if k not in dropped}
@@ -279,9 +282,9 @@ def _build_create_payload(
             continue
         dest_id = remap.resolve(entity_type, int(source_id))
         if dest_id is None:
-            return None
+            return None, entity_type
         payload[field_name] = dest_id
-    return payload
+    return payload, None
 
 
 def _skip(cat, reason: SkipReason, label: str, source_export_id, is_dry_run: bool) -> None:
@@ -402,17 +405,32 @@ async def _import_category(
             )
             continue
 
-        # FK remap: rewrite remappable FK ids; unresolved => DEPENDENCY_UNRESOLVED.
-        payload = _build_create_payload(archive_row, config, remap)
+        # FK remap: rewrite remappable FK ids; unresolved => the row is not
+        # created. A group/profile is a first-class entity the operator selected,
+        # so this is a LOSS even when the FK's own category was deselected (bead
+        # …-4mkoe). It is also the shape a DEGRADED BACKUP produces: bead
+        # …-zt3kf's ``{"_warning": …}`` stub can leave ``user_agents`` empty
+        # beside a full ``stream_profiles`` slice, and every profile pointing at
+        # an agent then vanishes from the replica in silence.
+        payload, unresolved_type = _build_create_payload(archive_row, config, remap)
         if payload is None:
+            reason = report.record_dependency_unresolved(
+                recorded_under=config.entity_type,
+                dependency=unresolved_type,
+                label=label,
+                remap=remap,
+                is_dry_run=is_dry_run,
+                source_export_id=source_id,
+            )
             logger.info(
-                "[%s] %s '%s' has an unresolved FK reference; skipped "
-                "DEPENDENCY_UNRESOLVED.",
+                "[%s] %s '%s' skipped (%s) — its %s dependency is not on the "
+                "destination.",
                 config.log_prefix,
                 noun,
                 label,
+                reason.value,
+                unresolved_type.value,
             )
-            _skip(cat, SkipReason.DEPENDENCY_UNRESOLVED, label, source_id, is_dry_run)
             continue
 
         if is_dry_run:

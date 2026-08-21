@@ -925,9 +925,17 @@ async def test_dry_run_preview_names_the_accounts_that_will_need_credentials():
 
 
 @pytest.mark.asyncio
-async def test_an_already_existing_account_is_not_an_action_item():
-    """A skipped account keeps whatever credential the destination already has;
-    nothing needs re-entering."""
+async def test_an_already_existing_account_that_has_its_credential_is_not_an_action_item():
+    """A skipped account keeps whatever credential the destination already has.
+
+    This test's TITLE and DOCSTRING are the original ones; its FIXTURE is not.
+    It used to hand the importer a destination row carrying no ``password`` key
+    at all and assert ``0``, which made "the account was skipped" stand in for
+    "the destination has the credential" — two different facts, and bead
+    ``…-ukjx5`` is what happens when they are conflated. The destination row now
+    actually HAS the password, which is the only shape the claim above is true
+    of.
+    """
     report = _report()
 
     await import_m3u_accounts(
@@ -936,6 +944,94 @@ async def test_an_already_existing_account_is_not_an_action_item():
             "name": "Infinity",
             "password": REDACTION_SENTINEL,
         }],
+        client=_client(existing_accounts=[
+            {"id": 77, "name": "Infinity", "password": "<destination-own-secret>"},
+        ]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 0
+
+
+@pytest.mark.asyncio
+async def test_an_already_existing_account_still_missing_its_credential_is_reported():
+    """The skip is not the end of the action item (bead ``…-ukjx5``).
+
+    The account is on the destination and authenticates nowhere. Recording only
+    where the CREATE succeeded made this a count of what the cycle WROTE, so a
+    scheduled cross-instance sync named the account once and then went silent
+    forever while nothing about the destination changed.
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(existing_accounts=[{"id": 77, "name": "Infinity"}]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 1
+    detail = report.credential_reentry_details[0]
+    assert detail.fields == ["password"]
+    # The destination id is known here — unlike on the create path's preview —
+    # so the operator can be pointed at the row they have to edit.
+    assert detail.destination_id == 77
+
+
+@pytest.mark.asyncio
+async def test_a_destination_still_holding_ecms_own_placeholder_is_still_reported():
+    """``***REDACTED***`` in the destination's password field is NOT a credential.
+
+    The exact failure this module's sentinel exists for, met on the skip path.
+    A restore from before bead ``…-6pilh`` wrote the literal placeholder into the
+    field, so the account LOOKS configured — the UI shows a populated password
+    and every truthiness check says yes — and authenticates nowhere. Asking
+    ``credential_is_present`` rather than ``bool`` is what keeps the re-check
+    from being fooled by ECM's own handwriting.
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(existing_accounts=[
+            {"id": 77, "name": "Infinity", "password": REDACTION_SENTINEL},
+        ]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 1
+    assert report.credential_reentry_details[0].fields == ["password"]
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_account_the_source_never_had_a_credential_for_is_silent():
+    """Bead ``…-15g1j``'s faithful half, on the skip path.
+
+    Nothing was redacted, so nothing was lost, so there is no action item — on
+    this cycle or any later one. Without this the fix would trade permanent
+    silence for permanent noise.
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Infinity", "password": ""}],
         client=_client(existing_accounts=[{"id": 77, "name": "Infinity"}]),
         selected=True,
         report=report,

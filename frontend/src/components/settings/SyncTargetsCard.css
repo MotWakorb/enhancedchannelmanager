@@ -222,6 +222,14 @@
   font-size: var(--icon-status);
 }
 
+/* Logo-replication opt-in (bead …-8gnik). Shares the toggle chrome with the
+   kill switch but carries its own ON colour, so a row's two toggles are not
+   mistaken for one another at a glance. */
+.sync-targets-card .stc-logos-toggle.is-on {
+  color: var(--accent-primary, #6366f1);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
 .sync-targets-card .stc-toggle:disabled,
 .sync-targets-card .stc-action-btn:disabled {
   opacity: 0.5;

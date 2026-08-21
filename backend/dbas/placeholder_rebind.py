@@ -176,10 +176,12 @@ WHAT IT DOES
 2. Re-fetch the destination's streams and build TWO sets from them, because
    WRITE AUTHORITY and DETECTION are different questions (bead ``…-kcfru``, and
    see its section below). The REAL candidates — everything this run did NOT
-   synthesize that carries a URL — are the only things a slot may be rebound
-   ONTO. The playable ids — EVERY stream that carries a URL, whoever made it —
-   are what step 5's verdict is taken against. A stream with no URL is in
-   neither: it is exactly the thing we are rebinding away from.
+   synthesize whose url CAN SERVE — are the only things a slot may be rebound
+   ONTO. The playable ids — EVERY stream whose url can serve, whoever made it —
+   are what step 5's verdict is taken against. A stream with no usable address is
+   in neither: it is exactly the thing we are rebinding away from. "Can serve" is
+   :func:`credential_sentinel.url_can_serve`, NOT truthiness — see "A DEAD
+   ADDRESS IS NOT ALWAYS AN ABSENT ONE" below.
 3. For each restored channel, re-run the SAME 4-tier matcher over the real
    candidates, one slot per archived stream in archived order. A hit takes the
    real id; a miss keeps the placeholder so the channel is never left with fewer
@@ -190,11 +192,11 @@ WHAT IT DOES
    SWEEP the residue an earlier run left behind, then drop the synthetic account
    if nothing is left under it. See "THE RESIDUE" below.
 5. Report what is left, in TWO populations (bead ``…-daziw``). A channel holding
-   any slot that is NOT a real URL-bearing destination stream — OR holding no
-   slot at all (bead ``…-15g1j``) — is counted in
+   any slot that is NOT a real destination stream with a usable address — OR
+   holding no slot at all (bead ``…-15g1j``) — is counted in
    :attr:`~dbas.restore_contracts.RestoreReport.channels_needing_stream_reattach`
-   and NAMED in ``stream_reattach_details``. A channel left with NOT ONE
-   URL-bearing stream is additionally counted in
+   and NAMED in ``stream_reattach_details``. A channel left with NOT ONE stream
+   that can serve is additionally counted in
    :attr:`~dbas.restore_contracts.RestoreReport.channels_with_no_playable_stream`
    and flagged ``has_playable_stream=False`` on its detail row — that is the
    population that CANNOT PLAY, and the only one that downgrades the restore
@@ -216,8 +218,8 @@ restore. Run 4 measured it twice: a repeat restore over an already-stranded
 that answered HTTP 500 on playback.
 
 The verdict is now taken for EVERY restored channel, from what it is ACTUALLY
-left holding, against ``playable_ids`` — every URL-bearing destination stream.
-Who created a bad slot is irrelevant to whether the channel plays. A slot that
+left holding, against ``playable_ids`` — every destination stream whose address
+can serve. Who created a bad slot is irrelevant to whether the channel plays. A slot that
 streams nothing is named from the destination's own stream list, so a prior run's
 placeholder gets its real name rather than ``<unknown>``. A channel whose every
 slot streams something is healthy and is not reported at all.
@@ -311,11 +313,13 @@ whether the current run's ledger happened to hold it.
 The two concerns are now two sets, and the split is the fix:
 
 * ``candidates`` — WRITE AUTHORITY. Unchanged, and still ledger-scoped: only a
-  stream this run did NOT synthesize, carrying a URL, may be rebound onto, and
-  only ledgered ids are ever rebound away from or deleted. Widening THIS is the
-  obvious wrong fix — it would let a run mutate streams it did not create.
-* ``playable_ids`` — DETECTION. Read-only and UNSCOPED: every URL-bearing
-  destination stream, whoever made it. Nothing is written from it.
+  stream this run did NOT synthesize, whose address can serve, may be rebound
+  onto, and only ledgered ids are ever rebound away from or deleted. Widening
+  THIS is the obvious wrong fix — it would let a run mutate streams it did not
+  create. (Bead ``…-1td94`` NARROWED it, which is the safe direction: a stream
+  with a redacted address is no longer a rebind TARGET.)
+* ``playable_ids`` — DETECTION. Read-only and UNSCOPED: every destination stream
+  whose address can serve, whoever made it. Nothing is written from it.
 
 The invariant it buys, which a single-apply test cannot check and which is why
 the regression tests run the pass TWICE: the verdict is a function of the
@@ -323,6 +327,51 @@ DESTINATION'S STATE alone. Two cycles over an unchanged destination return the
 same answer. A channel that streams nothing downgrades EVERY cycle, not just the
 one that stranded it — an unattended schedule must not go green over a replica
 that has stopped playing.
+
+----------------------------------------------------------------------------
+A DEAD ADDRESS IS NOT ALWAYS AN ABSENT ONE (bead ``…-1td94``, measured live on
+Dispatcharr 0.29.0, 2026-08-20)
+----------------------------------------------------------------------------
+
+Everything above says "carries a URL" and means "can be streamed". Those were the
+same sentence for as long as the only way a placeholder could fail to play was
+having no ``url`` at all. Bead ``…-msqf7`` ended that. An Xtream Codes stream URL
+authenticates by PATH SEGMENT, so redacting the credential without discarding the
+address — which is deliberate, so the operator can still see which provider and
+which stream it was — produces::
+
+    http://provider:9191/live/***REDACTED***/***REDACTED***/53.ts
+
+That is a non-empty string, so ``s.get("url")`` said PLAYABLE. Fetching said
+HTTP 404. Read from B's Postgres and by fetching, never from the run's report::
+
+    53 of B's channels bound to streams whose upstream returns HTTP 404
+    channels_with_no_playable_stream: 0
+
+So the report called a replica entirely healthy while 90 percent of it could not
+play — the same class of silence ``…-kcfru`` and ``…-oebpv`` each closed by a
+different route, reached this time through the PREDICATE rather than through
+provenance or control flow.
+
+THE FIX IS THE PREDICATE, NOT A SENTINEL TEST PER SITE. Every question of the
+form "does this stream have a usable address?" in this module now goes through
+:func:`credential_sentinel.url_can_serve`. Five sites ask it — the two candidate
+sets, ``playable_ids``, the post-refresh placeholder gate and the residue sweep —
+and the point of routing them through ONE named function is that the next reason
+an address is dead is added once, there, instead of being missed at four of five
+call sites. The invariant is "a channel bound to a stream that cannot serve is
+reported unplayable, WHATEVER the reason the address is dead"; the redacted URL
+is one example of it, not the specification.
+
+NOT A SUBSTITUTE FOR FETCHING, and the counter must not be read as one. This is
+the narrower question ECM can answer offline: is this an address at all, or is it
+ECM's own record that there is not one? An address that is well-formed and simply
+revoked still reads as playable here and always will.
+
+WHAT DID NOT CHANGE: the redaction. ``…-msqf7`` closed a real credential leak
+whose own live proof showed 53 provider passwords reaching B, and the trade it
+made — a safe stream that cannot play, over a playable stream that ships the
+password — stands. What was missing was the run SAYING so.
 
 ----------------------------------------------------------------------------
 THE RESIDUE (bead ``…-dgnms``, drill runs 2026-08-05-run4 AND run5)
@@ -382,6 +431,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
+from credential_sentinel import url_can_serve, url_is_redacted
 from dbas.custom_stream_fallback import CUSTOM_STREAM_ACCOUNT_NAME
 from dbas.restore_contracts import (
     EntityType,
@@ -425,8 +475,9 @@ class RebindResult:
             is it cleaning up after its predecessors.
         account_deleted: Whether the synthetic custom-stream account was removed.
         still_placeholder: Channels left holding at least one slot that is not a
-            real, URL-bearing destination stream — whoever created it (``…-oebpv``).
-        unplayable: Channels left with NO URL-bearing stream at all — the SUBSET
+            real destination stream whose address can serve — whoever created
+            it (``…-oebpv``).
+        unplayable: Channels left with NO stream that can serve — the SUBSET
             of ``still_placeholder`` that cannot play (bead ``…-daziw``).
     """
 
@@ -618,7 +669,8 @@ async def _rebind_one_channel(
             Anything outside it is a real stream and is never touched.
         archived_for: ``placeholder_id -> the stream record to re-match with``,
             or ``None`` when there is none (which yields a MISS).
-        candidates: The REAL, URL-bearing destination streams to match against.
+        candidates: The REAL destination streams — address usable — to match
+            against.
         allow_fuzzy: Whether the matcher may use its Tier-4 fuzzy rung.
 
     Returns:
@@ -713,10 +765,10 @@ async def rebind_placeholder_streams(
         client: The Dispatcharr API client.
         report: The shared :class:`RestoreReport`. Updated with
             ``streams_rebound`` and, for any restored channel left holding a slot
-            that is not a real URL-bearing stream,
+            that is not a real stream with a usable address,
             ``channels_needing_stream_reattach`` + ``stream_reattach_details``,
             plus ``channels_with_no_playable_stream`` for the subset left with
-            no URL-bearing stream at all.
+            no stream that can serve at all.
         ledger: The shared :class:`RollbackLedger` — the ONLY source of which
             streams/accounts this run synthesized. Nothing outside it is
             rebound or deleted; the playability verdict, by contrast, covers
@@ -794,25 +846,28 @@ async def _rebind_from_archive(
 
     all_streams = await _fetch_all(client, client.get_streams)
     # WRITE AUTHORITY — the match-TARGET set. Everything this run did NOT
-    # synthesize that carries a URL. Both conditions earn their place: a URL-less
-    # stream can never be a rebind target (playability is the entire point of
-    # this pass), and this run's own placeholders are excluded so no slot is ever
-    # rebound onto one. STAYS SCOPED.
+    # synthesize whose address CAN SERVE. Both conditions earn their place: a
+    # stream with no usable address can never be a rebind target (playability is
+    # the entire point of this pass), and this run's own placeholders are excluded
+    # so no slot is ever rebound onto one. STAYS SCOPED — bead ``…-1td94``
+    # narrowed the url half from truthiness to ``url_can_serve``, which subtracts
+    # rebind targets and never adds any.
     candidates = [
         s
         for s in all_streams
-        if _as_int(s.get("id")) not in placeholder_ids and s.get("url")
+        if _as_int(s.get("id")) not in placeholder_ids and url_can_serve(s.get("url"))
     ]
     if not candidates:
         logger.warning(
-            "[DBAS-REBIND] No URL-bearing provider stream this run could rebind "
-            "onto; every slot keeps whatever it is already bound to."
+            "[DBAS-REBIND] No provider stream with a usable address this run "
+            "could rebind onto; every slot keeps whatever it is already bound to."
         )
-    # DETECTION — the playability test (beads …-daziw / …-kcfru), and a SEPARATE
-    # set from the one above on purpose. A channel PLAYS if any id it is left
-    # holding carries a URL. WHO created that stream is irrelevant to whether it
-    # streams anything, so this set is UNSCOPED: every URL-bearing destination
-    # stream is in it, including the placeholders this run just synthesized.
+    # DETECTION — the playability test (beads …-daziw / …-kcfru / …-1td94), and a
+    # SEPARATE set from the one above on purpose. A channel PLAYS if any id it is
+    # left holding carries an address that CAN SERVE. WHO created that stream is
+    # irrelevant to whether it streams anything, so this set is UNSCOPED: every
+    # destination stream with a usable address is in it, including the
+    # placeholders this run just synthesized.
     #
     # It used to be read off ``candidates``, which made the verdict depend on
     # provenance — one set doing two jobs. ``custom_stream_fallback`` builds each
@@ -829,10 +884,15 @@ async def _rebind_from_archive(
     # A REDACTED archive strips the url, so those placeholders stream nothing and
     # are absent from this set on EVERY cycle — the downgrade the operator is
     # paged on is unchanged, and now holds in steady state too.
+    #
+    # ``url_can_serve``, not truthiness: a CREDENTIAL-redacted url (bead
+    # ``…-msqf7``) is a non-empty string that fetches 404, and reading it as
+    # playable put 53 of B's 59 channels in this set while none of them could
+    # play. See "A DEAD ADDRESS IS NOT ALWAYS AN ABSENT ONE" above.
     playable_ids = {
         sid
         for s in all_streams
-        if s.get("url") and (sid := _as_int(s.get("id"))) is not None
+        if url_can_serve(s.get("url")) and (sid := _as_int(s.get("id"))) is not None
     }
 
     # EVERY destination stream id -> its operator-facing name, for the detail
@@ -940,7 +1000,8 @@ async def _rebind_from_archive(
 
         # THE VERDICT (beads …-daziw / …-oebpv / …-kcfru). Taken from
         # ``final_ids`` — what the channel is ACTUALLY left holding — and keyed
-        # on ``playable_ids``, EVERY URL-bearing destination stream. Provenance
+        # on ``playable_ids``, EVERY destination stream whose address can
+        # serve. Provenance
         # does not appear on either side of this test, in either direction: a
         # channel stranded by an EARLIER restore used to escape the verdict
         # entirely while returning HTTP 500 (…-oebpv), and a channel on a
@@ -981,8 +1042,8 @@ async def _rebind_from_archive(
                 result.unplayable.append(label)
                 logger.warning(
                     "[DBAS-REBIND] Channel '%s' (id=%s) has NO playable stream: "
-                    "it holds %d slot(s), not one of them carrying a URL. "
-                    "Attach a real stream.",
+                    "it holds %d slot(s), not one of them carrying an address "
+                    "that can serve. Attach a real stream.",
                     label, dest_channel_id, len(final_ids),
                 )
             report.record_stream_reattach_needed(
@@ -1027,6 +1088,44 @@ async def _rebind_from_archive(
         synthetic_account_ids=synthetic_account_ids,
     )
     result.orphans_swept = len(swept_ids)
+
+    # --- The redacted-URL population, read off the DESTINATION (…-ukjx5). ----
+    # ONE reading of what B is left holding, taken after every delete this pass
+    # performs, so the number describes the destination's post-pass state rather
+    # than a moment inside the pass.
+    #
+    # WHY IT LIVES HERE AND NOT AT CREATE TIME. Bead ``…-msqf7`` recorded it where
+    # ``create_stream`` succeeded, which is a count of what THIS CYCLE WROTE. A
+    # cross-instance sync is a SCHEDULED task and it writes these rows exactly
+    # once: on cycle two the archived stream matches the row cycle one made,
+    # nothing is created, and the aggregate read ZERO over a destination whose
+    # streams were every one of them still redacted. Measured live on 0.29.0 —
+    # 53, then 0, with nothing changed in between. That is bead ``…-kcfru``'s
+    # shape for the third time, and its answer applies unchanged: DETECTION is an
+    # unscoped, read-only look at the destination; WRITE AUTHORITY stays
+    # ledger-scoped and is untouched by this block.
+    #
+    # UNSCOPED ON PURPOSE. Who created the row does not decide whether it can
+    # play, exactly as for ``playable_ids`` above. A redacted address left by an
+    # EARLIER cycle is the same shortfall, needs the same action from the
+    # operator, and used to be invisible.
+    #
+    # THE FAITHFUL HALF (bead ``…-15g1j``) needs no separate guard here, and that
+    # is a property of the predicate rather than luck: only a URL ECM cut a
+    # credential OUT of carries the sentinel, so a stream whose source address
+    # never held one is not in this set on any cycle. ``url_is_redacted``, not
+    # ``url_can_serve`` — a stream with an EMPTY url is a different loss with a
+    # different remedy, and it is already counted by the verdict above.
+    removed_ids = deleted_ids | swept_ids
+    report.record_redacted_stream_urls(
+        [
+            (sid, _stream_name(stream))
+            for stream in all_streams
+            if (sid := _as_int(stream.get("id"))) is not None
+            and sid not in removed_ids
+            and url_is_redacted(stream.get("url"))
+        ]
+    )
 
     if result.still_placeholder:
         # Say which of the two populations each number is: the drill's own report
@@ -1117,7 +1216,7 @@ async def rebind_placeholders_after_refresh(
        ONE ``get_m3u_accounts`` call, and the steady state on any instance that
        has never restored or that a previous pass already tidied (the empty
        account is dropped, so this stays false afterwards);
-    2. the account exists but holds no URL-less stream — one account-scoped
+    2. the account exists but holds no unservable stream — one account-scoped
        stream page on top.
 
     Only past both gates does it fetch the full stream and channel lists.
@@ -1125,7 +1224,7 @@ async def rebind_placeholders_after_refresh(
     THE SAFETY ENVELOPE is exactly the one PR #784 established for the residue
     sweep, reused rather than re-derived: a stream is a rebind candidate ONLY
     when it sits on the synthetic account AND carries no url. An operator's own
-    URL-less custom stream on ANY OTHER account is never rebound, never counted
+    unservable custom stream on ANY OTHER account is never rebound, never counted
     and never deleted.
 
     Never raises — every failure path inside is logged and swallowed, and the
@@ -1180,7 +1279,13 @@ async def _rebind_from_live_placeholders(
     if not synthetic_account_ids:
         return result
 
-    # --- Gate 2: does it hold any URL-less placeholder? ----------------------
+    # --- Gate 2: does it hold any placeholder that cannot serve? -------------
+    # "Cannot serve", not "URL-less": a credential-redacted placeholder (bead
+    # ``…-msqf7``) carries a non-empty url, so a truthiness gate returned EMPTY
+    # here and this whole pass exited before doing anything. That made credential
+    # re-entry plus a refresh — the recovery an operator reaches for FIRST —
+    # change nothing they could see (bead ``…-1td94``). The ACCOUNT test below is
+    # untouched and is still the entire safety envelope.
     # Account-scoped so the common case costs one small page, not the whole
     # stream table. The account filter is re-applied client-side as well: it is
     # the predicate that keeps this pass off an operator's own streams, and it
@@ -1191,7 +1296,7 @@ async def _rebind_from_live_placeholders(
             client, client.get_streams, m3u_account=account_id
         ):
             stream_id = _as_int(stream.get("id"))
-            if stream_id is None or stream.get("url"):
+            if stream_id is None or url_can_serve(stream.get("url")):
                 continue
             if _stream_account_id(stream) not in synthetic_account_ids:
                 continue
@@ -1209,17 +1314,18 @@ async def _rebind_from_live_placeholders(
 
     all_streams = await _fetch_all(client, client.get_streams)
     # REAL candidates — same definition as the archive-driven pass: everything
-    # that is not one of the placeholders and carries a URL.
+    # that is not one of the placeholders and whose address can serve.
     candidates = [
         s
         for s in all_streams
-        if _as_int(s.get("id")) not in placeholder_ids and s.get("url")
+        if _as_int(s.get("id")) not in placeholder_ids and url_can_serve(s.get("url"))
     ]
     candidate_ids = {cid for s in candidates if (cid := _as_int(s.get("id"))) is not None}
     if not candidates:
         logger.info(
-            "[DBAS-REBIND] %s: no URL-bearing provider streams on the destination "
-            "yet; the placeholders are kept so nothing loses its binding.", trigger,
+            "[DBAS-REBIND] %s: no provider stream with a usable address on the "
+            "destination yet; the placeholders are kept so nothing loses its "
+            "binding.", trigger,
         )
         return result
 
@@ -1274,14 +1380,15 @@ async def _rebind_from_live_placeholders(
         # The playability audit, scoped to the channels this pass touched. There
         # is no RestoreReport here, so it exists to LOG the residue an operator
         # still has to fix, and it uses the same test as the restore path: a
-        # channel plays if any id it is left holding is a URL-bearing candidate.
+        # channel plays if any id it is left holding is a candidate that can serve.
         if any(sid not in candidate_ids for sid in outcome.final_ids):
             result.still_placeholder.append(label)
             if not any(sid in candidate_ids for sid in outcome.final_ids):
                 result.unplayable.append(label)
                 logger.warning(
                     "[DBAS-REBIND] Channel '%s' (id=%s) has NO playable stream: "
-                    "not one of its slots carries a URL. Attach a real stream.",
+                    "not one of its slots carries an address that can serve. "
+                    "Attach a real stream.",
                     label, dest_channel_id,
                 )
 
@@ -1334,7 +1441,8 @@ async def _sweep_orphaned_placeholders(
     1. it sits on the synthetic ``CUSTOM_STREAM_ACCOUNT_NAME`` account (an
        account ECM itself creates for exactly this purpose and puts nothing else
        under);
-    2. it carries NO url (a URL-bearing stream on that account is not a
+    2. its url CANNOT SERVE — absent, or carrying the redaction sentinel (a
+       servable stream on that account is not a
        placeholder — it is something that can actually play, and nothing here
        deletes a playable stream);
     3. NO channel references it, taken from the post-rebind reference set;
@@ -1350,10 +1458,13 @@ async def _sweep_orphaned_placeholders(
 
     WHAT IS DELIBERATELY NOT SWEPT, and why the predicate is not widened:
 
-    * a URL-less stream on ANY OTHER account — an operator may legitimately keep
-      their own custom URL-less streams, and this pass has no business
+    * an unservable stream on ANY OTHER account — an operator may legitimately
+      keep their own custom URL-less streams, and this pass has no business
       classifying those. The account test is what keeps the sweep to streams ECM
-      itself synthesized;
+      itself synthesized, and widening the URL half to ``url_can_serve`` (bead
+      ``…-1td94``) does not touch it: without that widening a credential-redacted
+      placeholder survived every sweep, so each healed cycle left its dead rows
+      behind for the matcher to keep tripping over;
     * a placeholder a channel still holds — that binding is load-bearing, and
       cutting it is precisely the outage the rebind pass exists to prevent;
     * anything at all when the synthetic account cannot be identified — the set
@@ -1372,7 +1483,7 @@ async def _sweep_orphaned_placeholders(
         stream_id = _as_int(stream.get("id"))
         if stream_id is None or stream_id in already_deleted:
             continue
-        if stream.get("url"):
+        if url_can_serve(stream.get("url")):
             continue
         if _stream_account_id(stream) not in synthetic_account_ids:
             continue
@@ -1390,8 +1501,8 @@ async def _sweep_orphaned_placeholders(
         swept.add(stream_id)
         logger.info(
             "[DBAS-REBIND] Swept orphaned placeholder stream id=%s ('%s'): "
-            "URL-less, on the synthetic custom-stream account, and bound to no "
-            "channel.",
+            "no usable address, on the synthetic custom-stream account, and "
+            "bound to no channel.",
             stream_id, _stream_name(stream),
         )
     return swept

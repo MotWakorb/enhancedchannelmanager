@@ -42,10 +42,14 @@ docstrings on the public surface.
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from enum import Enum
+from typing import ClassVar
 
 from pydantic import BaseModel, Field
+
+from credential_sentinel import credential_path_is_operator_actionable
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +136,25 @@ class SkipReason(str, Enum):
     EXCLUDED_BY_OPERATOR = "excluded_by_operator"           # category opt-out / selection
     CURRENT_ADMIN_PRESERVED = "current_admin_preserved"     # …-l1p4p D11 guard
     UNSUPPORTED_IN_THIS_VERSION = "unsupported_in_this_version"  # e.g. plugins (ADR-012 D10)
+    # A required remap target is missing AND the run was asked to deliver it —
+    # so the replica is missing something the operator selected. Its aggregate,
+    # :attr:`RestoreReport.entities_blocked_by_dependency`, is a member of
+    # :data:`RestoreReport.DELIVERY_SHORTFALL_FIELDS`.
     DEPENDENCY_UNRESOLVED = "dependency_unresolved"         # required remap target missing
+    # The same missing remap target, when the operator EXCLUDED the category it
+    # lives in and the skipped record is a LINK INTO that category (bead
+    # …-4mkoe). Split out of ``DEPENDENCY_UNRESOLVED``, which carried both and
+    # so could report neither: a link into a category the operator asked to
+    # leave out was never going to resolve, and naming it is bead ``…-15g1j``'s
+    # crying wolf on every unattended cycle, forever. Never a shortfall.
+    #
+    # The test is a CONJUNCTION, and the second half is load-bearing: deselecting
+    # ``channel_groups`` while selecting ``channels`` strands CHANNELS, which the
+    # operator DID ask for — a loss, not a faithful absence. Only a record filed
+    # UNDER the deselected category is entailed by the operator's own selection.
+    # See :meth:`RestoreReport.record_dependency_unresolved`, the one place that
+    # decides it.
+    DEPENDENCY_DESELECTED = "dependency_deselected"
 
 
 class FailureReason(str, Enum):
@@ -175,18 +197,22 @@ class RestoreOutcome(str, Enum):
         not cost the operator their channels, groups, profiles and settings).
         The applied state is real and kept; the failed rows are counted in their
         category and listed in ``failure_details``.
-      * an APPLY finished with :attr:`RestoreReport.channels_with_no_playable_stream`
-        greater than zero (bead ``…-daziw``): a channel was restored holding NOT
-        ONE URL-bearing stream, so it cannot play. Every row "succeeded" and the
-        counts are clean, which is exactly how the drill's
-        ``success … created 32, failed 0`` described an instance whose channels
-        returned HTTP 500 with 0 bytes. A restored channel that cannot play is
+      * an APPLY produced a replica MISSING SOMETHING THE SOURCE HAD — any
+        member of :attr:`RestoreReport.DELIVERY_SHORTFALL_FIELDS` is non-zero
+        (beads ``…-daziw``, ``…-posm1``). Every row "succeeded" and the counts
+        are clean, which is exactly how the drill's ``success … created 32,
+        failed 0`` described an instance whose channels returned HTTP 500 with 0
+        bytes, and how the cross-instance sync's ``success … created 133,
+        failed 0`` described a replica that had lost 53 of 59 guide links and
+        every logo binding. A replica missing what it was asked to carry is
         mixed state, so SUCCESS is forbidden. Nothing is rolled back — the
-        applied state is real, kept, and one attached stream away from working.
-        NOTE the trigger is the unplayable aggregate, NEVER
-        :attr:`RestoreReport.channels_needing_stream_reattach`: a channel that
-        keeps its real streams and merely holds a leftover placeholder PLAYS,
-        and is not a failure.
+        applied state is real, kept, and recoverable.
+
+        The membership rules — including why
+        :attr:`RestoreReport.channels_needing_stream_reattach` is NOT a member
+        and must never become one, and why a FAITHFUL absence is not one — are
+        on ``DELIVERY_SHORTFALL_FIELDS`` itself. Read them before adding to the
+        set; both exclusions have already been implemented wrongly once.
     - ``PARTIAL_FAILED_ROLLED_BACK`` — at least one entity in a FATAL category
       failed, the compensating-delete rollback ran, and every created entity was
       successfully removed (or confirmed already-gone — 404 counts as success).
@@ -528,6 +554,27 @@ class EpgLinkMissDetail(BaseModel):
     )
 
 
+class StreamUrlRedactionDetail(BaseModel):
+    """One stream created with the provider credentials cut out of its URL (…-msqf7).
+
+    A real Xtream Codes provider serves every live stream at
+    ``/live/<user>/<pass>/<id>.ts`` — the credential IS part of the address, so
+    the address cannot be carried without it. The redactor replaces those path
+    segments with the sentinel and the rest of the URL crosses intact, which
+    means the destination holds a stream that names where it pointed and cannot
+    play until the destination's own provider account supplies a credential.
+
+    That is a post-restore ACTION ITEM, not a failure — the stream was created
+    and the outcome is unaffected — and it is exactly the class of shortfall the
+    …-6pilh / …-dfkbn drills proved a clean ``success, 0 failures`` can hide.
+    """
+
+    stream_id: int | None = Field(
+        default=None, description="Destination stream id, when upstream returned one."
+    )
+    label: str = Field(description="Operator-facing stream name — never a secret.")
+
+
 # Upper bound on how many channel NAMES a ReattachPopulation carries per list.
 # The counts are exact; the name lists are illustrative and must not turn a
 # routine merge report into a five-thousand-entry payload.
@@ -759,6 +806,78 @@ class RestoreReport(BaseModel):
         description="True for the counts-only plan (ADR-012 D7 default-ON); "
         "False for a realized apply/rollback result.",
     )
+
+    # THE DELIVERY-SHORTFALL SET (bead ``…-posm1``) ---------------------------
+    #
+    # The aggregates that mean, each in its own vocabulary, THE SOURCE HAD THIS
+    # AND THE REPLICA DOES NOT. Declared once, here, because two consumers must
+    # not be able to disagree about the list: ``restore_orchestrator`` decides
+    # the OUTCOME from it, and ``tasks.dbas_restore`` renders each member as a
+    # clause in the operator's one-line summary.
+    #
+    # THE INVARIANT (the specification; the members are examples of it):
+    #
+    #     A run never presents as an unqualified SUCCESS when the replica it
+    #     produced is missing something the source had and the run was asked to
+    #     carry.
+    #
+    # WHAT THE MEMBERSHIP TEST IS, and it is deliberately narrow on both sides:
+    #
+    # * It is a LOSS, not an action item. Every member counts something the
+    #   destination is missing right now, by comparison with the source — never
+    #   a chore the operator has to do, and never work the run performed.
+    # * A FAITHFUL absence is not a member (bead ``…-15g1j``). Implementing the
+    #   literal "anything absent" reading turned all ten keystone round-trip
+    #   scenarios red for replications that had lost nothing, so every member
+    #   below is a counter whose PRODUCER already restricts it to things the
+    #   source actually had: ``epg_links_unrestored`` is computed only over
+    #   archive channels carrying an ``epg_data_id``, ``logo_misses`` has its own
+    #   canonical loss-only invariant (see :meth:`record_logo_miss`),
+    #   ``stream_urls_redacted`` counts destination rows ECM itself cut an
+    #   address out of, and ``channels_with_no_playable_stream`` was narrowed by
+    #   ``…-15g1j`` itself.
+    # * Something the run was asked NOT to carry is not a member. That excludes
+    #   ``credentials_needing_reentry`` (the redaction is deliberate — bead
+    #   ``…-msqf7`` — and its CONSEQUENCE, a replica that cannot play, is already
+    #   a member through the two stream counters), ``channel_group_drift`` under
+    #   the default preserve mode, and both :class:`ReattachPopulation`'s
+    #   ``preserved_channels``.
+    # * Work the run DID is not a member: ``streams_rebound`` and, since bead
+    #   ``…-ukjx5`` made it read the destination first, ``profile_membership_drift``
+    #   — a membership that had drifted and was corrected leaves the replica
+    #   MATCHING, which is the opposite of a shortfall.
+    # * ``channels_needing_stream_reattach`` is not a member and must never
+    #   become one: a channel that kept its real streams and holds one leftover
+    #   placeholder PLAYS (bead ``…-daziw``).
+    # * ``entities_blocked_by_dependency`` is a member, and it is the first one
+    #   whose PRODUCER had to be split before it could join (bead ``…-4mkoe``).
+    #   ``SkipReason.DEPENDENCY_UNRESOLVED`` covered two opposite situations —
+    #   an upstream category the operator EXCLUDED, and one that was in scope and
+    #   still is not there — so surfacing the reason as it stood would have
+    #   reported the first as loudly as the second, forever, on every unattended
+    #   cycle. Only the second increments this counter. It passes the clearability
+    #   test that excludes ``credentials_needing_reentry``: restore the dependency
+    #   (re-take the degraded backup, fix the collision, add the category to the
+    #   selection) and the next cycle counts zero. The NAMED drill-down is the
+    #   per-category ``skip_details`` the same recorder writes — there is no
+    #   parallel detail list to drift out of step with the count.
+    #
+    # KEY ON THE OUTCOME, NEVER ON WHICH MEMBER FIRED. Bead ``…-cwmid`` had to
+    # UNDO a narrower keying after drill run 2026-08-06-run9 measured the
+    # severity ordering INVERTED — 12-of-12 channels unplayable alerted
+    # ``warning`` while one cosmetic logo failure alerted ``error``/"Task
+    # Failed". Every member here resolves to the SAME
+    # ``COMPLETED_WITH_FAILURES``, which
+    # :attr:`RestoreOutcome.is_degraded_not_failed` already maps to ``warning``
+    # with a per-task ``alert_on_warning`` opt-out. Adding a member therefore
+    # cannot reorder severities, because no member is ever consulted for one.
+    DELIVERY_SHORTFALL_FIELDS: ClassVar[tuple[str, ...]] = (
+        "channels_with_no_playable_stream",
+        "stream_urls_redacted",
+        "epg_links_unrestored",
+        "logo_misses",
+        "entities_blocked_by_dependency",
+    )
     outcome: RestoreOutcome | None = Field(
         default=None,
         description="Result of a realized restore. None on a dry-run "
@@ -784,6 +903,29 @@ class RestoreReport(BaseModel):
     logo_miss_details: list[LogoMissDetail] = Field(
         default_factory=list,
         description="Per-logo detail (id + name) for each unresolved logo (…-qhui4).",
+    )
+
+    # Entities the run was asked to deliver and did not, because a dependency
+    # they need is not on the destination (bead …-4mkoe). A DELIVERY_SHORTFALL
+    # member; the reasoning for its membership is on the declaration above.
+    #
+    # Counts ONLY the genuine half. A skip whose missing dependency lives in a
+    # category the operator EXCLUDED, and which is itself a link into that
+    # category, is recorded ``SkipReason.DEPENDENCY_DESELECTED`` and never
+    # counted here — that absence is what the operator asked for, and counting it
+    # would put a permanent non-zero beside a replica that has lost nothing.
+    #
+    # ADDITIVE optional — no CONTRACT_VERSION bump (the module's rule at line 54:
+    # bump when a field's MEANING changes, not for additive optional fields).
+    # Written ONLY through :meth:`record_dependency_unresolved`, which writes the
+    # count and the ``skip_details`` row in the same call so the aggregate and
+    # its drill-down cannot disagree.
+    entities_blocked_by_dependency: int = Field(
+        default=0,
+        description=(
+            "Archived entities not restored because a dependency they need is "
+            "absent from the destination and the run was asked to deliver it."
+        ),
     )
 
     # Credential-re-entry aggregate (bead …-6pilh). Counts ENTITIES restored from
@@ -863,6 +1005,41 @@ class RestoreReport(BaseModel):
     streams_rebound: int = Field(
         default=0,
         description="Placeholder stream bindings swapped for a real provider stream.",
+    )
+
+    # Streams the DESTINATION currently holds whose URL had the provider
+    # credentials cut out of it (…-msqf7). Counts STREAMS, tracking
+    # ``len(stream_url_redaction_details)``.
+    #
+    # A FACT ABOUT THE DESTINATION, NOT ABOUT THIS RUN (bead …-ukjx5). It used to
+    # be recorded where ``create_stream`` succeeded, which made it a count of
+    # what THIS CYCLE wrote — and a cross-instance sync is a SCHEDULED task whose
+    # second cycle creates nothing, because the rows are already there and are
+    # skipped. Measured live on 0.29.0 across consecutive cycles on an UNCHANGED
+    # destination: 53, then 0, while 53 of B's streams still carried a redacted
+    # address and could not play. The first cycle's honesty is what made the
+    # silence convincing. It is now recomputed from the destination's own stream
+    # rows by the post-refresh rebind pass, which already reads them, so a
+    # shortfall the replica still exhibits is reported on EVERY cycle and one it
+    # no longer exhibits is reported on none.
+    #
+    # NULL means NOT PREDICTED, exactly as for the two counters above and for the
+    # same reason: the pass that reads the destination's streams cannot run on a
+    # dry run. Now that the number describes the DESTINATION, a preview ``0``
+    # would be a claim ("B holds no redacted stream") derived from having looked
+    # at nothing. Consumers coerce with ``or 0``.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    stream_urls_redacted: int | None = Field(
+        default=0,
+        description=(
+            "Destination streams holding a URL the credentials were cut out of — "
+            "they cannot play. NULL on a dry run: the pass that reads the "
+            "destination's streams cannot run before the apply."
+        ),
+    )
+    stream_url_redaction_details: list[StreamUrlRedactionDetail] = Field(
+        default_factory=list,
+        description="Which streams lost the credential half of their URL (…-msqf7).",
     )
 
     # Channels restored without their guide link (…-dfkbn item 2).
@@ -986,6 +1163,105 @@ class RestoreReport(BaseModel):
         self.categories.append(cat)
         return cat
 
+    def delivery_shortfalls(self) -> dict[str, int]:
+        """Every :data:`DELIVERY_SHORTFALL_FIELDS` member this report carries.
+
+        A pure read of the counts — it applies no dry-run policy, because
+        "should a PREDICTED shortfall change an outcome?" is an outcome
+        question and is answered where the outcome is decided
+        (``dbas.restore_orchestrator.compute_outcome``, which refuses to
+        downgrade a preview: a prediction of a shortfall is not a failure, and
+        nothing was applied to be missing).
+
+        Returns:
+            ``{field name: count}`` for each member with a non-zero count, in
+            declaration order. Empty when the replica lost nothing. ``None``
+            (the "not predicted" value the dry-run counters carry) reads as
+            zero, exactly as every other consumer coerces it.
+        """
+        found: dict[str, int] = {}
+        for name in self.DELIVERY_SHORTFALL_FIELDS:
+            count = getattr(self, name, 0) or 0
+            if count > 0:
+                found[name] = count
+        return found
+
+    def record_dependency_unresolved(
+        self,
+        *,
+        recorded_under: EntityType,
+        dependency: EntityType,
+        label: str,
+        remap: "IdRemapTable",
+        is_dry_run: bool,
+        source_export_id: int | None = None,
+    ) -> SkipReason:
+        """Record one entity skipped for an unresolvable dependency (bead …-4mkoe).
+
+        THE ONE PLACE that decides which of the two opposite facts an unresolved
+        dependency is, and the one place that writes both the classification and
+        the aggregate. Declared once for the reason ``…-posm1`` declared
+        :data:`DELIVERY_SHORTFALL_FIELDS` once: the reason on the
+        ``skip_details`` row, the per-category count, and the top-level shortfall
+        aggregate are three views of one decision, and three call sites deciding
+        it separately is how they drift.
+
+        THE RULE, a conjunction whose second half is load-bearing::
+
+            faithful  <=>  the dependency's category was DESELECTED
+                           AND the skip is recorded UNDER that same category
+
+        The first half alone is wrong, and wrong in the direction that hides
+        losses. Deselecting ``channel_groups`` while selecting ``channels``
+        strands every grouped CHANNEL — a first-class entity the operator asked
+        for, whose absence is a shortfall no matter why its group is missing. The
+        only absence the operator's own selection ENTAILS is a LINK INTO the
+        excluded category, and this restore already files such a link under that
+        category rather than under the entity that carries it (an archived
+        channel's profile membership is recorded under ``CHANNEL_PROFILE``,
+        never under ``CHANNEL``). An ENTITY of a deselected category never
+        reaches here at all — its own importer skips it ``EXCLUDED_BY_OPERATOR``
+        before any FK is resolved — so ``recorded_under == dependency`` cannot
+        mean anything else.
+
+        FAIL LOUD when the run scope was never recorded. ``remap`` answers
+        "deselected?" with ``False`` until :meth:`IdRemapTable.record_run_scope`
+        has been called (``run_restore`` does it, once, for every path). The
+        defect this method exists to fix is UNDER-reporting, so an unknown scope
+        reports the loss rather than silencing it.
+
+        Args:
+            recorded_under: The category whose report slice carries the skip.
+            dependency: The category of the id that could not be resolved.
+            label: Operator-facing name of the skipped entity. Never a secret.
+            remap: The run-scoped :class:`IdRemapTable` — the object whose
+                ``resolve`` returned ``None``, and the one that knows the scope.
+            is_dry_run: Whether this is a preview (counts ``would_skip``).
+            source_export_id: The archive id of the skipped entity, if any.
+
+        Returns:
+            The :class:`SkipReason` recorded, so a caller can log which it was.
+        """
+        faithful = recorded_under == dependency and remap.category_deselected(
+            dependency
+        )
+        reason = (
+            SkipReason.DEPENDENCY_DESELECTED
+            if faithful
+            else SkipReason.DEPENDENCY_UNRESOLVED
+        )
+        cat = self.category(recorded_under)
+        if is_dry_run:
+            cat.would_skip += 1
+        else:
+            cat.skipped += 1
+        cat.skip_details.append(
+            SkipDetail(reason=reason, label=label, source_export_id=source_export_id)
+        )
+        if not faithful:
+            self.entities_blocked_by_dependency += 1
+        return reason
+
     def record_credential_reentry(
         self,
         entity_type: EntityType,
@@ -1001,6 +1277,18 @@ class RestoreReport(BaseModel):
         so they cannot drift. A no-op when ``fields`` is empty — an entity whose
         credentials all came through intact is not an action item.
 
+        NOR IS ONE THE OPERATOR CANNOT PERFORM (bead ``…-posm1``). Paths inside
+        the destination's own cached copy of the provider's reply
+        (``…custom_properties.user_info.*``) are dropped by
+        :func:`credential_sentinel.credential_path_is_operator_actionable`
+        before anything is recorded: there is no field to re-enter them into,
+        and the destination rewrites the blob itself on its next successful
+        refresh. Measured live on 0.29.0 — with them counted, the operator's
+        line still read "1 account(s) need credentials re-entered" AFTER the
+        real credentials had been entered and had cleared the account's own
+        ``username``/``password``. An action item that cannot be cleared by
+        doing what it asks is its own defect.
+
         Args:
             entity_type: The restored entity's category.
             label: Operator-facing entity identifier — never a secret.
@@ -1008,6 +1296,17 @@ class RestoreReport(BaseModel):
             source_export_id: The entity's id in the export archive, when known.
             destination_id: The destination id, or ``None`` on a dry-run.
         """
+        if not fields:
+            return
+        # Drop the paths the operator has no way to act on before anything is
+        # recorded, so the aggregate, the detail rows, the modal and the
+        # one-line summary all describe the same work (bead ``…-posm1``). A row
+        # left with nothing actionable is not an action item and is not
+        # recorded at all — the same disposition an empty ``fields`` gets.
+        fields = [
+            field for field in fields
+            if credential_path_is_operator_actionable(field)
+        ]
         if not fields:
             return
         self.credential_reentry_details.append(
@@ -1191,12 +1490,50 @@ class RestoreReport(BaseModel):
         true there — a preview rebinds nothing — and it is a work-done counter,
         not a "channels needing attention" alarm.
 
-        A no-op once a detail row exists, so it can never erase a real count.
+        :attr:`stream_urls_redacted` JOINED THIS SET with bead ``…-ukjx5``, which
+        redefined it from "streams this run created redacted" to "streams the
+        DESTINATION now holds redacted". The pass that reads the destination's
+        streams is the same one, so the dry-run answer is the same one: not
+        predicted, rather than a confident zero about a destination nothing
+        looked at.
+
+        A no-op per counter once its own detail rows exist, so it can never
+        erase a real count.
         """
+        if not self.stream_url_redaction_details:
+            self.stream_urls_redacted = None
         if self.stream_reattach_details:
             return
         self.channels_needing_stream_reattach = None
         self.channels_with_no_playable_stream = None
+
+    def record_redacted_stream_urls(
+        self, observed: Sequence[tuple[int | None, str]]
+    ) -> None:
+        """REPLACE the redacted-URL population with what the destination holds (…-msqf7).
+
+        REPLACES rather than appends, and that is the whole of bead ``…-ukjx5``.
+        The append form could only ever describe what THIS cycle had just
+        written, so a repeat cycle — which writes nothing, because the rows are
+        already there — reported zero over a destination whose streams were all
+        still redacted. Taking the whole population from one destination reading
+        makes the number say what is TRUE NOW: it can go up, it can go down, and
+        it stays put while the destination does.
+
+        Idempotent by construction: calling it twice with the same reading gives
+        the same answer, where a second append would have doubled it.
+
+        Args:
+            observed: ``(destination stream id, operator-facing label)`` for every
+                destination stream currently holding a redacted address. Labels
+                are stream NAMES — never a URL, which for an Xtream Codes
+                provider IS the credential.
+        """
+        self.stream_url_redaction_details = [
+            StreamUrlRedactionDetail(stream_id=stream_id, label=label)
+            for stream_id, label in observed
+        ]
+        self.stream_urls_redacted = len(self.stream_url_redaction_details)
 
     def record_epg_link_unrestored(
         self,
@@ -1317,6 +1654,46 @@ class IdRemapTable(BaseModel):
     contract_version: int = Field(default=CONTRACT_VERSION)
     # entity_type value -> {source_export_id: destination_id}
     mappings: dict[EntityType, dict[int, int]] = Field(default_factory=dict)
+
+    # The categories THIS RUN was asked to carry (bead …-4mkoe). It lives here,
+    # beside the mappings, because ``resolve`` returning ``None`` is the ONE fact
+    # every unresolved-dependency skip is derived from, and "was this namespace
+    # ever going to be populated?" is the question that makes that ``None``
+    # readable. Every importer already holds this table; threading the plan's
+    # selection separately into five importer signatures would put the same fact
+    # in five places.
+    #
+    # ``None`` means NOT RECORDED, which is deliberately distinct from "nothing
+    # was selected": an empty set would make every category read as deselected
+    # and silence every shortfall. Written once by
+    # ``dbas.restore_orchestrator.run_restore``.
+    selected_categories: set[EntityType] | None = Field(
+        default=None,
+        description="Categories this run was asked to carry; None = not recorded.",
+    )
+
+    def record_run_scope(self, selected: Iterable[EntityType]) -> None:
+        """Record which categories this run was asked to carry.
+
+        Args:
+            selected: The entity types the operator opted into for this run.
+        """
+        self.selected_categories = set(selected)
+
+    def category_deselected(self, entity_type: EntityType) -> bool:
+        """True when the operator EXCLUDED ``entity_type`` from this run.
+
+        A category absent from the plan entirely reads the same as one the
+        operator unticked — which is what the orchestrator's own ``_selected``
+        already means, so the two cannot disagree.
+
+        FAIL LOUD: ``False`` until :meth:`record_run_scope` has been called. A
+        caller must never be able to claim a deselection this table cannot
+        prove; see :meth:`RestoreReport.record_dependency_unresolved`.
+        """
+        if self.selected_categories is None:
+            return False
+        return entity_type not in self.selected_categories
 
     def add(self, entity_type: EntityType, source_export_id: int, destination_id: int) -> None:
         """Record a source-export-id -> destination-id mapping.

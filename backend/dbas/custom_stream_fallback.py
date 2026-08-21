@@ -271,6 +271,22 @@ async def synthesize_custom_streams(
             continue
 
         cat.created += 1
+        # Bead …-msqf7: an Xtream Codes stream URL authenticates by path segment,
+        # so the redactor cuts the credential OUT of the address rather than
+        # dropping the address. What lands is a stream that names where it
+        # pointed and cannot play until the destination has its own provider
+        # account.
+        #
+        # THE REPORTING USED TO HAPPEN HERE, and bead ``…-ukjx5`` moved it out.
+        # This site can only ever see what THIS cycle created, and a scheduled
+        # cross-instance sync creates these rows exactly once: on every later
+        # cycle the archived stream matches the row it made last time, nothing is
+        # created, and the counter read zero over a destination whose streams
+        # were all still redacted. The count is now taken from the DESTINATION's
+        # own stream rows by the post-refresh rebind pass
+        # (``dbas.placeholder_rebind``), which reads them on every apply. Do not
+        # re-add a recorder here: a create-time count and a destination-state
+        # count would disagree on cycle two and one of them would be wrong.
         result.created_stream_ids.append(dest_id)
         ledger.record_created(EntityType.STREAM, dest_id, label)
         src_int = _as_int_or_none(source_export_id)

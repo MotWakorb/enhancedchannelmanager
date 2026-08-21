@@ -169,6 +169,8 @@ from dbas.archive_keys import (
 from dbas.restore_contracts import (
     ChannelReattachMode,
     EntityType,
+    FailureDetail,
+    FailureReason,
     IdRemapTable,
     LogoMissChannel,
     ReattachPopulation,
@@ -778,6 +780,73 @@ def _archived_enabled_channels(archive_profile: dict) -> set[int] | None:
     return enabled
 
 
+def _profile_name_key(value) -> str | None:
+    """A channel profile's cross-instance identity: its NAME, normalized.
+
+    Case-insensitive and whitespace-trimmed, matching
+    ``dbas.importers.groups_profiles._norm_name`` — the function that decides
+    which destination profile an archived one IS. Comparing by anything else
+    here would let this pass and the importer disagree about the same profile.
+    """
+    if not isinstance(value, str):
+        return None
+    key = value.strip().lower()
+    return key or None
+
+
+async def _destination_enabled_by_profile(
+    client: DispatcharrClient,
+) -> "dict[str, set[int]] | None":
+    """``{profile name key: the channel ids that profile currently ENABLES}``.
+
+    Bead ``…-ukjx5``. The state the membership pass never read, and the reason
+    its counter could not tell "we corrected 4 memberships" from "4 memberships
+    had drifted". ``ChannelProfileSerializer.channels`` is the ENABLED-channel
+    list (0.28.2 and re-confirmed on 0.29.0), so absence from it IS the
+    exclusion — the same fact :func:`_archived_enabled_channels` reads on the
+    archive side, asked of the destination.
+
+    Keyed by NAME, not by id, and in BOTH the preview and the apply. A profile
+    this run would CREATE has only a PROVISIONAL destination id (the archive's
+    own), which on a populated destination can collide with a real profile that
+    means something else — the identical trap :func:`_group_identity` was written
+    to avoid after drill run 12 reported 3 of 7 drifted channels as correct. A
+    name that maps to more than one destination profile is DROPPED rather than
+    guessed at.
+
+    Returns ``None`` when the destination cannot be read at all — a genuine
+    "unknown", which the caller reports rather than papering over.
+    """
+    try:
+        rows = await client.get_channel_profiles()
+    except Exception as exc:  # noqa: BLE001 - best-effort; the caller says so
+        # TYPE only (PR review W4): an httpx error's str() embeds the request URL.
+        logger.warning(
+            "[DBAS-REATTACH] Could not list destination channel profiles: %s",
+            type(exc).__name__,
+        )
+        return None
+    enabled_by_name: dict[str, set[int]] = {}
+    ambiguous: set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = _profile_name_key(row.get("name"))
+        if key is None:
+            continue
+        if key in enabled_by_name:
+            ambiguous.add(key)
+            continue
+        enabled_by_name[key] = {
+            channel_id
+            for value in (row.get("channels") or [])
+            if (channel_id := _as_int(value)) is not None
+        }
+    for key in ambiguous:
+        enabled_by_name.pop(key, None)
+    return enabled_by_name
+
+
 async def reattach_profile_memberships(
     *,
     client: DispatcharrClient,
@@ -785,6 +854,7 @@ async def reattach_profile_memberships(
     remap: IdRemapTable,
     archive_profiles: list[dict],
     archive_channels: list[dict],
+    created_source_ids: set[int] | None = None,
     is_dry_run: bool = False,
 ) -> int:
     """Re-assert each archived profile's channel selection on the destination.
@@ -792,28 +862,78 @@ async def reattach_profile_memberships(
     For every restored channel, the membership is PATCHed to the archived
     ``enabled`` state. Dispatcharr's single-membership endpoint
     (``PATCH /api/channels/profiles/<p>/channels/<c>/``) CREATES the row when it
-    is absent (0.28.2 ``apps/channels/api_views.py``), so this works whether the
+    is absent (0.28.2 ``apps/channels/api_views.py``, re-read on 0.29.0 —
+    ``UpdateChannelMembershipAPIView.patch`` still creates the missing row at
+    ``enabled=False`` and then applies the payload), so this works whether the
     channel create already added it or not.
+
+    A CHANNEL PROFILE IS A RESTRICTION, so the degraded direction is not
+    symmetric (bead ``…-38c5a``; the same fail-closed reasoning bead ``…-if05f``
+    established for a user's ``channel_profiles`` list). Every way this pass can
+    fail to assert a membership leaves Dispatcharr's enable-everything create
+    default standing, which is the MAXIMUM exposure — so each of them is either
+    corrected toward fewer enabled channels or counted where an operator will
+    see it:
+
+    * **The archive does not say what the profile enabled** (no ``channels``
+      key at all, as opposed to an empty list, which is a real "nothing is
+      enabled" selection). There is no faithful answer, so this DISABLES the
+      memberships THIS run created — undoing the enable-everything side effect
+      of our own channel creates, never touching a membership an operator set
+      on a pre-existing destination channel — and names the profile in
+      ``report.notes``. It used to ``continue`` silently, which handed the
+      destination an unrestricted copy of a restricting profile.
+    * **A membership PATCH the destination refuses** (B rate-limits, so a 429
+      here is an ordinary operational event). The channel is left enabled and
+      there is nothing this pass can do about it, so it is recorded as a
+      CHANNEL_PROFILE failure — ``failed`` + a :class:`FailureDetail` — the same
+      structure ``dbas/importers/channels.py`` uses for the same event. That
+      forbids a SUCCESS outcome. It does NOT trigger a rollback: this pass runs
+      inside the CHANNEL step, whose own category is what the orchestrator
+      checks, and rolling a whole cycle back over one throttled PATCH would cost
+      more than it saved.
 
     Only channels THIS restore resolved are touched: a channel that already
     existed on the destination and is not in the archive keeps whatever
     membership the operator gave it.
 
+    WHAT THE COUNTER MEANS: MEMBERSHIPS THAT DRIFTED, NOT ONES WE ASSERTED
+    (bead ``…-ukjx5``). The pass PATCHes every membership every cycle — that is
+    the fail-closed guarantee above and it is deliberately unchanged — but it
+    used to COUNT every flip it asserted, without ever asking what the
+    destination already had. On a one-shot restore that is harmless. On a
+    SCHEDULED cross-instance sync it meant a fully converged replica reported
+    ``profile_membership_drift: 4`` on every cycle, forever: a number that looks
+    like a finding, never changes, and trains the operator to ignore the one
+    surface that would tell them a profile had genuinely widened.
+
+    So the destination's CURRENT enabled set is read first
+    (:func:`_destination_enabled_by_profile`) and a membership is counted only
+    when what the destination has DIFFERS from what the archive says. Bead
+    ``…-15g1j``'s line, from the other direction: re-asserting a membership that
+    was already correct is faithful work, not a shortfall.
+
+    Two things this deliberately does NOT do. It does not narrow what the pass
+    WRITES — bead ``…-kcfru``'s rule is that detection and write authority are
+    separate concerns, and the assert-everything write is what makes the pass
+    idempotent and fail-closed. And it does not decide what the operator is
+    SHOWN or whether any of this downgrades an outcome; that is bead
+    ``…-posm1``'s.
+
     DRY RUN (bead ``…-dgnms``, drill run 4). This pass used to be apply-only, so
     a preview reported ``profile_membership_drift: 0`` for an apply that then
     reported 6 — the counter that exists precisely to warn an operator their
     hide-these-channels profile is about to widen was silent in the one place it
-    could still be acted on. It is now predicted, because it is entirely
-    computable from state the preview already holds: the flip set is
-    "restored channels the archived profile EXCLUDES", and Dispatcharr's
-    enable-everything create default is what they would all be flipped away
-    from. The dry run does the identical arithmetic against the identical remap
-    entries and PATCHes nothing.
+    could still be acted on. It is now predicted, from state the preview already
+    holds plus the same destination reading the apply takes, and PATCHes nothing.
 
-    The prediction is exact rather than a bound because the apply's own count is
-    "memberships we set to disabled", not "memberships that were observed
-    enabled first" — the apply never reads the destination's current membership
-    either. Whatever changes that must change both branches together.
+    The prediction stays EXACT because both branches now run the identical
+    expression: a membership is treated as currently enabled when the
+    destination's profile enables it, when this run CREATED the channel
+    (Dispatcharr adds every new channel to every profile enabled — so a preview
+    can predict what the apply is about to walk into), or when the profile is not
+    on the destination yet at all. Whatever changes that must still change both
+    branches together.
 
     Args:
         client: The Dispatcharr API client.
@@ -822,6 +942,9 @@ async def reattach_profile_memberships(
         remap: The shared :class:`IdRemapTable` (``CHANNEL`` + ``CHANNEL_PROFILE``).
         archive_profiles: The CHANNEL_PROFILE records from the export archive.
         archive_channels: The CHANNEL records from the export archive.
+        created_source_ids: The source ids of the channels THIS run created.
+            Used only by the fail-closed path above, to keep it from touching a
+            membership on a channel that already existed on the destination.
         is_dry_run: Report the drift without PATCHing any membership.
 
     Returns:
@@ -829,11 +952,26 @@ async def reattach_profile_memberships(
         a dry run).
     """
     asserted = 0
+    # ONE destination reading for the whole pass — see the docstring. ``None``
+    # is a failed read, which is NOT the same as "the destination enables
+    # nothing" and must not be reported as though the pass had measured drift.
+    enabled_by_name = await _destination_enabled_by_profile(client)
+    if enabled_by_name is None:
+        report.notes.append(
+            "the destination's current channel-profile memberships could not be "
+            "read, so the profile membership count below assumes Dispatcharr's "
+            "enable-everything default: it is what this run turned OFF, not what "
+            "was measured to have drifted. The memberships were still applied."
+        )
 
     for archive_profile in archive_profiles or []:
         enabled_sources = _archived_enabled_channels(archive_profile)
-        if enabled_sources is None:
-            continue
+        # FAIL CLOSED. "The archive never said" is not "the archive said
+        # everything" — see the docstring. Treat the selection as empty and
+        # restrict the correction to the channels this run created.
+        selection_unknown = enabled_sources is None
+        if selection_unknown:
+            enabled_sources = set()
         source_profile_id = _as_int(archive_profile.get("id"))
         dest_profile_id = (
             remap.resolve(EntityType.CHANNEL_PROFILE, source_profile_id)
@@ -841,6 +979,19 @@ async def reattach_profile_memberships(
             else None
         )
         profile_label = str(archive_profile.get("name") or "<unknown>")
+        # What the DESTINATION currently enables for this profile. ``None`` means
+        # "not knowable": the profile is not on the destination yet (this run
+        # would create it), its name is ambiguous there, or the whole read
+        # failed. In every one of those cases the memberships this cycle touches
+        # land on Dispatcharr's enable-everything default, so "currently enabled"
+        # is the honest reading — and it is also exactly the pre-…-ukjx5
+        # behaviour, which keeps a failed read no worse than it used to be.
+        name_key = _profile_name_key(archive_profile.get("name"))
+        currently_enabled_ids = (
+            enabled_by_name.get(name_key)
+            if enabled_by_name is not None and name_key is not None
+            else None
+        )
         if dest_profile_id is None:
             report.notes.append(
                 "channel profile '%s' was not restored on this destination, so its "
@@ -861,15 +1012,37 @@ async def reattach_profile_memberships(
             dest_channel_id = remap.resolve(EntityType.CHANNEL, source_channel_id)
             if dest_channel_id is None:
                 continue
+            if selection_unknown and (
+                created_source_ids is None
+                or source_channel_id not in created_source_ids
+            ):
+                # Not ours to close down: this channel already existed on the
+                # destination and its membership is whatever the operator made
+                # it, not a side effect of this run.
+                continue
             label = _channel_label(archive_channel)
             should_be_enabled = source_channel_id in enabled_sources
+            # THE ONE EXPRESSION BOTH BRANCHES USE (…-ukjx5). A channel this run
+            # created is enabled by Dispatcharr on create, whether that create
+            # has happened yet (apply) or is about to (preview); an unknown
+            # destination set means the same thing for every channel in it.
+            currently_enabled = (
+                created_source_ids is not None
+                and source_channel_id in created_source_ids
+            ) or (
+                currently_enabled_ids is None
+                or dest_channel_id in currently_enabled_ids
+            )
+            drifted = currently_enabled != should_be_enabled
             if is_dry_run:
                 # Predict, never PATCH. Falls through to the same counting below
                 # so the preview and the apply can only ever report the same
                 # number for the same inputs.
                 asserted += 1
-                if not should_be_enabled:
+                if drifted and not should_be_enabled:
                     disabled_names.append(label)
+                elif drifted:
+                    enabled_names.append(label)
                 continue
             try:
                 await client.update_profile_channel(
@@ -886,13 +1059,64 @@ async def reattach_profile_memberships(
                     profile_label,
                     type(exc).__name__,
                 )
+                # COUNTED, not swallowed. A refused DISABLE leaves the channel
+                # enabled — the fail-open outcome this pass exists to prevent —
+                # and a refused ENABLE leaves the destination's own membership
+                # unasserted. Either way the archived selection is NOT on the
+                # destination, so the run must not report a clean success.
+                # Fetched lazily so a pass that reports nothing does not
+                # materialize an empty CHANNEL_PROFILE block on the report.
+                profile_cat = report.category(EntityType.CHANNEL_PROFILE)
+                profile_cat.failed += 1
+                profile_cat.failure_details.append(
+                    FailureDetail(
+                        reason=FailureReason.UPSTREAM_API_ERROR,
+                        label=profile_label,
+                        message=(
+                            "could not set channel '%s' %s in this profile (%s); "
+                            "the destination profile does not match the source's "
+                            "channel selection."
+                            % (
+                                label,
+                                "enabled" if should_be_enabled else "disabled",
+                                type(exc).__name__,
+                            )
+                        ),
+                        source_export_id=source_profile_id,
+                    )
+                )
                 continue
             asserted += 1
-            if not should_be_enabled:
-                # The destination had it ENABLED (Dispatcharr's create default)
-                # and the archive says it was excluded — the drift that turned a
-                # 9-of-12 profile into a 12-of-12 one.
+            if drifted and not should_be_enabled:
+                # The destination HAD it enabled — Dispatcharr's create default,
+                # or someone turned it back on — and the archive says it was
+                # excluded. That is the drift that turned a 9-of-12 profile into
+                # a 12-of-12 one. A membership that was ALREADY correct is not
+                # counted: re-asserting it is faithful work, not a finding
+                # (…-ukjx5).
                 disabled_names.append(label)
+            elif drifted:
+                # The mirror: the destination had it OFF and the archive enables
+                # it. Recorded in the row's own direction so the operator can see
+                # which way the profile had moved.
+                enabled_names.append(label)
+
+        if selection_unknown:
+            logger.warning(
+                "[DBAS-REATTACH] Channel profile '%s' carried no channel "
+                "selection; %d membership(s) this run created were DISABLED "
+                "rather than left on Dispatcharr's enable-everything default.",
+                profile_label,
+                len(disabled_names),
+            )
+            report.notes.append(
+                "channel profile '%s' arrived without its channel selection, so "
+                "the %d membership(s) this run created were disabled rather than "
+                "left enabled — a profile is a restriction, and guessing "
+                "'everything' would have widened it. Re-apply the profile's "
+                "channel selection on the destination."
+                % (profile_label, len(disabled_names))
+            )
 
         report.record_profile_membership_drift(
             name=profile_label,

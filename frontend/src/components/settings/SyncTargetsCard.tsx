@@ -15,6 +15,9 @@ import './SyncTargetsCard.css';
  *   - sync is ONE-WAY — edits on B are overwritten by A on the next apply;
  *   - credentials are NOT synced — they must be re-entered on B.
  *
+ * Logo replication is a per-target OPT-IN (`sync_logos`, default OFF per
+ * ADR-013 S9) with its own row toggle — see `handleToggleLogos`.
+ *
  * Safety model for "Sync now": the default action is a counts-only DRY-RUN
  * preview (confirm_apply:false). Only after a successful preview does an
  * explicit, confirm-gated "Apply" (confirm_apply:true) become available — apply
@@ -166,6 +169,44 @@ export function SyncTargetsCard() {
       } catch (err) {
         notifications.error(
           err instanceof Error ? err.message : 'Failed to update sync target',
+          'Cross-Instance Sync',
+        );
+      } finally {
+        clearBusy(target.id);
+      }
+    },
+    [notifications, loadTargets, markBusy, clearBusy],
+  );
+
+  /**
+   * Per-target logo-replication opt-in (bead …-8gnik).
+   *
+   * `sync_logos` had no UI: enabling logo replication meant a raw
+   * `PUT /api/sync-targets/{id}` or the MCP tool, and the operator guide said
+   * so. This is the missing control — nothing more. The DEFAULT stays OFF
+   * (ADR-013 S9: the logos importer carries a streaming-upload cost S9 judged
+   * wrong to run every interval), so the create path never sets it and only an
+   * explicit click here turns it on.
+   *
+   * Unlike preview/apply this is not gated on `enabled`: it is configuration,
+   * and an operator should be able to set it on a target whose kill switch is
+   * currently off, ready for when they turn it back on.
+   */
+  const handleToggleLogos = useCallback(
+    async (target: api.SyncTarget) => {
+      markBusy(target.id);
+      try {
+        await api.updateSyncTarget(target.id, { sync_logos: !target.sync_logos });
+        notifications.success(
+          target.sync_logos
+            ? `Logo replication off for ${target.name}`
+            : `Logo replication on for ${target.name} — logos replicate on the next apply`,
+          'Cross-Instance Sync',
+        );
+        await loadTargets();
+      } catch (err) {
+        notifications.error(
+          err instanceof Error ? err.message : 'Failed to update logo replication',
           'Cross-Instance Sync',
         );
       } finally {
@@ -381,6 +422,25 @@ export function SyncTargetsCard() {
                       {target.enabled ? 'toggle_on' : 'toggle_off'}
                     </span>
                     {target.enabled ? 'Enabled' : 'Disabled'}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stc-toggle stc-logos-toggle${target.sync_logos ? ' is-on' : ''}`}
+                    aria-pressed={target.sync_logos}
+                    title={
+                      target.sync_logos
+                        ? 'Logo replication is on — A\u2019s logos are copied to B on each apply. Click to turn off.'
+                        : 'Logo replication is off — B keeps its own logos and channels there have no artwork. Click to turn on.'
+                    }
+                    disabled={busy}
+                    data-testid={`sync-target-logos-${target.id}`}
+                    onClick={() => handleToggleLogos(target)}
+                  >
+                    <span className="material-icons" aria-hidden="true">
+                      {target.sync_logos ? 'image' : 'hide_image'}
+                    </span>
+                    {target.sync_logos ? 'Logos on' : 'Logos off'}
                   </button>
 
                   <button

@@ -71,7 +71,12 @@ AND the bytes of every DISPATCHARR-HOSTED logo, fetched from Dispatcharr at
 hydration time. Dispatcharr is ECM's source of truth for logos, so before that
 a replica received only whatever happened to sit in A's upload directory. The
 fetches are wall-clock bounded per fetch and per cycle, because unlike a backup
-this runs unattended on a schedule.
+this runs unattended on a schedule. Bead ``…-xgbjm`` closed the other half: the
+bytes crossing is not the same as the CHANNEL-TO-LOGO BINDING crossing, and for
+a while only the first did — B's Logo Manager showed the synced logo as UNUSED
+while every channel on B carried ``logo_id`` null. The LOGO step now runs the
+same post-create reattach pass the archive-restore registry runs, which is what
+its LAST position in the registry exists to make possible.
 
 Users NEVER sync (D3). The deferred auto-sync / EPG-download phase is **not** run
 per cycle (S9) — the step registry passes a deferred-apply no-op to the
@@ -106,7 +111,11 @@ from typing import Optional
 from httpx import HTTPStatusError, RequestError, TimeoutException  # ssrf-ok: error classes only, no I/O
 
 import journal
-from dbas.channel_reattach import reattach_epg_links
+from dbas.channel_reattach import (
+    reattach_channel_logos,
+    reattach_epg_links,
+    reattach_profile_memberships,
+)
 from dbas.preflight import (
     CHANNEL_FK_FIELDS,
     ImportPlan,
@@ -129,14 +138,17 @@ from dbas.restore_orchestrator import (
     ImporterCallable,
     ImporterStep,
     _importer_step_builders,
+    _would_create_logo_ids,
     new_restore_id,
     run_restore,
 )
+from dbas.importers import logos as logos_mod
 from dbas.importers.channels import import_channels
 from dbas.importers.logos import import_logos
 from routers import backup as backup_mod
 from routers.backup import (
     BACKUP_SCHEMA_VERSION,
+    _collect_credential_values,
     _gather_dispatcharr_sections,
     _redact_credentials_deep,
 )
@@ -430,6 +442,96 @@ def _hosted_logo_records(
     return records
 
 
+def _remote_logo_records(
+    source_logos: list[dict],
+    *,
+    mirrored_ids: set[int],
+    known_secrets: frozenset,
+    known_identities: frozenset,
+) -> list[dict]:
+    """Metadata-only records for the REMOTE-URL logos (bead …-sgrez).
+
+    THE THIRD STORAGE SHAPE, and on a real XC-sourced instance the only one that
+    matters. A provider hands over a ``tvg-logo`` address; Dispatcharr stores the
+    URL and never the bytes. Such a logo is neither a file under ECM's own
+    ``uploads/logos`` nor Dispatcharr-hosted, so before this bead it produced NO
+    PLAN RECORD AT ALL — not a miss, not a failure, nothing. Measured on the
+    documentation environment's source A on 2026-08-20: 59 of 60 logos.
+
+    COPIED AS A URL, NOT FETCHED AND REHOSTED. Dispatcharr's Logo model IS
+    ``{name, url}``, and the restore importer has re-created exactly this shape
+    from exactly this field since bead …-dfkbn
+    (:func:`~dbas.importers.logos._create_logo_from_url`); the backup builder
+    deliberately does not archive these bytes for the same reason. Rehosting
+    would also make B diverge FROM A rather than replicate it — A itself holds
+    only the pointer, so if the origin disappears A loses the picture too — and
+    it would spend 59 network fetches inside bead …-cfxml's 300s per-cycle
+    budget on every unattended cycle, forever.
+
+    CREDENTIAL-BEARING URLS ARE NOT COPIED. Bead …-msqf7 established that a real
+    Xtream Codes provider puts the account's username and password in PATH
+    SEGMENTS of the addresses it hands out; a logo url comes from the same
+    provider on the same instances, so copying one verbatim would re-open that
+    hole by a new route. Every candidate url is therefore put through the SAME
+    :func:`~routers.backup._scrub_credential_urls` machinery, with the same
+    harvested values, and a url the scrub TOUCHES AT ALL is dropped rather than
+    carried in its scrubbed form: with its credential segments replaced by the
+    sentinel the address no longer resolves, and handing B a logo that silently
+    404s is what ``importers.logos`` already rules "strictly worse than an
+    honest miss". The record still travels — without a ``url``, without a
+    ``filename``, and therefore with no way back — so the importer reports it as
+    a NAMED miss with its affected channels instead of the logo vanishing.
+
+    Args:
+        source_logos: the source Dispatcharr logo rows.
+        mirrored_ids: source ids an ECM-LOCAL file record already claims. Those
+            keep the local file (it holds real bytes, which is strictly more
+            robust than a pointer); emitting a second record for the same id
+            would put two records on one LOGO remap entry, and the loser would
+            be skipped ``ALREADY_EXISTS_IDENTICAL`` — a claim of sameness about
+            images that are not the same.
+        known_secrets: the authenticating half of the harvested credentials.
+        known_identities: the identifying half.
+
+    Returns:
+        Metadata-only records, each carrying the source ``id`` and display
+        ``name``, and the ``url`` only when it is safe to hand to the replica.
+    """
+    records: list[dict] = []
+    for logo in source_logos:
+        logo_id = logo.get("id")
+        if not isinstance(logo_id, int) or isinstance(logo_id, bool):
+            continue
+        url = logos_mod.remote_logo_url(logo)
+        if url is None:
+            continue  # ECM-local or Dispatcharr-hosted — the other two shapes.
+        if logo_id in mirrored_ids:
+            continue
+        name = logo.get("name")
+        record: dict = {
+            "id": logo_id,
+            "name": (
+                name if isinstance(name, str) and name.strip()
+                # Never the url or its basename — the label is operator-facing
+                # and reaches B as the created row's name. The id is stable, so
+                # the next cycle's tier-2 name match still finds it.
+                else "logo %d" % logo_id
+            ),
+        }
+        if backup_mod._scrub_credential_urls(url, known_secrets, known_identities):
+            # Never log the url itself — it is the thing that carries the
+            # credential. The name is the operator-facing identifier.
+            logger.warning(
+                "[SYNC] Logo '%s' has a credential-bearing address; it was NOT "
+                "copied to the destination and is reported as a miss.",
+                record["name"],
+            )
+        else:
+            record["url"] = url
+        records.append(record)
+    return records
+
+
 def _drop_superseded_local_logos(
     local_records: list[dict], hosted_source_ids: set[int]
 ) -> list[dict]:
@@ -471,11 +573,16 @@ def _drop_superseded_local_logos(
     return kept
 
 
-async def _gather_live_logos() -> list[dict]:
+async def _gather_live_logos(
+    *,
+    known_secrets: frozenset = frozenset(),
+    known_identities: frozenset = frozenset(),
+) -> list[dict]:
     """Gather source-A logos as METADATA-ONLY records (bead 7ipq2.1 — D8).
 
-    Two sources, the SAME two the backup artifact carries since bead …-xb58a,
-    reusing the backup builder's seams rather than reimplementing them:
+    THREE sources, which is every storage shape a Dispatcharr logo can have,
+    reusing the backup builder's and the restore importer's seams rather than
+    reimplementing them:
 
     * the files under ECM's OWN ``/config/uploads/logos/``
       (:func:`routers.backup._gather_logo_binary_subtree`), correlated to the
@@ -486,6 +593,12 @@ async def _gather_live_logos() -> list[dict]:
       Before bead …-cfxml the sync gather read only the first source, so a
       replica received whatever happened to sit in A's upload directory — on the
       live instance, two files from March.
+    * every REMOTE-URL logo (:func:`_remote_logo_records`, bead …-sgrez). The
+      first two shapes are the two the ARTIFACT carries as bytes; a logo whose
+      url is an absolute http(s) address is in neither, and the artifact carries
+      it as an ADDRESS instead, which the importer re-creates from. The gather
+      read only the byte-bearing halves, so on an XC-sourced instance — where
+      this is 59 logos in 60 — the LOGO category was very nearly empty.
 
     One Dispatcharr listing serves both concerns (the id correlation and the
     hosted set), the same lifetime the backup builder gives them. A logo whose
@@ -499,8 +612,15 @@ async def _gather_live_logos() -> list[dict]:
     assembling every logo's base64 into the plan up front would hold the whole
     logo set in memory and defeat D8.
 
+    Args:
+        known_secrets: the authenticating half of the credential values
+            harvested off the RAW gather (bead …-msqf7). A remote logo url is a
+            provider-supplied address and can carry them, so it is scrubbed
+            through the same machinery every other url on the wire is.
+        known_identities: the identifying half.
+
     Returns:
-        Metadata-only logo records; empty when neither source yields anything.
+        Metadata-only logo records; empty when no source yields anything.
     """
     try:
         source_logos = await backup_mod._fetch_source_logos()
@@ -527,12 +647,26 @@ async def _gather_live_logos() -> list[dict]:
     )
     taken = {record["filename"] for record in local_records}
     hosted_records = _hosted_logo_records(hosted_logos, taken_filenames=taken)
-    records = local_records + hosted_records
+    # The remote set is the complement of the hosted one, so it cannot collide
+    # with a hosted record; it CAN collide with an ECM-local file that
+    # correlates to the same source id by basename, and the local file wins
+    # there (see _remote_logo_records' ``mirrored_ids``).
+    remote_records = _remote_logo_records(
+        source_logos,
+        mirrored_ids={
+            record["id"] for record in local_records
+            if isinstance(record.get("id"), int)
+        },
+        known_secrets=known_secrets,
+        known_identities=known_identities,
+    )
+    records = local_records + hosted_records + remote_records
 
     logger.info(
         "[SYNC] Gathered %d source logo record(s) (metadata-only): %d local "
-        "file(s), %d Dispatcharr-hosted.",
+        "file(s), %d Dispatcharr-hosted, %d remote-url.",
         len(records), len(local_records), len(hosted_records),
+        len(remote_records),
     )
     return records
 
@@ -654,10 +788,30 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # the local Dispatcharr is unavailable — never a crash.
     sections = await _gather_dispatcharr_sections(set(SYNC_CONFIG_CATEGORIES))
 
+    # Harvest the credential VALUES off the RAW gather, BEFORE anything is
+    # redacted (bead …-msqf7). The key-name denylist cannot see a credential that
+    # is a PATH SEGMENT of a stream url — a real Xtream Codes provider puts the
+    # account's username and password there in every one of its stream URLs — but
+    # the values are right here in ``m3u_accounts``, so they can be matched
+    # LITERALLY rather than guessed at structurally.
+    #
+    # The union of every account's credentials is used, not the owning account's:
+    # the FK association IS available at this point (``m3u_account`` is still on
+    # each raw stream row; it is only dropped later, at payload-build time), but
+    # depending on it would leave a stream whose FK is null or unresolvable
+    # unprotected, and one provider's password leaking through another provider's
+    # URL is the same defect.
+    known_secrets, known_identities = _collect_credential_values(sections)
+
     # Redact to topology-only BEFORE the rows enter the plan — one shared denylist,
     # every category, no plaintext path (D2). preserve_keys is intentionally empty:
     # sync NEVER carries credentials, unlike the opt-in migration artifact (u81kh).
-    redacted_sections = _redact_credentials_deep(sections, preserve_keys=frozenset())
+    redacted_sections = _redact_credentials_deep(
+        sections,
+        preserve_keys=frozenset(),
+        known_secrets=known_secrets,
+        known_identities=known_identities,
+    )
 
     categories: list[PlanCategory] = []
     for section_key, entity_type in _SECTION_TO_ENTITY.items():
@@ -676,9 +830,18 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # — the matcher's Tier-1 identity — is NOT a redact key and survives, so the
     # stream floor still works on the wire. The CHANNEL category is appended LAST
     # so it applies after every config dependency (groups/profiles/M3U) is created.
+    #
+    # ``known_secrets`` is what stops "survives" meaning "carries the provider's
+    # username and password" for an XC account (bead …-msqf7): the credential
+    # SEGMENTS of the url become the sentinel and the rest of the address — host,
+    # kind marker, stream id — crosses intact, so the matcher keeps a usable
+    # identity and the operator keeps a visible one.
     channels = await _gather_live_channels()
     redacted_channels = _redact_credentials_deep(
-        {"channels": channels}, preserve_keys=frozenset()
+        {"channels": channels},
+        preserve_keys=frozenset(),
+        known_secrets=known_secrets,
+        known_identities=known_identities,
     )
     channel_rows = redacted_channels.get("channels") if isinstance(redacted_channels, dict) else None
     channel_entities = (
@@ -692,10 +855,19 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # same hard Phase-2 ordering the restore registries use: logos LAST, so the
     # CHANNEL remap is populated for the logo-miss affected-channel drill-down).
     # METADATA-ONLY records: no content_b64 ever enters the plan (D8) — bytes
-    # hydrate lazily per missed logo via _load_logo_content_b64. No redaction
-    # pass is needed (name/filename/size only; no secret-named keys).
+    # hydrate lazily per missed logo via _load_logo_content_b64.
+    #
+    # The harvested credential values are threaded in because a REMOTE-URL logo
+    # record carries an ADDRESS (bead …-sgrez), and a provider-supplied address
+    # is exactly where bead …-msqf7 found this operator's username and password.
+    # The gather scrubs each candidate url through the same machinery rather
+    # than the records being redacted afterwards, because the right answer for a
+    # credential-bearing logo url is to DROP it (a sentinel-bearing address 404s
+    # on the replica), not to carry a scrubbed one.
     if include_logos:
-        logo_records = await _gather_live_logos()
+        logo_records = await _gather_live_logos(
+            known_secrets=known_secrets, known_identities=known_identities,
+        )
         categories.append(
             PlanCategory(entity_type=EntityType.LOGO, entities=logo_records)
         )
@@ -937,6 +1109,41 @@ def _sync_channels_step(*, allow_fuzzy_stream_match: bool) -> ImporterCallable:
             is_dry_run=ctx.is_dry_run,
             allow_channel_tvg_id_fallback=False,
         )
+        # Channel-profile MEMBERSHIP (bead …-38c5a). Dispatcharr adds every new
+        # channel to EVERY profile ENABLED (0.29.0
+        # ``apps/channels/api_views.py`` — ``channel_profile_ids`` omitted means
+        # "all profiles", and ``ChannelProfileMembership.enabled`` defaults
+        # True), so a profile that exists to SHOW SIX CHANNELS AND HIDE
+        # FIFTY-THREE arrives on the replica showing all fifty-nine unless the
+        # source's selection is re-asserted here.
+        #
+        # This is the same pass the archive-restore registry runs
+        # (``restore_orchestrator``); it was simply never wired into the sync
+        # path, so the enablement was gathered (``ChannelProfileSerializer.
+        # channels`` is the ENABLED-channel list on 0.28.2 AND 0.29.0) and then
+        # dropped on the floor. Measured 2026-08-20 on 0.29.0: source
+        # 'Kids & Family' 6/59 enabled, replica 59/59, from a cycle that
+        # reported ``success, created 134, failed 0``.
+        #
+        # Gated on the CHANNEL_PROFILE category exactly as the restore registry
+        # gates it: with profiles absent from the plan no archived profile
+        # resolves through the remap, and re-asserting a selection this cycle
+        # was never asked to touch would be the widening failure's mirror image.
+        #
+        # Runs on a DRY RUN too, PATCHing nothing — a preview that cannot say
+        # "this cycle is about to expose 53 channels your profile hides" is
+        # silent at the only point the operator can still act.
+        profile_cat = ctx.plan.category(EntityType.CHANNEL_PROFILE)
+        if profile_cat is not None and profile_cat.selected:
+            await reattach_profile_memberships(
+                client=ctx.client,
+                report=ctx.report,
+                remap=ctx.remap,
+                archive_profiles=list(profile_cat.entities),
+                archive_channels=list(cat.entities) if cat else [],
+                created_source_ids=ctx.created_channel_source_ids,
+                is_dry_run=ctx.is_dry_run,
+            )
         return None
 
     return _channels
@@ -989,6 +1196,11 @@ class _LogoFetchBudget:
 def _sync_logos_step() -> ImporterCallable:
     """Build the LOGOS importer step for the sync path (bead 7ipq2.1).
 
+    Two halves, and the replica needs both: ``import_logos`` puts the logo BYTES
+    on B, and :func:`~dbas.channel_reattach.reattach_channel_logos` puts the
+    channel-to-logo BINDING back (bead …-xgbjm) — without the second, B holds the
+    right image files and every channel on it reads ``logo_id`` null.
+
     Reuses the UNCHANGED ``import_logos`` with two sync-specific bindings:
 
     * ``clear_existing=False`` — HARD-CODED, not a parameter. The destructive
@@ -1014,7 +1226,7 @@ def _sync_logos_step() -> ImporterCallable:
         if cat is None:
             return None  # target did not opt into logo sync — nothing to do.
         channel_cat = ctx.plan.category(EntityType.CHANNEL)
-        await import_logos(
+        logo_result = await import_logos(
             archive_logos=list(cat.entities),
             client=ctx.client,
             selected=bool(cat.selected),
@@ -1026,6 +1238,69 @@ def _sync_logos_step() -> ImporterCallable:
             archive_channels=list(channel_cat.entities) if channel_cat else [],
             content_provider=budget.load,
         )
+        # Channel -> LOGO BINDING (bead …-xgbjm). Bead …-cfxml got the logo
+        # BYTES across; the binding stayed behind, so the replica held the right
+        # image FILES with no channel using them — B's Logo Manager showed the
+        # synced logo as UNUSED while every channel on B carried logo_id null.
+        # It is the most VISIBLE difference between primary and replica: it is
+        # what an operator sees first on opening B.
+        #
+        # ``logo_id`` is a SOURCE id, so ``importers/channels.py`` drops it from
+        # the create payload (``_NON_REMAPPABLE_FK_KEYS``) — correctly, because
+        # forwarding A's id would either 400 or silently bind an unrelated
+        # destination row. This is the second half: re-derive the reference on B
+        # and PATCH it back. Same pass the archive-restore registry already runs
+        # (``restore_orchestrator._logos``), never wired into the sync path —
+        # exactly the shape ``reattach_profile_memberships`` had before …-38c5a.
+        #
+        # WHY IT RUNS HERE, AND WHY THE LOGO STEP STAYS LAST. The pass needs BOTH
+        # remap namespaces populated: CHANNEL (filled by the channels step,
+        # earlier in this registry) and LOGO (filled by ``import_logos``, three
+        # lines up). Last position is what makes that true. Moving LOGO ahead of
+        # CHANNEL to bind at create time would break it twice over — the pass
+        # would meet an empty CHANNEL remap, and so would the logo-miss
+        # drill-down that names the affected channels per missed logo (bead
+        # …-cm9bi, ``import_logos(archive_channels=...)``). The ordering is a
+        # precondition of this fix, not an obstacle to it.
+        #
+        # SOURCE-WINS (``OVERWRITE``), matching the EPG-link pass on this same
+        # path. ``sync_logos`` is opt-in and defaults OFF (bead …-8gnik owns the
+        # control), so the realistic sequence is: cycles run, B gets its lineup,
+        # THEN the flag goes on. By then every channel on B already exists and is
+        # MATCHED rather than created, so under PRESERVE this pass would bind
+        # nothing, on that cycle or any later one, and the new control would look
+        # broken. A replica's branding is the source's by definition.
+        #
+        # Gated on the CHANNEL category as well as LOGO. The pass operates on
+        # channels, so it needs the channel population to be meaningful: with
+        # channels absent from the plan no archived channel resolves through the
+        # remap and every one of them would be classified against an empty one.
+        # That mismatch is a live defect on the RESTORE side (bead …-lngo5,
+        # unreachable there today and left to that bead); this gate is what keeps
+        # the sync path from becoming its second home.
+        #
+        # Runs on a DRY RUN too, PATCHing nothing and recording no miss — and it
+        # counts the logos the preview knows the apply would CREATE (bead
+        # …-dgnms): on a fresh replica nothing matches, so that set is the whole
+        # population, and without it the preview reports 0 for an apply that
+        # binds every channel.
+        if (
+            cat.selected
+            and channel_cat is not None
+            and channel_cat.selected
+        ):
+            await reattach_channel_logos(
+                client=ctx.client,
+                report=ctx.report,
+                remap=ctx.remap,
+                archive_channels=list(channel_cat.entities),
+                created_source_ids=ctx.created_channel_source_ids,
+                mode=ChannelReattachMode.OVERWRITE,
+                is_dry_run=ctx.is_dry_run,
+                # Coerced defensively: ``import_logos`` is stubbed in several
+                # suites, and a stub's return value is not a LogoImportResult.
+                would_create_logo_source_ids=_would_create_logo_ids(logo_result),
+            )
         return None
 
     return _logos
@@ -1086,9 +1361,15 @@ def sync_config_importer_steps(
             EntityType.CHANNEL,
             _sync_channels_step(allow_fuzzy_stream_match=allow_fuzzy_stream_match),
         ),
-        # LOGOS LAST (restore-registry ordering parity: channels populate the
-        # CHANNEL remap the logo-miss drill-down reads). Structurally a no-op
-        # unless the plan carries a LOGO category (per-target sync_logos opt-in).
+        # LOGOS LAST (restore-registry ordering parity). Last position is load
+        # bearing in two directions: channels populate the CHANNEL remap that
+        # BOTH the logo-miss drill-down (…-cm9bi) and the channel->logo binding
+        # pass (…-xgbjm) read, and the binding pass additionally needs the LOGO
+        # remap this step's own importer fills. A channel therefore cannot carry
+        # a logo id at CREATE time — it is bound afterwards, here — and moving
+        # LOGO ahead of CHANNEL to try would break both readers at once.
+        # Structurally a no-op unless the plan carries a LOGO category
+        # (per-target sync_logos opt-in).
         ImporterStep(EntityType.LOGO, _sync_logos_step()),
     ]
 
@@ -1213,11 +1494,21 @@ class _ReadObservingClient:
     the destination's clothes). B restarting mid-cycle, one endpoint answering
     500, or a token expiring against a rate-limited refresh all land there.
 
-    So the client handed to the orchestrator records every read that raised.
-    Nothing is suppressed or retried — the importers' own fallbacks still run,
-    the run still completes — but :attr:`read_failures` is non-empty afterwards
-    and the report is marked unreadable, which is what stops a preview built on
-    a half-read destination from unlocking Apply.
+    So the client handed to the orchestrator marks the REPORT the moment a read
+    raises. Nothing is suppressed or retried — the importers' own fallbacks
+    still run and the run still completes — but the report carries
+    ``destination_unreadable`` from that moment on, which is what stops a
+    preview built on a half-read destination from unlocking Apply.
+
+    IT MARKS THE REPORT DURING THE RUN, NOT AFTER IT (bead ``…-bj442``). This
+    used to collect the failures in a list that ``run_sync`` drained once
+    ``run_restore`` had returned — which is to say, after ``compute_outcome``
+    had already decided the run was a clean SUCCESS from counts that describe
+    the SOURCE. Stamping at the moment of the failed read is what lets the ONE
+    outcome decision see it, so the task result, the task-history
+    ``details.outcome`` row, the ``sync_outbound`` journal row and the persisted
+    ``sync_targets.last_outcome`` column all read the same verdict instead of
+    needing a second correction each.
 
     A transparent proxy rather than a subclass: the client is constructed by
     :func:`make_remote_client` (Fernet decrypt + SSRF-pinned transport) and must
@@ -1225,11 +1516,11 @@ class _ReadObservingClient:
     straight through.
     """
 
-    def __init__(self, inner) -> None:
+    def __init__(self, inner, report: RestoreReport) -> None:
         # Bypass __getattr__ for our own state (anything not set here routes to
         # the wrapped client).
         object.__setattr__(self, "_inner", inner)
-        object.__setattr__(self, "read_failures", [])
+        object.__setattr__(self, "_report", report)
 
     def __getattr__(self, name: str):
         attr = getattr(self._inner, name)
@@ -1243,7 +1534,12 @@ class _ReadObservingClient:
                     result = await result
                 return result
             except Exception as exc:  # noqa: BLE001 - observe, never swallow
-                self.read_failures.append((name, _describe_destination_error(exc)))
+                _mark_destination_unread(
+                    self._report,
+                    "%s could not be read — %s" % (
+                        name, _describe_destination_error(exc),
+                    ),
+                )
                 raise
 
         return _observed_read
@@ -1430,8 +1726,11 @@ async def run_sync(
     # From here on the orchestrator talks to the destination through a wrapper
     # that NOTICES a failed read (the importers' own fallbacks turn one into
     # "the destination is empty"). Reads still behave exactly as before; the
-    # wrapper only remembers.
-    client = _ReadObservingClient(client)
+    # wrapper marks the report the moment one raises, so the marker is in place
+    # BEFORE run_restore decides the outcome (bead …-bj442) — which is why the
+    # report is built here rather than beside the ledger below.
+    report = RestoreReport(is_dry_run=not confirm_apply)
+    client = _ReadObservingClient(client, report)
 
     # --- 3. Redacted live-source plan (config categories, never users). The
     # logos slice is per-target OPT-IN (sync_logos, default off — 7ipq2.1);
@@ -1455,7 +1754,6 @@ async def run_sync(
     # stream, reported as SUCCESS (bead …-efvyg). Off => the stream matcher
     # floors at Tier-3 exact, everywhere in the cycle (ruling 1b).
     allow_fuzzy = bool(getattr(sync_target, "fuzzy_stream_matching", False))
-    report = RestoreReport(is_dry_run=not confirm_apply)
     ledger = RollbackLedger(restore_id=new_restore_id())
     result = await run_restore(
         plan=plan,
@@ -1476,14 +1774,16 @@ async def run_sync(
     # --- 4c. A read that failed AFTER the gate still means the report describes
     # a destination it did not fully read (…-jqfxm). The importer that hit it
     # already carried on with "existing = []", so the counts for that category
-    # are the source's, not the destination's — name the category so an operator
-    # can see which part of the diff is fiction. ---
-    for read_name, read_reason in client.read_failures:
-        _mark_destination_unread(
-            result, "%s could not be read — %s" % (read_name, read_reason)
-        )
+    # are the source's, not the destination's. THERE IS NO POST-RUN DRAIN HERE:
+    # _ReadObservingClient marks the report at the moment of the failed read, so
+    # the marker is already in place when run_restore's compute_outcome runs and
+    # the outcome that reaches the journal row below, the persisted
+    # last_outcome/last_full_sync_at stamp, and the task's details.outcome is
+    # the SAME one — one decision, every surface (bead …-bj442). Draining the
+    # failures here instead is exactly what let outcome=success be recorded for
+    # a cycle that never read its destination. ---
 
-    # The conflict details above land AFTER run_restore computed the tri-state
+    # The conflict details below land AFTER run_restore computed the tri-state
     # outcome, so without this re-check an APPLY with source-side name
     # conflicts would report outcome=SUCCESS alongside failed>0 — violating
     # the ratified "NEVER SUCCESS on mixed state" invariant (ADR-013 S8) that
