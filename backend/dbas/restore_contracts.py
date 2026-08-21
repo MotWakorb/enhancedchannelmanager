@@ -42,6 +42,7 @@ docstrings on the public surface.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -886,12 +887,35 @@ class RestoreReport(BaseModel):
         description="Placeholder stream bindings swapped for a real provider stream.",
     )
 
-    # Streams created with the provider credentials cut out of their URL
-    # (…-msqf7). Counts STREAMS, tracking ``len(stream_url_redaction_details)``.
+    # Streams the DESTINATION currently holds whose URL had the provider
+    # credentials cut out of it (…-msqf7). Counts STREAMS, tracking
+    # ``len(stream_url_redaction_details)``.
+    #
+    # A FACT ABOUT THE DESTINATION, NOT ABOUT THIS RUN (bead …-ukjx5). It used to
+    # be recorded where ``create_stream`` succeeded, which made it a count of
+    # what THIS CYCLE wrote — and a cross-instance sync is a SCHEDULED task whose
+    # second cycle creates nothing, because the rows are already there and are
+    # skipped. Measured live on 0.29.0 across consecutive cycles on an UNCHANGED
+    # destination: 53, then 0, while 53 of B's streams still carried a redacted
+    # address and could not play. The first cycle's honesty is what made the
+    # silence convincing. It is now recomputed from the destination's own stream
+    # rows by the post-refresh rebind pass, which already reads them, so a
+    # shortfall the replica still exhibits is reported on EVERY cycle and one it
+    # no longer exhibits is reported on none.
+    #
+    # NULL means NOT PREDICTED, exactly as for the two counters above and for the
+    # same reason: the pass that reads the destination's streams cannot run on a
+    # dry run. Now that the number describes the DESTINATION, a preview ``0``
+    # would be a claim ("B holds no redacted stream") derived from having looked
+    # at nothing. Consumers coerce with ``or 0``.
     # ADDITIVE optional — no CONTRACT_VERSION bump.
-    stream_urls_redacted: int = Field(
+    stream_urls_redacted: int | None = Field(
         default=0,
-        description="Streams created without a playable URL — it carried a credential.",
+        description=(
+            "Destination streams holding a URL the credentials were cut out of — "
+            "they cannot play. NULL on a dry run: the pass that reads the "
+            "destination's streams cannot run before the apply."
+        ),
     )
     stream_url_redaction_details: list[StreamUrlRedactionDetail] = Field(
         default_factory=list,
@@ -1224,24 +1248,49 @@ class RestoreReport(BaseModel):
         true there — a preview rebinds nothing — and it is a work-done counter,
         not a "channels needing attention" alarm.
 
-        A no-op once a detail row exists, so it can never erase a real count.
+        :attr:`stream_urls_redacted` JOINED THIS SET with bead ``…-ukjx5``, which
+        redefined it from "streams this run created redacted" to "streams the
+        DESTINATION now holds redacted". The pass that reads the destination's
+        streams is the same one, so the dry-run answer is the same one: not
+        predicted, rather than a confident zero about a destination nothing
+        looked at.
+
+        A no-op per counter once its own detail rows exist, so it can never
+        erase a real count.
         """
+        if not self.stream_url_redaction_details:
+            self.stream_urls_redacted = None
         if self.stream_reattach_details:
             return
         self.channels_needing_stream_reattach = None
         self.channels_with_no_playable_stream = None
 
-    def record_stream_url_redacted(
-        self, *, label: str, stream_id: int | None = None
+    def record_redacted_stream_urls(
+        self, observed: Sequence[tuple[int | None, str]]
     ) -> None:
-        """Record ONE stream created without the credential half of its URL (…-msqf7).
+        """REPLACE the redacted-URL population with what the destination holds (…-msqf7).
 
-        Written through ONE recorder, like every action-item pair above, so the
-        aggregate and the drill-down cannot drift.
+        REPLACES rather than appends, and that is the whole of bead ``…-ukjx5``.
+        The append form could only ever describe what THIS cycle had just
+        written, so a repeat cycle — which writes nothing, because the rows are
+        already there — reported zero over a destination whose streams were all
+        still redacted. Taking the whole population from one destination reading
+        makes the number say what is TRUE NOW: it can go up, it can go down, and
+        it stays put while the destination does.
+
+        Idempotent by construction: calling it twice with the same reading gives
+        the same answer, where a second append would have doubled it.
+
+        Args:
+            observed: ``(destination stream id, operator-facing label)`` for every
+                destination stream currently holding a redacted address. Labels
+                are stream NAMES — never a URL, which for an Xtream Codes
+                provider IS the credential.
         """
-        self.stream_url_redaction_details.append(
+        self.stream_url_redaction_details = [
             StreamUrlRedactionDetail(stream_id=stream_id, label=label)
-        )
+            for stream_id, label in observed
+        ]
         self.stream_urls_redacted = len(self.stream_url_redaction_details)
 
     def record_epg_link_unrestored(

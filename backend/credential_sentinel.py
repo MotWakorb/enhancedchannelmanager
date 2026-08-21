@@ -38,11 +38,18 @@ regardless of which field carries it, including keys nested inside
 
 from __future__ import annotations
 
+import re
+
 # The single placeholder the backup pipeline substitutes for a credential-class
 # value. Kept verbatim (not derived) because it is part of the on-disk artifact
 # format: artifacts written by earlier ECM builds carry this exact string, and a
 # restore of one of those must still recognize it.
 REDACTION_SENTINEL = "***REDACTED***"
+
+# The ``[0]`` list positions ``strip_redaction_sentinels`` writes into a
+# dotted path, read back by :func:`value_at_path`. Pre-compiled on a literal
+# pattern (``docs/style_guide.md`` — no bare ``re.*`` on a built pattern).
+_INDEX_PATTERN = re.compile(r"(\d+)\]")
 
 
 def is_redaction_sentinel(value: object) -> bool:
@@ -118,6 +125,68 @@ def _strip(node: object, prefix: str, removed: list[str]) -> object:
             for index, item in enumerate(node)
         ]
     return node
+
+
+def value_at_path(payload: object, path: str) -> object:
+    """Read back the value at one dotted path from :func:`strip_redaction_sentinels`.
+
+    That function reports WHICH keys it removed, as dotted paths
+    (``password``, ``custom_properties.password``, ``profiles[0].password``).
+    The other half of the round trip is asking a DIFFERENT record — the one the
+    destination currently holds — what IT has at the same path, which is how a
+    repeat cycle tells "the operator has since re-entered this" from "the
+    destination still has nothing here" (bead ``…-ukjx5``).
+
+    A path that does not resolve yields ``None``, which
+    :func:`credential_is_present` then reads as ABSENT. That is the fail-loud
+    direction on purpose: a destination record that does not expose the field at
+    all cannot be shown to have the credential, and reporting an action item the
+    operator can dismiss is recoverable, where silently dropping one is the
+    failure this bead exists to end.
+
+    Args:
+        payload: The record to read — typically the destination entity as its
+            list endpoint returned it.
+        path: One dotted path exactly as ``strip_redaction_sentinels`` emitted it.
+
+    Returns:
+        The value at ``path``, or ``None`` when any segment does not resolve.
+    """
+    node: object = payload
+    for segment in path.split("."):
+        key, _, indexes = segment.partition("[")
+        if key:
+            if not isinstance(node, dict) or key not in node:
+                return None
+            node = node[key]
+        for index in _INDEX_PATTERN.findall(indexes):
+            if not isinstance(node, list):
+                return None
+            position = int(index)
+            if position >= len(node):
+                return None
+            node = node[position]
+    return node
+
+
+def url_is_redacted(value: object) -> bool:
+    """True iff ``value`` is an address ECM cut a credential OUT of.
+
+    The narrower sibling of :func:`url_can_serve`, and deliberately not the same
+    question. ``url_can_serve`` answers "could this fetch anything?", which is
+    ``False`` for an EMPTY url too; this one answers "is this our own record
+    that the address carried a secret?" — the specific shortfall bead
+    ``…-msqf7`` creates and bead ``…-ukjx5`` has to count on every cycle. An
+    empty url is a different loss with a different remedy, and conflating them
+    would put one population in the other's counter.
+
+    Args:
+        value: A ``url`` read off a stream record — archived or destination.
+
+    Returns:
+        True when the value is non-empty and carries the redaction placeholder.
+    """
+    return bool(value) and REDACTION_SENTINEL in str(value)
 
 
 def url_can_serve(value: object) -> bool:

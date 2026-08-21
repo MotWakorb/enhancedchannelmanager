@@ -191,6 +191,13 @@ exactly which parts of the lineup are down rather than counting them yourself. A
 channel that still plays — because it kept a stream that carries no credential —
 is not listed.
 
+**Both counts repeat on every cycle until you fix it, and they stop the cycle after
+you do.** They describe what B is holding right now, not what the cycle happened to
+write, so a scheduled sync keeps telling you as long as the streams are still
+unplayable — and goes quiet on its own once B has its own provider account. The same
+is true of the "needs credentials re-entered" line: it names an account that is on B
+and still has no password, so it stops the first cycle after you enter one.
+
 An Xtream Codes stream URL puts the username and password in the address itself — `http://provider/live/<username>/<password>/<id>.ts` — so the credential *is* part of the address. Sync replaces those two path segments and carries the rest, which is why B's stream shows something like `http://provider/live/***REDACTED***/***REDACTED***/1234.ts`: you can see which provider and which stream it was, and no secret of yours has been copied onto B.
 
 This is deliberate. Cross-instance sync never puts a provider credential on the wire, and B may be a machine at a different site or trust level — a recurring schedule that kept re-sending your subscription password would be a standing exposure, not a convenience. A stream URL that carries **no** credential (a plain-M3U provider's direct URL, for instance) crosses byte-identical and plays immediately.

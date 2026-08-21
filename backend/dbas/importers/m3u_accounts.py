@@ -145,7 +145,12 @@ import logging
 
 from pydantic import BaseModel, Field
 
-from credential_sentinel import strip_redaction_sentinels
+from credential_sentinel import (
+    credential_is_present,
+    strip_redaction_sentinels,
+    value_at_path,
+)
+from dbas.archive_keys import as_int
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -606,6 +611,21 @@ async def import_m3u_accounts(
             existing_id = existing_acc.get("id")
             if source_id is not None and existing_id is not None:
                 remap.add(EntityType.M3U_ACCOUNT, int(source_id), int(existing_id))
+            # THE ACTION ITEM SURVIVES THE SKIP (bead …-ukjx5). The account is
+            # here, and it still authenticates nowhere: skipping the CREATE is
+            # not the same fact as the operator having re-entered the password.
+            # Recording only on the create path made this a count of what the
+            # cycle WROTE, so a scheduled sync said "2 accounts need credentials"
+            # once and then nothing, forever, over a replica on which nothing had
+            # changed. Asked of the DESTINATION ROW rather than of this run.
+            _report_credentials_still_missing(
+                report=report,
+                archive_account=archive_account,
+                remap=remap,
+                existing_acc=existing_acc,
+                label=label,
+                source_id=source_id,
+            )
             logger.info(
                 "[DBAS-M3U] Account '%s' already exists (dest id=%s); skipped.",
                 label,
@@ -729,6 +749,71 @@ async def import_m3u_accounts(
             )
 
     return result
+
+
+def _report_credentials_still_missing(
+    *,
+    report: RestoreReport,
+    archive_account: dict,
+    remap: IdRemapTable,
+    existing_acc: dict,
+    label: str,
+    source_id,
+) -> None:
+    """Report the credentials the DESTINATION account is still missing (…-ukjx5).
+
+    Called on the ALREADY_EXISTS skip, where nothing is created and the create
+    path's recorder therefore never fires. The shortfall is not "we just made an
+    account with no password" — it is "the account on the destination has no
+    password", which is true on every cycle until the operator fixes it and on no
+    cycle afterwards.
+
+    TWO HALVES, and both are load-bearing:
+
+    * **What the artifact could not carry** comes from the SAME
+      :func:`_build_create_payload` the create path uses, so the two can never
+      disagree about which fields count as credentials. Its ``redacted_fields``
+      are field NAMES, never values.
+    * **What the destination still lacks** is read off ``existing_acc`` — the row
+      the destination's own list endpoint returned — through
+      :func:`credential_sentinel.credential_is_present`, which reads ECM's own
+      placeholder as ABSENT rather than as a populated field.
+
+    A field the destination has is dropped, and an account whose every redacted
+    field has since been filled in reports nothing:
+    :meth:`RestoreReport.record_credential_reentry` is a no-op on an empty list.
+    Bead ``…-15g1j``'s rule holds by construction on the other side too — a
+    source account with no credential produces no redacted field, so it is never
+    an action item.
+
+    RESIDUAL, stated rather than left implicit: this can only see what the
+    destination's serializer returns. Measured on Dispatcharr 0.29.0,
+    ``/api/m3u/accounts/`` returns both ``username`` and ``password``, so the
+    check is real. A field a future serializer made write-only would read as
+    absent forever, which is the noisy direction rather than the silent one —
+    the deliberate choice, because an action item an operator can satisfy is
+    recoverable and a lost one is not.
+    """
+    _, redacted_fields, _, _ = _build_create_payload(archive_account, remap)
+    still_missing = [
+        field
+        for field in redacted_fields
+        if not credential_is_present(value_at_path(existing_acc, field))
+    ]
+    if not still_missing:
+        return
+    logger.warning(
+        "[DBAS-M3U] Account '%s' (id=%s) already exists on the destination but "
+        "still has %s unset; it will not refresh until they are re-entered.",
+        label, existing_acc.get("id"), ", ".join(still_missing),
+    )
+    report.record_credential_reentry(
+        EntityType.M3U_ACCOUNT,
+        label,
+        still_missing,
+        source_export_id=source_id,
+        destination_id=as_int(existing_acc.get("id")),
+    )
 
 
 async def _default_stream_count(client: DispatcharrClient, account_id: int) -> int:

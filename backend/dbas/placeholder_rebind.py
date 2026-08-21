@@ -431,7 +431,7 @@ import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
-from credential_sentinel import url_can_serve
+from credential_sentinel import url_can_serve, url_is_redacted
 from dbas.custom_stream_fallback import CUSTOM_STREAM_ACCOUNT_NAME
 from dbas.restore_contracts import (
     EntityType,
@@ -1088,6 +1088,44 @@ async def _rebind_from_archive(
         synthetic_account_ids=synthetic_account_ids,
     )
     result.orphans_swept = len(swept_ids)
+
+    # --- The redacted-URL population, read off the DESTINATION (…-ukjx5). ----
+    # ONE reading of what B is left holding, taken after every delete this pass
+    # performs, so the number describes the destination's post-pass state rather
+    # than a moment inside the pass.
+    #
+    # WHY IT LIVES HERE AND NOT AT CREATE TIME. Bead ``…-msqf7`` recorded it where
+    # ``create_stream`` succeeded, which is a count of what THIS CYCLE WROTE. A
+    # cross-instance sync is a SCHEDULED task and it writes these rows exactly
+    # once: on cycle two the archived stream matches the row cycle one made,
+    # nothing is created, and the aggregate read ZERO over a destination whose
+    # streams were every one of them still redacted. Measured live on 0.29.0 —
+    # 53, then 0, with nothing changed in between. That is bead ``…-kcfru``'s
+    # shape for the third time, and its answer applies unchanged: DETECTION is an
+    # unscoped, read-only look at the destination; WRITE AUTHORITY stays
+    # ledger-scoped and is untouched by this block.
+    #
+    # UNSCOPED ON PURPOSE. Who created the row does not decide whether it can
+    # play, exactly as for ``playable_ids`` above. A redacted address left by an
+    # EARLIER cycle is the same shortfall, needs the same action from the
+    # operator, and used to be invisible.
+    #
+    # THE FAITHFUL HALF (bead ``…-15g1j``) needs no separate guard here, and that
+    # is a property of the predicate rather than luck: only a URL ECM cut a
+    # credential OUT of carries the sentinel, so a stream whose source address
+    # never held one is not in this set on any cycle. ``url_is_redacted``, not
+    # ``url_can_serve`` — a stream with an EMPTY url is a different loss with a
+    # different remedy, and it is already counted by the verdict above.
+    removed_ids = deleted_ids | swept_ids
+    report.record_redacted_stream_urls(
+        [
+            (sid, _stream_name(stream))
+            for stream in all_streams
+            if (sid := _as_int(stream.get("id"))) is not None
+            and sid not in removed_ids
+            and url_is_redacted(stream.get("url"))
+        ]
+    )
 
     if result.still_placeholder:
         # Say which of the two populations each number is: the drill's own report

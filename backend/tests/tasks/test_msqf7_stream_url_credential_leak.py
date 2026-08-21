@@ -408,12 +408,17 @@ async def test_the_summary_names_the_streams_that_lost_their_credentials(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_a_preview_claims_nothing_because_it_created_nothing(tmp_path):
-    """The counter is written where the create SUCCEEDS, so a preview is silent.
+async def test_a_preview_says_not_measured_rather_than_zero(tmp_path):
+    """The counter describes the DESTINATION, and a preview reads no streams.
 
-    Asserted rather than assumed: bead ``…-dgnms`` measured what a confidently
-    reported preview ``0`` costs when the pass that produces the number cannot
-    run before the apply.
+    AMENDED BY BEAD ``…-ukjx5``, which moved this counter off the create path.
+    It used to assert ``0`` here and the reasoning was "the recorder fires on a
+    successful create, which a preview does not perform" — true of the old
+    mechanism, and exactly the confident-zero bead ``…-dgnms`` measured the cost
+    of. Now that the number means "streams the destination is holding redacted",
+    ``0`` from a preview would be a claim about a destination nothing looked at,
+    and on a second cycle a FALSE one. ``None`` is the honest answer, and the
+    operator's line still says nothing either way.
     """
     source = _source_with_xc_streams()
     dest = StatefulDispatcharrFake.empty_dest()
@@ -425,7 +430,7 @@ async def test_a_preview_claims_nothing_because_it_created_nothing(tmp_path):
     message = DbasSyncTask._summary_message(report, False, "unknown")
 
     assert dest.streams.list() == []
-    assert report.stream_urls_redacted == 0
+    assert report.stream_urls_redacted is None
     assert "without a playable URL" not in message
 
 
