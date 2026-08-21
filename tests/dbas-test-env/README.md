@@ -629,6 +629,16 @@ docker image rm ecm-xdmru:<sha>     # optional
 
 # HANDOVER — the documentation environment (beads `gk4d0`, `xvuk1`, `maopq`)
 
+> **SUPERSEDED 2026-08-21 by bead `enhancedchannelmanager-kdz6p`.** Instance A was
+> **destroyed and rebuilt** for the UI-only acceptance run recorded at the end of
+> this file, so **every count and id in this section is stale**: A no longer
+> carries 132 channels across five categories, it carries **316 across two**, and
+> the `Northwind Local` / `Northwind Regional` channels, the hosted-logo fixture
+> and the credentialed EPG source (id 3) are **gone**. `ecm-docenv` was stopped
+> and now points at an A it does not describe. The *method* in this section —
+> the credential rules, the traps, the pacing, the reset recipes — is still
+> current and is what you should read. The *numbers* are not.
+
 **BUILT 2026-08-20 on a synthetic provider chain. REPOINTED 2026-08-21 ONTO THE
 OPERATOR'S LIVE XTREAM CODES ACCOUNT** (bead `enhancedchannelmanager-maopq`, PO
 instruction). The synthetic Xtream Codes provider — Dispatcharr **P** — is
@@ -1273,6 +1283,283 @@ part of this environment.
   the census rather than trusting the list across sessions.
 
 ---
+
+---
+
+# The UI-ONLY A→B acceptance run (bead `enhancedchannelmanager-kdz6p`)
+
+**RUN 2026-08-21** against Dispatcharr **0.29.0** on both instances and a
+disposable ECM built from `fix/f5a5j-replica-fidelity` HEAD **`aed7447b`**. This
+is the acceptance test for epic `f5a5j`, and its binding constraint was **"only
+Playwright and the UI — no API calls."** Every piece of state below was created
+by clicking, in ECM's UI or in Dispatcharr's own first-run wizard. Reading the
+destination's Postgres was used for **verification only**, never to write.
+
+**This run is only possible under that constraint because bead `8gnik` shipped
+the `sync_logos` UI toggle.** Before it, enabling logo replication needed a raw
+API call, and logos are half of what `f5a5j` is about.
+
+## What was stood up, and by which control
+
+| Step | Where | The control that was clicked |
+|---|---|---|
+| A's superuser | Dispatcharr A `:9601` | first-run "Create your Super User Account" wizard |
+| B's superuser | Dispatcharr B `:9602` | same wizard |
+| ECM admin + login | ECM `:6500` | first-run "Create Admin Account" |
+| ECM → A connection | ECM | Dispatcharr Connection Settings → Test Connection (read `Connected`) → Save |
+| XC provider account | ECM | **M3U Manager → Add M3U Account → account type XtreamCodes**, Max Streams `3`, Refresh `0`, **Auto-enable new groups (Live) OFF before the first refresh** (trap 13), VOD/Series off |
+| exactly two categories | ECM | **M3U account → ⋮ → Manage Groups**, search each name, flip its Enabled toggle, read `2 / 777 enabled`, **Save & Refresh** |
+| EPG source | ECM | **EPG Manager → Add Standard EPG**, XMLTV URL, Refresh `0` |
+| 316 channels in two named groups | ECM | **Channel Manager → Edit Mode → expand the stream group (trap 9) → "Create channels from this group" → Channel Group → "Create new group" → Done → Apply All**, once per group |
+| EPG links | ECM | Edit Mode → select-all on both groups → **Assign EPG** → Match → **Accept Best Guesses** → Assign → Done → Apply All |
+| programme data | ECM | EPG Manager → **Refresh EPG source** (channels must already be mapped — see below) |
+| 3 channel profiles | ECM | **Channel Manager → ⋮ → Channel Profiles**, create, then **Manage channels** → group toggle → **Save Changes** |
+| the sync target | ECM | **Settings → Backup & Restore → Cross-Instance Sync → Add sync target** |
+| logo replication | ECM | the **`Logos off` → `Logos on`** button on the target row (bead `8gnik`) |
+| preview / apply | ECM | **Sync now (preview)** then **Apply** |
+
+Nothing in this run needed Dispatcharr A's own UI. ECM covered every step,
+including XC account creation and per-category enablement — which the earlier
+`xdmru` recipe had to leave to A's own screens.
+
+## What A ended up holding
+
+**316 channels / 316 streams / 779 channel groups / 3 channel profiles.**
+
+| Group | Channels | Numbers | Streams |
+|---|---|---|---|
+| `Sports` (from `USA: SPORTS NETWORK [1080p]`, provider category `10432`) | 102 | 200–301 | 102 |
+| `Entertainment` (from `USA: ENTERTAINMENT [1080p]`, provider category `10387`) | 214 | 600–813 | 214 |
+
+The other **777** channel groups are the provider-category rows the discovery
+refresh creates; they hold no channels and were deliberately left in place this
+time (see trap 13 for why they come back if you delete them).
+
+| Profile | Enabled / total membership |
+|---|---|
+| `Sports` | 102 / 316 — Sports group only |
+| `Entertainment` | 214 / 316 — Entertainment group only |
+| `LiveTV` | 316 / 316 — every channel |
+
+A channel belongs to exactly one **group** and appears in all three **profiles**
+with a per-profile enabled flag. That is the reading `LiveTV` requires.
+
+## The real coverage numbers — measured, not aspired to
+
+**Logos: 316 of 316 (100%).** Every channel carries one, and every logo record
+is a **remote URL** the provider publishes. **No logo bytes are hosted on A**, so
+this run exercised the remote-URL half of logo replication and **not** the
+Dispatcharr-hosted-bytes half (`cfxml`). A's `/data/logos` is empty and so is
+B's, correctly.
+
+**EPG: 183 of 316 (57.9%).** ECM's bulk matcher against 14,646 EPG entries
+returned **0 exact matches, 183 "need review" at 10–57% confidence, and 133
+unmatched.** The 183 were linked with the dialog's own **"Accept Best Guesses"**;
+that is an operator decision and it is recorded here as one. **133 channels have
+no guide and nothing was hand-fixed to hide that.** "Every channel has an EPG"
+is not reachable against this provider's names and this guide.
+
+## The 306 MB EPG: it ingested, and it was cheap
+
+The measured risk was that `https://cdn.epg.guru/7dayiptv/UnitedStates.xml.gz`
+(**~306 MB gzipped, ~3.26 GB decompressed**, roughly 35× the provider's own
+`xmltv.php`) might be slow, memory-hungry, or might not finish. **It finished.**
+
+| Phase | Wall time | Peak celery RSS | Disk |
+|---|---|---|---|
+| create source → channels parsed (no channels mapped yet) | **~36 s** | ~134 MB reported by the task, ~630 MB container RSS | no measurable change |
+| refresh with 183 channels mapped → programmes stored | **~66 s** | ~636 MB container RSS | ~1 GB (the cached file) |
+
+**The reason it is cheap is the thing to remember:** 0.29.0 stream-parses the
+gzip and **stores programmes only for channels that are already mapped.** The
+first refresh logged `Parsing programs for 143 MAPPED channels … skipping 14503
+unmapped EPG entries` and ended `25,618 programs for 143 channels, skipped
+2,693,286 programs for unmapped channels`. So **a source added before its
+channels exist will show 0 programmes and that is not a failure** — map the
+channels, then refresh again. A run that reads programme count after the first
+refresh and concludes the ingest failed has misread it.
+
+## The sync, and what was read off B
+
+B was destroyed (containers **and** both volumes), recreated, and its superuser
+made in the browser. Its pre-sync baseline, read from **B's own Postgres**:
+`0 channels / streams / groups / profiles / memberships / logos / EPG sources`,
+`3 user agents (1-3)`, `5 stream profiles (1-5)`, `2 output profiles`,
+`1 M3U account (custom)`, `1 user`. B's `/data/logos` empty; ECM's
+`/config/uploads/logos` empty.
+
+**Cycle 1 — apply onto empty B:** `completed_with_failures`, **created 1732,
+updated 0, failed 0 across 9 categories, 41.6 s.**
+
+**Cycle 2 — preview then apply onto the converged B:** the preview said **would
+create 0, update 0, skip 1425, 0 conflicts**; the apply said **created 0, updated
+316, failed 0**. The only row that changed anywhere in B was the one EPG link
+that had been missing (below). Everything else was byte-identical across a full
+dump of eleven collections.
+
+### Every counter the run reported, checked against B
+
+| Report field | Reported | Read off B |
+|---|---|---|
+| `logo_misses` | 0 | 316/316 channels carry a logo; all **316 channel→logo bindings identical to A** (number + name + logo URL) |
+| `logo_reattach.created_channels` | 316 | matches |
+| `epg_links_unrestored` (cycle 1) | **1**, named `USA: YES NETWORK [720p]`, `tvg_id YesNetwork(YES).us` | B had **182** links to A's 183; the missing one was **channel 301, exactly that channel** |
+| `epg_links_unrestored` (cycle 2) | 0, `existing_channels 183` | B now **183 = A**; the gap **self-healed on the next cycle** |
+| `stream_urls_redacted` | 316 | all 316 of B's URLs read `…/live/***REDACTED***/***REDACTED***/<id>.ts` |
+| `channels_with_no_playable_stream` | 316, **on both cycles** | consistent — the downgrade is **not** a creating-cycle artifact (`ukjx5`) |
+| `credentials_needing_reentry` | 1, `Live XC Provider`, fields `username`,`password` | B's XC account has `server_url` intact and **username/password empty** |
+| `profile_membership_drift` | 316 on cycle 1, **0 on cycle 2** | final state: **948 membership rows, all identical to A**, enabled flag included |
+| `channel_group_drift` | 0 | **779 groups, all 779 names identical** |
+| `entities_blocked_by_dependency` | 0 | — |
+
+### Side-by-side, both read from Postgres
+
+| | A | B | |
+|---|---|---|---|
+| channels | 316 | 316 | match |
+| channels with a logo | 316 | 316 | match |
+| channels with an EPG link | 183 | 183 | match (after cycle 2) |
+| streams / channel-stream links | 316 / 316 | 316 / 316 | match |
+| logo records | 316 | 316 | match |
+| channel groups | 779 | 779 | match |
+| channel profiles / memberships / enabled | 3 / 948 / 632 | 3 / 948 / 632 | match |
+| EPG sources / entries | 1 / 14,646 | 1 / 14,646 | match |
+| user agents / stream profiles | 3 / 5 | 3 / 5 | match |
+| programmes | 25,618 | 25,485 | **differs — expected**, B fetched the 7-day file itself at a later moment |
+| M3U accounts | 2 | 3 | **differs — expected**, B gains the synthetic `ECM Custom Streams (DBAS restore)` account named in the report's own notes |
+| `channelgroupm3uaccount` rows | 777 (2 enabled) | **0** | **differs — a gap, and an unreported one. See below.** |
+
+### The credential sweep on B, both poles
+
+Every credential-bearing column on B — `stream.url`, `stream.custom_properties`,
+`m3u_m3uaccount` (`username`/`password`/`custom_properties`),
+`m3u_m3uaccountprofile.custom_properties`, `epg_epgsource.url` — returned **0**
+matches for the provider's username and for its password. **The same query on A
+returns 316 and 1**, so the sweep can find a credential when one is there. B's
+XC account also carries **no `player_api` blob at all**, only the four
+auto-enable booleans — the cleartext-credentials hazard the screenshot section
+warns about does not reach B.
+
+## Findings
+
+**1. The per-account group-enable state does not cross (fidelity gap, unreported).**
+A holds 777 `dispatcharr_channels_channelgroupm3uaccount` rows with exactly 2
+enabled; **B holds 0**, and no counter in the sync report mentions it. B's XC
+account does carry `auto_enable_new_groups_live: false`, so a refresh on B would
+not silently import the whole catalogue — but the operator who re-enters
+credentials on B has lost the record of *which two categories A had enabled* and
+must rediscover it. `channel_group_drift` reports `0` while this is true, so the
+report is silent rather than wrong.
+
+**2. ECM's Channel-Profiles "Save Changes" fans out one PATCH per channel with no
+batching, no concurrency cap, no retry, and no visible failure (defect).**
+Disabling 214 channels in one profile fired **214 concurrent
+`PATCH /api/channel-profiles/<id>/channels/<channel_id>`** requests; **118
+succeeded and 96 failed with `net::ERR_NETWORK_CHANGED`.** The profile on A was
+left in a **partially applied** state (198 enabled instead of 102), and the
+dialog went on showing the *intended* count (`102 / 316 enabled`) with its 214
+changes still pending, so nothing in the UI said the save had not landed. A
+second click of the same button converged it. Dispatcharr exposes a bulk
+endpoint for exactly this (`/api/channels/profiles/<id>/channels/bulk-update/`,
+`PATCH` — trap 5) which this path does not use. **Not fixed here.**
+
+**3. A sync target's credentials and base URL cannot be edited after creation
+(UI gap).** The target row offers only Enabled, Logos, Sync now, Apply and
+Delete. Correcting a mistyped password means **deleting and recreating the
+target**, which also resets the `sync_logos` toggle and discards
+`last_full_sync_at` / `last_outcome`. This run hit it deliberately (the
+wrong-password pole was a real target) and had to delete and recreate.
+
+**4. The `stream` category still reports `updated 316` on a converged
+destination.** A full before/after dump of B across cycle 2 differs by **one
+line** — the healed EPG link — so **no stream row changed.** This is the
+cosmetic overstatement already recorded under the `xdmru` recipe; it is still
+live on `aed7447b`. Do not read `updated 0` as the idempotency criterion; read
+the dump diff.
+
+**5. The preview's `stream` category accounts for nothing.** On the converged
+preview every other category reported `would_skip` equal to its row count
+(779 groups, 316 channels, 316 logos …) while `stream` reported
+`would_create 0, would_update 0, would_skip 0` for 316 existing streams. Minor,
+but it means the preview's per-category totals do not sum to its own headline.
+
+## Instruments, and the poles each was proven against
+
+Nothing below was armed before it had produced a distinguishable verdict on a
+known-good **and** a known-bad input.
+
+| Instrument | Known-good | Known-bad |
+|---|---|---|
+| Playwright | navigating to A rendered the login wizard | a dead port raised `ERR_CONNECTION_REFUSED` rather than a blank page |
+| the Postgres reader | real tables return integers | a bogus table name and a bogus container both exit **non-zero** with the error text — it never degrades to `0` |
+| the collection dumper | 3,017 lines from B | pointed at a nonexistent container it exits `3` and writes one error line, not an empty "converged" dump |
+| **the sync report itself** | correct password → `success`, would-create plan, **Apply appears** | wrong password → notification `type=error`, **`SYNC_DESTINATION_UNREADABLE`**, **no Apply button**, and **exactly ONE `401` in B's own log** — not the eight the pre-`jqfxm` path made |
+| the credential grep | the provider's password matched 15 files before scrubbing; `Dispatcharr` matches 589 files in the tree | a nonsense token matches 0 |
+| the running-tree checksum | **244 / 244** non-test `backend/**.py` match `git show aed7447b:` | the same harness against `aed7447b~40` reports **56 MISMATCH** |
+
+**`/api/version` was not consulted.** It reports build metadata and has misled
+four engineers on this work (trap 12); the checksum above is the evidence.
+
+## Screenshot hazard, realised
+
+The Playwright MCP writes an accessibility-tree `.yml` per navigation into
+`.playwright-mcp/`. **15 of those files contained the provider's username and
+password in cleartext**, because ECM's Add-M3U-Account dialog renders the
+password field's value into the tree. The directory is gitignored
+(`.gitignore:153`) so nothing was committed, but a gitignored path inside the
+working tree is still a live credential on disk — **`.playwright-mcp/` was
+deleted at the end of the run**, and a repo-tree grep afterwards returns **0**
+hits for the username and **0** for the password. Delete it every time.
+
+The provider **hostname** still appears in two committed files —
+`frontend/src/utils/hdhomerun.test.ts` (pre-existing, commit `1d6b1450`,
+2026-07-28) and `.beads/issues.jsonl` (already present at `HEAD`). Neither
+carries a username or a password. Neither was introduced by this run.
+
+## What this run does NOT cover
+
+- **`cfxml`'s byte-copy half.** Every logo on A is a remote URL; A hosts no logo
+  file, so no bytes had to move. The binding half was covered and passed.
+- **`v7d37` (XC guide-URL redaction).** A's only EPG source is the
+  credential-free `cdn.epg.guru` URL. No `xmltv.php?username=…` source existed,
+  so the credentialed-EPG-URL case was not exercised.
+- **`4mkoe` (dependency classification).** `entities_blocked_by_dependency` was
+  `0` on every cycle; nothing was blocked, so the classifier had no work to do.
+- **`efvyg` / fuzzy rebinding.** `fuzzy_stream_matching` was left `false` and no
+  stream was deleted on B, so `streams_rebound` stayed `0` on both cycles.
+- **Playability as video.** Every stream URL on B is redacted by design, so B's
+  channels cannot play and no byte-level playability probe was run against B.
+  A's streams were not re-probed either; the census in
+  `xc-stream-census.json` describes the **retired** five-category lineup and
+  does **not** describe this A.
+- **Restore-path fixes** (`if05f` and anything reached only by a full restore).
+  `users` is in `SYNC_NEVER_CATEGORIES`; the sync UI structurally cannot reach it.
+
+## State this run leaves behind
+
+- **Dispatcharr A** (`:9601`) — 316 channels as described above, holding the PO's
+  live XC credentials in its Postgres. **Delete the `Live XC Provider` M3U
+  account before handing this host to anyone else.**
+- **Dispatcharr B** (`:9602`) — converged onto A, credential-free, every stream
+  URL redacted.
+- **ECM `ecm-kdz6p`** on `http://127.0.0.1:6500` (image `ecm-kdz6p:aed7447b`,
+  config volume `ecm-kdz6p-config`), admin `ecm-kdz6p-admin`, holding one sync
+  target with `sync_logos = 1`.
+- **`ecm-docenv` was STOPPED** at the start of this run so it could not touch A
+  while A was being rebuilt. It has not been restarted, and the A it is
+  configured against is not the A described in its own handover section above.
+- `ecm-ecm-1`, `ecm-ecm-mcp-1` and the operator's `dispatcharr` were **never
+  addressed by any command**: same container ids, same `StartedAt`, zero
+  restarts, before and after.
+
+### Tear down
+
+```bash
+docker rm -f ecm-kdz6p
+docker volume rm ecm-kdz6p-config
+docker image rm ecm-kdz6p:aed7447b
+```
+plus the two blocks under "Tearing the whole thing down" above.
 
 # ARCHIVE — the retired synthetic-provider measurements
 
