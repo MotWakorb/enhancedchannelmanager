@@ -7,6 +7,9 @@
  *   - The add-target form calls createSyncTarget with the entered fields.
  *   - The enable/disable toggle (the KILL SWITCH) calls updateSyncTarget with
  *     the flipped `enabled` value.
+ *   - The logo-replication toggle (bead …-8gnik) calls updateSyncTarget with the
+ *     flipped `sync_logos` value, reflects the target's stored value, and is
+ *     never flipped on implicitly — `sync_logos` stays default OFF (ADR-013 S9).
  *   - Delete confirms first, then calls deleteSyncTarget.
  *   - "Sync now" runs a DRY-RUN preview — runTask(`dbas_sync_${id}`, undefined,
  *     { sync_target_id, confirm_apply: false }) — and only an explicit Apply
@@ -45,6 +48,7 @@ const TARGET: api.SyncTarget = {
   enabled: true,
   insecure: false,
   fuzzy_stream_matching: false,
+  sync_logos: false,
   credential_version: 1,
   last_full_sync_at: '2026-06-18T12:00:00Z',
   last_outcome: 'success',
@@ -228,6 +232,70 @@ describe('SyncTargetsCard', () => {
       'false',
     );
   });
+  // -------------------------------------------------------------------------
+  // Logo replication opt-in (bead …-8gnik).
+  //
+  // `sync_logos` had no UI at all: the only ways to turn logo replication on
+  // were PUT /api/sync-targets/{id} or the MCP tool, and the operator guide
+  // said so in as many words. The toggle below is that missing control. It
+  // ADDS a control; it does not change the default, which ADR-013 S9 ratified
+  // as OFF because the logos importer is not a per-cycle cost.
+  // -------------------------------------------------------------------------
+
+  it('logo toggle calls updateSyncTarget with the flipped sync_logos (off -> on)', async () => {
+    (api.updateSyncTarget as Mock).mockResolvedValue({ ...TARGET, sync_logos: true });
+    await renderCard([{ ...TARGET, sync_logos: false }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-logos-7'));
+
+    await waitFor(() => expect(api.updateSyncTarget).toHaveBeenCalledTimes(1));
+    expect(api.updateSyncTarget).toHaveBeenCalledWith(7, { sync_logos: true });
+  });
+
+  it('logo toggle turns replication back OFF (on -> off)', async () => {
+    (api.updateSyncTarget as Mock).mockResolvedValue({ ...TARGET, sync_logos: false });
+    await renderCard([{ ...TARGET, sync_logos: true }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-logos-7'));
+
+    await waitFor(() => expect(api.updateSyncTarget).toHaveBeenCalledTimes(1));
+    expect(api.updateSyncTarget).toHaveBeenCalledWith(7, { sync_logos: false });
+  });
+
+  it('logo toggle reflects the stored sync_logos value', async () => {
+    await renderCard([{ ...TARGET, sync_logos: true }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+    expect(screen.getByTestId('sync-target-logos-7')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('logo toggle reads OFF for a target with logo replication disabled', async () => {
+    await renderCard([{ ...TARGET, sync_logos: false }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+    const toggle = screen.getByTestId('sync-target-logos-7');
+    expect(toggle).toHaveAttribute('aria-pressed', 'false');
+    expect(toggle).toHaveTextContent(/logos off/i);
+  });
+
+  it('creating a target never opts it into logo replication (default stays OFF)', async () => {
+    (api.createSyncTarget as Mock).mockResolvedValue({ ...TARGET, id: 8, name: 'New B' });
+    await renderCard([]);
+
+    fireEvent.click(await screen.findByRole('button', { name: /add sync target/i }));
+    fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: 'New B' } });
+    fireEvent.change(screen.getByLabelText(/base url/i), {
+      target: { value: 'https://new-b.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() => expect(api.createSyncTarget).toHaveBeenCalledTimes(1));
+    // ADR-013 S9: the create path must not carry a truthy sync_logos. Omitted
+    // is correct (the backend default is False); explicitly true is not.
+    const payload = (api.createSyncTarget as Mock).mock.calls[0][0];
+    expect(payload.sync_logos ?? false).toBe(false);
+  });
+
   // -------------------------------------------------------------------------
   // Per-target in-flight state (PR #752 review, Warn).
   //

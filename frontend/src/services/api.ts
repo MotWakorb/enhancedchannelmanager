@@ -5157,6 +5157,12 @@ export interface SyncTarget {
   enabled: boolean;
   insecure: boolean;
   fuzzy_stream_matching: boolean;
+  /**
+   * Per-target logo-replication opt-in. Default OFF and it stays OFF (ADR-013
+   * S9): the logos importer carries a streaming-upload cost S9 judged wrong to
+   * run every interval. The card offers a toggle; nothing flips it implicitly.
+   */
+  sync_logos: boolean;
   credential_version: number;
   token_revoked_at?: string | null;
   last_full_sync_at?: string | null;
@@ -5174,6 +5180,8 @@ export interface SyncTargetCreateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
+  /** Omit to take the backend default (OFF) — see `SyncTarget.sync_logos`. */
+  sync_logos?: boolean;
 }
 
 /**
@@ -5188,6 +5196,7 @@ export interface SyncTargetUpdateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
+  sync_logos?: boolean;
 }
 
 export async function listSyncTargets(): Promise<SyncTarget[]> {

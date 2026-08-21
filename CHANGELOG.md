@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Logo replication to a sync target can now be turned on from Settings, without calling the API (bead `enhancedchannelmanager-8gnik`).** Cross-instance sync can copy your primary's channel artwork to the replica, but the setting that enables it had no control anywhere in the web UI: the only ways to reach it were a raw `PUT /api/sync-targets/{id}` or the MCP tool, and this guide said so. Each target row on the **Cross-Instance Sync** card now carries a **Logos off / Logos on** toggle beside its enable/disable switch. It shows the target's stored setting and changes it in place, so what you see on the card is what that target will do.
+
+  **It is still off by default, and turning it on is still your decision.** Copying artwork means fetching and uploading every logo the primary holds, which is a real cost to repeat on a schedule — so a target you create is created with logo replication off, exactly as before, and nothing turns it on for you. Sync also never deletes or bulk-clears the replica's own logos, whether the setting is on or off.
+
 - **You can now create a redacted configuration backup directly from Backup & Restore (bead `enhancedchannelmanager-pui76`, build 0115).** The new **Configuration Backup** card creates the same `.zip` artifact as a scheduled backup and refreshes **Saved Backups** when it finishes. The card states what ECM replaces or removes before you create it: recognized M3U and EPG provider credential fields, credential-bearing URL values, and ECM login accounts. Operator-authored free text may still contain a secret ECM cannot recognize, so inspect the artifact before sharing it. Use **Encrypted Backup (Migration)** with **Include credentials** when the structured credentials and accounts need to travel to another install.
 
 ### Fixed
