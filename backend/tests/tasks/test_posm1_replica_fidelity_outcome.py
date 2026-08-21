@@ -278,6 +278,11 @@ def test_a_source_channel_with_no_epg_link_of_its_own_is_never_a_shortfall():
         "stream_urls_redacted",
         "epg_links_unrestored",
         "logo_misses",
+        # Bead …-4mkoe: an entity the run was asked to deliver and did not,
+        # because a dependency it needs is not on the destination. Only the
+        # GENUINE half increments it — a dependency the operator DESELECTED is
+        # recorded ``SkipReason.DEPENDENCY_DESELECTED`` and never counted.
+        "entities_blocked_by_dependency",
     ],
 )
 def test_every_member_of_the_set_downgrades_an_apply_on_its_own(field):

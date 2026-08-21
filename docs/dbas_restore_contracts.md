@@ -158,6 +158,7 @@ The invariant, of which the members are examples rather than the specification:
 | `stream_urls_redacted` | the replica holds an address ECM cut the credentials out of (bead `…-msqf7`) |
 | `epg_links_unrestored` | a channel the source gave a guide link arrived without one (bead `…-v7d37`) |
 | `logo_misses` | a logo the operator HAD on the source and does not have after the run (bead `…-dfkbn`) |
+| `entities_blocked_by_dependency` | an archived entity the run was asked to deliver was never created, because something it references is not on the destination (bead `…-4mkoe`). Only the GENUINE half: a dependency the operator DESELECTED is recorded `SkipReason.DEPENDENCY_DESELECTED` and never counted, because that absence is what the operator asked for |
 
 Everything else on the report is deliberately **out**, and each exclusion has a
 reason worth keeping:
@@ -244,6 +245,7 @@ above split into two groups, and they answer differently:
 |---|---|
 | `credentials_needing_reentry` | predicted. It is a fact about the artifact AND about the destination row, and both are readable without writing anything |
 | `epg_links_unrestored` | never recorded — a preview does not claim a loss |
+| `entities_blocked_by_dependency` | **predicted.** The FK resolution a preview performs is the same one the apply performs (the anti-drift provisional remap exists so a preview and an apply reach the same verdict), so the preview's `would_skip` rows are the apply's skips. `compute_outcome` still refuses to downgrade a preview |
 | `profile_membership_drift` | **predicted.** The drift set is the restored channels whose membership on the destination differs from the archived selection, computed from the archive, the remap the same run already populated, and one read-only look at the destination's current profile memberships. Both branches run the identical expression — a channel counts as currently enabled when the destination's profile enables it, when this run created it (Dispatcharr's enable-everything create default), or when the profile is not on the destination yet — so preview N == apply N (bead `…-ukjx5`) |
 | `channels_needing_stream_reattach` | **`null` — not predicted** |
 | `channels_with_no_playable_stream` | **`null` — not predicted** |

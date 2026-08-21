@@ -535,12 +535,17 @@ async def import_users(
                 "the channel profiles first, then re-run this category."
                 % (CATEGORY_LABEL, label)
             )
-            _skip(
-                cat,
-                SkipReason.DEPENDENCY_UNRESOLVED,
-                label,
-                archive_user.get("id"),
-                is_dry_run,
+            # A USER is a first-class entity the operator selected, so the
+            # replica is missing something it was asked for — reported whether or
+            # not the profile category was deselected (bead …-4mkoe). The note
+            # above already names it; this makes it reach the outcome too.
+            report.record_dependency_unresolved(
+                recorded_under=EntityType.USER,
+                dependency=EntityType.CHANNEL_PROFILE,
+                label=label,
+                remap=remap,
+                is_dry_run=is_dry_run,
+                source_export_id=archive_user.get("id"),
             )
             continue
 

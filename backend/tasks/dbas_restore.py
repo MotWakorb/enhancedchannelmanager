@@ -656,6 +656,22 @@ class DbasRestoreTask(TaskScheduler):
             "%d profile membership(s) corrected",
             "%d profile membership(s) would be corrected",
         ),
+        # Bead …-4mkoe. The entity was not created at all, because something it
+        # references is not on the destination — a degraded backup that lost the
+        # dependency's whole category, a collision that stopped it being created,
+        # or a selection that left it out while its dependants were kept. The
+        # clause names the shape rather than the entity type because every
+        # importer can produce it; the per-category ``skip_details`` name which
+        # rows they were. A skip whose dependency the operator DESELECTED is
+        # recorded ``DEPENDENCY_DESELECTED``, never counted here, and never
+        # reaches this clause.
+        (
+            "entities_blocked_by_dependency",
+            "%d archived item(s) were not restored — something they depend on is "
+            "not on the destination",
+            "%d archived item(s) would not be restored — something they depend on "
+            "is not on the destination",
+        ),
     )
 
     # Credential FIELD NAMES that carry the ADDRESS as well as the secret, so

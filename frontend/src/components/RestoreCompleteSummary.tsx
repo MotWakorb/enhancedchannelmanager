@@ -88,6 +88,11 @@ const SKIP_REASON_LABELS: Record<RestoreSkipReason, string> = {
   current_admin_preserved: 'Current admin preserved',
   unsupported_in_this_version: 'Unsupported in this version',
   dependency_unresolved: 'Dependency unresolved',
+  // Bead 4mkoe. The two read alike and mean opposite things, so the label says
+  // WHY rather than repeating "dependency": this row exists because the operator
+  // excluded the category the dependency lives in, which makes it an ordinary
+  // no-op beside "Excluded by operator" — not the shortfall above it.
+  dependency_deselected: 'Dependency excluded by operator',
 };
 
 const FAILURE_REASON_LABELS: Record<RestoreFailureReason, string> = {

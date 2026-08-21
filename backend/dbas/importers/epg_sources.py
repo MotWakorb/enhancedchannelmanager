@@ -358,12 +358,24 @@ async def import_epg_sources(
         # FK resolution first — an unresolved m3u_account is a hard skip, no create.
         resolved, m3u_dest_id = _resolve_m3u_fk(archive_source, remap)
         if not resolved:
-            _skip(cat, SkipReason.DEPENDENCY_UNRESOLVED, label, source_id, is_dry_run)
+            # An EPG SOURCE is a first-class entity the operator selected, so its
+            # absence is a loss whether or not the M3U category was deselected
+            # (bead …-4mkoe); ``record_dependency_unresolved`` reaches that from
+            # ``recorded_under != dependency``, with no special case here.
+            reason = report.record_dependency_unresolved(
+                recorded_under=EntityType.EPG_SOURCE,
+                dependency=EntityType.M3U_ACCOUNT,
+                label=label,
+                remap=remap,
+                is_dry_run=is_dry_run,
+                source_export_id=source_id,
+            )
             logger.info(
-                "[DBAS-EPG] Source '%s' (type=%s) skipped: m3u_account dependency "
-                "unresolved.",
+                "[DBAS-EPG] Source '%s' (type=%s) skipped (%s): its m3u_account "
+                "is not on the destination.",
                 label,
                 archive_source.get("source_type"),
+                reason.value,
             )
             continue
 

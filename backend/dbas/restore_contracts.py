@@ -42,7 +42,7 @@ docstrings on the public surface.
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from datetime import datetime, timezone
 from enum import Enum
 from typing import ClassVar
@@ -136,7 +136,25 @@ class SkipReason(str, Enum):
     EXCLUDED_BY_OPERATOR = "excluded_by_operator"           # category opt-out / selection
     CURRENT_ADMIN_PRESERVED = "current_admin_preserved"     # …-l1p4p D11 guard
     UNSUPPORTED_IN_THIS_VERSION = "unsupported_in_this_version"  # e.g. plugins (ADR-012 D10)
+    # A required remap target is missing AND the run was asked to deliver it —
+    # so the replica is missing something the operator selected. Its aggregate,
+    # :attr:`RestoreReport.entities_blocked_by_dependency`, is a member of
+    # :data:`RestoreReport.DELIVERY_SHORTFALL_FIELDS`.
     DEPENDENCY_UNRESOLVED = "dependency_unresolved"         # required remap target missing
+    # The same missing remap target, when the operator EXCLUDED the category it
+    # lives in and the skipped record is a LINK INTO that category (bead
+    # …-4mkoe). Split out of ``DEPENDENCY_UNRESOLVED``, which carried both and
+    # so could report neither: a link into a category the operator asked to
+    # leave out was never going to resolve, and naming it is bead ``…-15g1j``'s
+    # crying wolf on every unattended cycle, forever. Never a shortfall.
+    #
+    # The test is a CONJUNCTION, and the second half is load-bearing: deselecting
+    # ``channel_groups`` while selecting ``channels`` strands CHANNELS, which the
+    # operator DID ask for — a loss, not a faithful absence. Only a record filed
+    # UNDER the deselected category is entailed by the operator's own selection.
+    # See :meth:`RestoreReport.record_dependency_unresolved`, the one place that
+    # decides it.
+    DEPENDENCY_DESELECTED = "dependency_deselected"
 
 
 class FailureReason(str, Enum):
@@ -831,6 +849,18 @@ class RestoreReport(BaseModel):
     # * ``channels_needing_stream_reattach`` is not a member and must never
     #   become one: a channel that kept its real streams and holds one leftover
     #   placeholder PLAYS (bead ``…-daziw``).
+    # * ``entities_blocked_by_dependency`` is a member, and it is the first one
+    #   whose PRODUCER had to be split before it could join (bead ``…-4mkoe``).
+    #   ``SkipReason.DEPENDENCY_UNRESOLVED`` covered two opposite situations —
+    #   an upstream category the operator EXCLUDED, and one that was in scope and
+    #   still is not there — so surfacing the reason as it stood would have
+    #   reported the first as loudly as the second, forever, on every unattended
+    #   cycle. Only the second increments this counter. It passes the clearability
+    #   test that excludes ``credentials_needing_reentry``: restore the dependency
+    #   (re-take the degraded backup, fix the collision, add the category to the
+    #   selection) and the next cycle counts zero. The NAMED drill-down is the
+    #   per-category ``skip_details`` the same recorder writes — there is no
+    #   parallel detail list to drift out of step with the count.
     #
     # KEY ON THE OUTCOME, NEVER ON WHICH MEMBER FIRED. Bead ``…-cwmid`` had to
     # UNDO a narrower keying after drill run 2026-08-06-run9 measured the
@@ -846,6 +876,7 @@ class RestoreReport(BaseModel):
         "stream_urls_redacted",
         "epg_links_unrestored",
         "logo_misses",
+        "entities_blocked_by_dependency",
     )
     outcome: RestoreOutcome | None = Field(
         default=None,
@@ -872,6 +903,29 @@ class RestoreReport(BaseModel):
     logo_miss_details: list[LogoMissDetail] = Field(
         default_factory=list,
         description="Per-logo detail (id + name) for each unresolved logo (…-qhui4).",
+    )
+
+    # Entities the run was asked to deliver and did not, because a dependency
+    # they need is not on the destination (bead …-4mkoe). A DELIVERY_SHORTFALL
+    # member; the reasoning for its membership is on the declaration above.
+    #
+    # Counts ONLY the genuine half. A skip whose missing dependency lives in a
+    # category the operator EXCLUDED, and which is itself a link into that
+    # category, is recorded ``SkipReason.DEPENDENCY_DESELECTED`` and never
+    # counted here — that absence is what the operator asked for, and counting it
+    # would put a permanent non-zero beside a replica that has lost nothing.
+    #
+    # ADDITIVE optional — no CONTRACT_VERSION bump (the module's rule at line 54:
+    # bump when a field's MEANING changes, not for additive optional fields).
+    # Written ONLY through :meth:`record_dependency_unresolved`, which writes the
+    # count and the ``skip_details`` row in the same call so the aggregate and
+    # its drill-down cannot disagree.
+    entities_blocked_by_dependency: int = Field(
+        default=0,
+        description=(
+            "Archived entities not restored because a dependency they need is "
+            "absent from the destination and the run was asked to deliver it."
+        ),
     )
 
     # Credential-re-entry aggregate (bead …-6pilh). Counts ENTITIES restored from
@@ -1131,6 +1185,82 @@ class RestoreReport(BaseModel):
             if count > 0:
                 found[name] = count
         return found
+
+    def record_dependency_unresolved(
+        self,
+        *,
+        recorded_under: EntityType,
+        dependency: EntityType,
+        label: str,
+        remap: "IdRemapTable",
+        is_dry_run: bool,
+        source_export_id: int | None = None,
+    ) -> SkipReason:
+        """Record one entity skipped for an unresolvable dependency (bead …-4mkoe).
+
+        THE ONE PLACE that decides which of the two opposite facts an unresolved
+        dependency is, and the one place that writes both the classification and
+        the aggregate. Declared once for the reason ``…-posm1`` declared
+        :data:`DELIVERY_SHORTFALL_FIELDS` once: the reason on the
+        ``skip_details`` row, the per-category count, and the top-level shortfall
+        aggregate are three views of one decision, and three call sites deciding
+        it separately is how they drift.
+
+        THE RULE, a conjunction whose second half is load-bearing::
+
+            faithful  <=>  the dependency's category was DESELECTED
+                           AND the skip is recorded UNDER that same category
+
+        The first half alone is wrong, and wrong in the direction that hides
+        losses. Deselecting ``channel_groups`` while selecting ``channels``
+        strands every grouped CHANNEL — a first-class entity the operator asked
+        for, whose absence is a shortfall no matter why its group is missing. The
+        only absence the operator's own selection ENTAILS is a LINK INTO the
+        excluded category, and this restore already files such a link under that
+        category rather than under the entity that carries it (an archived
+        channel's profile membership is recorded under ``CHANNEL_PROFILE``,
+        never under ``CHANNEL``). An ENTITY of a deselected category never
+        reaches here at all — its own importer skips it ``EXCLUDED_BY_OPERATOR``
+        before any FK is resolved — so ``recorded_under == dependency`` cannot
+        mean anything else.
+
+        FAIL LOUD when the run scope was never recorded. ``remap`` answers
+        "deselected?" with ``False`` until :meth:`IdRemapTable.record_run_scope`
+        has been called (``run_restore`` does it, once, for every path). The
+        defect this method exists to fix is UNDER-reporting, so an unknown scope
+        reports the loss rather than silencing it.
+
+        Args:
+            recorded_under: The category whose report slice carries the skip.
+            dependency: The category of the id that could not be resolved.
+            label: Operator-facing name of the skipped entity. Never a secret.
+            remap: The run-scoped :class:`IdRemapTable` — the object whose
+                ``resolve`` returned ``None``, and the one that knows the scope.
+            is_dry_run: Whether this is a preview (counts ``would_skip``).
+            source_export_id: The archive id of the skipped entity, if any.
+
+        Returns:
+            The :class:`SkipReason` recorded, so a caller can log which it was.
+        """
+        faithful = recorded_under == dependency and remap.category_deselected(
+            dependency
+        )
+        reason = (
+            SkipReason.DEPENDENCY_DESELECTED
+            if faithful
+            else SkipReason.DEPENDENCY_UNRESOLVED
+        )
+        cat = self.category(recorded_under)
+        if is_dry_run:
+            cat.would_skip += 1
+        else:
+            cat.skipped += 1
+        cat.skip_details.append(
+            SkipDetail(reason=reason, label=label, source_export_id=source_export_id)
+        )
+        if not faithful:
+            self.entities_blocked_by_dependency += 1
+        return reason
 
     def record_credential_reentry(
         self,
@@ -1524,6 +1654,46 @@ class IdRemapTable(BaseModel):
     contract_version: int = Field(default=CONTRACT_VERSION)
     # entity_type value -> {source_export_id: destination_id}
     mappings: dict[EntityType, dict[int, int]] = Field(default_factory=dict)
+
+    # The categories THIS RUN was asked to carry (bead …-4mkoe). It lives here,
+    # beside the mappings, because ``resolve`` returning ``None`` is the ONE fact
+    # every unresolved-dependency skip is derived from, and "was this namespace
+    # ever going to be populated?" is the question that makes that ``None``
+    # readable. Every importer already holds this table; threading the plan's
+    # selection separately into five importer signatures would put the same fact
+    # in five places.
+    #
+    # ``None`` means NOT RECORDED, which is deliberately distinct from "nothing
+    # was selected": an empty set would make every category read as deselected
+    # and silence every shortfall. Written once by
+    # ``dbas.restore_orchestrator.run_restore``.
+    selected_categories: set[EntityType] | None = Field(
+        default=None,
+        description="Categories this run was asked to carry; None = not recorded.",
+    )
+
+    def record_run_scope(self, selected: Iterable[EntityType]) -> None:
+        """Record which categories this run was asked to carry.
+
+        Args:
+            selected: The entity types the operator opted into for this run.
+        """
+        self.selected_categories = set(selected)
+
+    def category_deselected(self, entity_type: EntityType) -> bool:
+        """True when the operator EXCLUDED ``entity_type`` from this run.
+
+        A category absent from the plan entirely reads the same as one the
+        operator unticked — which is what the orchestrator's own ``_selected``
+        already means, so the two cannot disagree.
+
+        FAIL LOUD: ``False`` until :meth:`record_run_scope` has been called. A
+        caller must never be able to claim a deselection this table cannot
+        prove; see :meth:`RestoreReport.record_dependency_unresolved`.
+        """
+        if self.selected_categories is None:
+            return False
+        return entity_type not in self.selected_categories
 
     def add(self, entity_type: EntityType, source_export_id: int, destination_id: int) -> None:
         """Record a source-export-id -> destination-id mapping.

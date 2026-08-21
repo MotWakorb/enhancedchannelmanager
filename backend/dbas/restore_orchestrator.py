@@ -500,6 +500,30 @@ async def run_rollback(
 # ---------------------------------------------------------------------------
 
 
+def _record_run_scope(plan: ImportPlan, remap: object) -> None:
+    """Tell the shared remap which categories this run was asked to carry.
+
+    Bead ``…-4mkoe``. The scope is what makes ``IdRemapTable.resolve`` returning
+    ``None`` readable: a namespace the operator EXCLUDED was never going to be
+    populated, while one that was in scope and is still empty means the replica
+    is missing something it was asked for. Recorded from the SAME
+    ``category(...).selected`` reading the importer wiring uses, so a category
+    absent from the plan reads as excluded in both places.
+
+    Tolerates a ``remap`` without the method (the parameter is typed loosely to
+    avoid an import cycle, and tests pass stand-ins): the classification then
+    falls back to its fail-loud default and reports every unresolved dependency.
+
+    Args:
+        plan: The restore plan carrying the operator's per-category selection.
+        remap: The shared ``IdRemapTable`` threaded through every importer.
+    """
+    recorder = getattr(remap, "record_run_scope", None)
+    if recorder is None:
+        return
+    recorder({cat.entity_type for cat in plan.categories if cat.selected})
+
+
 def _report_has_failures(report: RestoreReport) -> bool:
     """True when any category in the report recorded at least one failure."""
     return any(cat.failed > 0 for cat in report.categories)
@@ -834,6 +858,14 @@ async def run_restore(
 
     if plan_is_dry_run := report.is_dry_run:
         logger.info("[DBAS-RESTORE] Dry-run: pre-flight passed; no apply performed.")
+
+    # Hand the shared remap this run's SCOPE (bead …-4mkoe). This is the only
+    # place that holds both the plan and the table every importer resolves
+    # through, which is why it is recorded here rather than threaded into five
+    # importer signatures. Without it a remap answers "was this category ever
+    # going to be populated?" with "I was not told", and every unresolved
+    # dependency is reported as a loss — the fail-loud default, on purpose.
+    _record_run_scope(plan, remap)
 
     # Per-create durable flush: on a real apply, persist the shared ledger after
     # each ``record_created`` (importers call ``ctx.flush_ledger()``); on a
