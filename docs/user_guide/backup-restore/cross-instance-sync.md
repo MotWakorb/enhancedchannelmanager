@@ -39,7 +39,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | Channel profiles | Profile definitions. |
 | User agents | The custom user-agent strings an M3U account fetches with and a stream profile plays through. Synced first, before both, so each one's user-agent link is re-pointed at B's copy. Distinct from user *accounts*, which are never synced. |
 | Stream profiles | Profile definitions, including their user-agent link. |
-| Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. **A stream URL that carries the provider's credentials in its path** — the Xtream Codes `…/live/<username>/<password>/<id>.ts` form, and its `movie` / `series` variants — arrives on B with those two path segments replaced by `***REDACTED***`. The address is still there, so you can see where the stream pointed, but it will not play until B has its own provider account. The run summary names the count. A stream URL that carries no credential crosses byte-identical. |
+| Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. **A stream URL that carries the provider's credentials in its path** — the Xtream Codes `…/live/<username>/<password>/<id>.ts` form, and its `movie` / `series` variants — arrives on B with those two path segments replaced by `***REDACTED***`. The address is still there, so you can see where the stream pointed, but it will not play until B has its own provider account. The run summary names the count. A stream URL that carries no credential crosses byte-identical. On B every synced stream is filed under a single account named `ECM Custom Streams (DBAS restore)`, **not** under the replicated provider account it comes from — see [that section below](#on-b-every-synced-stream-belongs-to-an-account-called-ecm-custom-streams-dbas-restore) for why and what to do about it. |
 
 ### Opt-in per target
 
@@ -188,7 +188,23 @@ An Xtream Codes stream URL puts the username and password in the address itself 
 
 This is deliberate. Cross-instance sync never puts a provider credential on the wire, and B may be a machine at a different site or trust level — a recurring schedule that kept re-sending your subscription password would be a standing exposure, not a convenience. A stream URL that carries **no** credential (a plain-M3U provider's direct URL, for instance) crosses byte-identical and plays immediately.
 
-**Resolution:** give B its own copy of the provider. Re-enter the credentials on the matching M3U account on B and refresh it; B then ingests the provider's real stream URLs itself, and the channels bind to those. To seed B with working URLs from the start instead, do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
+**Resolution:** give B its own copy of the provider — but re-entering the credentials and refreshing is **not enough on its own**, and the step most people stop at is the one that does nothing visible. Do all three:
+
+1. On B, open the matching M3U account, re-enter the credentials, and refresh it. B now ingests the provider's real stream URLs. They arrive **alongside** the redacted ones rather than replacing them, so B briefly holds two copies of every stream and your channels are still on the unplayable copy.
+2. On B, delete the M3U account named **`ECM Custom Streams (DBAS restore)`**. That is the account sync put the redacted streams under (see below); deleting it removes them and leaves your channels with no streams for a moment. ECM creates that account itself and puts only these stand-in streams under it, so on a B that exists purely as a sync destination there is nothing of yours to lose. (If you have also *restored a backup* onto B, that account can hold stand-ins from the restore too — check it before deleting.)
+3. Let one more sync cycle run (or force one). It re-matches every channel onto the real streams B just ingested, correctly attributed to your own provider account.
+
+To skip all of this, seed B with working URLs from the start: do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
+
+### On B, every synced stream belongs to an account called "ECM Custom Streams (DBAS restore)"
+
+Expected, and worth knowing before it surprises you. Open B's M3U Manager after a sync and you will see the provider accounts sync replicated — your Xtream Codes account, your Standard M3U account — each showing **no streams**, plus a fourth account named `ECM Custom Streams (DBAS restore)` holding **all** of them.
+
+Sync does not make B fetch from your providers. Re-triggering every provider's playlist download on B on each cycle would hammer them and is deliberately not done, so B has no stream of its own to attach a replicated channel to. Sync therefore creates each stream directly and files it under that one account, which exists precisely to hold streams that have no provider account on the destination to belong to.
+
+The consequence to plan around: **B's account list does not tell you which provider supplies which stream.** Read that from A, which is the instance actually talking to your providers. B's copy is a mirror of A's lineup, not an independent subscriber.
+
+If you follow the three-step resolution above, B's streams end up under your real provider accounts and the `ECM Custom Streams (DBAS restore)` account is gone — that is the tidiest state B can be in, and it is worth doing once on a replica you intend to keep.
 
 ### The "Allow insecure TLS" warning
 
