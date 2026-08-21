@@ -538,6 +538,73 @@ def _report_has_delivery_shortfall(report: RestoreReport) -> bool:
     return bool(report.delivery_shortfalls())
 
 
+def outcome_for_unread_destination(report: RestoreReport) -> RestoreOutcome | None:
+    """The outcome a REALIZED run that never read its destination must carry.
+
+    THE PROPERTY (bead ``…-bj442``), of which a wrong password is one example:
+
+        A realized cycle that could not read the destination it describes
+        records an outcome no consumer can read as success — and records the
+        SAME one everywhere, because this is the only place that decides it.
+
+    Bead ``…-jqfxm`` established the FACT
+    (:attr:`RestoreReport.destination_unreadable`) and acted on it in
+    ``tasks.dbas_sync``, which corrected what the operator is TOLD.
+    ``report.outcome`` was not part of that decision, so every surface that
+    RECORDS the run — the task-history ``details.outcome`` row an API or MCP
+    consumer reads, the ``sync_outbound`` journal row, and the persisted
+    ``sync_targets.last_outcome`` / ``last_full_sync_at`` columns — kept reading
+    ``success`` for a cycle that never read the destination it claims to
+    describe. Measured at ``02c2a312``: a confirmed apply whose readback gate
+    passed and whose M3U category read then returned 503 recorded
+    ``outcome=success``, ``last_outcome="success"`` and a fresh
+    ``last_full_sync_at``, with every category ``failed`` at 0 — because every
+    importer degrades a failed destination read to ``existing = []``.
+
+    A SIBLING OF THE DELIVERY-SHORTFALL SET, NEVER A MEMBER OF IT.
+    :attr:`RestoreReport.DELIVERY_SHORTFALL_FIELDS` means "the source had this
+    and the replica does not": a LOSS from a cycle that RAN, whose applied state
+    is real, kept and reasonable-about, and every member of it resolves to
+    ``COMPLETED_WITH_FAILURES`` — which
+    :attr:`RestoreOutcome.is_degraded_not_failed` maps to a ``warning`` carrying
+    a per-task opt-out. An unread destination is not that. Nothing was lost; the
+    cycle never read the thing it describes, so it knows neither what the
+    destination carries nor what it applied. Bead ``…-jqfxm`` deliberately
+    treats that as an ERROR, so making it a shortfall member would downgrade a
+    hard failure into an opt-out-able warning — the inverse of the defect.
+
+    WHY ``FAILED_ROLLBACK_INCOMPLETE`` and not one of the other three. It is the
+    only value that means INDETERMINATE — "the caller cannot tell what it got" —
+    which is exactly the state ``…-jqfxm`` describes. ``SUCCESS`` and
+    ``COMPLETED_WITH_FAILURES`` both assert the run finished and left state the
+    operator can reason about; ``PARTIAL_FAILED_ROLLED_BACK`` asserts the
+    instance is back to its pre-restore state. All three are claims ABOUT the
+    destination, and a run that could not read it cannot make one.
+    ``tasks.dbas_sync_engine`` already resolves a no-rollback, no-residue
+    source-side name conflict to this same value.
+
+    THE ``…-cwmid`` PROPERTY IS PRESERVED: this returns an OUTCOME and nothing
+    else. Severity is still read off the outcome alone
+    (:attr:`RestoreOutcome.is_degraded_not_failed`), so no condition is ever
+    consulted for one and no condition can reorder the severities.
+
+    A DRY RUN gets ``None``: a preview has no realized outcome to record (the
+    ``…-kxuj2`` contract) and nothing was applied to be indeterminate. The
+    marker still fails the preview at the task layer, which is ``…-jqfxm``'s
+    half and is unchanged.
+
+    Args:
+        report: The restore report, carrying the ``…-jqfxm`` marker or not.
+
+    Returns:
+        The forced :class:`RestoreOutcome`, or ``None`` when the run read its
+        destination (or is a preview) and the ordinary decision stands.
+    """
+    if report.is_dry_run or report.destination_unreadable is None:
+        return None
+    return RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
+
+
 def compute_outcome(
     *,
     report: RestoreReport,
@@ -571,9 +638,15 @@ def compute_outcome(
       (:attr:`RestoreOutcome.is_degraded_not_failed`).
     * ``PARTIAL_FAILED_ROLLED_BACK`` — a fatal failure occurred, a rollback ran,
       and it was COMPLETE (every created entity deleted or confirmed 404-gone).
-    * ``FAILED_ROLLBACK_INCOMPLETE`` — a fatal failure occurred and the rollback
-      could not fully undo (non-404 delete error, or a type with no
-      compensator). The worst state; reported loudly.
+    * ``FAILED_ROLLBACK_INCOMPLETE`` — the INDETERMINATE state, reported loudly.
+      Either a fatal failure occurred and the rollback could not fully undo it
+      (non-404 delete error, or a type with no compensator), or the run could
+      not read the destination it describes and therefore knows neither what
+      that destination carries nor what it applied (bead ``…-bj442``, keyed on
+      :attr:`RestoreReport.destination_unreadable`). The second trigger DOMINATES
+      every other reading below, because the counts a run gets from a
+      destination it could not read describe the source; see
+      :func:`outcome_for_unread_destination`.
 
     Args:
         report: The shared restore report (its per-category failure counts and
@@ -585,6 +658,20 @@ def compute_outcome(
     Returns:
         The :class:`RestoreOutcome`.
     """
+    # A run that never read the destination it describes is indeterminate, and
+    # that dominates every other reading of the counts — the counts themselves
+    # are the SOURCE's, because each importer degrades a failed destination read
+    # to "the destination is empty" (bead ``…-bj442``). Decided here rather than
+    # compensated for at the task layer so that ONE decision feeds the task
+    # result, the task-history row, the journal row and the persisted per-target
+    # state. Sibling of the delivery-shortfall set, never a member of it — see
+    # :func:`outcome_for_unread_destination` for why, and for why the rolled-back
+    # verdicts are overridden too (they are claims about a destination this run
+    # could not read).
+    forced = outcome_for_unread_destination(report)
+    if forced is not None:
+        return forced
+
     mixed = failure_occurred or _report_has_failures(report)
     if not mixed:
         # Nothing FAILED, but a replica missing something the source had is

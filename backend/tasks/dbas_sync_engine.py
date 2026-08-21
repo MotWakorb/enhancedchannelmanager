@@ -1494,11 +1494,21 @@ class _ReadObservingClient:
     the destination's clothes). B restarting mid-cycle, one endpoint answering
     500, or a token expiring against a rate-limited refresh all land there.
 
-    So the client handed to the orchestrator records every read that raised.
-    Nothing is suppressed or retried — the importers' own fallbacks still run,
-    the run still completes — but :attr:`read_failures` is non-empty afterwards
-    and the report is marked unreadable, which is what stops a preview built on
-    a half-read destination from unlocking Apply.
+    So the client handed to the orchestrator marks the REPORT the moment a read
+    raises. Nothing is suppressed or retried — the importers' own fallbacks
+    still run and the run still completes — but the report carries
+    ``destination_unreadable`` from that moment on, which is what stops a
+    preview built on a half-read destination from unlocking Apply.
+
+    IT MARKS THE REPORT DURING THE RUN, NOT AFTER IT (bead ``…-bj442``). This
+    used to collect the failures in a list that ``run_sync`` drained once
+    ``run_restore`` had returned — which is to say, after ``compute_outcome``
+    had already decided the run was a clean SUCCESS from counts that describe
+    the SOURCE. Stamping at the moment of the failed read is what lets the ONE
+    outcome decision see it, so the task result, the task-history
+    ``details.outcome`` row, the ``sync_outbound`` journal row and the persisted
+    ``sync_targets.last_outcome`` column all read the same verdict instead of
+    needing a second correction each.
 
     A transparent proxy rather than a subclass: the client is constructed by
     :func:`make_remote_client` (Fernet decrypt + SSRF-pinned transport) and must
@@ -1506,11 +1516,11 @@ class _ReadObservingClient:
     straight through.
     """
 
-    def __init__(self, inner) -> None:
+    def __init__(self, inner, report: RestoreReport) -> None:
         # Bypass __getattr__ for our own state (anything not set here routes to
         # the wrapped client).
         object.__setattr__(self, "_inner", inner)
-        object.__setattr__(self, "read_failures", [])
+        object.__setattr__(self, "_report", report)
 
     def __getattr__(self, name: str):
         attr = getattr(self._inner, name)
@@ -1524,7 +1534,12 @@ class _ReadObservingClient:
                     result = await result
                 return result
             except Exception as exc:  # noqa: BLE001 - observe, never swallow
-                self.read_failures.append((name, _describe_destination_error(exc)))
+                _mark_destination_unread(
+                    self._report,
+                    "%s could not be read — %s" % (
+                        name, _describe_destination_error(exc),
+                    ),
+                )
                 raise
 
         return _observed_read
@@ -1711,8 +1726,11 @@ async def run_sync(
     # From here on the orchestrator talks to the destination through a wrapper
     # that NOTICES a failed read (the importers' own fallbacks turn one into
     # "the destination is empty"). Reads still behave exactly as before; the
-    # wrapper only remembers.
-    client = _ReadObservingClient(client)
+    # wrapper marks the report the moment one raises, so the marker is in place
+    # BEFORE run_restore decides the outcome (bead …-bj442) — which is why the
+    # report is built here rather than beside the ledger below.
+    report = RestoreReport(is_dry_run=not confirm_apply)
+    client = _ReadObservingClient(client, report)
 
     # --- 3. Redacted live-source plan (config categories, never users). The
     # logos slice is per-target OPT-IN (sync_logos, default off — 7ipq2.1);
@@ -1736,7 +1754,6 @@ async def run_sync(
     # stream, reported as SUCCESS (bead …-efvyg). Off => the stream matcher
     # floors at Tier-3 exact, everywhere in the cycle (ruling 1b).
     allow_fuzzy = bool(getattr(sync_target, "fuzzy_stream_matching", False))
-    report = RestoreReport(is_dry_run=not confirm_apply)
     ledger = RollbackLedger(restore_id=new_restore_id())
     result = await run_restore(
         plan=plan,
@@ -1757,14 +1774,16 @@ async def run_sync(
     # --- 4c. A read that failed AFTER the gate still means the report describes
     # a destination it did not fully read (…-jqfxm). The importer that hit it
     # already carried on with "existing = []", so the counts for that category
-    # are the source's, not the destination's — name the category so an operator
-    # can see which part of the diff is fiction. ---
-    for read_name, read_reason in client.read_failures:
-        _mark_destination_unread(
-            result, "%s could not be read — %s" % (read_name, read_reason)
-        )
+    # are the source's, not the destination's. THERE IS NO POST-RUN DRAIN HERE:
+    # _ReadObservingClient marks the report at the moment of the failed read, so
+    # the marker is already in place when run_restore's compute_outcome runs and
+    # the outcome that reaches the journal row below, the persisted
+    # last_outcome/last_full_sync_at stamp, and the task's details.outcome is
+    # the SAME one — one decision, every surface (bead …-bj442). Draining the
+    # failures here instead is exactly what let outcome=success be recorded for
+    # a cycle that never read its destination. ---
 
-    # The conflict details above land AFTER run_restore computed the tri-state
+    # The conflict details below land AFTER run_restore computed the tri-state
     # outcome, so without this re-check an APPLY with source-side name
     # conflicts would report outcome=SUCCESS alongside failed>0 — violating
     # the ratified "NEVER SUCCESS on mixed state" invariant (ADR-013 S8) that

@@ -547,6 +547,17 @@ class DbasSyncTask(TaskScheduler):
         Settings card duly offered Apply (it gates on ``result.success``). A
         preview that never read the destination is a failed preview.
 
+        ON A REALIZED APPLY THE MARKER RULE IS NOW REDUNDANT HERE, and
+        deliberately kept: ``compute_outcome`` folds it into the OUTCOME (bead
+        ``…-bj442`` — :func:`dbas.restore_orchestrator.outcome_for_unread_destination`),
+        so the apply arrives already carrying ``FAILED_ROLLBACK_INCOMPLETE`` and
+        the clause below cannot be what makes it fail. What the clause still
+        covers on its own is the case an outcome cannot express: a DRY RUN, whose
+        realized outcome is ``None`` by contract — both the preview whose
+        destination read failed and the cycle the freshness / readback gate
+        aborted before ``run_restore`` ever ran. That is why it stays a check on
+        the marker rather than on the outcome.
+
         ``success=False`` is not one severity. A run that FINISHED and left real,
         kept state is DEGRADED, and is declared as such through
         ``completed_degraded`` so the task engine alerts it as a ``warning``
@@ -716,11 +727,20 @@ class DbasSyncTask(TaskScheduler):
         "Degraded" means the run finished and B carries real, kept state the
         operator can reason about. A run that never got an answer out of B knows
         neither what B carries nor what it applied — that is the error branch,
-        not a warning an operator can opt out of.
+        not a warning an operator can opt out of. That rule USED TO BE A SECOND
+        CONDITION READ HERE, and bead ``…-bj442`` removed it rather than leaving
+        it beside the outcome: ``compute_outcome`` now resolves an unread
+        destination to ``FAILED_ROLLBACK_INCOMPLETE``
+        (:func:`dbas.restore_orchestrator.outcome_for_unread_destination`), which
+        ``is_degraded_not_failed`` already answers ``False`` for. Keeping the
+        condition here would have re-created exactly what ``…-cwmid`` measured
+        and undid — a severity keyed on a condition rather than on the outcome —
+        and the point of moving the decision was that ONE decision feeds every
+        surface. Pinned by
+        ``tests/tasks/test_bj442_unread_destination_outcome.py``
+        ::``test_severity_is_still_read_off_the_outcome_alone``.
         """
         if is_dry_run or report.outcome is None:
-            return False
-        if getattr(report, "destination_unreadable", None) is not None:
             return False
         return report.outcome.is_degraded_not_failed
 
