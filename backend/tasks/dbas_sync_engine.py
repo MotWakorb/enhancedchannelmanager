@@ -1328,11 +1328,20 @@ def sync_config_importer_steps(
     (spike ``xp6mp`` ruling 1b). The channel-row collision-safe floor (ruling 1a)
     is inside the importer and always applies.
 
-    CRITICAL (ADR-013 S9): the M3U step is registered with ``defers=False`` and
-    the orchestrator is given a deferred-apply no-op, so the per-cycle deferred
-    auto-sync / EPG-download phase NEVER fires — re-triggering provider auto-sync
-    on B every interval is exactly the behaviour S9 forbids. The M3U importer
-    still returns its deferred settings; we simply never apply them.
+    CRITICAL (ADR-013 S9): the per-cycle provider AUTO-SYNC is never
+    re-triggered on B — that is exactly the behaviour S9 forbids. The
+    orchestrator is therefore given :func:`_apply_group_selection_only` rather
+    than the restore path's ``apply_deferred_auto_sync``: it writes the source
+    account's per-group ENABLE selection to B (a pure destination-side upsert)
+    and performs none of the three provider-touching steps that follow it there
+    — is_active toggle, refresh trigger, stream-count poll.
+
+    This used to be a no-op that dropped the deferred settings on the floor, and
+    bead ``…-avrix`` measured what that produced: a replica whose XC account
+    held ZERO group rows against the source's 777, which on its own refresh
+    ingests either nothing or the provider's whole catalogue depending on a flag
+    it inherits. S9 is about not touching the PROVIDER; B's own stored settings
+    are not the provider.
     """
     s = _importer_step_builders()
     return [
@@ -1349,9 +1358,10 @@ def sync_config_importer_steps(
         # step. Distinct from the USERS category, which stays never-sync (D3).
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
         # M3U before EPG (EPG sources resolve their m3u_account FK through the
-        # remap M3U writes). defers=False: the deferred auto-sync phase is
-        # suppressed.
-        ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=False),
+        # remap M3U writes). defers=True: the step DOES return settings for the
+        # final phase — but the fn that consumes them there is the
+        # group-selection-only apply, never the provider refresh (S9).
+        ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
@@ -1374,21 +1384,55 @@ def sync_config_importer_steps(
     ]
 
 
-async def _no_deferred_apply(*, deferred: list[dict], client) -> list[dict]:
-    """Deferred-apply no-op for the sync path (ADR-013 S9).
+async def _apply_group_selection_only(
+    *, deferred: list[dict], client, remap=None, report=None
+) -> list[dict]:
+    """Deferred-apply for the sync path: the GROUP SELECTION, never the refresh.
 
-    The orchestrator only calls a deferred-apply fn when ``ctx.deferred`` is
-    non-empty AND the run is a clean non-dry-run apply. The config step registry
-    registers M3U with ``defers=False``, but the M3U importer still RETURNS its
-    deferred settings; to guarantee S9 even if a future builder change starts
-    collecting them, this fn drops them on the floor and logs.
+    ADR-013 S9 forbids re-triggering the destination's provider auto-sync every
+    cycle. It does NOT forbid writing the destination's own stored settings, and
+    this fn is the line between the two: it applies the source account's
+    per-group ENABLE selection (a pure destination-side upsert — see
+    :func:`dbas.importers.m3u_accounts._apply_one_group_selection`) and performs
+    none of the three provider-touching steps the restore path's
+    ``apply_deferred_auto_sync`` goes on to do (is_active toggle, refresh
+    trigger, stream-count poll).
+
+    WHY THIS REPLACED A NO-OP (bead ``…-avrix``). Dropping the settings on the
+    floor was measured live on 2026-08-21: the replica's XC account held ZERO
+    ``ChannelGroupM3UAccount`` rows against the source's 777 (2 enabled), and
+    ``channel_group_drift`` reported ``0`` throughout because it measures which
+    group a CHANNEL sits in, not which of an ACCOUNT's groups are switched on.
+    Given credentials, the replica's own refresh then answered ``Filtered 0
+    streams from 0 enabled categories`` and aborted — 0 streams against the
+    source's 316 — and with ``auto_enable_new_groups_live`` at Dispatcharr's own
+    default of ``True`` the same empty selection enabled 777 of 777 categories
+    instead, i.e. the provider's entire 53,661-stream catalogue. The invariant
+    this restores: a replica ingests the same provider content the source
+    ingests, or the run says plainly that it will not.
+
+    RETURNS ``[]`` DELIBERATELY. The orchestrator reads this fn's return value
+    as "how many accounts had their deferred AUTO-SYNC applied" and renders it
+    as ``deferred auto-sync applied for N account(s)``. On this path the honest
+    answer is still none — no auto-sync ran. What DID happen is reported by the
+    apply itself, through ``report.record_provider_group_selection`` and the
+    action-item clause it drives, so nothing is hidden by returning ``[]``.
     """
-    if deferred:
-        logger.info(
-            "[SYNC] Suppressing %d deferred auto-sync setting(s) (ADR-013 S9 — "
-            "per-cycle provider auto-sync is not re-triggered on B).",
-            len(deferred),
-        )
+    if not deferred:
+        return []
+    from dbas.importers.m3u_accounts import apply_group_selection
+
+    summaries = await apply_group_selection(
+        deferred=deferred, client=client, remap=remap, report=report
+    )
+    logger.info(
+        "[SYNC] Applied the provider group selection for %d account(s) "
+        "(%d selection(s), %d enabled); no provider refresh was triggered "
+        "(ADR-013 S9).",
+        len(summaries),
+        sum(s.get("groups_applied", 0) for s in summaries),
+        sum(s.get("groups_enabled", 0) for s in summaries),
+    )
     return []
 
 
@@ -1763,7 +1807,9 @@ async def run_sync(
         ledger=ledger,
         remap=IdRemapTable(),
         confirm_apply=confirm_apply,
-        deferred_apply_fn=_no_deferred_apply,  # ADR-013 S9 — suppress per-cycle defer.
+        # ADR-013 S9 — the destination's group SELECTION is applied; its
+        # provider refresh is not triggered. See _apply_group_selection_only.
+        deferred_apply_fn=_apply_group_selection_only,
         ledger_dir=ledger_dir,
         allow_fuzzy_stream_match=allow_fuzzy,
     )

@@ -674,6 +674,55 @@ class ProfileMembershipDriftDetail(BaseModel):
     )
 
 
+class ProviderGroupSelectionDetail(BaseModel):
+    """One replicated M3U account whose per-group selection did not fully land (…-avrix).
+
+    An XC provider account's per-group ENABLED selection is the setting that
+    decides what the account ingests. Measured live 2026-08-21: a source account
+    with 2 of 777 provider categories enabled produced a replica holding **zero**
+    ``ChannelGroupM3UAccount`` rows, and the replica's own refresh then logged
+    ``Filtered 0 streams from 0 enabled categories`` and aborted — 0 streams
+    where the source has 316. With the source's ``auto_enable_new_groups_live``
+    at Dispatcharr's own default (``True`` — ``apps/m3u/serializers.py`` pops it
+    with a ``True`` fallback on create), the SAME missing selection sends the
+    replica the other way: its discovery refresh enabled all 777 of 777
+    categories, which is the provider's whole 53,661-stream catalogue.
+
+    So the counter is a LOSS, in the ``…-15g1j`` sense: it counts only group
+    selections the SOURCE actually had and the destination account did not
+    receive. A source account carrying no selection at all produces no rows and
+    no count.
+
+    Ids, not names: the deferred settings are keyed by DESTINATION account id and
+    SOURCE channel-group pk, and neither the account name nor the group names are
+    in scope at apply time. An account NAME would be safe to render (it is not a
+    secret) but is not available here without a second read of the destination.
+    """
+
+    destination_account_id: int = Field(
+        description="Destination Dispatcharr M3U account id the selection was for.",
+    )
+    selections_total: int = Field(
+        description="Per-group selections the SOURCE account carried.",
+    )
+    selections_applied: int = Field(
+        default=0,
+        description="Selections written to the destination account.",
+    )
+    selections_unapplied: int = Field(
+        default=0,
+        description="Selections the destination account did NOT receive.",
+    )
+    enabled_applied: int = Field(
+        default=0,
+        description="Of the applied selections, how many were ENABLED — what the "
+        "replica would ingest.",
+    )
+    reason: str = Field(
+        description="Why they did not land — a sanitized phrase, never a secret.",
+    )
+
+
 class ChannelGroupDriftDetail(BaseModel):
     """One restored channel sitting in a group the archive does not put it in (…-r1ei7).
 
@@ -1090,6 +1139,37 @@ class RestoreReport(BaseModel):
         default_factory=list,
         description="Which channels drifted, the group they are in, and the archive's.",
     )
+    # Per-account provider GROUP-ENABLE selections the destination account did
+    # not receive (bead …-avrix). Distinct from ``channel_group_drift`` above,
+    # which is about which group a CHANNEL sits in: this is about which of a
+    # PROVIDER ACCOUNT's groups are switched on, i.e. what that account ingests
+    # on its next refresh. ``channel_group_drift`` reported ``0`` through the
+    # whole 2026-08-21 acceptance run while the replica held zero selections,
+    # because it was measuring a different thing — not wrong, silent.
+    #
+    # DELIBERATELY NOT A ``DELIVERY_SHORTFALL_FIELDS`` MEMBER. It passes the
+    # loss test (its producer counts only selections the source had) but fails
+    # the CLEARABILITY test in one reachable configuration: an operator who
+    # deselects the ``channel_groups`` category leaves the destination without
+    # the groups these selections point at, so every cycle would count the same
+    # non-zero forever with no action that clears it — bead ``…-4mkoe``'s
+    # ``DEPENDENCY_DESELECTED`` trap, which cost the ``entities_blocked_by_dependency``
+    # counter a producer split before it could join the set. Joining it would
+    # need the same conjunction. It is rendered as a named action-item clause
+    # instead (the ``profile_membership_drift`` precedent), so it is visible
+    # without moving the outcome.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    provider_group_selection_unapplied: int = Field(
+        default=0,
+        description="Provider per-group ENABLE selections the source had that the "
+        "destination's M3U account did not receive.",
+    )
+    provider_group_selection_details: list[ProviderGroupSelectionDetail] = Field(
+        default_factory=list,
+        description="Which replicated M3U accounts did not receive their group "
+        "selection, how many, and why.",
+    )
+
     # Why the count above is not a finding, when it is not one. The pass is
     # SKIPPED when the operator deselects the channel-groups category (no
     # archived group resolves through the remap, so every matched channel would
@@ -1612,6 +1692,51 @@ class RestoreReport(BaseModel):
             )
         )
         self.channel_group_drift = len(self.channel_group_drift_details)
+
+    def record_provider_group_selection(
+        self,
+        *,
+        destination_account_id: int,
+        selections_total: int,
+        selections_applied: int,
+        selections_unapplied: int,
+        enabled_applied: int,
+        reason: str,
+    ) -> None:
+        """Record ONE replicated M3U account's group-selection outcome (…-avrix).
+
+        The ONE place the aggregate count and the detail list are both updated,
+        so they cannot drift apart — the same rule
+        :meth:`record_channel_group_drift` follows.
+
+        A FULLY-APPLIED account records NOTHING: a run that carried every
+        selection is not carrying a finding, and a counter that reads non-zero
+        on every converged cycle forever is the ``…-posm1`` noise problem this
+        report exists to avoid. Only ``selections_unapplied > 0`` is recorded.
+
+        Args:
+            destination_account_id: The destination M3U account id.
+            selections_total: Per-group selections the SOURCE account carried.
+            selections_applied: Selections written to the destination.
+            selections_unapplied: Selections the destination did NOT receive.
+            enabled_applied: Of the applied selections, how many were ENABLED.
+            reason: Sanitized phrase saying why they did not land — never a secret.
+        """
+        if selections_unapplied <= 0:
+            return
+        self.provider_group_selection_details.append(
+            ProviderGroupSelectionDetail(
+                destination_account_id=destination_account_id,
+                selections_total=selections_total,
+                selections_applied=selections_applied,
+                selections_unapplied=selections_unapplied,
+                enabled_applied=enabled_applied,
+                reason=reason,
+            )
+        )
+        self.provider_group_selection_unapplied = sum(
+            d.selections_unapplied for d in self.provider_group_selection_details
+        )
 
 
 # ---------------------------------------------------------------------------

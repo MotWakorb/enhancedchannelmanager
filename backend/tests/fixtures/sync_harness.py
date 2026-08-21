@@ -263,6 +263,22 @@ class StatefulDispatcharrFake:
         # Every bulk_delete_logos invocation is recorded so tests can pin the
         # sync-path invariant: the destructive pre-step NEVER fires (ADR-013 S9).
         self.bulk_logo_delete_calls: list[list[int]] = []
+        # PER-ACCOUNT PROVIDER GROUP SELECTION (bead …-avrix), modelled the way
+        # Dispatcharr models it (0.29.0 ``dispatcharr_channels_channelgroupm3uaccount``,
+        # written by ``PATCH /api/m3u/accounts/<id>/group-settings/`` as a
+        # bulk_create UPSERT on ``(channel_group, m3u_account)``). This is the
+        # setting that decides WHAT AN ACCOUNT INGESTS: on the live measured
+        # account, 2 of 777 groups enabled is the difference between 316 channels
+        # and the provider's whole 53,661-stream catalogue. Keyed
+        # ``(m3u_account_id, channel_group_id) -> row``.
+        self.group_settings: dict[tuple[int, int], dict] = {}
+        # Every PROVIDER-touching M3U call, recorded so a test can pin ADR-013
+        # S9: the sync path applies the destination's own group settings and
+        # triggers NO provider refresh. Recorded rather than absent so the
+        # assertion can actually fail — a method the fake does not define would
+        # raise AttributeError, which is a different (and weaker) signal.
+        self.m3u_refresh_calls: list[int] = []
+        self.m3u_patch_calls: list[tuple[int, dict]] = []
         # Channel-profile MEMBERSHIP, modelled the way Dispatcharr models it
         # (0.29.0 ``apps/channels``): ``ChannelProfileMembership.enabled``
         # defaults to ``True``; the ``post_save`` signal on ChannelProfile
@@ -300,7 +316,82 @@ class StatefulDispatcharrFake:
     # ----- M3U accounts ----------------------------------------------------
 
     async def get_m3u_accounts(self) -> list:
-        return self.m3u_accounts.list()
+        # ``M3UAccountSerializer`` embeds the account's per-group settings under
+        # ``channel_groups`` (confirmed live on 0.29.0: A's XC account serialized
+        # 777 entries, 2 ``enabled``). The gather reads this shape, so the fake
+        # has to produce it or a test can never see the selection cross.
+        rows = self.m3u_accounts.list()
+        for row in rows:
+            account_id = row.get("id")
+            row["channel_groups"] = [
+                dict(entry)
+                for (acc_id, _group_id), entry in sorted(self.group_settings.items())
+                if acc_id == account_id
+            ]
+        return rows
+
+    def set_group_selection(self, account_id: int, entries: list[dict]) -> None:
+        """Seed an account's per-group selection (test-side helper, not an API)."""
+        for entry in entries:
+            group_id = entry["channel_group"]
+            self.group_settings[(account_id, group_id)] = {
+                "channel_group": group_id,
+                "enabled": entry.get("enabled", True),
+                "auto_channel_sync": entry.get("auto_channel_sync", False),
+                **{
+                    k: entry[k]
+                    for k in ("auto_sync_channel_start", "auto_sync_channel_end",
+                              "custom_properties")
+                    if entry.get(k) is not None
+                },
+            }
+
+    def enabled_group_ids(self, account_id: int) -> set[int]:
+        """The group ids this account would ingest from — the operator's choice."""
+        return {
+            gid
+            for (acc_id, gid), entry in self.group_settings.items()
+            if acc_id == account_id and entry.get("enabled")
+        }
+
+    async def update_m3u_group_settings(self, account_id: int, data: dict) -> dict:
+        """UPSERT the per-group settings — the real endpoint's exact semantics.
+
+        Dispatcharr 0.29.0 ``apps/m3u/api_views.py::update_group_settings``
+        validates the auto-sync ranges then ``bulk_create(..., update_conflicts=
+        True, unique_fields=["channel_group", "m3u_account"])``. It triggers NO
+        refresh and opens no socket to the provider, which is why the sync path
+        may call it under ADR-013 S9.
+        """
+        self._check_fault("update_m3u_group_settings", data)
+        for entry in data.get("group_settings") or []:
+            group_id = entry.get("channel_group")
+            if not group_id:
+                continue
+            self.group_settings[(account_id, group_id)] = {
+                "channel_group": group_id,
+                "enabled": entry.get("enabled", True),
+                "auto_channel_sync": entry.get("auto_channel_sync", False),
+                **{
+                    k: entry[k]
+                    for k in ("auto_sync_channel_start", "auto_sync_channel_end",
+                              "custom_properties")
+                    if entry.get(k) is not None
+                },
+            }
+        return {"message": "Group settings updated successfully"}
+
+    async def refresh_m3u_account(self, account_id: int) -> dict:
+        """PROVIDER-TOUCHING. Recorded so ADR-013 S9 can be asserted, not assumed."""
+        self._check_fault("refresh_m3u_account", account_id)
+        self.m3u_refresh_calls.append(account_id)
+        return {"success": True}
+
+    async def patch_m3u_account(self, account_id: int, data: dict) -> dict:
+        """The is_active toggle the restore path uses to coax a provider fetch."""
+        self._check_fault("patch_m3u_account", data)
+        self.m3u_patch_calls.append((account_id, dict(data)))
+        return self.m3u_accounts.update(account_id, data)
 
     async def create_m3u_account(self, data: dict) -> dict:
         self._check_fault("create_m3u_account", data)
