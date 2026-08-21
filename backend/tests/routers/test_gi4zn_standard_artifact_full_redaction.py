@@ -1632,11 +1632,23 @@ async def test_m3u_restore_leaves_redacted_username_unset_and_reports_it():
     detail = report.credential_reentry_details[0]
     assert detail.entity_type == EntityType.M3U_ACCOUNT
     assert detail.label == "Provider XC"
-    # The account-level pair AND the nested second copy are both named, so the
-    # operator's action item matches what the artifact actually dropped.
+    # The account-level fields are named, so the operator's action item matches
+    # what they actually have to re-type.
     assert "username" in detail.fields
     assert "server_url" in detail.fields
-    assert "profiles[0].custom_properties.user_info.username" in detail.fields
+    # SUPERSEDED ASSERTION, rewritten rather than deleted (bead ``…-posm1``).
+    # This required the nested ``profiles[0].custom_properties.user_info.*``
+    # copies to be named too. The REDACTION half of that is unchanged and is
+    # still asserted above — the placeholder never reaches the blob. The
+    # REPORTING half was wrong: ``user_info`` is Dispatcharr's cache of the
+    # provider's ``player_api`` reply, there is no field on any screen to
+    # re-enter it into, and the destination rewrites it itself on its next
+    # successful refresh. Measured live on 0.29.0, an account whose real
+    # credentials HAD been re-entered kept reporting "1 account(s) need
+    # credentials re-entered" on the strength of these two paths alone. The
+    # importer still LOGS every path it stripped — that is a developer surface,
+    # and it is the operator-facing action item that must be actionable.
+    assert not [f for f in detail.fields if "user_info" in f]
     # Field NAMES only — never a value.
     assert backup_mod.REDACTED not in report.model_dump_json()
 

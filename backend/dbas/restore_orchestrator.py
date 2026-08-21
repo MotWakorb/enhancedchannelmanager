@@ -505,22 +505,37 @@ def _report_has_failures(report: RestoreReport) -> bool:
     return any(cat.failed > 0 for cat in report.categories)
 
 
-def _report_has_unplayable_channels(report: RestoreReport) -> bool:
-    """True when an APPLY left a channel with no URL-bearing stream (…-daziw).
+def _report_has_delivery_shortfall(report: RestoreReport) -> bool:
+    """True when an APPLY produced a replica missing something the source had.
 
-    Keyed on ``channels_with_no_playable_stream``, NEVER on
-    ``channels_needing_stream_reattach``. The latter counts channels holding at
-    least one placeholder SLOT, and the ``…-ixdaw`` fix (v0.18.1-0026)
-    deliberately produces exactly that on a channel that keeps its real streams
-    and plays fine — downgrading on it would false-fail an instance where every
-    channel works.
+    THE PROPERTY, not a list of cases (beads ``…-daziw`` → ``…-posm1``):
+
+        A run never presents as an unqualified SUCCESS when the replica it
+        produced is missing something the source had and the run was asked to
+        carry.
+
+    The membership test and the reasoning for every inclusion and every
+    exclusion live on :data:`RestoreReport.DELIVERY_SHORTFALL_FIELDS`, which is
+    the single declaration this function reads. Two of its exclusions are load-
+    bearing enough to repeat here, because both have already been implemented
+    wrongly once:
+
+    * NEVER ``channels_needing_stream_reattach``. It counts channels holding at
+      least one placeholder SLOT, and the ``…-ixdaw`` fix (v0.18.1-0026)
+      deliberately produces exactly that on a channel that keeps its real
+      streams and plays fine — downgrading on it would false-fail an instance
+      where every channel works.
+    * NEVER a faithful absence (bead ``…-15g1j``). A channel whose SOURCE has no
+      EPG link, no logo and no stream has lost nothing; the literal reading of
+      the invariant turned all ten keystone round-trip scenarios red for
+      replications that had lost nothing.
 
     A DRY RUN can never trigger this: a preview that predicts a shortfall is a
-    prediction, not a failure, and nothing was applied to be unplayable.
+    prediction, not a failure, and nothing was applied to be missing.
     """
     if report.is_dry_run:
         return False
-    return (report.channels_with_no_playable_stream or 0) > 0
+    return bool(report.delivery_shortfalls())
 
 
 def compute_outcome(
@@ -539,12 +554,21 @@ def compute_outcome(
     * ``COMPLETED_WITH_FAILURES`` — the apply never decided to abort, so nothing
       was rolled back and the applied state stands, but the result is not clean.
       Either rows DID fail in a :data:`NON_FATAL_FAILURE_CATEGORIES` category
-      (bead ``…-y65si``), or the apply finished with at least one channel left
-      holding NOT ONE URL-bearing stream (bead ``…-daziw``). The second case has
-      clean per-category counts and is still not a success: a channel that
-      cannot play is mixed state, and the drill measured exactly that behind a
-      reported ``success … created 32, failed 0``. Nothing is rolled back — the
-      applied state is real and worth keeping.
+      (bead ``…-y65si``), or the apply produced a replica MISSING SOMETHING THE
+      SOURCE HAD — any member of
+      :data:`RestoreReport.DELIVERY_SHORTFALL_FIELDS` (beads ``…-daziw``,
+      ``…-posm1``). The second case has clean per-category counts and is still
+      not a success: the drill measured a lineup where not one channel could
+      play behind a reported ``success … created 32, failed 0``, and the
+      cross-instance sync measured 53 of 59 replica channels landing with no
+      guide link and every logo binding lost behind ``success … failed 0``.
+      Nothing is rolled back — the applied state is real and worth keeping.
+
+      The trigger is the SET, never which member fired. Bead ``…-cwmid`` had to
+      undo a narrower keying after a drill measured the severity ordering
+      inverted; every member resolves to this one outcome, and severity is
+      decided from the outcome alone
+      (:attr:`RestoreOutcome.is_degraded_not_failed`).
     * ``PARTIAL_FAILED_ROLLED_BACK`` — a fatal failure occurred, a rollback ran,
       and it was COMPLETE (every created entity deleted or confirmed 404-gone).
     * ``FAILED_ROLLBACK_INCOMPLETE`` — a fatal failure occurred and the rollback
@@ -553,7 +577,7 @@ def compute_outcome(
 
     Args:
         report: The shared restore report (its per-category failure counts and
-            its unplayable-channel aggregate are independent signals that the
+            its delivery-shortfall aggregates are independent signals that the
             result is not clean).
         failure_occurred: Whether the apply phase raised / decided to roll back.
         rollback: The rollback result, or ``None`` if no rollback ran.
@@ -563,9 +587,11 @@ def compute_outcome(
     """
     mixed = failure_occurred or _report_has_failures(report)
     if not mixed:
-        # Nothing FAILED, but a restored channel that cannot play is still mixed
-        # state — the applied lineup does not do the one thing it exists to do.
-        if _report_has_unplayable_channels(report):
+        # Nothing FAILED, but a replica missing something the source had is
+        # still mixed state — the applied lineup does not do the one thing it
+        # exists to do, whether what it lost was a playable stream, a guide
+        # link or its branding.
+        if _report_has_delivery_shortfall(report):
             return RestoreOutcome.COMPLETED_WITH_FAILURES
         return RestoreOutcome.SUCCESS
 

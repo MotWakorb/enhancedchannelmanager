@@ -4455,6 +4455,12 @@ export interface RestoreReport {
    * — those channels CANNOT PLAY, and an apply that reports any of them
    * resolves to `completed_with_failures`, never `success`.
    *
+   * One of FOUR counters that carry that weight (bead posm1): an apply is also
+   * `completed_with_failures` when `stream_urls_redacted`,
+   * `epg_links_unrestored` or `logo_misses` is above zero — each of them means
+   * the replica is missing something the source had. Do not render any one of
+   * them as the reason for the outcome; read `outcome` itself.
+   *
    * `null` on a dry run, for the same reason as the field above (bead dgnms).
    */
   channels_with_no_playable_stream?: number | null;

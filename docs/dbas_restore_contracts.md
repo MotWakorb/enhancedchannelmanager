@@ -123,10 +123,10 @@ ECM settings had reverted. All are additive optional: no `CONTRACT_VERSION` bump
 
 | Aggregate | Drill-down | Recorder | Means |
 |---|---|---|---|
-| `credentials_needing_reentry` | `credential_reentry_details` | `record_credential_reentry` | the entity is on the destination and authenticates nowhere, because the artifact carried only the redaction sentinel for the named FIELDS and the destination still has no usable value at them. Asked of the DESTINATION ROW on every cycle, not only where the entity was created (bead `…-ukjx5`) — an account that already exists is not the same fact as one whose password has been re-entered, and recording only on the create path made a scheduled sync say it once and then go silent forever |
+| `credentials_needing_reentry` | `credential_reentry_details` | `record_credential_reentry` | the entity is on the destination and authenticates nowhere, because the artifact carried only the redaction sentinel for the named FIELDS and the destination still has no usable value at them. Asked of the DESTINATION ROW on every cycle, not only where the entity was created (bead `…-ukjx5`) — an account that already exists is not the same fact as one whose password has been re-entered, and recording only on the create path made a scheduled sync say it once and then go silent forever. Paths inside the destination's own cached copy of the provider's reply (`…custom_properties.user_info.*`) are NOT recorded (bead `…-posm1`): there is no field to re-enter them into and the destination rewrites the blob itself on its next successful refresh, so counting them left the line reading "1 account(s) need credentials re-entered" after the operator had already re-entered them. The importer still LOGS every path it stripped — that is a developer surface. **Not** a delivery shortfall: the redaction is deliberate (bead `…-msqf7`), and its consequence is already counted by `stream_urls_redacted` / `channels_with_no_playable_stream` |
 | `channels_needing_stream_reattach` | `stream_reattach_details` | `record_stream_reattach_needed` | still holding at least one URL-less placeholder SLOT after the post-refresh rebind. Most of these channels still play — the `…-ixdaw` fix deliberately leaves one contested slot on its placeholder |
 | `channels_with_no_playable_stream` | `stream_reattach_details` (rows with `has_playable_stream: false`) | `record_stream_reattach_needed` | the SUBSET above left with NO stream that can serve — **the channel cannot play**. "Can serve" is `credential_sentinel.url_can_serve`, NOT truthiness on `url`: a stream whose address carries the redaction sentinel is a non-empty string that fetches HTTP 404, and reading it as playable reported a replica whose channels were 90% dead as entirely healthy (bead `…-1td94`). Non-zero on an apply forces `outcome: completed_with_failures` (bead `…-daziw`) |
-| `epg_links_unrestored` | `epg_link_miss_details` | `record_epg_link_unrestored` | no destination EPG row carried the channel's archived `tvg_id` |
+| `epg_links_unrestored` | `epg_link_miss_details` | `record_epg_link_unrestored` | no destination EPG row carried the channel's archived `tvg_id`. Computed only over ARCHIVE channels that carry an `epg_data_id`, so a channel the source never linked cannot contribute (bead `…-15g1j`) — which is what makes it safe to key an outcome on. Non-zero on an apply forces `outcome: completed_with_failures` (bead `…-posm1`) |
 | `profile_membership_drift` | `profile_membership_drift_details` | `record_profile_membership_drift` | channels whose membership on the destination DIFFERED from the archived selection and were flipped back (Dispatcharr enables every new channel in every profile). The pass still asserts EVERY membership every cycle — that is the fail-closed write and it is unchanged — but it counts only what had actually drifted (bead `…-ukjx5`). It used to count every flip it asserted, so a converged replica reported the same non-zero number on every scheduled cycle, forever |
 | `stream_urls_redacted` | `stream_url_redaction_details` | `record_redacted_stream_urls` | streams **the destination is currently holding** whose URL had the provider credentials cut out of it (bead `…-msqf7`). An Xtream Codes stream address IS the credential (`/live/<user>/<pass>/<id>.ts`), so the credential segments become the sentinel and the rest of the address crosses — the stream lands naming where it pointed and cannot play until the destination has its own provider account. Every channel left on one of these is ALSO counted in `channels_with_no_playable_stream`, so the run is downgraded rather than reporting success (bead `…-1td94`). Taken from ONE reading of the destination's stream rows by the post-refresh rebind pass, so the recorder REPLACES the population rather than appending to it; it was recorded at create time until bead `…-ukjx5`, which made cycle two report `0` over a destination whose streams were all still redacted |
 
@@ -137,6 +137,61 @@ placeholder bindings the rebind pass DID resolve onto a real provider stream.
 operator-meaningful unit ("3 channels a profile was built to exclude were
 exposed") — so unlike the others it does **not** track the length of its detail
 list. An already-correct profile records nothing.
+
+### The delivery-shortfall set — what forbids `success`
+
+`RestoreReport.DELIVERY_SHORTFALL_FIELDS` is the single declaration of which
+aggregates mean **the source had this and the replica does not**. It is read by
+exactly two consumers, which is why it is declared once rather than repeated:
+`restore_orchestrator.compute_outcome` decides the OUTCOME from it, and
+`tasks.dbas_restore._credential_reentry_suffix` renders each member as a clause
+in the one-line summary a scheduled run produces.
+
+The invariant, of which the members are examples rather than the specification:
+
+> A run never presents as an unqualified `success` when the replica it produced
+> is missing something the source had and the run was asked to carry.
+
+| Member | Why it is in the set |
+|---|---|
+| `channels_with_no_playable_stream` | the channel cannot play (bead `…-daziw`) |
+| `stream_urls_redacted` | the replica holds an address ECM cut the credentials out of (bead `…-msqf7`) |
+| `epg_links_unrestored` | a channel the source gave a guide link arrived without one (bead `…-v7d37`) |
+| `logo_misses` | a logo the operator HAD on the source and does not have after the run (bead `…-dfkbn`) |
+
+Everything else on the report is deliberately **out**, and each exclusion has a
+reason worth keeping:
+
+- `channels_needing_stream_reattach` — a channel that kept its real streams and
+  merely holds one leftover placeholder **plays**. The `…-ixdaw` fix produces
+  exactly that on healthy channels; downgrading on it would false-fail an
+  instance where everything works (bead `…-daziw`).
+- `credentials_needing_reentry` — the redaction is deliberate (bead `…-msqf7`),
+  so the run was asked **not** to carry it. Its consequence — a replica whose
+  streams have no usable address — is already in the set twice over, so the
+  OUTCOME keys on what the replica is missing and the SUMMARY keys on what the
+  operator must do.
+- `channel_group_drift` under the default preserve mode, and both
+  `ReattachPopulation.preserved_channels` — the operator asked the run to leave
+  the destination's own choices alone.
+- `profile_membership_drift` and `streams_rebound` — work the run **performed**.
+  A membership that had drifted and was corrected leaves the replica matching,
+  which is the opposite of a shortfall.
+- A **faithful absence** is never a member (bead `…-15g1j`). Implementing the
+  literal "anything absent" reading turned all ten keystone round-trip scenarios
+  red for replications that had lost nothing, so every member above is a counter
+  whose PRODUCER already restricts it to things the source actually had.
+
+**Key on the outcome, never on which member fired.** Bead `…-cwmid` had to undo
+a narrower keying after drill run 2026-08-06-run9 measured the severity ordering
+inverted — 12-of-12 channels unplayable alerting `warning` while one cosmetic
+logo failure alerted `error` / "Task Failed". Every member resolves to the same
+`completed_with_failures`, which `RestoreOutcome.is_degraded_not_failed` maps to
+`warning` with a per-task `alert_on_warning` opt-out. Adding a member therefore
+cannot reorder severities, because no member is ever consulted for one.
+
+A **dry run** never downgrades: a preview that predicts a shortfall predicted it,
+and nothing was applied to be missing.
 
 #### The rebind is no longer restore-only (bead `…-2o0cz` residual)
 
@@ -222,7 +277,7 @@ second half is what a fresh target consists of entirely.
 | Value | Meaning |
 |---|---|
 | `success` | every selected entity created/updated/skipped cleanly; nothing failed; no compensation needed |
-| `completed_with_failures` | the restore ran to completion and **nothing was rolled back**, but the result is not clean. Two independent triggers: at least one entity in a non-fatal category failed (the failed rows are counted in their category), **or** an apply finished with `channels_with_no_playable_stream` above zero — a channel restored holding not one stream that can serve cannot play, and that is mixed state even though every row succeeded (bead `…-daziw`). Either way the applied state is real and kept |
+| `completed_with_failures` | the restore ran to completion and **nothing was rolled back**, but the result is not clean. Two independent triggers: at least one entity in a non-fatal category failed (the failed rows are counted in their category), **or** an apply produced a replica **missing something the source had** — any member of `RestoreReport.DELIVERY_SHORTFALL_FIELDS` above zero (beads `…-daziw`, `…-posm1`). Either way the applied state is real and kept |
 | `partial_failed_rolled_back` | at least one failure in a fatal category; compensating rollback ran and removed **every** created entity (404-on-delete counts as removed); instance back to pre-restore state |
 | `failed_rollback_incomplete` | a fatal failure occurred **and** the rollback could not fully undo it (a non-404 delete error); instance indeterminate; ledger residue surfaced for manual cleanup |
 

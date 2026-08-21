@@ -141,8 +141,13 @@ shapes of this, and only one of them is an outage:
 - **The channel plays.** It kept its real streams and is holding one
   leftover placeholder in one slot. The report counts it under
   `channels_needing_stream_reattach` and names it in
-  `stream_reattach_details` with `has_playable_stream: true`. The
-  restore still reports success. This is untidy, not broken.
+  `stream_reattach_details` with `has_playable_stream: true`. This is
+  untidy, not broken, and it never on its own stops the restore reporting
+  success. (The run can still report **completed with failures** for a
+  different reason — a channel that cannot play at all, a stream whose
+  address lost its credentials, a channel that arrived without its guide
+  link, or a logo that could not be reinstated. A leftover placeholder on
+  a channel that plays is not one of them.)
 - **The channel errors on playback.** Nothing on it is a real stream.
   The report counts it under "channel(s) have NO playable stream"
   (`channels_with_no_playable_stream`), names it in

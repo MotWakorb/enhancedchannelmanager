@@ -51,6 +51,51 @@ REDACTION_SENTINEL = "***REDACTED***"
 # pattern (``docs/style_guide.md`` — no bare ``re.*`` on a built pattern).
 _INDEX_PATTERN = re.compile(r"(\d+)\]")
 
+# Dotted-path segment marking a credential ECM read out of the DESTINATION'S OWN
+# CACHE of the provider's reply rather than out of an operator-editable field
+# (bead ``…-posm1``). Dispatcharr stores the ``player_api.php`` response on an
+# Xtream-Codes M3U account profile as
+# ``profiles[N].custom_properties.user_info``, and that blob echoes the
+# ``username`` and ``password`` it authenticated with — so the deep redactor
+# strips them there too, and the restore reports them as fields to re-enter.
+#
+# There is no field on any screen to re-enter them INTO. The blob is rewritten
+# wholesale by the destination on its next successful refresh, using whatever
+# credentials the operator DID enter. Measured live on 0.29.0 (bead ``…-ukjx5``):
+# after B's real provider credentials were entered, the account's own
+# ``username``/``password`` dropped out of the action item and the row survived
+# on these two paths alone, so the operator's line still read "1 account(s) need
+# credentials re-entered" after they had done exactly what it asked.
+#
+# An action item that cannot be cleared by performing it is bead ``…-kcfru``'s
+# crying-wolf failure, and bead ``…-15g1j`` is the ruling: a FAITHFUL absence is
+# not a shortfall. This is one — the destination is not missing anything it will
+# not repopulate itself.
+CACHED_PROVIDER_RESPONSE_SEGMENT = "custom_properties.user_info."
+
+
+def credential_path_is_operator_actionable(path: object) -> bool:
+    """True unless ``path`` names a destination-owned cached-response field.
+
+    The predicate that keeps :meth:`RestoreReport.record_credential_reentry` from
+    reporting work the operator cannot do. Matches on the dotted PATH that
+    :func:`strip_redaction_sentinels` emits, so it is indifferent to which
+    profile index the blob sits under (``profiles[0]`` and ``profiles[3]`` are
+    the same fact) and it never suppresses a real field that merely shares a
+    leaf name: ``username`` and ``profiles[0].username`` stay actionable, and so
+    does anything else under ``custom_properties`` — ``xc_id`` and its siblings
+    are not credentials and never reach this list at all.
+
+    Args:
+        path: One dotted path exactly as ``strip_redaction_sentinels`` emitted
+            it. Coerced with ``str`` so a caller cannot suppress the check by
+            handing over a non-string.
+
+    Returns:
+        True when the operator has somewhere to re-enter the credential.
+    """
+    return CACHED_PROVIDER_RESPONSE_SEGMENT not in str(path)
+
 
 def is_redaction_sentinel(value: object) -> bool:
     """True iff ``value`` is exactly the redaction placeholder.

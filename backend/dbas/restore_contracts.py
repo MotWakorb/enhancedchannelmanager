@@ -45,8 +45,11 @@ import logging
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from enum import Enum
+from typing import ClassVar
 
 from pydantic import BaseModel, Field
+
+from credential_sentinel import credential_path_is_operator_actionable
 
 logger = logging.getLogger(__name__)
 
@@ -176,18 +179,22 @@ class RestoreOutcome(str, Enum):
         not cost the operator their channels, groups, profiles and settings).
         The applied state is real and kept; the failed rows are counted in their
         category and listed in ``failure_details``.
-      * an APPLY finished with :attr:`RestoreReport.channels_with_no_playable_stream`
-        greater than zero (bead ``…-daziw``): a channel was restored holding NOT
-        ONE URL-bearing stream, so it cannot play. Every row "succeeded" and the
-        counts are clean, which is exactly how the drill's
-        ``success … created 32, failed 0`` described an instance whose channels
-        returned HTTP 500 with 0 bytes. A restored channel that cannot play is
+      * an APPLY produced a replica MISSING SOMETHING THE SOURCE HAD — any
+        member of :attr:`RestoreReport.DELIVERY_SHORTFALL_FIELDS` is non-zero
+        (beads ``…-daziw``, ``…-posm1``). Every row "succeeded" and the counts
+        are clean, which is exactly how the drill's ``success … created 32,
+        failed 0`` described an instance whose channels returned HTTP 500 with 0
+        bytes, and how the cross-instance sync's ``success … created 133,
+        failed 0`` described a replica that had lost 53 of 59 guide links and
+        every logo binding. A replica missing what it was asked to carry is
         mixed state, so SUCCESS is forbidden. Nothing is rolled back — the
-        applied state is real, kept, and one attached stream away from working.
-        NOTE the trigger is the unplayable aggregate, NEVER
-        :attr:`RestoreReport.channels_needing_stream_reattach`: a channel that
-        keeps its real streams and merely holds a leftover placeholder PLAYS,
-        and is not a failure.
+        applied state is real, kept, and recoverable.
+
+        The membership rules — including why
+        :attr:`RestoreReport.channels_needing_stream_reattach` is NOT a member
+        and must never become one, and why a FAITHFUL absence is not one — are
+        on ``DELIVERY_SHORTFALL_FIELDS`` itself. Read them before adding to the
+        set; both exclusions have already been implemented wrongly once.
     - ``PARTIAL_FAILED_ROLLED_BACK`` — at least one entity in a FATAL category
       failed, the compensating-delete rollback ran, and every created entity was
       successfully removed (or confirmed already-gone — 404 counts as success).
@@ -781,6 +788,65 @@ class RestoreReport(BaseModel):
         description="True for the counts-only plan (ADR-012 D7 default-ON); "
         "False for a realized apply/rollback result.",
     )
+
+    # THE DELIVERY-SHORTFALL SET (bead ``…-posm1``) ---------------------------
+    #
+    # The aggregates that mean, each in its own vocabulary, THE SOURCE HAD THIS
+    # AND THE REPLICA DOES NOT. Declared once, here, because two consumers must
+    # not be able to disagree about the list: ``restore_orchestrator`` decides
+    # the OUTCOME from it, and ``tasks.dbas_restore`` renders each member as a
+    # clause in the operator's one-line summary.
+    #
+    # THE INVARIANT (the specification; the members are examples of it):
+    #
+    #     A run never presents as an unqualified SUCCESS when the replica it
+    #     produced is missing something the source had and the run was asked to
+    #     carry.
+    #
+    # WHAT THE MEMBERSHIP TEST IS, and it is deliberately narrow on both sides:
+    #
+    # * It is a LOSS, not an action item. Every member counts something the
+    #   destination is missing right now, by comparison with the source — never
+    #   a chore the operator has to do, and never work the run performed.
+    # * A FAITHFUL absence is not a member (bead ``…-15g1j``). Implementing the
+    #   literal "anything absent" reading turned all ten keystone round-trip
+    #   scenarios red for replications that had lost nothing, so every member
+    #   below is a counter whose PRODUCER already restricts it to things the
+    #   source actually had: ``epg_links_unrestored`` is computed only over
+    #   archive channels carrying an ``epg_data_id``, ``logo_misses`` has its own
+    #   canonical loss-only invariant (see :meth:`record_logo_miss`),
+    #   ``stream_urls_redacted`` counts destination rows ECM itself cut an
+    #   address out of, and ``channels_with_no_playable_stream`` was narrowed by
+    #   ``…-15g1j`` itself.
+    # * Something the run was asked NOT to carry is not a member. That excludes
+    #   ``credentials_needing_reentry`` (the redaction is deliberate — bead
+    #   ``…-msqf7`` — and its CONSEQUENCE, a replica that cannot play, is already
+    #   a member through the two stream counters), ``channel_group_drift`` under
+    #   the default preserve mode, and both :class:`ReattachPopulation`'s
+    #   ``preserved_channels``.
+    # * Work the run DID is not a member: ``streams_rebound`` and, since bead
+    #   ``…-ukjx5`` made it read the destination first, ``profile_membership_drift``
+    #   — a membership that had drifted and was corrected leaves the replica
+    #   MATCHING, which is the opposite of a shortfall.
+    # * ``channels_needing_stream_reattach`` is not a member and must never
+    #   become one: a channel that kept its real streams and holds one leftover
+    #   placeholder PLAYS (bead ``…-daziw``).
+    #
+    # KEY ON THE OUTCOME, NEVER ON WHICH MEMBER FIRED. Bead ``…-cwmid`` had to
+    # UNDO a narrower keying after drill run 2026-08-06-run9 measured the
+    # severity ordering INVERTED — 12-of-12 channels unplayable alerted
+    # ``warning`` while one cosmetic logo failure alerted ``error``/"Task
+    # Failed". Every member here resolves to the SAME
+    # ``COMPLETED_WITH_FAILURES``, which
+    # :attr:`RestoreOutcome.is_degraded_not_failed` already maps to ``warning``
+    # with a per-task ``alert_on_warning`` opt-out. Adding a member therefore
+    # cannot reorder severities, because no member is ever consulted for one.
+    DELIVERY_SHORTFALL_FIELDS: ClassVar[tuple[str, ...]] = (
+        "channels_with_no_playable_stream",
+        "stream_urls_redacted",
+        "epg_links_unrestored",
+        "logo_misses",
+    )
     outcome: RestoreOutcome | None = Field(
         default=None,
         description="Result of a realized restore. None on a dry-run "
@@ -1043,6 +1109,29 @@ class RestoreReport(BaseModel):
         self.categories.append(cat)
         return cat
 
+    def delivery_shortfalls(self) -> dict[str, int]:
+        """Every :data:`DELIVERY_SHORTFALL_FIELDS` member this report carries.
+
+        A pure read of the counts — it applies no dry-run policy, because
+        "should a PREDICTED shortfall change an outcome?" is an outcome
+        question and is answered where the outcome is decided
+        (``dbas.restore_orchestrator.compute_outcome``, which refuses to
+        downgrade a preview: a prediction of a shortfall is not a failure, and
+        nothing was applied to be missing).
+
+        Returns:
+            ``{field name: count}`` for each member with a non-zero count, in
+            declaration order. Empty when the replica lost nothing. ``None``
+            (the "not predicted" value the dry-run counters carry) reads as
+            zero, exactly as every other consumer coerces it.
+        """
+        found: dict[str, int] = {}
+        for name in self.DELIVERY_SHORTFALL_FIELDS:
+            count = getattr(self, name, 0) or 0
+            if count > 0:
+                found[name] = count
+        return found
+
     def record_credential_reentry(
         self,
         entity_type: EntityType,
@@ -1058,6 +1147,18 @@ class RestoreReport(BaseModel):
         so they cannot drift. A no-op when ``fields`` is empty — an entity whose
         credentials all came through intact is not an action item.
 
+        NOR IS ONE THE OPERATOR CANNOT PERFORM (bead ``…-posm1``). Paths inside
+        the destination's own cached copy of the provider's reply
+        (``…custom_properties.user_info.*``) are dropped by
+        :func:`credential_sentinel.credential_path_is_operator_actionable`
+        before anything is recorded: there is no field to re-enter them into,
+        and the destination rewrites the blob itself on its next successful
+        refresh. Measured live on 0.29.0 — with them counted, the operator's
+        line still read "1 account(s) need credentials re-entered" AFTER the
+        real credentials had been entered and had cleared the account's own
+        ``username``/``password``. An action item that cannot be cleared by
+        doing what it asks is its own defect.
+
         Args:
             entity_type: The restored entity's category.
             label: Operator-facing entity identifier — never a secret.
@@ -1065,6 +1166,17 @@ class RestoreReport(BaseModel):
             source_export_id: The entity's id in the export archive, when known.
             destination_id: The destination id, or ``None`` on a dry-run.
         """
+        if not fields:
+            return
+        # Drop the paths the operator has no way to act on before anything is
+        # recorded, so the aggregate, the detail rows, the modal and the
+        # one-line summary all describe the same work (bead ``…-posm1``). A row
+        # left with nothing actionable is not an action item and is not
+        # recorded at all — the same disposition an empty ``fields`` gets.
+        fields = [
+            field for field in fields
+            if credential_path_is_operator_actionable(field)
+        ]
         if not fields:
             return
         self.credential_reentry_details.append(

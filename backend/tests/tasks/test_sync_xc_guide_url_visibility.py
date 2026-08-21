@@ -207,9 +207,14 @@ async def test_b_stores_an_addressless_xc_source_and_an_unlinked_channel(tmp_pat
     assert not _b_row(dest, _XC_SOURCE_NAME).get("url")
     # And no channel on B carries a guide link.
     assert [c.get("epg_data_id") for c in dest.channels.list()] == [None]
-    # While the run itself is a clean success by every count it reports.
-    assert report.outcome == RestoreOutcome.SUCCESS
+    # Every COUNT the run reports is clean — which is what made "success"
+    # survive so long. SUPERSEDED ASSERTION, rewritten rather than deleted
+    # (bead ``…-posm1``): this used to read ``outcome == SUCCESS``, and the
+    # module note in ``tasks/dbas_sync.py`` recorded that as posm1's to decide.
+    # It decided: a replica missing a guide link the source had is not an
+    # unqualified success, so the LABEL now agrees with the clause beside it.
     assert sum(c.failed for c in report.categories) == 0
+    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
     # The shortfall IS measured — it is simply not on any operator surface.
     assert report.epg_links_unrestored == 1
     # And it is the ADDRESS that was lost, not a password beside it. (The
@@ -234,7 +239,15 @@ async def test_a_credential_free_guide_url_reaches_b_intact(tmp_path):
     )
 
     assert _b_row(dest, _PLAIN_SOURCE_NAME)["url"] == _PLAIN_GUIDE_URL
-    assert report.outcome == RestoreOutcome.SUCCESS
+    # SUPERSEDED ASSERTION, rewritten rather than deleted (bead ``…-posm1``).
+    # This read ``outcome == SUCCESS``, which was incidental to the control's
+    # actual point — the ADDRESS crosses intact. B still holds no guide row
+    # carrying this channel's ``tvg_id`` (nothing seeds one here, unlike
+    # ``test_a_clean_sync_gains_no_clause`` below), so the channel genuinely
+    # lands with no link and the run is genuinely not a clean success. The
+    # control's claim is the url, and it is unchanged.
+    assert report.epg_links_unrestored == 1
+    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
     # Nothing about this source is an address action item.
     assert not [
         d for d in report.credential_reentry_details if "url" in d.fields
