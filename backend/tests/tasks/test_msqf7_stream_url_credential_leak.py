@@ -342,10 +342,20 @@ async def test_b_stores_no_provider_credential_in_any_stream_url(tmp_path):
     stored = json.dumps(dest.streams.list(), default=str)
     assert _XC_PASS not in stored
     assert _XC_USER not in stored
-    # The run is still a success and the streams still landed — the fix must not
-    # cost the replica its stream rows.
-    assert report.outcome == RestoreOutcome.SUCCESS
+    # The streams still landed — the fix must not cost the replica its rows.
     assert len(dest.streams.list()) == len(source.streams.list())
+    # AMENDED BY BEAD ``…-1td94``. This line asserted ``SUCCESS``, and that was
+    # the defect written down as an expectation: three of B's channels are left
+    # on redacted placeholders that fetch HTTP 404, and calling that outcome a
+    # success is precisely the silence bead ``…-posm1`` exists to end. Measured
+    # live on 0.29.0 at the same time: 53 of B's 59 channels served 404 while the
+    # run reported ``channels_with_no_playable_stream: 0``.
+    #
+    # WHAT DID NOT CHANGE: the redaction, which is msqf7's and stays exactly as
+    # shipped. The credential assertions above are this test's subject and are
+    # untouched. What changed is that the run now SAYS what the redaction cost.
+    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert report.channels_with_no_playable_stream == 3
 
 
 @pytest.mark.asyncio

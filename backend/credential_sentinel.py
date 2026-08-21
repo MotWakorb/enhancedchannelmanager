@@ -118,3 +118,36 @@ def _strip(node: object, prefix: str, removed: list[str]) -> object:
             for index, item in enumerate(node)
         ]
     return node
+
+
+def url_can_serve(value: object) -> bool:
+    """True iff ``value`` is an address that could actually fetch something.
+
+    Use this anywhere the question is "does this stream have a usable address?".
+    Plain truthiness answers YES for a redacted URL, which is how 53 channels on
+    a replica fetched HTTP 404 while the run reported zero unplayable channels
+    (bead ``…-1td94``).
+
+    THE SECOND HALF OF :func:`credential_is_present`'S CONTRACT. That function
+    covers a credential FIELD whose whole value ECM replaced. This one covers a
+    URL that merely CONTAINS the placeholder: the credential-redacting producer
+    (bead ``…-msqf7``) rewrites only the credential path segments of an Xtream
+    Codes stream URL, so what crosses is a real-looking address —
+    ``http://host/live/***REDACTED***/***REDACTED***/53.ts`` — that names where
+    the stream pointed and resolves to nothing. Containment, not equality, is
+    therefore the right test here, and equality the right test there.
+
+    NOT A SUBSTITUTE FOR FETCHING. An address can be dead for reasons no local
+    predicate can see (the provider revoked it, the host is gone). This answers
+    the narrower question ECM can answer offline: is this an address at all, or
+    is it ECM's own record that there ISN'T one? It exists as a single named
+    function so a future reason an address is unusable is added HERE, once,
+    rather than at each site that currently asks.
+
+    Args:
+        value: A ``url`` read off a stream record — archived or destination.
+
+    Returns:
+        True when the value is non-empty and carries no redaction placeholder.
+    """
+    return bool(value) and REDACTION_SENTINEL not in str(value)

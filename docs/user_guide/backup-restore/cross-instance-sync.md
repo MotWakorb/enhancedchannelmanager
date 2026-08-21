@@ -181,18 +181,34 @@ An Xtream Codes guide URL authenticates by putting the username and password *in
 
 ### B's streams show `***REDACTED***` in their URL and will not play
 
-Expected on an **Xtream Codes** provider, and the run tells you: the summary reads
-`… ; N stream(s) restored without a playable URL (it carried the provider's credentials)`.
+Expected on an **Xtream Codes** provider, and the run tells you twice. It does not
+report success: the outcome is **completed with failures**, and the summary reads
+
+`… ; N channel(s) have NO playable stream; … ; N stream(s) restored without a playable URL (it carried the provider's credentials)`
+
+Each affected channel is named in the run's stream-reattach detail, so you can see
+exactly which parts of the lineup are down rather than counting them yourself. A
+channel that still plays — because it kept a stream that carries no credential —
+is not listed.
 
 An Xtream Codes stream URL puts the username and password in the address itself — `http://provider/live/<username>/<password>/<id>.ts` — so the credential *is* part of the address. Sync replaces those two path segments and carries the rest, which is why B's stream shows something like `http://provider/live/***REDACTED***/***REDACTED***/1234.ts`: you can see which provider and which stream it was, and no secret of yours has been copied onto B.
 
 This is deliberate. Cross-instance sync never puts a provider credential on the wire, and B may be a machine at a different site or trust level — a recurring schedule that kept re-sending your subscription password would be a standing exposure, not a convenience. A stream URL that carries **no** credential (a plain-M3U provider's direct URL, for instance) crosses byte-identical and plays immediately.
 
-**Resolution:** give B its own copy of the provider — but re-entering the credentials and refreshing is **not enough on its own**, and the step most people stop at is the one that does nothing visible. Do all three:
+**Resolution:** give B its own copy of the provider. Two steps, and neither is destructive:
 
-1. On B, open the matching M3U account, re-enter the credentials, and refresh it. B now ingests the provider's real stream URLs. They arrive **alongside** the redacted ones rather than replacing them, so B briefly holds two copies of every stream and your channels are still on the unplayable copy.
-2. On B, delete the M3U account named **`ECM Custom Streams (DBAS restore)`**. That is the account sync put the redacted streams under (see below); deleting it removes them and leaves your channels with no streams for a moment. ECM creates that account itself and puts only these stand-in streams under it, so on a B that exists purely as a sync destination there is nothing of yours to lose. (If you have also *restored a backup* onto B, that account can hold stand-ins from the restore too — check it before deleting.)
-3. Let one more sync cycle run (or force one). It re-matches every channel onto the real streams B just ingested, correctly attributed to your own provider account.
+1. On B, open the matching M3U account, re-enter the credentials, and refresh it. B now ingests the provider's real stream URLs. They arrive **alongside** the redacted ones rather than replacing them, so B briefly holds two copies of every stream and your channels are still on the unplayable copy. Nothing you can see has changed yet — that is expected, and step 2 is what finishes it.
+2. Let one more sync cycle run (or force one). It re-matches every channel onto the real streams B just ingested, correctly attributed to your own provider account, and deletes the redacted stand-ins it is no longer using.
+
+Measured end to end on a 59-channel replica: after step 1 the channels were still on
+the 53 redacted stand-ins; after step 2 all 53 were bound to the real provider account
+and every redacted stand-in was gone, with the run back to reporting success.
+
+> **This used to need a third step** — manually deleting the `ECM Custom Streams (DBAS restore)`
+> account between 1 and 2, because the re-match preferred the redacted stand-in over the
+> real stream and would not let go of it. It no longer does, so **do not delete that
+> account by hand**; on a B that is also a *restore* destination it can hold stand-ins
+> that other channels are still using.
 
 To skip all of this, seed B with working URLs from the start: do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
 
@@ -204,7 +220,7 @@ Sync does not make B fetch from your providers. Re-triggering every provider's p
 
 The consequence to plan around: **B's account list does not tell you which provider supplies which stream.** Read that from A, which is the instance actually talking to your providers. B's copy is a mirror of A's lineup, not an independent subscriber.
 
-If you follow the three-step resolution above, B's streams end up under your real provider accounts and the `ECM Custom Streams (DBAS restore)` account is gone — that is the tidiest state B can be in, and it is worth doing once on a replica you intend to keep.
+If you follow the [two-step resolution above](#bs-streams-show-redacted-in-their-url-and-will-not-play) for each of your providers, B's streams end up under your real provider accounts and sync deletes the stand-ins it no longer needs — that is the tidiest state B can be in, and it is worth doing once on a replica you intend to keep. The account itself only disappears once nothing is left under it, so it can legitimately linger holding the stand-ins for a provider you have not re-credentialed on B yet.
 
 ### The "Allow insecure TLS" warning
 
