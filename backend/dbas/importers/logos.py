@@ -466,10 +466,26 @@ def hydratable_bytes(archive_logo: dict, content_provider) -> bool:
     path) or a lazy ``content_provider`` is wired that can fetch it (the
     cross-instance sync path). When neither holds, the only way to restore the
     logo is by URL.
+
+    A LAZY PROVIDER IS ONLY CREDITED FOR A RECORD THAT NAMES A FILE (bead
+    …-sgrez). ``filename`` is not decoration here: the upload path below cannot
+    run without it — the hydration pre-check gates on
+    :func:`_safe_basename`, :func:`_validate_logo` rejects a record without one
+    outright, and ``client.upload_logo_file`` needs a basename to write under.
+    So a byte-less record carrying no filename can NEVER be restored by upload
+    however capable the provider is, and answering "hydratable" for it would
+    send it down a path whose only possible outcome is a VALIDATION_ERROR while
+    denying it the URL path that would have restored it. That is exactly what
+    happened to the cross-instance sync gather: it wired a provider for every
+    record, so every REMOTE-url logo — 59 of 60 on a real XC-sourced instance —
+    was locked out of the re-create-by-URL branch. The archive-restore path
+    (``content_provider is None``) is unchanged.
     """
     if archive_logo.get("content_b64"):
         return True
-    return content_provider is not None
+    if content_provider is None:
+        return False
+    return bool(archive_logo.get("filename"))
 
 
 def _remote_logo_url(archive_logo: dict) -> str | None:

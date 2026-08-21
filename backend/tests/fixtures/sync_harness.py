@@ -539,6 +539,21 @@ class StatefulDispatcharrFake:
     async def get_all_logos_paginated(self, page_size: int = 500) -> list:
         return self.logos.list()
 
+    async def create_logo(self, data: dict) -> dict:
+        """``POST /api/channels/logos/`` — create a logo from a ``{name, url}``.
+
+        The re-create-BY-URL path (``importers.logos._create_logo_from_url``).
+        A logo whose ``url`` is an absolute http(s) address has no bytes to
+        upload: Dispatcharr's Logo model IS ``{name, url}``, so the replica's
+        row is restored by pointing at the same address. Modelling this write is
+        what lets a test drive the REMOTE-url logo shape (bead …-sgrez) — on a
+        real XC-sourced instance the overwhelming majority — end to end.
+        """
+        self._check_fault("create_logo", dict(data))
+        return self.logos.create(
+            {"name": data.get("name"), "url": data.get("url")}
+        )
+
     async def upload_logo_file(
         self, name: str, filename: str, data: bytes, content_type: str
     ) -> dict:

@@ -1466,6 +1466,219 @@ async def test_hosted_logo_fetch_cannot_hang_the_cycle(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# REMOTE-URL logos on the sync path (bead …-sgrez).
+#
+# The third storage shape, and the one an XC-sourced instance is made of: the
+# provider hands over a tvg-logo ADDRESS and Dispatcharr stores the url, never
+# the bytes. Such a logo is neither an ECM-local file nor Dispatcharr-hosted, so
+# the gather produced no record for it AT ALL — the LOGO category on the
+# documentation environment's source A carried 1 entity out of 60.
+#
+# COPIED AS A URL, NOT REHOSTED: Dispatcharr's Logo model IS {name, url}, the
+# restore importer has re-created this shape from this field since bead …-dfkbn,
+# and 59 fetches per unattended cycle would land in bead …-cfxml's 300s budget
+# for no fidelity gain — A itself holds only the pointer.
+# ---------------------------------------------------------------------------
+
+
+def _source_client_with_remote_logos(*, logos=None) -> MagicMock:
+    """A source-A whose Dispatcharr logos carry ABSOLUTE http(s) addresses."""
+    client = _source_client()
+    client.get_all_logos_paginated = AsyncMock(
+        return_value=list(
+            logos
+            or [
+                {"id": 1, "name": "Meridian News",
+                 "url": "http://cdn.northwind.example/logos/meridian.png"},
+                {"id": 2, "name": "Capitol Report",
+                 "url": "https://cdn.northwind.example/logos/capitol.png"},
+            ]
+        )
+    )
+    client.fetch_logo_image = AsyncMock(return_value=None)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_plan_carries_remote_url_logos_as_addresses(tmp_path):
+    """The gather emits a record per remote logo, carrying the ADDRESS and no
+    bytes — and fetches nothing, because there is nothing of ours to fetch."""
+    src = _source_client_with_remote_logos()
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    cat = plan.category(EntityType.LOGO)
+    assert {e["id"] for e in cat.entities} == {1, 2}
+    assert {e["url"] for e in cat.entities} == {
+        "http://cdn.northwind.example/logos/meridian.png",
+        "https://cdn.northwind.example/logos/capitol.png",
+    }
+    for entity in cat.entities:
+        assert "content_b64" not in entity  # D8: never bytes in the plan.
+        assert "filename" not in entity  # nothing to upload -> nothing to name.
+    src.fetch_logo_image.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_sync_recreates_remote_logos_by_url_and_uploads_nothing(tmp_path):
+    """Apply: B gets a row per remote logo pointing at the SAME address, via the
+    create-by-url path. No bytes are fetched from A and none are uploaded to B —
+    the cost this shape must not have on an unattended schedule."""
+    src = _source_client_with_remote_logos()
+    dest = _dest_client_with_logos()
+    created: list[dict] = []
+
+    async def _create(data):
+        created.append(dict(data))
+        return {"id": 8900 + len(created), "name": data.get("name")}
+
+    dest.create_logo = AsyncMock(side_effect=_create)
+    target = _sync_target()
+    target.sync_logos = True
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert created == [
+        {"name": "Meridian News",
+         "url": "http://cdn.northwind.example/logos/meridian.png"},
+        {"name": "Capitol Report",
+         "url": "https://cdn.northwind.example/logos/capitol.png"},
+    ]
+    dest.upload_logo_file.assert_not_called()
+    src.fetch_logo_image.assert_not_awaited()
+    assert report.category(EntityType.LOGO).created == 2
+    assert report.logo_misses == 0
+    dest.bulk_delete_logos.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_nameless_remote_logo_gets_a_stable_operator_facing_label(tmp_path):
+    """The label reaches B as the created row's NAME, so it can be neither the
+    importer's ``<unknown>`` placeholder nor anything derived from the url (a
+    url is the thing that carries the credential). The id is stable, so the next
+    cycle's tier-2 name match still finds the row this cycle created."""
+    src = _source_client_with_remote_logos(
+        logos=[{"id": 51, "name": "  ", "url": "http://cdn.test/x.png"}]
+    )
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    assert plan.category(EntityType.LOGO).entities[0]["name"] == "logo 51"
+
+
+@pytest.mark.asyncio
+async def test_an_ecm_local_mirror_still_wins_over_the_remote_pointer(tmp_path):
+    """A file in ECM's upload dir that correlates BY BASENAME to a remote logo
+    holds real bytes for that source id, so it keeps the record — the previously
+    shipped slice (bead 7ipq2.1) is untouched. Exactly ONE record may claim a
+    source id: two would collide through the LOGO remap and the loser would be
+    skipped ALREADY_EXISTS_IDENTICAL, a claim of sameness about images that are
+    not the same."""
+    _seed_logo_files(tmp_path, files=("cnn.png",))
+    src = _source_client_with_logos()  # logo id 77, url http://a/data/logos/cnn.png
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    entities = plan.category(EntityType.LOGO).entities
+    assert [e["id"] for e in entities if e.get("id") == 77] == [77]
+    correlated = next(e for e in entities if e.get("id") == 77)
+    assert correlated["filename"] == "cnn.png"  # the local FILE, not a pointer
+    assert "url" not in correlated
+
+
+# ---------------------------------------------------------------------------
+# CREDENTIAL INTERACTION with bead …-msqf7. A logo url is a provider-supplied
+# address on the same instances whose STREAM urls were found carrying the
+# account's username and password in PATH SEGMENTS. Copying one to the replica
+# is a new route to the hole …-msqf7 closed, so every candidate goes through the
+# same scrub — and a url the scrub touches is DROPPED, not carried scrubbed: a
+# sentinel-bearing address 404s on B, which importers/logos already rules is
+# strictly worse than an honest miss.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "leaky_url",
+    [
+        # The XC path-segment shape …-msqf7 measured on 1,409,363 real stream
+        # urls. SECRET_M3U_PASSWORD is what _source_client's account holds, so
+        # the match is literal, not a guess.
+        "http://provider.test/live/operator/%s/logos/cnn.png",
+        # Percent-encoded: an escape must not be a way through.
+        "http://provider.test/live/operator/%s/cnn.png",
+    ],
+)
+async def test_a_path_segment_credential_logo_url_is_not_copied(tmp_path, leaky_url):
+    src = _source_client_with_remote_logos(
+        logos=[{"id": 5, "name": "Leaky Logo", "url": leaky_url % SECRET_M3U_PASSWORD}]
+    )
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    entity = plan.category(EntityType.LOGO).entities[0]
+    # The record TRAVELS — that is what makes the loss visible to the operator
+    # as a named miss rather than a logo that silently never existed.
+    assert entity["id"] == 5
+    assert entity["name"] == "Leaky Logo"
+    # ... but it carries no address, and neither half of the credential appears
+    # anywhere in the whole plan.
+    assert "url" not in entity
+    blob = json.dumps(
+        [c.entities for c in plan.categories], default=str
+    )
+    assert SECRET_M3U_PASSWORD not in blob
+    assert "operator" not in blob
+
+
+@pytest.mark.asyncio
+async def test_a_query_string_credential_logo_url_is_not_copied(tmp_path):
+    """The other carrier shape, which the name-blind query rule already knew."""
+    src = _source_client_with_remote_logos(
+        logos=[
+            {"id": 6, "name": "Leaky Query Logo",
+             "url": "http://provider.test/logo.php?username=u1&password=p1"},
+        ]
+    )
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    entity = plan.category(EntityType.LOGO).entities[0]
+    assert entity["id"] == 6
+    assert "url" not in entity
+
+
+@pytest.mark.asyncio
+async def test_a_credential_free_address_is_carried_byte_for_byte(tmp_path):
+    """The converse, and the reason the rule is a literal match rather than a
+    pattern: an ordinary address with structural path words survives intact."""
+    src = _source_client_with_remote_logos(
+        logos=[
+            {"id": 7, "name": "Ordinary Logo",
+             "url": "http://cdn.test/live/movie/news/operator-choice.png"},
+        ]
+    )
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(backup_mod, "CONFIG_DIR", tmp_path):
+        plan = await build_live_source_plan(include_logos=True)
+
+    entity = plan.category(EntityType.LOGO).entities[0]
+    assert entity["url"] == "http://cdn.test/live/movie/news/operator-choice.png"
+
+
+# ---------------------------------------------------------------------------
 # Persisted sync state (bead 7ipq2.2 — live-validation finding): the DBA-ruled
 # sync_targets columns (last_full_sync_at / last_outcome, migration 0024) were
 # never stamped by any code path — the operator status surface stayed NULL

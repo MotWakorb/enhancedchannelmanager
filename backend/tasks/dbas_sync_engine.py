@@ -142,6 +142,7 @@ from dbas.restore_orchestrator import (
     new_restore_id,
     run_restore,
 )
+from dbas.importers import logos as logos_mod
 from dbas.importers.channels import import_channels
 from dbas.importers.logos import import_logos
 from routers import backup as backup_mod
@@ -441,6 +442,96 @@ def _hosted_logo_records(
     return records
 
 
+def _remote_logo_records(
+    source_logos: list[dict],
+    *,
+    mirrored_ids: set[int],
+    known_secrets: frozenset,
+    known_identities: frozenset,
+) -> list[dict]:
+    """Metadata-only records for the REMOTE-URL logos (bead …-sgrez).
+
+    THE THIRD STORAGE SHAPE, and on a real XC-sourced instance the only one that
+    matters. A provider hands over a ``tvg-logo`` address; Dispatcharr stores the
+    URL and never the bytes. Such a logo is neither a file under ECM's own
+    ``uploads/logos`` nor Dispatcharr-hosted, so before this bead it produced NO
+    PLAN RECORD AT ALL — not a miss, not a failure, nothing. Measured on the
+    documentation environment's source A on 2026-08-20: 59 of 60 logos.
+
+    COPIED AS A URL, NOT FETCHED AND REHOSTED. Dispatcharr's Logo model IS
+    ``{name, url}``, and the restore importer has re-created exactly this shape
+    from exactly this field since bead …-dfkbn
+    (:func:`~dbas.importers.logos._create_logo_from_url`); the backup builder
+    deliberately does not archive these bytes for the same reason. Rehosting
+    would also make B diverge FROM A rather than replicate it — A itself holds
+    only the pointer, so if the origin disappears A loses the picture too — and
+    it would spend 59 network fetches inside bead …-cfxml's 300s per-cycle
+    budget on every unattended cycle, forever.
+
+    CREDENTIAL-BEARING URLS ARE NOT COPIED. Bead …-msqf7 established that a real
+    Xtream Codes provider puts the account's username and password in PATH
+    SEGMENTS of the addresses it hands out; a logo url comes from the same
+    provider on the same instances, so copying one verbatim would re-open that
+    hole by a new route. Every candidate url is therefore put through the SAME
+    :func:`~routers.backup._scrub_credential_urls` machinery, with the same
+    harvested values, and a url the scrub TOUCHES AT ALL is dropped rather than
+    carried in its scrubbed form: with its credential segments replaced by the
+    sentinel the address no longer resolves, and handing B a logo that silently
+    404s is what ``importers.logos`` already rules "strictly worse than an
+    honest miss". The record still travels — without a ``url``, without a
+    ``filename``, and therefore with no way back — so the importer reports it as
+    a NAMED miss with its affected channels instead of the logo vanishing.
+
+    Args:
+        source_logos: the source Dispatcharr logo rows.
+        mirrored_ids: source ids an ECM-LOCAL file record already claims. Those
+            keep the local file (it holds real bytes, which is strictly more
+            robust than a pointer); emitting a second record for the same id
+            would put two records on one LOGO remap entry, and the loser would
+            be skipped ``ALREADY_EXISTS_IDENTICAL`` — a claim of sameness about
+            images that are not the same.
+        known_secrets: the authenticating half of the harvested credentials.
+        known_identities: the identifying half.
+
+    Returns:
+        Metadata-only records, each carrying the source ``id`` and display
+        ``name``, and the ``url`` only when it is safe to hand to the replica.
+    """
+    records: list[dict] = []
+    for logo in source_logos:
+        logo_id = logo.get("id")
+        if not isinstance(logo_id, int) or isinstance(logo_id, bool):
+            continue
+        url = logos_mod.remote_logo_url(logo)
+        if url is None:
+            continue  # ECM-local or Dispatcharr-hosted — the other two shapes.
+        if logo_id in mirrored_ids:
+            continue
+        name = logo.get("name")
+        record: dict = {
+            "id": logo_id,
+            "name": (
+                name if isinstance(name, str) and name.strip()
+                # Never the url or its basename — the label is operator-facing
+                # and reaches B as the created row's name. The id is stable, so
+                # the next cycle's tier-2 name match still finds it.
+                else "logo %d" % logo_id
+            ),
+        }
+        if backup_mod._scrub_credential_urls(url, known_secrets, known_identities):
+            # Never log the url itself — it is the thing that carries the
+            # credential. The name is the operator-facing identifier.
+            logger.warning(
+                "[SYNC] Logo '%s' has a credential-bearing address; it was NOT "
+                "copied to the destination and is reported as a miss.",
+                record["name"],
+            )
+        else:
+            record["url"] = url
+        records.append(record)
+    return records
+
+
 def _drop_superseded_local_logos(
     local_records: list[dict], hosted_source_ids: set[int]
 ) -> list[dict]:
@@ -482,11 +573,16 @@ def _drop_superseded_local_logos(
     return kept
 
 
-async def _gather_live_logos() -> list[dict]:
+async def _gather_live_logos(
+    *,
+    known_secrets: frozenset = frozenset(),
+    known_identities: frozenset = frozenset(),
+) -> list[dict]:
     """Gather source-A logos as METADATA-ONLY records (bead 7ipq2.1 — D8).
 
-    Two sources, the SAME two the backup artifact carries since bead …-xb58a,
-    reusing the backup builder's seams rather than reimplementing them:
+    THREE sources, which is every storage shape a Dispatcharr logo can have,
+    reusing the backup builder's and the restore importer's seams rather than
+    reimplementing them:
 
     * the files under ECM's OWN ``/config/uploads/logos/``
       (:func:`routers.backup._gather_logo_binary_subtree`), correlated to the
@@ -497,6 +593,12 @@ async def _gather_live_logos() -> list[dict]:
       Before bead …-cfxml the sync gather read only the first source, so a
       replica received whatever happened to sit in A's upload directory — on the
       live instance, two files from March.
+    * every REMOTE-URL logo (:func:`_remote_logo_records`, bead …-sgrez). The
+      first two shapes are the two the ARTIFACT carries as bytes; a logo whose
+      url is an absolute http(s) address is in neither, and the artifact carries
+      it as an ADDRESS instead, which the importer re-creates from. The gather
+      read only the byte-bearing halves, so on an XC-sourced instance — where
+      this is 59 logos in 60 — the LOGO category was very nearly empty.
 
     One Dispatcharr listing serves both concerns (the id correlation and the
     hosted set), the same lifetime the backup builder gives them. A logo whose
@@ -510,8 +612,15 @@ async def _gather_live_logos() -> list[dict]:
     assembling every logo's base64 into the plan up front would hold the whole
     logo set in memory and defeat D8.
 
+    Args:
+        known_secrets: the authenticating half of the credential values
+            harvested off the RAW gather (bead …-msqf7). A remote logo url is a
+            provider-supplied address and can carry them, so it is scrubbed
+            through the same machinery every other url on the wire is.
+        known_identities: the identifying half.
+
     Returns:
-        Metadata-only logo records; empty when neither source yields anything.
+        Metadata-only logo records; empty when no source yields anything.
     """
     try:
         source_logos = await backup_mod._fetch_source_logos()
@@ -538,12 +647,26 @@ async def _gather_live_logos() -> list[dict]:
     )
     taken = {record["filename"] for record in local_records}
     hosted_records = _hosted_logo_records(hosted_logos, taken_filenames=taken)
-    records = local_records + hosted_records
+    # The remote set is the complement of the hosted one, so it cannot collide
+    # with a hosted record; it CAN collide with an ECM-local file that
+    # correlates to the same source id by basename, and the local file wins
+    # there (see _remote_logo_records' ``mirrored_ids``).
+    remote_records = _remote_logo_records(
+        source_logos,
+        mirrored_ids={
+            record["id"] for record in local_records
+            if isinstance(record.get("id"), int)
+        },
+        known_secrets=known_secrets,
+        known_identities=known_identities,
+    )
+    records = local_records + hosted_records + remote_records
 
     logger.info(
         "[SYNC] Gathered %d source logo record(s) (metadata-only): %d local "
-        "file(s), %d Dispatcharr-hosted.",
+        "file(s), %d Dispatcharr-hosted, %d remote-url.",
         len(records), len(local_records), len(hosted_records),
+        len(remote_records),
     )
     return records
 
@@ -732,10 +855,19 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # same hard Phase-2 ordering the restore registries use: logos LAST, so the
     # CHANNEL remap is populated for the logo-miss affected-channel drill-down).
     # METADATA-ONLY records: no content_b64 ever enters the plan (D8) — bytes
-    # hydrate lazily per missed logo via _load_logo_content_b64. No redaction
-    # pass is needed (name/filename/size only; no secret-named keys).
+    # hydrate lazily per missed logo via _load_logo_content_b64.
+    #
+    # The harvested credential values are threaded in because a REMOTE-URL logo
+    # record carries an ADDRESS (bead …-sgrez), and a provider-supplied address
+    # is exactly where bead …-msqf7 found this operator's username and password.
+    # The gather scrubs each candidate url through the same machinery rather
+    # than the records being redacted afterwards, because the right answer for a
+    # credential-bearing logo url is to DROP it (a sentinel-bearing address 404s
+    # on the replica), not to carry a scrubbed one.
     if include_logos:
-        logo_records = await _gather_live_logos()
+        logo_records = await _gather_live_logos(
+            known_secrets=known_secrets, known_identities=known_identities,
+        )
         categories.append(
             PlanCategory(entity_type=EntityType.LOGO, entities=logo_records)
         )

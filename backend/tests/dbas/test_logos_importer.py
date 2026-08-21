@@ -1473,3 +1473,60 @@ async def test_lost_logo_does_reach_the_operator_loss_summary():
     )
 
     assert "1 logo(s) could not be reinstated" in DbasRestoreTask._credential_reentry_suffix(report)
+
+
+# ===========================================================================
+# E. A LAZY PROVIDER DOES NOT MAKE A FILE-LESS RECORD HYDRATABLE
+#    (bead enhancedchannelmanager-sgrez).
+#
+#    ``hydratable_bytes`` gates the re-create-BY-URL branch: a record it calls
+#    hydratable goes to the upload path instead. The sync path wires a provider
+#    for EVERY record, so answering on the provider alone locked every
+#    REMOTE-URL logo out of the only branch that could restore it — and sent it
+#    to an upload path whose only possible outcome is a VALIDATION_ERROR,
+#    because that path cannot run without a ``filename``.
+# ===========================================================================
+
+
+async def _never_called_provider(record):  # pragma: no cover - must not run
+    raise AssertionError("a file-less record must never be hydrated")
+
+
+def test_a_byteless_record_with_no_filename_is_not_hydratable():
+    """The invariant, stated on the predicate itself."""
+    from dbas.importers.logos import hydratable_bytes
+
+    remote = {"id": 1, "name": "Remote"}
+    assert hydratable_bytes(remote, _never_called_provider) is False
+    # A record that DOES name a file still is — the sync path's local/hosted
+    # records both carry one, so bead …-cfxml's slice is untouched.
+    assert hydratable_bytes(
+        {"id": 1, "name": "Hosted", "filename": "x.png"}, _never_called_provider
+    ) is True
+    # Bytes already in hand always win, filename or not.
+    assert hydratable_bytes({"content_b64": "AA=="}, None) is True
+    # No provider and no bytes: unchanged archive-restore behaviour.
+    assert hydratable_bytes(remote, None) is False
+
+
+@pytest.mark.asyncio
+async def test_a_remote_url_record_is_recreated_by_url_even_with_a_provider_wired():
+    """End to end through the importer: the URL branch, not the upload branch,
+    and the provider is never asked for bytes that do not exist."""
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+
+    await import_logos(
+        archive_logos=[
+            {"id": 42, "name": "Remote Logo", "url": "http://cdn.example/x.png"}
+        ],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_never_called_provider,
+    )
+
+    client.create_logo.assert_awaited_once_with(
+        {"name": "Remote Logo", "url": "http://cdn.example/x.png"}
+    )
+    client.upload_logo_file.assert_not_awaited()
+    assert report.category(EntityType.LOGO).created == 1
+    assert report.logo_misses == 0

@@ -1144,3 +1144,245 @@ async def test_logos_off_leaves_bs_channel_logos_alone(tmp_path):
     assert report.logo_reattach.existing_channels == 0
     assert report.logo_reattach.preserved_channels == 0
     assert dest.logos.rows[source_logo["id"]]["name"] == _DECOY_LOGO_NAME
+
+
+# ---------------------------------------------------------------------------
+# (k) REMOTE-URL LOGOS — the third, disjoint storage shape (bead …-sgrez).
+#
+# The gather built the LOGO category from TWO sources: files under ECM's own
+# ``/config/uploads/logos/`` and the DISPATCHARR-HOSTED bytes bead …-cfxml
+# added. A logo whose ``url`` is an ABSOLUTE http(s) address is in NEITHER set,
+# so it produced no plan record at all — not a miss, not a failure, nothing.
+# Measured on source A of the documentation environment, 2026-08-20:
+#
+#     A logos total=60   remote-url=59   Dispatcharr-hosted=1
+#     e.g. id 1 'Meridian News'  http://dispatcharr-p-web:9191/api/…/cache/
+#
+# So sync replicated ONE LOGO IN SIXTY, and it took bead …-xgbjm making the
+# bindings cross for the run to start saying so ('58 logo(s) could not be
+# reinstated' where it had silently said 0).
+#
+# THE INVARIANT under test: a channel that shows a logo on A shows the
+# CORRESPONDING logo on B, whatever the logo's storage shape. The 1-of-60 count
+# is one example of that property, not the specification — so the tests below
+# drive a MIXED population (remote + hosted) rather than the remote shape alone.
+#
+# The assertion surface is bead …-xgbjm's: WHICH LOGO B'S CHANNEL POINTS AT, BY
+# NAME, with a DECOY planted on B at the exact id A's logo carries.
+# ---------------------------------------------------------------------------
+
+_REMOTE_LOGO_URL = "http://cdn.northwind.example/logos/cnn.png"
+
+
+def _channel_with_a_remote_url_logo():
+    """A source-A whose 'CNN' channel carries a REMOTE-URL logo.
+
+    The shape an XC-sourced instance actually holds: the provider hands over a
+    ``tvg-logo`` address and Dispatcharr stores the URL, never the bytes. There
+    is nothing to upload and nothing to fetch — Dispatcharr's Logo model IS
+    ``{name, url}``, so the replica is restored by pointing at the same address.
+    """
+    source = StatefulDispatcharrFake.seeded_source()
+    logo = source.logos.create({"name": "Northwind CNN", "url": _REMOTE_LOGO_URL})
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = logo["id"]
+    return source, logo
+
+
+@pytest.mark.asyncio
+async def test_a_channel_with_a_remote_url_logo_carries_bs_own_logo_on_b(tmp_path):
+    """THE INVARIANT for the remote shape: B's channel points at B's copy, by
+    name, and B's copy carries the SAME address A points at."""
+    source, source_logo = _channel_with_a_remote_url_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    # The logo came BACK, so it is not an operator-facing loss.
+    assert report.logo_misses == 0
+
+    # THE INVARIANT, read off B by NAME.
+    assert dest.channel_logo_name("CNN") == source.channel_logo_name("CNN")
+    assert dest.channel_logo_name("CNN") == "Northwind CNN"
+
+    # ... bound through B's OWN id, never A's — the decoy is what A's id names
+    # on B, and B's channel must not be pointing at it.
+    dest_channel = next(
+        row for row in dest.channels.rows.values() if row.get("name") == "CNN"
+    )
+    assert dest_channel["logo_id"] != source_logo["id"]
+    assert dest.logos.rows[dest_channel["logo_id"]]["name"] == "Northwind CNN"
+    # B's row points at the SAME address A's does — that is what makes the
+    # replica show the same picture.
+    assert dest.logos.rows[dest_channel["logo_id"]]["url"] == _REMOTE_LOGO_URL
+
+    # The decoy is untouched.
+    assert dest.logos.rows[source_logo["id"]]["name"] == _DECOY_LOGO_NAME
+
+
+@pytest.mark.asyncio
+async def test_every_storage_shape_crosses_in_one_cycle(tmp_path):
+    """A MIXED population — the specification, not the 1-of-60 reproduction.
+
+    One remote-URL logo and one Dispatcharr-hosted logo on two different
+    channels. Both channels must show their own logo on B in the SAME cycle: a
+    fix that handled the remote shape by displacing the hosted one would pass a
+    remote-only test and still lose a logo.
+    """
+    source = StatefulDispatcharrFake.seeded_source()
+    remote = source.logos.create({"name": "Northwind CNN", "url": _REMOTE_LOGO_URL})
+    hosted = source.logos.create(
+        {"name": "XDMRU Hosted Logo", "url": "/data/logos/xdmru.png"}
+    )
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = remote["id"]
+    source.channels.create(
+        {"name": "BBC", "channel_number": 6, "streams": [], "logo_id": hosted["id"]}
+    )
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert report.logo_misses == 0
+    assert dest.channel_logo_name("CNN") == "Northwind CNN"
+    assert dest.channel_logo_name("BBC") == "XDMRU Hosted Logo"
+    # B holds BOTH, and never fetched bytes it had no business fetching: the
+    # remote row is a pointer, the hosted row is an upload.
+    assert dest.logos.rows[
+        next(
+            rid for rid, r in dest.logos.rows.items() if r["name"] == "Northwind CNN"
+        )
+    ]["url"] == _REMOTE_LOGO_URL
+
+
+@pytest.mark.asyncio
+async def test_the_remote_binding_is_stable_across_cycles(tmp_path):
+    """Cycle 2 matches B's now-present row rather than creating a second one."""
+    source, source_logo = _channel_with_a_remote_url_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+    first = dest.channel_logo_name("CNN")
+
+    second = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert second.category(EntityType.LOGO).created == 0  # matched, not re-created
+    assert dest.channel_logo_name("CNN") == first == "Northwind CNN"
+
+
+@pytest.mark.asyncio
+async def test_a_dry_run_predicts_the_remote_create_and_writes_nothing(tmp_path):
+    """The preview must predict what the apply will DO (bead …-dgnms's lesson,
+    applied to the sync path): a would-CREATE, and B untouched."""
+    source, source_logo = _channel_with_a_remote_url_logo()
+    dest = _dest_with_a_decoy_at(source_logo["id"])
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=False, ledger_dir=tmp_path)
+
+    assert report.category(EntityType.LOGO).would_create == 1
+    assert report.logo_misses == 0
+    assert report.logo_reattach.mode == ChannelReattachMode.OVERWRITE
+    assert report.logo_reattach.created_channels == 1
+    assert dest.channels.rows == {}
+    assert dest.logo_names() == {_DECOY_LOGO_NAME.lower()}
+
+
+# ---------------------------------------------------------------------------
+# (k2) CREDENTIAL INTERACTION — bead …-msqf7 closed the hole where a real XC
+# provider's username and password crossed to the replica inside every stream
+# URL, as PATH SEGMENTS. A logo url is a provider-supplied address on exactly
+# the same instances, so COPYING one to B is a new route to the same hole.
+#
+# THE RULE: a logo URL that carries a credential is NOT handed to B. The address
+# is not usable once its credential segments are the sentinel — it would give
+# the operator a channel whose logo silently 404s, which the logos importer
+# already rules is "strictly worse than an honest miss" — so the record travels
+# WITHOUT a url and the operator is told, by name, which logo did not come back.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_credential_bearing_logo_url_never_reaches_the_replica(tmp_path):
+    """The XC path-segment shape …-msqf7 measured, on a logo url this time."""
+    source = StatefulDispatcharrFake.seeded_source()
+    account = next(iter(source.m3u_accounts.rows.values()))
+    account["username"] = "northwind-demo"
+    account["password"] = "not-a-real-password"
+    logo = source.logos.create(
+        {
+            "name": "Leaky Logo",
+            "url": "http://provider.example/live/northwind-demo/"
+                   "not-a-real-password/logos/cnn.png",
+        }
+    )
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = logo["id"]
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    # NOTHING on B carries either half of the credential, anywhere.
+    blob = json.dumps(
+        [dict(r) for r in dest.logos.rows.values()], default=str
+    )
+    assert "not-a-real-password" not in blob
+    assert "northwind-demo" not in blob
+
+    # And the operator is TOLD, by name, rather than the logo vanishing. The
+    # miss aggregate is a top-level int; the channel names live in
+    # ``logo_miss_details[].channels[].name``.
+    assert report.logo_misses >= 1
+    assert "Leaky Logo" in {d.label for d in report.logo_miss_details}
+    affected = {
+        channel.name
+        for miss in report.logo_miss_details
+        for channel in miss.channels
+    }
+    assert "CNN" in affected
+
+
+@pytest.mark.asyncio
+async def test_a_query_string_credential_logo_url_never_reaches_the_replica(tmp_path):
+    """The other carrier shape: ``?username=…&password=…`` in the query."""
+    source = StatefulDispatcharrFake.seeded_source()
+    logo = source.logos.create(
+        {
+            "name": "Leaky Query Logo",
+            "url": "http://provider.example/logo.php?username=u1&password=p1",
+        }
+    )
+    for row in source.channels.rows.values():
+        if row.get("name") == "CNN":
+            row["logo_id"] = logo["id"]
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    harness = SyncHarness(
+        source=source, dest=dest, target=make_sync_target(sync_logos=True)
+    )
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    blob = json.dumps([dict(r) for r in dest.logos.rows.values()], default=str)
+    assert "password=p1" not in blob
+    assert "username=u1" not in blob
+    assert report.logo_misses >= 1
+    assert "Leaky Query Logo" in {d.label for d in report.logo_miss_details}
