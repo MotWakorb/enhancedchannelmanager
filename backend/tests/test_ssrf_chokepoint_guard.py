@@ -180,6 +180,49 @@ class TestCloudStorageChokepointGuard:
             "guard — the D1 guard-extension AC is unenforced"
         )
 
+    def test_provisioning_writer_is_in_scope(self):
+        """The credential-provisioning writer MUST be scanned (D1 / §11.5.4 item 2).
+
+        Bead ``enhancedchannelmanager-wd20y``. This is the one outbound path
+        that deliberately carries a PROVIDER CREDENTIAL to a remote instance, so
+        a raw outbound call on it would slip the chokepoint on the worst
+        possible request.
+
+        The threat model made this a BUILD GATE precisely because the natural
+        home for the code — a route handler on ``backend/routers/sync_targets.py``
+        — is OUTSIDE ``_SYNC_GLOB`` (``routers/`` is not scanned at all). The
+        writer is therefore at ``backend/tasks/dbas_sync_provisioning.py``, and
+        the file NAME is load-bearing: rename it away from the ``dbas_sync*``
+        prefix and it silently stops being scanned. This test is what makes that
+        rename fail loudly instead.
+        """
+        scanned = {p.name for p in _adapter_modules()}
+        assert "dbas_sync_provisioning.py" in scanned, (
+            "the credential-provisioning writer is NOT scanned by the SSRF "
+            "chokepoint guard. It must live at backend/tasks/dbas_sync_*.py so "
+            "_SYNC_GLOB covers it, or the guard's scanned set must be extended "
+            "in the same commit — threat model §11.5.4 item 2 (build gate) / "
+            "row D1."
+        )
+
+    def test_provisioning_writer_makes_no_raw_outbound_call(self):
+        """Its ONLY outbound path is the SSRF-pinned remote client.
+
+        The scan above proves the module is covered; this proves what the
+        coverage found. Stated separately because "is in the scanned set" and
+        "is clean" are different claims, and the first one passing is exactly
+        how a dirty module could be reported as safe.
+        """
+        path = SYNC_DIR / "dbas_sync_provisioning.py"
+        assert path.exists(), f"provisioning writer not found at {path}"
+        findings = _forbidden_outbound_nodes(path.read_text())
+        assert not findings, (
+            "the credential-provisioning writer makes a RAW outbound call "
+            f"({findings}). Every request must go through "
+            "tasks.dbas_sync_client.make_remote_client, whose pinned transport "
+            "routes each one through security.ssrf.validate_outbound_url."
+        )
+
     def test_sync_factory_passes_only_via_tagged_import(self):
         """The real sync factory passes BECAUSE its httpx import is # ssrf-ok:.
 

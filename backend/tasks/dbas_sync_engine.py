@@ -1864,6 +1864,29 @@ async def run_sync(
             sync_target.last_outcome = result.outcome.value
             if result.outcome == RestoreOutcome.SUCCESS:
                 sync_target.last_full_sync_at = datetime.now(timezone.utc)
+            # --- The OBSERVED half of the S11 insecure gate (ADR-013 INV-4 /
+            # threat model row D16, PO ruling 2026-08-22 on §11.5.4 item 5).
+            #
+            # The credential re-entry reporter has ALREADY read B's provider
+            # account rows this cycle and ALREADY run credential_is_present
+            # against them; ``destination_credentials_observed`` is that same
+            # verdict, carried out on the report. Stamping it here adds no
+            # fetch, no comparison and no credential — the column is a
+            # timestamp, and PRESENCE is the only thing it records.
+            #
+            # It is what lets the ``insecure`` refusal see a credential ECM did
+            # NOT write: the operator entering the provider password on B by
+            # hand, which is the recovery ECM's own guide documents and which
+            # the provisioning marker is structurally blind to.
+            #
+            # Monotonic here on purpose — this run only ever ADDS the
+            # observation. Retiring it is an explicit, audited de-provision
+            # whose write to B succeeded (INV-9); a cycle that merely failed to
+            # observe must not clear a gate that protects a live secret.
+            if getattr(result, "destination_credentials_observed", False):
+                sync_target.destination_credentials_observed_at = datetime.now(
+                    timezone.utc
+                )
             session.commit()
         except Exception as exc:  # noqa: BLE001 - stamping is best-effort
             logger.warning("[SYNC] Failed to stamp persisted sync state: %s", exc)

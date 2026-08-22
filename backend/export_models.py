@@ -164,6 +164,41 @@ class SyncTarget(Base):
     # add to a possibly-populated table, so it carries a server_default like
     # fuzzy_stream_matching above.
     sync_logos = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    # --- One-time credential provisioning (ADR-013 S10-S13, bead wd20y) ------
+    # THE S11 GATE STATE, and it is a COLUMN deliberately. It records that ECM
+    # WROTE a provider credential onto this target's replicated provider
+    # accounts, so ``insecure`` can be refused while B may still hold one. It is
+    # NOT an inference from journal / execution history: bead 5dp92 records that
+    # execution history is keyed on a REUSABLE target id, so a freshly created
+    # target can inherit a deleted target's rows and would inherit a
+    # ``provisioned`` verdict it never earned (or lose one it did).
+    #
+    # NULL == never provisioned (or an audited de-provision that SUCCEEDED on B
+    # for every targeted account — INV-9). Nullable additive DDL, matching the
+    # S-series precedent for this table.
+    #
+    # THIS COLUMN NEVER HOLDS A CREDENTIAL (INV-3). It is a timestamp. The
+    # harvested values are read, written to B and discarded inside the request.
+    credentials_provisioned_at = Column(DateTime, nullable=True)
+    # THE OBSERVED half of the S11 gate (threat model §11.5 row D16, PO ruling
+    # 2026-08-22 on §11.5.4 item 5: gate ``insecure`` on RECORDED **OR**
+    # OBSERVED state). ``credentials_provisioned_at`` sees only what ECM wrote;
+    # an operator who entered the provider credential on B BY HAND — the
+    # recovery ECM's own guide documents — leaves it NULL while B holds a live
+    # credential that the per-cycle destination read carries back to A on every
+    # cycle.
+    #
+    # Written by the sync cycle from state it ALREADY reads: the credential
+    # re-entry reporter (``dbas.importers.m3u_accounts._report_credentials_still_missing``)
+    # already calls ``credential_sentinel.credential_is_present`` against B's
+    # own account rows. This column records PRESENCE ONLY — never a value, never
+    # a fragment, never a comparison against A's value. No new fetch, no new
+    # comparison; one boolean's worth of new persistence.
+    #
+    # NULL == no cycle has observed a credential on B (or a de-provision cleared
+    # the last one). It is advisory for everything EXCEPT the ``insecure``
+    # refusal, which treats it exactly like the recorded marker.
+    destination_credentials_observed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -182,6 +217,16 @@ class SyncTarget(Base):
             "last_source_fingerprint": self.last_source_fingerprint,
             "fuzzy_stream_matching": self.fuzzy_stream_matching,
             "sync_logos": self.sync_logos,
+            "credentials_provisioned_at": (
+                self.credentials_provisioned_at.isoformat() + "Z"
+                if self.credentials_provisioned_at
+                else None
+            ),
+            "destination_credentials_observed_at": (
+                self.destination_credentials_observed_at.isoformat() + "Z"
+                if self.destination_credentials_observed_at
+                else None
+            ),
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }

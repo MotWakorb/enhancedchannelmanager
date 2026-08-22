@@ -2163,3 +2163,108 @@ async def test_logo_binding_pass_needs_both_categories(
         assert kwargs["archive_channels"] == ctx.plan.category(
             EntityType.CHANNEL
         ).entities
+
+
+# ---------------------------------------------------------------------------
+# One-time credential provisioning: what the CYCLE must and must not do
+# (bead wd20y — ADR-013 INV-4 / INV-5 / S13).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_full_cycle_writes_zero_provisioning_journal_rows(tmp_path):
+    """INV-5 / S13: only a provisioning attempt records one, and a cycle is not one.
+
+    This is the property that makes the audit row a DETECTOR rather than a
+    record. A ``sync_provision_credentials`` row whose actor is the scheduler is
+    not a log line, it is THE ALARM — the only detector for the failure mode of
+    the one-time path becoming recurring (threat model D12).
+    """
+    from tasks.dbas_sync_provisioning import (
+        DEPROVISION_ACTION_TYPE,
+        PROVISION_ACTION_TYPE,
+    )
+
+    src = _source_client()
+    dest = _empty_dest_client()
+    target = _sync_target()
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None), \
+         patch.object(engine.journal, "log_entry") as log_entry:
+        await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    action_types = [
+        call.kwargs.get("action_type") for call in log_entry.call_args_list
+    ]
+    assert log_entry.call_count > 0, "the cycle journalled nothing at all — this "\
+        "assertion would pass vacuously"
+    assert PROVISION_ACTION_TYPE not in action_types
+    assert DEPROVISION_ACTION_TYPE not in action_types
+
+
+@pytest.mark.asyncio
+async def test_a_cycle_stamps_the_observed_marker_when_B_holds_a_credential(tmp_path):
+    """INV-4's OBSERVED half, from state the cycle ALREADY reads (row D16).
+
+    B's account row carries a username and password ECM never wrote — the
+    by-hand recovery ECM's own guide documents. The credential re-entry reporter
+    already reads that row and already runs ``credential_is_present`` against
+    it; the marker is that same verdict, persisted, so the ``insecure`` refusal
+    can see a credential the provisioning marker is structurally blind to.
+
+    No new fetch, no comparison, and the column holds a timestamp.
+    """
+    src = _source_client()
+    dest = _converged_dest_client()
+    dest.get_m3u_accounts = AsyncMock(
+        return_value=[
+            {
+                "id": 501,
+                "name": "Provider A",
+                "username": "entered-by-hand",
+                "password": "entered-by-hand-pass",
+            }
+        ]
+    )
+    target = _sync_target()
+    target.destination_credentials_observed_at = None
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.destination_credentials_observed is True
+    assert target.destination_credentials_observed_at is not None
+    # Presence only — no credential value reached the report.
+    assert "entered-by-hand-pass" not in report.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_a_cycle_against_a_credential_free_B_stamps_nothing(tmp_path):
+    """The gate must not close on a replica that holds nothing.
+
+    Without this the observed half would be a one-way ratchet that fires on
+    every target, and ``insecure`` would become permanently unavailable for
+    reasons unrelated to any credential.
+    """
+    src = _source_client()
+    dest = _converged_dest_client()
+    target = _sync_target()
+    target.destination_credentials_observed_at = None
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.destination_credentials_observed is False
+    assert target.destination_credentials_observed_at is None
