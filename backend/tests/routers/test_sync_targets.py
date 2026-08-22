@@ -203,6 +203,107 @@ class TestUpdateSyncTarget:
         assert resp.json()["credential_version"] == 1  # metadata-only
 
     @pytest.mark.asyncio
+    async def test_correction_leaves_the_row_settings_alone(self, async_client, test_session):
+        """A base_url + credentials correction must not disturb sync_logos/enabled.
+
+        Bead ``…-a3lby``. Correcting a mistyped base URL or password used to mean
+        DELETE AND RECREATE, which reset ``sync_logos`` to its default OFF (the
+        control bead ``…-8gnik`` shipped) and handed the replacement the deleted
+        target's execution history, because that history is keyed on a REUSABLE
+        target id (bead ``…-5dp92``).
+
+        THE INVARIANT this pins (the specification; base_url and credentials are
+        examples of it): any field an operator can set at creation can be
+        corrected afterwards without destroying the target, and correcting one
+        must leave the settings they set elsewhere exactly where they were.
+
+        The mechanism is that :class:`SyncTargetUpdate` is a PARTIAL update whose
+        unnamed fields are left untouched — so an unconditional write of any of
+        them would reintroduce the reset through the correction path. That is the
+        mutant this test is red against.
+        """
+        created = await async_client.post(
+            "/api/sync-targets",
+            json={
+                "name": "typo",
+                "base_url": "https://b.exmaple.com",
+                "credentials": {"username": "admin", "password": "wrongpassword1"},
+                "enabled": False,
+                "sync_logos": True,
+                "fuzzy_stream_matching": True,
+            },
+        )
+        tid = created.json()["id"]
+
+        resp = await async_client.put(
+            f"/api/sync-targets/{tid}",
+            json={
+                "name": "corrected",
+                "base_url": "https://b.example.com",
+                "insecure": False,
+                "credentials": {"username": "admin", "password": "rightpassword1"},
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+
+        # The correction landed...
+        assert body["name"] == "corrected"
+        assert body["base_url"] == "https://b.example.com"
+        assert body["credential_version"] == 2
+
+        # ...and nothing the operator set on the row moved with it.
+        assert body["sync_logos"] is True
+        assert body["enabled"] is False
+        assert body["fuzzy_stream_matching"] is True
+
+        test_session.expire_all()
+        row = test_session.query(SyncTarget).filter_by(id=tid).first()
+        assert row.base_url == "https://b.example.com"
+        assert row.sync_logos is True
+        assert row.enabled is False
+        assert row.fuzzy_stream_matching is True
+        assert decrypt_credentials(row.credentials) == {
+            "username": "admin",
+            "password": "rightpassword1",
+        }
+
+    @pytest.mark.asyncio
+    async def test_credentials_omitted_leaves_the_stored_secret_untouched(
+        self, async_client, test_session
+    ):
+        """Correcting only the base_url must not touch the stored credentials.
+
+        Bead ``…-a3lby``: the UI leaves its credential boxes blank to mean "keep
+        what is stored", which only works because an omitted ``credentials`` is
+        not written. A partial write here would be worse than a no-op — the
+        backend REPLACES the dict rather than merging into it.
+        """
+        created = await async_client.post(
+            "/api/sync-targets",
+            json={
+                "name": "keep-creds",
+                "base_url": "https://k.exmaple.com",
+                "credentials": {"username": "admin", "password": "originalpass12"},
+            },
+        )
+        tid = created.json()["id"]
+
+        resp = await async_client.put(
+            f"/api/sync-targets/{tid}", json={"base_url": "https://k.example.com"}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["base_url"] == "https://k.example.com"
+        assert resp.json()["credential_version"] == 1  # no credentials write
+
+        test_session.expire_all()
+        row = test_session.query(SyncTarget).filter_by(id=tid).first()
+        assert decrypt_credentials(row.credentials) == {
+            "username": "admin",
+            "password": "originalpass12",
+        }
+
+    @pytest.mark.asyncio
     async def test_update_rejects_non_http_base_url(self, async_client):
         created = await async_client.post(
             "/api/sync-targets",
