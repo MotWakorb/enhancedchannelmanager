@@ -375,4 +375,172 @@ describe('SyncTargetsCard', () => {
     resolveA({ success: true, message: 'preview ok' });
     await waitFor(() => expect(screen.getByTestId('sync-target-preview-7')).toBeEnabled());
   });
+  // -------------------------------------------------------------------------
+  // Correcting a target in place (bead …-a3lby).
+  //
+  // Every field the create form sets — name, base URL, credentials, the
+  // insecure-TLS opt-out — was WRITE-ONCE in the UI: the only way to fix a
+  // mistyped character was delete-and-recreate, which resets `sync_logos` to
+  // its default OFF (bead …-8gnik shipped that control) and hands the
+  // replacement the deleted target's execution history, because that history is
+  // keyed on a REUSABLE target id (bead …-5dp92).
+  //
+  // `PUT /api/sync-targets/{id}` already accepted all of them and the api.ts
+  // client already exposed them; only the affordance was missing.
+  //
+  // THE INVARIANT (the specification; base URL and credentials are examples of
+  // it): any sync-target field an operator can set at creation can be corrected
+  // afterwards without destroying the target — and correcting one must not
+  // disturb the settings the operator set elsewhere.
+  // -------------------------------------------------------------------------
+
+  it('Edit opens the form prefilled with the target as it stands', async () => {
+    await renderCard([{ ...TARGET, insecure: true }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+
+    expect(await screen.findByLabelText(/^name/i)).toHaveValue('Living Room B');
+    expect(screen.getByLabelText(/base url/i)).toHaveValue('https://b.example.com');
+    expect(screen.getByRole('checkbox')).toBeChecked();
+  });
+
+  it('never prefills the credential inputs with the masked stored value', async () => {
+    // The read shape masks credentials to last-4 (`***user`). Putting that in
+    // the box invites the operator to "keep" a value that is not the secret.
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+
+    expect(await screen.findByLabelText(/username/i)).toHaveValue('');
+    expect(screen.getByLabelText(/password/i)).toHaveValue('');
+  });
+
+  it('corrects the base URL WITHOUT touching sync_logos, enabled or the credentials', async () => {
+    // The whole point of the bead: a typo fix must not cost the operator their
+    // logo choice, their kill-switch state, or their stored secret. A PUT is
+    // partial, so the payload carries ONLY what the form edits.
+    (api.updateSyncTarget as Mock).mockResolvedValue({ ...TARGET });
+    await renderCard([{ ...TARGET, sync_logos: true, enabled: false }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+    fireEvent.change(await screen.findByLabelText(/base url/i), {
+      target: { value: 'https://corrected-b.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(api.updateSyncTarget).toHaveBeenCalledTimes(1));
+    const [id, payload] = (api.updateSyncTarget as Mock).mock.calls[0];
+    expect(id).toBe(7);
+    expect(payload).toEqual({
+      name: 'Living Room B',
+      base_url: 'https://corrected-b.example.com',
+      insecure: false,
+    });
+    // Explicit, because omission is the mechanism: naming any of these would
+    // overwrite state the operator set on the row, not correct the typo.
+    expect(payload).not.toHaveProperty('sync_logos');
+    expect(payload).not.toHaveProperty('enabled');
+    expect(payload).not.toHaveProperty('credentials');
+  });
+
+  it('sends the new credentials when they are entered in full', async () => {
+    (api.updateSyncTarget as Mock).mockResolvedValue({ ...TARGET });
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+    fireEvent.change(await screen.findByLabelText(/username/i), { target: { value: 'admin' } });
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value: 'corrected' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(api.updateSyncTarget).toHaveBeenCalledTimes(1));
+    expect(api.updateSyncTarget).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ credentials: { username: 'admin', password: 'corrected' } }),
+    );
+  });
+
+  it('refuses a HALF-entered credential rather than erasing the other half', async () => {
+    // The backend REPLACES the whole credentials dict — it does not merge — and
+    // ECM cannot read the stored secret back to fill the gap. Sending
+    // `{username: '', password: 'x'}` would blank the username. Refuse instead.
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+    fireEvent.change(await screen.findByLabelText(/password/i), { target: { value: 'only-this' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(notify.error).toHaveBeenCalled());
+    expect(api.updateSyncTarget).not.toHaveBeenCalled();
+  });
+
+  it('refuses a switch to API key with no key entered', async () => {
+    // Changing the auth MODE changes the shape of the credentials dict, so the
+    // stored username/password cannot be carried over — the new secret is
+    // mandatory, and silently keeping the old shape would be a lie.
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+    fireEvent.change(await screen.findByLabelText(/authentication/i), {
+      target: { value: 'api_key' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(notify.error).toHaveBeenCalled());
+    expect(api.updateSyncTarget).not.toHaveBeenCalled();
+  });
+
+  it('prefills the auth mode from the stored credential shape (api_key)', async () => {
+    await renderCard([{ ...TARGET, credentials: { api_key: '***key1' } }]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+
+    expect(await screen.findByLabelText(/authentication/i)).toHaveValue('api_key');
+    expect(screen.getByLabelText(/api key/i)).toHaveValue('');
+  });
+
+  it('Cancel closes the edit form and writes nothing', async () => {
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+    fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: 'Discarded' } });
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() => expect(screen.queryByLabelText(/base url/i)).not.toBeInTheDocument());
+    expect(api.updateSyncTarget).not.toHaveBeenCalled();
+  });
+
+  it('Add still creates — the shared form did not turn creates into updates', async () => {
+    (api.createSyncTarget as Mock).mockResolvedValue({ ...TARGET, id: 8, name: 'New B' });
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /add sync target/i }));
+    fireEvent.change(await screen.findByLabelText(/^name/i), { target: { value: 'New B' } });
+    fireEvent.change(screen.getByLabelText(/base url/i), {
+      target: { value: 'https://new-b.example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() => expect(api.createSyncTarget).toHaveBeenCalledTimes(1));
+    expect(api.updateSyncTarget).not.toHaveBeenCalled();
+  });
+
+  it('says plainly that a blank credential box keeps the stored secret', async () => {
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-edit-7'));
+
+    expect(await screen.findByTestId('stc-credentials-hint')).toHaveTextContent(
+      /leave .*blank to keep the stored credentials/i,
+    );
+  });
 });

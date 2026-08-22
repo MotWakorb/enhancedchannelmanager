@@ -1535,13 +1535,69 @@ carries a username or a password. Neither was introduced by this run.
 - **Restore-path fixes** (`if05f` and anything reached only by a full restore).
   `users` is in `SYNC_NEVER_CATEGORIES`; the sync UI structurally cannot reach it.
 
+## What bead `avrix` measured here afterwards, 2026-08-21/22
+
+The finding above ("the per-account group-enable state does not cross") was
+worked as bead `enhancedchannelmanager-avrix`, and the first thing it did was
+answer the question the finding left open: **what does B do on its own refresh,
+having inherited no group-enable state?** Reproduced twice against this A and
+this provider, on 0.29.0 both sides.
+
+- **As the replica actually arrives** (`auto_enable_new_groups_live: false`,
+  inherited from A): its discovery refresh created all 777
+  `channelgroupm3uaccount` rows **DISABLED** — 777 log lines reading
+  `creating relationship but DISABLED (auto_enable_new_groups_live=False)` —
+  then `Filtered 0 groups for processing: {}`,
+  `Retrieved 53661 total live streams from provider`,
+  `Filtered 0 streams from 0 enabled categories`, and
+  `No streams collected ... aborting refresh to preserve the existing channel
+  lineup`. **0 streams against A's 316.** The account lands in `status = error`,
+  `No streams returned from Xtream Codes provider`, which blames the provider.
+- **One boolean the other way it is far worse, and that boolean is Dispatcharr's
+  own default.** `apps/m3u/serializers.py` pops
+  `auto_enable_new_groups_live` with a `True` fallback on create (and ECM's
+  synthesized `ECM Custom Streams` account on B carries all three auto-enable
+  flags `true` for exactly that reason — ECM sets none of them). B inherits
+  whatever A has. Armed with `true` and the same empty selection, B's discovery
+  refresh enabled **777 of 777** categories in one pass. Celery was killed at
+  that point and no streams were imported, but that is the provider's entire
+  53,661-stream catalogue one refresh away.
+
+So the SAME missing state sends a replica either way, and which way is decided
+by a flag that defaults to the dangerous one. **Do not treat "B inherits
+auto-enable OFF here, so it is safe" as a property of the system** — it is a
+property of how this A's account happened to be created (trap 13).
+
+**Traps this measurement adds.** Dispatcharr's celery log lists every registered
+task name at worker startup, so a grep for `refresh_single_m3u_account` matches
+the *registry listing*, not an invocation — match `Task …[` or
+`Retrieved N total live streams` instead. And A's and B's channel-group ids
+COINCIDE on a B built by one sync from an empty volume, so a live run cannot
+tell a remap from a raw forward: create one decoy group on B first to shift its
+ids, and confirm what sits at A's ids on B is a *different* group.
+
 ## State this run leaves behind
 
+- **`ecm-kdz6p` no longer runs the tree of `aed7447b`.** Bead `avrix` deployed
+  the full backend tree of its own branch into it (`fix/avrix-group-enable-state`
+  at `65fa24d3`) and verified it the documented way: **244 non-test
+  `backend/**.py`, 244 OK / 0 MISMATCH / 0 ABSENT** against `git show`, with the
+  same harness against `e8b244c8` reporting 4 MISMATCH so the check is not
+  vacuous. Its FRONTEND is still `aed7447b`'s. `/api/version` was not consulted
+  (trap 12).
 - **Dispatcharr A** (`:9601`) — 316 channels as described above, holding the PO's
-  live XC credentials in its Postgres. **Delete the `Live XC Provider` M3U
-  account before handing this host to anyone else.**
-- **Dispatcharr B** (`:9602`) — converged onto A, credential-free, every stream
-  URL redacted.
+  live XC credentials in its Postgres. Re-read at the end of the `avrix` run and
+  unchanged: 316 channels, 316 streams, 779 groups, 777 `channelgroupm3uaccount`
+  rows with **2** enabled. **Delete the `Live XC Provider` M3U account before
+  handing this host to anyone else.**
+- **Dispatcharr B** (`:9602`) — **destroyed and recreated at the end of the
+  `avrix` run** (containers and both volumes), superuser re-created,
+  `stream_settings` cache busted. Read from its own Postgres: 0 channels /
+  streams / channel groups / `channelgroupm3uaccount` rows / channel profiles /
+  logos / EPG sources; 3 user agents; 5 stream profiles; 1 M3U account
+  (`custom`). It holds **no provider credentials** — the ones entered during
+  that run went with the volume. The sync target in `ecm-kdz6p` still exists and
+  still points at it.
 - **ECM `ecm-kdz6p`** on `http://127.0.0.1:6500` (image `ecm-kdz6p:aed7447b`,
   config volume `ecm-kdz6p-config`), admin `ecm-kdz6p-admin`, holding one sync
   target with `sync_logos = 1`.

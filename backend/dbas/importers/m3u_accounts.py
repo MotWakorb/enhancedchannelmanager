@@ -626,6 +626,31 @@ async def import_m3u_accounts(
                 label=label,
                 source_id=source_id,
             )
+            # THE GROUP SELECTION SURVIVES THE SKIP TOO (bead …-avrix, the same
+            # shape as the credential action item above). Deferring only on the
+            # CREATE path made the selection a property of the cycle that first
+            # made the account, not of the source: measured live on 2026-08-21,
+            # enabling a THIRD provider category on A left B at two, on a cycle
+            # that reported ``SUCCESS`` with every counter at zero. A replica is
+            # supposed to track its source, not a snapshot of the day it was
+            # built.
+            #
+            # ``created: False`` is what keeps the blast radius where it was.
+            # The sync path never refreshes anything, so it is inert there; on
+            # the RESTORE path it tells ``apply_deferred_auto_sync`` to converge
+            # this account's SELECTION and stop — an account this run did not
+            # create does not get its streams refetched from the provider, which
+            # is the behaviour a skip has always had.
+            if existing_id is not None:
+                existing_settings = _extract_group_settings(archive_account)
+                if existing_settings is not None:
+                    result.deferred_auto_sync_settings.append(
+                        {
+                            "m3u_account_id": int(existing_id),
+                            "settings": existing_settings,
+                            "created": False,
+                        }
+                    )
             logger.info(
                 "[DBAS-M3U] Account '%s' already exists (dest id=%s); skipped.",
                 label,
@@ -872,6 +897,170 @@ def _remap_group_settings(
     return remapped, unresolved
 
 
+async def _apply_one_group_selection(
+    *,
+    account_id: int,
+    settings: dict,
+    client: DispatcharrClient,
+    remap: IdRemapTable | None,
+    report: RestoreReport | None,
+) -> dict:
+    """Write ONE account's archived per-group selection to the destination.
+
+    THE ONE implementation of the group-selection apply. Both callers use it:
+    :func:`apply_deferred_auto_sync` (the restore path, as step 1 of four) and
+    :func:`apply_group_selection` (the sync path, as the only step). A second
+    copy is exactly how the two paths would come to disagree about what a
+    replica's provider account carries.
+
+    NO PROVIDER TRAFFIC. ``PATCH /api/m3u/accounts/<id>/group-settings/`` is a
+    pure destination-side upsert — ``ChannelGroupM3UAccount.objects.bulk_create(
+    ..., update_conflicts=True)`` (verified live against Dispatcharr 0.29.0
+    ``apps/m3u/api_views.py::update_group_settings``, 2026-08-21: it validates
+    the channel ranges, upserts the rows in one transaction, and returns; it
+    triggers no refresh and opens no socket to the provider). That is what lets
+    the sync path call it without violating ADR-013 S9, which forbids
+    re-triggering provider auto-sync on B, not writing B's own settings.
+
+    Returns:
+        ``{"m3u_account_id", "selections_total", "groups_applied",
+        "groups_unresolved", "groups_enabled"}`` — safe fields only.
+    """
+    source_groups = settings.get("channel_groups") or []
+    selections_total = len(source_groups) if isinstance(source_groups, list) else 0
+    groups, unresolved = _remap_group_settings(source_groups, remap)
+    groups_applied = 0
+    groups_enabled = 0
+    apply_failed = False
+    if groups:
+        try:
+            await client.update_m3u_group_settings(
+                account_id, {"group_settings": groups}
+            )
+            groups_applied = len(groups)
+            groups_enabled = sum(1 for g in groups if g.get("enabled"))
+            logger.info(
+                "[DBAS-M3U] Applied %d group setting(s) (%d enabled) to account id=%s.",
+                groups_applied,
+                groups_enabled,
+                account_id,
+            )
+        except Exception as exc:
+            apply_failed = True
+            logger.warning(
+                "[DBAS-M3U] Group-settings apply failed for account id=%s: %s",
+                account_id,
+                exc,
+            )
+            if report is not None:
+                report.notes.append(
+                    "M3U account id=%s: the archived enabled-group selection could "
+                    "not be applied; re-select its groups and use Save & Refresh "
+                    "before expecting streams." % account_id
+                )
+    if unresolved and report is not None:
+        report.notes.append(
+            "M3U account id=%s: %d archived group selection(s) referenced a "
+            "channel group that is not on this destination and were skipped."
+            % (account_id, unresolved)
+        )
+
+    # The operator-facing accounting (bead …-avrix). A selection the source had
+    # and the destination did not receive is what decides whether the replica
+    # ingests the same provider content — so it is counted and named, not left
+    # to a ``notes`` entry the UI only renders on rollback residue.
+    #
+    # The "nothing was lost, so record nothing" decision lives in the recorder
+    # and ONLY there. Guarding it here as well produced a branch that no mutation
+    # could reach — the third time this module's suite has been measured blind on
+    # a duplicate guard (bead …-15g1j's own note), so the duplicate is removed
+    # rather than kept unexercised.
+    if report is not None:
+        if apply_failed:
+            reason = "the destination rejected the group-settings write"
+        elif unresolved:
+            reason = "the source's channel group is not on this destination"
+        else:
+            reason = "not applied"
+        report.record_provider_group_selection(
+            destination_account_id=account_id,
+            selections_total=selections_total,
+            selections_applied=groups_applied,
+            selections_unapplied=selections_total - groups_applied,
+            enabled_applied=groups_enabled,
+            reason=reason,
+        )
+
+    return {
+        "m3u_account_id": account_id,
+        "selections_total": selections_total,
+        "groups_applied": groups_applied,
+        "groups_unresolved": unresolved,
+        "groups_enabled": groups_enabled,
+    }
+
+
+async def apply_group_selection(
+    *,
+    deferred: list[dict],
+    client: DispatcharrClient,
+    remap: IdRemapTable | None = None,
+    report: RestoreReport | None = None,
+) -> list[dict]:
+    """Apply ONLY the archived per-group ENABLE selection — never a refresh.
+
+    The group-selection half of :func:`apply_deferred_auto_sync`, without the
+    is_active toggle, the refresh trigger, or the stream-count poll. Written for
+    the cross-instance sync path (bead ``…-avrix``), where ADR-013 S9 forbids
+    re-triggering provider auto-sync on the destination every cycle but says
+    nothing about the destination's own stored settings — and where dropping
+    them left the replica unable to ingest what the source ingests.
+
+    WHY IT MATTERS, measured on Dispatcharr 0.29.0 on 2026-08-21 with a real XC
+    account of 777 provider categories, 2 of them enabled on the source:
+
+    * With the selection dropped, the destination's account held ZERO group
+      rows. Given its credentials, its own refresh created all 777 rows from
+      discovery and then answered ``Filtered 0 streams from 0 enabled
+      categories`` — 0 streams against the source's 316.
+    * The direction of that failure is not even stable. It is decided by
+      ``auto_enable_new_groups_live``, which the account faithfully inherits
+      from the source and which Dispatcharr defaults to ``True``: with it
+      ``True`` the same empty-selection discovery enabled 777 of 777 categories,
+      i.e. the provider's entire 53,661-stream catalogue.
+
+    Carrying the selection removes both, because the groups are then no longer
+    "new to this account" when the destination first refreshes.
+
+    Args:
+        deferred: The importer's ``deferred_auto_sync_settings`` list.
+        client: The Dispatcharr API client (destination).
+        remap: The shared :class:`IdRemapTable` for the SOURCE->DEST group-pk
+            rewrite. ``None`` drops every entry rather than forwarding a stale
+            source pk.
+        report: Optional shared :class:`RestoreReport` — receives the
+            named per-account accounting for anything that did not land.
+
+    Returns:
+        Per-account summaries; ``[]`` when nothing was deferred.
+    """
+    summaries: list[dict] = []
+    for entry in deferred or []:
+        account_id = entry.get("m3u_account_id")
+        if account_id is None:
+            continue
+        summaries.append(
+            await _apply_one_group_selection(
+                account_id=account_id,
+                settings=entry.get("settings") or {},
+                client=client,
+                remap=remap,
+                report=report,
+            )
+        )
+    return summaries
+
+
 async def apply_deferred_auto_sync(
     *,
     deferred: list[dict],
@@ -953,42 +1142,42 @@ async def apply_deferred_auto_sync(
             continue
 
         # 1. Apply per-group settings (enabled selection + auto-sync range),
-        #    with every SOURCE group pk rewritten to its DESTINATION pk.
-        groups, unresolved = _remap_group_settings(
-            settings.get("channel_groups"), remap
-        )
-        groups_applied = 0
-        if groups:
-            try:
-                await client.update_m3u_group_settings(
-                    account_id, {"group_settings": groups}
-                )
-                groups_applied = len(groups)
-                logger.info(
-                    "[DBAS-M3U] Applied %d group setting(s) (%d enabled) to account "
-                    "id=%s before its refresh.",
-                    len(groups),
-                    sum(1 for g in groups if g.get("enabled")),
-                    account_id,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[DBAS-M3U] Deferred group-settings apply failed for account id=%s: %s",
-                    account_id,
-                    exc,
-                )
-                if report is not None:
-                    report.notes.append(
-                        "M3U account id=%s: the archived enabled-group selection could "
-                        "not be applied; re-select its groups and use Save & Refresh "
-                        "before expecting streams." % account_id
-                    )
-        if unresolved and report is not None:
-            report.notes.append(
-                "M3U account id=%s: %d archived group selection(s) referenced a "
-                "channel group that is not on this destination and were skipped."
-                % (account_id, unresolved)
+        #    with every SOURCE group pk rewritten to its DESTINATION pk. Shared
+        #    with the sync path's ``apply_group_selection`` so the two cannot
+        #    disagree about what a replica's provider account carries.
+        groups_applied = (
+            await _apply_one_group_selection(
+                account_id=account_id,
+                settings=settings,
+                client=client,
+                remap=remap,
+                report=report,
             )
+        )["groups_applied"]
+
+        # AN ACCOUNT THIS RUN DID NOT CREATE STOPS HERE (bead …-avrix). Its
+        # SELECTION is converged onto the source's — that is what makes a
+        # replica track its source rather than the day it was built — but its
+        # streams are not refetched from the provider, because a skip has never
+        # done that and making it do so would silently add a provider refresh
+        # plus a bounded poll per pre-existing account to every restore.
+        # ``created`` absent means True, so every caller that predates the key
+        # (and every existing test) keeps all four steps.
+        if not entry.get("created", True):
+            logger.info(
+                "[DBAS-M3U] Converged the group selection for pre-existing "
+                "account id=%s (%d setting(s)); its streams were NOT refetched.",
+                account_id,
+                groups_applied,
+            )
+            summaries.append(
+                {
+                    "m3u_account_id": account_id,
+                    "groups_applied": groups_applied,
+                    "refreshed": False,
+                }
+            )
+            continue
 
         # 2. is_active toggle workaround — False then True.
         try:

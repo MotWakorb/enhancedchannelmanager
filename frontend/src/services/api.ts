@@ -4483,6 +4483,28 @@ export interface RestoreReport {
   stream_reattach_details?: StreamReattachDetail[];
   /** Placeholder bindings the rebind pass swapped for a real provider stream. */
   streams_rebound?: number;
+  /**
+   * Destination streams holding a URL the provider credentials were cut out of
+   * (bead msqf7) — a real Xtream Codes address embeds the credential in its
+   * path, so it cannot be carried without it. Those streams name where they
+   * pointed and cannot play until the destination's own provider account
+   * supplies one. One of the five counters that make an apply
+   * `completed_with_failures`; read `outcome`, not this.
+   *
+   * A FACT ABOUT THE DESTINATION, NOT ABOUT THIS RUN (bead ukjx5). Recomputed
+   * from the destination's own stream rows on every cycle, so a shortfall the
+   * replica still exhibits is reported every time rather than only on the cycle
+   * that wrote it — the earlier count was cycle-scoped and read 53, then 0,
+   * while 53 of B's streams still could not play.
+   *
+   * `null` means NOT PREDICTED and only ever appears on a DRY RUN: the pass that
+   * reads the destination's streams cannot run before the apply, so a preview
+   * `0` would be a claim derived from having looked at nothing. Coerce with
+   * `?? 0` only where a number is unavoidable — never render the null as `0`.
+   */
+  stream_urls_redacted?: number | null;
+  /** Which streams lost the credential half of their URL (bead msqf7). */
+  stream_url_redaction_details?: StreamUrlRedactionDetail[];
   /** Channels whose archived EPG link could not be reattached (bead dfkbn). */
   epg_links_unrestored?: number;
   /**
@@ -4520,6 +4542,26 @@ export interface RestoreReport {
   /** Which channels drifted, the group they are in, and the archive's (r1ei7). */
   channel_group_drift_details?: ChannelGroupDriftDetail[];
   /**
+   * Per-account provider GROUP-ENABLE selections the destination's M3U account
+   * did not receive (bead avrix). Distinct from `channel_group_drift`, which is
+   * about which group a CHANNEL sits in: this is about which of a provider
+   * ACCOUNT's groups are switched on, i.e. what that account ingests on its next
+   * refresh. `channel_group_drift` read `0` throughout the run that found this,
+   * while the replica held zero selections — not wrong, measuring another thing.
+   *
+   * Deliberately NOT one of the five counters that move the outcome: an operator
+   * who deselects the channel-groups category leaves the destination without the
+   * groups these selections point at, so the count would stay non-zero forever
+   * with no action that clears it. It renders as a named action item instead —
+   * the `profile_membership_drift` precedent — visible without moving `outcome`.
+   */
+  provider_group_selection_unapplied?: number;
+  /**
+   * Which replicated M3U accounts did not receive their group selection, how
+   * many, and why (bead avrix).
+   */
+  provider_group_selection_details?: ProviderGroupSelectionDetail[];
+  /**
    * Set when the channel-group check did NOT run, because the operator
    * deselected the channel groups category (bead r1ei7). Its absence is what
    * makes `channel_group_drift: 0` trustworthy; when it is present that zero
@@ -4535,6 +4577,22 @@ export interface RestoreReport {
   epg_link_reattach?: ReattachPopulation;
   /** The same split for the channel-logo reattach (bead dfkbn). */
   logo_reattach?: ReattachPopulation;
+  /**
+   * The "I never read the destination" marker (bead jqfxm). Every count in this
+   * report is a claim ABOUT the destination — "would create 24" means "B does
+   * not have these 24" — but each importer degrades a failed destination read to
+   * "B is empty", so a run that could not authenticate produced the same shape
+   * as a run against an empty B: a full would-create plan, zero failures. A live
+   * cross-instance sync measured that against a WRONG PASSWORD and offered
+   * Apply, with seven 401/429s in B's log that no surface mentioned.
+   *
+   * Set whenever the run could not read the destination it claims to describe —
+   * credentials rejected, rate-limited, unreachable, TLS/DNS/SSRF refused, a
+   * 5xx, or aborted before any read. A report carrying this is NEVER a success
+   * and its counts describe the source, not the destination. Sanitized prose
+   * (status code + error class); never a URL, body or credential.
+   */
+  destination_unreadable?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];
@@ -4587,6 +4645,18 @@ export interface StreamReattachDetail {
 }
 
 /**
+ * One destination stream whose URL had the provider credentials cut out of it
+ * (bead msqf7) — the per-stream drill-down behind `stream_urls_redacted`.
+ * `label` is the operator-facing stream name; never the URL, which can embed a
+ * provider token. `stream_id` is the destination stream id when upstream
+ * returned one.
+ */
+export interface StreamUrlRedactionDetail {
+  stream_id?: number | null;
+  label: string;
+}
+
+/**
  * One restored channel whose EPG link could not be reattached (bead dfkbn).
  * The link is re-derived from the archived `tvg_id` — an EPG row's numeric id is
  * instance-local and cannot round-trip.
@@ -4627,6 +4697,28 @@ export interface ChannelGroupDriftDetail {
   current_group: string;
   archive_group: string;
   moved?: boolean;
+}
+
+/**
+ * One replicated M3U account whose per-group ENABLE selection did not fully land
+ * (bead avrix) — the drill-down behind `provider_group_selection_unapplied`.
+ *
+ * That selection is what decides how much of a provider's catalogue the account
+ * ingests, so losing it sends the replica one of two ways depending on the
+ * source account's auto-enable flag: a refresh that filters zero streams from
+ * zero enabled categories, or one that enables every category the provider has.
+ *
+ * IDS, NOT NAMES: the selections are keyed by destination account id and source
+ * channel-group pk, and neither name is in scope where they are recorded.
+ * `reason` is a sanitized phrase — never a secret.
+ */
+export interface ProviderGroupSelectionDetail {
+  destination_account_id: number;
+  selections_total: number;
+  selections_applied?: number;
+  selections_unapplied?: number;
+  enabled_applied?: number;
+  reason: string;
 }
 
 export async function getExportSections(): Promise<{key: string; label: string}[]> {

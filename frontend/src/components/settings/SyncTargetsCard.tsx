@@ -29,6 +29,13 @@ import './SyncTargetsCard.css';
  * would-create counts derived purely from A (bead …-jqfxm), so the card offered
  * Apply for a destination nobody had reached. The backend now fails such a
  * preview; this card needs no extra check, only to keep gating on `success`.
+ *
+ * Correcting a target in place (bead …-a3lby) — see `handleSave`. Every field
+ * the create form sets was WRITE-ONCE here, so a mistyped base URL or password
+ * meant delete-and-recreate: that resets `sync_logos` to its default OFF and
+ * hands the replacement the deleted target's execution history, which is keyed
+ * on a REUSABLE target id (bead …-5dp92). The backend PUT and the api.ts client
+ * already accepted every one of those fields; only this affordance was absent.
  */
 
 /** Tri-state badge derived from SyncTarget.last_outcome. */
@@ -54,7 +61,8 @@ function formatTimestamp(ts?: string | null): string {
   return d.toLocaleString(getDateLocale());
 }
 
-interface AddForm {
+/** Shape of the create/correct form — one form, two modes (bead …-a3lby). */
+interface TargetForm {
   name: string;
   baseUrl: string;
   authMode: 'password' | 'api_key';
@@ -64,7 +72,7 @@ interface AddForm {
   insecure: boolean;
 }
 
-const EMPTY_FORM: AddForm = {
+const EMPTY_FORM: TargetForm = {
   name: '',
   baseUrl: '',
   authMode: 'password',
@@ -74,13 +82,26 @@ const EMPTY_FORM: AddForm = {
   insecure: false,
 };
 
+/**
+ * Which auth mode a stored target uses, read off its credential KEYS.
+ *
+ * The read shape masks credential VALUES to last-4 but leaves the keys intact,
+ * so the shape of the dict is knowable even though its secrets are not — which
+ * is exactly enough to reopen the form on the mode the operator chose.
+ */
+function authModeOf(target: api.SyncTarget): TargetForm['authMode'] {
+  return 'api_key' in target.credentials ? 'api_key' : 'password';
+}
+
 export function SyncTargetsCard() {
   const notifications = useNotifications();
   const [targets, setTargets] = useState<api.SyncTarget[]>([]);
   const [loading, setLoading] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState<AddForm>(EMPTY_FORM);
-  const [creating, setCreating] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  // The target being corrected, or null when the form is creating a new one.
+  const [editing, setEditing] = useState<api.SyncTarget | null>(null);
+  const [form, setForm] = useState<TargetForm>(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
   // Target ids currently busy with a sync/preview/apply/toggle/delete op.
   // A SET, not a scalar: with per-target sync tasks (7ipq2.3) two targets can
   // legitimately be in flight at once, and a scalar marker let starting B
@@ -128,33 +149,118 @@ export function SyncTargetsCard() {
     loadTargets();
   }, [loadTargets]);
 
-  const handleCreate = useCallback(async () => {
-    if (!form.name.trim() || !form.baseUrl.trim() || creating) return;
-    setCreating(true);
+  const closeForm = useCallback(() => {
+    setForm(EMPTY_FORM);
+    setEditing(null);
+    setFormOpen(false);
+  }, []);
+
+  /**
+   * Open the form on an existing target so its settings can be CORRECTED
+   * (bead …-a3lby) instead of the target being deleted and rebuilt.
+   *
+   * Name, base URL and the insecure opt-out are prefilled from what is stored.
+   * The credential inputs deliberately are NOT: what the read shape carries is
+   * the last-4 MASK (`***user`), and putting that in the box invites the
+   * operator to "keep" a value that is not the secret.
+   */
+  const handleEdit = useCallback((target: api.SyncTarget) => {
+    setEditing(target);
+    setForm({
+      ...EMPTY_FORM,
+      name: target.name,
+      baseUrl: target.base_url,
+      authMode: authModeOf(target),
+      insecure: target.insecure,
+    });
+    setFormOpen(true);
+  }, []);
+
+  /**
+   * Commit the form — a create when `editing` is null, a correction otherwise.
+   *
+   * TWO RULES CARRY THE BEAD, and both are about what the update does NOT say.
+   *
+   * 1. The payload names ONLY the fields this form edits. `PUT
+   *    /api/sync-targets/{id}` is a partial update, so omitting `enabled`,
+   *    `sync_logos` and `fuzzy_stream_matching` is what leaves the operator's
+   *    kill-switch state and logo choice exactly where they set them. Naming
+   *    any of them here would reintroduce, through the correction path, the
+   *    silent reset that delete-and-recreate caused.
+   *
+   * 2. Credentials are ALL-OR-NOTHING. The backend REPLACES the stored dict
+   *    rather than merging into it, and ECM cannot read the stored secret back
+   *    to fill a gap, so a half-entry would blank the half left empty. Blank
+   *    boxes therefore omit `credentials` entirely (the stored secret is
+   *    untouched); a partial entry — or a change of auth MODE, which changes
+   *    the dict's shape and so cannot carry the old secret over — is refused
+   *    with the reason, not silently completed.
+   */
+  const handleSave = useCallback(async () => {
+    if (!form.name.trim() || !form.baseUrl.trim() || saving) return;
+
+    const credentials: Record<string, string> =
+      form.authMode === 'api_key'
+        ? { api_key: form.apiKey }
+        : { username: form.username, password: form.password };
+    const credentialsComplete = Object.values(credentials).every((v) => v !== '');
+    const credentialsTouched = Object.values(credentials).some((v) => v !== '');
+
+    if (editing) {
+      const modeChanged = authModeOf(editing) !== form.authMode;
+      if ((credentialsTouched || modeChanged) && !credentialsComplete) {
+        notifications.error(
+          form.authMode === 'api_key'
+            ? 'Enter the API key in full. ECM cannot read the stored one back, so ' +
+              'a partial entry would replace it rather than add to it.'
+            : 'Enter the username AND password in full. ECM cannot read the stored ' +
+              'ones back, so a partial entry would replace them rather than add to them.',
+          'Cross-Instance Sync',
+        );
+        return;
+      }
+    }
+
+    setSaving(true);
     try {
-      const credentials: Record<string, string> =
-        form.authMode === 'api_key'
-          ? { api_key: form.apiKey }
-          : { username: form.username, password: form.password };
-      await api.createSyncTarget({
-        name: form.name.trim(),
-        base_url: form.baseUrl.trim(),
-        credentials,
-        insecure: form.insecure,
-      });
-      notifications.success(`Added sync target '${form.name.trim()}'`, 'Cross-Instance Sync');
-      setForm(EMPTY_FORM);
-      setShowAdd(false);
+      if (editing) {
+        const payload: api.SyncTargetUpdateRequest = {
+          name: form.name.trim(),
+          base_url: form.baseUrl.trim(),
+          insecure: form.insecure,
+        };
+        if (credentialsComplete) payload.credentials = credentials;
+        await api.updateSyncTarget(editing.id, payload);
+        notifications.success(
+          credentialsComplete
+            ? `Updated sync target '${form.name.trim()}' — credentials replaced`
+            : `Updated sync target '${form.name.trim()}'`,
+          'Cross-Instance Sync',
+        );
+      } else {
+        await api.createSyncTarget({
+          name: form.name.trim(),
+          base_url: form.baseUrl.trim(),
+          credentials,
+          insecure: form.insecure,
+        });
+        notifications.success(`Added sync target '${form.name.trim()}'`, 'Cross-Instance Sync');
+      }
+      closeForm();
       await loadTargets();
     } catch (err) {
       notifications.error(
-        err instanceof Error ? err.message : 'Failed to add sync target',
+        err instanceof Error
+          ? err.message
+          : editing
+            ? 'Failed to update sync target'
+            : 'Failed to add sync target',
         'Cross-Instance Sync',
       );
     } finally {
-      setCreating(false);
+      setSaving(false);
     }
-  }, [form, creating, notifications, loadTargets]);
+  }, [form, saving, editing, notifications, loadTargets, closeForm]);
 
   const handleToggleEnabled = useCallback(
     async (target: api.SyncTarget) => {
@@ -331,7 +437,7 @@ export function SyncTargetsCard() {
     [notifications, loadTargets, markBusy, clearBusy],
   );
 
-  const updateForm = <K extends keyof AddForm>(key: K, value: AddForm[K]) =>
+  const updateForm = <K extends keyof TargetForm>(key: K, value: TargetForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   return (
@@ -471,6 +577,18 @@ export function SyncTargetsCard() {
 
                   <button
                     type="button"
+                    className="btn-secondary stc-action-btn"
+                    disabled={busy}
+                    title="Edit — correct the name, base URL, credentials or certificate setting"
+                    data-testid={`sync-target-edit-${target.id}`}
+                    onClick={() => handleEdit(target)}
+                    aria-label="Edit sync target"
+                  >
+                    <span className="material-icons" aria-hidden="true">edit</span>
+                  </button>
+
+                  <button
+                    type="button"
                     className="btn-secondary stc-action-btn stc-delete-btn"
                     disabled={busy}
                     title="Delete sync target"
@@ -487,15 +605,19 @@ export function SyncTargetsCard() {
         </div>
       )}
 
-      {showAdd ? (
+      {formOpen ? (
         <div className="stc-add-form">
+          <div className="stc-form-title">
+            {editing ? `Edit '${editing.name}'` : 'New sync target'}
+          </div>
+
           <div className="stc-field">
             <label htmlFor="stc-name">Name</label>
             <input
               id="stc-name"
               type="text"
               value={form.name}
-              disabled={creating}
+              disabled={saving}
               onChange={(e) => updateForm('name', e.target.value)}
               placeholder="e.g. Living Room B"
             />
@@ -507,19 +629,28 @@ export function SyncTargetsCard() {
               id="stc-base-url"
               type="text"
               value={form.baseUrl}
-              disabled={creating}
+              disabled={saving}
               onChange={(e) => updateForm('baseUrl', e.target.value)}
               placeholder="https://dispatcharr-b.example.com"
             />
           </div>
+
+          {editing && (
+            <p className="form-hint" data-testid="stc-credentials-hint">
+              Leave the credential boxes blank to keep the stored credentials. To
+              change them, enter them <strong>in full</strong> — ECM cannot read the
+              stored secret back, so a partial entry replaces what is there rather
+              than adding to it.
+            </p>
+          )}
 
           <div className="stc-field">
             <label htmlFor="stc-auth-mode">Authentication</label>
             <select
               id="stc-auth-mode"
               value={form.authMode}
-              disabled={creating}
-              onChange={(e) => updateForm('authMode', e.target.value as AddForm['authMode'])}
+              disabled={saving}
+              onChange={(e) => updateForm('authMode', e.target.value as TargetForm['authMode'])}
             >
               <option value="password">Username &amp; password</option>
               <option value="api_key">API key</option>
@@ -535,7 +666,7 @@ export function SyncTargetsCard() {
                   type="text"
                   autoComplete="off"
                   value={form.username}
-                  disabled={creating}
+                  disabled={saving}
                   onChange={(e) => updateForm('username', e.target.value)}
                 />
               </div>
@@ -546,7 +677,7 @@ export function SyncTargetsCard() {
                   type="password"
                   autoComplete="new-password"
                   value={form.password}
-                  disabled={creating}
+                  disabled={saving}
                   onChange={(e) => updateForm('password', e.target.value)}
                 />
               </div>
@@ -559,7 +690,7 @@ export function SyncTargetsCard() {
                 type="password"
                 autoComplete="new-password"
                 value={form.apiKey}
-                disabled={creating}
+                disabled={saving}
                 onChange={(e) => updateForm('apiKey', e.target.value)}
               />
             </div>
@@ -569,7 +700,7 @@ export function SyncTargetsCard() {
             <input
               type="checkbox"
               checked={form.insecure}
-              disabled={creating}
+              disabled={saving}
               onChange={(e) => updateForm('insecure', e.target.checked)}
             />
             <span>
@@ -582,21 +713,15 @@ export function SyncTargetsCard() {
             <button
               type="button"
               className="btn-primary"
-              disabled={creating || !form.name.trim() || !form.baseUrl.trim()}
-              onClick={handleCreate}
+              disabled={saving || !form.name.trim() || !form.baseUrl.trim()}
+              onClick={handleSave}
             >
-              <span className="material-icons">{creating ? 'hourglass_empty' : 'add'}</span>
-              Create target
+              <span className="material-icons">
+                {saving ? 'hourglass_empty' : editing ? 'save' : 'add'}
+              </span>
+              {editing ? 'Save changes' : 'Create target'}
             </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={creating}
-              onClick={() => {
-                setForm(EMPTY_FORM);
-                setShowAdd(false);
-              }}
-            >
+            <button type="button" className="btn-secondary" disabled={saving} onClick={closeForm}>
               Cancel
             </button>
           </div>
@@ -605,7 +730,11 @@ export function SyncTargetsCard() {
         <button
           type="button"
           className="btn-secondary stc-add-toggle"
-          onClick={() => setShowAdd(true)}
+          onClick={() => {
+            setEditing(null);
+            setForm(EMPTY_FORM);
+            setFormOpen(true);
+          }}
         >
           <span className="material-icons">add</span>
           Add sync target

@@ -672,6 +672,19 @@ class DbasRestoreTask(TaskScheduler):
             "%d archived item(s) would not be restored — something they depend on "
             "is not on the destination",
         ),
+        # Bead …-avrix. A provider account's per-group ENABLE selection is what
+        # decides WHAT THAT ACCOUNT INGESTS — on the measured account, 2 groups
+        # of 777 is the difference between 316 channels and 53,661 streams. A
+        # destination account that did not receive it will not ingest what the
+        # source ingests, and none of the counts above can say so: every row
+        # succeeded. The clause names the consequence, not the table.
+        (
+            "provider_group_selection_unapplied",
+            "%d provider group selection(s) did not reach the destination's M3U "
+            "account — it will not ingest the same content as this instance",
+            "%d provider group selection(s) would not reach the destination's M3U "
+            "account — it would not ingest the same content as this instance",
+        ),
     )
 
     # Credential FIELD NAMES that carry the ADDRESS as well as the secret, so

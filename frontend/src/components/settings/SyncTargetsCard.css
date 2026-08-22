@@ -316,3 +316,12 @@
   align-items: center;
   gap: 0.375rem;
 }
+
+/* Correct-in-place form heading (bead …-a3lby). The form is shared between
+   creating a target and correcting one, so it has to say which it is doing —
+   an edit that looks like a create invites the operator to retype everything. */
+.sync-targets-card .stc-form-title {
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
