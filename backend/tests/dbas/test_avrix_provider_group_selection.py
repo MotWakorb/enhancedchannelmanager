@@ -175,6 +175,85 @@ async def test_sync_never_triggers_the_replicas_provider_refresh(tmp_path):
     assert dest.group_settings, "nothing was applied — the assertions above are vacuous"
 
 
+@pytest.mark.asyncio
+async def test_the_selection_keeps_tracking_the_source_on_later_cycles(tmp_path):
+    """STEADY STATE, not just the creating cycle (the …-ukjx5 shape).
+
+    Measured live on 2026-08-21 before this half of the fix: with B already
+    converged, enabling a THIRD provider category on A left B at two, on a cycle
+    that reported ``SUCCESS`` with every counter at zero. The account is
+    ``ALREADY_EXISTS_IDENTICAL`` from cycle 2 onward, so a selection deferred
+    only on the CREATE path is a snapshot of the day the replica was built.
+    """
+    source = _source_with_a_narrow_selection()
+    dest = StatefulDispatcharrFake.empty_dest()
+    harness = SyncHarness(source=source, dest=dest)
+
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+    dest_account = next(
+        a for a in dest.m3u_accounts.list() if a.get("name") == "Provider A"
+    )
+    dest_groups = {g["name"]: g["id"] for g in dest.channel_groups.list()}
+    assert dest.enabled_group_ids(dest_account["id"]) == {dest_groups["News"]}
+
+    # The operator enables a second group on the SOURCE, long after B was built.
+    source_groups = {g["name"]: g["id"] for g in source.channel_groups.list()}
+    source_account_id = source.m3u_accounts.list()[0]["id"]
+    source.set_group_selection(
+        source_account_id, [{"channel_group": source_groups["Sports"], "enabled": True}]
+    )
+
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert dest.enabled_group_ids(dest_account["id"]) == {
+        dest_groups["News"],
+        dest_groups["Sports"],
+    }, "the replica stopped tracking the source's selection after the first cycle"
+    # Still no provider refresh — converging the selection is not refetching.
+    assert dest.m3u_refresh_calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_pre_existing_account_is_converged_but_not_refetched():
+    """``created: False`` converges the SELECTION and stops (restore path).
+
+    A skip has never triggered a provider refresh, and making it do so would add
+    one refresh plus a bounded poll per pre-existing account to every restore.
+    """
+    from unittest.mock import AsyncMock
+
+    remap = IdRemapTable()
+    remap.add(EntityType.CHANNEL_GROUP, 110, 210)
+    report = RestoreReport(is_dry_run=False)
+
+    client = AsyncMock()
+    client.update_m3u_group_settings = AsyncMock(return_value={"message": "ok"})
+    client.patch_m3u_account = AsyncMock(return_value={"success": True})
+    client.refresh_m3u_account = AsyncMock(return_value={"success": True})
+
+    deferred = _deferred([110], enabled={110})
+    deferred[0]["created"] = False
+
+    async def _boom(seconds):  # the poll must not even be entered
+        raise AssertionError("the poll loop ran for a pre-existing account")
+
+    summaries = await apply_deferred_auto_sync(
+        deferred=deferred,
+        client=client,
+        remap=remap,
+        report=report,
+        sleep_fn=_boom,
+        max_polls=3,
+    )
+
+    client.update_m3u_group_settings.assert_awaited_once()
+    client.refresh_m3u_account.assert_not_awaited()
+    client.patch_m3u_account.assert_not_awaited()
+    assert summaries == [
+        {"m3u_account_id": 901, "groups_applied": 1, "refreshed": False}
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 4-6. The reporting half — over the apply helper directly.
 # ---------------------------------------------------------------------------

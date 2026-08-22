@@ -626,6 +626,31 @@ async def import_m3u_accounts(
                 label=label,
                 source_id=source_id,
             )
+            # THE GROUP SELECTION SURVIVES THE SKIP TOO (bead …-avrix, the same
+            # shape as the credential action item above). Deferring only on the
+            # CREATE path made the selection a property of the cycle that first
+            # made the account, not of the source: measured live on 2026-08-21,
+            # enabling a THIRD provider category on A left B at two, on a cycle
+            # that reported ``SUCCESS`` with every counter at zero. A replica is
+            # supposed to track its source, not a snapshot of the day it was
+            # built.
+            #
+            # ``created: False`` is what keeps the blast radius where it was.
+            # The sync path never refreshes anything, so it is inert there; on
+            # the RESTORE path it tells ``apply_deferred_auto_sync`` to converge
+            # this account's SELECTION and stop — an account this run did not
+            # create does not get its streams refetched from the provider, which
+            # is the behaviour a skip has always had.
+            if existing_id is not None:
+                existing_settings = _extract_group_settings(archive_account)
+                if existing_settings is not None:
+                    result.deferred_auto_sync_settings.append(
+                        {
+                            "m3u_account_id": int(existing_id),
+                            "settings": existing_settings,
+                            "created": False,
+                        }
+                    )
             logger.info(
                 "[DBAS-M3U] Account '%s' already exists (dest id=%s); skipped.",
                 label,
@@ -1129,6 +1154,30 @@ async def apply_deferred_auto_sync(
                 report=report,
             )
         )["groups_applied"]
+
+        # AN ACCOUNT THIS RUN DID NOT CREATE STOPS HERE (bead …-avrix). Its
+        # SELECTION is converged onto the source's — that is what makes a
+        # replica track its source rather than the day it was built — but its
+        # streams are not refetched from the provider, because a skip has never
+        # done that and making it do so would silently add a provider refresh
+        # plus a bounded poll per pre-existing account to every restore.
+        # ``created`` absent means True, so every caller that predates the key
+        # (and every existing test) keeps all four steps.
+        if not entry.get("created", True):
+            logger.info(
+                "[DBAS-M3U] Converged the group selection for pre-existing "
+                "account id=%s (%d setting(s)); its streams were NOT refetched.",
+                account_id,
+                groups_applied,
+            )
+            summaries.append(
+                {
+                    "m3u_account_id": account_id,
+                    "groups_applied": groups_applied,
+                    "refreshed": False,
+                }
+            )
+            continue
 
         # 2. is_active toggle workaround — False then True.
         try:
