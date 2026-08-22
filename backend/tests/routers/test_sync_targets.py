@@ -605,7 +605,7 @@ class TestInsecureGateAtTheServiceLayer:
 
         target = await _make_target(async_client)
         row = test_session.query(SyncTarget).filter_by(id=target["id"]).first()
-        row.destination_credentials_observed_at = datetime.now(timezone.utc)
+        row.destination_credential_observed_at = datetime.now(timezone.utc)
         test_session.commit()
 
         resp = await async_client.put(

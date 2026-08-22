@@ -1021,6 +1021,28 @@ class RestoreReport(BaseModel):
         "credential (presence only, never a value) — ADR-013 INV-4 / D16.",
     )
 
+    # WHETHER THE OBSERVATION RAN AT ALL, which is a different question from
+    # what it found, and conflating them is how a gate protecting a live secret
+    # would open by accident.
+    #
+    # The observed marker CLEARS when a cycle observes ABSENCE (ADR-013: "it
+    # clears when a cycle observes absence, by the same presence check"), so a
+    # bare ``destination_credentials_observed is False`` is not enough to act
+    # on: it is equally the value of a run that never reached the destination's
+    # account rows — an unreadable destination, a failed read after the gate, a
+    # source with no credential-bearing account at all. Clearing on that would
+    # re-permit ``insecure`` on a target whose replica still holds a credential,
+    # which is the exact failure INV-9 refuses in the de-provision path.
+    #
+    # So: stamp when checked AND observed; clear when checked AND NOT observed;
+    # leave the marker exactly as it is when the check did not run.
+    destination_credentials_checked: bool = Field(
+        default=False,
+        description="A destination provider account's credential presence was "
+        "actually evaluated this run. Distinguishes 'observed absent' from "
+        "'never looked' (ADR-013 INV-4).",
+    )
+
     # THE STALENESS SIGNAL (INV-8 / S12(b)). A standby whose provisioned
     # credential stopped working says so, on the cycle that can observe it,
     # WITHOUT any credential value crossing the wire to determine it and WITHOUT
@@ -1439,22 +1461,36 @@ class RestoreReport(BaseModel):
         )
         self.credentials_needing_reentry = len(self.credential_reentry_details)
 
-    def record_destination_credentials_observed(self) -> None:
-        """Record that a destination provider account HOLDS a credential.
+    def record_destination_credential_check(self, *, present: bool) -> None:
+        """Record ONE destination account's credential-presence verdict.
 
         ADR-013 INV-4 / threat model row D16 — the OBSERVED half of the S11
-        ``insecure`` gate. Idempotent and monotonic within a run: it is a
-        property of the destination as a whole, not a count, so a second
-        observation adds nothing.
+        ``insecure`` gate, and the ONE recorder for both halves of it so they
+        cannot drift.
 
-        **Presence only.** The caller establishes it with
+        TWO FACTS, and they are not the same fact:
+
+        * ``destination_credentials_checked`` — the observation RAN. Set by any
+          call, whatever it found.
+        * ``destination_credentials_observed`` — something was FOUND. Monotonic
+          within a run: it is a property of the destination as a whole, so one
+          account holding a credential is enough and a later empty account does
+          not retract it. The gate protects a live secret; a replica with one
+          credentialed account is a replica that holds a credential.
+
+        **Presence only.** The caller establishes ``present`` with
         ``credential_sentinel.credential_is_present`` against the destination
         row it already fetched. No value is read into this report, no value is
         compared against the source's, and nothing here can distinguish one
         credential from another — which is the point: answering "does B hold
         one?" must not require pulling B's secret back to A.
+
+        Args:
+            present: Whether this destination account holds a credential.
         """
-        self.destination_credentials_observed = True
+        self.destination_credentials_checked = True
+        if present:
+            self.destination_credentials_observed = True
 
     def record_provisioned_credential_stale(self, message: str) -> None:
         """Record ONE replicated provider account whose credential looks stale.

@@ -2231,7 +2231,7 @@ async def test_a_cycle_stamps_the_observed_marker_when_B_holds_a_credential(tmp_
         ]
     )
     target = _sync_target()
-    target.destination_credentials_observed_at = None
+    target.destination_credential_observed_at = None
 
     with patch.object(backup_mod, "get_client", return_value=src), \
          patch.object(engine, "make_remote_client", return_value=dest), \
@@ -2241,7 +2241,7 @@ async def test_a_cycle_stamps_the_observed_marker_when_B_holds_a_credential(tmp_
         )
 
     assert report.destination_credentials_observed is True
-    assert target.destination_credentials_observed_at is not None
+    assert target.destination_credential_observed_at is not None
     # Presence only — no credential value reached the report.
     assert "entered-by-hand-pass" not in report.model_dump_json()
 
@@ -2257,7 +2257,7 @@ async def test_a_cycle_against_a_credential_free_B_stamps_nothing(tmp_path):
     src = _source_client()
     dest = _converged_dest_client()
     target = _sync_target()
-    target.destination_credentials_observed_at = None
+    target.destination_credential_observed_at = None
 
     with patch.object(backup_mod, "get_client", return_value=src), \
          patch.object(engine, "make_remote_client", return_value=dest), \
@@ -2267,4 +2267,60 @@ async def test_a_cycle_against_a_credential_free_B_stamps_nothing(tmp_path):
         )
 
     assert report.destination_credentials_observed is False
-    assert target.destination_credentials_observed_at is None
+    assert target.destination_credential_observed_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_cycle_that_observes_ABSENCE_clears_the_observed_marker(tmp_path):
+    """The observed marker retires by the same presence check that set it.
+
+    ADR-013: "it clears when a cycle observes absence, by the same presence
+    check". The operator removed the credential on the replica — the second of
+    the two remedies the refusal names — so the gate must open again on its own.
+    A marker that could only ever be set would make that remedy a dead end.
+    """
+    from datetime import datetime, timezone
+
+    src = _source_client()
+    dest = _converged_dest_client()
+    target = _sync_target()
+    target.destination_credential_observed_at = datetime.now(timezone.utc)
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.destination_credentials_checked is True
+    assert report.destination_credentials_observed is False
+    assert target.destination_credential_observed_at is None
+
+
+@pytest.mark.asyncio
+async def test_a_cycle_that_never_LOOKED_leaves_the_observed_marker_alone(tmp_path):
+    """"Observed absent" and "never looked" are different, and only one clears.
+
+    Here the destination holds no matching account at all, so the presence check
+    never ran. Clearing on that would re-permit `insecure` on a target whose
+    replica still holds a live credential — the same failure INV-9 refuses on
+    the de-provision path, arriving by a different route.
+    """
+    from datetime import datetime, timezone
+
+    src = _source_client()
+    dest = _empty_dest_client()
+    target = _sync_target()
+    stamped = datetime.now(timezone.utc)
+    target.destination_credential_observed_at = stamped
+
+    with patch.object(backup_mod, "get_client", return_value=src), \
+         patch.object(engine, "make_remote_client", return_value=dest), \
+         patch.object(engine, "sync_freshness_reason", return_value=None):
+        report = await run_sync(
+            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
+        )
+
+    assert report.destination_credentials_checked is False
+    assert target.destination_credential_observed_at == stamped

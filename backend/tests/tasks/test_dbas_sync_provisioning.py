@@ -123,7 +123,7 @@ def _target(**over):
         "base_url": "https://b.example.com",
         "insecure": False,
         "credentials_provisioned_at": None,
-        "destination_credentials_observed_at": None,
+        "destination_credential_observed_at": None,
     }
     base.update(over)
     return SimpleNamespace(**base)
@@ -300,7 +300,7 @@ class TestInsecureGate:
         still carries that credential back to A on every cycle.
         """
         target = _target(
-            destination_credentials_observed_at=datetime.now(timezone.utc)
+            destination_credential_observed_at=datetime.now(timezone.utc)
         )
         reason = prov.insecure_refusal_reason(target, requested_insecure=True)
         assert reason is not None
@@ -313,11 +313,18 @@ class TestInsecureGate:
         they conclude the control is broken.
         """
         target = _target(
-            destination_credentials_observed_at=datetime.now(timezone.utc)
+            destination_credential_observed_at=datetime.now(timezone.utc)
         )
         reason = prov.insecure_refusal_reason(target, requested_insecure=True)
         assert "cannot de-provision what it did not provision" in reason
-        assert "clear the credential on the replica" in reason
+        # Both applicable remedies, with the certificate one recommended first:
+        # it keeps the standby working, where removing the credential on the
+        # replica costs the operator the thing they built the standby for.
+        assert "install a valid certificate" in reason
+        assert "remove the credential on the replica itself" in reason
+        assert reason.index("install a valid certificate") < reason.index(
+            "remove the credential on the replica itself"
+        )
 
     def test_clearing_insecure_is_always_allowed(self):
         """True -> False can only tighten, on either half of the predicate."""
@@ -325,7 +332,7 @@ class TestInsecureGate:
             _target(insecure=True, credentials_provisioned_at=datetime.now(timezone.utc)),
             _target(
                 insecure=True,
-                destination_credentials_observed_at=datetime.now(timezone.utc),
+                destination_credential_observed_at=datetime.now(timezone.utc),
             ),
         ):
             assert prov.insecure_refusal_reason(target, requested_insecure=False) is None
@@ -341,10 +348,10 @@ class TestInsecureGate:
         assert not prov.target_holds_credentials(_target())
         assert prov.target_holds_credentials(_target(credentials_provisioned_at=now))
         assert prov.target_holds_credentials(
-            _target(destination_credentials_observed_at=now)
+            _target(destination_credential_observed_at=now)
         )
         assert prov.target_holds_credentials(
-            _target(credentials_provisioned_at=now, destination_credentials_observed_at=now)
+            _target(credentials_provisioned_at=now, destination_credential_observed_at=now)
         )
 
     @pytest.mark.asyncio
@@ -893,6 +900,11 @@ class TestSchedulesDirect:
         assert len(outcome.schedules_direct_notes) == 1
         note = outcome.schedules_direct_notes[0]
         assert "Guide SD" in note
+        assert "needs your input" in note, (
+            "the statement's meaning is 'this field needs your input', not "
+            "'this cannot cross' — Schedules Direct is IN scope with an "
+            "operator-supplied value (ADR-013 ruling 6, 2026-08-22)"
+        )
         assert "unreadable, not unset" in note
         assert "still serves video" in note
 
@@ -953,8 +965,11 @@ class TestSchedulesDirect:
         outcome = await prov.provision_target_credentials(
             session=None, sync_target=_target(), schedules_direct_password="x"
         )
-        assert outcome.schedules_direct_notes
-        assert "Nothing was persisted here" in outcome.schedules_direct_notes[0]
+        note = outcome.schedules_direct_notes[0]
+        assert "was not persisted here" in note
+        # And the property the write-only field makes permanent: ECM can say it
+        # WROTE the value, never that the replica holds a working one.
+        assert "never that the replica holds a working one" in note
 
     @pytest.mark.asyncio
     async def test_an_SD_password_is_never_harvested_from_A(self, monkeypatch):
@@ -1109,10 +1124,18 @@ class TestObservedCredentialRecording:
             {"id": 101, "name": "Provider XC", "username": "u", "password": "p"}
         )
         assert report.destination_credentials_observed is True
+        assert report.destination_credentials_checked is True
 
-    def test_a_destination_holding_NOTHING_is_not_observed(self):
+    def test_a_destination_holding_NOTHING_is_observed_ABSENT_not_unchecked(self):
+        """Observed-absent and never-looked must be distinguishable.
+
+        The marker clears on an observed absence, so a report that could not
+        tell these apart would clear a gate protecting a live secret every time
+        a run failed to reach the destination.
+        """
         report = self._run_reporter({"id": 101, "name": "Provider XC"})
         assert report.destination_credentials_observed is False
+        assert report.destination_credentials_checked is True
 
     def test_the_SENTINEL_does_not_count_as_an_observed_credential(self):
         """A value ECM itself wrote as a placeholder is ABSENT, not present.
@@ -1141,6 +1164,7 @@ class TestObservedCredentialRecording:
             {"id": 101, "name": "Provider XC", "username": "u"}
         )
         assert report.destination_credentials_observed is True
+        assert report.destination_credentials_checked is True
 
     def test_observation_records_presence_only_never_a_value(self):
         report = self._run_reporter(
@@ -1156,6 +1180,10 @@ class TestObservedCredentialRecording:
             archive_account=_tuner_account(),
         )
         assert report.destination_credentials_observed is False
+        assert report.destination_credentials_checked is False, (
+            "an account whose source carries no credential is not an "
+            "observation of anything, and must not be able to clear the gate"
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -140,7 +140,7 @@ class SyncTargetResponse(BaseModel):
     # One-time credential provisioning gate state (ADR-013 S10-S13). Timestamps,
     # never credentials — see export_models.SyncTarget.
     credentials_provisioned_at: Optional[str] = None
-    destination_credentials_observed_at: Optional[str] = None
+    destination_credential_observed_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

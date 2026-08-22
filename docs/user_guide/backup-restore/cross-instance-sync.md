@@ -151,7 +151,7 @@ The replica fetches its own stream URLs on its next refresh and starts serving.
 | **Plain-M3U** whose credential is in the URL (`get.php?username=…&password=…`) | The whole `server_url`. This type has no password field at all — the address *is* the credential. |
 | **Plain-M3U** pointing at a LAN tuner (HDHomeRun) | Nothing. There is no credential to write. |
 | **XMLTV EPG** (`xmltv.php?username=…&password=…`) | The whole `url`. |
-| **Schedules Direct EPG** | `username` only. **Its password cannot be read from this instance at all** — Dispatcharr marks it write-only and never returns it, so there is nothing here to copy. This is *unreadable*, not *unset*, and the run says so for every Schedules Direct source it saw. You may supply the password with the provisioning request for that one run (it is used and discarded, never stored here), or enter it on the replica by hand. Until you do, the replica still **serves video** — streams come from M3U accounts — but it has no guide data from that source. |
+| **Schedules Direct EPG** | `username` automatically, and `password` **from you** — this is the one field the action asks for. Dispatcharr marks the SD password write-only and never returns it, so there is nothing on this instance to copy; that is *unreadable*, not *unset*, which is why you are prompted rather than left to discover the gap. The value is used for that run and discarded, never stored here. Because the replica does not return it either, ECM can confirm it **wrote** the value but never that the replica holds a **working** one: a mistyped password shows up as the replica's EPG source failing to fetch, and the fix is to run the action again. Skip it and the replica still **serves video** — streams come from M3U accounts — but it has no guide data from that source. |
 | **Anything else** | Nothing. ECM's own settings secrets, alert-method secrets, cloud-target and sync-target credentials and Dispatcharr users are never provisioning inputs. |
 
 ### It never happens on a schedule
@@ -175,9 +175,22 @@ accounts back, password included, so an unverified connection would carry your
 provider credential across the network inbound, unattended, on a schedule.
 
 The refusal also fires on a credential ECM did **not** write — one you entered on the
-replica by hand — because a sync cycle can see that the replica holds one. In that
-case de-provisioning is not the remedy (there is nothing on this side to clear): clear
-it on the replica, or fix the certificate.
+replica by hand — because a sync cycle can see that the replica holds one. De-provisioning
+is not the remedy there: there is nothing on this side to clear, and ECM will not delete a
+credential you placed on the replica yourself. Two things will work, and neither is
+something ECM does for you:
+
+1. **Install a valid certificate on the replica and leave verification on.** Prefer this
+   one — it keeps the standby working and ends the exposure.
+2. **Remove the credential on the replica itself.** The next cycle sees that it is gone and
+   the setting becomes available again — at the cost of the replica no longer serving,
+   which is presumably the thing you wanted it for.
+
+A credential typed into the replica is not seen until the **next** cycle, and that cycle's
+own read of the replica is what sees it — so it crosses once more before the refusal takes
+effect. The window is exactly one sync interval, and zero cycles after that. Closing it
+completely would need ECM to poll the replica on its own, which is the extra network call
+this design deliberately does not make.
 
 ### De-provisioning, and what it cannot undo
 

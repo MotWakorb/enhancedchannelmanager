@@ -894,8 +894,15 @@ def _report_credentials_still_missing(
     # the provider credential on B by hand — the recovery ECM's own guide
     # documents — leaves the marker NULL while B holds a live credential that
     # the per-cycle destination read carries back to A on every cycle.
-    if len(still_missing) < len(redacted_fields):
-        report.record_destination_credentials_observed()
+    if redacted_fields:
+        # The check RAN — record that separately from what it found, because
+        # the observed marker CLEARS on an observed absence and must NOT clear
+        # on "we never looked". An account whose source carries no credential
+        # at all produces no redacted field and is not an observation of
+        # anything, so it is excluded from the check entirely.
+        report.record_destination_credential_check(
+            present=len(still_missing) < len(redacted_fields)
+        )
     if destination_account_looks_stale(existing_acc):
         report.record_provisioned_credential_stale(stale_account_message(existing_acc))
 

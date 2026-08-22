@@ -119,7 +119,7 @@ INV-3 — NOTHING IS PERSISTED ON A
 ---------------------------------
 No column, no cache, no settings key, no queued payload holds a harvested value.
 The two columns this feature adds to ``sync_targets`` are TIMESTAMPS
-(``credentials_provisioned_at``, ``destination_credentials_observed_at``).
+(``credentials_provisioned_at``, ``destination_credential_observed_at``).
 
 INV-9 — DE-PROVISION IS HONEST, NOT COSMETIC
 --------------------------------------------
@@ -359,7 +359,7 @@ def target_holds_credentials(target) -> bool:
 
     * **RECORDED** — ``credentials_provisioned_at``: ECM wrote a credential to B
       and has not seen an de-provision succeed since.
-    * **OBSERVED** — ``destination_credentials_observed_at``: a sync cycle SAW a
+    * **OBSERVED** — ``destination_credential_observed_at``: a sync cycle SAW a
       credential on B's own provider account rows. This covers the credential
       ECM did NOT write — the operator entering it on B by hand, which is the
       recovery ECM's own guide documents today. The recorded marker cannot see
@@ -370,7 +370,7 @@ def target_holds_credentials(target) -> bool:
     """
     return (
         getattr(target, "credentials_provisioned_at", None) is not None
-        or getattr(target, "destination_credentials_observed_at", None) is not None
+        or getattr(target, "destination_credential_observed_at", None) is not None
     )
 
 
@@ -409,7 +409,7 @@ def insecure_refusal_reason(target, *, requested_insecure: bool) -> Optional[str
     if not requested_insecure:
         return None
     recorded = getattr(target, "credentials_provisioned_at", None) is not None
-    observed = getattr(target, "destination_credentials_observed_at", None) is not None
+    observed = getattr(target, "destination_credential_observed_at", None) is not None
     if not (recorded or observed):
         return None
 
@@ -428,9 +428,15 @@ def insecure_refusal_reason(target, *, requested_insecure: bool) -> Optional[str
         "Cannot disable TLS verification on sync target '%s': a sync cycle "
         "observed a provider credential on the replica's own provider accounts "
         "that ECM did not write — most likely entered on the replica by hand. "
-        "Every cycle would carry it back over an unverified connection. ECM "
-        "cannot de-provision what it did not provision: clear the credential on "
-        "the replica, or fix the certificate, then retry." % name
+        "Every cycle would carry it back over an unverified connection. "
+        "ECM cannot de-provision what it did not provision, so there are two "
+        "remedies and neither is something ECM does for you: (1) install a "
+        "valid certificate on the replica and leave TLS verification on — this "
+        "keeps the standby working and ends the exposure, and is the one to "
+        "prefer; or (2) remove the credential on the replica itself, after "
+        "which the next cycle observes its absence and this setting becomes "
+        "available again — at the cost of the replica no longer serving."
+        % name
     )
 
 
@@ -651,19 +657,25 @@ def schedules_direct_notes(
         name = source.get("name") or "<unnamed>"
         if password_supplied:
             notes.append(
-                "Schedules Direct source '%s': its password cannot be read from "
-                "this instance (write-only upstream), so the value you supplied "
-                "for this run was written instead. Nothing was persisted here."
-                % name
+                "Schedules Direct source '%s': its password is the one field "
+                "that needs your input, because Dispatcharr never returns it "
+                "and there is nothing on this instance to read. The value you "
+                "supplied was written to the replica for this run and was not "
+                "persisted here. The replica does not return it either, so ECM "
+                "can confirm it WROTE the value but never that the replica "
+                "holds a working one — a mistyped password surfaces as the "
+                "replica's EPG source failing to fetch, and the remedy is to "
+                "re-run this action." % name
             )
         else:
             notes.append(
-                "Schedules Direct source '%s': its password CANNOT cross. "
+                "Schedules Direct source '%s': its password needs your input. "
                 "Dispatcharr never returns it, so there is nothing on this "
-                "instance to harvest — this is unreadable, not unset. Enter it "
-                "on the replica by hand, or supply it with a provisioning run. "
-                "The replica still serves video; it goes without guide data "
-                "from this source until then." % name
+                "instance to harvest — this is unreadable, not unset, which is "
+                "why you are being told rather than left to find the gap. "
+                "Supply it with a provisioning run, or enter it on the replica "
+                "by hand. Until then the replica still serves video; it goes "
+                "without guide data from this source." % name
             )
     return notes
 
@@ -912,7 +924,7 @@ async def _run(
             # just wrote back to unset are the ones the cycle observes. A later
             # cycle that still sees a credential on B re-stamps it, which is the
             # honest direction — the observation is re-derived, not remembered.
-            sync_target.destination_credentials_observed_at = None
+            sync_target.destination_credential_observed_at = None
             outcome.marker_set = False
         else:
             sync_target.credentials_provisioned_at = now

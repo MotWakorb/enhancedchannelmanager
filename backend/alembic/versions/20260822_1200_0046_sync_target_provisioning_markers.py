@@ -16,7 +16,7 @@ harvested values are read, written to B and discarded inside the request):
   succeeded for EVERY targeted account (INV-9). A target may not be both
   "TLS verification disabled" and "provisioned"; this column is the recorded
   half of that predicate.
-* ``destination_credentials_observed_at`` DATETIME NULL — the OBSERVED half
+* ``destination_credential_observed_at`` DATETIME NULL — the OBSERVED half
   (threat model row D16; PO ruling 2026-08-22 on §11.5.4 item 5). Stamped by
   the sync cycle from state it already reads: the credential re-entry reporter
   already runs ``credential_sentinel.credential_is_present`` against B's own
@@ -58,7 +58,7 @@ __all__ = ["revision", "down_revision", "branch_labels", "depends_on"]
 
 
 _SYNC_TABLE = "sync_targets"
-_NEW_COLUMNS = ("credentials_provisioned_at", "destination_credentials_observed_at")
+_NEW_COLUMNS = ("credentials_provisioned_at", "destination_credential_observed_at")
 
 
 def _table_exists(connection, table_name: str) -> bool:

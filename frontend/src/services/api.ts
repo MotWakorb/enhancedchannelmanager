@@ -4463,6 +4463,15 @@ export interface RestoreReport {
    */
   destination_credentials_observed?: boolean;
   /**
+   * Whether the credential-presence check actually RAN this run — a different
+   * question from what it found, and the backend's observed marker clears on an
+   * observed absence, so the two must not be conflated. `false` here means the
+   * run never reached a destination provider account to inspect (an unreadable
+   * destination, or no credential-bearing account at all), NOT that the
+   * destination holds nothing. May be absent on older reports.
+   */
+  destination_credentials_checked?: boolean;
+  /**
    * Replicated provider accounts whose own status and stream count indicate
    * their provisioned credential has stopped working (bead wd20y, ADR-013
    * INV-8). An ACTION ITEM, not a failure and not a delivery shortfall: it does

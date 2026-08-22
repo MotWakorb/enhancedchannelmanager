@@ -198,7 +198,7 @@ class SyncTarget(Base):
     # NULL == no cycle has observed a credential on B (or a de-provision cleared
     # the last one). It is advisory for everything EXCEPT the ``insecure``
     # refusal, which treats it exactly like the recorded marker.
-    destination_credentials_observed_at = Column(DateTime, nullable=True)
+    destination_credential_observed_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -222,9 +222,9 @@ class SyncTarget(Base):
                 if self.credentials_provisioned_at
                 else None
             ),
-            "destination_credentials_observed_at": (
-                self.destination_credentials_observed_at.isoformat() + "Z"
-                if self.destination_credentials_observed_at
+            "destination_credential_observed_at": (
+                self.destination_credential_observed_at.isoformat() + "Z"
+                if self.destination_credential_observed_at
                 else None
             ),
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,

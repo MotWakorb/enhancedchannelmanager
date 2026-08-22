@@ -1879,13 +1879,19 @@ async def run_sync(
             # hand, which is the recovery ECM's own guide documents and which
             # the provisioning marker is structurally blind to.
             #
-            # Monotonic here on purpose — this run only ever ADDS the
-            # observation. Retiring it is an explicit, audited de-provision
-            # whose write to B succeeded (INV-9); a cycle that merely failed to
-            # observe must not clear a gate that protects a live secret.
-            if getattr(result, "destination_credentials_observed", False):
-                sync_target.destination_credentials_observed_at = datetime.now(
-                    timezone.utc
+            # THREE-WAY, not two. The marker clears when a cycle observes
+            # ABSENCE ("it clears when a cycle observes absence, by the same
+            # presence check") — but "observed absent" and "never looked" are
+            # different states and only the first may clear a gate that
+            # protects a live secret. A run whose destination read failed, or
+            # that had no credential-bearing account to inspect, leaves
+            # ``destination_credentials_checked`` False and the marker
+            # untouched.
+            if getattr(result, "destination_credentials_checked", False):
+                sync_target.destination_credential_observed_at = (
+                    datetime.now(timezone.utc)
+                    if result.destination_credentials_observed
+                    else None
                 )
             session.commit()
         except Exception as exc:  # noqa: BLE001 - stamping is best-effort
