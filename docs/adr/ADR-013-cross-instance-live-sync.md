@@ -541,8 +541,17 @@ that on its own:
 | **Residual: credential re-entry friction on B** | Described as "accepted, availability, **not confidentiality**". Provisioning converts it into a confidentiality decision the operator makes deliberately, per target. |
 | **Residual: `insecure=true` on a recurring channel** | Rated Low and accepted because what crosses is "topology over unverified TLS", bounded by the per-cycle audit row. On a provisioned target that premise is gone (the destination read carries B's credential back), which is why S11 **refuses** the combination rather than auditing it. |
 
-Tracked as its own bead so the gate stays visible in the backlog rather than assumed satisfied by
-this file.
+**Done, 2026-08-22, as bead `enhancedchannelmanager-t77qd`** — a separate bead deliberately, so the
+gate stayed visible in the backlog rather than being assumed satisfied by this file. The amendment
+is `docs/security/threat_model_dbas_import.md` **§11.5**, which carries the rows above plus three
+findings this table did not anticipate: the SSRF chokepoint guard's scanned set is the literal glob
+`tasks/dbas_sync*.py`, so a provisioning writer placed on the router is **outside** it (row D1); the
+guard extension itself already shipped, leaving D1's status line stale in the other direction; and
+`insecure` combined with a credential an operator entered on B **by hand** — the recovery ECM's own
+guide documents — is exposed today, independently of this feature, because S11's marker records what
+ECM wrote rather than what B holds (row D16). That last one carries a recommendation to gate the
+refusal on observed as well as recorded state, which would strengthen INV-4; it is **not** applied
+here, because widening a PO-ratified control is not a decision to take silently.
 
 ### PO rulings, 2026-08-22
 

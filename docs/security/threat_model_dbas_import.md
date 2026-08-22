@@ -3,7 +3,7 @@
 **Bead:** bd-qmuij (informs bd-gb5r5.3, the DBAS import engine); §8–§9 addenda + checklist 18–26: `enhancedchannelmanager-0i2vt.3` (Phase 0, v0.18.0 DBAS absorption)
 **Author:** Security Engineer persona (Claude)
 **Date:** 2026-04-20 · **Addenda A & B added:** 2026-05-12 · **Re-pointed at ADR-012, lifted to Accepted, Addendum C added:** 2026-06-17 · **Addendum D (cross-instance live sync) added:** 2026-06-19
-**Status:** Accepted. Assumptions (§6) and the Addendum A residual (§8.4) resolved by PO; cross-instance scope corrected to ADR-012 D11; passphrase encryption covered by Addendum C (ADR-012 D12); v0.18.1 cross-instance live sync covered by Addendum D ([ADR-013](../adr/ADR-013-cross-instance-live-sync.md), epic `i39wu`)
+**Status:** Accepted. Assumptions (§6) and the Addendum A residual (§8.4) resolved by PO; cross-instance scope corrected to ADR-012 D11; passphrase encryption covered by Addendum C (ADR-012 D12); v0.18.1 cross-instance live sync covered by Addendum D ([ADR-013](../adr/ADR-013-cross-instance-live-sync.md), epic `i39wu`); one-time credential provisioning (ADR-013 S10–S13, bead `wd20y`) covered by **§11.5**
 **Related:** bd-ppe28 (closed, OWASP hardening), ADR-002 (restore transaction model, pending), ADR-004 (DBAS instance trust, referenced), [ADR-012](../adr/ADR-012-dbas-absorption-approach.md) (DBAS absorption, source of truth), epic `enhancedchannelmanager-0i2vt` (DBAS absorption), beads `0i2vt.4` (Fernet credential models) / `0i2vt.5` (SSRF wizard) / `0i2vt.7` (ZIP builder) / `0i2vt.8` (cloud upload) / `u81kh` + `0zrse` (whole-artifact passphrase encryption, Addendum C) / `l1p4p` + `tsfv0` (users importer + Dispatcharr user-API spike, §3.6 P2 / §6 A3)
 
 ---
@@ -897,3 +897,167 @@ The hard primitives already exist and were designed for this: `backend/security/
 - **Residual: credential re-entry friction on B (accepted, availability, not confidentiality).** Redact-by-default means the operator re-enters M3U/EPG passwords on B after first sync. The deliberate trade for not streaming live secrets continuously; secret migration remains the `u81kh` artifact path.
 - **Residual: no live-B integration coverage at build time (tracked).** The build + unit/contract tests run against mocks/fakes; the live A→B round-trip + the live half of the test harness are gated on a reachable second Dispatcharr (bead `46pkq`). Flagged, not silently skipped.
 - **Residual: `insecure=true` on a recurring channel (Low, accepted with per-cycle audit).** A one-shot insecure upload is one auditable event; a recurring insecure sync ships topology over unverified TLS every interval, bounded by the per-cycle audit row (D6) so the operator sees recurring exposure, and forbidden the moment the payload is non-redacted.
+
+### 11.5 Update 2026-08-22: one-time credential provisioning (bead `enhancedchannelmanager-t77qd`)
+
+§11.1–§11.4 above are the design record for a sync that **carries no credential at all**. This
+section is the **current** description of the surface after [ADR-013](../adr/ADR-013-cross-instance-live-sync.md)'s
+2026-08-22 amendment (decisions S10–S13, bead `enhancedchannelmanager-wd20y`, PO-ratified), and
+where the two differ this one is authoritative.
+
+**The §11 build gate applies to this section on the same terms.** §11 states that no sync build bead
+opens until it is reviewed; that sentence now covers §11.5, and the `wd20y` build does not open until
+the items in [§11.5.4](#1154-what-still-gates-the-build) are satisfied. An addendum left reading as
+satisfied while the design underneath it has moved is the false-green class this document exists to
+prevent.
+
+#### What changed
+
+ADR-013 S10 ratifies an **explicit, operator-initiated, audited, TLS-verified provisioning action**
+that writes a provider credential onto the replica's provider accounts once, at sync-target setup.
+The **per-cycle path is unchanged**: it still redacts, still carries topology only, and gains no
+exemption and no "provisioning mode". Redact-by-default (D2) therefore remains a true and complete
+description of *the cycle*, and stops being a true description of *the system*.
+
+Two PO rulings of 2026-08-22 shape the risk and neither can be read off the decision text alone:
+
+1. **Credentials are HARVESTED from A's own provider records, not typed by the operator.** The
+   typed design had a human as an implicit review step — someone read the value before it crossed.
+   That step is gone. Nothing below may carry a rating computed under the typed assumption.
+2. **An explicit de-provision escape is permitted**, so a target *can* return to `insecure` after
+   having held a credential. The architect recommended a permanent symmetric refusal; the PO ruled
+   otherwise with that objection in front of them. What a de-provision cannot undo is a residual of
+   this system now, recorded in §11.5.3.
+
+One further property of the harvest decides several ratings below and is stated once here. The
+harvest is a new **write**, not a new **read**: `routers.backup._collect_credential_values` already
+walks the raw gather on every cycle, by the same key sets the redactor uses, because that is what
+makes the `msqf7` literal-match rule possible. A's process already holds every value a provisioning
+would send, on every scheduled run, today. So the provisioning adds no new read surface — and it
+removes the barrier that would have made a recurring push hard to build by accident, because the
+values are already in the cycle's own memory. Under the typed design, making the cycle push
+credentials was impossible without first inventing somewhere to persist them. Under the harvest it
+is a call edge. **The feature's safety now rests on one structural guarantee where the typed design
+had two**, and that is why D12 below is rated as it is.
+
+#### 11.5.1 New STRIDE rows: one-time credential provisioning
+
+| # | Surface | STRIDE | Threat | Mitigation | Status | Sev |
+|---|---------|--------|--------|------------|--------|-----|
+| **D11** | Provisioning action (A→B write) | Information Disclosure | A live provider credential is deliberately written to a second instance. B's database, backups, logs and its own generated stream URLs then hold it, and B may sit at a different site or trust level. The exposure is intended; the risk is that it is unbounded in *scope* (which fields, which categories) or *frequency*. | Closed set of exactly two entity categories (M3U accounts, EPG sources), enforced in code rather than by whatever the gather returns. Writable field set is **derived** from the redactor's own per-entity output (`strip_redaction_sentinels` → `value_at_path` against the raw record, ADR-013 INV-6), not from a maintained literal. Authenticated-admin actor only; one-time; TLS verification mandatory (D6/S11); harvested values never persisted on A (INV-3); one journal row per attempt (D9/S13). | to-build (`wd20y`) | **High** |
+| **D12** | Provisioning **code path** | Information Disclosure | **The one-time path becomes a recurring one.** The cycle already holds the values; making it push them is a single call edge, with no missing input and no operator keystroke absent to make the change conspicuous. A later "auto-heal stale credentials" convenience, or a well-meaning refactor that registers provisioning as an importer step, silently converts the whole design into the thing S3 forbids — and the run report would look normal. | **Not a payload control — a reachability control.** ADR-013 INV-2: the provisioning writer is not an `ImporterStep`, is absent from `sync_config_importer_steps()`, and is **not reachable by any call path** from `tasks.dbas_sync` / `tasks.dbas_sync_engine`, pinned by (i) a registry test in the idiom of the existing `SYNC_NEVER_CATEGORIES` test and (ii) a transitive import/reachability guard, the same idiom as row D1's chokepoint grep. A registry check alone is insufficient: a direct call bypasses the registry entirely. Detection backstop: a `sync_provision_credentials` journal row whose actor is the scheduler (D9). | to-build (`wd20y`) | **High** |
+| **D13** | De-provision | Information Disclosure / Repudiation | A de-provision that did not actually clear B flips the marker anyway, and `insecure` becomes settable while B still holds a live credential — re-opening the unverified channel over which the per-cycle destination read carries that credential back (see D6, D16). A local flag flip is A's *belief* about B, and B is where the secret is. | ADR-013 INV-9: the clear is **attempted on B** over the same field set the provision wrote; the marker flips **only** if that write succeeded for every targeted account; any partial or total failure leaves the marker set, leaves `insecure` refused, and names the accounts still holding a credential. Audited as its own action type with a per-account success/failure breakdown (D9/S13). This is row D8's "no partial state is reported as success" applied to the safety control itself. | to-build (`wd20y`) | **High** |
+| **D14** | Harvest scope | Information Disclosure | A harvest is a loop over records, and a loop widens by accident. A future category added to the sync, or a gather that starts returning more, silently enlarges what is provisioned — ECM's own settings secrets (`dispatcharr_api_key`, `emby_api_key`, `plex_token`, `smtp_password`, `telegram_bot_token`, `mcp_api_key`), alert-method secrets, cloud/sync-target credentials, or `dispatcharr_users`. "Provision the credentials" becomes "provision every secret A holds". | The provisioning category set is a **closed named set**, separate from and narrower than the sync category allowlist (row D4), enforced in code. Everything else stays outside by construction: `SYNC_NEVER_CREDENTIAL_COLUMNS`, `SYNC_NEVER_CATEGORIES`, `_SETTINGS_CREDENTIAL_FIELDS` and the alert-method keys are never provisioning inputs. INV-6's derived field set means a widened *gather* cannot widen the *write* on its own. | to-build (`wd20y`) | Med |
+| **D15** | Schedules Direct reporting | Repudiation | **Absence means unreadable, not unset — and nothing says so.** An SD EPG password is write-only on Dispatcharr and is never returned, so it never enters the gather, so it is never a `redacted_field`, so `dbas/importers/epg_sources.py::_report_credentials_still_missing` — which derives its list from `redacted_fields` — can never name it. The operator's record of what crossed and what did not is silently incomplete for this type, and the rule that makes the reporter correct everywhere else ("a source with no credential produces no redacted field, so it is never an action item") is precisely wrong here. The security consequence is not cosmetic: it trains the operator to read "no report" as "fully provisioned", which is the assumption they will carry into a de-provision or an incident. | ADR-013 S10 excludes `schedules_direct` from provisioning and requires the run to state, driven by **`source_type` rather than by a presence check** (presence being unknowable), that the SD password cannot cross and must be entered on B by hand. Statement, not inference. | to-build (`wd20y`) | Med |
+| **D16** | `insecure` + credentials B holds that ECM did not write | Information Disclosure | **Reachable today, before any `wd20y` code ships.** The per-cycle destination read fetches B's provider account rows on every cycle — `dbas/importers/m3u_accounts.py::_report_credentials_still_missing` inspects them, and its own measurement records that on Dispatcharr 0.29.0 `/api/m3u/accounts/` returns **both `username` and `password`** to an admin caller. The currently *documented recovery* is for the operator to enter the provider credential on B by hand. An operator who has done that and has `insecure=true` is shipping B's live provider credential to A over an unverified-TLS channel, every cycle, unattended. S11's marker records what **ECM wrote**, not what **B holds**, so it does not see this case at all. | **Recommended, not yet ratified** (see §11.5.4 item 5): derive the `insecure` refusal from **observed** destination state as well as recorded state. `credential_sentinel.credential_is_present()` is already called against B's account rows on every cycle by the reporter above, so ECM can already tell that B holds a credential without comparing or storing a value. Gate `insecure` on *recorded OR observed*, and warn on the mismatch. Compensating control until then: the per-cycle `sync_insecure_tls` audit row (D6) records the exposure but does not prevent it. Attacker model is an **active** MITM able to present a forged certificate, not a passive eavesdropper. | to-build; **pre-existing, not introduced by `wd20y`** | **High** |
+
+#### 11.5.2 Re-rated and re-scoped rows
+
+| Row | Before | After | Reasoning |
+|---|---|---|---|
+| **D2** — sync payload / Information Disclosure | **High**, mitigated by "redact-by-default … **no plaintext-cred path in v0.18.1** … cred-carrying continuous sync is **not shipped**" | **High** (unchanged), mitigation **re-scoped to the per-cycle path** | The threat D2 names — naively streaming live secrets to B on a schedule — is still High and still fully mitigated, and the redactor is untouched. What changes is that D2's mitigation text was doing double duty as the system-wide claim "ECM never sends a credential to B". That half is now false and has been **moved to rows D11 and D12**, which carry their own mitigations. Read D2 as: *the cycle* carries no credential. Do not read it as: *ECM* never does. The severity does not move because nothing about the recurring path got worse; the honest change is scope, and pretending a number moved would obscure that. |
+| **D6** — TLS / Tampering | Med — "`verify=True` default; `insecure=true` writes a per-cycle audit row; **forbidden-by-construction if the payload is ever non-redacted** (moot while redact-by-default holds: topology has no creds to expose)" | **High** (provisioned) / Med (never provisioned) | The premise for Med was that a MITM on the channel sees topology. On a provisioned target it sees a live provider credential, and — the part the original row did not consider — it sees it on the **inbound** leg too: the per-cycle destination read pulls B's account rows back to A, `password` included (D16). So the recurring flow carries a live secret rather than topology, every cycle, in both directions. Two further corrections: the "construction" was never built (`insecure` has been editable on `PUT /api/sync-targets/{id}` since the router's first commit, `ed98f32f`, 2026-06-19 — `git log -S` on both the update-model field and the handler write returns exactly that one commit, and the MCP `update_sync_target` tool reaches the same route), so S11 **builds** it rather than inheriting it; and it is no longer a one-way door, because the ratified de-provision escape (D13) lets a target return to `insecure`. The conditional rating follows the existing idiom of row D7's "**High** (if bidir)". |
+| **D9** — Audit / Repudiation | Med — "`journal.log_entry` per sync run … no trail of what A pushed to B" | **High** | Two independent reasons, either sufficient. Under the harvest **no human reads the value before it crosses**, so the journal row is the *only* record that a secret moved at all — there is no operator memory, no clipboard, no ticket. And the row is now a **detection control, not only a forensic one**: a `sync_provision_credentials` row whose actor is the scheduler is the alarm for D12, the failure mode with no other detector. An audit row that is useful after an incident is Med; an audit row that is the sole detector of a control failure is High. |
+| **D1** — SSRF / Spoofing-EoP | **High**, status "to-build (reuse `0i2vt.5`; guard-extension = AC on `1t3al`)" | **High** (unchanged), **requirement extended**, and the status line corrected | *Status correction:* the guard extension **shipped**. `backend/tests/test_ssrf_chokepoint_guard.py` scans `cloud_storage/*.py` **and** `tasks/dbas_sync*.py`, carries a `test_sync_module_is_in_scope` regression guard, and proves itself red by stripping the `# ssrf-ok:` tag; `tasks/dbas_sync_client.py` routes every request through `security.ssrf.validate_outbound_url` at execute time. D1 as written still reads as outstanding. *Requirement extension, and it is build-gating:* that guard's sync scope is the literal glob `_SYNC_GLOB = "dbas_sync*.py"` under `backend/tasks/`. **A provisioning writer placed anywhere else is not scanned** — and the most natural home for it, a route handler on `backend/routers/sync_targets.py`, is outside the glob. A raw outbound call on the one path that carries a credential would slip the chokepoint entirely. Either place the writer at `backend/tasks/dbas_sync_*.py` so the existing glob covers it, or extend the guard's scanned set in the same commit; do not leave the choice to be discovered. |
+| **D4** — category registry / Tampering | Med | Med (unchanged), **scope note** | D4's allowlist governs what the *cycle* assembles, and "secret fields stripped pre-serialize" remains true there. The provisioning path has a **second, narrower** category set that D4 does not govern; that one is row D14. Two allowlists, two owners — neither inherits the other's coverage. |
+| **D8** — partial failure / Integrity | Med | Med (unchanged), **newly instantiated** | "No partial state is reported as success" now has a second instance with a security consequence rather than an availability one: a partially-succeeded de-provision must not report success, because the report is what flips the marker that re-permits `insecure`. Recorded as D13 / INV-9. |
+| **D3**, **D5**, **D7**, **D10** | — | **Unchanged** | Verified rather than assumed. D3 (`users` never sync) and D7 (one-way only) are the hard lines the §11 gate names and neither is touched — provisioning is A→B, adds no inbound-write boundary on A, and does not add a category to the never-sync set's complement. D5 concerns the **SyncTarget's own** API credential freshness, not provider credentials. D10 (trigger/DoS) is unaffected: provisioning is not a trigger. |
+
+#### 11.5.3 Residual risk after S10–S13
+
+The two residuals in §11.4 that assumed a credential-free channel are re-rated first; the rest are new.
+
+- **Residual: credential re-entry friction on B — RE-RATED.** §11.4 records this as "accepted,
+  availability, **not confidentiality**". That framing survives only for an **unprovisioned** target,
+  which remains the default. For a provisioned one it inverts: the operator is making a
+  **confidentiality decision, per target** — placing a live provider credential on a second instance
+  in exchange for a standby that can actually serve. **New rating: Medium, accepted, PO-ratified
+  2026-08-22.** The mitigation is that the decision is explicit, per-target, audited, and refused
+  over an unverified channel; it is not that the exposure is small.
+- **Residual: `insecure=true` on a recurring channel — RE-RATED and largely CONVERTED INTO A
+  REFUSAL.** §11.4 rates this Low and accepts it "with per-cycle audit" because what crosses is
+  "topology over unverified TLS". That premise does not survive B holding a provider credential:
+  the per-cycle **destination read** pulls B's account rows back to A and `/api/m3u/accounts/`
+  returns both `username` and `password` to an admin caller on 0.29.0, so the recurring **inbound**
+  flow carries a live secret. For a provisioned target the combination is therefore **refused**
+  (S11), not audited — an audit row that records a recurring credential exposure is a receipt, not a
+  control. What remains as residual, after the refusal: **(a)** a never-provisioned target on an
+  unverified channel, unchanged at **Low**; **(b)** the de-provision path, below; **(c)** the case
+  the marker cannot see — credentials B holds that ECM did not write — which is **row D16, rated
+  High and reachable today**, and is the reason the refusal should be driven by observed as well as
+  recorded state.
+- **Residual: what a successful de-provision cannot guarantee (High, accepted, PO-ratified
+  2026-08-22).** This is the residual the PO accepted in choosing the escape over a permanent
+  refusal, and it belongs here rather than only in the ADR because it is the operator-facing half. A
+  **successful** de-provision guarantees exactly one thing: B's provider account rows no longer hold
+  the credential, so B will not re-authenticate with it. Surviving it:
+  - **B's own stream rows.** Once B refreshed with a working credential, B's stream table holds URLs
+    with the credential in their **path segments**. That is the normal shape, not an edge case — the
+    2026-08-20 survey found **all 1,409,363** of one real provider's stream URLs path-credentialed
+    (§8.5, rule 4). Clearing an account field does not rewrite those rows, and they remain valid
+    addresses.
+  - **B's backups and exports** — any artifact, cloud upload or support bundle B produced while
+    provisioned. §8.5 keeps a *standard* artifact clean; B's encrypted artifacts and raw database
+    copies are outside that.
+  - **B's logs and status fields**, including any upstream error body echoed into `last_message`.
+  - **Anything downstream that consumed B's output while provisioned** — B's own M3U/HDHR output,
+    its clients, and any proxy or cache in front of them.
+  - **The provider side. De-provision is not revocation.** The credential stays valid at the
+    provider until the operator rotates it there, which is outside ECM entirely.
+  - **Time already spent.** Every cycle between provisioning and de-provisioning is unrecoverable.
+
+  Two operator-facing consequences must be surfaced **with the action**, not in a doc. First,
+  **B does not immediately go dark**: it keeps serving from its existing credentialed stream rows
+  until its next refresh fails, so "it still works" is **not** evidence the clear failed — and
+  conversely an operator watching for an outage as confirmation will get the wrong answer. Second,
+  **the security-complete action is rotating the credential at the provider**; de-provision stops B
+  *re-acquiring* it, it does not make the exposure end.
+- **Residual: no human reads the value before it crosses (Medium, accepted, PO-ratified
+  2026-08-22).** Under the harvest there is no operator keystroke between A's stored secrets and the
+  write to B. The compensating controls are entirely mechanical — INV-6's derived field set bounds
+  *which* values, D14's closed category set bounds *whose*, D12's reachability guard bounds *when*,
+  and D9's journal row is the only trace afterwards. None of them is a person noticing that a value
+  looks wrong. This is the reason D9 moved to High and the reason D12 cannot be satisfied by a
+  registry check.
+- **Residual: Schedules Direct is not served (Low, accepted).** One EPG source type still requires a
+  manual credential entry on B, because the value does not exist on A to harvest (`docs/dispatcharr_api.md`
+  §EPG Sources — write-only, never returned, SHA1-hashed at fetch). The standby still **serves
+  video**; it loses guide data from that source. Bounded and named, but only once row D15's
+  `source_type`-driven statement is built — until then the gap is silent, which is the part that
+  makes it a security finding rather than a feature limitation.
+
+#### 11.5.4 What still gates the build
+
+§11's own rule — no sync build bead opens until the addendum is reviewed — applies to this section.
+These are the conditions on the `wd20y` build specifically. Items 1–4 are requirements; item 5 is a
+decision that must be taken before the code that depends on it is written.
+
+1. **D12's reachability guard exists and is proven red.** Both halves: the registry test *and* the
+   transitive import guard, with a demonstration that the guard fires when the sync engine is made
+   to import the provisioning writer. This is the single structural control standing between a
+   one-time path and a recurring one, so an unproven guard here is worth less than no guard, because
+   it reads as coverage. (Enforcement-code-tests-itself applies: the guard ships with its own
+   red-proof in the same commit, exactly as `test_ssrf_chokepoint_guard.py` does for D1.)
+2. **The provisioning writer is inside the SSRF chokepoint guard's scanned set** — either placed at
+   `backend/tasks/dbas_sync_*.py` so the existing `_SYNC_GLOB` covers it, or the guard's scope
+   extended in the same commit. See row D1. Decide this **before** choosing where the code lives; a
+   route handler on `backend/routers/sync_targets.py` is the natural home and is *outside* the glob.
+3. **D13/INV-9 is proven on the failure paths, not only the happy one.** Partial-failure and
+   total-failure tests asserting the marker is unchanged, `insecure` stays refused, and the affected
+   accounts are named — and specifically that a destination error cannot be swallowed into a
+   success. The escape is only honest if its failure path is.
+4. **D15's `source_type`-driven Schedules Direct statement is built with the feature**, not after it.
+   Shipping the harvest without it makes the exclusion silent, and silence is what the finding is.
+5. **DECISION REQUIRED — row D16: does the `insecure` refusal gate on recorded state, or on recorded
+   *or observed* state?** S11 as ratified gates on ECM's own provisioning marker, which does not see
+   a credential the operator entered on B by hand — the path ECM's own guide currently documents as
+   the recovery. Gating on observed state as well closes it, costs little (`credential_is_present()`
+   already runs against B's account rows on every cycle, so no value is compared or stored), and is
+   a **strengthening** of INV-4 rather than a contradiction of any ruling. It is recorded as a
+   recommendation rather than applied, because it widens a PO-ratified control and that is not the
+   security engineer's call to make silently. Note the exposure it addresses is **live today** and
+   independent of `wd20y`; if the decision is to defer, D16 should be tracked as its own bead rather
+   than closed with this one.
+
+Items 1, 3 and 5 are the ones where getting it wrong is invisible from the outside: the feature
+works, the tests are green, and the control is absent.
