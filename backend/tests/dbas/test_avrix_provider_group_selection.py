@@ -254,6 +254,79 @@ async def test_a_pre_existing_account_is_converged_but_not_refetched():
     ]
 
 
+@pytest.mark.asyncio
+async def test_the_auto_enable_policy_flags_cross_to_the_replica(tmp_path):
+    """The POLICY for groups that do not exist yet crosses too (…-avrix).
+
+    Distinct from the selection above, and the PO's own framing of it: which
+    groups are enabled is a choice about groups that exist, while
+    ``auto_enable_new_groups_*`` is the operator's policy for categories the
+    provider has not added yet. Persisting the first and defaulting the second
+    would leave two instances that agree today and silently diverge the next
+    time the provider adds a category.
+
+    WHY THIS NEEDS A GUARD AT ALL, given nothing in ECM names these keys: they
+    ride to the destination as TOP-LEVEL fields, not inside ``custom_properties``
+    — Dispatcharr's ``create`` overwrites the blob's copies from the top-level
+    ones. So any future narrowing of the create payload (a whitelist, or another
+    entry in ``_DROPPED_CREATE_KEYS``) would drop them silently, and the three
+    auto-enable flags would land on their default of ``True``: the setting that
+    makes a replica ingest the provider's whole catalogue.
+
+    Measured live 2026-08-22: A ``false/false/false`` produced B
+    ``false/false/false``, while the synthetic ``ECM Custom Streams`` account
+    created on the SAME B in the SAME run — by an ECM payload that names none of
+    these fields — came out ``true/true/true``.
+    """
+    source = _source_with_a_narrow_selection()
+    # The operator's policy on A: every auto-enable OFF. Deliberately the
+    # OPPOSITE of the destination's create default for all three, so a value
+    # that arrives ``False`` on B cannot be a coincidence.
+    account_id = source.m3u_accounts.list()[0]["id"]
+    source.m3u_accounts.update(
+        account_id,
+        {
+            "custom_properties": {
+                "enable_vod": False,
+                "auto_enable_new_groups_live": False,
+                "auto_enable_new_groups_vod": False,
+                "auto_enable_new_groups_series": False,
+            }
+        },
+    )
+    dest = StatefulDispatcharrFake.empty_dest()
+    harness = SyncHarness(source=source, dest=dest)
+
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    dest_account = next(
+        a for a in dest.m3u_accounts.list() if a.get("name") == "Provider A"
+    )
+    dest_custom = dest_account.get("custom_properties") or {}
+    for key in (
+        "auto_enable_new_groups_live",
+        "auto_enable_new_groups_vod",
+        "auto_enable_new_groups_series",
+    ):
+        assert key in dest_custom, f"{key} is absent on the replica entirely"
+        assert dest_custom[key] is False, (
+            f"{key} arrived {dest_custom[key]!r} on the replica — the source has "
+            "False and True is the destination's create default, so this is the "
+            "policy failing to cross, not a match"
+        )
+
+    # THE CONTROL, in the same run, on the same destination: an account created
+    # WITHOUT those fields lands on the destination default. Without this the
+    # assertions above could be satisfied by a fake that never defaults at all.
+    control = await dest.create_m3u_account({"name": "No-Preferences Control"})
+    assert control["custom_properties"] == {
+        "enable_vod": False,
+        "auto_enable_new_groups_live": True,
+        "auto_enable_new_groups_vod": True,
+        "auto_enable_new_groups_series": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 4-6. The reporting half — over the apply helper directly.
 # ---------------------------------------------------------------------------

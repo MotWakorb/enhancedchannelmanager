@@ -323,6 +323,12 @@ class StatefulDispatcharrFake:
         rows = self.m3u_accounts.list()
         for row in rows:
             account_id = row.get("id")
+            # ``to_representation`` projects the four preference booleans out of
+            # the blob and onto the top level — the ONLY route by which they can
+            # reach a create payload (see ``_PREFERENCE_DEFAULTS``).
+            custom = row.get("custom_properties") or {}
+            for key, default in self._PREFERENCE_DEFAULTS.items():
+                row[key] = custom.get(key, default)
             row["channel_groups"] = [
                 dict(entry)
                 for (acc_id, _group_id), entry in sorted(self.group_settings.items())
@@ -393,9 +399,39 @@ class StatefulDispatcharrFake:
         self.m3u_patch_calls.append((account_id, dict(data)))
         return self.m3u_accounts.update(account_id, data)
 
+    # THE FOUR PREFERENCE BOOLEANS AND WHERE THEY REALLY LIVE (bead …-avrix).
+    # On Dispatcharr 0.29.0 (``apps/m3u/serializers.py``, read 2026-08-22) each
+    # of these is a ``write_only`` top-level serializer field whose STORAGE is
+    # ``custom_properties``. The two directions are asymmetric, and modelling
+    # only one of them makes a test that cannot fail:
+    #
+    # * ``to_representation`` PROJECTS them from the blob back onto the top
+    #   level, with these defaults for an account whose blob omits them;
+    # * ``create`` POPS them from the top level with these same defaults and
+    #   writes them into the blob, OVERWRITING whatever the incoming
+    #   ``custom_properties`` carried. So a payload that forwards the blob but
+    #   drops the top-level fields silently lands on the DEFAULTS — and for the
+    #   three auto-enable flags the default is ``True``, the setting that makes
+    #   a replica ingest a provider's entire catalogue.
+    #
+    # ``enable_vod`` defaults ``False`` and the other three ``True``; that
+    # asymmetry is real and is what lets a test tell a crossed value from a
+    # defaulted one without contriving anything.
+    _PREFERENCE_DEFAULTS = {
+        "enable_vod": False,
+        "auto_enable_new_groups_live": True,
+        "auto_enable_new_groups_vod": True,
+        "auto_enable_new_groups_series": True,
+    }
+
     async def create_m3u_account(self, data: dict) -> dict:
         self._check_fault("create_m3u_account", data)
-        return self.m3u_accounts.create(data)
+        payload = dict(data)
+        custom = dict(payload.get("custom_properties") or {})
+        for key, default in self._PREFERENCE_DEFAULTS.items():
+            custom[key] = payload.pop(key, default)
+        payload["custom_properties"] = custom
+        return self.m3u_accounts.create(payload)
 
     async def update_m3u_account(self, account_id: int, data: dict) -> dict:
         self._check_fault("update_m3u_account", data)
