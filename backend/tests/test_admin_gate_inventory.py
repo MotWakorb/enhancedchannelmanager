@@ -410,6 +410,29 @@ _DESTINATION_CRUD = {
     ("POST", "/api/sync-targets"),
     ("PUT", "/api/sync-targets/{target_id}"),
     ("DELETE", "/api/sync-targets/{target_id}"),
+    # bead wd20y (ADR-013 S10-S13). The two one-time credential-provisioning
+    # routes run on the SAME plain ``RequireAdminIfEnabled`` as their five CRUD
+    # siblings above, so the route DEPENDENCY admits the principal here too.
+    #
+    # The residual they add is the largest in this group and is stated rather
+    # than inherited: provisioning reads THIS instance's own provider
+    # credentials and writes them onto a remote instance's provider accounts.
+    # No other route in this set moves a provider secret; the five above move
+    # topology, destinations and ECM's own credentials for reaching them.
+    #
+    # EFFECTIVE authority is decided in ``auth.mcp_capabilities``, which is
+    # deny-by-default, and neither template is declared there — so the service
+    # principal is REFUSED both. That is deliberate, not an omission: adding a
+    # tool contract for either one has to be an explicit backend authority
+    # decision, which is exactly what that module's docstring requires. It is
+    # pinned by ``tests/tasks/test_dbas_sync_provisioning.py`` so the refusal
+    # cannot become accidental.
+    #
+    # The S11 ``insecure`` refusal is enforced at the service layer regardless,
+    # so it holds on whichever surface reaches the write — the point of putting
+    # it below the router instead of in the form (ADR-013 INV-4).
+    ("POST", "/api/sync-targets/{target_id}/provision-credentials"),
+    ("POST", "/api/sync-targets/{target_id}/deprovision-credentials"),
 }
 
 # bead 9kwzp.10 item 4. The one route in ``/api/alert-methods`` that is not

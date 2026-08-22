@@ -380,3 +380,343 @@ class TestSyncTargetAdminGate:
         # Default test posture: auth disabled -> gate passes through.
         resp = await async_client.get("/api/sync-targets")
         assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# One-time credential provisioning (bead wd20y — ADR-013 S10-S13)
+# ---------------------------------------------------------------------------
+
+class _ProvClient:
+    """A destination that records what the provisioning routes wrote to it."""
+
+    def __init__(self, fail=False):
+        self.fail = fail
+        self.writes: list[tuple[int, dict]] = []
+
+    async def get_m3u_accounts(self):
+        return [{"id": 101, "name": "Provider XC"}]
+
+    async def get_epg_sources(self):
+        return []
+
+    async def patch_m3u_account(self, account_id, data):
+        if self.fail:
+            raise RuntimeError("destination refused")
+        self.writes.append((account_id, data))
+        return {"id": account_id}
+
+    async def update_epg_source(self, source_id, data):  # pragma: no cover
+        return {"id": source_id}
+
+    async def close(self):
+        return None
+
+
+_SOURCE_SECTIONS = {
+    "m3u_accounts": [
+        {
+            "id": 1,
+            "name": "Provider XC",
+            "account_type": "XC",
+            "server_url": "http://xc.example.com",
+            "username": "provider-user",
+            "password": "provider-pass-4471",
+        }
+    ],
+    "epg_sources": [],
+}
+
+
+@pytest.fixture
+def provisioning_seams(monkeypatch):
+    """Patch the WRITER's two seams (the local gather + the remote client).
+
+    Patched on ``tasks.dbas_sync_provisioning``, not on the router: the router
+    holds no client and no gather, deliberately — the writer lives under
+    ``backend/tasks/`` so the SSRF chokepoint guard's ``dbas_sync*.py`` glob
+    covers it (threat model §11.5.4 item 2).
+    """
+    from unittest.mock import AsyncMock
+
+    import tasks.dbas_sync_provisioning as prov
+
+    client = _ProvClient()
+    monkeypatch.setattr(
+        prov, "_gather_dispatcharr_sections", AsyncMock(return_value=_SOURCE_SECTIONS)
+    )
+    monkeypatch.setattr(prov, "make_remote_client", lambda target: client)
+    return client
+
+
+async def _make_target(async_client, **over):
+    payload = {
+        "name": over.pop("name", "standby-b"),
+        "base_url": "https://b.example.com",
+        "credentials": {"token": "sync-target-token-1234"},
+    }
+    payload.update(over)
+    resp = await async_client.post("/api/sync-targets", json=payload)
+    assert resp.status_code == 201
+    return resp.json()
+
+
+class TestProvisionCredentialsRoute:
+    @pytest.mark.asyncio
+    async def test_provisioning_writes_to_B_and_records_the_marker(
+        self, async_client, test_session, provisioning_seams
+    ):
+        target = await _make_target(async_client)
+        resp = await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["succeeded"] is True
+        assert body["accounts_written"] == 1
+        assert sorted(body["fields_written"]) == ["password", "username"]
+        assert provisioning_seams.writes == [
+            (101, {"username": "provider-user", "password": "provider-pass-4471"})
+        ]
+
+        row = test_session.query(SyncTarget).filter_by(id=target["id"]).first()
+        assert row.credentials_provisioned_at is not None
+
+    @pytest.mark.asyncio
+    async def test_the_response_carries_no_credential_value(
+        self, async_client, provisioning_seams
+    ):
+        target = await _make_target(async_client)
+        resp = await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        assert "provider-pass-4471" not in resp.text
+        assert "provider-user" not in resp.text
+
+    @pytest.mark.asyncio
+    async def test_a_destination_failure_is_502_and_leaves_the_marker_unset(
+        self, async_client, test_session, monkeypatch
+    ):
+        from unittest.mock import AsyncMock
+
+        import tasks.dbas_sync_provisioning as prov
+
+        monkeypatch.setattr(
+            prov,
+            "_gather_dispatcharr_sections",
+            AsyncMock(return_value=_SOURCE_SECTIONS),
+        )
+        monkeypatch.setattr(prov, "make_remote_client", lambda t: _ProvClient(fail=True))
+        target = await _make_target(async_client)
+        resp = await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        assert resp.status_code == 502
+        detail = resp.json()["detail"]
+        assert detail["succeeded"] is False
+        assert detail["failed"][0]["name"] == "Provider XC"
+
+        row = test_session.query(SyncTarget).filter_by(id=target["id"]).first()
+        assert row.credentials_provisioned_at is None
+
+    @pytest.mark.asyncio
+    async def test_missing_target_is_404(self, async_client):
+        resp = await async_client.post(
+            "/api/sync-targets/99999/provision-credentials", json={}
+        )
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_the_marker_is_exposed_on_the_read_shape(
+        self, async_client, provisioning_seams
+    ):
+        target = await _make_target(async_client)
+        before = await async_client.get(f"/api/sync-targets/{target['id']}")
+        assert before.json()["credentials_provisioned_at"] is None
+        await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        after = await async_client.get(f"/api/sync-targets/{target['id']}")
+        assert after.json()["credentials_provisioned_at"] is not None
+
+
+class TestInsecureGateAtTheServiceLayer:
+    """INV-4: refused symmetrically, in BOTH orderings, on every surface.
+
+    A UI guard satisfies neither surface — the MCP ``update_sync_target`` tool
+    calls this same route, and ``insecure`` has been editable on
+    ``PUT /api/sync-targets/{id}`` since the router's first commit.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ordering_one_provision_then_enable_insecure(
+        self, async_client, test_session, provisioning_seams
+    ):
+        target = await _make_target(async_client)
+        await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        resp = await async_client.put(
+            f"/api/sync-targets/{target['id']}", json={"insecure": True}
+        )
+        assert resp.status_code == 409
+        assert "TLS verification" in resp.json()["detail"]
+
+        row = test_session.query(SyncTarget).filter_by(id=target["id"]).first()
+        assert row.insecure is False, "a refused write must leave the row untouched"
+
+    @pytest.mark.asyncio
+    async def test_ordering_two_insecure_then_provision(
+        self, async_client, provisioning_seams
+    ):
+        target = await _make_target(async_client, insecure=True)
+        resp = await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        assert resp.status_code == 409
+        assert "must never cross an unverified connection" in resp.json()["detail"]
+        assert provisioning_seams.writes == [], (
+            "a refused provisioning must not reach the destination at all"
+        )
+
+    @pytest.mark.asyncio
+    async def test_clearing_insecure_is_always_allowed_even_when_provisioned(
+        self, async_client, test_session, provisioning_seams
+    ):
+        target = await _make_target(async_client)
+        await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        resp = await async_client.put(
+            f"/api/sync-targets/{target['id']}", json={"insecure": False}
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_an_OBSERVED_credential_refuses_insecure_with_no_marker(
+        self, async_client, test_session
+    ):
+        """The credential ECM did NOT write — row D16, reachable today.
+
+        No provisioning has ever run, so ``credentials_provisioned_at`` is NULL.
+        A cycle observed a credential on the replica's own account rows, which is
+        what the operator's by-hand recovery leaves behind.
+        """
+        from datetime import datetime, timezone
+
+        target = await _make_target(async_client)
+        row = test_session.query(SyncTarget).filter_by(id=target["id"]).first()
+        row.destination_credential_observed_at = datetime.now(timezone.utc)
+        test_session.commit()
+
+        resp = await async_client.put(
+            f"/api/sync-targets/{target['id']}", json={"insecure": True}
+        )
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "did not write" in detail
+        assert "cannot de-provision what it did not provision" in detail
+
+    @pytest.mark.asyncio
+    async def test_the_gate_applies_to_the_MCP_surface_too(
+        self, async_client, test_session, provisioning_seams
+    ):
+        """The MCP tools call these same routes, so one predicate covers both.
+
+        Asserted by driving the route as the MCP principal resolves it, rather
+        than by asserting a shared function exists — a shared function that the
+        MCP path did not reach would pass the second check and fail the first.
+        """
+        from main import app
+        from auth import ResolveIsMcpServicePrincipalIfEnabled as _mcp
+
+        target = await _make_target(async_client)
+        await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+
+        async def _is_mcp() -> bool:
+            return True
+
+        app.dependency_overrides[_mcp.dependency] = _is_mcp
+        try:
+            resp = await async_client.put(
+                f"/api/sync-targets/{target['id']}", json={"insecure": True}
+            )
+        finally:
+            app.dependency_overrides.pop(_mcp.dependency, None)
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_an_unprovisioned_target_may_still_set_insecure(self, async_client):
+        """The default posture is unchanged for a target that holds nothing."""
+        target = await _make_target(async_client)
+        resp = await async_client.put(
+            f"/api/sync-targets/{target['id']}", json={"insecure": True}
+        )
+        assert resp.status_code == 200
+        assert resp.json()["insecure"] is True
+
+
+class TestDeprovisionCredentialsRoute:
+    @pytest.mark.asyncio
+    async def test_a_successful_deprovision_clears_B_then_the_marker(
+        self, async_client, test_session, provisioning_seams
+    ):
+        target = await _make_target(async_client)
+        await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        resp = await async_client.post(
+            f"/api/sync-targets/{target['id']}/deprovision-credentials"
+        )
+        assert resp.status_code == 200
+        assert provisioning_seams.writes[-1] == (101, {"username": "", "password": ""})
+        row = test_session.query(SyncTarget).filter_by(id=target["id"]).first()
+        assert row.credentials_provisioned_at is None
+
+    @pytest.mark.asyncio
+    async def test_deprovision_always_states_what_it_cannot_guarantee(
+        self, async_client, provisioning_seams
+    ):
+        target = await _make_target(async_client)
+        await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+        resp = await async_client.post(
+            f"/api/sync-targets/{target['id']}/deprovision-credentials"
+        )
+        assert "NOT revocation" in resp.json()["residual_statement"]
+
+    @pytest.mark.asyncio
+    async def test_a_failed_deprovision_is_502_and_insecure_stays_refused(
+        self, async_client, test_session, monkeypatch, provisioning_seams
+    ):
+        """INV-9 end to end, through the surface the operator actually uses."""
+        import tasks.dbas_sync_provisioning as prov
+
+        target = await _make_target(async_client)
+        await async_client.post(
+            f"/api/sync-targets/{target['id']}/provision-credentials", json={}
+        )
+
+        monkeypatch.setattr(prov, "make_remote_client", lambda t: _ProvClient(fail=True))
+        resp = await async_client.post(
+            f"/api/sync-targets/{target['id']}/deprovision-credentials"
+        )
+        assert resp.status_code == 502
+        assert resp.json()["detail"]["failed"][0]["name"] == "Provider XC"
+
+        row = test_session.query(SyncTarget).filter_by(id=target["id"]).first()
+        assert row.credentials_provisioned_at is not None
+
+        blocked = await async_client.put(
+            f"/api/sync-targets/{target['id']}", json={"insecure": True}
+        )
+        assert blocked.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_deprovision_on_a_missing_target_is_404(self, async_client):
+        resp = await async_client.post(
+            "/api/sync-targets/99999/deprovision-credentials"
+        )
+        assert resp.status_code == 404

@@ -1864,6 +1864,35 @@ async def run_sync(
             sync_target.last_outcome = result.outcome.value
             if result.outcome == RestoreOutcome.SUCCESS:
                 sync_target.last_full_sync_at = datetime.now(timezone.utc)
+            # --- The OBSERVED half of the S11 insecure gate (ADR-013 INV-4 /
+            # threat model row D16, PO ruling 2026-08-22 on §11.5.4 item 5).
+            #
+            # The credential re-entry reporter has ALREADY read B's provider
+            # account rows this cycle and ALREADY run credential_is_present
+            # against them; ``destination_credentials_observed`` is that same
+            # verdict, carried out on the report. Stamping it here adds no
+            # fetch, no comparison and no credential — the column is a
+            # timestamp, and PRESENCE is the only thing it records.
+            #
+            # It is what lets the ``insecure`` refusal see a credential ECM did
+            # NOT write: the operator entering the provider password on B by
+            # hand, which is the recovery ECM's own guide documents and which
+            # the provisioning marker is structurally blind to.
+            #
+            # THREE-WAY, not two. The marker clears when a cycle observes
+            # ABSENCE ("it clears when a cycle observes absence, by the same
+            # presence check") — but "observed absent" and "never looked" are
+            # different states and only the first may clear a gate that
+            # protects a live secret. A run whose destination read failed, or
+            # that had no credential-bearing account to inspect, leaves
+            # ``destination_credentials_checked`` False and the marker
+            # untouched.
+            if getattr(result, "destination_credentials_checked", False):
+                sync_target.destination_credential_observed_at = (
+                    datetime.now(timezone.utc)
+                    if result.destination_credentials_observed
+                    else None
+                )
             session.commit()
         except Exception as exc:  # noqa: BLE001 - stamping is best-effort
             logger.warning("[SYNC] Failed to stamp persisted sync state: %s", exc)

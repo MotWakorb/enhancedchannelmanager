@@ -263,6 +263,23 @@ CASES = (
         "DELETE", f"/api/sync-targets/{ABSENT_ID}", ADMITTED,
         witness="routers.sync_targets.get_session", extra=(), request={},
     ),
+    # --- bead wd20y: one-time credential provisioning ------------------
+    # The ROUTE DEPENDENCY admits the principal, exactly like its five CRUD
+    # siblings above (they all run on the plain ``RequireAdminIfEnabled``).
+    # EFFECTIVE authority is a different question and is answered elsewhere:
+    # ``auth.mcp_capabilities`` is deny-by-default and these two templates are
+    # not declared there, so the service principal is refused — pinned by
+    # ``tests/tasks/test_dbas_sync_provisioning.py`` rather than left to the
+    # absence of an entry. See that file for why this route being the one that
+    # moves a provider credential makes the default the right answer.
+    _Case(
+        "POST", f"/api/sync-targets/{ABSENT_ID}/provision-credentials", ADMITTED,
+        witness="routers.sync_targets.get_session", extra=(), request={"json": {}},
+    ),
+    _Case(
+        "POST", f"/api/sync-targets/{ABSENT_ID}/deprovision-credentials", ADMITTED,
+        witness="routers.sync_targets.get_session", extra=(), request={},
+    ),
     # --- 9kwzp.10 item 4, cloud targets --------------------------------
     _Case(
         "GET", "/api/cloud-targets", ADMITTED,
@@ -348,6 +365,10 @@ ADMITTED_CASES = tuple(c for c in CASES if c.verdict == ADMITTED)
 # is what FastAPI registers.
 TEMPLATE = {
     f"/api/sync-targets/{ABSENT_ID}": "/api/sync-targets/{target_id}",
+    f"/api/sync-targets/{ABSENT_ID}/provision-credentials":
+        "/api/sync-targets/{target_id}/provision-credentials",
+    f"/api/sync-targets/{ABSENT_ID}/deprovision-credentials":
+        "/api/sync-targets/{target_id}/deprovision-credentials",
     f"/api/cloud-targets/{ABSENT_ID}": "/api/cloud-targets/{target_id}",
     f"/api/alert-methods/{ABSENT_ID}": "/api/alert-methods/{method_id}",
 }

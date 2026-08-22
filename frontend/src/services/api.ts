@@ -4451,6 +4451,41 @@ export interface RestoreReport {
   /** Which entities need which credential fields re-entered (bead 6pilh). */
   credential_reentry_details?: CredentialReentryDetail[];
   /**
+   * True when this run OBSERVED a provider credential present on a destination
+   * provider account (bead wd20y, ADR-013 INV-4 / threat model row D16).
+   *
+   * PRESENCE ONLY. It never carries, compares or derives from a credential
+   * value — the backend reads it off the destination row the credential
+   * re-entry reporter already fetched. It is what lets the `insecure` refusal
+   * see a credential ECM did not itself write (one entered on the replica by
+   * hand), which the provisioning marker is structurally blind to.
+   * May be absent on reports produced before this field existed.
+   */
+  destination_credentials_observed?: boolean;
+  /**
+   * Whether the credential-presence check actually RAN this run — a different
+   * question from what it found, and the backend's observed marker clears on an
+   * observed absence, so the two must not be conflated. `false` here means the
+   * run never reached a destination provider account to inspect (an unreadable
+   * destination, or no credential-bearing account at all), NOT that the
+   * destination holds nothing. May be absent on older reports.
+   */
+  destination_credentials_checked?: boolean;
+  /**
+   * Replicated provider accounts whose own status and stream count indicate
+   * their provisioned credential has stopped working (bead wd20y, ADR-013
+   * INV-8). An ACTION ITEM, not a failure and not a delivery shortfall: it does
+   * not move the run's outcome, and it never triggers a re-push — the operator
+   * re-runs the provisioning action. May be absent on older reports.
+   */
+  provisioned_credentials_stale?: number;
+  /**
+   * One sanitized operator-facing line per stale replicated provider account.
+   * Names and counts only — never an upstream error body, which can quote a
+   * request URL. May be absent on older reports.
+   */
+  provisioned_credential_stale_details?: string[];
+  /**
    * Channels still holding at least one URL-less PLACEHOLDER stream slot after
    * the restore's post-refresh rebind pass (bead 2o0cz). NOT an unplayability
    * signal: a channel that kept its real streams and holds one leftover

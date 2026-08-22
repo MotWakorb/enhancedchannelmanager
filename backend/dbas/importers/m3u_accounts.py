@@ -498,6 +498,62 @@ def _extract_group_settings(archive_account: dict) -> dict | None:
     return settings
 
 
+# Destination account statuses that mean "this account cannot ingest". Bead
+# ``…-avrix`` measured ``status=error`` with "No streams returned from Xtream
+# Codes provider" on exactly the credential-stale failure this detects.
+_STALE_ACCOUNT_STATUSES: frozenset[str] = frozenset({"error"})
+
+
+def destination_account_looks_stale(existing_acc: dict) -> bool:
+    """True when the DESTINATION's own account row says it cannot ingest.
+
+    ADR-013 INV-8 / S12(b) — the staleness signal for a hot standby whose
+    provisioned provider credential has stopped working (rotated at the
+    provider). Note what this is NOT: it never compares a credential VALUE.
+    Doing so would pull B's secret back to A on a schedule to answer a question,
+    which is the mirror image of bead ``…-msqf7``. Every input is state the
+    cycle's destination read ALREADY returns — ``status`` and ``stream_count``
+    — so this adds no fetch of any kind.
+
+    It lives HERE, next to that read, rather than with the provisioning writer,
+    because the cycle must be able to call it and the cycle must never be able
+    to reach the writer (INV-2).
+
+    The conjunction is deliberate. ``status=error`` alone fires on any transient
+    upstream hiccup; zero streams alone fires on an account that simply has not
+    refreshed yet. Together they are the shape ``avrix`` measured when a replica
+    cannot authenticate: an errored account materializing nothing.
+
+    A detected-stale credential must NEVER cause a push (S12(c) — scheduled or
+    automatic re-push is forbidden). It causes a report; the operator decides
+    and re-runs the provisioning action.
+    """
+    status = existing_acc.get("status")
+    if not isinstance(status, str):
+        return False
+    if status.strip().lower() not in _STALE_ACCOUNT_STATUSES:
+        return False
+    count = existing_acc.get("stream_count")
+    return not isinstance(count, int) or count <= 0
+
+
+def stale_account_message(existing_acc: dict) -> str:
+    """A sanitized operator-facing line for one stale destination account.
+
+    ``last_message`` is an UPSTREAM error body echoed onto the row and can quote
+    a request URL, so it is NEVER forwarded (the same hygiene as
+    :func:`_sanitize_failure`). Only the account's own name and the two
+    structural facts cross.
+    """
+    return (
+        "Replicated provider account '%s' is in status 'error' with %s stream(s). "
+        "If this target was provisioned with provider credentials, the credential "
+        "has most likely stopped working. Re-run the provisioning action to push "
+        "the current value — ECM never re-pushes on a schedule."
+        % (_account_label(existing_acc), existing_acc.get("stream_count", 0) or 0)
+    )
+
+
 def _existing_by_name(existing_accounts: list[dict]) -> dict[str, dict]:
     """Index existing destination accounts by their normalized name."""
     index: dict[str, dict] = {}
@@ -825,6 +881,31 @@ def _report_credentials_still_missing(
         for field in redacted_fields
         if not credential_is_present(value_at_path(existing_acc, field))
     ]
+
+    # --- The OBSERVED half of the S11 insecure gate (ADR-013 INV-4 / threat
+    # model row D16), and the staleness signal (INV-8). Both are read off the
+    # SAME destination row this function already has, by the SAME
+    # credential_is_present predicate it already ran. No new fetch, no new
+    # comparison, and nothing about a credential's VALUE is examined or
+    # recorded — only whether the destination has something at a path.
+    #
+    # Recording PRESENCE matters as much as recording absence: the recorded
+    # provisioning marker sees only what ECM wrote, so an operator who entered
+    # the provider credential on B by hand — the recovery ECM's own guide
+    # documents — leaves the marker NULL while B holds a live credential that
+    # the per-cycle destination read carries back to A on every cycle.
+    if redacted_fields:
+        # The check RAN — record that separately from what it found, because
+        # the observed marker CLEARS on an observed absence and must NOT clear
+        # on "we never looked". An account whose source carries no credential
+        # at all produces no redacted field and is not an observation of
+        # anything, so it is excluded from the check entirely.
+        report.record_destination_credential_check(
+            present=len(still_missing) < len(redacted_fields)
+        )
+    if destination_account_looks_stale(existing_acc):
+        report.record_provisioned_credential_stale(stale_account_message(existing_acc))
+
     if not still_missing:
         return
     logger.warning(

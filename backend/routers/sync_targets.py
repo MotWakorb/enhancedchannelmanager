@@ -37,7 +37,7 @@ from urllib.parse import urlsplit
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
-from auth import RequireAdminIfEnabled
+from auth import RequireAdminIfEnabled, ResolveIsMcpServicePrincipalIfEnabled
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
 from database import get_session
 from export_models import SyncTarget
@@ -137,8 +137,30 @@ class SyncTargetResponse(BaseModel):
     last_source_fingerprint: Optional[str] = None
     fuzzy_stream_matching: bool
     sync_logos: bool
+    # One-time credential provisioning gate state (ADR-013 S10-S13). Timestamps,
+    # never credentials — see export_models.SyncTarget.
+    credentials_provisioned_at: Optional[str] = None
+    destination_credential_observed_at: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
+
+
+class SyncTargetProvisionRequest(BaseModel):
+    """Body for the provisioning action (ADR-013 S10).
+
+    Under the ratified HARVEST input model there is nothing to supply: A reads
+    its own current provider values. The one exception is the Schedules Direct
+    password, which Dispatcharr marks write-only and never returns, so it does
+    not exist anywhere on A for a harvest to read.
+
+    ``schedules_direct_password`` is REQUEST-SCOPED — applied to this run's
+    Schedules Direct EPG sources and discarded with the request. It is never
+    persisted on this instance, never carried on a cycle, and appears in the
+    audit row by FIELD NAME only (INV-3 / S13). Omitting it is fully supported:
+    the run then STATES, per source, that the password could not cross.
+    """
+
+    schedules_direct_password: Optional[str] = None
 
 
 def _mask_credentials(creds: dict) -> dict:
@@ -215,6 +237,60 @@ def _remove_sync_task_best_effort(target_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# One-time credential provisioning (ADR-013 S10-S13, bead wd20y)
+# ---------------------------------------------------------------------------
+#
+# THE WRITER IS NOT IN THIS FILE, DELIBERATELY. It lives at
+# ``backend/tasks/dbas_sync_provisioning.py`` because the SSRF chokepoint guard
+# (``tests/test_ssrf_chokepoint_guard.py``) scans ``cloud_storage/*.py`` and the
+# literal glob ``dbas_sync*.py`` under ``backend/tasks/`` — ``routers/`` is NOT
+# scanned. A provisioning writer placed here, the natural home, would put the
+# one outbound path that carries a provider credential outside the guard
+# entirely (threat model §11.5.4 item 2 — a build gate, decided before the code
+# was placed rather than discovered afterwards).
+#
+# The imports below are LAZY, per the same rule the task-registration hooks
+# above follow: routers load before the tasks package during startup.
+
+
+def _guard_insecure_write(target: SyncTarget, requested_insecure: Optional[bool]) -> None:
+    """Refuse ``insecure=true`` on a target that holds a credential on B (S11).
+
+    ONE PREDICATE, AT THE SERVICE LAYER, so REST and MCP are both covered — the
+    MCP ``update_sync_target`` tool calls this same route, and a guard in the
+    frontend form would cover neither surface. ``insecure`` has in fact been
+    editable on ``PUT /api/sync-targets/{id}`` since the router's first commit
+    (``ed98f32f``), so S7's "forbidden-by-construction" is a construction this
+    BUILDS rather than one it restores.
+
+    Symmetric with :func:`provision_credentials`, which refuses the other
+    ordering. Clearing ``insecure`` is always allowed.
+    """
+    from tasks.dbas_sync_provisioning import insecure_refusal_reason
+
+    reason = insecure_refusal_reason(target, requested_insecure=bool(requested_insecure))
+    if reason:
+        logger.warning("[SYNC] %s", reason)
+        raise HTTPException(status_code=409, detail=reason)
+
+
+def _provisioning_surface(caller_is_mcp: bool) -> str:
+    """Which surface the attempt came in on, for the S13 audit row."""
+    from tasks.dbas_sync_provisioning import SURFACE_MCP, SURFACE_REST
+
+    return SURFACE_MCP if caller_is_mcp else SURFACE_REST
+
+
+def _actor_name(admin) -> Optional[str]:
+    """The acting admin principal's name for the audit row, or ``None``.
+
+    ``RequireAdminIfEnabled`` returns the ``User`` when auth is on and ``None``
+    in setup mode; never anything credential-bearing.
+    """
+    return getattr(admin, "username", None)
+
+
+# ---------------------------------------------------------------------------
 # CRUD
 # ---------------------------------------------------------------------------
 
@@ -266,6 +342,11 @@ async def create_sync_target(
             fuzzy_stream_matching=req.fuzzy_stream_matching,
             sync_logos=req.sync_logos,
         )
+        # S11 / INV-4: the SAME predicate the update path calls. A brand-new row
+        # is neither provisioned nor observed, so this is a pass today — it is
+        # here so the gate is a property of "a write that sets insecure",
+        # whichever route performs it, rather than of one handler.
+        _guard_insecure_write(target, req.insecure)
         db.add(target)
         db.commit()
         db.refresh(target)
@@ -351,6 +432,11 @@ async def update_sync_target(
         if req.enabled is not None:
             target.enabled = req.enabled
         if req.insecure is not None:
+            # S11 / INV-4, the second ordering: enabling `insecure` on a target
+            # that is RECORDED or OBSERVED to hold a provider credential on B is
+            # refused, with the reason and the real remedy. Refused BEFORE any
+            # field is assigned, so a rejected write leaves the row untouched.
+            _guard_insecure_write(target, req.insecure)
             target.insecure = req.insecure
         if req.fuzzy_stream_matching is not None:
             target.fuzzy_stream_matching = req.fuzzy_stream_matching
@@ -420,6 +506,123 @@ async def delete_sync_target(
     except Exception as e:
         db.rollback()
         logger.warning("[SYNC] Failed to delete sync target %s: %s", target_id, e)
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Provisioning routes (ADR-013 S10-S13)
+# ---------------------------------------------------------------------------
+
+@router.post("/{target_id}/provision-credentials")
+async def provision_credentials(
+    target_id: int,
+    req: SyncTargetProvisionRequest = SyncTargetProvisionRequest(),
+    _admin=RequireAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
+    """Write this instance's provider credentials onto the replica, once.
+
+    ADR-013 S10. The step that turns a structurally-complete replica into a hot
+    standby: the replica already has the channels, groups, profiles, logos and
+    EPG links; what it lacks is a working provider credential, so every stream
+    URL on it reads ``.../live/***REDACTED***/***REDACTED***/.ts`` and 404s.
+
+    Values are HARVESTED from this instance's own provider records, written, and
+    discarded within the request — never persisted here for this purpose
+    (INV-3), and never on any recurring cycle (INV-2; scheduled or automatic
+    re-push is forbidden under every ruling, S12(c)).
+
+    RE-RUNNING THIS IS THE ROTATION CONTROL (S12(a)). After the provider password
+    changes on this instance, re-run it; it needs no input. The staleness signal
+    that tells the operator to (INV-8) is derived from destination state the
+    cycle already reads, never from comparing credential values.
+
+    Refused (409) when TLS verification is disabled for the target (S11) — a
+    provider credential must never cross an unverified connection.
+    """
+    from tasks.dbas_sync_provisioning import (
+        ProvisioningRefused,
+        provision_target_credentials,
+    )
+
+    db = get_session()
+    try:
+        target = db.query(SyncTarget).filter(SyncTarget.id == target_id).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Sync target not found")
+        outcome = await provision_target_credentials(
+            session=db,
+            sync_target=target,
+            actor=_actor_name(_admin),
+            surface=_provisioning_surface(caller_is_mcp),
+            schedules_direct_password=req.schedules_direct_password,
+        )
+        if not outcome.succeeded:
+            # A partial write is not a success. The response carries the named
+            # per-account breakdown so the operator can see which replicated
+            # accounts did and did not receive their credential.
+            raise HTTPException(status_code=502, detail=outcome.as_response())
+        return outcome.as_response()
+    except ProvisioningRefused as e:
+        logger.warning("[SYNC] Provisioning refused for target %s: %s", target_id, e)
+        raise HTTPException(status_code=409, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.warning(
+            "[SYNC] Failed to provision credentials for target %s: %s", target_id, e
+        )
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        db.close()
+
+
+@router.post("/{target_id}/deprovision-credentials")
+async def deprovision_credentials(
+    target_id: int,
+    _admin=RequireAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
+    """Clear the provisioned credential fields on the replica, then the marker.
+
+    ADR-013 S11's de-provision escape (PO-ratified 2026-08-22). The clear is
+    ATTEMPTED on the replica over the same derived field set the provisioning
+    wrote; the marker flips ONLY if that write succeeded for every targeted
+    account (INV-9). A partial or total failure returns 502, leaves the marker
+    SET, leaves ``insecure`` refused, and NAMES the accounts still holding a
+    credential — the marker means "the replica may still hold a credential", and
+    a failed clear is exactly that state.
+
+    The response always carries ``residual_statement``: what a SUCCESSFUL
+    de-provision cannot guarantee, told at the moment of the action rather than
+    left in a doc.
+    """
+    from tasks.dbas_sync_provisioning import deprovision_target_credentials
+
+    db = get_session()
+    try:
+        target = db.query(SyncTarget).filter(SyncTarget.id == target_id).first()
+        if not target:
+            raise HTTPException(status_code=404, detail="Sync target not found")
+        outcome = await deprovision_target_credentials(
+            session=db,
+            sync_target=target,
+            actor=_actor_name(_admin),
+            surface=_provisioning_surface(caller_is_mcp),
+        )
+        if not outcome.succeeded:
+            raise HTTPException(status_code=502, detail=outcome.as_response())
+        return outcome.as_response()
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.warning(
+            "[SYNC] Failed to de-provision credentials for target %s: %s", target_id, e
+        )
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         db.close()

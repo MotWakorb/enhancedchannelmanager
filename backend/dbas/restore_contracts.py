@@ -999,6 +999,67 @@ class RestoreReport(BaseModel):
         description="Which entities need which credential fields re-entered (…-6pilh).",
     )
 
+    # --- One-time credential provisioning signals (ADR-013 S10-S13, wd20y) ---
+    # ADDITIVE optional, no CONTRACT_VERSION bump (the ``provider_group_selection_*``
+    # precedent). Neither is a shortfall member and neither moves the outcome:
+    # one is an observation, the other an action item.
+
+    # THE OBSERVED HALF OF THE S11 ``insecure`` GATE (INV-4 / threat model row
+    # D16). True when this run saw a credential PRESENT on a destination
+    # provider account. Presence only — this never carries, compares or derives
+    # from a credential VALUE, and it is computed from the destination row the
+    # credential re-entry reporter already reads, so it costs no extra fetch.
+    #
+    # It exists because the provisioning marker on the sync-target row records
+    # what ECM WROTE, and an operator may have entered the credential on the
+    # replica BY HAND — the recovery ECM's own guide documents. That case is
+    # invisible to the marker, and it is the case where an unverified-TLS cycle
+    # carries a live provider secret back to A on every run.
+    destination_credentials_observed: bool = Field(
+        default=False,
+        description="A destination provider account was observed to hold a "
+        "credential (presence only, never a value) — ADR-013 INV-4 / D16.",
+    )
+
+    # WHETHER THE OBSERVATION RAN AT ALL, which is a different question from
+    # what it found, and conflating them is how a gate protecting a live secret
+    # would open by accident.
+    #
+    # The observed marker CLEARS when a cycle observes ABSENCE (ADR-013: "it
+    # clears when a cycle observes absence, by the same presence check"), so a
+    # bare ``destination_credentials_observed is False`` is not enough to act
+    # on: it is equally the value of a run that never reached the destination's
+    # account rows — an unreadable destination, a failed read after the gate, a
+    # source with no credential-bearing account at all. Clearing on that would
+    # re-permit ``insecure`` on a target whose replica still holds a credential,
+    # which is the exact failure INV-9 refuses in the de-provision path.
+    #
+    # So: stamp when checked AND observed; clear when checked AND NOT observed;
+    # leave the marker exactly as it is when the check did not run.
+    destination_credentials_checked: bool = Field(
+        default=False,
+        description="A destination provider account's credential presence was "
+        "actually evaluated this run. Distinguishes 'observed absent' from "
+        "'never looked' (ADR-013 INV-4).",
+    )
+
+    # THE STALENESS SIGNAL (INV-8 / S12(b)). A standby whose provisioned
+    # credential stopped working says so, on the cycle that can observe it,
+    # WITHOUT any credential value crossing the wire to determine it and WITHOUT
+    # triggering a push. Derived from destination ``status`` / ``stream_count``,
+    # which the cycle already reads (see
+    # ``dbas.importers.m3u_accounts.destination_account_looks_stale``).
+    provisioned_credentials_stale: int = Field(
+        default=0,
+        description="Replicated provider accounts whose state indicates their "
+        "credential has stopped working (ADR-013 INV-8).",
+    )
+    provisioned_credential_stale_details: list[str] = Field(
+        default_factory=list,
+        description="One sanitized operator-facing line per stale replicated "
+        "provider account. Names and counts only — never an upstream message.",
+    )
+
     # --- Post-restore action items (bead …-2o0cz / …-dfkbn). -----------------
     # Each pair below follows the ``credentials_needing_reentry`` precedent: an
     # AGGREGATE count plus a NAMED drill-down, written through ONE recorder so
@@ -1399,6 +1460,60 @@ class RestoreReport(BaseModel):
             )
         )
         self.credentials_needing_reentry = len(self.credential_reentry_details)
+
+    def record_destination_credential_check(self, *, present: bool) -> None:
+        """Record ONE destination account's credential-presence verdict.
+
+        ADR-013 INV-4 / threat model row D16 — the OBSERVED half of the S11
+        ``insecure`` gate, and the ONE recorder for both halves of it so they
+        cannot drift.
+
+        TWO FACTS, and they are not the same fact:
+
+        * ``destination_credentials_checked`` — the observation RAN. Set by any
+          call, whatever it found.
+        * ``destination_credentials_observed`` — something was FOUND. Monotonic
+          within a run: it is a property of the destination as a whole, so one
+          account holding a credential is enough and a later empty account does
+          not retract it. The gate protects a live secret; a replica with one
+          credentialed account is a replica that holds a credential.
+
+        **Presence only.** The caller establishes ``present`` with
+        ``credential_sentinel.credential_is_present`` against the destination
+        row it already fetched. No value is read into this report, no value is
+        compared against the source's, and nothing here can distinguish one
+        credential from another — which is the point: answering "does B hold
+        one?" must not require pulling B's secret back to A.
+
+        Args:
+            present: Whether this destination account holds a credential.
+        """
+        self.destination_credentials_checked = True
+        if present:
+            self.destination_credentials_observed = True
+
+    def record_provisioned_credential_stale(self, message: str) -> None:
+        """Record ONE replicated provider account whose credential looks stale.
+
+        ADR-013 INV-8 / S12(b). Aggregate and drill-down written through ONE
+        recorder so they cannot drift, exactly like
+        :meth:`record_credential_reentry`.
+
+        It is an ACTION ITEM, not a shortfall and not a failure: the operator
+        re-runs the provisioning action. It must never itself trigger a push —
+        S12(c) forbids scheduled or automatic re-push, and INV-2 is what
+        enforces that structurally.
+
+        Args:
+            message: A sanitized operator-facing line. Names and counts only —
+                never an upstream error body, which can quote a request URL.
+        """
+        if not message or message in self.provisioned_credential_stale_details:
+            return
+        self.provisioned_credential_stale_details.append(message)
+        self.provisioned_credentials_stale = len(
+            self.provisioned_credential_stale_details
+        )
 
     def record_logo_miss(
         self,
