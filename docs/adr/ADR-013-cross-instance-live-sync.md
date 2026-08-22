@@ -26,17 +26,108 @@
 
 Build one-way A→B live sync as a thin shell over the **reused** DBAS restore engine, per the decision table below. New code is the client-seam only: a remote-client factory, `SyncTarget` CRUD, a `SyncTask` on `task_scheduler`, observability, and a settings-card UI. The orchestrator and importers are **not** modified for the sync mechanism itself (one small importer *correctness* fix is called out in S3/decision table notes).
 
+### Governing principle (PO direction, 2026-08-22): a replica is a faithful copy
+
+**Everything replicates by default. Any exclusion is an exception that must be explicitly named,
+individually justified, and visible — never a silent omission, and never a default.**
+
+The PO's bar, verbatim: *"this product doesn't work if it doesn't replicate everything to a second
+instance."* A replica that is missing settings is a **broken replica, not a conservative one**.
+
+This **inverts the default this ADR was originally written under.** Until 2026-08-22 an item was out
+of scope unless someone argued it in. From now on an item is **in scope unless there is a written,
+specific reason it cannot be**, and the following are explicitly *not* reasons: "we did not get to
+it", "it is cheaper not to", "it seemed risky". A reason must name a **specific harm** or a
+**specific impossibility**.
+
+Two things this principle does **not** do, stated because the distinction decides how it is applied:
+
+- **It is about scope, not about controls.** "Everything replicates" does not mean "everything
+  replicates by any mechanism"; it means *the destination ends up faithful*, and the mechanism still
+  has to be safe. Nothing here licenses putting a secret on a recurring cycle. `msqf7`'s redaction on
+  the per-cycle path, INV-2's reachability guard, the `insecure` gate (S11) and `avrix`'s group
+  selection are all unchanged by it.
+- **It does not turn "unreadable" into "out of scope."** A value that cannot be *harvested* is still
+  in scope; it is provisioned another way. The Schedules Direct password is the worked example — see
+  the [2026-08-22 amendment](#amendment-2026-08-22-one-time-credential-provisioning-at-sync-target-setup-distinct-from-per-cycle-sync-bead-enhancedchannelmanager-wd20y).
+
+Every exclusion in this ADR is therefore reclassified into exactly three kinds, and the register is
+[below the decision table](#exclusion-register-reclassified-against-the-2026-08-22-principle):
+**(1) technically impossible** — say why, and say what closes the gap by hand; **(2) deliberately
+excluded on a specific harm** that survives the principle; **(3) not yet built** — which is a gap
+with a bead, not an exclusion.
+
 | # | Decision | Choice | Alternatives Considered | Exit Path |
 |---|----------|--------|-------------------------|-----------|
 | **S1** | Mechanism | **REUSE** the DBAS `run_restore` orchestrator + 8 importers unchanged; sync = "restore over HTTP" against a remote `DispatcharrClient`. New code = remote-client factory + `SyncTarget` CRUD + `SyncTask` + alert + UI. *(Proven by spike `xp6mp`: round-trip + re-run no-op, zero `dbas/` edits.)* | (a) Greenfield sync engine; (b) bidirectional CRDT/merge engine. Both re-derive FK-remap, the 4-tier stream matcher, the rollback ledger, and the dry-run engine from scratch. | Revert = drop the `SyncTask`, the remote-client factory, and the `SyncTarget` router from registration. Orchestrator/importers are untouched, so nothing there to unwind. |
 | **S2** | Direction | **One-way A→B.** B is a managed replica; A is system-of-record. **Bidirectional is explicitly out of scope → a separate future ADR** (it opens a new inbound-write trust boundary on A, makes conflict resolution a security control, and risks A→B→A loop amplification). | Bidirectional A↔B; last-writer-wins two-way. | Bidirectional is additive in a later epic; one-way imposes no schema/contract that blocks it. |
-| **S3** | Category set + permanent **never-sync** list | **Sync:** M3U accounts, EPG sources, channel groups, channel profiles, stream profiles, user agents, core settings, **channels (+ embedded streams)**, logos *(logos phased — see S9)*. **NEVER-SYNC (permanent, code-enforced):** **users** (privilege-flag escalation / operator lockout under continuous push) and the credential-freshness columns (`credentials`, `credential_version`, `token_revoked_at`, `insecure`). Plugins excluded (inherits ADR-012 D10). | Sync all 13 categories incl. users; sync credentials on the wire. | A future ADR could add `users` behind an explicit, separately-ratified opt-in with a lockout guard; the never-sync set is one shared constant in the redact/category-filter layer, removable per-category if justified. |
+| **S3** | Category set + permanent **never-sync** list | *(Reframed 2026-08-22 by the governing principle above: read this row as an **exclusion register**, not a scope ceiling. Its never-sync list is not the set of things that happen not to sync — it is the set for which a specific harm has been written down. Everything else is in scope, and anything absent is a gap, not a decision. Per-item reclassification: see the register below the table.)* **Sync:** M3U accounts, EPG sources, channel groups, channel profiles, stream profiles, user agents, core settings, **channels (+ embedded streams)**, logos *(logos phased — see S9)*. **NEVER-SYNC (permanent, code-enforced):** **users** (privilege-flag escalation / operator lockout under continuous push) and the credential-freshness columns (`credentials`, `credential_version`, `token_revoked_at`, `insecure`). Plugins excluded (inherits ADR-012 D10). | Sync all 13 categories incl. users; sync credentials on the wire. | A future ADR could add `users` behind an explicit, separately-ratified opt-in with a lockout guard; the never-sync set is one shared constant in the redact/category-filter layer, removable per-category if justified. |
 | **S4** | Change detection | **Full-read + idempotent upsert every cycle. NO delta state in v1.** Each cycle reads B's full category; the importers match→skip-or-create. | Delta/CDC with persisted per-entity sync cursors; change-driven (webhook) trigger. | Delta is a deferred optimization **gated on measured slowness**; it bolts onto the existing match logic without changing the contract. |
 | **S5** | Conflict policy | **Source-wins (A overwrites B).** Consistent with one-way "A is system-of-record." The importer collision taxonomy already encodes this (existing-identical → skip; ambiguous match on a load-bearing natural key → `CONFLICT`, surfaced, not silent). | Last-write-wins by timestamp; manual / field-level merge. | Merge/manual conflict UI is additive later; the per-entity `CONFLICT` result already exists to surface it. |
 | **S6** | Trigger | **Scheduled-interval** via `task_scheduler` (+ manual force-sync). Overlap guard + credential-freshness gate at fire time. **One `task_id` per SyncTarget** (distinct targets run concurrently; the `ALREADY_RUNNING` guard excludes a second run of the *same* target). | Change-driven / webhook; continuous streaming. | Change-driven is the same `SyncTask` invoked from an event source later; no engine change. |
 | **S7** | Security controls | **SSRF `validate_outbound_url` on `base_url` on EVERY request** (execute-time, resolve-by-IP, redirect re-validate) — and the CI grep that forbids raw outbound calls **must extend to the sync module**. **Credential-freshness at fire time** (capture `credential_version` at enqueue; re-check + `token_revoked_at` at execute; abort+audit on change/revoke — mirror `dbas_backup`). **TLS `verify=True` default; per-target `insecure` escape hatch ONLY with a per-cycle audit row** (and forbidden-by-construction if the payload is ever non-redacted). **Redact-by-default** via the shared `_REDACT_KEYS` denylist before serialize. *(Risk ratings → Addendum D / `gwjss`.)* | Config-time-only SSRF validation; one-time insecure audit; secrets on the wire. | Controls are existing chokepoints; tightening (mandatory TLS, drop the insecure flag) is a settings change, not a re-architecture. |
 | **S8** | Failure / idempotency | **Reuse `RollbackLedger` + compensating-delete + the tri-state `RestoreOutcome`** (never SUCCESS on mixed state); default-ON dry-run guardrail carries over. **Idempotency is the load-bearing operational property:** a run MUST be safe to re-run to convergence (upsert-by-stable-identity), so retry IS the recovery mechanism — **no rollback/saga machinery** beyond what the ledger already provides, and none may be added without revisiting this ADR. | Best-effort no-rollback; a custom sync-specific failure model. | The tri-state contract is already the orchestrator's; a richer per-category report is additive. |
 | **S9** | Which importers run per cycle | **Config categories every cycle** (M3U, EPG, groups, channel/stream profiles, user agents, core settings — cheap reads). **Channels + streams every cycle** (in scope; pulls the 4-tier stream matcher). **Logos: PHASED — not in the first sync-cycle slice** (the logos importer carries a destructive `clear_existing` bulk-delete + a streaming-upload cost that is wrong to run every interval). **The deferred auto-sync / EPG-download phase MUST be suppressed per-cycle** (it would re-trigger provider auto-sync / EPG-download on B on every run). **Not** "run all importers blindly." | Run all importers every cycle incl. logos and the deferred phase; run the channels matcher off-cycle. | Logos join the per-cycle set once cost is measured acceptable (or on a slower sub-interval); the importer already registers into the same ordered step list. |
+
+### Exclusion register: reclassified against the 2026-08-22 principle
+
+Every exclusion this ADR carries, walked and reclassified. Where a **prior PO ruling** excluded
+something and the new principle points the other way, both are recorded, the tension is named, and
+the entry **defaults toward replication** pending the PO's reconciliation — it is not resolved
+silently in either direction.
+
+#### Kind 1 — technically impossible, closed by hand
+
+| Item | Why it cannot be read or written | What closes the gap |
+|---|---|---|
+| Schedules Direct EPG `password` | Write-only on Dispatcharr: never returned, SHA1-hashed at fetch (`docs/dispatcharr_api.md` §EPG Sources). The value exists nowhere on A to read, and B does not return it either, so ECM can report that it *wrote* one but never that B *holds* a working one. | **In scope, operator-supplied for that one field** at provisioning (2026-08-22 amendment, S10). Not excluded — impossible-to-harvest is not out-of-scope. A `source_type`-driven prompt appears only when a `schedules_direct` source is present. |
+
+#### Kind 2 — deliberately excluded on a specific harm
+
+| Item | The specific harm (not a general unease) |
+|---|---|
+| `dispatcharr_users` | Continuous one-way push of the `users` category repeatedly overwrites B's `is_superuser` / `is_staff` / `user_level` from A: a **privilege-escalation and operator-lockout primitive under automation**. `password_hash` is non-transportable anyway (Dispatcharr exposes `password` write-only). Survives unchanged. |
+| The sync target's **own** credential columns (`credentials`, `credential_version`, `token_revoked_at`) | These are **A's record of how to reach B**, not instance configuration. There is nothing on B for them to correspond to, and pushing them would overwrite B's own token-freshness state with A's. Not a scope exclusion so much as a category error. Survives unchanged. |
+| `network_access` (core-settings blob) | Access control **tied to where the instance sits**. Replicating it can lock the operator out of B, or open B up, depending on which direction the two instances differ. This is the same harm class as `users` and it survives the principle intact. |
+| The deferred auto-sync / EPG-download phase, suppressed per cycle (S9) | Excludes an **action**, not a setting: running it every cycle re-triggers provider auto-sync and EPG downloads **on B**, on every interval. The replicated *configuration* still crosses; only the repeated side effect is suppressed. Survives. |
+
+#### Kind 3 — not yet built, or unresolved: a gap with a bead
+
+| Item | Status |
+|---|---|
+| `stream_settings`, `dvr_settings`, `system_settings` | **Ruled SYNC by the PO on 2026-08-21** (bead `10wnq`) and **not implemented** — `core_settings` appears nowhere in the sync engine at any layer. Under the new principle this is unambiguously a gap, not an exclusion. Note the implementation seam: settings are key/value **blobs**, absent from `_SECTION_TO_ENTITY` by design, so adding a category key alone would be inert. |
+| Plugins (inherited from [ADR-012](ADR-012-dbas-absorption-approach.md) D10) | Held excluded on an **unconfirmed but severe** potential harm: nobody has yet established whether a Dispatcharr "plugin" is executable code (an RCE surface on write) or declarative config. That is a determination nobody has made, not a harm anybody has demonstrated, so under the principle it is a **gap with a safety hold**: the deliverable is the determination, and the hold stands only until it is made. |
+| Provider **attribution** on replicated streams (`hne7k`, Option A) | Every replicated stream hangs off a synthesized "ECM Custom Streams" account while B's replicated provider accounts arrive holding zero streams, so **B's M3U Manager misrepresents what each account provides**. The PO chose Option A on 2026-08-20 ("let's try option A and see what happens"). **Tension with the new principle, recorded rather than resolved:** a replica whose provider attribution is wrong is not a faithful copy. `hne7k` established attribution is reconstructible (the source `m3u_account` reaches `_build_stream_payload`, and the remap is fully populated by the channels step); one thing is unmeasured and gates any move — whether Dispatcharr's own refresh reconciles or **deletes** rows ECM created under an account it now owns. Default under the principle is to replicate attribution; the measurement comes first. |
+
+#### Tensions with the 2026-08-21 per-blob ruling
+
+The PO ruled these four core-settings blobs **never-sync** on 2026-08-21 (bead `10wnq`), one day
+before stating the faithful-copy principle. `network_access` survives as Kind 2 above. The other
+three are recorded here with **both** positions, defaulting toward replication:
+
+| Blob | 2026-08-21 ruling and its reason | Read against the 2026-08-22 principle |
+|---|---|---|
+| `proxy_settings` | Never-sync: buffering speed/timeout, client wait, init grace, shutdown delay, Redis chunk TTL — "tuning that may legitimately differ if the replica has different hardware or network." | "May legitimately differ" is a **preference**, not a named harm; the principle rejects that class of reason. There *is* a real functional risk (tuning copied onto different hardware can degrade playback on B), but that argues for a **per-target opt-out**, not for silent omission. Default: replicate, opt-out available. |
+| `user_limit_settings` | Never-sync: recorded as adjacent to the permanently never-sync `users` category, for lockout reasons. Empty on the live instance. | **Adjacency is not a specific harm.** A specific harm may exist — limits keyed to user accounts that never cross could apply to nonexistent or mismatched accounts on B — but it is **unverified**, because the blob is empty on the live instance and nobody has read its populated shape. That makes this a measurement gap. Default: replicate once the shape is known. |
+| `backup_settings` | Never-sync: schedule cron/frequency/retention — "two instances on an identical backup schedule is worse than useless, and B's retention is a local storage decision." | This one **does** name a specific harm (simultaneous backup runs; retention is bounded by B's own storage). It is the strongest of the three. Even so, a standby with no backup schedule at all is a replica missing settings, so the principle points at **replicate-with-offset or a per-target opt-out** rather than omission. Default: replicate, opt-out available. |
+
+Also reconciled here, per the same 2026-08-21 ruling: **S3's never-sync column list is over-broad.**
+It names `insecure` alongside the three credential columns; the shipped constant
+`SYNC_NEVER_CREDENTIAL_COLUMNS` names only the three, and **the code is right**. `insecure` is a
+local per-target *transport flag*, not a secret and not instance configuration — it describes A's
+connection to B and has no counterpart on B. Read S3's fourth column name as withdrawn. This matters
+now in a way it did not on 2026-08-21, because S11 makes `insecure` load-bearing locally.
+
+#### Logos: replicated, but off by default — a tension worth naming
+
+Logos are **in scope** and do replicate; S9 keeps them off the *unconditional* per-cycle set for two
+mechanism reasons (a destructive `clear_existing` bulk-delete and a streaming-upload cost that is
+wrong to pay every interval), and they run per target behind `sync_logos`. That is a mechanism
+decision the principle does not disturb. What the principle **does** disturb is the **default-OFF**
+toggle: a replica that silently arrives without branding is exactly the failure epic `f5a5j` is named
+for ("...has lost its guide data and its branding"). Under a faithful-copy default, `sync_logos`
+should default **ON**, with the per-cycle cost addressed by a slower sub-interval rather than by
+omission. Recorded as a tension, defaulting toward replication.
 
 ### Persisted sync state (DBA ruling, spike `xp6mp`)
 
@@ -151,7 +242,7 @@ differs on every axis the rationale names:
 | What starts it | `task_scheduler`, unattended, or force-sync | an authenticated admin, one explicit request |
 | How often | every interval, forever | once per operator decision |
 | Provider credentials on the wire | **none, in any field, in any URL position** | the named fields, for the named destination accounts |
-| Where the value comes from | A's live config, read then **redacted** | A's live config, read then **written to B** |
+| Where the value comes from | A's live config, read then **redacted** | A's live config, read then **written to B** — plus one operator-supplied field, the Schedules Direct password, which exists nowhere on A to read |
 | Persisted on A for the purpose | n/a | **nothing** (INV-3) |
 | TLS | `verify=True` default; `insecure` escape hatch permitted | verification **mandatory** while provisioned (S11) |
 | Journal | one run row, `redaction_mode: topology_only` | one `sync_provision_credentials` row per attempt (S13) |
@@ -240,36 +331,48 @@ than generalised from the XC case, and each checked for whether a harvest can ac
 | M3U account | `STD` (plain M3U) | The credential is **inside `server_url`** (`get.php?username=…&password=…`); there are no username/password fields on this type | **Yes.** The raw gather must carry it, or `_scrub_credential_urls`'s whole-value rule would have nothing to replace with the sentinel — the sentinel it produces is what makes `server_url` a named re-entry field today | **Yes** — and note the provisioned value is a **URL**, not a password. A design that writes "username and password" onto B covers XC and silently misses this type |
 | M3U account | `STD` — HDHomeRun tuner | none (a LAN tuner URL) | n/a | Nothing to provision |
 | EPG source | `xmltv` | credential embedded in `url` | **Yes.** Measured on 0.29.0: `/api/epg/sources/` returns `url` | **Yes** — same URL shape as `STD` |
-| EPG source | `schedules_direct` | `username` + `password` | **`username` yes; `password` NO — and not "difficult", impossible.** The serializer marks it write-only with no admin re-add; Dispatcharr never returns it and SHA1-hashes it at fetch (`docs/dispatcharr_api.md` §EPG Sources). `dbas/importers/epg_sources.py` records the same measurement and its consequence: "a live gather does not normally carry one, so there is usually nothing at that path to strip OR to re-check" | **Excluded — see below** |
+| EPG source | `schedules_direct` | `username` + `password` | **`username` yes; `password` NO — and not "difficult", impossible.** The serializer marks it write-only with no admin re-add; Dispatcharr never returns it and SHA1-hashes it at fetch (`docs/dispatcharr_api.md` §EPG Sources). `dbas/importers/epg_sources.py` records the same measurement and its consequence: "a live gather does not normally carry one, so there is usually nothing at that path to strip OR to re-check" | **Yes** — `username` harvested, `password` **operator-supplied** for this one field. See below |
 | EPG source | `dummy` | none | n/a | Nothing to provision |
 
-#### Schedules Direct is excluded, and the run must say so
+#### Schedules Direct: the one field the operator supplies
 
-**Ruling: `schedules_direct` is explicitly OUT of S10, and no operator-typed fallback is built for
-it in this feature.** The value does not exist anywhere on A for a harvest to read — it never enters
-ECM's process, because Dispatcharr never returns it. Building a second, typed input model for one
-field would re-introduce precisely the input path the PO ruled against, in a feature whose input
-model has just been decided; that is a separate decision, not an implementation detail of this one.
+**PO direction, 2026-08-22, verbatim: "this product doesn't work if it doesn't replicate everything
+to a second instance."** That settles it. `schedules_direct` is **IN scope**, and because its
+password exists nowhere on A to read, that one field is **operator-supplied**.
 
-**But exclusion may not be silent, and today it would be.** The reporting that names what B is still
-missing (`dbas/importers/epg_sources.py::_report_credentials_still_missing`) derives its list from
-`redacted_fields` — the fields the redactor *sentinelled*. An SD `password` was never in the
-gathered payload, so it is never a redacted field, so it is **never reported**. The rule that makes
-this correct everywhere else ("a source with no credential produces no redacted field, so it is
-never an action item") is wrong for exactly this type, where absence means *unreadable*, not *unset*.
+This is not a reversal of the harvest ruling and should not be read as one. The harvest ruling
+governs **where a value comes from when it can be read**; it was never a ruling that a field which
+cannot be read gets dropped. Impossible-to-harvest and out-of-scope are different things, and the
+earlier draft conflated them. A standby that silently loses guide data does not meet the bar the PO
+just stated.
 
-So S10 carries a reporting obligation, and it must be driven by `source_type`, not by a presence
-check, because presence is unknowable: **for every `schedules_direct` EPG source on a provisioned
-target, the run states that the SD password cannot cross and must be entered on B by hand.** That is
-INV-7 applied to the one case this feature cannot serve.
+So the input model is: **harvest `XC`, plain-M3U `STD` and `xmltv` automatically; prompt for the SD
+password only, and only when a `schedules_direct` source is actually present on the target being
+provisioned.** Every constraint already ratified applies to the supplied value exactly as it applies
+to a harvested one — request-scoped, **never persisted on A** (INV-3), never reachable from a cycle
+(INV-2), audited by field name only (S13), and inside the closed two-category set (INV-6). One field
+of typed input does not reopen the input-model decision for anything else.
 
-**Consequence for an operator whose standby has an SD source, stated plainly rather than
-discovered:** the standby still **serves video** — streams come from M3U accounts, which harvest
-fine. What it loses is guide data from that source: B's SD source cannot authenticate, so it fetches
-nothing, and channels fed by it go without EPG on B. The operator must enter the SD password on B
-once, by hand — the exact manual step this feature exists to remove, surviving for this one source
-type. That is a smaller failure than a replica that cannot play, and it is bounded, named, and
-reported rather than silent.
+**The `source_type`-driven statement survives, with its meaning inverted.** It was specified because
+the reporting that names what B is missing
+(`dbas/importers/epg_sources.py::_report_credentials_still_missing`) derives its list from
+`redacted_fields` — the fields the redactor *sentinelled* — and an SD `password` was never in the
+gathered payload, so it is never a redacted field and is **never reported**. The rule that makes
+that reporter correct everywhere else ("a source with no credential produces no redacted field, so
+it is never an action item") is wrong for exactly this type, where absence means *unreadable*, not
+*unset*. Presence is therefore unknowable and no presence check can drive this. Driven by
+`source_type` instead, the statement becomes **"this field needs your input"** rather than "this
+cannot cross" — surfaced when a `schedules_direct` source is present, so the operator is prompted
+rather than left to discover a gap.
+
+**What ECM still cannot do for this field, stated so it is not mistaken for a defect later.** The
+write-only property runs in both directions: B does not return the SD password either, so after
+provisioning ECM can report that it **wrote** the value, never that B **holds** a working one. A
+mistyped SD password therefore surfaces as B's EPG source failing to fetch, not as a provisioning
+error. The remedy is the ordinary one — re-provision, which `a3lby`'s edit affordance already makes
+cheap. The same property has one benign consequence worth recording: because B never returns it, an
+SD password **cannot ride the per-cycle destination read back to A**, so this field is outside the
+inbound exposure that drives S11 and threat-model row D16.
 
 **Explicitly outside S10, and they stay outside**: ECM's own settings secrets
 (`_SETTINGS_CREDENTIAL_FIELDS` — `dispatcharr_api_key`, `emby_api_key`, `plex_token`,
@@ -298,7 +401,7 @@ the REST nor the MCP surface.
 
 | # | Decision | Choice |
 |---|---|---|
-| **S11** | `insecure` vs provisioning | **A sync target may not be in both states "TLS verification disabled" and "provisioned with a provider credential".** The two writes are refused symmetrically, whichever order they arrive in: provisioning is refused on a target with `insecure=true`, and setting `insecure=true` is refused on a target carrying the provisioning marker — in both cases with the reason and the remedy stated, never silently. Clearing `insecure` (true→false) is always allowed. The gate state is a **per-row marker** on the sync-target row, set on a successful provisioning; it is monotonic **except through one audited transition**, an explicit de-provision (below). Both refusals are enforced at the **service layer**, so REST and MCP are covered by one predicate. |
+| **S11** | `insecure` vs a credential on B | **A sync target may not be in both states "TLS verification disabled" and "the destination holds a provider credential".** The gate triggers on **recorded OR observed** state (PO-ratified 2026-08-22 — see [Credentials ECM did not write](#credentials-ecm-did-not-write-the-observed-state-gate)): *recorded* = ECM's own provisioning marker; *observed* = a credential seen present on B by the cycle that already reads B's account rows. The two writes are refused symmetrically, whichever order they arrive in: provisioning is refused on a target with `insecure=true`, and setting `insecure=true` is refused on a target in either state — in both cases with the reason **and the remedy** stated, never silently. Clearing `insecure` (true→false) is always allowed. The recorded marker is a **per-row column** on the sync-target row, set on a successful provisioning; it is monotonic **except through one audited transition**, an explicit de-provision (below). Both refusals are enforced at the **service layer**, so REST and MCP are covered by one predicate. |
 
 **Why the marker records "has been provisioned", and why it is a column.** The exposure `insecure`
 bounds is not only the outbound push. **The per-cycle destination read pulls B's provider credential
@@ -312,6 +415,54 @@ sync-target row**, not an inference from journal or execution history: `5dp92` r
 execution history is keyed on a **reusable** target id, so a freshly created target can inherit a
 deleted target's rows — an "is there a provisioning row for this id?" gate would inherit a
 *provisioned* verdict it never earned, or lose one it did.
+
+#### Credentials ECM did not write: the observed-state gate
+
+**PO ruling, 2026-08-22 (the architect's recommendation, accepted). Closes bead
+`enhancedchannelmanager-3dmgr`.** The marker above records **what ECM wrote**. It does not record
+**what B holds**, and those differ in a case that is live today, independently of this feature: the
+credential re-entry that ECM's own operator guide currently documents as the *recovery* procedure is
+typed into B by hand, so no marker exists for it. An operator who followed the guide and has
+`insecure=true` is shipping B's live provider credential to A — **inbound**, over an unverified
+channel, on every cycle, unattended — because the per-cycle destination read fetches B's provider
+account rows and `/api/m3u/accounts/` returns both `username` and `password` to an admin caller on
+0.29.0.
+
+So the gate triggers on **recorded OR observed** state. This is a **widening of INV-4, not a
+replacement**: everything already ratified stands — both write orders, service-layer enforcement,
+the marker column, the de-provision escape and its five-point contract.
+
+**Presence only, and no new read.** The observation is
+`credential_sentinel.credential_is_present()` — non-empty and not the sentinel — evaluated against
+account rows **the cycle already fetches**, inside the re-entry reporter that already calls it. No
+new request, **no value comparison** (the same prohibition as S12's staleness signal, for the same
+reason), and no secret stored. One new **non-secret** column is required and is stated rather than
+absorbed: the write path (`PUT insecure=true`) has no live view of B, so the observation must be
+recorded as a fact — a `destination_credential_observed_at` timestamp, holding a boolean's worth of
+information and never a value. It clears when a cycle observes absence, by the same presence check.
+
+**The two markers are distinct and must not be merged.** *Recorded* governs the de-provision
+transition; *observed* governs only the refusal. That distinction decides the remedy, because **an
+observed credential ECM did not write has no marker to clear, so de-provision is not the remedy for
+it** — there is nothing on A to de-provision, and ECM will not delete a credential an operator
+placed on B by hand. S11 requires every refusal to state a remedy, so this one states both, with
+their consequences:
+
+1. **Install a valid certificate on B and clear `insecure`.** This is the primary remedy: it keeps
+   the standby working and ends the exposure. Recommend it first.
+2. **Remove the credential from B, on B.** The next cycle observes absence, clears the observed
+   marker, and `insecure` becomes settable again — at the cost of B no longer serving, which is the
+   thing the operator presumably wanted.
+
+Neither is "ECM does it for you", and the refusal must not imply otherwise.
+
+**The window this leaves, bounded.** The observation happens on a cycle, so a credential typed into
+B at time *T* is not seen until the next cycle — and that cycle's own destination read is what sees
+it, so the credential crosses once more before the gate closes. The exposure is therefore bounded at
+**exactly one further cycle after the credential appears on B**, i.e. one sync interval, and zero
+cycles thereafter. It cannot be driven to zero from A's side without a new fetch, which constraint
+(1) above forbids; one interval is the honest floor of a presence-only gate and is recorded as such
+in threat-model row D16.
 
 #### The de-provision escape
 
@@ -482,11 +633,11 @@ that enforcement exists the line is a **convention, not a guarantee**, and must 
 |---|---|---|
 | **INV-1** | **No provider credential value leaves A on any recurring cycle** — scheduled or force-sync — in any field, in any URL position (userinfo, query string, path segment), for any account type. The XC stream URL is one example of the property, not the specification. | Unchanged: the existing `msqf7` suite plus `_redact_credentials_deep` over every gathered section. This amendment adds **no** exemption to either. |
 | **INV-2** | **The provisioning writer is unreachable from a cycle.** Not an `ImporterStep`, not in `sync_config_importer_steps()`, and **not reachable by any call path** from `tasks.dbas_sync` / `tasks.dbas_sync_engine`. | **Two tests, and under S10 this is the load-bearing one.** (i) the step registry contains no provisioning step, in the idiom of the existing `SYNC_NEVER_CATEGORIES` test; (ii) a **reachability/import guard** asserting the sync task and engine modules do not import the provisioning writer, transitively — the same idiom as the SSRF chokepoint CI grep this ADR already relies on. A registry check alone is insufficient: the cycle already holds the values, so a direct call would bypass the registry entirely. |
-| **INV-3** | **A persists no provider credential for provisioning purposes.** No column, no cache, no settings key, no queued job payload; harvested values are read, written and discarded within the request. | Schema review + a test that no harvested value is written to any persistent store. **Scope note:** under S10 this no longer *prevents* a recurring push (the cycle holds the same values in memory already) — it bounds at-rest exposure and keeps `sync_targets` free of provider secrets. INV-2 is what prevents recurrence. |
-| **INV-4** | **A target is never both `insecure` and provisioned**, on any branch, in any order of operations, on any surface (REST or MCP). Provisioning on an `insecure` target is refused; enabling `insecure` on a provisioned target is refused; clearing `insecure` is always allowed. | One predicate, called by both the create and update paths at the service layer, with tests for **both orderings** and for the MCP surface. A UI-only guard does not satisfy this. |
+| **INV-3** | **A persists no provider credential for provisioning purposes.** No column, no cache, no settings key, no queued job payload; harvested values, and the one operator-supplied Schedules Direct password, are read, written and discarded within the request. | Schema review + a test that no harvested value is written to any persistent store. **Scope note:** under S10 this no longer *prevents* a recurring push (the cycle holds the same values in memory already) — it bounds at-rest exposure and keeps `sync_targets` free of provider secrets. INV-2 is what prevents recurrence. |
+| **INV-4** | **A target is never both `insecure` and holding a provider credential on its destination**, on any branch, in any order of operations, on any surface (REST or MCP) — where "holding" is **recorded OR observed** (ECM's provisioning marker, or a credential seen present on B by a cycle). Provisioning on an `insecure` target is refused; enabling `insecure` on a target in either state is refused, with the reason **and** an applicable remedy; clearing `insecure` is always allowed. | One predicate, called by both the create and update paths at the service layer, with tests for **both orderings**, for **both state sources**, and for the MCP surface. A UI-only guard does not satisfy this. The observed half must be **presence-only** (`credential_is_present` against rows the cycle already fetches) — a test must assert no new destination request and no value comparison is introduced. |
 | **INV-5** | **Every provisioning and de-provisioning attempt is recorded, and only such an attempt records one.** Success and failure both write exactly one row; no cycle ever writes one. | Journal-row assertions on all four paths (provision/de-provision × success/failure), plus a test that a full sync cycle produces zero rows of either action type. |
-| **INV-6** | **The provisionable field set equals the redacted field set**, per entity, derived from the same function — and the de-provision clears exactly the set the provision wrote. | A test that derives both sides from `strip_redaction_sentinels` / `_build_create_payload` / `value_at_path` rather than from a literal, covering `STD` (`server_url`) and `xmltv` (`url`) as well as `XC`. Under the harvest this is the only thing standing between "the fields we meant" and "whatever the gather returned". |
-| **INV-7** | **After setup completes, a replica serves the streams its source serves, with no further operator action** — or the run says plainly that it will not, naming what is missing. Silence is only permitted when it is true. | The `credential_reentry` / `provider_group_selection_unapplied` reporting already shipped, extended to the provisioned case, **plus** the `schedules_direct` statement driven by `source_type` rather than by a presence check (S10). Live verification against a real provider, read from B, not from the run's own report. |
+| **INV-6** | **The provisionable field set equals the redacted field set**, per entity, derived from the same function — and the de-provision clears exactly the set the provision wrote. | A test that derives both sides from `strip_redaction_sentinels` / `_build_create_payload` / `value_at_path` rather than from a literal, covering `STD` (`server_url`), `xmltv` (`url`) and `schedules_direct` (harvested `username` beside an operator-supplied `password`) as well as `XC`. Under the harvest this is the only thing standing between "the fields we meant" and "whatever the gather returned". |
+| **INV-7** | **After setup completes, a replica serves the streams its source serves, with no further operator action** — or the run says plainly that it will not, naming what is missing. Silence is only permitted when it is true. | The `credential_reentry` / `provider_group_selection_unapplied` reporting already shipped, extended to the provisioned case, **plus** the `schedules_direct` prompt-and-statement driven by `source_type` rather than by a presence check (S10) — "this field needs your input", surfaced when such a source is present. Live verification against a real provider, read from B, not from the run's own report. |
 | **INV-8** | **A standby whose provisioned credentials have stopped working says so**, on the cycle that can observe it, without any credential value crossing the wire to determine it, and **without triggering a push**. | Built from destination state the cycle already reads (account `status` / `last_message` / `stream_count`). If that cannot carry the signal truthfully, say so and file it — never a value comparison, and never an auto-heal. |
 | **INV-9** | **A de-provision that did not clear B does not clear the marker.** The provisioned marker flips only on a destination write that succeeded for every account it targeted; any failure leaves the marker set, leaves `insecure` refused, and names the accounts still holding a credential. | Tests for the partial-failure and total-failure paths asserting the marker is unchanged and the refusal still holds — and specifically that a destination error cannot be swallowed into a success. This is the invariant that makes the ratified escape honest rather than cosmetic. |
 
@@ -513,10 +664,13 @@ a support chat.
   the ratified harvest, the cycle already holds every value a push would need. INV-2's reachability
   guard is now the only structural thing preventing it, and it must be treated as a security control,
   not a tidiness test.
-- **`insecure` and hot-standby are mutually exclusive while provisioned** (S11). An operator running
-  B behind a self-signed certificate must fix the certificate, or de-provision and accept both the
-  loss of the standby and the residual above.
-- **Schedules Direct is not served.** One source type still requires a manual credential entry on B.
+- **`insecure` and a credential on B are mutually exclusive** (S11), whether ECM put it there or an
+  operator did. An operator running B behind a self-signed certificate must fix the certificate, or
+  give up the credential on B — by de-provisioning (and accepting the residual above) if ECM wrote
+  it, or by removing it on B if they did. Existing installations that combine `insecure` with a
+  hand-entered credential will start being refused, which is the point: that combination is
+  bead `enhancedchannelmanager-3dmgr`, and it is exposing a live secret today.
+- **Schedules Direct costs one keystroke.** Its password cannot be harvested, so the operator supplies that one field at provisioning; and because B never returns it either, ECM can report that it wrote the value but never that B holds a working one. A mistyped SD password surfaces as B's EPG source failing to fetch, and the remedy is a re-provision.
 - **The blast radius of a group-selection regression grows** (see `avrix`, above).
 
 **Exit path.** Remove the provisioning and de-provisioning routes, their UI affordances and the
@@ -549,9 +703,9 @@ findings this table did not anticipate: the SSRF chokepoint guard's scanned set 
 guard extension itself already shipped, leaving D1's status line stale in the other direction; and
 `insecure` combined with a credential an operator entered on B **by hand** — the recovery ECM's own
 guide documents — is exposed today, independently of this feature, because S11's marker records what
-ECM wrote rather than what B holds (row D16). That last one carries a recommendation to gate the
-refusal on observed as well as recorded state, which would strengthen INV-4; it is **not** applied
-here, because widening a PO-ratified control is not a decision to take silently.
+ECM wrote rather than what B holds (row D16). That last one carried a recommendation to gate the refusal on
+observed as well as recorded state; the PO **ratified it on 2026-08-22** (rulings table, row 5), so
+S11 and INV-4 now carry it and `enhancedchannelmanager-3dmgr` is closed by it.
 
 ### PO rulings, 2026-08-22
 
@@ -564,7 +718,11 @@ front of the decider — not overlooked.
 |---|---|---|---|
 | **1. Proceed** | Authorized. The feature ships, removing the mitigation that today makes the 53,661-stream case unreachable. | No — the architect recommended proceeding. | The safety case now rests on `avrix`'s shipped per-cycle group-selection behaviour. |
 | **2. `insecure` escape** | **An explicit de-provision escape**, rather than the architect's permanent symmetric refusal. | **Yes.** | Ruled with the architect's objection in front of the decider: **A cannot prove B's copy is gone, and the de-provision write can fail while the flag flips anyway.** The first is answered only partially — by naming the residual honestly (S11) rather than by removing it, since no design can retract a secret from a remote instance. The second is answered in full by INV-9: the marker flips only on a write to B that succeeded for every targeted account. What remains accepted is that a *successful* de-provision still leaves B's stream rows, backups, logs and downstream consumers carrying the credential, and that the provider-side credential stays valid until rotated. |
-| **3. Input model** | **Harvest from A's own provider accounts**, rather than the architect's operator-typed, request-scoped values. | **Yes.** The architect had listed harvesting under "should not proceed". | Ruled having read that it re-creates `msqf7`'s shape and cannot serve Schedules Direct. Both consequences are carried rather than argued: SD is excluded with a reporting obligation (S10), and the objection is converted into constraints — closed category set, operator-triggered, one-time, audited, never persisted, and INV-2 raised from a registry check to a reachability guard, because the harvest removes the barrier that would otherwise have made a recurring push hard to build by accident. The architect's "no at-rest provider secret" ruling (INV-3) stands unchanged. |
+| **3. Input model** | **Harvest from A's own provider accounts**, rather than the architect's operator-typed, request-scoped values. | **Yes.** The architect had listed harvesting under "should not proceed". | Ruled having read that it re-creates `msqf7`'s shape and cannot serve Schedules Direct. Both consequences are carried rather than argued: SD keeps its harvest-impossible field (see ruling 6), and the objection is converted into constraints — closed category set, operator-triggered, one-time, audited, never persisted, and INV-2 raised from a registry check to a reachability guard, because the harvest removes the barrier that would otherwise have made a recurring push hard to build by accident. The architect's "no at-rest provider secret" ruling (INV-3) stands unchanged. |
 | **4. Rotation** | **Re-provision and staleness signal, both now.** | No — as recommended. | Staleness from state the cycle already reads; never a credential-value comparison, and never an auto-heal push (S12(c)). |
+
+| **5. Observed-state gate** | **The `insecure` refusal triggers on recorded OR observed state**, not on ECM's provisioning marker alone. | No — the architect's recommendation, accepted. **Closes bead `enhancedchannelmanager-3dmgr`.** | Accepted on the evidence that the exposure is live today and independent of this feature: the documented recovery has the operator typing a credential into B by hand, which no marker sees, while the per-cycle destination read carries it back over whatever channel the target is configured with. Cheap because `credential_is_present()` already runs against those rows every cycle — presence only, no new read, no value comparison, no stored secret; one non-secret timestamp column. Residual accepted: a bounded one-interval window (see [the observed-state gate](#credentials-ecm-did-not-write-the-observed-state-gate)). |
+| **6. Schedules Direct** | **IN scope, with an operator-supplied value for the one field that cannot be harvested.** | **Yes** — the architect had ruled it excluded, with a reporting obligation. | Direction, verbatim: *"this product doesn't work if it doesn't replicate everything to a second instance."* The architect's reasoning (the password is write-only, so harvest is impossible) was sound on its own terms and is retained; what it got wrong was treating **impossible-to-harvest as out-of-scope**. The harvest ruling governs where a value comes from *when it can be read*, and was never a ruling that unreadable fields get dropped. A standby that silently loses guide data does not meet the stated bar. |
+| **7. Faithful-copy principle** | **Everything replicates by default; every exclusion must be named, individually justified and visible.** Recorded as a [governing principle](#governing-principle-po-direction-2026-08-22-a-replica-is-a-faithful-copy) on the ADR body, not in this amendment, because it governs the whole document. | **Yes, and explicitly so** — direction, verbatim: *"You need to update the ADR, Architect persona be damned, with the fact that all settings must replicate."* | It inverts the default this ADR was written under. Every existing exclusion is reclassified in the [exclusion register](#exclusion-register-reclassified-against-the-2026-08-22-principle) into technically-impossible, specific-harm, or not-yet-built; three entries from the 2026-08-21 per-blob ruling and two prior decisions (`hne7k` attribution, `sync_logos` default-OFF) are recorded as tensions defaulting toward replication rather than resolved silently. Scope only — no control is weakened by it. |
 
 Scheduled or automatic re-push is forbidden under every ruling.

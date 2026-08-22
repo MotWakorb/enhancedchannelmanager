@@ -929,6 +929,22 @@ Two PO rulings of 2026-08-22 shape the risk and neither can be read off the deci
    otherwise with that objection in front of them. What a de-provision cannot undo is a residual of
    this system now, recorded in §11.5.3.
 
+Two later rulings of the same day complete the picture and are folded in below:
+
+3. **Schedules Direct is IN scope with an operator-supplied value for its one unharvestable field.**
+   The PO's product bar — *"this product doesn't work if it doesn't replicate everything to a second
+   instance"* — governs, and the earlier draft's exclusion is withdrawn: impossible-to-harvest is not
+   the same as out-of-scope. This is one field of typed input inside the closed set, request-scoped
+   and never persisted, and it does not reopen the input model for anything else (row D15).
+4. **The `insecure` refusal gates on recorded OR OBSERVED state** (row D16, closing bead
+   `enhancedchannelmanager-3dmgr`).
+
+ADR-013 also gained a **governing principle** on 2026-08-22 — a replica is a faithful copy;
+everything replicates by default and every exclusion must be named and justified. It is a **scope**
+principle and weakens no control in this addendum: the per-cycle redaction, the reachability guard
+(D12), the TLS gate (D6/D16) and the never-sync `users` exclusion (D3) are untouched by it.
+"Everything replicates" means the destination ends up faithful, not that any mechanism is licensed.
+
 One further property of the harvest decides several ratings below and is stated once here. The
 harvest is a new **write**, not a new **read**: `routers.backup._collect_credential_values` already
 walks the raw gather on every cycle, by the same key sets the redactor uses, because that is what
@@ -944,12 +960,12 @@ had two**, and that is why D12 below is rated as it is.
 
 | # | Surface | STRIDE | Threat | Mitigation | Status | Sev |
 |---|---------|--------|--------|------------|--------|-----|
-| **D11** | Provisioning action (A→B write) | Information Disclosure | A live provider credential is deliberately written to a second instance. B's database, backups, logs and its own generated stream URLs then hold it, and B may sit at a different site or trust level. The exposure is intended; the risk is that it is unbounded in *scope* (which fields, which categories) or *frequency*. | Closed set of exactly two entity categories (M3U accounts, EPG sources), enforced in code rather than by whatever the gather returns. Writable field set is **derived** from the redactor's own per-entity output (`strip_redaction_sentinels` → `value_at_path` against the raw record, ADR-013 INV-6), not from a maintained literal. Authenticated-admin actor only; one-time; TLS verification mandatory (D6/S11); harvested values never persisted on A (INV-3); one journal row per attempt (D9/S13). | to-build (`wd20y`) | **High** |
+| **D11** | Provisioning action (A→B write) | Information Disclosure | A live provider credential is deliberately written to a second instance. B's database, backups, logs and its own generated stream URLs then hold it, and B may sit at a different site or trust level. The exposure is intended; the risk is that it is unbounded in *scope* (which fields, which categories) or *frequency*. | Closed set of exactly two entity categories (M3U accounts, EPG sources), enforced in code rather than by whatever the gather returns. Writable field set is **derived** from the redactor's own per-entity output (`strip_redaction_sentinels` → `value_at_path` against the raw record, ADR-013 INV-6), not from a maintained literal. Authenticated-admin actor only; one-time; TLS verification mandatory (D6/S11); harvested values — and the one operator-supplied Schedules Direct password — never persisted on A (INV-3); one journal row per attempt (D9/S13). | to-build (`wd20y`) | **High** |
 | **D12** | Provisioning **code path** | Information Disclosure | **The one-time path becomes a recurring one.** The cycle already holds the values; making it push them is a single call edge, with no missing input and no operator keystroke absent to make the change conspicuous. A later "auto-heal stale credentials" convenience, or a well-meaning refactor that registers provisioning as an importer step, silently converts the whole design into the thing S3 forbids — and the run report would look normal. | **Not a payload control — a reachability control.** ADR-013 INV-2: the provisioning writer is not an `ImporterStep`, is absent from `sync_config_importer_steps()`, and is **not reachable by any call path** from `tasks.dbas_sync` / `tasks.dbas_sync_engine`, pinned by (i) a registry test in the idiom of the existing `SYNC_NEVER_CATEGORIES` test and (ii) a transitive import/reachability guard, the same idiom as row D1's chokepoint grep. A registry check alone is insufficient: a direct call bypasses the registry entirely. Detection backstop: a `sync_provision_credentials` journal row whose actor is the scheduler (D9). | to-build (`wd20y`) | **High** |
 | **D13** | De-provision | Information Disclosure / Repudiation | A de-provision that did not actually clear B flips the marker anyway, and `insecure` becomes settable while B still holds a live credential — re-opening the unverified channel over which the per-cycle destination read carries that credential back (see D6, D16). A local flag flip is A's *belief* about B, and B is where the secret is. | ADR-013 INV-9: the clear is **attempted on B** over the same field set the provision wrote; the marker flips **only** if that write succeeded for every targeted account; any partial or total failure leaves the marker set, leaves `insecure` refused, and names the accounts still holding a credential. Audited as its own action type with a per-account success/failure breakdown (D9/S13). This is row D8's "no partial state is reported as success" applied to the safety control itself. | to-build (`wd20y`) | **High** |
 | **D14** | Harvest scope | Information Disclosure | A harvest is a loop over records, and a loop widens by accident. A future category added to the sync, or a gather that starts returning more, silently enlarges what is provisioned — ECM's own settings secrets (`dispatcharr_api_key`, `emby_api_key`, `plex_token`, `smtp_password`, `telegram_bot_token`, `mcp_api_key`), alert-method secrets, cloud/sync-target credentials, or `dispatcharr_users`. "Provision the credentials" becomes "provision every secret A holds". | The provisioning category set is a **closed named set**, separate from and narrower than the sync category allowlist (row D4), enforced in code. Everything else stays outside by construction: `SYNC_NEVER_CREDENTIAL_COLUMNS`, `SYNC_NEVER_CATEGORIES`, `_SETTINGS_CREDENTIAL_FIELDS` and the alert-method keys are never provisioning inputs. INV-6's derived field set means a widened *gather* cannot widen the *write* on its own. | to-build (`wd20y`) | Med |
-| **D15** | Schedules Direct reporting | Repudiation | **Absence means unreadable, not unset — and nothing says so.** An SD EPG password is write-only on Dispatcharr and is never returned, so it never enters the gather, so it is never a `redacted_field`, so `dbas/importers/epg_sources.py::_report_credentials_still_missing` — which derives its list from `redacted_fields` — can never name it. The operator's record of what crossed and what did not is silently incomplete for this type, and the rule that makes the reporter correct everywhere else ("a source with no credential produces no redacted field, so it is never an action item") is precisely wrong here. The security consequence is not cosmetic: it trains the operator to read "no report" as "fully provisioned", which is the assumption they will carry into a de-provision or an incident. | ADR-013 S10 excludes `schedules_direct` from provisioning and requires the run to state, driven by **`source_type` rather than by a presence check** (presence being unknowable), that the SD password cannot cross and must be entered on B by hand. Statement, not inference. | to-build (`wd20y`) | Med |
-| **D16** | `insecure` + credentials B holds that ECM did not write | Information Disclosure | **Reachable today, before any `wd20y` code ships.** The per-cycle destination read fetches B's provider account rows on every cycle — `dbas/importers/m3u_accounts.py::_report_credentials_still_missing` inspects them, and its own measurement records that on Dispatcharr 0.29.0 `/api/m3u/accounts/` returns **both `username` and `password`** to an admin caller. The currently *documented recovery* is for the operator to enter the provider credential on B by hand. An operator who has done that and has `insecure=true` is shipping B's live provider credential to A over an unverified-TLS channel, every cycle, unattended. S11's marker records what **ECM wrote**, not what **B holds**, so it does not see this case at all. | **Recommended, not yet ratified** (see §11.5.4 item 5): derive the `insecure` refusal from **observed** destination state as well as recorded state. `credential_sentinel.credential_is_present()` is already called against B's account rows on every cycle by the reporter above, so ECM can already tell that B holds a credential without comparing or storing a value. Gate `insecure` on *recorded OR observed*, and warn on the mismatch. Compensating control until then: the per-cycle `sync_insecure_tls` audit row (D6) records the exposure but does not prevent it. Attacker model is an **active** MITM able to present a forged certificate, not a passive eavesdropper. | to-build; **pre-existing, not introduced by `wd20y`** | **High** |
+| **D15** | Schedules Direct reporting | Repudiation | **Absence means unreadable, not unset — and nothing says so.** An SD EPG password is write-only on Dispatcharr and is never returned, so it never enters the gather, so it is never a `redacted_field`, so `dbas/importers/epg_sources.py::_report_credentials_still_missing` — which derives its list from `redacted_fields` — can never name it. The operator's record of what crossed and what did not is silently incomplete for this type, and the rule that makes the reporter correct everywhere else ("a source with no credential produces no redacted field, so it is never an action item") is precisely wrong here. The security consequence is not cosmetic: it trains the operator to read "no report" as "fully provisioned", which is the assumption they will carry into a de-provision or an incident. | **Re-rated Med → Low, 2026-08-22, because the silence is what made it a finding and the silence is closed.** Under the PO's faithful-copy ruling `schedules_direct` is IN scope: `username` is harvested, and the password is **operator-supplied at provisioning**, prompted by the same **`source_type`-driven** rule (presence being unknowable, no presence check can drive it) — now reading "this field needs your input" rather than "this cannot cross". What remains: the write-only property runs both ways, so ECM can report that it **wrote** the value and never that B **holds** a working one; a mistyped password surfaces as B's EPG source failing to fetch, remedied by re-provisioning. That residual is availability-flavoured, not confidentiality — and the same property means an SD password **never rides the per-cycle destination read back to A**, so this field is outside D16's inbound exposure entirely. | to-build (`wd20y`) | ~~Med~~ → **Low** |
+| **D16** | `insecure` + credentials B holds that ECM did not write | Information Disclosure | **Reachable today, before any `wd20y` code ships.** The per-cycle destination read fetches B's provider account rows on every cycle — `dbas/importers/m3u_accounts.py::_report_credentials_still_missing` inspects them, and its own measurement records that on Dispatcharr 0.29.0 `/api/m3u/accounts/` returns **both `username` and `password`** to an admin caller. The currently *documented recovery* is for the operator to enter the provider credential on B by hand. An operator who has done that and has `insecure=true` is shipping B's live provider credential to A over an unverified-TLS channel, every cycle, unattended. S11's marker records what **ECM wrote**, not what **B holds**, so it does not see this case at all. | **PO-ratified 2026-08-22 — closes bead `enhancedchannelmanager-3dmgr`.** The `insecure` refusal gates on **recorded OR OBSERVED** state (ADR-013 S11 / INV-4): *observed* is `credential_sentinel.credential_is_present()` — non-empty and not the sentinel — evaluated against the account rows **the cycle already fetches**, inside the re-entry reporter that already calls it. **Presence only:** no new request, no value comparison (same prohibition as S12's staleness signal), no stored secret. One new **non-secret** column (`destination_credential_observed_at`) is required and is stated rather than absorbed, because the write path `PUT insecure=true` has no live view of B; it clears when a cycle observes absence. The refusal must name a remedy that applies: an observed credential ECM did not write has **no marker to clear**, so de-provision is not the remedy — install a valid certificate and clear `insecure` (primary; keeps the standby working), or remove the credential on B (secondary; B stops serving). Attacker model is an **active** MITM able to present a forged certificate, not a passive eavesdropper. | to-build (`wd20y`); **pre-existing, not introduced by it** | **High** |
 
 #### 11.5.2 Re-rated and re-scoped rows
 
@@ -983,9 +999,9 @@ The two residuals in §11.4 that assumed a credential-free channel are re-rated 
   (S11), not audited — an audit row that records a recurring credential exposure is a receipt, not a
   control. What remains as residual, after the refusal: **(a)** a never-provisioned target on an
   unverified channel, unchanged at **Low**; **(b)** the de-provision path, below; **(c)** the case
-  the marker cannot see — credentials B holds that ECM did not write — which is **row D16, rated
-  High and reachable today**, and is the reason the refusal should be driven by observed as well as
-  recorded state.
+  the recorded marker cannot see — credentials B holds that ECM did not write — which is **row D16,
+  rated High and reachable today**, and which the 2026-08-22 observed-state ruling closes down to the
+  bounded window below.
 - **Residual: what a successful de-provision cannot guarantee (High, accepted, PO-ratified
   2026-08-22).** This is the residual the PO accepted in choosing the escape over a permanent
   refusal, and it belongs here rather than only in the ADR because it is the operator-facing half. A
@@ -1019,18 +1035,27 @@ The two residuals in §11.4 that assumed a credential-free channel are re-rated 
   and D9's journal row is the only trace afterwards. None of them is a person noticing that a value
   looks wrong. This is the reason D9 moved to High and the reason D12 cannot be satisfied by a
   registry check.
-- **Residual: Schedules Direct is not served (Low, accepted).** One EPG source type still requires a
-  manual credential entry on B, because the value does not exist on A to harvest (`docs/dispatcharr_api.md`
-  §EPG Sources — write-only, never returned, SHA1-hashed at fetch). The standby still **serves
-  video**; it loses guide data from that source. Bounded and named, but only once row D15's
-  `source_type`-driven statement is built — until then the gap is silent, which is the part that
-  makes it a security finding rather than a feature limitation.
+- **Residual: the observed-state gate leaves a bounded one-interval window (Low, accepted,
+  PO-ratified 2026-08-22).** The observation happens on a cycle, so a credential typed into B at time
+  *T* is not seen until the next cycle — and that cycle's own destination read is what sees it, so
+  the credential crosses **once more** before the gate closes. The exposure is therefore bounded at
+  **exactly one further cycle after the credential appears on B**, one sync interval, and zero
+  cycles thereafter. It cannot be driven to zero from A's side without a new fetch at write time,
+  which the presence-only constraint forbids; one interval is the honest floor of a presence-only
+  gate. Before this ruling the same exposure was **unbounded** — every cycle, forever.
+- **Residual: ECM cannot confirm the Schedules Direct password landed (Low, accepted).** The
+  write-only property runs both ways: B does not return an SD password either, so after provisioning
+  the run can report that it **wrote** a value, never that B **holds** a working one. A mistyped
+  value surfaces as B's EPG source failing to fetch rather than as a provisioning error; the remedy
+  is a re-provision, which `a3lby`'s edit affordance makes cheap. Availability, not confidentiality —
+  and the same property keeps this field out of D16's inbound exposure, because it never crosses
+  back.
 
 #### 11.5.4 What still gates the build
 
 §11's own rule — no sync build bead opens until the addendum is reviewed — applies to this section.
-These are the conditions on the `wd20y` build specifically. Items 1–4 are requirements; item 5 is a
-decision that must be taken before the code that depends on it is written.
+These are the conditions on the `wd20y` build specifically. All five are now requirements; the
+decision item 5 previously carried was ruled on 2026-08-22.
 
 1. **D12's reachability guard exists and is proven red.** Both halves: the registry test *and* the
    transitive import guard, with a demonstration that the guard fires when the sync engine is made
@@ -1038,26 +1063,36 @@ decision that must be taken before the code that depends on it is written.
    one-time path and a recurring one, so an unproven guard here is worth less than no guard, because
    it reads as coverage. (Enforcement-code-tests-itself applies: the guard ships with its own
    red-proof in the same commit, exactly as `test_ssrf_chokepoint_guard.py` does for D1.)
-2. **The provisioning writer is inside the SSRF chokepoint guard's scanned set** — either placed at
-   `backend/tasks/dbas_sync_*.py` so the existing `_SYNC_GLOB` covers it, or the guard's scope
-   extended in the same commit. See row D1. Decide this **before** choosing where the code lives; a
-   route handler on `backend/routers/sync_targets.py` is the natural home and is *outside* the glob.
+2. **The provisioning writer is inside the SSRF chokepoint guard's scanned set.** This is the item
+   most easily lost, because nothing fails when it is wrong. `backend/tests/test_ssrf_chokepoint_guard.py`
+   scans `cloud_storage/*.py` and, under `backend/tasks/`, the literal glob `_SYNC_GLOB = "dbas_sync*.py"`
+   — `routers/` appears nowhere in the file. **The natural home for the provisioning route,
+   `backend/routers/sync_targets.py`, is outside that set**, so a raw outbound call on the one path
+   that carries a credential would bypass the chokepoint silently. Either place the writer at
+   `backend/tasks/dbas_sync_*.py` so the existing glob covers it, or extend the guard's scanned set
+   **in the same commit. Decide it before a line of the route is written**, not after. See row D1 —
+   which also records that the guard extension itself already **shipped**, so D1's status line
+   ("guard-extension = AC on `1t3al`") reads as a pending control that is in fact enforced; `bd show`
+   returns no such issue.
 3. **D13/INV-9 is proven on the failure paths, not only the happy one.** Partial-failure and
    total-failure tests asserting the marker is unchanged, `insecure` stays refused, and the affected
    accounts are named — and specifically that a destination error cannot be swallowed into a
    success. The escape is only honest if its failure path is.
-4. **D15's `source_type`-driven Schedules Direct statement is built with the feature**, not after it.
-   Shipping the harvest without it makes the exclusion silent, and silence is what the finding is.
-5. **DECISION REQUIRED — row D16: does the `insecure` refusal gate on recorded state, or on recorded
-   *or observed* state?** S11 as ratified gates on ECM's own provisioning marker, which does not see
-   a credential the operator entered on B by hand — the path ECM's own guide currently documents as
-   the recovery. Gating on observed state as well closes it, costs little (`credential_is_present()`
-   already runs against B's account rows on every cycle, so no value is compared or stored), and is
-   a **strengthening** of INV-4 rather than a contradiction of any ruling. It is recorded as a
-   recommendation rather than applied, because it widens a PO-ratified control and that is not the
-   security engineer's call to make silently. Note the exposure it addresses is **live today** and
-   independent of `wd20y`; if the decision is to defer, D16 should be tracked as its own bead rather
-   than closed with this one.
+4. **D15's `source_type`-driven Schedules Direct prompt is built with the feature**, not after it.
+   Under the 2026-08-22 faithful-copy ruling SD is in scope, and the same `source_type` rule that was
+   to have announced the exclusion now raises the prompt for the one operator-supplied field.
+   Shipping the harvest without it leaves an SD standby silently without guide data, which is the
+   finding either way — presence cannot drive it, because the value is unknowable on both instances.
+5. **Row D16's observed-state gate ships with the feature — RULED 2026-08-22, closing bead
+   `enhancedchannelmanager-3dmgr`.** The `insecure` refusal gates on recorded **or observed** state.
+   Three properties must hold in the implementation and each is testable: **presence only**
+   (`credential_is_present` against rows the cycle already fetches — a test must assert no new
+   destination request and no value comparison appears); **the remedy is stated and applicable** (an
+   observed credential ECM did not write has no marker to clear, so the refusal must offer the
+   certificate fix or removal on B, never "de-provision"); and **the observation is recorded as a
+   fact, not a value** (one non-secret timestamp column, cleared when a cycle observes absence).
+   Note the exposure predates `wd20y` and is live today, so this item is the one whose absence has a
+   cost even if the rest of the feature never ships.
 
 Items 1, 3 and 5 are the ones where getting it wrong is invisible from the outside: the feature
 works, the tests are green, and the control is absent.
