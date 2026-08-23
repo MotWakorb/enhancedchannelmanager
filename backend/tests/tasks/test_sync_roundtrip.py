@@ -524,8 +524,9 @@ async def test_the_provider_credential_reaches_b(tmp_path):
     """AMENDED 2026-08-22 — inverted, deliberately (ADR-013 amendment (b)).
 
     This was ``test_redaction_no_seeded_secret_reaches_b`` and asserted that
-    neither the M3U password nor the EPG api_key seeded on A appeared anywhere in
-    B's rows. The PO ruled that provider credentials cross on every cycle, so
+    neither the M3U password nor the EPG password seeded on A appeared anywhere
+    in B's rows. (The EPG seed was ``api_key`` until bead ``…-fmtg0``;
+    Dispatcharr removed that field in its ``epg/0024`` migration.) The PO ruled that provider credentials cross on every cycle, so
     both must now arrive — and this is the end-to-end layer that proves it: the
     whole pipeline (gather → redact → plan → importer → B write) runs through the
     harness and the assertion is read off what B actually STORED, not off the
@@ -535,9 +536,9 @@ async def test_the_provider_credential_reaches_b(tmp_path):
     change, so the pair is a contrast rather than a one-sided claim.
     """
     leak_m3u = "LEAK-M3U-PASSWORD-XYZ"
-    leak_epg = "LEAK-EPG-APIKEY-XYZ"
+    leak_epg = "LEAK-EPG-PASSWORD-XYZ"
     source = StatefulDispatcharrFake.seeded_source(
-        m3u_password=leak_m3u, epg_api_key=leak_epg
+        m3u_password=leak_m3u, epg_password=leak_epg
     )
     dest = StatefulDispatcharrFake.empty_dest()
 
@@ -556,7 +557,7 @@ async def test_the_provider_credential_reaches_b(tmp_path):
         }
     )
     assert leak_m3u in stored, "the provider password did not reach the replica"
-    assert leak_epg in stored, "the EPG api_key did not reach the replica"
+    assert leak_epg in stored, "the EPG password did not reach the replica"
     # Read off the account row itself, not merely "somewhere in the blob": the
     # replica authenticates with THIS field.
     b_m3u = next(a for a in dest.m3u_accounts.list() if a["name"] == "Provider A")

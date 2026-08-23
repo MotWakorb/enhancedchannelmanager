@@ -61,8 +61,11 @@ def _source_client() -> MagicMock:
     )
     client.get_epg_sources = AsyncMock(
         return_value=[
+            # ``password``, not ``api_key``: Dispatcharr REMOVED ``api_key``
+            # from ``EPGSource`` in its ``epg/0024`` migration and replaced it
+            # with ``username``/``password`` (bead ``…-fmtg0``).
             {"id": 10, "name": "EPG One", "source_type": "xmltv",
-             "m3u_account": None, "api_key": SECRET_EPG_PASSWORD},
+             "m3u_account": None, "password": SECRET_EPG_PASSWORD},
         ]
     )
     client.get_channel_groups = AsyncMock(
