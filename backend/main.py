@@ -22,9 +22,11 @@ from config import (
     CONFIG_FILE,
     MCP_SERVICE_FILE,
     MCP_SERVICE_FILENAME,
+    SettingsWriteTimeout,
     superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
+    sweep_orphaned_settings_temporaries,
 )
 from database import init_db, get_session
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
@@ -145,7 +147,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0138",
+    version="0.18.1-0139",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1093,6 +1095,24 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+@app.exception_handler(SettingsWriteTimeout)
+async def settings_write_timeout_handler(request: Request, exc: SettingsWriteTimeout):
+    """Surface a contended settings write as a retryable 503, not a 500.
+
+    ``save_settings`` takes the cross-process settings lock on a bounded retry
+    budget rather than blocking forever (blocking forever stalls the event
+    loop, and every caller is on it). Exhausting the budget means the save did
+    NOT happen and nothing was written — which is a service-availability
+    condition the client should retry, not an internal error.
+    """
+    logger.error("[MAIN] Settings write lock unavailable on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Settings are being saved by another writer. Please retry."},
+        headers={"Retry-After": "5"},
+    )
+
+
 @app.exception_handler(HTTPException)
 async def sanitized_http_exception_handler(request: Request, exc: HTTPException):
     """Scrub internal details from 500 responses to prevent information leakage."""
@@ -1117,6 +1137,13 @@ async def startup_event():
     logger.info("=" * 60)
     logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
     logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
+
+    # Remove any .settings.json.*.tmp a SIGKILLed/OOM-killed save left behind.
+    # Each orphan is a complete 0600 credential snapshot, so after a rotation
+    # that replaced a compromised key the orphan preserves that key forever;
+    # nothing else in the codebase removes them. Runs under the settings write
+    # lock and is best effort — see config.sweep_orphaned_settings_temporaries.
+    sweep_orphaned_settings_temporaries()
 
     # Materialize the private sidecar projection before the backend becomes
     # healthy. The MCP container waits on that health check, so its very first
