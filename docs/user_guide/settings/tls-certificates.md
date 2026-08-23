@@ -66,5 +66,5 @@ need to request or upload a new one before HTTPS works again.
 
 ## Going deeper
 
-- [Backup & Restore](../backup-restore/index.md): a Full Backup includes your TLS certificates; relevant if you're migrating to a new host.
+- [Backup & Restore](../backup-restore/index.md): no ECM backup format copies your TLS certificate or private key. Copy `/config/tls` yourself, or plan to reissue the certificate, before migrating to a new host.
 - [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md): the dual-port (HTTP fallback + HTTPS) model this page configures.

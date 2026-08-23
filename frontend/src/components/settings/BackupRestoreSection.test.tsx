@@ -185,9 +185,13 @@ describe('BackupRestoreSection', () => {
     // one do I need?" helper recommends the DBAS format for disaster recovery
     // and reserves the full backup for restoring pre-v0.18.0 files — while the
     // deprecated producer rendered first, so it was the first backup control
-    // an operator met. It is also the riskier artifact to hold (TLS private
-    // keys, uploaded playlists), which makes it the last thing that should sit
-    // next to the DBAS cards' redaction language.
+    // an operator met. It is also the riskier artifact to hold — plaintext, and
+    // not a redacted artifact — which makes it the last thing that should sit
+    // next to the DBAS cards' redaction language. (The "TLS private keys,
+    // uploaded playlists" reason this comment used to give stopped being true in
+    // 0.18.1: BACKUP_DIRS is ["uploads/logos"], bead 04c0u.13. A pre-v0.18.0
+    // .zip on disk still carries them, which is what the caption test below is
+    // about.)
     it('renders the deprecated full-backup producer last, below both DBAS cards (bead pui76)', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
 
@@ -318,6 +322,39 @@ describe('BackupRestoreSection', () => {
       expect(screen.getByText(/contains sensitive data/i)).toBeInTheDocument();
 
       // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-04c0u.13. This card is where an operator
+    // decides whether the full backup covers their TLS material, and it promised
+    // "TLS certificates, and M3U files" for a build whose BACKUP_DIRS is
+    // ["uploads/logos"]. Believing it costs the operator their only copy of a
+    // TLS private key on the next container rebuild. Nothing pinned the string,
+    // so the code narrowed and the promise stayed. Now it is pinned in the
+    // direction that matters: the card may not claim material the archive does
+    // not carry.
+    it('does not promise TLS certificates or M3U files in the full backup (bead 04c0u.13)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const fullBackupCard = screen
+        .getByRole('heading', { name: 'Create Full Backup' })
+        .closest('.backup-card') as HTMLElement;
+      expect(fullBackupCard).not.toBeNull();
+
+      const description = fullBackupCard.querySelector(
+        '.backup-card-description',
+      ) as HTMLElement;
+      expect(description.textContent).toMatch(/uploaded logos/i);
+      expect(description.textContent).toMatch(/not\s+include TLS certificates or uploaded M3U files/i);
+
+      const warning = fullBackupCard.querySelector(
+        '.backup-sensitive-warning',
+      ) as HTMLElement;
+      expect(warning.textContent).not.toMatch(/certificate/i);
+      expect(warning.textContent).toMatch(/plaintext/i);
+
       await waitFor(() => {
         expect(screen.getByText('Settings')).toBeInTheDocument();
       });
