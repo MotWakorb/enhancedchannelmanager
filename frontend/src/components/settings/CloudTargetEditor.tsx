@@ -88,10 +88,30 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
     setCredentials(prev => ({ ...prev, [key]: value }));
   };
 
-  const getCredValue = (key: string): string => {
-    if (credentials[key] !== undefined) return credentials[key];
-    if (isEditing && target?.credentials[key]) return target.credentials[key];
-    return '';
+  /**
+   * What goes in the box — NEVER the stored value (bead …-ybr3u, rule 2).
+   *
+   * The read shape masks credential values to their last four characters, so
+   * `target.credentials.access_key_id` is `"***5678"`, not the key. Prefilling
+   * from it put a string that is not the secret into an input the operator
+   * would then "keep", and submitting it would have written the mask itself
+   * into the store. Only what this operator typed in this session is shown.
+   */
+  const getCredValue = (key: string): string => credentials[key] ?? '';
+
+  /**
+   * Whether the SAVED target already holds a value for this credential.
+   *
+   * The mask hides the values but leaves the KEYS intact, which is exactly
+   * enough to tell the operator which boxes they have to retype — and no more
+   * (same trick as `authModeOf` in `SyncTargetsCard.tsx`).
+   */
+  const hasStoredCred = (key: string): boolean =>
+    isEditing && target?.credentials?.[key] !== undefined && target.credentials[key] !== '';
+
+  const credPlaceholder = (field: CredentialField): string => {
+    if (!isEditing) return field.placeholder || '';
+    return hasStoredCred(field.key) ? 'currently set — retype to replace' : 'not set';
   };
 
   const buildCredentials = (): Record<string, string> => {
@@ -105,11 +125,55 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
     return result;
   };
 
+  /**
+   * All-or-nothing credential entry (bead …-ybr3u, rule 1).
+   *
+   * `PATCH /api/cloud-targets/{id}` REPLACES the whole `credentials` dict —
+   * `routers/cloud_targets.py` does `target.credentials =
+   * encrypt_credentials(req.credentials)`, it does not merge — and ECM cannot
+   * read the stored values back to fill the gaps. So submitting only the box
+   * the operator touched blanked every sibling: rotating an S3 secret wiped
+   * `bucket_name`, `access_key_id` and `region`. Refuse the partial entry and
+   * say why, rather than half-write it.
+   *
+   * Returns the fields still missing, or an empty list when the set is
+   * complete. `[]` also covers "nothing typed at all" — that means "leave the
+   * stored set alone", and the caller omits `credentials` from the payload.
+   */
+  const missingRequiredCreds = (creds: Record<string, string>): CredentialField[] => {
+    if (Object.keys(creds).length === 0) return [];
+    return fields.filter(f => f.required && !creds[f.key]);
+  };
+
+  const refusePartialCredentials = (missing: CredentialField[]) => {
+    notifications.error(
+      `Enter every required credential in full: ${missing.map(f => f.label).join(', ')}. ` +
+        'Saving credentials REPLACES the whole stored set — ECM cannot read the ' +
+        'stored values back, so a partial entry would blank the rest rather than ' +
+        'add to it.',
+    );
+  };
+
   const handleTest = async () => {
     const creds = buildCredentials();
     if (Object.keys(creds).length === 0 && !isEditing) {
       notifications.error('Enter credentials first');
       return;
+    }
+
+    // On the EDIT path a half-typed set is not a thing that can be tested
+    // meaningfully: the inline test would fail against a dict that is neither
+    // what is stored nor what would be saved (reading as "your stored
+    // credentials are broken"), and falling back to the saved-target test would
+    // pass while telling the operator nothing about what they just typed.
+    // The CREATE path keeps its field-by-field "test as you go" affordance —
+    // there is no stored set there to misrepresent.
+    if (isEditing) {
+      const missing = missingRequiredCreds(creds);
+      if (missing.length > 0) {
+        refusePartialCredentials(missing);
+        return;
+      }
     }
 
     setTesting(true);
@@ -147,6 +211,12 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
       const missingRequired = fields.filter(f => f.required && !creds[f.key]);
       if (missingRequired.length > 0) {
         notifications.error(`Required: ${missingRequired.map(f => f.label).join(', ')}`);
+        return;
+      }
+    } else {
+      const missing = missingRequiredCreds(creds);
+      if (missing.length > 0) {
+        refusePartialCredentials(missing);
         return;
       }
     }
@@ -214,8 +284,18 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
 
             <div className="cloud-target-credentials">
               <label className="modal-section-title">Credentials</label>
+              {/*
+                Describes what the ROUTE does, not what would be convenient
+                (bead …-ybr3u). The previous text promised a per-field merge
+                that `PATCH /api/cloud-targets/{id}` has never performed.
+              */}
               {isEditing && (
-                <p className="form-hint">Leave fields empty to keep existing values. Only changed fields will be updated.</p>
+                <p className="form-hint">
+                  Stored credentials cannot be read back. Leave every box blank to
+                  keep them unchanged — entering any value <strong>replaces the
+                  whole set</strong>, so retype every field this target needs.
+                  Anything left blank is cleared.
+                </p>
               )}
               {fields.map(field => (
                 <div key={field.key} className="modal-form-group">
@@ -227,7 +307,7 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
                     <textarea
                       value={getCredValue(field.key)}
                       onChange={e => updateCred(field.key, e.target.value)}
-                      placeholder={field.placeholder || (isEditing ? '(unchanged)' : '')}
+                      placeholder={credPlaceholder(field)}
                       rows={4}
 
                     />
@@ -236,7 +316,7 @@ export function CloudTargetEditor({ target, onClose, onSaved }: CloudTargetEdito
                       type={field.type}
                       value={getCredValue(field.key)}
                       onChange={e => updateCred(field.key, e.target.value)}
-                      placeholder={field.placeholder || (isEditing ? '(unchanged)' : '')}
+                      placeholder={credPlaceholder(field)}
                     />
                   )}
                 </div>
