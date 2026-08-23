@@ -394,10 +394,44 @@ class StatefulDispatcharrFake:
         return {"success": True}
 
     async def patch_m3u_account(self, account_id: int, data: dict) -> dict:
-        """The is_active toggle the restore path uses to coax a provider fetch."""
+        """PATCH an account — the restore path's is_active toggle, and the
+        sync path's field convergence (bead ``…-zszjd``).
+
+        MODELS ``M3UAccountSerializer.update``, read off Dispatcharr 0.29.0 on
+        2026-08-23, because two of its behaviours decide whether a convergence
+        test can fail at all:
+
+        * **The four preference booleans are POPPED off the top level and written
+          into ``custom_properties``** — the same asymmetry ``create`` has (see
+          ``_PREFERENCE_DEFAULTS``). A fake that stored them at the top level
+          would be contradicted by ``get_m3u_accounts``, which projects them
+          back OUT of the blob, so the round trip has to go through the blob or
+          the value never survives a read.
+        * **``custom_properties`` is MERGED, not replaced**:
+          ``custom_props = {**existing_custom, **incoming_custom}``. A key the
+          destination holds and the source does not therefore SURVIVES a PATCH.
+          That is the honest ceiling on convergence through this endpoint, and
+          modelling replacement instead would let a test assert a deletion the
+          real API cannot perform.
+
+        Unlike ``update`` the booleans are only written when PRESENT — a partial
+        PATCH that omits them must not reset them to the create-time defaults.
+        """
         self._check_fault("patch_m3u_account", data)
         self.m3u_patch_calls.append((account_id, dict(data)))
-        return self.m3u_accounts.update(account_id, data)
+        payload = dict(data)
+        existing = self.m3u_accounts.rows.get(account_id) or {}
+        existing_custom = dict(existing.get("custom_properties") or {})
+        incoming_custom = dict(payload.pop("custom_properties", None) or {})
+        merged_custom = {**existing_custom, **incoming_custom}
+        touched_custom = bool(incoming_custom)
+        for key in self._PREFERENCE_DEFAULTS:
+            if key in payload:
+                merged_custom[key] = payload.pop(key)
+                touched_custom = True
+        if touched_custom:
+            payload["custom_properties"] = merged_custom
+        return self.m3u_accounts.update(account_id, payload)
 
     # THE FOUR PREFERENCE BOOLEANS AND WHERE THEY REALLY LIVE (bead …-avrix).
     # On Dispatcharr 0.29.0 (``apps/m3u/serializers.py``, read 2026-08-22) each

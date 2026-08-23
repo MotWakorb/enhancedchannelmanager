@@ -674,6 +674,53 @@ class ProfileMembershipDriftDetail(BaseModel):
     )
 
 
+class AccountFieldDriftDetail(BaseModel):
+    """One replicated M3U account whose FIELDS differ from the source's (…-zszjd).
+
+    THE DEFECT THIS EXISTS FOR. An M3U account that already exists on the
+    destination is matched ``ALREADY_EXISTS_IDENTICAL`` and, until this bead, was
+    never written to again — for EVERY field, not one. Measured during bead
+    ``…-avrix``: ``auto_enable_new_groups_live`` was flipped on the source, a
+    cycle ran, and the replica stayed on the old value, silently and
+    permanently. The flag was one example; the ruling covered ``name``,
+    ``server_url``, ``max_streams``, ``user_agent``, ``refresh_interval``,
+    ``custom_properties``, the credential fields and the four preference
+    booleans alike.
+
+    THE INVARIANT THIS SURFACE ENFORCES, stated as a property rather than as
+    that reproduction: **a field set on the source is the field set on the
+    replica after the next cycle, for every field except those carrying a
+    written exclusion** (``dbas.importers.m3u_accounts.NEVER_CONVERGE_FIELDS``,
+    which names each one and why). Drift that still exists is COUNTED here on
+    every cycle, so the failure mode the defect actually had — silence — cannot
+    return even if a write is refused.
+
+    FIELD NAMES ONLY, NEVER VALUES. ``fields`` is a list of names; a converging
+    account carries ``username``, ``password`` and ``server_url``, and this
+    report is rendered to operators and journalled. The same rule
+    :meth:`RestoreReport.record_credential_reentry` follows.
+    """
+
+    destination_account_id: int | None = Field(
+        default=None, description="Destination Dispatcharr M3U account id."
+    )
+    name: str = Field(description="Operator-facing account name — never a secret.")
+    fields: list[str] = Field(
+        default_factory=list,
+        description="FIELD NAMES that differed from the source. Never any value.",
+    )
+    applied: bool = Field(
+        default=False,
+        description="Whether this cycle actually wrote the fields to the replica "
+        "(always False on a dry run — nothing is written there).",
+    )
+    reason: str | None = Field(
+        default=None,
+        description="Why the write did not happen — a sanitized phrase, never a "
+        "secret. None when it did.",
+    )
+
+
 class ProviderGroupSelectionDetail(BaseModel):
     """One replicated M3U account whose per-group selection did not fully land (…-avrix).
 
@@ -926,6 +973,23 @@ class RestoreReport(BaseModel):
         "epg_links_unrestored",
         "logo_misses",
         "entities_blocked_by_dependency",
+        # …-zszjd. Fields the SOURCE set that an APPLY tried and failed to write
+        # onto the replica's existing M3U account. Both membership tests pass.
+        # LOSS: it counts only fields the source actually has and the replica
+        # actually lacks — a field the source never set produces no diff and no
+        # count, and a dry run never contributes (nothing was attempted there,
+        # so nothing can have fallen short). CLEARABLE: the next cycle re-derives
+        # the diff from a fresh read of the destination, so a write that later
+        # succeeds takes the counter to zero with no operator action at all;
+        # there is no reachable selection under which it is permanently non-zero
+        # for an absence the operator asked for (deselecting ``m3u_accounts``
+        # skips the whole category before any diff is computed), which is the
+        # ``…-4mkoe`` DEPENDENCY_DESELECTED trap this test exists to catch.
+        # DELIBERATELY NOT the sibling ``account_field_drift``: that one counts
+        # every difference INCLUDING the ones this cycle successfully converged,
+        # so making it a shortfall would forbid SUCCESS on exactly the cycle that
+        # fixed the problem.
+        "account_convergence_unapplied",
     )
     outcome: RestoreOutcome | None = Field(
         default=None,
@@ -1213,6 +1277,39 @@ class RestoreReport(BaseModel):
         default_factory=list,
         description="Which replicated M3U accounts did not receive their group "
         "selection, how many, and why.",
+    )
+
+    # Fields on an ALREADY-EXISTING replica M3U account that differ from the
+    # source's (bead …-zszjd). Counts FIELDS, not accounts — the
+    # operator-meaningful unit is "3 settings on this account are not what you
+    # set on the primary", exactly as ``profile_membership_drift`` counts
+    # channels rather than profiles.
+    #
+    # DELIBERATELY NOT a ``DELIVERY_SHORTFALL_FIELDS`` member, and for the same
+    # reason ``profile_membership_drift`` is not: it counts every difference the
+    # cycle FOUND, including the ones it then successfully converged. A cycle
+    # that detects three drifted fields and writes all three has done its job;
+    # forbidding SUCCESS there would put a permanent red mark on the fix. The
+    # half that IS a shortfall is ``account_convergence_unapplied`` below.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    account_field_drift: int = Field(
+        default=0,
+        description="Fields on an existing replica M3U account that differ from "
+        "the source's.",
+    )
+    account_field_drift_details: list[AccountFieldDriftDetail] = Field(
+        default_factory=list,
+        description="Which accounts drifted, WHICH FIELD NAMES (never values), "
+        "and whether this cycle wrote them.",
+    )
+
+    # The shortfall half of the pair above: fields an APPLY tried to converge and
+    # could not. Membership reasoning is on ``DELIVERY_SHORTFALL_FIELDS``.
+    # ADDITIVE optional — no CONTRACT_VERSION bump.
+    account_convergence_unapplied: int = Field(
+        default=0,
+        description="Drifted fields an apply attempted to write onto the replica "
+        "and could not.",
     )
 
     # Why the count above is not a finding, when it is not one. The pass is
@@ -1745,6 +1842,64 @@ class RestoreReport(BaseModel):
             )
         )
         self.profile_membership_drift += len(disabled) + len(enabled)
+
+    def record_account_field_drift(
+        self,
+        *,
+        name: str,
+        fields: list[str],
+        destination_account_id: int | None = None,
+        applied: bool = False,
+        reason: str | None = None,
+    ) -> None:
+        """Record ONE existing replica M3U account whose fields differ (…-zszjd).
+
+        The ONE place :attr:`account_field_drift`, its detail list, and
+        :attr:`account_convergence_unapplied` are all written, so the aggregates
+        and the drill-down cannot drift out of step with each other — the same
+        single-writer rule :meth:`record_credential_reentry` follows.
+
+        The aggregate counts FIELDS (the operator-meaningful unit: "3 settings on
+        this account do not match the primary"), so it tracks the total length of
+        every ``fields`` list rather than the number of detail rows. A call with
+        an empty ``fields`` is a no-op — an account that already matches is not
+        drift, and counting it would put a permanent non-zero beside a faithful
+        replica.
+
+        ``account_convergence_unapplied`` — the ``DELIVERY_SHORTFALL_FIELDS``
+        half — rises ONLY when a write was attempted and did not land
+        (``applied=False`` with a ``reason``). A dry run passes ``applied=False``
+        and ``reason=None``: it attempted nothing, so it has fallen short of
+        nothing, and a preview must never manufacture a shortfall the apply it
+        previews would not have.
+
+        **Field NAMES only.** A converging account carries ``username``,
+        ``password`` and ``server_url``; the names are safe and the values never
+        enter this report.
+
+        Args:
+            name: the account's operator-facing name — never a secret.
+            fields: the FIELD NAMES that differed. Never any value.
+            destination_account_id: the replica's id for the account.
+            applied: whether this cycle wrote the fields.
+            reason: sanitized phrase saying why it did not. ``None`` on a dry run
+                and on a successful write.
+        """
+        names = [f for f in (fields or []) if isinstance(f, str) and f]
+        if not names:
+            return
+        self.account_field_drift_details.append(
+            AccountFieldDriftDetail(
+                destination_account_id=destination_account_id,
+                name=name,
+                fields=sorted(set(names)),
+                applied=applied,
+                reason=reason,
+            )
+        )
+        self.account_field_drift += len(set(names))
+        if not applied and reason is not None:
+            self.account_convergence_unapplied += len(set(names))
 
     def record_channel_group_drift(
         self,

@@ -4596,6 +4596,31 @@ export interface RestoreReport {
    */
   provider_group_selection_details?: ProviderGroupSelectionDetail[];
   /**
+   * Fields on an ALREADY-EXISTING replica M3U account that differ from the
+   * source's (bead zszjd). Counts FIELDS, not accounts — "3 settings on this
+   * account are not what you set on the primary".
+   *
+   * Deliberately NOT one of the counters that move the outcome, for the same
+   * reason `profile_membership_drift` is not: it counts every difference the
+   * cycle FOUND, including the ones it then converged, so downgrading on it
+   * would put a red mark on exactly the cycle that fixed the problem. The half
+   * that does move the outcome is `account_convergence_unapplied`.
+   */
+  account_field_drift?: number;
+  /**
+   * Which accounts drifted, WHICH FIELD NAMES (never values — a converging
+   * account carries `username`, `password` and a credential-bearing
+   * `server_url`), and whether this cycle wrote them (bead zszjd).
+   */
+  account_field_drift_details?: AccountFieldDriftDetail[];
+  /**
+   * Drifted fields an APPLY tried to write onto the replica and could not
+   * (bead zszjd). One of the counters that forbid a SUCCESS outcome: the
+   * replica is missing something the source has and the run tried to deliver
+   * it. Clears by itself once a later cycle's write lands.
+   */
+  account_convergence_unapplied?: number;
+  /**
    * Set when the channel-group check did NOT run, because the operator
    * deselected the channel groups category (bead r1ei7). Its absence is what
    * makes `channel_group_drift: 0` trustworthy; when it is present that zero
@@ -4753,6 +4778,26 @@ export interface ProviderGroupSelectionDetail {
   selections_unapplied?: number;
   enabled_applied?: number;
   reason: string;
+}
+
+/**
+ * One replicated M3U account whose fields differ from the source's (bead zszjd).
+ *
+ * An account that already exists on the replica used to be matched
+ * ALREADY_EXISTS_IDENTICAL and never written to again — for every field, not
+ * one — so a setting changed on the primary afterwards diverged silently and
+ * permanently. The cycle now converges the account and reports what it moved.
+ *
+ * FIELD NAMES ONLY, NEVER VALUES: a converging account carries `username`,
+ * `password` and a credential-bearing `server_url`. `reason` is a sanitized
+ * phrase saying why a write did not happen, and is null when it did.
+ */
+export interface AccountFieldDriftDetail {
+  destination_account_id?: number | null;
+  name: string;
+  fields?: string[];
+  applied?: boolean;
+  reason?: string | null;
 }
 
 export async function getExportSections(): Promise<{key: string; label: string}[]> {

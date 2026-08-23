@@ -147,6 +147,7 @@ from dbas.restore_orchestrator import (
 from dbas.importers import logos as logos_mod
 from dbas.importers.channels import import_channels
 from dbas.importers.logos import import_logos
+from dbas.importers.m3u_accounts import import_m3u_accounts
 from credential_sentinel import credential_is_present
 from routers import backup as backup_mod
 from routers.backup import (
@@ -1368,6 +1369,61 @@ def _apply_name_conflict_details(
 # ---------------------------------------------------------------------------
 
 
+def _sync_m3u_step() -> ImporterCallable:
+    """Build the M3U_ACCOUNT importer step for the sync path (bead ``…-zszjd``).
+
+    Identical to the orchestrator's shared ``_m3u`` builder except that it turns
+    FIELD CONVERGENCE on: an account that already exists on the replica has its
+    fields written toward the source instead of being left frozen at whatever
+    they were on the cycle that first created it.
+
+    THE INVARIANT THIS DELIVERS, and it is a property rather than the case that
+    exposed it: **a field set on A is the field set on B after the next cycle,
+    for every field except those in
+    :data:`dbas.importers.m3u_accounts.NEVER_CONVERGE_FIELDS`**, each of which
+    names a specific harm or a specific impossibility. Spike ``xp6mp`` ruled an
+    existing account ``ALREADY_EXISTS_IDENTICAL`` and never overwritten, which
+    covered every field on the row — ``server_url``, ``max_streams``,
+    ``user_agent``, ``refresh_interval``, ``custom_properties``, the credential
+    fields and the four preference booleans alike. ADR-013 S5 says source-wins.
+    The two disagreed, and this step is the reconciliation the bead asked for:
+    S5 governs, and every field xp6mp froze is now either converged or carries a
+    written exclusion.
+
+    WHY THE FLAG RATHER THAN A UNIFORM CHANGE. The archive-restore registries
+    keep the old behaviour, on the same reasoning bead ``…-avrix`` used for its
+    ``created: False`` flag. Continuous sync is what turns a frozen field into
+    permanent silent divergence — it runs unattended, forever, and nobody looks.
+    A one-shot restore onto a populated instance is an operator action with a
+    different blast radius and a different question behind it, and answering it
+    is not this bead's to decide.
+
+    IT DOES NOT DUPLICATE THE PER-CYCLE CREDENTIAL CASCADE — it COMPLETES it.
+    Measured on this branch's base: the cascade puts the real ``username`` /
+    ``password`` / credential-bearing address into the PLAN, and the CREATE path
+    writes them, but the existing-account branch issued no write at all, so a
+    credential rotated on A never reached a replica that already had the
+    account. There is exactly one writer for the row, here, and the credential
+    fields ride it like every other field.
+    """
+
+    async def _m3u(ctx: ApplyContext) -> list[dict] | None:
+        cat = ctx.plan.category(EntityType.M3U_ACCOUNT)
+        result = await import_m3u_accounts(
+            archive_accounts=list(cat.entities) if cat else [],
+            client=ctx.client,
+            selected=bool(cat.selected) if cat else False,
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+            converge_existing=True,
+        )
+        return result.deferred_auto_sync_settings or None
+
+    return _m3u
+
+
 def _sync_channels_step(*, allow_fuzzy_stream_match: bool) -> ImporterCallable:
     """Build the CHANNELS importer step for the sync path (bead kcxie).
 
@@ -1654,7 +1710,11 @@ def sync_config_importer_steps(
         # remap M3U writes). defers=True: the step DOES return settings for the
         # final phase — but the fn that consumes them there is the
         # group-selection-only apply, never the provider refresh (S9).
-        ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
+        # …-zszjd: the sync path's OWN M3U step, so an account that already
+        # exists on the replica converges instead of staying frozen at its
+        # first-sync values. See _sync_m3u_step for the invariant and for why
+        # the archive-restore registries keep the old behaviour.
+        ImporterStep(EntityType.M3U_ACCOUNT, _sync_m3u_step(), defers=True),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
