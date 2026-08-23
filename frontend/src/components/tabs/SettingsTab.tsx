@@ -2452,8 +2452,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           <label>App Debug Bundle</label>
           <span className="form-description">
             Download a tar.gz covering the whole app: channels, rules, settings, recent logs, and a
-            channel groups diagnostic. Sensitive fields (URLs, passwords, tokens) are redacted.
-            Share this when reporting issues. For a Channel Pipeline-only bundle, use the
+            channel groups diagnostic. Hostnames are replaced, and your provider credentials,
+            passwords and tokens are redacted wherever they appear. Redaction is thorough but not
+            guaranteed complete — skim the bundle before posting it somewhere public.
+            For a Channel Pipeline-only bundle, use the
             Pipeline Debug Bundle button on the Channel Pipeline tab instead.
           </span>
           <button

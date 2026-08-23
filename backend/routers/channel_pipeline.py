@@ -4170,9 +4170,18 @@ def _prune_old_debug_bundle_jobs() -> None:
         logger.debug("[AUTO-CREATE] Pruned %s expired debug-bundle jobs", len(stale))
 
 
-def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str):
-    """Add a text file to a tar archive."""
-    encoded = data.encode("utf-8")
+def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str, scrub):
+    """Add a text file to a tar archive, credential-scrubbed on the way in.
+
+    ``scrub`` is the LAST redaction stage of the bundle and is a REQUIRED
+    positional argument so that adding a new member cannot silently skip it
+    (bead …-d0hoc). Per-producer scrubbing is necessary but not sufficient: the
+    leak this guards against reached ``channels.csv`` and ``channels.json``
+    through a producer that believed it had already obfuscated its URLs, and
+    every member added since would have inherited the same assumption. Pass
+    :func:`obfuscate.scrub_credential_values` bound to the harvested values.
+    """
+    encoded = scrub(data).encode("utf-8")
     info = tarfile.TarInfo(name=name)
     info.size = len(encoded)
     info.mtime = time.time()
@@ -4612,8 +4621,61 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     from csv_handler import generate_csv
     from log_utils import get_recent_logs
     from models import ChannelPipelineRule
-    from obfuscate import obfuscate_text, obfuscate_url
-    from routers.backup import APP_VERSION
+    from obfuscate import obfuscate_text, obfuscate_url, scrub_credential_values
+    from routers.backup import APP_VERSION, _collect_credential_values
+    from config import get_settings as get_config_settings
+
+    # -- 0. Harvest the credential VALUES this instance holds ---------
+    #
+    # THE PRIMARY CREDENTIAL RULE IS BY VALUE, NOT BY URL SHAPE (bead …-d0hoc).
+    # This must run BEFORE anything is obfuscated, because every later scrub
+    # takes these values as input. The shape rule in ``obfuscate.py`` is a
+    # fallback for credentials no account record holds; on its own it is the
+    # rule that shipped 316 copies of a real username and password in a bundle
+    # that looked obfuscated, because it was anchored on a path shape
+    # Dispatcharr does not emit.
+    #
+    # ``_collect_credential_values`` is the backup artifact's harvester, reused
+    # verbatim so the two redactors cannot drift on what counts as a credential:
+    # a new credential-bearing key added to either denylist starts contributing
+    # its value to BOTH artifacts automatically.
+    m3u_accounts: list = []
+    m3u_accounts_fetched = False
+    try:
+        m3u_accounts = await client.get_m3u_accounts() or []
+        m3u_accounts_fetched = True
+    except Exception as m3u_lookup_err:
+        logger.warning(
+            "[AUTO-CREATE] Debug bundle: could not fetch M3U accounts (%s); the "
+            "value-based credential rule is DEGRADED for this bundle and only "
+            "the URL-shape fallback applies",
+            m3u_lookup_err,
+        )
+    epg_sources: list = []
+    try:
+        epg_sources = await client.get_epg_sources() or []
+    except Exception as epg_lookup_err:
+        logger.warning(
+            "[AUTO-CREATE] Debug bundle: could not fetch EPG sources (%s); EPG "
+            "credential values are not known to the value-based rule",
+            epg_lookup_err,
+        )
+    settings_obj = get_config_settings()
+    settings_dict = settings_obj.model_dump()
+    known_secrets, known_identities = _collect_credential_values({
+        "m3u_accounts": m3u_accounts,
+        "epg_sources": epg_sources,
+        "settings": settings_dict,
+    })
+
+    def scrub_url(value: str) -> str:
+        return obfuscate_url(value, known_secrets, known_identities)
+
+    def scrub_log_line(value: str) -> str:
+        return obfuscate_text(value, known_secrets, known_identities)
+
+    def scrub_member(value: str) -> str:
+        return scrub_credential_values(value, known_secrets, known_identities)
 
     # -- 1. Fetch channels and groups from Dispatcharr ----------------
     all_channels, channels_report = await _fetch_all_channels(client)
@@ -4627,7 +4689,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
 
     stream_ids_list = list(all_stream_ids)
     stream_detail_lookup, streams_report = await _fetch_stream_details(
-        client, stream_ids_list, obfuscate_url
+        client, stream_ids_list, scrub_url
     )
 
     # Load stream stats from DB
@@ -4711,17 +4773,20 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
             ChannelPipelineRule.priority
         ).all()
 
+        # Reuses the accounts fetched in step 0 for the credential harvest —
+        # one upstream call, not two, and the same records feed both uses.
         m3u_id_to_name = {}
-        try:
-            m3u_accounts = await client.get_m3u_accounts()
-            m3u_id_to_name = {a["id"]: a["name"] for a in m3u_accounts}
-        except Exception as m3u_lookup_err:
+        if m3u_accounts_fetched:
+            m3u_id_to_name = {
+                a["id"]: a["name"] for a in m3u_accounts if "id" in a
+            }
+        else:
             # M3U-name lookup is decorative for the YAML export — when it
             # fails we still export rules with raw m3u_account_ids and the
             # operator can re-import on a host with M3U access.
             logger.warning(
-                "[AUTO-CREATE-EXPORT] Could not fetch M3U accounts for name resolution: %s",
-                m3u_lookup_err,
+                "[AUTO-CREATE-EXPORT] Could not fetch M3U accounts for name "
+                "resolution; exporting raw m3u_account_ids"
             )
 
         export_rules = {
@@ -4765,14 +4830,13 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         session.close()
 
     # -- 5. settings.json — user settings with secrets redacted -------
-    from config import get_settings as get_config_settings
+    # ``settings_dict`` was materialized in step 0 (its credential values are an
+    # input to the value-based rule) and is redacted in place here.
     # Import the canonical credential-field set from the backup router so the
     # two redactors can never drift (bd-jmi1c P0-1 / bd-46g4t). Prior to this
     # the local tuple omitted both the Dispatcharr ``api_key`` (legacy, leak
     # since v0.16.0-0004) and the new ``dispatcharr_api_key`` field.
     from routers.backup import _SETTINGS_CREDENTIAL_FIELDS as _BACKUP_CREDS
-    settings_obj = get_config_settings()
-    settings_dict = settings_obj.model_dump()
     # Redact sensitive fields, using the backup router's
     # ``_SETTINGS_CREDENTIAL_FIELDS`` verbatim.
     #
@@ -4934,7 +4998,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
 
     # -- 8. logs.txt — recent logs, obfuscated -----------------------
     log_lines = get_recent_logs()
-    obfuscated_lines = [obfuscate_text(line) for line in log_lines]
+    obfuscated_lines = [scrub_log_line(line) for line in log_lines]
     logs_text = "\n".join(obfuscated_lines)
 
     # -- 9. manifest.json --------------------------------------------
@@ -4966,6 +5030,17 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
             "channels": channels_report,
             "streams": streams_report,
         },
+        # bead …-d0hoc: state what the credential scrub could actually do, so a
+        # reader is never left inferring safety from the fact that hostnames
+        # look replaced. COUNTS ONLY — putting the values here would be the
+        # leak this exists to close. ``value_rule_active`` False means the
+        # upstream account fetch failed and only the URL-shape fallback ran.
+        "credential_scrub": {
+            "value_rule_active": bool(known_secrets),
+            "known_credential_values": len(known_secrets) + len(known_identities),
+            "m3u_accounts_fetched": m3u_accounts_fetched,
+            "epg_sources_fetched": bool(epg_sources),
+        },
         "stream_stats": {
             "probed_success": probed_success,
             "probed_failed": probed_failed,
@@ -4982,18 +5057,25 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         )
 
     # -- 10. Pack into tar.gz ----------------------------------------
+    #
+    # EVERY member goes through ``scrub_member`` — the literal value sweep — on
+    # its way into the archive. This is the stage that makes the invariant a
+    # property of the ARTIFACT rather than a property each producer has to
+    # remember: a member added later inherits the scrub whether or not its
+    # author thought about credentials, which is exactly the assumption that
+    # failed in bead …-d0hoc.
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        _add_tar_entry(tf, "channels.json", channels_json_str)
-        _add_tar_entry(tf, "channels.csv", csv_content)
-        _add_tar_entry(tf, "rules.yaml", yaml_content)
-        _add_tar_entry(tf, "normalization_rules.yaml", norm_yaml_content)
-        _add_tar_entry(tf, "settings.json", settings_json_str)
-        _add_tar_entry(tf, "task_schedules.json", task_schedules_str)
-        _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str)
-        _add_tar_entry(tf, "event_sync_matching.json", event_sync_matching_str)
-        _add_tar_entry(tf, "logs.txt", logs_text)
-        _add_tar_entry(tf, "manifest.json", manifest_str)
+        _add_tar_entry(tf, "channels.json", channels_json_str, scrub_member)
+        _add_tar_entry(tf, "channels.csv", csv_content, scrub_member)
+        _add_tar_entry(tf, "rules.yaml", yaml_content, scrub_member)
+        _add_tar_entry(tf, "normalization_rules.yaml", norm_yaml_content, scrub_member)
+        _add_tar_entry(tf, "settings.json", settings_json_str, scrub_member)
+        _add_tar_entry(tf, "task_schedules.json", task_schedules_str, scrub_member)
+        _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str, scrub_member)
+        _add_tar_entry(tf, "event_sync_matching.json", event_sync_matching_str, scrub_member)
+        _add_tar_entry(tf, "logs.txt", logs_text, scrub_member)
+        _add_tar_entry(tf, "manifest.json", manifest_str, scrub_member)
     payload = buf.getvalue()
 
     elapsed_ms = (time.time() - start) * 1000

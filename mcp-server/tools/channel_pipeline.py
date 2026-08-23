@@ -1530,7 +1530,13 @@ def register(mcp: FastMCP):
                 "  POST /api/channel-pipeline/debug-bundle           -> 202 + {job_id}\n"
                 "  GET  /api/channel-pipeline/debug-bundle/{job_id}  -> JSON status, or tar.gz when ready\n"
                 "Or download it from the ECM UI: Auto-Creation / Channel Pipeline page > Debug Bundle button.\n\n"
-                "Bundle contains (all data obfuscated for safe sharing):\n"
+                "Bundle contents. Hostnames are replaced and provider\n"
+                "credentials are redacted by value and by URL shape; a\n"
+                "credential this instance does not hold, in a URL shape the\n"
+                "fallback does not recognize, can still survive. manifest.json\n"
+                "reports whether the value-based rule was able to run. Treat\n"
+                "the bundle as sensitive and check it before posting it\n"
+                "publicly:\n"
                 "  - channels.json — channel data with stream details and stats\n"
                 "  - rules.yaml — auto-creation rules configuration\n"
                 "  - normalization_rules.yaml — normalization rule groups + rules (cross-references rules.yaml's normalization_group_ids)\n"
@@ -1538,6 +1544,7 @@ def register(mcp: FastMCP):
                 "  - settings.json — app settings (credentials redacted)\n"
                 "  - task_schedules.json — scheduled task configuration\n"
                 "  - channel_groups_diagnostic.json — Channel Manager group/membership diagnostic\n"
+                "  - event_sync_matching.json — per-rule Event Sync matching diagnostics\n"
                 "  - logs.txt — recent application logs\n"
                 "  - manifest.json — bundle metadata + counts")
 
