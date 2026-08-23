@@ -182,15 +182,20 @@ save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
         assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
         assert list(tmp_path.glob(".settings.json.*.tmp")) == []
 
-    def test_mcp_sidecar_observes_rotation_on_the_next_read(self, isolated_settings):
+    def test_mcp_sidecar_observes_rotation_on_the_next_read(
+        self, monkeypatch, isolated_settings
+    ):
         """Cross-seam: the real sidecar reader against the real backend writer.
 
-        Pinned to today's seam, where the sidecar reads ``mcp_api_key`` straight
-        out of settings.json. Bead ...-04c0u.8 moves that credential into a
-        separate projected key file, so whoever merges .8 must re-point this at
-        ``mcp_config.MCP_KEY_FILE`` rather than delete it: the property under
-        test (a rotation is visible to the sidecar on its next read, with no
-        restart) is unchanged, only the file it reads.
+        Re-pointed at ``mcp_config.MCP_KEY_FILE`` on the ...-04c0u.8 merge, as
+        the pre-merge version of this docstring instructed. The sidecar no
+        longer parses settings.json at all; it reads the ``api-key``
+        projection that ``save_settings`` writes through
+        ``_project_mcp_api_key``. The property under test is unchanged — a
+        rotation is visible to the sidecar on its next read, with no restart —
+        only the file it reads. Both ends are pinned into this test's private
+        directory so the assertion cannot be satisfied by whatever the shared
+        test ``CONFIG_DIR`` happens to hold.
         """
         module_path = REPOSITORY_ROOT / "mcp-server" / "config.py"
         specification = importlib.util.spec_from_file_location(
@@ -199,7 +204,9 @@ save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
         assert specification is not None and specification.loader is not None
         mcp_config = importlib.util.module_from_spec(specification)
         specification.loader.exec_module(mcp_config)
-        mcp_config.SETTINGS_FILE = isolated_settings
+        projected_key = isolated_settings.parent / "api-key"
+        monkeypatch.setattr(config, "MCP_KEY_FILE", projected_key)
+        monkeypatch.setattr(mcp_config, "MCP_KEY_FILE", projected_key)
 
         config.save_settings(_settings("before-rotation"))
         assert mcp_config.get_mcp_api_key_status() == ("before-rotation", "ok")
@@ -270,7 +277,17 @@ class TestSerializedDurableWrite:
         monkeypatch.setattr(config.os, "replace", record_replace)
         config.save_settings(_settings("durable-key"))
 
-        assert events == [
+        # ``save_settings`` performs a SECOND ``os.replace`` since bead
+        # ...-04c0u.8 landed: ``_project_mcp_api_key`` publishes the sidecar's
+        # ``api-key`` projection, after the cache assignment and so after the
+        # settings file's durability sequence. That projection is not what
+        # this test is about, and it is the only event dropped here — the
+        # remainder is still asserted as an exact ordered list, so moving the
+        # directory fsync before the settings replace still fails.
+        settings_durability = [
+            event for event in events if event != ("replace", str(config.MCP_KEY_FILE))
+        ]
+        assert settings_durability == [
             ("replace", str(isolated_settings)),
             ("fsync-directory", isolated_settings.parent.stat().st_ino),
         ]
