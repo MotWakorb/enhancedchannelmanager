@@ -883,22 +883,29 @@ The hard primitives already exist and were designed for this: `backend/security/
 ### 11.3 Mitigations summary (Addendum D)
 
 1. **One-way only.** A is system-of-record; bidirectional is a separate epic with a separate threat model. (D7 / ADR-013 S2.)
-2. **Redact-by-default, no secrets on the wire.** Shared `_REDACT_KEYS` denylist strips all secret fields before serialize; cred-carrying continuous sync is not shipped. (D2 / S7.)
+2. **Redact-by-default, PROVIDER CREDENTIALS EXCEPTED (amended 2026-08-22 — see §11.6).** The shared `_REDACT_KEYS` denylist still strips every secret field before serialize for every category *except* `m3u_accounts` and `epg_sources`, whose credential fields and credential-bearing addresses are transmitted deliberately on every cycle under the PO's ruling. ECM's own settings secrets, alert-method secrets and target credentials are unchanged. (D2 / S3′ / S7′.)
 3. **Users never sync: enforced, not scoped.** A shared never-sync constant + a test that the payload assembler refuses the `users` category and the credential columns. (D3 / S3.)
 4. **SSRF on every request, execute-time, and the CI guard extends to the sync module.** Without the guard extension the chokepoint is theatre for the new path. (D1.)
 5. **Credential-freshness at fire time.** Capture-at-enqueue / re-check-at-execute / abort+audit; mirrors the shipped CloudStorageTarget contract. (D5.)
-6. **TLS verify default; per-cycle insecure audit; insecure forbidden if payload ever carries creds.** (D6.)
+6. **TLS verify default; per-cycle insecure audit; insecure WARNED, not forbidden (amended 2026-08-22 — §11.6).** The payload does carry provider credentials now, and the PO removed the refusal in their own terms. What remains is a warning on every credential-carrying cycle, an audit row recording `tls_verified=false`, and a badge on the target. (D6.)
 7. **Idempotency is recovery.** Upsert-by-stable-identity + reuse the rollback ledger + tri-state outcome; retry converges, no new saga machinery. (D8 / S8.)
-8. **No new crypto.** Under redact-by-default the payload is topology-only, so TLS is the complete in-transit control; ADR-012 D3's "no new crypto surface" holds for the redacted sync path. (D2/D6.)
+8. **No new crypto.** TLS remains the complete in-transit control and ADR-012 D3's "no new crypto surface" still holds — but the payload is no longer topology-only, so TLS is now protecting a live provider credential rather than a deployment shape, on every cycle. That raises what a failure of it costs; it does not add a control. (D2/D6, amended — §11.6.)
 
 ### 11.4 Residual risk (Addendum D)
 
 - **Residual: topology disclosure to B (Low, accepted).** Even redacted, the sync payload reveals the deployment shape (channel names, source URLs minus creds). Inherent to replicating config at all; B is an operator-trusted destination. Same accepted residual as the redacted backup artifact (Addendum A §8.4).
-- **Residual: credential re-entry friction on B (accepted, availability, not confidentiality).** Redact-by-default means the operator re-enters M3U/EPG passwords on B after first sync. The deliberate trade for not streaming live secrets continuously; secret migration remains the `u81kh` artifact path.
+- **~~Residual: credential re-entry friction on B~~ — CLOSED 2026-08-22 (§11.6).** The operator no longer re-enters anything: provider credentials cross on every cycle. What replaced it is a confidentiality residual the PO has explicitly accepted — the replica is a place the provider credential lives — recorded in §11.6.
 - **Residual: no live-B integration coverage at build time (tracked).** The build + unit/contract tests run against mocks/fakes; the live A→B round-trip + the live half of the test harness are gated on a reachable second Dispatcharr (bead `46pkq`). Flagged, not silently skipped.
-- **Residual: `insecure=true` on a recurring channel (Low, accepted with per-cycle audit).** A one-shot insecure upload is one auditable event; a recurring insecure sync ships topology over unverified TLS every interval, bounded by the per-cycle audit row (D6) so the operator sees recurring exposure, and forbidden the moment the payload is non-redacted.
+- **Residual: `insecure=true` on a recurring channel — RE-RATED High, PO-ACCEPTED 2026-08-22 (§11.6).** The Low rating rested on the payload being topology. It is not: an insecure target receives a live provider credential in clear on every cycle. The refusal that §11.5 built was removed by PO ruling; the exposure is now warned, badged and audited, and the operator owns the mitigation.
 
 ### 11.5 Update 2026-08-22: one-time credential provisioning (bead `enhancedchannelmanager-t77qd`)
+
+> **SUPERSEDED the same day by [§11.6](#116-update-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-115).**
+> Everything in §11.5 analyses the one-time provisioning design that shipped in PR #908 and was
+> removed two days later. It is kept as the record of what was weighed. **Rows D11-D16 as written
+> below are void**; §11.6 re-rates each against per-cycle transmission and records which residuals
+> the PO has ACCEPTED rather than mitigated. §11.5.4's five build gates are void with the build they
+> gated.
 
 §11.1–§11.4 above are the design record for a sync that **carries no credential at all**. This
 section is the **current** description of the surface after [ADR-013](../adr/ADR-013-cross-instance-live-sync.md)'s
@@ -1096,3 +1103,86 @@ decision item 5 previously carried was ruled on 2026-08-22.
 
 Items 1, 3 and 5 are the ones where getting it wrong is invisible from the outside: the feature
 works, the tests are green, and the control is absent.
+
+---
+
+### 11.6 Update 2026-08-22 (b): provider credentials cross on every cycle (supersedes §11.5)
+
+**Companion to [ADR-013 amendment (b)](../adr/ADR-013-cross-instance-live-sync.md#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a).**
+PO-ratified 2026-08-22, third ruling of that day, in the PO's own words:
+
+> *"I know the security risks. That's on the user to mitigate, not us. … We should be sending
+> credentials every time so that we don't need the user to deal with needing to re-type anything."*
+
+This section exists because §11.5 is now a description of removed code, and because several of the
+threats it rated as *mitigated* are, under this ruling, **accepted**. Those are different words and
+the difference is the whole point of writing it down: a mitigated threat has a control someone can
+check; an accepted threat has a decision someone made. Reading a row as mitigated when it is
+accepted is how a later reader concludes a control was lost by mistake.
+
+#### 11.6.1 What actually changed
+
+Provider credentials are part of what the ordinary sync cycle writes. There is no provisioning
+action, no marker column, no version gate and no change detector. The mechanism is one constant —
+`tasks.dbas_sync_engine.PROVIDER_CREDENTIAL_SECTIONS`, naming `m3u_accounts` and `epg_sources` — plus
+the decision to stop threading harvested secrets into the channels and logos redaction so stream and
+logo addresses cross whole.
+
+What did **not** change: `users` never syncs (D3), ECM's own settings secrets, alert-method secrets
+and cloud/sync-target credentials are still redacted, the SSRF chokepoint still gates every outbound
+request (D1), and the standard backup **artifact** still redacts everything it always did — that is a
+file people attach to support tickets, and it is a different surface from a live push to a host the
+operator chose.
+
+#### 11.6.2 Re-rated rows
+
+| Row | Was | Now | Why, and mitigated vs accepted |
+|---|---|---|---|
+| **D2** — sync payload / Information Disclosure | "no plaintext-cred path in v0.18.1"; cred-carrying continuous sync not shipped | **High, ACCEPTED** | Cred-carrying continuous sync is exactly what shipped. The payload carries the operator's provider username, password and credential-bearing addresses to B on every cycle. There is no control that reduces this — it is the feature. What bounds it is the destination: B is a host the operator chose and owns. **Accepted, not mitigated.** |
+| **D6** — TLS / Tampering | Med; "forbidden-by-construction if the payload is ever non-redacted" | **High, ACCEPTED on an `insecure` target; Med otherwise** | The payload is non-redacted now, so the construction's own condition is met — and §11.5 built the refusal it called for. The PO removed it. An active MITM against an `insecure` target reads a live provider credential on every cycle, in both directions (the destination read pulls B's account rows back to A). Remaining controls are **detective, not preventive**: a warning in the run's notes and log on every credential-carrying cycle, `tls_verified=false` on the audit row, and a badge on the target row. |
+| **D9** — Audit / Repudiation | High (sole detector for D12) | **High, MITIGATED** | Still High, for a changed reason. D12's detection role is gone with D12; what makes the row High now is that under per-cycle transmission **no human reads the value and no one is present when it moves**, so the journal row is the only record that it moved at all. Strengthened accordingly: every terminal route of a cycle writes exactly one `sync_outbound` row carrying `redaction_mode=topology_plus_provider_credentials`, `tls_verified`, the count of provider records that carried a credential, and those records by label and FIELD NAME. The abort routes write it too, recording that they carried nothing. This is the surviving form of bead `gad2p`. |
+| **D11** — provisioning action | High, to-build | **VOID** | There is no provisioning action. Its exposure is subsumed by D2. |
+| **D12** — the one-time path becomes recurring | High, mitigated by INV-2's reachability guard | **REALISED AND ACCEPTED.** | This is the honest entry. D12's threat was that the one-time path would silently become a recurring one; the PO has made it recurring **deliberately and in the open**, so the threat did not fail to be mitigated — its premise was withdrawn. The reachability guard and the writer module were deleted rather than weakened, because a guard asserting the opposite of the ratified design reads as a control and enforces nothing. **What now bounds the transmission is nothing structural.** It is bounded only by scope (two categories, one constant) and by disclosure (the audit row, the docs and the UI all say it happens). A reader looking for the control that used to be here should know there is not one. |
+| **D13** — de-provision | High, to-build | **VOID** | There is no de-provision. See §11.6.3 for what an operator does instead, and what it cannot achieve. |
+| **D14** — harvest scope | Med | **Med, MITIGATED** | Survives in changed form and is the one structural control left. The credential-carrying section set is a closed named constant (`PROVIDER_CREDENTIAL_SECTIONS`), and the key set within it is **derived** from the redactor's own `_REDACT_KEYS` / `_PROVIDER_IDENTITY_KEYS` rather than maintained as a literal, so the two rules cannot drift about what a credential is. A newly gathered category does not inherit the exception. |
+| **D15** — Schedules Direct reporting | Low | **Low, MITIGATED** | The silence that made it a finding stays closed, and the operator's cost fell from "supply it at every provisioning" to "supply it once". The password is stored Fernet-encrypted on the sync-target row and re-sent every cycle. Its write-only property still runs both ways: ECM can confirm it **wrote** the value and never that B holds a **working** one. New sub-residual: A now persists one provider credential at rest, which §11.5's INV-3 forbade — deliberate, scoped to the one value that cannot be harvested, and using the same crypto path as the target's own credentials. |
+| **D16** — `insecure` + a credential B holds that ECM did not write | High, mitigated by the observed-state gate | **High, ACCEPTED** | The gate is gone with the refusal it fed. Its predicate was also measurably wrong (bead `ngwxx`: a populated but credential-free XC `server_url` counted as an observed credential, so the gate false-positived on every XC target, permanently and unclearably) — but that is not why it was removed; it was removed because nothing reads it. Whether ECM wrote the credential or the operator did is now immaterial: B holds one either way, every cycle. **Bead `3dmgr` is dissolved, not fixed.** |
+
+#### 11.6.3 Residual risk after the ruling
+
+Every item here is **PO-accepted**. None has a control that reduces it.
+
+1. **The replica is a place the provider credential lives, permanently.** Its database, backups,
+   exports, logs and its own stream rows hold it. Nothing retracts it.
+2. **An `insecure` target leaks it in clear on every cycle**, recurring rather than one-shot,
+   warned and audited but not blocked.
+3. **The blast radius of a compromised replica now includes the provider subscription**, where
+   before it was the topology.
+4. **There is no ECM-side record of which replicas hold a credential** — the marker columns were
+   dropped. The journal is the record: every cycle that carried one says so, naming the target.
+5. **De-provisioning is not available and would not have been sufficient.** An operator who wants a
+   replica to stop holding the credential must (i) delete or disable the sync target so no further
+   cycle re-sends it, (ii) clear the credentials on B themselves, and (iii) **rotate the credential
+   at the provider** — which is the only step that ends the exposure, and is outside ECM. Steps (i)
+   and (ii) without (iii) stop B re-authenticating; they do not make the secret secret again.
+6. **A logo address carrying a credential is copied verbatim** rather than dropped, trading a named
+   logo miss for the replica loading the artwork.
+
+#### 11.6.4 What still gates the build
+
+§11.5.4's five items are void with the design they gated. Two survive in changed form, and one is new.
+
+1. **The credential-carrying outbound path stays inside the SSRF chokepoint guard's scanned set.**
+   Unchanged in force, easier to satisfy: the path is now `tasks.dbas_sync_engine` →
+   `tasks.dbas_sync_client.make_remote_client`, both already inside `_SYNC_GLOB`. §11.5.4 item 2's
+   warning — that `backend/routers/` is scanned nowhere — still applies to any future outbound path.
+2. **The operator-facing text matches the behaviour, and it is a hard gate.** This is bead
+   `msqf7`'s actual subject and the only thing about this feature that can still be a *defect*
+   rather than an accepted risk. `msqf7` was not "credentials crossed"; it was "ECM said they were
+   stripped while they crossed". Any surface that claims the sync path redacts provider
+   credentials — the user guide, a tooltip, a report field, a docstring, or the audit row's own
+   `redaction_mode` — is a recurrence of that bead. Corrected in the same branch as the behaviour.
+3. **NEW: the two-section boundary is asserted, not assumed.** The easy and invisible way to widen
+   this is to apply `preserve_keys` past `PROVIDER_CREDENTIAL_SECTIONS`. A test must assert that an
+   ECM settings secret and an alert-method secret are still sentinelled in a sync plan **while** a
+   provider password is not, so the pair fails asymmetrically when the boundary moves.

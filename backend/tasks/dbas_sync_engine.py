@@ -13,8 +13,10 @@ take the Dispatcharr ``client`` as an injected parameter — the ONLY coupling t
 
 1. gathers the LOCAL source-A config (the SAME ``_gather_dispatcharr_sections``
    pointed at ``get_client()`` the backup builder uses),
-2. REDACTS it to topology-only via the shared ``_REDACT_KEYS`` deep redactor
-   (no secrets on the wire — Addendum D D2),
+2. REDACTS it via the shared ``_REDACT_KEYS`` deep redactor — with ONE deliberate
+   exception, the provider credential fields, which cross on every cycle under the
+   PO's 2026-08-22 ruling (see :data:`PROVIDER_CREDENTIAL_SECTIONS`). ECM's own
+   secrets, alert-method secrets and target credentials do not,
 3. maps each category to its :class:`EntityType` (the SAME
    ``restore_artifact._SECTION_TO_ENTITY`` table the archive decoder uses),
 4. assembles an :class:`~dbas.preflight.ImportPlan` whose manifest carries
@@ -145,12 +147,16 @@ from dbas.restore_orchestrator import (
 from dbas.importers import logos as logos_mod
 from dbas.importers.channels import import_channels
 from dbas.importers.logos import import_logos
+from credential_sentinel import credential_is_present
 from routers import backup as backup_mod
 from routers.backup import (
     BACKUP_SCHEMA_VERSION,
     _collect_credential_values,
     _gather_dispatcharr_sections,
+    _PROVIDER_IDENTITY_KEYS,
+    _REDACT_KEYS,
     _redact_credentials_deep,
+    _url_carries_credentials,
 )
 from security.ssrf import SSRFError
 from tasks.dbas_sync_client import make_remote_client, sync_freshness_reason
@@ -218,6 +224,76 @@ SYNC_ALL_CATEGORIES: frozenset[str] = SYNC_CONFIG_CATEGORIES | SYNC_CHANNEL_CATE
 # slice only runs for a target whose operator opted in. When it runs it is
 # NEVER destructive (clear_existing is hard-disabled in the sync logos step).
 SYNC_LOGO_CATEGORIES: frozenset[str] = frozenset({"logos"})
+
+
+# ---------------------------------------------------------------------------
+# PROVIDER CREDENTIALS CROSS ON EVERY CYCLE (PO ruling 2026-08-22, ADR-013 S3 /
+# S12 as amended). This constant is the whole of the exception.
+# ---------------------------------------------------------------------------
+#
+# THE RULING, verbatim: "We should be sending credentials every time so that we
+# don't need the user to deal with needing to re-type anything. Any update
+# happens as soon as the next scheduled sync occurs." The operator owns both
+# instances; a replica whose provider credential is absent or stale is not a
+# replica, and the re-typing that closed the gap is the thing being removed.
+#
+# THIS SUPERSEDES the one-time provisioning action (bead ``wd20y``, PR #908) and
+# the setup-only and change-detected cascades considered the same day. There is
+# no separate action, no marker column, no version gate and no change detector:
+# the credential fields are simply part of what the cycle writes, so rotation on
+# A reaches B on the next cycle by construction rather than by mechanism.
+#
+# WHAT BEAD ``msqf7`` ACTUALLY FORBIDS, and it is not this. That bead was not
+# about transmitting a credential; it was about ECM TELLING THE OPERATOR
+# credentials were stripped while transmitting them anyway, implicitly, inside
+# stream-URL path segments that nothing inspected. Deliberate transmission with
+# the product's own words matching the behaviour is the opposite of that defect.
+# The operator-facing text was corrected in the same commit as this constant —
+# ``docs/user_guide/backup-restore/cross-instance-sync.md``, the sync journal
+# row, and the SyncTargets card all now say credentials cross on every cycle.
+#
+# THE SCOPE IS THE PROVIDER SECTIONS ONLY, and this is the precise half. The
+# sections named here are pure third-party provider configuration:
+# ``m3u_accounts`` and ``epg_sources``. Everything ELSE the redactor covers is
+# redacted exactly as before — ECM's own settings secrets, alert-method secrets,
+# cloud-target and sync-target credentials, and ``dispatcharr_users`` (which is
+# never synced at all, D3). A new gathered category does NOT inherit this
+# exception; it has to be added here, deliberately.
+PROVIDER_CREDENTIAL_SECTIONS: frozenset[str] = frozenset(
+    {"m3u_accounts", "epg_sources"}
+)
+
+# The credential-class KEYS carried verbatim inside those sections.
+#
+# DERIVED FROM THE REDACTOR'S OWN VOCABULARY, not maintained as a literal. It is
+# exactly the set the deep redactor would otherwise sentinel — the secret half
+# (``_REDACT_KEYS``: password, api_key, access_token, …) plus the identity half
+# (``_PROVIDER_IDENTITY_KEYS``: username). Within these two sections every one of
+# those keys IS a third-party provider credential, and every one of them is
+# needed for the replica to authenticate: an XC account given a password but no
+# username authenticates no better than one given neither, and an EPG source
+# given a URL but no ``api_key`` fetches nothing.
+#
+# Deriving it is what keeps this honest as the redactor grows. A new
+# credential-class key added to either denylist starts crossing in the provider
+# sections automatically and stops crossing everywhere else automatically, so
+# the two rules cannot drift into disagreeing about what a credential is. A
+# maintained literal here would silently withhold the new key from the replica
+# and the failure would look like "the provider stopped working".
+PROVIDER_CREDENTIAL_KEYS: frozenset[str] = _REDACT_KEYS | _PROVIDER_IDENTITY_KEYS
+
+# The Dispatcharr EPG ``source_type`` whose password Dispatcharr never returns.
+#
+# Every other credential on this instance can be read back off A's own records,
+# so it needs no operator input at all. Schedules Direct cannot: the serializer
+# marks the password write-only, with no admin re-add, and SHA1-hashes it at
+# fetch, so the value never enters ECM's process. Absence is UNREADABLE, not
+# unset. The operator therefore supplies it ONCE, on the sync target
+# (``SyncTarget.schedules_direct_password``, Fernet-encrypted at rest like the
+# target's own credentials), and it cascades on every cycle with everything else
+# — which is exactly the re-typing the ruling removes.
+SCHEDULES_DIRECT_SOURCE_TYPE = "schedules_direct"
+SCHEDULES_DIRECT_PASSWORD_FIELD = "password"
 
 
 # ---------------------------------------------------------------------------
@@ -443,11 +519,7 @@ def _hosted_logo_records(
 
 
 def _remote_logo_records(
-    source_logos: list[dict],
-    *,
-    mirrored_ids: set[int],
-    known_secrets: frozenset,
-    known_identities: frozenset,
+    source_logos: list[dict], *, mirrored_ids: set[int]
 ) -> list[dict]:
     """Metadata-only records for the REMOTE-URL logos (bead …-sgrez).
 
@@ -468,19 +540,16 @@ def _remote_logo_records(
     it would spend 59 network fetches inside bead …-cfxml's 300s per-cycle
     budget on every unattended cycle, forever.
 
-    CREDENTIAL-BEARING URLS ARE NOT COPIED. Bead …-msqf7 established that a real
+    CREDENTIAL-BEARING URLS ARE NOW COPIED VERBATIM (PO ruling 2026-08-22 — see
+    :data:`PROVIDER_CREDENTIAL_SECTIONS`). Bead …-msqf7 established that a real
     Xtream Codes provider puts the account's username and password in PATH
-    SEGMENTS of the addresses it hands out; a logo url comes from the same
-    provider on the same instances, so copying one verbatim would re-open that
-    hole by a new route. Every candidate url is therefore put through the SAME
-    :func:`~routers.backup._scrub_credential_urls` machinery, with the same
-    harvested values, and a url the scrub TOUCHES AT ALL is dropped rather than
-    carried in its scrubbed form: with its credential segments replaced by the
-    sentinel the address no longer resolves, and handing B a logo that silently
-    404s is what ``importers.logos`` already rules "strictly worse than an
-    honest miss". The record still travels — without a ``url``, without a
-    ``filename``, and therefore with no way back — so the importer reports it as
-    a NAMED miss with its affected channels instead of the logo vanishing.
+    SEGMENTS of the addresses it hands out, and a logo url comes from the same
+    provider; this gather used to DROP such a url and report the logo as a named
+    miss. Under per-cycle credential transmission that drop bought nothing and
+    cost the replica its branding — the replica holds the same provider
+    credential now, so the address it is handed is one it can actually fetch.
+    The scrub is gone rather than neutered, because a scrub whose inputs are
+    always empty is a rule that reads as enforcement and enforces nothing.
 
     Args:
         source_logos: the source Dispatcharr logo rows.
@@ -490,12 +559,10 @@ def _remote_logo_records(
             would put two records on one LOGO remap entry, and the loser would
             be skipped ``ALREADY_EXISTS_IDENTICAL`` — a claim of sameness about
             images that are not the same.
-        known_secrets: the authenticating half of the harvested credentials.
-        known_identities: the identifying half.
 
     Returns:
-        Metadata-only records, each carrying the source ``id`` and display
-        ``name``, and the ``url`` only when it is safe to hand to the replica.
+        Metadata-only records, each carrying the source ``id``, display ``name``
+        and ``url``.
     """
     records: list[dict] = []
     for logo in source_logos:
@@ -518,16 +585,7 @@ def _remote_logo_records(
                 else "logo %d" % logo_id
             ),
         }
-        if backup_mod._scrub_credential_urls(url, known_secrets, known_identities):
-            # Never log the url itself — it is the thing that carries the
-            # credential. The name is the operator-facing identifier.
-            logger.warning(
-                "[SYNC] Logo '%s' has a credential-bearing address; it was NOT "
-                "copied to the destination and is reported as a miss.",
-                record["name"],
-            )
-        else:
-            record["url"] = url
+        record["url"] = url
         records.append(record)
     return records
 
@@ -573,11 +631,7 @@ def _drop_superseded_local_logos(
     return kept
 
 
-async def _gather_live_logos(
-    *,
-    known_secrets: frozenset = frozenset(),
-    known_identities: frozenset = frozenset(),
-) -> list[dict]:
+async def _gather_live_logos() -> list[dict]:
     """Gather source-A logos as METADATA-ONLY records (bead 7ipq2.1 — D8).
 
     THREE sources, which is every storage shape a Dispatcharr logo can have,
@@ -611,13 +665,6 @@ async def _gather_live_logos(
     time, by :func:`_load_logo_content_b64` inside the importer loop —
     assembling every logo's base64 into the plan up front would hold the whole
     logo set in memory and defeat D8.
-
-    Args:
-        known_secrets: the authenticating half of the credential values
-            harvested off the RAW gather (bead …-msqf7). A remote logo url is a
-            provider-supplied address and can carry them, so it is scrubbed
-            through the same machinery every other url on the wire is.
-        known_identities: the identifying half.
 
     Returns:
         Metadata-only logo records; empty when no source yields anything.
@@ -657,8 +704,6 @@ async def _gather_live_logos(
             record["id"] for record in local_records
             if isinstance(record.get("id"), int)
         },
-        known_secrets=known_secrets,
-        known_identities=known_identities,
     )
     records = local_records + hosted_records + remote_records
 
@@ -754,15 +799,242 @@ async def _load_logo_content_b64(record: dict) -> Optional[str]:
     return base64.b64encode(data).decode("ascii")
 
 
-async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
+def _redact_sync_sections(sections: dict) -> dict:
+    """Redact a gathered payload for the wire, PROVIDER CREDENTIALS EXCEPTED.
+
+    TWO PASSES, and the split is the whole of the precision the PO's ruling
+    requires — "be precise about which is which, in code and in prose".
+
+    * The PROVIDER sections (:data:`PROVIDER_CREDENTIAL_SECTIONS`) are redacted
+      with :data:`PROVIDER_CREDENTIAL_KEYS` preserved AND with the URL-credential
+      rule disabled, because a plain-M3U account has no password field at all —
+      its whole credential lives inside ``server_url``'s query string, and an
+      account that receives a sentinelled ``server_url`` authenticates against
+      nothing. The same is true of an authenticated XMLTV EPG ``url``. Every
+      other redaction rule still runs over these sections.
+    * EVERY OTHER section is redacted exactly as it was before this ruling:
+      the full denylist, the identity half, and the URL rule. ECM's own settings
+      secrets, alert-method secrets and cloud/sync-target credentials are not
+      provider credentials and do not cross.
+
+    THE PATH-SEGMENT RULE IS OFF FOR THE PROVIDER SECTIONS AND UNCHANGED
+    EVERYWHERE ELSE. That harvest (bead ``…-msqf7``) exists to find a credential
+    hiding in a URL PATH SEGMENT so it can be replaced. In the provider sections
+    the credential is carried on purpose, so running it there would sentinel the
+    very values the replica needs. Everywhere else it stays exactly as armed as
+    it was — note the harvest reads the WHOLE gather, not just the sections it
+    is applied to, because the values it looks for LIVE in the provider sections
+    and a provider password quoted inside a stream profile's command string is
+    still a leak.
+
+    Args:
+        sections: the RAW gather, keyed by category.
+
+    Returns:
+        A new dict, same keys, redacted per the split above.
+    """
+    if not isinstance(sections, dict):
+        return sections
+    provider = {
+        key: value
+        for key, value in sections.items()
+        if key in PROVIDER_CREDENTIAL_SECTIONS
+    }
+    rest = {
+        key: value
+        for key, value in sections.items()
+        if key not in PROVIDER_CREDENTIAL_SECTIONS
+    }
+    # Harvested from the WHOLE gather: the credential VALUES live in the
+    # provider sections, and narrowing the harvest to ``rest`` would quietly
+    # disarm the path-segment rule for every other section by giving it nothing
+    # to match against.
+    known_secrets, known_identities = _collect_credential_values(sections)
+    out = dict(
+        _redact_credentials_deep(
+            rest,
+            preserve_keys=frozenset(),
+            known_secrets=known_secrets,
+            known_identities=known_identities,
+        )
+    )
+    out.update(
+        _redact_credentials_deep(
+            provider,
+            preserve_keys=PROVIDER_CREDENTIAL_KEYS,
+            scrub_credential_urls=False,
+        )
+    )
+    return out
+
+
+def _inject_schedules_direct_password(sections: dict, password: Optional[str]) -> None:
+    """Write the target's stored Schedules Direct password onto its SD sources.
+
+    IN PLACE, on the already-redacted sections, because there is nothing on this
+    instance to harvest: Dispatcharr marks the SD password write-only, never
+    returns it, and SHA1-hashes it at fetch. It is the ONE credential the
+    operator supplies, once, on the sync target — see
+    :data:`SCHEDULES_DIRECT_SOURCE_TYPE`.
+
+    Driven by ``source_type``, never by a presence check. A presence check cannot
+    work for a field that is never in the gather: absence here means UNREADABLE,
+    not unset, and a presence-driven writer would silently skip every SD source
+    forever.
+
+    A ``None``/empty password writes nothing at all — omitting the key leaves
+    whatever the replica already holds rather than clearing it to empty, which
+    would take a working SD source down on the first cycle after an operator
+    upgraded without filling the new field in.
+
+    Args:
+        sections: the redacted gather; mutated in place.
+        password: the target's decrypted SD password, or ``None``.
+    """
+    if not password:
+        return
+    rows = sections.get("epg_sources") if isinstance(sections, dict) else None
+    if not isinstance(rows, list):
+        return
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("source_type") != SCHEDULES_DIRECT_SOURCE_TYPE:
+            continue
+        row[SCHEDULES_DIRECT_PASSWORD_FIELD] = password
+
+
+def credential_bearing_records(plan: ImportPlan) -> list[str]:
+    """The operator-facing LABELS of the records this plan carries a credential on.
+
+    The audit half of the ruling (bead ``gad2p``'s surviving invariant): under
+    per-cycle transmission the journal row is the only record of what moved, so
+    every cycle states WHICH provider records carried a credential field and
+    which FIELD NAMES they carried. Names and labels only — no value, no
+    fragment of a value, no masked tail of a value.
+
+    Read off the ASSEMBLED PLAN rather than off the sections dict it came from,
+    deliberately: the plan is what the orchestrator will actually send, so a
+    later assembly step that dropped or rewrote a row cannot leave the audit row
+    claiming a credential crossed that did not.
+
+    Args:
+        plan: the assembled :class:`ImportPlan`.
+
+    Returns:
+        ``["<label> (<field>, <field>)", …]`` in category then document order,
+        empty when the cycle carried no credential at all.
+    """
+    out: list[str] = []
+    wanted = (EntityType.M3U_ACCOUNT, EntityType.EPG_SOURCE)
+    for category in getattr(plan, "categories", []) or []:
+        if getattr(category, "entity_type", None) not in wanted:
+            continue
+        for row in getattr(category, "entities", []) or []:
+            if not isinstance(row, dict):
+                continue
+            fields = [
+                key
+                for key in row
+                if isinstance(key, str)
+                and key.lower() in PROVIDER_CREDENTIAL_KEYS
+                and credential_is_present(row.get(key))
+            ]
+            # A plain-M3U account has no password field at all — its credential
+            # is inside the address — so a credential-bearing URL counts as a
+            # carried credential in its own right, or the count would report
+            # zero for the very account type no field name can describe.
+            for url_key in ("server_url", "url"):
+                value = row.get(url_key)
+                if isinstance(value, str) and _url_carries_credentials(value):
+                    fields.append(url_key)
+            if not fields:
+                continue
+            label = row.get("name") or "<unnamed>"
+            out.append("%s (%s)" % (label, ", ".join(sorted(set(fields)))))
+    return out
+
+
+def target_schedules_direct_password(sync_target) -> Optional[str]:
+    """Decrypt this target's stored Schedules Direct password, or ``None``.
+
+    Fail-soft on a decryption failure (a rotated ``FERNET_KEY``): the cycle
+    proceeds and leaves the replica's SD password untouched rather than aborting
+    an otherwise-healthy sync over one optional field. The miss is logged.
+    """
+    stored = getattr(sync_target, "schedules_direct_password", None)
+    if not stored:
+        return None
+    try:
+        from cloud_storage.crypto import decrypt_credentials
+
+        decrypted = decrypt_credentials(stored)
+    except Exception as exc:  # noqa: BLE001 — an optional field must not abort a cycle
+        logger.warning(
+            "[SYNC] Could not decrypt the Schedules Direct password for target "
+            "%s: %s", getattr(sync_target, "id", "?"), exc.__class__.__name__,
+        )
+        return None
+    if not isinstance(decrypted, dict):
+        return None
+    value = decrypted.get(SCHEDULES_DIRECT_PASSWORD_FIELD)
+    return value if isinstance(value, str) and value else None
+
+
+def insecure_transmission_warning(
+    sync_target, *, carrying_credentials: bool
+) -> Optional[str]:
+    """The warning a credential-carrying cycle over unverified TLS produces.
+
+    WHAT THIS REPLACED, and why it is a warning rather than a refusal. Until the
+    2026-08-22 ruling this combination was a 409 at the service layer: a target
+    with ``insecure=true`` could not be provisioned, and a provisioned target
+    could not be set insecure. The PO removed it in their own terms — "I know the
+    security risks. That's on the user to mitigate, not us." The operator owns
+    both instances; ECM states the exposure plainly and does not block them.
+
+    So the exposure is NAMED rather than prevented, and it is named on every
+    cycle that actually carries a credential — not once at setup, because under
+    per-cycle transmission the exposure recurs on every cycle too.
+
+    Returns:
+        The operator-facing warning, or ``None`` when TLS verification is on or
+        this cycle carried no credential.
+    """
+    if not carrying_credentials:
+        return None
+    if not bool(getattr(sync_target, "insecure", False)):
+        return None
+    name = getattr(sync_target, "name", None) or "this sync target"
+    return (
+        "TLS verification is DISABLED for sync target '%s' (insecure=true) and "
+        "this cycle carried your provider credentials to it in clear. Every "
+        "cycle carries them, so this exposure repeats on the schedule, not "
+        "once. ECM does not block it — that is your call — but the remedy is "
+        "one setting: install a valid certificate on the replica and turn TLS "
+        "verification back on." % name
+    )
+
+
+async def build_live_source_plan(
+    *,
+    include_logos: bool = False,
+    schedules_direct_password: Optional[str] = None,
+) -> ImportPlan:
     """Gather the LOCAL source-A config, redact it, and assemble an ImportPlan.
 
     Reuses the backup gather (:func:`_gather_dispatcharr_sections`, which reads
     the LOCAL ``get_client()`` itself) and the shared
-    :func:`_redact_credentials_deep` deep redactor — the SAME topology-only
-    pipeline the redacted backup artifact uses (Addendum D D2: no secrets on the
-    wire). Each gathered section maps to its :class:`EntityType` via
-    :data:`_SECTION_TO_ENTITY`.
+    :func:`_redact_credentials_deep` deep redactor. Each gathered section maps to
+    its :class:`EntityType` via :data:`_SECTION_TO_ENTITY`.
+
+    **PROVIDER CREDENTIALS CROSS** (PO ruling 2026-08-22 — see
+    :data:`PROVIDER_CREDENTIAL_SECTIONS` for the ruling and its exact scope). The
+    M3U account and EPG source rows carry their real ``username`` / ``password``
+    and their real credential-bearing addresses, and stream URLs carry the
+    provider credential their path segments hold, so the replica authenticates
+    and serves on the SAME cycle rather than after an operator action. Everything
+    else the redactor covers is still redacted before a byte leaves this process.
 
     The plan's manifest carries ``schema_version = BACKUP_SCHEMA_VERSION`` — the
     orchestrator's pre-flight runs the SAME .17 schema-version gate as archive
@@ -775,12 +1047,16 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
             the Dispatcharr-hosted set (bead …-cfxml) — with no ``content_b64``
             in the plan (D8; bytes hydrate lazily per missed logo at import
             time). ``False`` (default) keeps logos out of the plan entirely.
+        schedules_direct_password: the target's stored Schedules Direct password,
+            already decrypted. ``None`` leaves every SD source's password
+            untouched on the replica.
 
     Returns:
-        An :class:`ImportPlan` of the redacted config categories PLUS the channels
+        An :class:`ImportPlan` of the config categories PLUS the channels
         category (with embedded streams, gathered separately — bead kcxie) PLUS,
         only when ``include_logos`` is set, the metadata-only logos category.
-        The ``users`` category is NEVER present (D3).
+        The ``users`` category is NEVER present (D3). Pass it to
+        :func:`credential_bearing_records` for the audit row's account list.
     """
     # Gather ONLY the config categories (never users; never channels/streams/
     # logos — those are other beads). _gather_dispatcharr_sections owns the LOCAL
@@ -788,30 +1064,9 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # the local Dispatcharr is unavailable — never a crash.
     sections = await _gather_dispatcharr_sections(set(SYNC_CONFIG_CATEGORIES))
 
-    # Harvest the credential VALUES off the RAW gather, BEFORE anything is
-    # redacted (bead …-msqf7). The key-name denylist cannot see a credential that
-    # is a PATH SEGMENT of a stream url — a real Xtream Codes provider puts the
-    # account's username and password there in every one of its stream URLs — but
-    # the values are right here in ``m3u_accounts``, so they can be matched
-    # LITERALLY rather than guessed at structurally.
-    #
-    # The union of every account's credentials is used, not the owning account's:
-    # the FK association IS available at this point (``m3u_account`` is still on
-    # each raw stream row; it is only dropped later, at payload-build time), but
-    # depending on it would leave a stream whose FK is null or unresolvable
-    # unprotected, and one provider's password leaking through another provider's
-    # URL is the same defect.
-    known_secrets, known_identities = _collect_credential_values(sections)
-
-    # Redact to topology-only BEFORE the rows enter the plan — one shared denylist,
-    # every category, no plaintext path (D2). preserve_keys is intentionally empty:
-    # sync NEVER carries credentials, unlike the opt-in migration artifact (u81kh).
-    redacted_sections = _redact_credentials_deep(
-        sections,
-        preserve_keys=frozenset(),
-        known_secrets=known_secrets,
-        known_identities=known_identities,
-    )
+    # Redact for the wire, provider credentials excepted (see the helper).
+    redacted_sections = _redact_sync_sections(sections)
+    _inject_schedules_direct_password(redacted_sections, schedules_direct_password)
 
     categories: list[PlanCategory] = []
     for section_key, entity_type in _SECTION_TO_ENTITY.items():
@@ -825,23 +1080,30 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
         categories.append(PlanCategory(entity_type=entity_type, entities=entities))
 
     # CHANNELS (bead kcxie) — gathered separately (not a config RESTORABLE_SECTION)
-    # WITH embedded streams, then redacted through the SAME deep denylist (D2). The
-    # redactor strips only secret-NAMED keys (password/token/...); stream ``url``
-    # — the matcher's Tier-1 identity — is NOT a redact key and survives, so the
-    # stream floor still works on the wire. The CHANNEL category is appended LAST
-    # so it applies after every config dependency (groups/profiles/M3U) is created.
+    # WITH embedded streams, then redacted through the SAME deep denylist. The
+    # CHANNEL category is appended LAST so it applies after every config
+    # dependency (groups/profiles/M3U) is created.
     #
-    # ``known_secrets`` is what stops "survives" meaning "carries the provider's
-    # username and password" for an XC account (bead …-msqf7): the credential
-    # SEGMENTS of the url become the sentinel and the rest of the address — host,
-    # kind marker, stream id — crosses intact, so the matcher keeps a usable
-    # identity and the operator keeps a visible one.
+    # THE STREAM URL NOW CROSSES WHOLE, and that is what makes the replica serve
+    # on this cycle rather than the one after next (beads ``…-2jvvb`` /
+    # ``…-5bib5``). A real Xtream Codes provider puts the account's username and
+    # password in every stream URL's path segments; bead ``…-msqf7`` replaced
+    # those segments with the sentinel, so the replica's channels bound to
+    # addresses that resolved to nothing, its own refresh later fetched the real
+    # streams as ORPHANS, and only a FURTHER ECM cycle rebound them. Carrying the
+    # address intact removes both halves: the channel is bound to a working URL
+    # the moment the cycle applies it.
+    #
+    # ``known_secrets`` is therefore deliberately NOT threaded here, and
+    # ``scrub_credential_urls`` is off: both exist to remove the provider
+    # credential from an address, which is the value the replica needs. Every
+    # KEY-NAMED redaction still runs over the channel rows — a channel or stream
+    # record carrying some other secret-named key is still redacted.
     channels = await _gather_live_channels()
     redacted_channels = _redact_credentials_deep(
         {"channels": channels},
         preserve_keys=frozenset(),
-        known_secrets=known_secrets,
-        known_identities=known_identities,
+        scrub_credential_urls=False,
     )
     channel_rows = redacted_channels.get("channels") if isinstance(redacted_channels, dict) else None
     channel_entities = (
@@ -857,17 +1119,13 @@ async def build_live_source_plan(*, include_logos: bool = False) -> ImportPlan:
     # METADATA-ONLY records: no content_b64 ever enters the plan (D8) — bytes
     # hydrate lazily per missed logo via _load_logo_content_b64.
     #
-    # The harvested credential values are threaded in because a REMOTE-URL logo
-    # record carries an ADDRESS (bead …-sgrez), and a provider-supplied address
-    # is exactly where bead …-msqf7 found this operator's username and password.
-    # The gather scrubs each candidate url through the same machinery rather
-    # than the records being redacted afterwards, because the right answer for a
-    # credential-bearing logo url is to DROP it (a sentinel-bearing address 404s
-    # on the replica), not to carry a scrubbed one.
+    # A REMOTE-URL logo record carries an ADDRESS (bead …-sgrez) which, on an
+    # XC-sourced instance, is where bead …-msqf7 found this operator's username
+    # and password. Under the 2026-08-22 ruling that address crosses verbatim:
+    # the replica holds the same provider credential, so a url it can fetch is
+    # worth more than a named miss.
     if include_logos:
-        logo_records = await _gather_live_logos(
-            known_secrets=known_secrets, known_identities=known_identities,
-        )
+        logo_records = await _gather_live_logos()
         categories.append(
             PlanCategory(entity_type=EntityType.LOGO, entities=logo_records)
         )
@@ -1615,11 +1873,34 @@ def _journal_sync_run(
 ) -> None:
     """Write the per-run ``sync_outbound`` audit row (Addendum D D9).
 
-    Records target id, the config categories + their counts, the result, and the
-    redaction mode. Best-effort — a journal failure must not crash the sync. Only
-    SAFE fields (names, counts, outcome) are logged; never a credential.
+    Records target id, the config categories + their counts, the result, the
+    redaction mode, AND what provider credentials this cycle carried. Best-effort
+    — a journal failure must not crash the sync. Only SAFE fields (names, counts,
+    outcome, FIELD names) are logged; never a credential value.
+
+    THE REDACTION MODE IS NOW ``topology_plus_provider_credentials``, and the
+    rename is not cosmetic. This row said ``topology_only`` while bead
+    ``…-msqf7`` was live and the cycle was carrying the provider's username and
+    password inside every stream URL — the audit row asserting the exact thing
+    that was false. Under the 2026-08-22 ruling the cycle carries them
+    deliberately, so the row says so, on every run, with the affected records
+    named. That is the whole of what ``msqf7`` requires of this feature: the
+    product's words match the behaviour.
+
+    ``credential_records`` / ``credential_count`` are the surviving form of bead
+    ``…-gad2p``'s invariant — no credential-carrying attempt terminates without
+    an audit row. The two failure routes that bead measured (a gate refusal with
+    no row, a de-provision against an unreachable destination with no row) do not
+    exist any more: the gate and the de-provision action were both deleted. What
+    replaced them is that EVERY terminal route of a cycle writes this row — the
+    freshness abort, the destination-unreadable abort, the completed apply and
+    the completed dry run — and each one states what it carried.
     """
     try:
+        credential_records = list(
+            getattr(report, "provider_credential_transmission_details", []) or []
+        )
+        tls_verified = not bool(getattr(target, "insecure", False))
         if aborted_reason is not None:
             description = "Cross-instance sync ABORTED: %s" % aborted_reason
             counts = {}
@@ -1643,8 +1924,12 @@ def _journal_sync_run(
             # unconditional set when the report carries no categories.
             ran_categories = sorted(counts) if counts else sorted(SYNC_ALL_CATEGORIES)
             description = (
-                "Cross-instance sync run (mode=%s, redaction_mode=topology_only, "
-                "categories=%s)" % (result, ran_categories)
+                "Cross-instance sync run (mode=%s, "
+                "redaction_mode=topology_plus_provider_credentials, "
+                "categories=%s, provider_credentials_transmitted=%d, "
+                "tls_verified=%s)" % (
+                    result, ran_categories, len(credential_records), tls_verified,
+                )
             )
         journal.log_entry(
             category="sync_outbound",
@@ -1656,9 +1941,13 @@ def _journal_sync_run(
             # category names, counts, and the result/redaction mode).
             after_value={
                 "confirm_apply": confirm_apply,
-                "redaction_mode": "topology_only",
+                "redaction_mode": "topology_plus_provider_credentials",
                 "result": result,
                 "counts": counts,
+                # What moved, named. Labels and FIELD names only.
+                "provider_credentials_transmitted": len(credential_records),
+                "provider_credential_records": credential_records,
+                "tls_verified": tls_verified,
             },
             user_initiated=False,
         )
@@ -1781,7 +2070,24 @@ async def run_sync(
     # when on, the plan gains a METADATA-ONLY logo category (bytes hydrate
     # lazily at import time, misses only — D8). ---
     include_logos = bool(getattr(sync_target, "sync_logos", False))
-    plan = await build_live_source_plan(include_logos=include_logos)
+    # The provider credential crosses on THIS cycle and every cycle (PO ruling
+    # 2026-08-22 — PROVIDER_CREDENTIAL_SECTIONS). The one value that cannot be
+    # harvested off A is the Schedules Direct password, which the operator
+    # supplied once on the target and which is decrypted here, per run, and
+    # never held anywhere else.
+    plan = await build_live_source_plan(
+        include_logos=include_logos,
+        schedules_direct_password=target_schedules_direct_password(sync_target),
+    )
+    credential_records = credential_bearing_records(plan)
+    for detail in credential_records:
+        report.record_provider_credential_transmission(detail)
+    insecure_warning = insecure_transmission_warning(
+        sync_target, carrying_credentials=bool(credential_records)
+    )
+    if insecure_warning:
+        logger.warning("[SYNC] %s", insecure_warning)
+        report.notes.append(insecure_warning)
 
     # --- 3b. Degrade a source-side duplicate name to a per-item CONFLICT ---
     # instead of inheriting preflight's all-or-nothing plan refusal (see
@@ -1864,35 +2170,6 @@ async def run_sync(
             sync_target.last_outcome = result.outcome.value
             if result.outcome == RestoreOutcome.SUCCESS:
                 sync_target.last_full_sync_at = datetime.now(timezone.utc)
-            # --- The OBSERVED half of the S11 insecure gate (ADR-013 INV-4 /
-            # threat model row D16, PO ruling 2026-08-22 on §11.5.4 item 5).
-            #
-            # The credential re-entry reporter has ALREADY read B's provider
-            # account rows this cycle and ALREADY run credential_is_present
-            # against them; ``destination_credentials_observed`` is that same
-            # verdict, carried out on the report. Stamping it here adds no
-            # fetch, no comparison and no credential — the column is a
-            # timestamp, and PRESENCE is the only thing it records.
-            #
-            # It is what lets the ``insecure`` refusal see a credential ECM did
-            # NOT write: the operator entering the provider password on B by
-            # hand, which is the recovery ECM's own guide documents and which
-            # the provisioning marker is structurally blind to.
-            #
-            # THREE-WAY, not two. The marker clears when a cycle observes
-            # ABSENCE ("it clears when a cycle observes absence, by the same
-            # presence check") — but "observed absent" and "never looked" are
-            # different states and only the first may clear a gate that
-            # protects a live secret. A run whose destination read failed, or
-            # that had no credential-bearing account to inspect, leaves
-            # ``destination_credentials_checked`` False and the marker
-            # untouched.
-            if getattr(result, "destination_credentials_checked", False):
-                sync_target.destination_credential_observed_at = (
-                    datetime.now(timezone.utc)
-                    if result.destination_credentials_observed
-                    else None
-                )
             session.commit()
         except Exception as exc:  # noqa: BLE001 - stamping is best-effort
             logger.warning("[SYNC] Failed to stamp persisted sync state: %s", exc)

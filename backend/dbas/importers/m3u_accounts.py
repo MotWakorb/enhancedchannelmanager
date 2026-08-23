@@ -882,27 +882,19 @@ def _report_credentials_still_missing(
         if not credential_is_present(value_at_path(existing_acc, field))
     ]
 
-    # --- The OBSERVED half of the S11 insecure gate (ADR-013 INV-4 / threat
-    # model row D16), and the staleness signal (INV-8). Both are read off the
-    # SAME destination row this function already has, by the SAME
-    # credential_is_present predicate it already ran. No new fetch, no new
-    # comparison, and nothing about a credential's VALUE is examined or
-    # recorded — only whether the destination has something at a path.
-    #
-    # Recording PRESENCE matters as much as recording absence: the recorded
-    # provisioning marker sees only what ECM wrote, so an operator who entered
-    # the provider credential on B by hand — the recovery ECM's own guide
-    # documents — leaves the marker NULL while B holds a live credential that
-    # the per-cycle destination read carries back to A on every cycle.
-    if redacted_fields:
-        # The check RAN — record that separately from what it found, because
-        # the observed marker CLEARS on an observed absence and must NOT clear
-        # on "we never looked". An account whose source carries no credential
-        # at all produces no redacted field and is not an observation of
-        # anything, so it is excluded from the check entirely.
-        report.record_destination_credential_check(
-            present=len(still_missing) < len(redacted_fields)
-        )
+    # THE OBSERVED-CREDENTIAL CHECK IS GONE, and its removal is the fix for
+    # bead ``…-ngwxx`` rather than a repair of it. That check recorded whether
+    # the destination held a credential, to feed the S11 ``insecure`` refusal;
+    # it was measurably wrong (its predicate,
+    # ``len(still_missing) < len(redacted_fields)``, read a populated but
+    # credential-free XC ``server_url`` as an observed credential, so the gate
+    # false-positived on every XC target, permanently and unclearably). The PO's
+    # 2026-08-22 ruling removed the refusal it fed — "I know the security risks.
+    # That's on the user to mitigate, not us." — so the observation has no
+    # consumer, and a presence check kept alive with nothing reading it is
+    # exactly the sort of dead bookkeeping the next reader mistakes for a
+    # control. What replaced the gate is a warning on every credential-carrying
+    # cycle: ``tasks.dbas_sync_engine.insecure_transmission_warning``.
     if destination_account_looks_stale(existing_acc):
         report.record_provisioned_credential_stale(stale_account_message(existing_acc))
 

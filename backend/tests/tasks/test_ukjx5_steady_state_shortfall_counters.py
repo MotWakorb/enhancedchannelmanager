@@ -73,11 +73,47 @@ from tests.tasks.test_msqf7_stream_url_credential_leak import (
 )
 from tests.tasks.test_sync_roundtrip import _restricting_profile_source
 
-# The three source streams whose address IS the credential, so redacting it
-# leaves them unplayable on the replica. The two decoys and the standard-M3U
-# stream on the same instance are the CONTRAST: they lost nothing.
+# The three source streams whose address IS the credential. The two decoys and
+# the standard-M3U stream on the same instance are the CONTRAST: they never
+# carried one.
 _REDACTED_ON_B = {"Summit Sports 1", "Silverline Cinema", "Orbit Sci-Fi"}
 _UNTOUCHED_ON_B = {"Pitchside FC", "Matinee Family", "Valley Public"}
+
+
+def _source_already_redacted() -> StatefulDispatcharrFake:
+    """Source-A that ITSELF holds sentinelled credentials and addresses.
+
+    AMENDED 2026-08-22 (ADR-013 amendment (b)). The steady-state tests below
+    used to reach this state through the SYNC PATH: A held real credentials, the
+    per-cycle redactor sentinelled them, and B was left holding placeholders on
+    every cycle. Provider credentials now cross whole, so that route no longer
+    produces the shortfall — which is bead ``…-2jvvb`` closed, not a counter
+    that stopped working.
+
+    **The steady-state invariant these tests exist for is unchanged and still
+    reachable**, by the route that still produces it: A itself restored from a
+    STANDARD (redact-by-default) backup artifact, which is a file designed to be
+    attachable to a support ticket and therefore still redacts. Such an A holds
+    ``***REDACTED***`` in its own account fields and stream addresses; every
+    cycle faithfully copies that state to B; and the counters must say so on
+    EVERY cycle, which is the property ``ukjx5`` is about.
+
+    So the fixture moved and the invariant did not. Repointing rather than
+    deleting matters: a counter that reports the destination's CURRENT state on
+    cycle 1 and goes quiet on cycle 2 is the defect this file was written for,
+    and it would still be a defect today.
+    """
+    source = _source_with_xc_streams()
+    for row in source.m3u_accounts.rows.values():
+        if row.get("name") == _XC_ACCOUNT_NAME:
+            row["username"] = REDACTION_SENTINEL
+            row["password"] = REDACTION_SENTINEL
+    for row in source.streams.rows.values():
+        if row.get("name") in _REDACTED_ON_B:
+            row["url"] = "%s/live/%s/%s/%d.ts" % (
+                _XC_HOST, REDACTION_SENTINEL, REDACTION_SENTINEL, row["id"],
+            )
+    return source
 
 
 def _redacted_urls_on(dest: StatefulDispatcharrFake) -> set:
@@ -101,7 +137,7 @@ def _redacted_urls_on(dest: StatefulDispatcharrFake) -> set:
 @pytest.mark.asyncio
 async def test_a_second_cycle_still_names_the_redacted_urls_b_still_holds(tmp_path):
     """The exact live measurement, in the harness: 3, then 3 — not 3, then 0."""
-    source = _source_with_xc_streams()
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 
@@ -123,7 +159,7 @@ async def test_the_third_cycle_reports_what_the_second_did(tmp_path):
     A counter that decays over cycles would still pass a two-cycle test if it
     only lost half its rows each time.
     """
-    source = _source_with_xc_streams()
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 
@@ -166,7 +202,7 @@ async def test_the_count_falls_to_zero_once_the_replica_holds_real_urls(tmp_path
     with real addresses on those rows. The next cycle must stop reporting a
     shortfall the destination no longer exhibits.
     """
-    source = _source_with_xc_streams()
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 
@@ -192,7 +228,7 @@ async def test_the_count_falls_to_zero_once_the_replica_holds_real_urls(tmp_path
 @pytest.mark.asyncio
 async def test_the_operators_line_repeats_the_clause_on_the_second_cycle(tmp_path):
     """The one line an unattended run produces is the only surface it has."""
-    source = _source_with_xc_streams()
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 
@@ -212,7 +248,7 @@ async def test_a_preview_says_not_measured_rather_than_a_confident_zero(tmp_path
     claim ("B holds no redacted stream") derived from having looked at nothing —
     and on the second cycle it is a FALSE one. ``None`` says what is true.
     """
-    source = _source_with_xc_streams()
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 
@@ -239,7 +275,7 @@ def _needing_reentry(report) -> set:
 @pytest.mark.asyncio
 async def test_a_second_cycle_still_reports_the_credentials_b_still_lacks(tmp_path):
     """The account exists on B and authenticates nowhere. Cycle 2 must say so."""
-    source = _source_with_xc_streams()
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 
@@ -253,8 +289,12 @@ async def test_a_second_cycle_still_reports_the_credentials_b_still_lacks(tmp_pa
     assert not xc_on_b.get("username")
     assert not xc_on_b.get("password")
 
-    assert first.credentials_needing_reentry == 3
-    assert second.credentials_needing_reentry == 3
+    # ONE account, not three: on this fixture the shortfall comes from A's own
+    # sentinelled record (see ``_source_already_redacted``), so only the XC
+    # account is short. It used to be three because the per-cycle redactor
+    # sentinelled the EPG sources too, and it no longer does.
+    assert first.credentials_needing_reentry == 1
+    assert second.credentials_needing_reentry == 1
     assert (EntityType.M3U_ACCOUNT, _XC_ACCOUNT_NAME) in _needing_reentry(second)
 
 
@@ -421,7 +461,7 @@ async def test_a_stream_with_no_address_at_all_is_not_a_redacted_url(tmp_path):
     destination its own provider account". A stream with nothing in its address
     was never redacted and belongs to ``channels_with_no_playable_stream``.
     """
-    source = _source_with_xc_streams()
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 

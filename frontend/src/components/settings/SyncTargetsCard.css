@@ -32,7 +32,8 @@
   color: var(--danger-text);
 }
 
-/* Credentials-not-synced — caution level. */
+/* Provider-credential transmission notice — caution level: it states what
+   crosses on every cycle, and that certificate checking off sends it in clear. */
 .sync-targets-card .stc-warning-creds {
   background: rgba(245, 158, 11, 0.08);
   border: 1px solid rgba(245, 158, 11, 0.25);
@@ -166,8 +167,19 @@
   text-transform: none;
 }
 
+/* A stored Schedules Direct password — informational, not a warning: it is the
+   one credential the operator supplies, and its presence is a good state. */
+.sync-targets-card .stc-badge-sd {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--info, #3b82f6);
+  border-color: rgba(59, 130, 246, 0.3);
+  gap: 0.25rem;
+  text-transform: none;
+}
+
 /* Badge icon role — a glyph inside a chip. */
-.sync-targets-card .stc-badge-insecure .material-icons {
+.sync-targets-card .stc-badge-insecure .material-icons,
+.sync-targets-card .stc-badge-sd .material-icons {
   font-size: var(--icon-badge);
 }
 

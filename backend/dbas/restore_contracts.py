@@ -999,48 +999,32 @@ class RestoreReport(BaseModel):
         description="Which entities need which credential fields re-entered (…-6pilh).",
     )
 
-    # --- One-time credential provisioning signals (ADR-013 S10-S13, wd20y) ---
+    # --- Provider-credential transmission signals (PO ruling 2026-08-22) ---
     # ADDITIVE optional, no CONTRACT_VERSION bump (the ``provider_group_selection_*``
     # precedent). Neither is a shortfall member and neither moves the outcome:
-    # one is an observation, the other an action item.
-
-    # THE OBSERVED HALF OF THE S11 ``insecure`` GATE (INV-4 / threat model row
-    # D16). True when this run saw a credential PRESENT on a destination
-    # provider account. Presence only — this never carries, compares or derives
-    # from a credential VALUE, and it is computed from the destination row the
-    # credential re-entry reporter already reads, so it costs no extra fetch.
+    # they are the AUDIT of what this cycle carried.
     #
-    # It exists because the provisioning marker on the sync-target row records
-    # what ECM WROTE, and an operator may have entered the credential on the
-    # replica BY HAND — the recovery ECM's own guide documents. That case is
-    # invisible to the marker, and it is the case where an unverified-TLS cycle
-    # carries a live provider secret back to A on every run.
-    destination_credentials_observed: bool = Field(
-        default=False,
-        description="A destination provider account was observed to hold a "
-        "credential (presence only, never a value) — ADR-013 INV-4 / D16.",
+    # WHAT THESE REPLACED. Two fields recorded whether a destination provider
+    # account was OBSERVED to hold a credential; they existed to feed the S11
+    # ``insecure`` refusal, which is gone (the PO removed it: "I know the
+    # security risks. That's on the user to mitigate, not us."). With nothing
+    # reading them they were deleted rather than left to read as live
+    # bookkeeping — the same reason the two marker columns were dropped.
+    #
+    # These two are their honest replacement. Under per-cycle transmission the
+    # audit trail is the only record of what moved, so every cycle states HOW
+    # MANY provider records it carried a credential onto and NAMES them with the
+    # field names. Names and labels only — no value, no fragment of a value, no
+    # masked tail of a value.
+    provider_credentials_transmitted: int = Field(
+        default=0,
+        description="Provider records this cycle carried a credential onto "
+        "(count only, never a value).",
     )
-
-    # WHETHER THE OBSERVATION RAN AT ALL, which is a different question from
-    # what it found, and conflating them is how a gate protecting a live secret
-    # would open by accident.
-    #
-    # The observed marker CLEARS when a cycle observes ABSENCE (ADR-013: "it
-    # clears when a cycle observes absence, by the same presence check"), so a
-    # bare ``destination_credentials_observed is False`` is not enough to act
-    # on: it is equally the value of a run that never reached the destination's
-    # account rows — an unreadable destination, a failed read after the gate, a
-    # source with no credential-bearing account at all. Clearing on that would
-    # re-permit ``insecure`` on a target whose replica still holds a credential,
-    # which is the exact failure INV-9 refuses in the de-provision path.
-    #
-    # So: stamp when checked AND observed; clear when checked AND NOT observed;
-    # leave the marker exactly as it is when the check did not run.
-    destination_credentials_checked: bool = Field(
-        default=False,
-        description="A destination provider account's credential presence was "
-        "actually evaluated this run. Distinguishes 'observed absent' from "
-        "'never looked' (ADR-013 INV-4).",
+    provider_credential_transmission_details: list[str] = Field(
+        default_factory=list,
+        description="One line per provider record carrying a credential — "
+        "operator-facing label plus FIELD NAMES only, never values.",
     )
 
     # THE STALENESS SIGNAL (INV-8 / S12(b)). A standby whose provisioned
@@ -1461,36 +1445,26 @@ class RestoreReport(BaseModel):
         )
         self.credentials_needing_reentry = len(self.credential_reentry_details)
 
-    def record_destination_credential_check(self, *, present: bool) -> None:
-        """Record ONE destination account's credential-presence verdict.
+    def record_provider_credential_transmission(self, detail: str) -> None:
+        """Record ONE provider record this cycle carried a credential onto.
 
-        ADR-013 INV-4 / threat model row D16 — the OBSERVED half of the S11
-        ``insecure`` gate, and the ONE recorder for both halves of it so they
-        cannot drift.
+        The audit half of the 2026-08-22 ruling. Aggregate and drill-down
+        written through ONE recorder so they cannot drift, exactly like
+        :meth:`record_credential_reentry`.
 
-        TWO FACTS, and they are not the same fact:
-
-        * ``destination_credentials_checked`` — the observation RAN. Set by any
-          call, whatever it found.
-        * ``destination_credentials_observed`` — something was FOUND. Monotonic
-          within a run: it is a property of the destination as a whole, so one
-          account holding a credential is enough and a later empty account does
-          not retract it. The gate protects a live secret; a replica with one
-          credentialed account is a replica that holds a credential.
-
-        **Presence only.** The caller establishes ``present`` with
-        ``credential_sentinel.credential_is_present`` against the destination
-        row it already fetched. No value is read into this report, no value is
-        compared against the source's, and nothing here can distinguish one
-        credential from another — which is the point: answering "does B hold
-        one?" must not require pulling B's secret back to A.
+        **Names only.** ``detail`` is an operator-facing label plus the FIELD
+        NAMES carried; no value, no fragment of a value, no masked tail of a
+        value ever reaches this report.
 
         Args:
-            present: Whether this destination account holds a credential.
+            detail: ``"<label> (<field>, <field>)"``.
         """
-        self.destination_credentials_checked = True
-        if present:
-            self.destination_credentials_observed = True
+        if not detail or detail in self.provider_credential_transmission_details:
+            return
+        self.provider_credential_transmission_details.append(detail)
+        self.provider_credentials_transmitted = len(
+            self.provider_credential_transmission_details
+        )
 
     def record_provisioned_credential_stale(self, message: str) -> None:
         """Record ONE replicated provider account whose credential looks stale.

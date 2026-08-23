@@ -520,12 +520,19 @@ async def test_never_sync_users_end_to_end(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_redaction_no_seeded_secret_reaches_b(tmp_path):
-    """D2: the M3U password + EPG api_key seeded on A never appear in B's rows.
+async def test_the_provider_credential_reaches_b(tmp_path):
+    """AMENDED 2026-08-22 — inverted, deliberately (ADR-013 amendment (b)).
 
-    The whole config pipeline (gather → deep-redact → plan → importer → B write)
-    runs through the harness; we then dump everything B actually STORED and assert
-    neither plaintext secret is present anywhere in it.
+    This was ``test_redaction_no_seeded_secret_reaches_b`` and asserted that
+    neither the M3U password nor the EPG api_key seeded on A appeared anywhere in
+    B's rows. The PO ruled that provider credentials cross on every cycle, so
+    both must now arrive — and this is the end-to-end layer that proves it: the
+    whole pipeline (gather → redact → plan → importer → B write) runs through the
+    harness and the assertion is read off what B actually STORED, not off the
+    report.
+
+    ``test_ecm_own_secrets_never_reach_b`` below keeps the half that did not
+    change, so the pair is a contrast rather than a one-sided claim.
     """
     leak_m3u = "LEAK-M3U-PASSWORD-XYZ"
     leak_epg = "LEAK-EPG-APIKEY-XYZ"
@@ -548,11 +555,34 @@ async def test_redaction_no_seeded_secret_reaches_b(tmp_path):
             "streams": dest.streams.list(),
         }
     )
-    assert leak_m3u not in stored
-    assert leak_epg not in stored
-    # The M3U account DID sync (topology) — but its secret field is redacted.
+    assert leak_m3u in stored, "the provider password did not reach the replica"
+    assert leak_epg in stored, "the EPG api_key did not reach the replica"
+    # Read off the account row itself, not merely "somewhere in the blob": the
+    # replica authenticates with THIS field.
     b_m3u = next(a for a in dest.m3u_accounts.list() if a["name"] == "Provider A")
-    assert b_m3u.get("password") != leak_m3u
+    assert b_m3u.get("password") == leak_m3u
+
+
+@pytest.mark.asyncio
+async def test_ecm_own_secrets_never_reach_b(tmp_path):
+    """The half of D2 that did NOT change, at the same end-to-end layer.
+
+    The 2026-08-22 exception is exactly two sections wide. ECM's own settings
+    secrets are not provider credentials; a change that widened ``preserve_keys``
+    past the provider sections would leave the test above green and this one red,
+    which is the only reason the pair is worth having.
+    """
+    from tasks.dbas_sync_engine import _redact_sync_sections
+
+    redacted = _redact_sync_sections(
+        {
+            "m3u_accounts": [{"name": "Provider A", "password": "PROVIDER-PW"}],
+            "settings": [{"key": "smtp_password", "password": "ECM-OWN-SECRET"}],
+        }
+    )
+    blob = json.dumps(redacted, default=str)
+    assert "ECM-OWN-SECRET" not in blob
+    assert "PROVIDER-PW" in blob
 
 
 # ---------------------------------------------------------------------------
@@ -1318,8 +1348,14 @@ async def test_a_dry_run_predicts_the_remote_create_and_writes_nothing(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_a_credential_bearing_logo_url_never_reaches_the_replica(tmp_path):
-    """The XC path-segment shape …-msqf7 measured, on a logo url this time."""
+async def test_a_credential_bearing_logo_url_reaches_the_replica(tmp_path):
+    """AMENDED 2026-08-22 — inverted (ADR-013 amendment (b)).
+
+    The XC path-segment shape …-msqf7 measured, on a logo url. This used to be
+    dropped and reported as a named miss; under per-cycle credential
+    transmission the replica holds the same credential, so an address it can
+    actually fetch is worth more than an honest miss.
+    """
     source = StatefulDispatcharrFake.seeded_source()
     account = next(iter(source.m3u_accounts.rows.values()))
     account["username"] = "northwind-demo"
@@ -1341,28 +1377,22 @@ async def test_a_credential_bearing_logo_url_never_reaches_the_replica(tmp_path)
     )
     report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
 
-    # NOTHING on B carries either half of the credential, anywhere.
+    # The address crossed WHOLE, so B loads the same picture A does.
     blob = json.dumps(
         [dict(r) for r in dest.logos.rows.values()], default=str
     )
-    assert "not-a-real-password" not in blob
-    assert "northwind-demo" not in blob
-
-    # And the operator is TOLD, by name, rather than the logo vanishing. The
-    # miss aggregate is a top-level int; the channel names live in
-    # ``logo_miss_details[].channels[].name``.
-    assert report.logo_misses >= 1
-    assert "Leaky Logo" in {d.label for d in report.logo_miss_details}
-    affected = {
-        channel.name
-        for miss in report.logo_miss_details
-        for channel in miss.channels
-    }
-    assert "CNN" in affected
+    assert (
+        "http://provider.example/live/northwind-demo/"
+        "not-a-real-password/logos/cnn.png"
+    ) in blob
+    # ...and it is no longer reported as a miss, because it is not one. A
+    # counter that keeps firing after its condition is gone is bead
+    # ``…-kcfru``'s crying wolf.
+    assert "Leaky Logo" not in {d.label for d in report.logo_miss_details}
 
 
 @pytest.mark.asyncio
-async def test_a_query_string_credential_logo_url_never_reaches_the_replica(tmp_path):
+async def test_a_query_string_credential_logo_url_reaches_the_replica(tmp_path):
     """The other carrier shape: ``?username=…&password=…`` in the query."""
     source = StatefulDispatcharrFake.seeded_source()
     logo = source.logos.create(
@@ -1382,7 +1412,6 @@ async def test_a_query_string_credential_logo_url_never_reaches_the_replica(tmp_
     report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
 
     blob = json.dumps([dict(r) for r in dest.logos.rows.values()], default=str)
-    assert "password=p1" not in blob
-    assert "username=u1" not in blob
-    assert report.logo_misses >= 1
-    assert "Leaky Query Logo" in {d.label for d in report.logo_miss_details}
+    assert "password=p1" in blob
+    assert "username=u1" in blob
+    assert "Leaky Query Logo" not in {d.label for d in report.logo_miss_details}

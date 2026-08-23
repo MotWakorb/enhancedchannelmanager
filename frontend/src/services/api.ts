@@ -4451,32 +4451,31 @@ export interface RestoreReport {
   /** Which entities need which credential fields re-entered (bead 6pilh). */
   credential_reentry_details?: CredentialReentryDetail[];
   /**
-   * True when this run OBSERVED a provider credential present on a destination
-   * provider account (bead wd20y, ADR-013 INV-4 / threat model row D16).
+   * How many provider records this cycle carried a credential onto (PO ruling
+   * 2026-08-22, ADR-013 amendment (b) S13').
    *
-   * PRESENCE ONLY. It never carries, compares or derives from a credential
-   * value — the backend reads it off the destination row the credential
-   * re-entry reporter already fetched. It is what lets the `insecure` refusal
-   * see a credential ECM did not itself write (one entered on the replica by
-   * hand), which the provisioning marker is structurally blind to.
+   * COUNT ONLY — never a value. Under per-cycle transmission the audit trail is
+   * the only record of how often a secret moved, so every run states it,
+   * including the runs that carried nothing. Replaced
+   * `destination_credentials_observed` / `destination_credentials_checked`,
+   * which fed the `insecure` refusal that this ruling removed.
    * May be absent on reports produced before this field existed.
    */
-  destination_credentials_observed?: boolean;
+  provider_credentials_transmitted?: number;
   /**
-   * Whether the credential-presence check actually RAN this run — a different
-   * question from what it found, and the backend's observed marker clears on an
-   * observed absence, so the two must not be conflated. `false` here means the
-   * run never reached a destination provider account to inspect (an unreadable
-   * destination, or no credential-bearing account at all), NOT that the
-   * destination holds nothing. May be absent on older reports.
+   * One line per provider record carrying a credential: operator-facing label
+   * plus the FIELD NAMES carried, never a value or a fragment of one.
    */
-  destination_credentials_checked?: boolean;
+  provider_credential_transmission_details?: string[];
   /**
    * Replicated provider accounts whose own status and stream count indicate
    * their provisioned credential has stopped working (bead wd20y, ADR-013
-   * INV-8). An ACTION ITEM, not a failure and not a delivery shortfall: it does
-   * not move the run's outcome, and it never triggers a re-push — the operator
-   * re-runs the provisioning action. May be absent on older reports.
+   * INV-8, retained as information after amendment (b) voided the invariant's
+   * wording). An ACTION ITEM, not a failure and not a delivery shortfall: it
+   * does not move the run's outcome. There is no provisioning action to re-run
+   * any more — the cycle re-sends the current credential every time, so a
+   * persistently stale account is a problem to fix on the SOURCE.
+   * May be absent on older reports.
    */
   provisioned_credentials_stale?: number;
   /**
@@ -5303,6 +5302,16 @@ export async function deleteEventSyncExclusion(
 // `runTask(`dbas_sync_${id}`, undefined, { sync_target_id, confirm_apply })` —
 // one registered task per target (7ipq2.3 / ADR-013 S6), so distinct targets
 // sync concurrently and a second run against the SAME target is refused.
+//
+// PROVIDER CREDENTIALS CROSS ON EVERY CYCLE (PO ruling 2026-08-22). The
+// replica's M3U accounts and EPG sources receive this instance's real provider
+// username, password and credential-bearing addresses as part of the ordinary
+// sync, so it authenticates and serves without the operator typing anything and
+// a rotation on the source reaches it on the next scheduled run. There is no
+// separate "provision credentials" action and no client function for one — that
+// action existed for two days and was removed. The only credential an operator
+// still supplies is the Schedules Direct password (write-only upstream, so
+// nothing on the source can be read), stored once on the target.
 // -------------------------------------------------------------------------
 
 /**
@@ -5324,6 +5333,12 @@ export interface SyncTarget {
    * run every interval. The card offers a toggle; nothing flips it implicitly.
    */
   sync_logos: boolean;
+  /**
+   * PRESENCE of a stored Schedules Direct password — never the value. True once
+   * the operator has supplied one; the backend re-sends it to the replica's
+   * Schedules Direct EPG sources on every cycle so it is never typed twice.
+   */
+  has_schedules_direct_password: boolean;
   credential_version: number;
   token_revoked_at?: string | null;
   last_full_sync_at?: string | null;
@@ -5343,6 +5358,13 @@ export interface SyncTargetCreateRequest {
   fuzzy_stream_matching?: boolean;
   /** Omit to take the backend default (OFF) — see `SyncTarget.sync_logos`. */
   sync_logos?: boolean;
+  /**
+   * The ONE credential an operator types, and they type it once. Ask for it
+   * only when `getSyncSourceCredentialNeeds()` reports
+   * `needs_schedules_direct_password` — this instance having no Schedules
+   * Direct EPG source means there is nothing for the value to be written onto.
+   */
+  schedules_direct_password?: string;
 }
 
 /**
@@ -5358,6 +5380,26 @@ export interface SyncTargetUpdateRequest {
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
   sync_logos?: boolean;
+  /** Omit to leave the stored value untouched; `''` clears it. */
+  schedules_direct_password?: string;
+}
+
+/**
+ * What this instance CANNOT harvest and therefore has to be typed once.
+ *
+ * Normally nothing: every provider credential is read off the source's own
+ * records on every cycle. The Schedules Direct password is the sole exception —
+ * Dispatcharr marks it write-only and never returns it — so the create form
+ * shows a field for it if, and only if, this reports one.
+ */
+export interface SyncSourceCredentialNeeds {
+  needs_schedules_direct_password: boolean;
+  /** Operator-facing names of the Schedules Direct EPG sources on this instance. */
+  schedules_direct_sources: string[];
+}
+
+export async function getSyncSourceCredentialNeeds(): Promise<SyncSourceCredentialNeeds> {
+  return fetchJson(`${API_BASE}/sync-targets/source-credential-needs`);
 }
 
 export async function listSyncTargets(): Promise<SyncTarget[]> {

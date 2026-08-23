@@ -8,11 +8,11 @@ UI path: **Settings → Backup & Restore → Cross-Instance Sync**.
 
 **ONE-WAY.** Sync replicates from A to B on a schedule. B is a managed replica. Edits you make directly on B are overwritten by A on the next sync cycle. Do not use B as a working instance if you intend sync to keep running.
 
-**THE SYNC CYCLE NEVER CARRIES A CREDENTIAL — SETUP CAN, ONCE, IF YOU ASK IT TO.** These are two different things and the difference is the whole design. Every scheduled cycle pushes source and channel *definitions* (URLs, names, group structure, profiles) and no M3U/EPG password, ever, in any field or URL position. Separately, **Provision Credentials** is a one-time action you take deliberately at setup: it reads this instance's own provider credentials, writes them onto the replica's matching provider accounts once, and records that it did. After that the replica fetches its own streams on its next refresh and can actually serve video — a hot standby rather than a structurally-complete replica that 404s.
+**PROVIDER CREDENTIALS ARE SENT ON EVERY CYCLE.** Every scheduled sync pushes your source and channel definitions *and* the provider credentials that make them work: the M3U account username and password, the credentials inside a plain-M3U or Xtream Codes URL, and the credentials inside every stream address. B therefore authenticates against your provider and serves video on its own, with nothing for you to type on B — and when you change your provider password on A, B picks the new one up on its next scheduled sync.
 
-You do not have to use it. Leave it alone and the replica behaves exactly as before: complete in every way except that its streams have no working address, and you re-enter the credentials on B by hand when you need it. What provisioning changes is that the step becomes one click, audited, over a TLS-verified connection — instead of you typing your subscription password into a second machine with no record that it happened.
+**What it costs, stated plainly:** the replica is a place your provider credential lives. Its database, its backups, its logs and its own generated stream URLs all hold it. If you turn certificate checking off for a target, those credentials cross the network in clear, on every cycle, not once. ECM does not stop you — that call is yours — but it warns on the target and writes an audit row every time.
 
-**What it costs, stated plainly:** the replica becomes a place your provider credential lives. Its database, its backups, its logs and its own generated stream URLs will hold it. See [Provisioning credentials to the replica](#provisioning-credentials-to-the-replica) before you decide.
+**The one thing you still type,** and only once: a **Schedules Direct** password. Dispatcharr never gives that value back to anything, so there is nothing on A to read; if you have a Schedules Direct EPG source, the sync-target form asks for it and stores it encrypted, then re-sends it every cycle. If you have no Schedules Direct source, the field is not shown and you type nothing at all.
 
 ---
 
@@ -26,7 +26,6 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 
 **Do not use sync to:**
 - Replace backups: sync does not capture a point-in-time snapshot you can restore from. Take regular encrypted backups as well.
-- Carry credentials to B: they are redacted before transmission. Use an encrypted backup for the initial credential migration.
 - Replicate user accounts: users are never synced (see [What never syncs](#what-syncs-vs-what-never-does)).
 
 ---
@@ -37,26 +36,26 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 
 | Category | Notes |
 |-|-|
-| M3U accounts | Source URL and settings. Credentials are stripped; re-enter on B. **If the credentials are embedded in the URL itself** — a plain-M3U playlist URL of the form `…/get.php?username=…&password=…` — then the address cannot be separated from the secret, so the whole URL is left blank on B and you re-enter the URL rather than just a password. An **Xtream Codes** account is not affected here: Dispatcharr keeps its server URL and its credentials in separate fields, so the URL crosses and only the password needs re-entering. Either way the run summary names the account. |
-| EPG sources | Source URL and settings. Credentials are stripped; re-enter on B. The same URL-embedded-credentials case applies, and it is the common one: an Xtream Codes guide URL (`xmltv.php?username=…&password=…`) arrives on B blank, the source shows **No URL provided**, and until you re-enter it every channel that guide feeds has no programme data on B. |
+| M3U accounts | Source URL, settings **and credentials**. An **Xtream Codes** account's `username` and `password` cross as themselves; a **plain-M3U** account's whole playlist URL crosses intact, credentials and all, because that account type has no password field and the secret is inside the address. Nothing is left for you to re-enter. An HDHomeRun-style LAN tuner URL carries no credential and crosses as it always did. |
+| EPG sources | Source URL, settings **and credentials**. An Xtream Codes guide URL (`xmltv.php?username=…&password=…`) crosses whole, so B's guide fills in without you touching it. The one exception is a **Schedules Direct** source: Dispatcharr marks that password write-only and never returns it, so there is nothing on A to copy — supply it once on the sync target and it is sent every cycle with everything else. |
 | Channel groups | Group names and ordering. |
 | Channel profiles | Profile definitions. |
 | User agents | The custom user-agent strings an M3U account fetches with and a stream profile plays through. Synced first, before both, so each one's user-agent link is re-pointed at B's copy. Distinct from user *accounts*, which are never synced. |
 | Stream profiles | Profile definitions, including their user-agent link. |
-| Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. **A stream URL that carries the provider's credentials in its path** — the Xtream Codes `…/live/<username>/<password>/<id>.ts` form, and its `movie` / `series` variants — arrives on B with those two path segments replaced by `***REDACTED***`. The address is still there, so you can see where the stream pointed, but it will not play until B has its own provider account. The run summary names the count. A stream URL that carries no credential crosses byte-identical. On B every synced stream is filed under a single account named `ECM Custom Streams (DBAS restore)`, **not** under the replicated provider account it comes from — see [that section below](#on-b-every-synced-stream-belongs-to-an-account-called-ecm-custom-streams-dbas-restore) for why and what to do about it. |
+| Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. **Stream URLs cross whole**, including the Xtream Codes `…/live/<username>/<password>/<id>.ts` form where the credential is part of the address — so B's channels are bound to addresses that play, on the same cycle, with no second pass and nothing to re-enter. On B every synced stream is filed under a single account named `ECM Custom Streams (DBAS restore)`, **not** under the replicated provider account it comes from — see [that section below](#on-b-every-synced-stream-belongs-to-an-account-called-ecm-custom-streams-dbas-restore) for why. |
 
 ### Opt-in per target
 
 | Category | Notes |
 |-|-|
-| Logos | Off by default. Each target row on the Cross-Instance Sync card carries a **Logos off / Logos on** toggle next to its enable/disable switch; click it to turn logo replication on for that target. The setting is stored on the target, so it survives a reload and applies to that target's later runs. Covers all three places a logo can live: the files in ECM's own `/config/uploads/logos/`, the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives), and the ones your provider supplies as a web address — which on an Xtream Codes lineup is usually nearly all of them. The first two travel as image files; the third travels as the address itself, so B points at the same picture A does without either instance re-hosting it. Where two of them describe the same logo, the one holding real image bytes is the one that travels. Only logos B is missing are created (matched by id, name, then filename); sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. A provider address that carries your account's username or password is **not** copied: it would hand B a credential, and once the credential is stripped the address no longer loads, so that logo is reported as a miss with the channels it affected instead. |
+| Logos | Off by default. Each target row on the Cross-Instance Sync card carries a **Logos off / Logos on** toggle next to its enable/disable switch; click it to turn logo replication on for that target. The setting is stored on the target, so it survives a reload and applies to that target's later runs. Covers all three places a logo can live: the files in ECM's own `/config/uploads/logos/`, the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives), and the ones your provider supplies as a web address — which on an Xtream Codes lineup is usually nearly all of them. The first two travel as image files; the third travels as the address itself, so B points at the same picture A does without either instance re-hosting it. Where two of them describe the same logo, the one holding real image bytes is the one that travels. Only logos B is missing are created (matched by id, name, then filename); sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. A provider address that carries your account's username or password **is** copied now, like every other credential-bearing address, so those logos arrive and load on B. |
 
 ### Never synced
 
 | Category | Why |
 |-|-|
 | **Users** | Continuous one-way push of `users` would overwrite B's privilege flags and could lock out B's operator. This exclusion is permanent and code-enforced. It cannot be configured away. |
-| **Credentials** | M3U passwords, EPG passwords, API tokens. Redacted before transmission to avoid streaming live secrets on a recurring schedule. **This row is about the CYCLE and stays true of it permanently.** A credential reaches the replica only by the one-time [Provision Credentials](#provisioning-credentials-to-the-replica) action you take yourself, or by the encrypted backup artifact. Neither is a cycle, and no schedule can perform either. |
+| **ECM's own secrets** | ECM's settings secrets, alert-method secrets (SMTP passwords, bot tokens, webhooks), and the credentials of your cloud-storage and sync targets. These are not provider credentials and have no business on a replica; they are redacted before transmission and always will be. Your *provider* credentials are a different matter and now cross every cycle — see the row for M3U accounts above. |
 | **Server groups** | Dispatcharr's server groups — the grouping that makes several M3U accounts share one provider's connection limit. ECM has no server-group category, so a group cannot be created on B and an account's assignment cannot be re-pointed at one. An account that belongs to a server group on A is created on B without one; the sync report names the account so you can re-assign it on B. Create the server group on B yourself if the accounts sharing it need a shared connection limit. |
 
 ---
@@ -113,118 +112,83 @@ The **Enable** toggle on each target is the kill switch. Flipping it off immedia
 
 If you are setting up B from scratch as a DR standby:
 
-1. **Take an encrypted backup on A.** Use the **Encrypted Backup** card. This captures everything including credentials.
-2. **Stand up a fresh Dispatcharr-B** on your standby host. Import the encrypted backup from A. This seeds B with A's full configuration, including credentials.
-3. **Add a sync target on A** pointing at B (steps above). Run a preview-then-apply. Because B is already seeded from the backup, the first sync should be mostly skips.
-4. **Enable the sync schedule on A.** B now tracks A.
-5. **Verify B is healthy.** Log into B, check the channels and EPG, and test a stream if possible.
+1. **Stand up a fresh Dispatcharr-B** on your standby host. It can be empty.
+2. **Add a sync target on A** pointing at B (steps above). Run a preview, then apply.
+3. **Enable the sync schedule on A.** B now tracks A.
+4. **Verify B is healthy.** Log into B, check the channels and EPG, and play a stream.
 
-After the initial seeding via encrypted backup, sync keeps B current. You only need to re-enter credentials on B if a new M3U or EPG source is added on A. Credentials for existing sources survive because B already has them from the backup.
+**The encrypted-backup seeding step this list used to start with is no longer needed.** It existed
+because sync could not carry credentials, so B had to get them from a backup or by hand. Sync
+carries them now, so an empty B converges to a working standby on its first apply. Taking an
+encrypted backup is still worth doing — it is a restorable point-in-time snapshot, which sync is
+not — but it is a backup, not a prerequisite.
+
+From then on sync keeps B current — credentials included. A new M3U or EPG source added on A arrives on B complete and working on the next cycle, and so does a changed provider password. There is nothing to re-enter on B, ever.
 
 ---
 
-## Provisioning credentials to the replica
+## What credentials cross, by source type
 
-UI path: the sync target's **Provision Credentials** action (`POST /api/sync-targets/{id}/provision-credentials`).
+There is no separate action to run and nothing to click. Every scheduled sync carries
+these, and a change to any of them on A reaches B on the next cycle.
 
-A replica arrives structurally complete — channels, groups, profiles, profile
-memberships, logo bindings and EPG links all cross. The one thing it does not have is
-a working provider credential, so every stream URL on it reads
-`.../live/***REDACTED***/***REDACTED***/.ts` and returns 404, and the run correctly
-reports every channel as having no playable stream.
-
-Provisioning closes exactly that gap, and nothing else.
-
-### What it does
-
-- Reads **this instance's own** provider credentials — you type nothing.
-- Writes them onto the replica's **matching** provider accounts and EPG sources, once.
-- Records that it did, on the sync target.
-
-The replica fetches its own stream URLs on its next refresh and starts serving.
-
-### What crosses, by source type
-
-| Type | What is written |
+| Type | What crosses |
 |-|-|
-| **Xtream Codes M3U** | `username` and `password`. |
+| **Xtream Codes M3U** | `username` and `password`, as themselves. |
 | **Plain-M3U** whose credential is in the URL (`get.php?username=…&password=…`) | The whole `server_url`. This type has no password field at all — the address *is* the credential. |
-| **Plain-M3U** pointing at a LAN tuner (HDHomeRun) | Nothing. There is no credential to write. |
+| **Plain-M3U** pointing at a LAN tuner (HDHomeRun) | Nothing to carry; there is no credential. The address crosses as it always did. |
 | **XMLTV EPG** (`xmltv.php?username=…&password=…`) | The whole `url`. |
-| **Schedules Direct EPG** | `username` automatically, and `password` **from you** — this is the one field the action asks for. Dispatcharr marks the SD password write-only and never returns it, so there is nothing on this instance to copy; that is *unreadable*, not *unset*, which is why you are prompted rather than left to discover the gap. The value is used for that run and discarded, never stored here. Because the replica does not return it either, ECM can confirm it **wrote** the value but never that the replica holds a **working** one: a mistyped password shows up as the replica's EPG source failing to fetch, and the fix is to run the action again. Skip it and the replica still **serves video** — streams come from M3U accounts — but it has no guide data from that source. |
-| **Anything else** | Nothing. ECM's own settings secrets, alert-method secrets, cloud-target and sync-target credentials and Dispatcharr users are never provisioning inputs. |
+| **Stream addresses** | Whole, including the Xtream Codes `…/live/<username>/<password>/<id>.ts` form. This is what lets B's channels play on the same cycle they are created. |
+| **Provider logo addresses** | Whole, so B loads the same artwork A does. |
+| **Schedules Direct EPG** | `username` automatically. The **password** is the one value you supply, because Dispatcharr marks it write-only and never returns it — there is nothing on A to read, which is *unreadable*, not *unset*. Enter it once in the sync-target form (the field appears only if you actually have a Schedules Direct source) and it is stored encrypted and re-sent every cycle. Because the replica does not return it either, ECM can confirm it **wrote** the value but never that the replica holds a **working** one: a mistyped password shows up as B's EPG source failing to fetch, and the fix is to correct it on the target. Skip it and B still **serves video** — streams come from M3U accounts — it just has no guide data from that source. |
+| **Anything else** | Does not cross. ECM's own settings secrets, alert-method secrets (SMTP passwords, bot tokens, webhooks), cloud-storage and sync-target credentials, and Dispatcharr users are redacted or excluded exactly as they always have been. |
 
-### It never happens on a schedule
+### Rotation needs no mechanism
 
-There is no automatic re-push, and there cannot be one: the provisioning code is
-structurally unreachable from the sync cycle, enforced by a build-failing test rather
-than by convention. If your provider password changes, the standby stops working and
-the run **tells you** — it reads the replica's own account status and stream count,
-never your credentials — and you re-run the same action. That is the whole rotation
-story.
+Change your provider password on A and the next scheduled sync carries the new one to
+B. There is no action to remember, no marker to clear, and no state that can be stale:
+B is given the current value every time, so "the standby's credential went out of date"
+is not a condition that can arise between cycles.
 
-### TLS verification becomes mandatory
+### Certificate checking, and the risk that is yours
 
-A sync target cannot be both *TLS verification disabled* and *holding a provider
-credential on the replica*. The refusal is symmetric: you cannot provision a target
-with `insecure` set, and you cannot set `insecure` on a target that holds a
-credential. Turning verification back **on** is always allowed.
+ECM does **not** refuse to send credentials to a target with **Allow insecure TLS**
+turned on. It used to; that refusal was removed deliberately. Your instances, your
+network, your call.
 
-This is not about the outbound push alone. Every cycle **reads** the replica's provider
-accounts back, password included, so an unverified connection would carry your
-provider credential across the network inbound, unattended, on a schedule.
+What ECM does instead: the target row shows a **Certificate check off** badge saying
+that credentials cross in clear, the card's banner says the same, and **every**
+credential-carrying cycle logs a warning and an audit row. If you leave certificate
+checking off, understand that this is a recurring exposure on your sync interval — not
+a one-time one — and that the remedy is one setting: install a valid certificate on B
+and turn verification back on.
 
-The refusal also fires on a credential ECM did **not** write — one you entered on the
-replica by hand — because a sync cycle can see that the replica holds one. De-provisioning
-is not the remedy there: there is nothing on this side to clear, and ECM will not delete a
-credential you placed on the replica yourself. Two things will work, and neither is
-something ECM does for you:
+### Every cycle is audited
 
-1. **Install a valid certificate on the replica and leave verification on.** Prefer this
-   one — it keeps the standby working and ends the exposure.
-2. **Remove the credential on the replica itself.** The next cycle sees that it is gone and
-   the setting becomes available again — at the cost of the replica no longer serving,
-   which is presumably the thing you wanted it for.
+Each sync run writes one `sync_outbound` journal entry recording which target, which
+categories, the counts, the outcome, whether TLS was verified, **how many provider
+records carried a credential**, and which ones by name and field name. Never a value,
+never a fragment of one. Under per-cycle transmission that entry is the only record
+of how often a secret moved, which is why it is written on every terminal route —
+including the runs that abort before sending anything, which record that they sent
+nothing.
 
-A credential typed into the replica is not seen until the **next** cycle, and that cycle's
-own read of the replica is what sees it — so it crosses once more before the refusal takes
-effect. The window is exactly one sync interval, and zero cycles after that. Closing it
-completely would need ECM to poll the replica on its own, which is the extra network call
-this design deliberately does not make.
+### What you cannot undo
 
-### De-provisioning, and what it cannot undo
+There is no de-provision action, because there is no one-time provisioning to undo.
+If you want a replica to stop holding your provider credential, the order that
+actually works is:
 
-**De-provision Credentials** clears those same fields on the replica and then clears
-the marker — in that order, and only in that order. If the write to the replica fails
-for any account, the marker stays set, `insecure` stays refused, and the failed
-accounts are named. A marker that flipped on a write that did not happen would be a
-belief, not a control.
+1. **Delete the sync target on A**, or turn its **Enable** kill switch off, so no
+   further cycle re-sends it.
+2. **Clear the credentials on B yourself**, on B's own provider accounts.
+3. **Rotate the credential at your provider.** This is the only step that ends the
+   exposure. Everything B produced while it held the credential — its stream rows
+   (which carry it in their path segments), its backups, its logs, anything downstream
+   that consumed its output — still holds it, and none of that is retractable.
 
-A **successful** de-provision guarantees exactly one thing: the replica's provider
-account rows no longer hold the credential, so it will not re-authenticate with it.
-All of this survives it:
-
-- **The replica's own stream rows.** Provider stream URLs carry the credential in
-  their path segments; clearing an account field does not rewrite them.
-- **The replica's backups, exports and support bundles** produced while provisioned.
-- **The replica's logs and status fields.**
-- **Anything downstream** that consumed the replica's output while provisioned.
-- **The provider side. De-provision is not revocation.** The credential stays valid at
-  your provider until you rotate it there.
-
-Two things that will mislead you if you do not know them. The replica **does not go
-dark immediately** — it keeps serving from the stream rows it already has until its
-next refresh fails, so "it still works" is not evidence the clear failed. And the
-security-complete action is **rotating the credential at your provider**;
-de-provisioning stops the replica re-acquiring it, it does not end the exposure.
-
-### Every attempt is audited
-
-Provisioning and de-provisioning each write one journal entry, whether they succeed or
-fail: who did it, from which surface, which target, which accounts by name, which
-**field names**, how many, the TLS state, and the outcome. Never a value, never a
-fragment of one. A de-provision entry additionally carries the per-account outcome,
-because that is what decided the marker.
+Doing 1 and 2 without 3 stops B re-authenticating; it does not make the credential
+secret again.
 
 ---
 
@@ -277,58 +241,48 @@ A channel on A has no channel number, and B already has a channel with the same 
 
 ### B has credentials for sources that A can't provide
 
-Expected. Credentials are intentionally not synced. Log into B and re-enter them manually. Sync will not overwrite B's credentials. It only sends redacted (credential-stripped) definitions.
+No longer a thing you have to fix. Sync sends A's provider credentials on every cycle
+and overwrites B's, so a source that works on A works on B. If a source works on B and
+not on A, fix it on A — B converges on whatever A holds.
 
 ### Most of B's channels have no programme data, and B's EPG source says "No URL provided"
 
-Expected on an **Xtream Codes** provider, and the run tells you: the summary reads
-`… ; 1 source(s) need their URL re-entered (the address carried the credentials, so it could not be copied); N channel(s) restored without an EPG link`.
+This was expected on an Xtream Codes provider before v0.18.2 and is **not** expected
+now: the guide URL crosses whole, credentials included, so B's source has an address to
+fetch from on the first cycle.
 
-An Xtream Codes guide URL authenticates by putting the username and password *in the URL*. Sync cannot ship the address without shipping the secret with it, so it ships neither — which leaves the source on B with nowhere to fetch from, and every channel that guide feeds without programme data. A guide URL that carries **no** credential (a plain XMLTV file, for instance) is unaffected and arrives intact, which is why some of B's channels usually still have their guide.
+If you still see it, the cause is one of:
 
-**Resolution:** on B, open the named EPG source, paste in the full guide URL including its credentials, and refresh it. On the next cycle the channels relink to it on their own — you do not need to re-run anything on A. To seed B with working URLs from the start instead, do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
+- **A Schedules Direct source.** Its password is the one value that cannot be copied
+  off A. Enter it on the sync target (Settings → Backup & Restore → Cross-Instance
+  Sync → edit the target) and it is sent on the next cycle.
+- **A source that is broken on A too.** B mirrors A; check A first.
+- **B has not run its own EPG download yet.** The address arriving is not the same as
+  the guide being fetched. Give B a refresh.
 
 ### B's streams show `***REDACTED***` in their URL and will not play
 
-Expected on an **Xtream Codes** provider, and the run tells you twice. It does not
-report success: the outcome is **completed with failures**, and the summary reads
+**This was fixed in v0.18.2 and should no longer happen.** Stream addresses now cross
+whole, credentials and all, so B's channels are bound to URLs that play on the same
+cycle that creates them. The two-step recovery this section used to describe — enter
+the credentials on B, then wait for one more cycle to re-bind the channels off the
+placeholders — is gone along with the placeholders.
 
-`… ; N channel(s) have NO playable stream; … ; N stream(s) restored without a playable URL (it carried the provider's credentials)`
+If you are looking at `***REDACTED***` in a stream URL on B, one of these is true:
 
-Each affected channel is named in the run's stream-reattach detail, so you can see
-exactly which parts of the lineup are down rather than counting them yourself. A
-channel that still plays — because it kept a stream that carries no credential —
-is not listed.
+- **B has not synced since you upgraded A.** The placeholders are what a *previous*
+  cycle wrote; they are B's data, not something the new cycle removes on sight. Run one
+  sync (preview, then apply). The cycle rewrites each channel's stream onto the real
+  address.
+- **A itself is holding a redacted URL** — for instance B was itself restored from a
+  standard (redacted) backup artifact. A backup artifact still redacts credentials, and
+  always will: that is a file that can be attached to a support ticket. Check the URL on
+  A.
 
-**Both counts repeat on every cycle until you fix it, and they stop the cycle after
-you do.** They describe what B is holding right now, not what the cycle happened to
-write, so a scheduled sync keeps telling you as long as the streams are still
-unplayable — and goes quiet on its own once B has its own provider account. The same
-is true of the "needs credentials re-entered" line: it names an account that is on B
-and still has no password, so it stops the first cycle after you enter one.
-
-An Xtream Codes stream URL puts the username and password in the address itself — `http://provider/live/<username>/<password>/<id>.ts` — so the credential *is* part of the address. Sync replaces those two path segments and carries the rest, which is why B's stream shows something like `http://provider/live/***REDACTED***/***REDACTED***/1234.ts`: you can see which provider and which stream it was, and no secret of yours has been copied onto B.
-
-This is deliberate. **The sync cycle never puts a provider credential on the wire**, and B may be a machine at a different site or trust level — a recurring schedule that kept re-sending your subscription password would be a standing exposure, not a convenience. A stream URL that carries **no** credential (a plain-M3U provider's direct URL, for instance) crosses byte-identical and plays immediately.
-
-The two steps below are the manual recovery, and they still work. If you would rather not perform them by hand every time, [Provision Credentials](#provisioning-credentials-to-the-replica) does step 1 for you, once, at setup — and step 2 then happens on the next cycle exactly as described.
-
-**Resolution:** give B its own copy of the provider. Two steps, and neither is destructive:
-
-1. On B, open the matching M3U account, re-enter the credentials, and refresh it. B now ingests the provider's real stream URLs. They arrive **alongside** the redacted ones rather than replacing them, so B briefly holds two copies of every stream and your channels are still on the unplayable copy. Nothing you can see has changed yet — that is expected, and step 2 is what finishes it.
-2. Let one more sync cycle run (or force one). It re-matches every channel onto the real streams B just ingested, correctly attributed to your own provider account, and deletes the redacted stand-ins it is no longer using.
-
-Measured end to end on a 59-channel replica: after step 1 the channels were still on
-the 53 redacted stand-ins; after step 2 all 53 were bound to the real provider account
-and every redacted stand-in was gone, with the run back to reporting success.
-
-> **This used to need a third step** — manually deleting the `ECM Custom Streams (DBAS restore)`
-> account between 1 and 2, because the re-match preferred the redacted stand-in over the
-> real stream and would not let go of it. It no longer does, so **do not delete that
-> account by hand**; on a B that is also a *restore* destination it can hold stand-ins
-> that other channels are still using.
-
-To skip all of this, seed B with working URLs from the start: do the [initial migration with an encrypted backup](#dr-standby-setup-first-time-flow), which is the one path that carries credentials.
+An Xtream Codes stream URL puts the username and password in the address itself —
+`http://provider/live/<username>/<password>/<id>.ts` — so the credential *is* part of
+the address, and carrying the address means carrying the credential. That is now
+deliberate and stated: see [Two semantics](#two-semantics-you-must-understand-before-you-start).
 
 ### On B, every synced stream belongs to an account called "ECM Custom Streams (DBAS restore)"
 
@@ -338,15 +292,15 @@ Sync does not make B fetch from your providers. Re-triggering every provider's p
 
 The consequence to plan around: **B's account list does not tell you which provider supplies which stream.** Read that from A, which is the instance actually talking to your providers. B's copy is a mirror of A's lineup, not an independent subscriber.
 
-If you follow the [two-step resolution above](#bs-streams-show-redacted-in-their-url-and-will-not-play) for each of your providers, B's streams end up under your real provider accounts and sync deletes the stand-ins it no longer needs — that is the tidiest state B can be in, and it is worth doing once on a replica you intend to keep. The account itself only disappears once nothing is left under it, so it can legitimately linger holding the stand-ins for a provider you have not re-credentialed on B yet.
+The streams under that account **play** — they carry your provider credential in their addresses like A's do. What the account does not give you is provider attribution on B. If you want B's streams filed under B's own provider accounts instead, refresh each provider account on B: it ingests the same addresses under its own account, and the next sync cycle re-matches the channels onto them and drops the stand-ins it no longer needs. That is tidier, and it is optional.
 
 ### The "Allow insecure TLS" warning
 
-If you enabled **Allow insecure TLS** on a target, every sync cycle logs an audit row. You will see these in the journal. This is expected behavior. It is the record that TLS verification is being bypassed.
+If you enabled **Allow insecure TLS** on a target, every sync cycle logs a warning and an audit row, and the target's row shows a **Certificate check off** badge. This is expected behaviour and it is not going to stop: it is the record that your provider credentials are crossing an unverified connection in clear, on every cycle. ECM does not block it. The remedy is to install a valid certificate on B and turn verification back on, which is always allowed.
 
 ---
 
 ## Going deeper
 
-- [Security threat model, Addendum D](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/security/threat_model_dbas_import.md#11-addendum-d-cross-instance-live-sync-v0181-one-way-ab-config-replication), covering STRIDE analysis of the sync egress surface: why credentials are redacted, why users never sync, SSRF controls.
+- [Security threat model, Addendum D](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/security/threat_model_dbas_import.md#11-addendum-d-cross-instance-live-sync-v0181-one-way-ab-config-replication), covering STRIDE analysis of the sync egress surface: what is and is not redacted, why provider credentials cross on every cycle and what that risk is, why users never sync, SSRF controls.
 - [Runbook: ECMSyncStalledTargetDrift](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/runbooks/sync-target-stalled-drift.md): step-by-step when the sync stalls alert fires.

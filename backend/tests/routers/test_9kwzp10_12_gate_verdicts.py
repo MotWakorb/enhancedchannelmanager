@@ -263,22 +263,21 @@ CASES = (
         "DELETE", f"/api/sync-targets/{ABSENT_ID}", ADMITTED,
         witness="routers.sync_targets.get_session", extra=(), request={},
     ),
-    # --- bead wd20y: one-time credential provisioning ------------------
-    # The ROUTE DEPENDENCY admits the principal, exactly like its five CRUD
-    # siblings above (they all run on the plain ``RequireAdminIfEnabled``).
-    # EFFECTIVE authority is a different question and is answered elsewhere:
-    # ``auth.mcp_capabilities`` is deny-by-default and these two templates are
-    # not declared there, so the service principal is refused — pinned by
-    # ``tests/tasks/test_dbas_sync_provisioning.py`` rather than left to the
-    # absence of an entry. See that file for why this route being the one that
-    # moves a provider credential makes the default the right answer.
+    # --- Provider credentials cross on every cycle (PO ruling 2026-08-22) ---
+    # The two provisioning routes that stood here — ``provision-credentials``
+    # and ``deprovision-credentials`` (bead ``wd20y``) — were DELETED with the
+    # feature. What replaced them is not a route the operator calls: the
+    # credential is part of what the ordinary sync cycle writes.
+    #
+    # This read-only route is what remains, and it is here so a new route on
+    # this router cannot be added without a recorded verdict. It reports whether
+    # THIS instance has a Schedules Direct EPG source, which is the one
+    # credential that cannot be harvested and so is the only thing the create
+    # form ever asks for. It reads local EPG source names; it carries no
+    # credential in either direction.
     _Case(
-        "POST", f"/api/sync-targets/{ABSENT_ID}/provision-credentials", ADMITTED,
-        witness="routers.sync_targets.get_session", extra=(), request={"json": {}},
-    ),
-    _Case(
-        "POST", f"/api/sync-targets/{ABSENT_ID}/deprovision-credentials", ADMITTED,
-        witness="routers.sync_targets.get_session", extra=(), request={},
+        "GET", "/api/sync-targets/source-credential-needs", ADMITTED,
+        witness="dispatcharr_client.get_client", extra=(), request={},
     ),
     # --- 9kwzp.10 item 4, cloud targets --------------------------------
     _Case(
@@ -365,10 +364,6 @@ ADMITTED_CASES = tuple(c for c in CASES if c.verdict == ADMITTED)
 # is what FastAPI registers.
 TEMPLATE = {
     f"/api/sync-targets/{ABSENT_ID}": "/api/sync-targets/{target_id}",
-    f"/api/sync-targets/{ABSENT_ID}/provision-credentials":
-        "/api/sync-targets/{target_id}/provision-credentials",
-    f"/api/sync-targets/{ABSENT_ID}/deprovision-credentials":
-        "/api/sync-targets/{target_id}/deprovision-credentials",
     f"/api/cloud-targets/{ABSENT_ID}": "/api/cloud-targets/{target_id}",
     f"/api/alert-methods/{ABSENT_ID}": "/api/alert-methods/{method_id}",
 }

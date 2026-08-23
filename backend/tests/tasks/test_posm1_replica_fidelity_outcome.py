@@ -495,21 +495,33 @@ def test_the_blob_exclusion_is_scoped_to_the_cached_reply_only():
 async def test_the_credential_line_is_unchanged_where_no_blob_is_involved(tmp_path):
     """Regression guard on the live-shaped run: the narrowing is not a mute.
 
-    The harness source carries an M3U password, an EPG api_key and a
-    credential-bearing guide URL, none of which is inside a cached reply — so
-    every clause the operator got before this bead is still there, on both
-    cycles.
+    AMENDED 2026-08-22 — the fixture had to move, and the reason matters.
+    This ran against a source whose M3U password, EPG api_key and guide URL were
+    all sentinelled BY THE PER-CYCLE REDACTOR, and asserted the operator still
+    got every clause. Under ADR-013 amendment (b) the cycle carries all three,
+    so that source now produces NO shortfall at all and the test would have been
+    asserting the clauses against a run with nothing to report — passing only if
+    the narrowing had broken in the noisy direction.
+
+    ``_source_already_redacted`` reaches the same operator-visible state by the
+    route that still produces it: an A restored from a standard
+    (redact-by-default) backup artifact holds the sentinel in its own fields.
+    The property under test — the ``posm1`` narrowing is not a mute, and it
+    holds on BOTH cycles — is unchanged.
     """
-    source = _source_with_guide(_XC_GUIDE_URL, _XC_SOURCE_NAME)
+    from tests.tasks.test_ukjx5_steady_state_shortfall_counters import (
+        _source_already_redacted,
+    )
+
+    source = _source_already_redacted()
     dest = StatefulDispatcharrFake.empty_dest()
     harness = SyncHarness(source=source, dest=dest)
 
     for _ in range(2):
         report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
-        assert report.credentials_needing_reentry == 3
+        assert report.credentials_needing_reentry == 1
         message = DbasSyncTask._summary_message(report, False, report.outcome.value)
-        assert "1 source(s) need their URL re-entered" in message
-        assert "2 account(s) need credentials re-entered" in message
+        assert "1 account(s) need credentials re-entered" in message
 
 
 def DbasRestoreTask_suffix(report) -> str:
