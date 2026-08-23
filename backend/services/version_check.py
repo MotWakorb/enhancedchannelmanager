@@ -85,9 +85,13 @@ _loop_task: Optional[asyncio.Task] = None
 def current_version() -> str:
     """The version this container reports, matching ``GET /api/health``.
 
-    Falls back to the CI-enforced ``APP_VERSION`` constant when ``ECM_VERSION``
-    is unset (dev containers built outside the release pipeline) so the check
-    still works there instead of silently disabling itself.
+    Falls back to the ``APP_VERSION`` constant when ``ECM_VERSION`` is unset
+    (dev containers built outside the release pipeline) so the check still
+    works there instead of silently disabling itself. ``APP_VERSION`` is held
+    in lockstep with ``frontend/package.json`` by
+    ``backend/tests/unit/test_version_touchpoint_consistency.py`` — the
+    ``version-consistency`` CI job this docstring used to credit was removed
+    in commit 3404d2d5.
     """
     version = os.environ.get("ECM_VERSION", "").strip()
     if version and version != "unknown":
