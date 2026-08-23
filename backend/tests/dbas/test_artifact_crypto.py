@@ -20,10 +20,12 @@ Scope under test (the low-level crypto envelope, no app wiring):
 
 from __future__ import annotations
 
+import json
+import stat
 import struct
+from unittest.mock import patch
 
 import pytest
-
 from dbas import artifact_crypto as ac
 
 GOOD_PASS = "correct horse battery staple"  # >= 12 chars
@@ -33,6 +35,15 @@ WRONG_PASS = "incorrect horse battery"
 def _write(path, data: bytes):
     path.write_bytes(data)
     return path
+
+
+def _rewrite_header(path, mutate):
+    raw = path.read_bytes()
+    (hlen,) = struct.unpack(">I", raw[8:12])
+    header = json.loads(raw[12:12 + hlen])
+    mutate(header)
+    encoded = json.dumps(header, sort_keys=True, separators=(",", ":")).encode()
+    path.write_bytes(ac.MAGIC + struct.pack(">I", len(encoded)) + encoded + raw[12 + hlen:])
 
 
 # --- round-trip ------------------------------------------------------------
@@ -138,6 +149,80 @@ def test_read_header_rejects_non_artifact(tmp_path):
     assert not ac.is_encrypted_artifact(plain)
     with pytest.raises(ac.UnsupportedArtifactFormatError):
         ac.read_header(plain)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda h: h.__setitem__("format_version", 0),
+        lambda h: h["kdf"].__setitem__("name", "pbkdf2"),
+        lambda h: h["kdf"].__setitem__("n", 2 ** 31),
+        lambda h: h["kdf"].__setitem__("n", 2 ** 14),
+        lambda h: h["kdf"].__setitem__("r", 2 ** 20),
+        lambda h: h["kdf"].__setitem__("p", 0),
+        lambda h: h["kdf"].__setitem__("length", 64),
+        lambda h: h.__setitem__("aead", "aes256gcm"),
+        lambda h: h.__setitem__("salt", "not-base64!"),
+        lambda h: h.__setitem__("salt", "YQ=="),
+        lambda h: h.__setitem__("base_nonce", "YQ=="),
+        lambda h: h.__setitem__("chunk_size", 2 ** 31),
+        lambda h: h.pop("kdf"),
+    ],
+)
+def test_malformed_or_extreme_header_is_rejected_before_kdf(tmp_path, mutate):
+    """A hostile header must be refused BEFORE any scrypt work is performed.
+
+    The spy is ``Scrypt`` itself — the KDF entry point the module calls — not
+    the ``_derive_key`` wrapper around it, so the assertion cannot be satisfied
+    by a future refactor that reaches the KDF by another route. Removing any
+    single bound in :func:`artifact_crypto.read_header` makes the matching
+    parameter case reach ``Scrypt`` and fail this test.
+    """
+    plain = _write(tmp_path / "plain.bin", b"data")
+    enc = tmp_path / "art.enc"
+    ac.encrypt_file(plain, GOOD_PASS, enc)
+    _rewrite_header(enc, mutate)
+
+    with (
+        patch.object(ac, "Scrypt", wraps=ac.Scrypt) as scrypt,
+        patch.object(ac, "_derive_key", wraps=ac._derive_key) as derive,
+        pytest.raises(ac.ArtifactDecryptError),
+    ):
+        ac.decrypt_file(enc, GOOD_PASS, tmp_path / "out.bin")
+
+    scrypt.assert_not_called()
+    derive.assert_not_called()
+    assert not (tmp_path / "out.bin").exists()
+
+
+def test_kdf_spy_observes_the_real_derivation_on_a_valid_header(tmp_path):
+    """Instrument check: the spy above CAN see a call, so a zero count means
+    the work did not happen rather than that the spy is pointed at nothing."""
+    plain = _write(tmp_path / "plain.bin", b"data")
+    enc = tmp_path / "art.enc"
+    ac.encrypt_file(plain, GOOD_PASS, enc)
+
+    with patch.object(ac, "Scrypt", wraps=ac.Scrypt) as scrypt:
+        ac.decrypt_file(enc, GOOD_PASS, tmp_path / "out.bin")
+
+    assert scrypt.call_count == 1
+    assert scrypt.call_args.kwargs["n"] == ac._SCRYPT_N
+    assert scrypt.call_args.kwargs["r"] == ac._SCRYPT_R
+    assert scrypt.call_args.kwargs["p"] == ac._SCRYPT_P
+
+
+def test_encrypted_and_decrypted_files_are_owner_only(tmp_path):
+    plain = _write(tmp_path / "plain.bin", b"data")
+    enc = tmp_path / "art.enc"
+    dec = tmp_path / "out.bin"
+    enc.touch(mode=0o666)
+    dec.touch(mode=0o666)
+
+    ac.encrypt_file(plain, GOOD_PASS, enc)
+    ac.decrypt_file(enc, GOOD_PASS, dec)
+
+    assert stat.S_IMODE(enc.stat().st_mode) == 0o600
+    assert stat.S_IMODE(dec.stat().st_mode) == 0o600
 
 
 # --- tamper detection ------------------------------------------------------

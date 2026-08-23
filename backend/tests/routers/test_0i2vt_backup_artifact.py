@@ -22,6 +22,7 @@ new sealed-artifact seam that Phase-1 .6/.8 and Phase-2 restore will consume.
 import base64
 import io
 import json
+import stat
 import zipfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -381,6 +382,11 @@ class TestStreaming:
         art = _patched_build(tmp_path, dest_dir=dest)
         assert art.zip_path.parent == dest
         assert art.zip_path.exists()
+
+    def test_local_artifact_and_checksum_are_owner_only(self, tmp_path):
+        art = _patched_build(tmp_path)
+        assert stat.S_IMODE(art.zip_path.stat().st_mode) == 0o600
+        assert stat.S_IMODE(art.sidecar_path.stat().st_mode) == 0o600
 
 
 class TestBinarySubtree:
