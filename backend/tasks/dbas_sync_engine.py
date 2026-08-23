@@ -263,24 +263,59 @@ PROVIDER_CREDENTIAL_SECTIONS: frozenset[str] = frozenset(
     {"m3u_accounts", "epg_sources"}
 )
 
+# The field names Dispatcharr ACTUALLY exposes for PROVIDER AUTHENTICATION on
+# an M3U account or an EPG source (bead ``…-fmtg0``).
+#
+# READ OFF DISPATCHARR, NOT GUESSED FROM KEY NAMES. Against 0.29.0 source:
+# ``apps/m3u/serializers.py`` — ``M3UAccountSerializer.Meta.fields`` carries
+# exactly ``username`` and ``password``; ``apps/epg/serializers.py`` —
+# ``EPGSourceSerializer.Meta.fields`` carries exactly the same two. Neither
+# ``apps/m3u/models.py`` nor ``apps/epg/models.py`` declares an ``api_key``, a
+# token or a secret field, and no such name occurs anywhere in either app
+# outside its test fixtures. The previous comment here asserted that "an EPG
+# source given a URL but no ``api_key`` fetches nothing"; there is no
+# ``api_key`` on an EPG source to give it.
+#
+# THIS IS A LITERAL BECAUSE IT IS A FACT ABOUT DISPATCHARR, not about ECM's
+# idea of what a credential is. It changes when Dispatcharr's serializers
+# change, which is a deliberate act with a diff to read — not when ECM adds a
+# secret of its own. It is pinned in both directions by
+# ``tests/tasks/test_fmtg0_provider_credential_key_scope.py``.
+_PROVIDER_AUTH_FIELD_NAMES: frozenset[str] = frozenset({"username", "password"})
+
 # The credential-class KEYS carried verbatim inside those sections.
 #
-# DERIVED FROM THE REDACTOR'S OWN VOCABULARY, not maintained as a literal. It is
-# exactly the set the deep redactor would otherwise sentinel — the secret half
-# (``_REDACT_KEYS``: password, api_key, access_token, …) plus the identity half
-# (``_PROVIDER_IDENTITY_KEYS``: username). Within these two sections every one of
-# those keys IS a third-party provider credential, and every one of them is
-# needed for the replica to authenticate: an XC account given a password but no
-# username authenticates no better than one given neither, and an EPG source
-# given a URL but no ``api_key`` fetches nothing.
+# THE INVARIANT: only a key that authenticates to a THIRD-PARTY PROVIDER crosses
+# in cleartext; a key that authenticates to ECM itself, or to a service the
+# OPERATOR runs downstream, never does — in any section, at any nesting depth.
 #
-# Deriving it is what keeps this honest as the redactor grows. A new
-# credential-class key added to either denylist starts crossing in the provider
-# sections automatically and stops crossing everywhere else automatically, so
-# the two rules cannot drift into disagreeing about what a credential is. A
-# maintained literal here would silently withhold the new key from the replica
-# and the failure would look like "the provider stopped working".
-PROVIDER_CREDENTIAL_KEYS: frozenset[str] = _REDACT_KEYS | _PROVIDER_IDENTITY_KEYS
+# DERIVED FROM THE REDACTOR'S OWN VOCABULARY, then INTERSECTED with the fields
+# that can actually occur on one of these two entities. The derivation is what
+# keeps the two rules from drifting apart about what a credential IS: a name
+# preserved here has to be one the deep redactor would otherwise sentinel, or
+# it is not being redacted anywhere else either. The intersection is what keeps
+# the exception from being wider than the ruling: without it the set was 25
+# keys — ``smtp_password``, ``plex_token``, ``mcp_api_key``,
+# ``dispatcharr_api_key``, ``telegram_bot_token``, ``discord_webhook_url``,
+# ``private_key`` and the rest — and none of those authenticates to an IPTV
+# provider.
+#
+# THAT WIDTH WAS REACHABLE, not theoretical. ``preserve_keys`` matches by key
+# name at EVERY depth, and bead ``…-vn63c`` measured that Dispatcharr stores
+# the provider's ``player_api`` reply VERBATIM in
+# ``profiles[].custom_properties`` — a nested blob whose key names ECM does not
+# choose. Anything credential-shaped landing in one of those blobs crossed
+# preserved rather than sentinelled.
+#
+# WHAT IS NOT IN HERE AND STILL CROSSES: a plain-M3U account's whole
+# ``server_url`` and an authenticated XMLTV source's ``url`` cross because
+# :func:`_redact_sync_sections` disables the URL rule for these sections, which
+# is a separate mechanism from ``preserve_keys``; and the Schedules Direct
+# password is written onto ``password`` AFTER redaction by
+# :func:`_inject_schedules_direct_password`.
+PROVIDER_CREDENTIAL_KEYS: frozenset[str] = (
+    _REDACT_KEYS | _PROVIDER_IDENTITY_KEYS
+) & _PROVIDER_AUTH_FIELD_NAMES
 
 # The Dispatcharr EPG ``source_type`` whose password Dispatcharr never returns.
 #
