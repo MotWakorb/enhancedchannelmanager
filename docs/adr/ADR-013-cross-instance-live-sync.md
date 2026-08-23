@@ -67,7 +67,7 @@ with a bead, not an exclusion.
 |---|----------|--------|-------------------------|-----------|
 | **S1** | Mechanism | **REUSE** the DBAS `run_restore` orchestrator + 8 importers unchanged; sync = "restore over HTTP" against a remote `DispatcharrClient`. New code = remote-client factory + `SyncTarget` CRUD + `SyncTask` + alert + UI. *(Proven by spike `xp6mp`: round-trip + re-run no-op, zero `dbas/` edits.)* | (a) Greenfield sync engine; (b) bidirectional CRDT/merge engine. Both re-derive FK-remap, the 4-tier stream matcher, the rollback ledger, and the dry-run engine from scratch. | Revert = drop the `SyncTask`, the remote-client factory, and the `SyncTarget` router from registration. Orchestrator/importers are untouched, so nothing there to unwind. |
 | **S2** | Direction | **One-way A→B.** B is a managed replica; A is system-of-record. **Bidirectional is explicitly out of scope → a separate future ADR** (it opens a new inbound-write trust boundary on A, makes conflict resolution a security control, and risks A→B→A loop amplification). | Bidirectional A↔B; last-writer-wins two-way. | Bidirectional is additive in a later epic; one-way imposes no schema/contract that blocks it. |
-| **S3** | Category set + permanent **never-sync** list | *(**AMENDED 2026-08-22 by [amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a) → S3′: provider credentials are OUT of the never-sync set and cross on every cycle. The never-sync set is now `users` plus ECM's own secrets.**)* *(Reframed 2026-08-22 by the governing principle above: read this row as an **exclusion register**, not a scope ceiling. Its never-sync list is not the set of things that happen not to sync — it is the set for which a specific harm has been written down. Everything else is in scope, and anything absent is a gap, not a decision. Per-item reclassification: see the register below the table.)* **Sync:** M3U accounts, EPG sources, channel groups, channel profiles, stream profiles, user agents, core settings, **channels (+ embedded streams)**, logos *(logos phased — see S9)*. **NEVER-SYNC (permanent, code-enforced):** **users** (privilege-flag escalation / operator lockout under continuous push) and the credential-freshness columns (`credentials`, `credential_version`, `token_revoked_at`, `insecure`). Plugins excluded (inherits ADR-012 D10). | Sync all 13 categories incl. users; sync credentials on the wire. | A future ADR could add `users` behind an explicit, separately-ratified opt-in with a lockout guard; the never-sync set is one shared constant in the redact/category-filter layer, removable per-category if justified. |
+| **S3** | Category set + permanent **never-sync** list | *(**AMENDED 2026-08-22 by [amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a) → S3′: provider credentials are OUT of the never-sync set and cross on every cycle. The never-sync set is now `users` plus ECM's own secrets.**)* *(Reframed 2026-08-22 by the governing principle above: read this row as an **exclusion register**, not a scope ceiling. Its never-sync list is not the set of things that happen not to sync — it is the set for which a specific harm has been written down. Everything else is in scope, and anything absent is a gap, not a decision. Per-item reclassification: see the register below the table.)* **Sync:** M3U accounts, EPG sources, channel groups, channel profiles, stream profiles, user agents, core settings, **channels (+ embedded streams)**, logos *(logos phased — see S9)*. **NEVER-SYNC (permanent, code-enforced):** **users** (privilege-flag escalation / operator lockout under continuous push) and the credential-freshness columns (`credentials`, `credential_version`, `token_revoked_at`, `insecure`). Plugins **split** by [amendment (c)](#amendment-2026-08-23-c-the-two-measurements-s3-was-waiting-on--plugins-split-and-provider-attribution-reconciles-rather-than-deletes-beads-enhancedchannelmanager-ne0gf-enhancedchannelmanager-hne7k): plugin CODE excluded on a confirmed RCE surface, plugin CONFIGURATION in scope, `enabled`/`ever_enabled` never-sync on their own harm (trust-modal suppression). *(Was: "Plugins excluded (inherits ADR-012 D10).")* | Sync all 13 categories incl. users; sync credentials on the wire. | A future ADR could add `users` behind an explicit, separately-ratified opt-in with a lockout guard; the never-sync set is one shared constant in the redact/category-filter layer, removable per-category if justified. |
 | **S4** | Change detection | **Full-read + idempotent upsert every cycle. NO delta state in v1.** Each cycle reads B's full category; the importers match→skip-or-create. | Delta/CDC with persisted per-entity sync cursors; change-driven (webhook) trigger. | Delta is a deferred optimization **gated on measured slowness**; it bolts onto the existing match logic without changing the contract. |
 | **S5** | Conflict policy | **Source-wins (A overwrites B).** Consistent with one-way "A is system-of-record." The importer collision taxonomy already encodes this (existing-identical → skip; ambiguous match on a load-bearing natural key → `CONFLICT`, surfaced, not silent). | Last-write-wins by timestamp; manual / field-level merge. | Merge/manual conflict UI is additive later; the per-entity `CONFLICT` result already exists to surface it. |
 | **S6** | Trigger | **Scheduled-interval** via `task_scheduler` (+ manual force-sync). Overlap guard + credential-freshness gate at fire time. **One `task_id` per SyncTarget** (distinct targets run concurrently; the `ALREADY_RUNNING` guard excludes a second run of the *same* target). | Change-driven / webhook; continuous streaming. | Change-driven is the same `SyncTask` invoked from an event source later; no engine change. |
@@ -102,8 +102,8 @@ silently in either direction.
 | Item | Status |
 |---|---|
 | `stream_settings`, `dvr_settings`, `system_settings` | **Ruled SYNC by the PO on 2026-08-21** (bead `10wnq`) and **not implemented** — `core_settings` appears nowhere in the sync engine at any layer. Under the new principle this is unambiguously a gap, not an exclusion. Note the implementation seam: settings are key/value **blobs**, absent from `_SECTION_TO_ENTITY` by design, so adding a category key alone would be inert. |
-| Plugins (inherited from [ADR-012](ADR-012-dbas-absorption-approach.md) D10) | Held excluded on an **unconfirmed but severe** potential harm: nobody has yet established whether a Dispatcharr "plugin" is executable code (an RCE surface on write) or declarative config. That is a determination nobody has made, not a harm anybody has demonstrated, so under the principle it is a **gap with a safety hold**: the deliverable is the determination, and the hold stands only until it is made. |
-| Provider **attribution** on replicated streams (`hne7k`, Option A) | Every replicated stream hangs off a synthesized "ECM Custom Streams" account while B's replicated provider accounts arrive holding zero streams, so **B's M3U Manager misrepresents what each account provides**. The PO chose Option A on 2026-08-20 ("let's try option A and see what happens"). **Tension with the new principle, recorded rather than resolved:** a replica whose provider attribution is wrong is not a faithful copy. `hne7k` established attribution is reconstructible (the source `m3u_account` reaches `_build_stream_payload`, and the remap is fully populated by the channels step); one thing is unmeasured and gates any move — whether Dispatcharr's own refresh reconciles or **deletes** rows ECM created under an account it now owns. Default under the principle is to replicate attribution; the measurement comes first. |
+| Plugins (inherited from [ADR-012](ADR-012-dbas-absorption-approach.md) D10) | **RESOLVED 2026-08-23 by [amendment (c)](#amendment-2026-08-23-c-the-two-measurements-s3-was-waiting-on--plugins-split-and-provider-attribution-reconciles-rather-than-deletes-beads-enhancedchannelmanager-ne0gf-enhancedchannelmanager-hne7k) — this row is superseded and the category splits.** The determination was made against `dispatcharr:latest`: plugin **code** is executable Python that Dispatcharr imports into its own process (`spec.loader.exec_module`), so the code half moves to **Kind 2** on a confirmed named harm; plugin **configuration** is separable, API-reachable, persists on an instance lacking the code, and is adopted when the code arrives, so the config half is **in scope** and its absence is a fidelity gap tracked on `ne0gf`; `enabled`/`ever_enabled` are **never-sync** on a distinct harm (replicating them suppresses the arbitrary-code trust prompt on the destination). *Was: held on an unconfirmed but severe potential harm.* |
+| Provider **attribution** on replicated streams (`hne7k`, Option A) | Every replicated stream hangs off a synthesized "ECM Custom Streams" account while B's replicated provider accounts arrive holding zero streams, so **B's M3U Manager misrepresents what each account provides**. The PO chose Option A on 2026-08-20 ("let's try option A and see what happens"). **Tension with the new principle, recorded rather than resolved:** a replica whose provider attribution is wrong is not a faithful copy. `hne7k` established attribution is reconstructible (the source `m3u_account` reaches `_build_stream_payload`, and the remap is fully populated by the channels step); the one thing that gated any move — whether Dispatcharr's own refresh reconciles or **deletes** rows ECM created under an account it now owns — was **MEASURED 2026-08-23** ([amendment (c)](#amendment-2026-08-23-c-the-two-measurements-s3-was-waiting-on--plugins-split-and-provider-attribution-reconciles-rather-than-deletes-beads-enhancedchannelmanager-ne0gf-enhancedchannelmanager-hne7k)): it **reconciles**, adopting the row in place, when the row's `stream_hash` matches what the destination computes and its group is enabled for that account; it **deletes** otherwise — immediately for a null or disabled group, and after `stale_stream_days` (default 7) for anything the provider feed does not match. Attribution is therefore implementable and not inherently destructive, but it is unsafe unless ECM achieves hash parity against the **destination's** `m3u_hash_key`. Default under the principle is still to replicate attribution; the remaining choice is a design fork recorded in the amendment, not a safety question. |
 
 #### Tensions with the 2026-08-21 per-blob ruling
 
@@ -897,3 +897,99 @@ absent control for an oversight.
 5. **A logo address carrying a credential is now copied verbatim** rather than dropped. This trades
    a named logo miss for the replica loading the artwork — and for the address carrying the
    credential, which under this ruling it already does everywhere else.
+
+## Amendment, 2026-08-23 (c): the two measurements S3 was waiting on — plugins split, and provider attribution reconciles rather than deletes (beads `enhancedchannelmanager-ne0gf`, `enhancedchannelmanager-hne7k`)
+
+- **Status**: Accepted as a **determination**. It resolves two register rows that were explicitly
+  recorded as unmeasured. It ratifies **no new build scope** on its own; the work each half implies
+  stays on its bead.
+- **Why it exists**: the governing principle above requires every exclusion to be *named,
+  individually justified and visible*. Two rows failed that test by their own admission — the
+  plugins row ("a determination nobody has made") and the attribution row ("one thing is unmeasured
+  and gates any move"). Both were measured on 2026-08-23 against
+  `ghcr.io/dispatcharr/dispatcharr:latest`, on the `dbas-sync-testenv` **B** instance, with every
+  fixture removed afterward.
+
+### (c.1) Plugins — a split, not a category
+
+Full evidence in [ADR-012's 2026-08-23 amendment](ADR-012-dbas-absorption-approach.md). In brief:
+
+- **Code is a confirmed RCE surface.** `apps/plugins/loader.py::_load_module_from_path` ends in
+  `spec.loader.exec_module(module)`; a probe plugin's module-level statement executed inside the
+  Django process. Upstream's own docs call plugins *"trusted code … full app permissions"* and gate
+  first-enable behind a modal warning about *"arbitrary server-side code."* **Plugin code stays
+  excluded — now under Kind 2 (a specific named harm), no longer Kind 3.**
+- **Configuration is separable, and is NOT excluded.** `PluginConfig` (`key`, `name`, `version`,
+  `enabled`, `ever_enabled`, `settings`) lives in Postgres and is fully API-reachable.
+  `_sync_db_with_registry` never deletes a row whose code is absent, so a replicated config row
+  persists; when the operator later installs the plugin, the replicated `settings` **win over the
+  manifest defaults** (measured: `{"limit": 99, …}` survived install intact, not reset to `5`).
+- **Dispatcharr already renders the interim state.** A config row with no code on disk returns
+  `"missing": true` from `GET /api/plugins/plugins/`, and the shipped `PluginCard` branches on it.
+  ECM does not need to build an operator-facing surface for "plugin config present, code absent" —
+  it needs only to not suppress the one upstream already has.
+- **`enabled` / `ever_enabled` carry their own harm and are excluded on it.** The trust modal is
+  gated on `!ever_enabled` (`PluginCard`: `if (t && !e.ever_enabled && r && !await r(e))`).
+  Replicating either flag as true permanently suppresses the arbitrary-code consent prompt on the
+  destination. Same harm class as `users` and `network_access`. **Replicated plugin config must land
+  disabled and never-yet-enabled.**
+
+### (c.2) Provider attribution — Dispatcharr's own refresh RECONCILES, on conditions ECM controls
+
+The gating question was whether Dispatcharr's refresh reconciles or **deletes** rows ECM created
+under an account Dispatcharr now considers itself to own. **It does both, and which one is decided
+by two properties of the row that ECM sets.** Measured by creating a controlled file-backed M3U
+account, letting it refresh, injecting rows that simulate ECM sync writes, and refreshing again.
+
+**It reconciles — adopting the existing row in place — when the row's `stream_hash` matches what
+the destination computes for that provider entry, and the row's `channel_group` is ENABLED for that
+account.** The lookup in `process_m3u_batch_direct` is
+`Stream.objects.filter(stream_hash__in=…)` — **not** scoped by `m3u_account`, so a hash match is
+adopted regardless of who wrote the row. Proven end-to-end through the API surface ECM actually
+uses: a stream `POST`ed to `/api/channels/streams/` with `m3u_account` and a Dispatcharr-compatible
+`stream_hash` was picked up by the provider's next refresh **as the same row id**, renamed from
+`ECM_SYNC_P6` to the provider's `Probe Six`, `last_seen` refreshed, `is_stale` false. Not deleted,
+not duplicated.
+
+**It deletes in two ways otherwise, both in `cleanup_streams`, both scoped only by
+`m3u_account`:**
+
+| Route | Trigger | Timing |
+|---|---|---|
+| Group filter — `Stream.objects.filter(m3u_account=account).exclude(channel_group__in=<enabled groups>).delete()` | Row's group is disabled for that account, **or null** | **Immediate**, on the very next refresh, regardless of `stale_stream_days` |
+| Stale sweep — `filter(m3u_account=account, last_seen__lt=scan_start - stale_stream_days)` | Provider feed produced no hash match for the row | After `stale_stream_days` (**default 7**) |
+
+Measured outcomes from one refresh over five injected rows: null-group and disabled-group rows were
+deleted on the spot ("2 streams removed due to group filter"); a row not in the feed and a row whose
+hash was computed differently were both marked `is_stale=true` and then deleted once past the
+retention window; the hash-matching row was adopted. **A hash mismatch also creates a duplicate** —
+the differently-hashed row for the same URL sat alongside a freshly created provider row until the
+sweep took it.
+
+**What this means for `hne7k`.** The catastrophic outcome the bead feared — "hand the replica's
+entire lineup to the next provider refresh to destroy" — is **real but avoidable, not inherent**.
+Re-attributing streams to the real provider account is safe if and only if ECM satisfies all three:
+
+1. **Hash parity.** `stream_hash` must equal what the *destination* computes. It is
+   `sha256(json.dumps(<subset>, sort_keys=True))` over fields chosen by the **destination's**
+   `stream_settings.m3u_hash_key` core setting (default `"url"`, operator-settable), and for **XC**
+   accounts `url` is replaced by the provider `stream_id`. ECM must read this from B, not assume A's.
+2. **Enabled group.** The stream's group must be enabled for that account on B, or it dies on the
+   next refresh with no retention grace. ECM already replicates the enabled-group selection
+   (`m3u_accounts.py` → `client.update_m3u_group_settings`), so this precondition is *met today*,
+   but it is load-bearing and must stay that way.
+3. **Feed presence.** Anything ECM attributes that the destination's provider does not currently
+   serve is deleted after `stale_stream_days`. Attribution is not a way to carry streams B's
+   provider will not return.
+
+Two consequential notes. First, **the Dispatcharr API accepts `m3u_account` and `stream_hash` on
+stream create** — the `StreamSerializer` declares `read_only_fields` as a *class* attribute rather
+than inside `Meta`, so DRF ignores it; a `POST` echoing both fields back returned `201`. Attribution
+is therefore implementable without upstream changes, though it rests on an upstream bug and should
+be pinned by a contract test (ADR-014 drift strategy). Second, once attribution is correct, B's own
+refresh becomes the authority for that account's streams — which interacts directly with S9's
+suppression of the deferred auto-sync phase and with `wd20y`'s provisioned credentials. **That
+design fork — ECM copies streams and hash-matches them, versus ECM configures the account and lets
+B's own refresh populate it — is a PO/architect decision and is deliberately NOT settled here.**
+`hne7k`'s row in the register moves from "unmeasured, gates any move" to "measured; the move is a
+choice between two workable designs."
