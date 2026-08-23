@@ -16,8 +16,10 @@
  *     runs with confirm_apply: true. The task id is PER TARGET (7ipq2.3 /
  *     ADR-013 S6): distinct targets sync concurrently; the backend refuses a
  *     second run against the same target.
- *   - The load-bearing operator copy (one-way overwrite + credentials-not-synced)
- *     is present in the card (ADR-013).
+ *   - The load-bearing operator copy (one-way overwrite + provider credentials
+ *     ARE sent every cycle) is present in the card (ADR-013 amendment (b)).
+ *   - The Schedules Direct password field appears ONLY when this instance has a
+ *     Schedules Direct EPG source, and is carried on create.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -27,6 +29,7 @@ vi.mock('../../services/api', () => ({
   createSyncTarget: vi.fn(),
   updateSyncTarget: vi.fn(),
   deleteSyncTarget: vi.fn(),
+  getSyncSourceCredentialNeeds: vi.fn(),
   runTask: vi.fn(),
 }));
 
@@ -49,6 +52,7 @@ const TARGET: api.SyncTarget = {
   insecure: false,
   fuzzy_stream_matching: false,
   sync_logos: false,
+  has_schedules_direct_password: false,
   credential_version: 1,
   last_full_sync_at: '2026-06-18T12:00:00Z',
   last_outcome: 'success',
@@ -58,8 +62,15 @@ function mockTargets(targets: api.SyncTarget[]) {
   (api.listSyncTargets as Mock).mockResolvedValue(targets);
 }
 
-async function renderCard(targets: api.SyncTarget[] = [TARGET]) {
+async function renderCard(
+  targets: api.SyncTarget[] = [TARGET],
+  needsSd = false,
+) {
   mockTargets(targets);
+  (api.getSyncSourceCredentialNeeds as Mock).mockResolvedValue({
+    needs_schedules_direct_password: needsSd,
+    schedules_direct_sources: needsSd ? ['SD Lineup'] : [],
+  });
   render(<SyncTargetsCard />);
   // Wait for the initial list load to settle.
   await waitFor(() => expect(api.listSyncTargets).toHaveBeenCalled());
@@ -72,11 +83,60 @@ describe('SyncTargetsCard', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
-  it('renders the one-way + credentials-not-synced operator copy', async () => {
+  it('renders the one-way + credentials-are-sent operator copy', async () => {
+    // AMENDED 2026-08-22: this asserted "credentials are not synced". Bead
+    // msqf7's defect was ECM claiming credentials were stripped while sending
+    // them, so this copy has to change in the same commit as the behaviour —
+    // the assertion is the gate on that, not decoration.
     await renderCard([]);
     expect(screen.getByText(/managed replica/i)).toBeInTheDocument();
     expect(screen.getByText(/overwritten by/i)).toBeInTheDocument();
-    expect(screen.getByText(/credentials are not synced/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/provider credentials are sent on every sync/i),
+    ).toBeInTheDocument();
+    // And the copy states the cost, not only the convenience.
+    expect(
+      screen.getByTestId('stc-credentials-banner').textContent,
+    ).toMatch(/in clear/i);
+    // The claim it replaced must be gone, not merely outweighed.
+    expect(screen.queryByText(/credentials are not synced/i)).toBeNull();
+  });
+
+  it('asks for a Schedules Direct password only when a source needs one', async () => {
+    await renderCard([], false);
+    fireEvent.click(await screen.findByRole('button', { name: /add sync target/i }));
+    expect(screen.queryByTestId('stc-sd-password-field')).toBeNull();
+  });
+
+  it('shows the Schedules Direct field and carries it on create', async () => {
+    (api.createSyncTarget as Mock).mockResolvedValue({ ...TARGET, id: 9 });
+    await renderCard([], true);
+    fireEvent.click(await screen.findByRole('button', { name: /add sync target/i }));
+
+    const field = await screen.findByTestId('stc-sd-password-field');
+    expect(field).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^name$/i), {
+      target: { value: 'New B' },
+    });
+    fireEvent.change(screen.getByLabelText(/base url/i), {
+      target: { value: 'https://b2.example.com' },
+    });
+    fireEvent.change(screen.getByLabelText(/schedules direct password/i), {
+      target: { value: 'sd-secret' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create target/i }));
+
+    await waitFor(() => expect(api.createSyncTarget).toHaveBeenCalled());
+    expect((api.createSyncTarget as Mock).mock.calls[0][0]).toMatchObject({
+      schedules_direct_password: 'sd-secret',
+    });
+  });
+
+  it('badges a target that already has a stored Schedules Direct password', async () => {
+    await renderCard([{ ...TARGET, has_schedules_direct_password: true }]);
+    expect(
+      await screen.findByTestId('sync-target-sd-password-7'),
+    ).toBeInTheDocument();
   });
 
   it('lists configured targets with a tri-state status badge', async () => {

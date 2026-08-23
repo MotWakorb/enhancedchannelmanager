@@ -1,11 +1,15 @@
 # ADR-013: Cross-Instance Live Sync (one-way A→B configuration replication)
 
-- **Status**: Accepted — **amended 2026-08-22** (one-time credential provisioning at sync-target
-  setup: adds S10–S13 and amends the reading of S3 and S7; PO-ratified — see
-  [Amendment, 2026-08-22](#amendment-2026-08-22-one-time-credential-provisioning-at-sync-target-setup-distinct-from-per-cycle-sync-bead-enhancedchannelmanager-wd20y) below).
+- **Status**: Accepted — **amended twice on 2026-08-22, and the second reverses the first.**
+  [Amendment (a)](#amendment-2026-08-22-a-one-time-credential-provisioning-at-sync-target-setup-distinct-from-per-cycle-sync-bead-enhancedchannelmanager-wd20y)
+  added one-time credential provisioning (S10–S13). **[Amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a)
+  supersedes it in full**: provider credentials cross on EVERY cycle, S10–S13 and INV-2/3/4/8/9 are
+  void, and S3 and S7 are amended rather than merely re-read. **Read (b) first; (a) is history.**
 - **Date**: 2026-06-19 (PO decisions ratified in epic `enhancedchannelmanager-i39wu` team-plan; architecture proven by spike `enhancedchannelmanager-xp6mp`)
 - **Author**: IT Architect persona (on behalf of PO), encoding the i39wu team-plan decisions and the xp6mp spike findings.
-- **Amendment bead**: `enhancedchannelmanager-wd20y` (2026-08-22, one-time credential provisioning).
+- **Amendment beads**: `enhancedchannelmanager-wd20y` (2026-08-22, one-time credential provisioning
+  — superseded the same day); the per-cycle ruling in amendment (b) also dissolves `ngwxx`, `3dmgr`,
+  `2jvvb`/`5bib5` and `nc6t7`, and re-scopes `gad2p`.
 - **Bead**: `enhancedchannelmanager-i39wu` (epic) · spike `enhancedchannelmanager-xp6mp` (closed) · this ADR file tracked under `enhancedchannelmanager-anop4`.
 - **Extends**: [ADR-012](ADR-012-dbas-absorption-approach.md) D6 (Sync = Phase 3, deferred to v0.18.1 as a separate epic; the `SyncTarget` schema landed in v0.18.0 under `0i2vt.4`).
 - **Security companion**: `docs/security/threat_model_dbas_import.md` **Addendum D** (bead `gwjss`) — the STRIDE rows + ratings for the sync egress surface. Build is gated on Addendum D the same way `u81kh` was gated on Addendum C.
@@ -45,11 +49,13 @@ Two things this principle does **not** do, stated because the distinction decide
 - **It is about scope, not about controls.** "Everything replicates" does not mean "everything
   replicates by any mechanism"; it means *the destination ends up faithful*, and the mechanism still
   has to be safe. Nothing here licenses putting a secret on a recurring cycle. `msqf7`'s redaction on
-  the per-cycle path, INV-2's reachability guard, the `insecure` gate (S11) and `avrix`'s group
-  selection are all unchanged by it.
+  the per-cycle path, `msqf7`'s redaction of ECM's own secrets and `avrix`'s group selection are all
+  unchanged by it. *(INV-2's reachability guard and the S11 `insecure` gate were named here too and
+  are since VOID — removed by amendment (b), not by this principle.)*
 - **It does not turn "unreadable" into "out of scope."** A value that cannot be *harvested* is still
-  in scope; it is provisioned another way. The Schedules Direct password is the worked example — see
-  the [2026-08-22 amendment](#amendment-2026-08-22-one-time-credential-provisioning-at-sync-target-setup-distinct-from-per-cycle-sync-bead-enhancedchannelmanager-wd20y).
+  in scope; it reaches the replica another way. The Schedules Direct password is the worked example —
+  the operator supplies it once on the sync target and it cascades every cycle
+  ([amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a)).
 
 Every exclusion in this ADR is therefore reclassified into exactly three kinds, and the register is
 [below the decision table](#exclusion-register-reclassified-against-the-2026-08-22-principle):
@@ -61,11 +67,11 @@ with a bead, not an exclusion.
 |---|----------|--------|-------------------------|-----------|
 | **S1** | Mechanism | **REUSE** the DBAS `run_restore` orchestrator + 8 importers unchanged; sync = "restore over HTTP" against a remote `DispatcharrClient`. New code = remote-client factory + `SyncTarget` CRUD + `SyncTask` + alert + UI. *(Proven by spike `xp6mp`: round-trip + re-run no-op, zero `dbas/` edits.)* | (a) Greenfield sync engine; (b) bidirectional CRDT/merge engine. Both re-derive FK-remap, the 4-tier stream matcher, the rollback ledger, and the dry-run engine from scratch. | Revert = drop the `SyncTask`, the remote-client factory, and the `SyncTarget` router from registration. Orchestrator/importers are untouched, so nothing there to unwind. |
 | **S2** | Direction | **One-way A→B.** B is a managed replica; A is system-of-record. **Bidirectional is explicitly out of scope → a separate future ADR** (it opens a new inbound-write trust boundary on A, makes conflict resolution a security control, and risks A→B→A loop amplification). | Bidirectional A↔B; last-writer-wins two-way. | Bidirectional is additive in a later epic; one-way imposes no schema/contract that blocks it. |
-| **S3** | Category set + permanent **never-sync** list | *(Reframed 2026-08-22 by the governing principle above: read this row as an **exclusion register**, not a scope ceiling. Its never-sync list is not the set of things that happen not to sync — it is the set for which a specific harm has been written down. Everything else is in scope, and anything absent is a gap, not a decision. Per-item reclassification: see the register below the table.)* **Sync:** M3U accounts, EPG sources, channel groups, channel profiles, stream profiles, user agents, core settings, **channels (+ embedded streams)**, logos *(logos phased — see S9)*. **NEVER-SYNC (permanent, code-enforced):** **users** (privilege-flag escalation / operator lockout under continuous push) and the credential-freshness columns (`credentials`, `credential_version`, `token_revoked_at`, `insecure`). Plugins excluded (inherits ADR-012 D10). | Sync all 13 categories incl. users; sync credentials on the wire. | A future ADR could add `users` behind an explicit, separately-ratified opt-in with a lockout guard; the never-sync set is one shared constant in the redact/category-filter layer, removable per-category if justified. |
+| **S3** | Category set + permanent **never-sync** list | *(**AMENDED 2026-08-22 by [amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a) → S3′: provider credentials are OUT of the never-sync set and cross on every cycle. The never-sync set is now `users` plus ECM's own secrets.**)* *(Reframed 2026-08-22 by the governing principle above: read this row as an **exclusion register**, not a scope ceiling. Its never-sync list is not the set of things that happen not to sync — it is the set for which a specific harm has been written down. Everything else is in scope, and anything absent is a gap, not a decision. Per-item reclassification: see the register below the table.)* **Sync:** M3U accounts, EPG sources, channel groups, channel profiles, stream profiles, user agents, core settings, **channels (+ embedded streams)**, logos *(logos phased — see S9)*. **NEVER-SYNC (permanent, code-enforced):** **users** (privilege-flag escalation / operator lockout under continuous push) and the credential-freshness columns (`credentials`, `credential_version`, `token_revoked_at`, `insecure`). Plugins excluded (inherits ADR-012 D10). | Sync all 13 categories incl. users; sync credentials on the wire. | A future ADR could add `users` behind an explicit, separately-ratified opt-in with a lockout guard; the never-sync set is one shared constant in the redact/category-filter layer, removable per-category if justified. |
 | **S4** | Change detection | **Full-read + idempotent upsert every cycle. NO delta state in v1.** Each cycle reads B's full category; the importers match→skip-or-create. | Delta/CDC with persisted per-entity sync cursors; change-driven (webhook) trigger. | Delta is a deferred optimization **gated on measured slowness**; it bolts onto the existing match logic without changing the contract. |
 | **S5** | Conflict policy | **Source-wins (A overwrites B).** Consistent with one-way "A is system-of-record." The importer collision taxonomy already encodes this (existing-identical → skip; ambiguous match on a load-bearing natural key → `CONFLICT`, surfaced, not silent). | Last-write-wins by timestamp; manual / field-level merge. | Merge/manual conflict UI is additive later; the per-entity `CONFLICT` result already exists to surface it. |
 | **S6** | Trigger | **Scheduled-interval** via `task_scheduler` (+ manual force-sync). Overlap guard + credential-freshness gate at fire time. **One `task_id` per SyncTarget** (distinct targets run concurrently; the `ALREADY_RUNNING` guard excludes a second run of the *same* target). | Change-driven / webhook; continuous streaming. | Change-driven is the same `SyncTask` invoked from an event source later; no engine change. |
-| **S7** | Security controls | **SSRF `validate_outbound_url` on `base_url` on EVERY request** (execute-time, resolve-by-IP, redirect re-validate) — and the CI grep that forbids raw outbound calls **must extend to the sync module**. **Credential-freshness at fire time** (capture `credential_version` at enqueue; re-check + `token_revoked_at` at execute; abort+audit on change/revoke — mirror `dbas_backup`). **TLS `verify=True` default; per-target `insecure` escape hatch ONLY with a per-cycle audit row** (and forbidden-by-construction if the payload is ever non-redacted). **Redact-by-default** via the shared `_REDACT_KEYS` denylist before serialize. *(Risk ratings → Addendum D / `gwjss`.)* | Config-time-only SSRF validation; one-time insecure audit; secrets on the wire. | Controls are existing chokepoints; tightening (mandatory TLS, drop the insecure flag) is a settings change, not a re-architecture. |
+| **S7** | Security controls | *(**AMENDED 2026-08-22 by [amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a) → S7′: the payload IS non-redacted for provider credentials, and `insecure` is WARNED rather than forbidden. Every other control below stands.**)* **SSRF `validate_outbound_url` on `base_url` on EVERY request** (execute-time, resolve-by-IP, redirect re-validate) — and the CI grep that forbids raw outbound calls **must extend to the sync module**. **Credential-freshness at fire time** (capture `credential_version` at enqueue; re-check + `token_revoked_at` at execute; abort+audit on change/revoke — mirror `dbas_backup`). **TLS `verify=True` default; per-target `insecure` escape hatch ONLY with a per-cycle audit row** (and forbidden-by-construction if the payload is ever non-redacted). **Redact-by-default** via the shared `_REDACT_KEYS` denylist before serialize. *(Risk ratings → Addendum D / `gwjss`.)* | Config-time-only SSRF validation; one-time insecure audit; secrets on the wire. | Controls are existing chokepoints; tightening (mandatory TLS, drop the insecure flag) is a settings change, not a re-architecture. |
 | **S8** | Failure / idempotency | **Reuse `RollbackLedger` + compensating-delete + the tri-state `RestoreOutcome`** (never SUCCESS on mixed state); default-ON dry-run guardrail carries over. **Idempotency is the load-bearing operational property:** a run MUST be safe to re-run to convergence (upsert-by-stable-identity), so retry IS the recovery mechanism — **no rollback/saga machinery** beyond what the ledger already provides, and none may be added without revisiting this ADR. | Best-effort no-rollback; a custom sync-specific failure model. | The tri-state contract is already the orchestrator's; a richer per-category report is additive. |
 | **S9** | Which importers run per cycle | **Config categories every cycle** (M3U, EPG, groups, channel/stream profiles, user agents, core settings — cheap reads). **Channels + streams every cycle** (in scope; pulls the 4-tier stream matcher). **Logos: PHASED — not in the first sync-cycle slice** (the logos importer carries a destructive `clear_existing` bulk-delete + a streaming-upload cost that is wrong to run every interval). **The deferred auto-sync / EPG-download phase MUST be suppressed per-cycle** (it would re-trigger provider auto-sync / EPG-download on B on every run). **Not** "run all importers blindly." | Run all importers every cycle incl. logos and the deferred phase; run the channels matcher off-cycle. | Logos join the per-cycle set once cost is measured acceptable (or on a slower sub-interval); the importer already registers into the same ordered step list. |
 
@@ -176,9 +182,17 @@ Sync is additive at exactly two seams (the remote-client factory and the `SyncTa
 
 ---
 
-## Amendment, 2026-08-22: one-time credential provisioning at sync-target setup, distinct from per-cycle sync (bead `enhancedchannelmanager-wd20y`)
+## Amendment, 2026-08-22 (a): one-time credential provisioning at sync-target setup, distinct from per-cycle sync (bead `enhancedchannelmanager-wd20y`)
 
-- **Status of this amendment**: **Accepted — PO-ratified 2026-08-22.** Drafted 2026-08-21 by the
+> **SUPERSEDED, same day, by [Amendment 2026-08-22 (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a).**
+> Everything below describes the one-time provisioning design that shipped in PR #908 and was
+> removed two days later. It is kept because the reasoning is the record of what was weighed —
+> including the objections the PO overruled — and a reader who finds a stale reference to
+> "Provision Credentials" needs to be able to find out what it was. **Nothing in this section
+> is current.** In particular **S10, S11, S12(c), S13, INV-2, INV-3, INV-4, INV-8 and INV-9 are
+> void**; read amendment (b) for what replaced each.
+
+- **Status of this amendment**: **Superseded 2026-08-22 by amendment (b). Was: Accepted — PO-ratified 2026-08-22.** Drafted 2026-08-21 by the
   architect in response to the PO direction recorded on `wd20y` ("my users would like it to be a hot
   standby"); four decisions were reserved for the PO and all four were ruled on. **Two rulings went
   against the architect's recommendation** and are recorded as such, with what the PO accepted in
@@ -726,3 +740,158 @@ front of the decider — not overlooked.
 | **7. Faithful-copy principle** | **Everything replicates by default; every exclusion must be named, individually justified and visible.** Recorded as a [governing principle](#governing-principle-po-direction-2026-08-22-a-replica-is-a-faithful-copy) on the ADR body, not in this amendment, because it governs the whole document. | **Yes, and explicitly so** — direction, verbatim: *"You need to update the ADR, Architect persona be damned, with the fact that all settings must replicate."* | It inverts the default this ADR was written under. Every existing exclusion is reclassified in the [exclusion register](#exclusion-register-reclassified-against-the-2026-08-22-principle) into technically-impossible, specific-harm, or not-yet-built; three entries from the 2026-08-21 per-blob ruling and two prior decisions (`hne7k` attribution, `sync_logos` default-OFF) are recorded as tensions defaulting toward replication rather than resolved silently. Scope only — no control is weakened by it. |
 
 Scheduled or automatic re-push is forbidden under every ruling.
+
+
+---
+
+## Amendment, 2026-08-22 (b): provider credentials cross on every cycle (supersedes amendment (a))
+
+- **Status**: **Accepted — PO-ratified 2026-08-22.** Third and final ruling of that day; the PO
+  ruled three times as the design was walked from setup-only, to cascade-on-change, to this.
+- **Supersedes**: [Amendment 2026-08-22 (a)](#amendment-2026-08-22-a-one-time-credential-provisioning-at-sync-target-setup-distinct-from-per-cycle-sync-bead-enhancedchannelmanager-wd20y)
+  in its entirety, and with it **S10, S11, S12, S13** and invariants **INV-2, INV-3, INV-4, INV-8,
+  INV-9**. It also **reverses S12(c)** ("scheduled or automatic re-push is FORBIDDEN"), which was
+  ratified that morning and is now wrong.
+- **Amends**: **S3** (never-sync set) and **S7** (security controls) in the ADR body.
+- **Does not revert**: `enhancedchannelmanager-msqf7`. See
+  [What msqf7 actually forbids](#what-msqf7-actually-forbids-and-it-is-not-this).
+- **Companion**: `docs/security/threat_model_dbas_import.md` §11.5, re-rated in the same branch.
+
+### The ruling
+
+Verbatim, and it is the whole argument:
+
+> *"In the end, this should be easy for the user, not complicated. You keep fighting me on this and
+> I don't know why. I know the security risks. That's on the user to mitigate, not us. If a user is
+> dumb enough to insecurely send credentials cleartext, that's on them. We should be sending
+> credentials every time so that we don't need the user to deal with needing to re-type anything.
+> Any update happens as soon as the next scheduled sync occurs."*
+
+Two prior rulings the same day are superseded by it and are recorded so the sequence is legible
+rather than looking like a single decision: (i) *setup-only provisioning, automatic at sync-target
+setup* — rejected because a replica whose credential goes stale on rotation is not a standby;
+(ii) *cascade on detected change, gated on a recorded fingerprint* — rejected as complexity that
+buys the operator nothing they asked for. **The PO made this call with the security objection in
+front of them and accepted the risk in their own terms.** That is what makes it a decision rather
+than an oversight, and it is why this section records the residuals as **accepted** rather than
+as **mitigated**.
+
+### S3 as amended — provider credentials leave the never-sync set
+
+| # | Area | Decision | Reversibility |
+|---|---|---|---|
+| **S3′** | Never-sync set | **Provider credentials are IN the per-cycle sync.** M3U account `username`/`password`, the credential inside a plain-M3U `server_url`, the credential inside an XMLTV EPG `url`, the credential in a stream URL's path segments, and the credential in a provider logo address all cross on every cycle, as part of the ordinary importer write. **The never-sync set is now exactly two things**: `users` (privilege escalation / operator lockout under continuous push — unchanged, code-enforced, D3) and **ECM's own secrets** — its settings secrets, alert-method secrets, and the credentials of its cloud-storage and sync targets. Those are not provider credentials and have no purpose on a replica. | Revert = restore `known_secrets` threading and `scrub_credential_urls=True` in `build_live_source_plan`. Credentials already sent to a replica are **not** retracted by reverting. |
+
+The mechanism is one constant, `tasks.dbas_sync_engine.PROVIDER_CREDENTIAL_SECTIONS`, naming
+`m3u_accounts` and `epg_sources`, plus the same file's decision to stop threading harvested secrets
+into the channels and logos redaction. A gathered category does **not** inherit the exception; it
+has to be added there deliberately.
+
+### S7 / S11 as amended — TLS verification is recommended, not enforced
+
+| # | Area | Decision | Reversibility |
+|---|---|---|---|
+| **S7′** | `insecure` and a credential on the destination | **The refusal is REMOVED.** A sync target may be both "TLS verification disabled" and carrying provider credentials on every cycle. ECM does not block it. What it does instead: a **warning on every credential-carrying cycle** (`insecure_transmission_warning`, in the run's notes and the log), an **audit row on every such cycle** recording `tls_verified=false` and how many records carried a credential, and a **badge on the target row** in the UI saying credentials cross in clear. **The risk is PO-accepted, explicitly**: the operator owns both instances and mitigates this themselves. | Revert = restore the service-layer predicate on both write orders. |
+
+This voids **S11** and **INV-4** entirely, and it dissolves rather than fixes two open beads:
+
+- **`enhancedchannelmanager-ngwxx`** (P1) — the observed-credential predicate false-positived on
+  every XC target, permanently and unclearably, because a populated but credential-free XC
+  `server_url` counted as an observed credential. The predicate existed only to feed this refusal.
+  With the refusal gone the observation has no consumer and was deleted, along with the
+  `destination_credential_observed_at` column. **This bead is closed by removal, not by repair** —
+  the wrong predicate is not made right, it is made absent.
+- **`enhancedchannelmanager-3dmgr`** — the same refusal widened to a hand-entered credential on the
+  replica. Same disposition: the exposure it described is real and is now **accepted** rather than
+  refused, and stated to the operator at the point of the choice.
+
+### S12 as amended — rotation needs no mechanism
+
+| # | Area | Decision |
+|---|---|---|
+| **S12′** | Rotation and staleness | **Rotation falls out of per-cycle transmission and needs no feature.** A provider password changed on A reaches B on the next scheduled cycle because B is given the current value every cycle. There is no re-provision action, no marker to clear, no version gate, no change detector and no staleness that can arise between cycles. **S12(c) is REVERSED**: scheduled automatic re-push is not merely permitted, it is the design. |
+
+The staleness signal (`destination_account_looks_stale` / `provisioned_credentials_stale`) is
+retained because a replica whose provider account is failing is still worth reporting, but its
+remedy is no longer "re-run the provisioning action" — it is the ordinary one: fix it on A.
+
+### S13 as amended — every cycle states what it carried
+
+| # | Area | Decision |
+|---|---|---|
+| **S13′** | Audit | **Every terminal route of a sync run writes exactly one `sync_outbound` journal row**, and that row states the redaction mode (`topology_plus_provider_credentials`), whether TLS was verified, **how many provider records carried a credential**, and **which ones, by operator-facing label and FIELD NAME**. Never a value, never a fragment of one, never a masked tail. Under per-cycle transmission this row is the only record of how often a secret moved, so the routes that carry nothing — the freshness abort, the destination-unreadable abort — write it too, recording that they carried nothing. |
+
+This is the surviving form of **`enhancedchannelmanager-gad2p`**. That bead named two failure routes
+that wrote no audit row: a provisioning gate refusal returning 409, and a de-provision against an
+unreachable destination returning a bare 500. **Neither route exists any more** — the gate and the
+de-provision action are both deleted — so the bead is fixed by the invariant rather than by patching
+its two reproductions. The invariant as restated: *no credential-carrying attempt, and no attempt
+that could have carried one, terminates without an audit row.*
+
+### The rebind gap is closed by the same change
+
+**`enhancedchannelmanager-2jvvb` / `enhancedchannelmanager-5bib5`.** Under `msqf7`'s redaction the
+replica's channels were bound to stream URLs whose credential segments were the sentinel; the
+replica's own refresh then fetched the real streams as **orphans**, and only a *further* ECM cycle
+rebound the channels onto them. A target with no armed schedule sat with a full stream set bound to
+nothing after an action that reported success.
+
+Carrying the stream URL whole removes both halves at the source: the channel is bound to a working
+address the moment the cycle writes it, so there is nothing to rebind and no orphan window. The
+acceptance invariant — *the replica serves the streams its source serves, with no further operator
+action* — is met on the first cycle rather than the third.
+
+### What `msqf7` actually forbids, and it is not this
+
+`msqf7` was **not** a bug about transmitting credentials. It was a bug about **ECM telling the
+operator credentials were stripped while transmitting them anyway**, implicitly, inside stream-URL
+path segments that nothing inspected, on every scheduled cycle. The product's own words were false.
+
+Sending them deliberately is permitted by this amendment. Sending them while the UI, the docs, the
+audit row or a docstring claims otherwise is the defect `msqf7` exists to prevent recurring, and it
+is a build gate on this amendment. Changed in the same branch as the behaviour:
+
+- `docs/user_guide/backup-restore/cross-instance-sync.md` — the "never puts a provider credential on
+  the wire" claim, the credential-re-entry recovery procedure (which no longer exists), the
+  never-synced table, and the redacted-stream troubleshooting entry;
+- the SyncTargets card's "Credentials are not synced" banner, the insecure-TLS copy and the
+  target-row badge;
+- the `sync_outbound` audit row's `redaction_mode`, which asserted `topology_only` **while `msqf7`
+  was live** — the audit trail stating the exact thing that was false;
+- `tasks.dbas_sync_engine`'s own module docstring.
+
+Bead `enhancedchannelmanager-nc6t7` is closed by this work.
+
+### Invariants, restated
+
+| # | Invariant | Status | Enforcement |
+|---|---|---|---|
+| **INV-1′** | **A provider credential leaves A only inside the provider sections and the addresses of the entities they own** (`m3u_accounts`, `epg_sources`, stream URLs, provider logo URLs). ECM's own settings secrets, alert-method secrets and target credentials never leave A on any path. | Amended (was: no credential leaves A on any cycle) | The two-pass split in `_redact_sync_sections`, plus tests asserting an ECM settings secret and an alert-method secret are still sentinelled in a sync plan. |
+| **INV-2** | *The provisioning writer is unreachable from a cycle.* | **VOID.** | The writer module and its import-reachability guard are **deleted**. The guard asserted the exact opposite of the ratified design; it was removed rather than weakened, because a guard kept alive against a design that no longer exists reads as a control and enforces nothing. |
+| **INV-3** | *A persists no provider credential.* | **VOID as written.** | A now persists exactly one, deliberately: the Schedules Direct password, Fernet-encrypted on the sync-target row, because it cannot be harvested and the alternative is the operator typing it every time. No other provider credential is persisted on A for sync purposes. |
+| **INV-4** | *A target is never both `insecure` and holding a credential on B.* | **VOID.** | Replaced by a warning and an audit row (S7′). |
+| **INV-5′** | **Every terminal route of a cycle writes exactly one audit row stating what it carried.** | Amended | Journal assertions on the completed-apply, dry-run, freshness-abort and destination-unreadable routes. |
+| **INV-6′** | **The credential-bearing field set is the redactor's own, inverted** — what crosses is precisely what `preserve_keys` names plus what `scrub_credential_urls=False` leaves alone, within `PROVIDER_CREDENTIAL_SECTIONS`. | Amended | Derived from `_redact_credentials_deep`'s own parameters rather than from a literal field list. |
+| **INV-7′** | **After one successful apply, a replica serves the streams its source serves, with no further operator action** — or the run says plainly what is missing. | Retained, and now literally true at the cycle layer | Stream URLs cross whole, so `channels_with_no_playable_stream` is 0 on the first cycle for a credentialed provider. **Not live-verified** — see the residual below. |
+| **INV-8** | *A standby whose provisioned credentials stopped working says so, without triggering a push.* | **VOID as written** (the "without triggering a push" half is meaningless now) | The staleness reporting is retained as information; the cycle re-sends the current credential regardless. |
+| **INV-9** | *A de-provision that did not clear B does not clear the marker.* | **VOID.** | There is no de-provision and no marker. |
+
+### Residuals, accepted rather than mitigated
+
+Each of these was previously prevented by a control this amendment removes. They are listed as
+**accepted** — the PO's ruling is the acceptance — so that a later reader does not mistake an
+absent control for an oversight.
+
+1. **The replica is a place the provider credential lives, permanently and by design.** Its
+   database, backups, exports, logs, and its own stream rows all hold it. Nothing retracts it; only
+   rotating the credential at the provider ends the exposure.
+2. **A target with `insecure=true` transmits the credential in clear on every cycle.** Recurring,
+   not one-shot. Warned and audited, not blocked. *"That's on the user to mitigate, not us."*
+3. **The blast radius of a compromised replica now includes the provider subscription**, where
+   before it included only the topology.
+4. **There is no ECM-side record of which replicas hold a credential**, because the marker columns
+   were dropped. The journal is the record: every cycle that carried one says so, with the target
+   named.
+5. **A logo address carrying a credential is now copied verbatim** rather than dropped. This trades
+   a named logo miss for the replica loading the artwork — and for the address carrying the
+   credential, which under this ruling it already does everywhere else.

@@ -424,15 +424,17 @@ _DESTINATION_CRUD = {
     # deny-by-default, and neither template is declared there — so the service
     # principal is REFUSED both. That is deliberate, not an omission: adding a
     # tool contract for either one has to be an explicit backend authority
-    # decision, which is exactly what that module's docstring requires. It is
-    # pinned by ``tests/tasks/test_dbas_sync_provisioning.py`` so the refusal
-    # cannot become accidental.
+    # decision, which is exactly what that module's docstring requires.
     #
-    # The S11 ``insecure`` refusal is enforced at the service layer regardless,
-    # so it holds on whichever surface reaches the write — the point of putting
-    # it below the router instead of in the form (ADR-013 INV-4).
-    ("POST", "/api/sync-targets/{target_id}/provision-credentials"),
-    ("POST", "/api/sync-targets/{target_id}/deprovision-credentials"),
+    # THE TWO PROVISIONING ROUTES WERE DELETED (PO ruling 2026-08-22, ADR-013
+    # amendment (b)). Provider credentials now cross on the ordinary sync cycle,
+    # so there is no operator-callable action to reach and nothing here for a
+    # surface to be admitted to. What is left on this router is one read-only
+    # route reporting whether this instance has a Schedules Direct EPG source —
+    # the single credential that cannot be harvested, and therefore the only one
+    # the create form ever asks for. It carries no credential in either
+    # direction.
+    ("GET", "/api/sync-targets/source-credential-needs"),
 }
 
 # bead 9kwzp.10 item 4. The one route in ``/api/alert-methods`` that is not

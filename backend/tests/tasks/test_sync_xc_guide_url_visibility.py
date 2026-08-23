@@ -13,7 +13,27 @@ Bead ``enhancedchannelmanager-v7d37`` (epic ``f5a5j``). Measured on Dispatcharr
 kept theirs. The credential-free URL crossed intact and the credential-bearing
 one did not, which is the mechanism rather than an inference.
 
-WHY THE URL IS STRIPPED WHOLE, AND WHY THAT IS NOT THE BUG UNDER TEST HERE.
+AMENDED 2026-08-22 — THE XC GUIDE URL NOW CROSSES WHOLE
+--------------------------------------------------------
+ADR-013 amendment (b): the PO ruled that provider credentials cross on every
+cycle, so an XC guide URL is carried with its credentials rather than stripped.
+B's source therefore HAS an address, downloads its guide, and its channels keep
+their EPG links — which is the measured 53-of-59 loss above, fixed at the source
+rather than reported better.
+
+**THE BUG THIS FILE EXISTS FOR IS THE SILENCE, NOT THE STRIPPING**, and that
+half is untouched: when a source genuinely cannot deliver an address, the run's
+ONE LINE must say so. That path is still live — an A restored from a standard
+(redact-by-default) backup artifact holds a sentinelled url of its own, and the
+artifact still redacts, because it is a file people attach to support tickets.
+:func:`_source_with_sentinelled_guide` reaches that state and the reporting
+assertions moved onto it, so the reporting coverage is preserved rather than
+deleted along with the condition that used to produce it.
+
+The layer-1 producer tests below are UNCHANGED: ``_scrub_credential_urls`` is
+still exactly what the artifact path runs.
+
+WHY THE URL IS STRIPPED WHOLE IN THE ARTIFACT, AND WHY THAT IS NOT THE BUG HERE.
 For an Xtream Codes account the guide URL CONTAINS the credentials, so
 ``routers.backup._scrub_credential_urls`` cannot separate the secret from the
 address and replaces the entire value with the redaction sentinel; the importer
@@ -101,6 +121,21 @@ def _strip_seeded_credentials(source: StatefulDispatcharrFake) -> None:
             row["api_key"] = ""
 
 
+def _source_with_sentinelled_guide(name: str) -> StatefulDispatcharrFake:
+    """Source-A whose OWN guide url is already the redaction sentinel.
+
+    The route that still produces an addressless source on B now that the sync
+    path carries credentials: A was itself restored from a standard
+    (redact-by-default) backup artifact. The cycle faithfully copies A's state,
+    the importer refuses to write the sentinel, and B's source is left with no
+    url — the same operator-visible state the XC-stripping used to produce, and
+    the one the reporting clauses exist for.
+    """
+    from credential_sentinel import REDACTION_SENTINEL
+
+    return _source_with_guide(REDACTION_SENTINEL, name)
+
+
 def _b_row(dest: StatefulDispatcharrFake, name: str) -> dict:
     return next(row for row in dest.epg_sources.list() if row["name"] == name)
 
@@ -162,13 +197,25 @@ def test_which_url_shapes_the_redactor_can_and_cannot_see(url, stripped_whole):
 
 
 @pytest.mark.asyncio
-async def test_the_report_is_the_same_whichever_carrier_the_credential_uses(tmp_path):
-    """Shape-independence of the FIX, stated as the property rather than the
-    example. The operator's line must not depend on whether the provider put the
-    secret in the query string or in the userinfo — both lose the address, so
-    both are the same action item.
+@pytest.mark.parametrize(
+    "guide_url",
+    [
+        # Query-string credentials — the shape measured on 0.29.0.
+        _XC_GUIDE_URL,
+        # RFC 3986 userinfo — a different carrier for the same secret.
+        "http://u:p@p.test:9191/xmltv.php",
+    ],
+)
+async def test_a_credential_bearing_guide_url_crosses_whole(tmp_path, guide_url):
+    """AMENDED 2026-08-22 — inverted, and carrier-independent.
+
+    This asserted that BOTH carriers lost the address and produced the same
+    action item. Under ADR-013 amendment (b) both cross whole, so B's source has
+    an address on the first cycle and the operator has nothing to do. Stated
+    over both carriers for the same reason it always was: the property must not
+    depend on where the provider put the secret.
     """
-    source = _source_with_guide("http://u:p@p.test:9191/xmltv.php", _XC_SOURCE_NAME)
+    source = _source_with_guide(guide_url, _XC_SOURCE_NAME)
     dest = StatefulDispatcharrFake.empty_dest()
 
     report = await SyncHarness(source=source, dest=dest).run(
@@ -176,9 +223,8 @@ async def test_the_report_is_the_same_whichever_carrier_the_credential_uses(tmp_
     )
     message = DbasSyncTask._summary_message(report, False, report.outcome.value)
 
-    assert not _b_row(dest, _XC_SOURCE_NAME).get("url")
-    assert "1 source(s) need their URL re-entered" in message
-    assert "1 channel(s) restored without an EPG link" in message
+    assert _b_row(dest, _XC_SOURCE_NAME).get("url") == guide_url
+    assert "need their URL re-entered" not in message
 
 
 # ---------------------------------------------------------------------------
@@ -187,16 +233,20 @@ async def test_the_report_is_the_same_whichever_carrier_the_credential_uses(tmp_
 
 
 @pytest.mark.asyncio
-async def test_b_stores_an_addressless_xc_source_and_an_unlinked_channel(tmp_path):
-    """Read off B: no url on the source, no EPG link on the channel.
+async def test_b_stores_an_addressless_source_when_A_ITSELF_has_no_address(tmp_path):
+    """AMENDED 2026-08-22 — the CAUSE moved; the state and its report did not.
 
-    This is the state the operator opens, and it is asserted on B's stored rows
-    rather than on the report, because the report is the thing that lied. The
-    causal chain is reproduced end to end: no url on B means B never downloads a
-    guide, means no ``epg_data`` row carries the channel's ``tvg_id``, means the
-    link cannot be reattached.
+    B ending up with an addressless source is no longer something the SYNC PATH
+    produces (amendment (b) carries the credential-bearing url whole). It is
+    still reachable, by the route that still redacts: an A restored from a
+    standard backup artifact holds the sentinel in its own ``url``.
+
+    Asserted on B's stored rows rather than on the report, because the report is
+    the thing that lied. The causal chain is unchanged end to end: no url on B
+    means B never downloads a guide, means no ``epg_data`` row carries the
+    channel's ``tvg_id``, means the link cannot be reattached.
     """
-    source = _source_with_guide(_XC_GUIDE_URL, _XC_SOURCE_NAME)
+    source = _source_with_sentinelled_guide(_XC_SOURCE_NAME)
     dest = StatefulDispatcharrFake.empty_dest()
 
     report = await SyncHarness(source=source, dest=dest).run(
@@ -207,25 +257,36 @@ async def test_b_stores_an_addressless_xc_source_and_an_unlinked_channel(tmp_pat
     assert not _b_row(dest, _XC_SOURCE_NAME).get("url")
     # And no channel on B carries a guide link.
     assert [c.get("epg_data_id") for c in dest.channels.list()] == [None]
-    # Every COUNT the run reports is clean — which is what made "success"
-    # survive so long. SUPERSEDED ASSERTION, rewritten rather than deleted
-    # (bead ``…-posm1``): this used to read ``outcome == SUCCESS``, and the
-    # module note in ``tasks/dbas_sync.py`` recorded that as posm1's to decide.
-    # It decided: a replica missing a guide link the source had is not an
-    # unqualified success, so the LABEL now agrees with the clause beside it.
-    assert sum(c.failed for c in report.categories) == 0
-    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
-    # The shortfall IS measured — it is simply not on any operator surface.
-    assert report.epg_links_unrestored == 1
-    # And it is the ADDRESS that was lost, not a password beside it. (The
-    # harness's baseline source also carries an M3U password and an EPG api_key
-    # that are correctly redacted, so this asserts on the XC row specifically
-    # rather than on the list being a singleton.)
+    # And it is the ADDRESS that is missing, not a password beside it — the
+    # distinction the operator's remedy turns on.
     xc_detail = next(
         d for d in report.credential_reentry_details if d.label == _XC_SOURCE_NAME
     )
     assert xc_detail.fields == ["url"]
     assert xc_detail.entity_type == EntityType.EPG_SOURCE
+
+
+@pytest.mark.asyncio
+async def test_b_keeps_its_guide_link_when_the_address_crosses(tmp_path):
+    """The CONTRAST, and the thing amendment (b) actually bought.
+
+    Without this the test above would pass just as happily on a build that had
+    stopped carrying any url at all.
+    """
+    source = _source_with_guide(_XC_GUIDE_URL, _XC_SOURCE_NAME)
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    report = await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    assert _b_row(dest, _XC_SOURCE_NAME).get("url") == _XC_GUIDE_URL
+    # Nothing for the operator to re-enter, on this source or any other.
+    assert report.credentials_needing_reentry == 0
+    assert sum(c.failed for c in report.categories) == 0
+    assert _XC_SOURCE_NAME not in {
+        d.label for d in report.credential_reentry_details
+    }
 
 
 @pytest.mark.asyncio
@@ -267,7 +328,7 @@ async def test_the_summary_names_the_lost_address_and_the_lost_links(tmp_path):
     failed 0 across M categories`` — the 0.29.0 measurement's own words — with
     no clause naming either shortfall.
     """
-    source = _source_with_guide(_XC_GUIDE_URL, _XC_SOURCE_NAME)
+    source = _source_with_sentinelled_guide(_XC_SOURCE_NAME)
     dest = StatefulDispatcharrFake.empty_dest()
 
     report = await SyncHarness(source=source, dest=dest).run(
@@ -322,7 +383,7 @@ async def test_a_clean_sync_gains_no_clause(tmp_path):
 async def test_the_preview_says_the_same_thing_in_the_future_tense(tmp_path):
     """A dry run changed nothing, so its clause must not read as history
     (bead ``…-juu3c``). The credential clause is already tense-neutral."""
-    source = _source_with_guide(_XC_GUIDE_URL, _XC_SOURCE_NAME)
+    source = _source_with_sentinelled_guide(_XC_SOURCE_NAME)
     dest = StatefulDispatcharrFake.empty_dest()
 
     report = await SyncHarness(source=source, dest=dest).run(ledger_dir=tmp_path)

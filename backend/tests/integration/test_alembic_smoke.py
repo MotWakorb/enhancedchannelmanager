@@ -1863,8 +1863,11 @@ class TestSmartBootstrapFastPath:
             # 4a. Only the destructive revisions ran, each targeted by id.
             # A blanket ``upgrade head`` would reopen bd-ax3uj / bd-5w6jz.
             targets = [call.args[1] for call in mock_upgrade.call_args_list]
+            # 0047 joins the set: it DROPS the two sync-target provisioning
+            # marker columns (PO ruling 2026-08-22, ADR-013 amendment (b)), so
+            # the detector is right to flag it and it must replay by id.
             assert targets == [
-                "0010", "0011", "0012", "0029", "0041", "0044",
+                "0010", "0011", "0012", "0029", "0041", "0044", "0047",
             ], targets
             assert "head" not in targets, (
                 "a blanket `upgrade head` re-runs every pending migration — "
@@ -4514,9 +4517,10 @@ class TestFastPathDestructiveRevisions:
     def test_fast_path_still_skips_non_destructive_pending_revisions(self, tmp_path):
         """The fix NARROWS the fast path — it does not remove it.
 
-        From 0040, destructive revisions 0041 and 0044 are pending. Both must
-        execute by id, never through a blanket ``upgrade head`` that re-runs
-        the whole pending range (which would reopen bd-ax3uj / bd-5w6jz).
+        From 0040, destructive revisions 0041, 0044 and 0047 are pending. All
+        must execute by id, never through a blanket ``upgrade head`` that
+        re-runs the whole pending range (which would reopen bd-ax3uj /
+        bd-5w6jz). 0047 drops the two sync-target provisioning marker columns.
         """
         from unittest.mock import patch
 
@@ -4531,8 +4535,8 @@ class TestFastPathDestructiveRevisions:
                 database._bootstrap_alembic(engine)
 
             targets = [call.args[1] for call in mock_upgrade.call_args_list]
-            assert targets == ["0041", "0044"], (
-                "expected targeted upgrades to 0041 and 0044, "
+            assert targets == ["0041", "0044", "0047"], (
+                "expected targeted upgrades to 0041, 0044 and 0047, "
                 f"got {targets}"
             )
         finally:

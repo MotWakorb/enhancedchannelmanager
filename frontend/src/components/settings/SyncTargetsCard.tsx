@@ -13,7 +13,17 @@ import './SyncTargetsCard.css';
  *
  * Load-bearing operator-expectation copy (ADR-013) is surfaced prominently:
  *   - sync is ONE-WAY — edits on B are overwritten by A on the next apply;
- *   - credentials are NOT synced — they must be re-entered on B.
+ *   - provider credentials ARE synced, on every cycle (PO ruling 2026-08-22),
+ *     so B authenticates and serves without the operator typing anything.
+ *
+ * THAT SECOND LINE USED TO SAY THE OPPOSITE, and getting it wrong is the whole
+ * of bead `…-msqf7`. That bead was not about transmitting credentials; it was
+ * about ECM asserting they were stripped while transmitting them anyway. The
+ * copy below therefore changes in the same commit as the behaviour, and the
+ * `key_off` "credentials are not synced" banner is replaced by a `key` banner
+ * that says what actually happens — including the part an operator has to
+ * weigh, which is that a target with certificate checking off carries those
+ * credentials in clear on every cycle.
  *
  * Logo replication is a per-target OPT-IN (`sync_logos`, default OFF per
  * ADR-013 S9) with its own row toggle — see `handleToggleLogos`.
@@ -70,6 +80,14 @@ interface TargetForm {
   password: string;
   apiKey: string;
   insecure: boolean;
+  /**
+   * The ONE provider credential that cannot be harvested off this instance —
+   * Dispatcharr marks the Schedules Direct password write-only and never
+   * returns it. Typed once, stored encrypted on the target, re-sent every
+   * cycle. The field is only RENDERED when this instance actually has a
+   * Schedules Direct EPG source (`needsSdPassword`).
+   */
+  schedulesDirectPassword: string;
 }
 
 const EMPTY_FORM: TargetForm = {
@@ -80,6 +98,7 @@ const EMPTY_FORM: TargetForm = {
   password: '',
   apiKey: '',
   insecure: false,
+  schedulesDirectPassword: '',
 };
 
 /**
@@ -129,6 +148,14 @@ export function SyncTargetsCard() {
   }, []);
   // Targets that have a successful preview pending, so Apply is offered.
   const [previewedIds, setPreviewedIds] = useState<Set<number>>(new Set());
+  // What this instance cannot harvest and therefore has to be typed. Normally
+  // nothing at all: the create form asks for a Schedules Direct password ONLY
+  // when a `schedules_direct` EPG source exists here for it to be written onto.
+  // Defaults to "nothing needed" so a failed probe hides the field rather than
+  // showing a box the operator has no value for.
+  const [credentialNeeds, setCredentialNeeds] =
+    useState<api.SyncSourceCredentialNeeds | null>(null);
+  const needsSdPassword = credentialNeeds?.needs_schedules_direct_password === true;
 
   const loadTargets = useCallback(async () => {
     setLoading(true);
@@ -148,6 +175,30 @@ export function SyncTargetsCard() {
   useEffect(() => {
     loadTargets();
   }, [loadTargets]);
+
+  // Advisory, and deliberately silent on failure: not knowing whether a
+  // Schedules Direct source exists must never block target creation, and the
+  // consequence of being wrong is one EPG source keeping the password it
+  // already has on the replica.
+  useEffect(() => {
+    let cancelled = false;
+    // An ASYNC body with try/catch, not a `.catch()` on the promise, and the
+    // difference is load-bearing: a throw that happens BEFORE a promise exists
+    // (the call itself failing) escapes a `.catch()` chain entirely and takes
+    // the render down. `loadTargets` above is shaped the same way for the same
+    // reason.
+    (async () => {
+      try {
+        const needs = await api.getSyncSourceCredentialNeeds();
+        if (!cancelled) setCredentialNeeds(needs);
+      } catch {
+        if (!cancelled) setCredentialNeeds(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const closeForm = useCallback(() => {
     setForm(EMPTY_FORM);
@@ -230,6 +281,11 @@ export function SyncTargetsCard() {
           insecure: form.insecure,
         };
         if (credentialsComplete) payload.credentials = credentials;
+        // Omitted when blank, exactly like `credentials`: an empty box means
+        // "leave the stored Schedules Direct password alone", never "clear it".
+        if (form.schedulesDirectPassword !== '') {
+          payload.schedules_direct_password = form.schedulesDirectPassword;
+        }
         await api.updateSyncTarget(editing.id, payload);
         notifications.success(
           credentialsComplete
@@ -243,6 +299,9 @@ export function SyncTargetsCard() {
           base_url: form.baseUrl.trim(),
           credentials,
           insecure: form.insecure,
+          ...(form.schedulesDirectPassword !== ''
+            ? { schedules_direct_password: form.schedulesDirectPassword }
+            : {}),
         });
         notifications.success(`Added sync target '${form.name.trim()}'`, 'Cross-Instance Sync');
       }
@@ -398,7 +457,8 @@ export function SyncTargetsCard() {
       const ok = window.confirm(
         `Apply sync to '${target.name}'? This OVERWRITES B's config with A's ` +
           `(source-wins). Any edits made directly on B will be lost. ` +
-          `Credentials are NOT pushed — re-enter them on B.`,
+          `Your provider credentials ARE pushed, so B can serve — ` +
+          `this is the confirmation that a secret is about to leave this instance.`,
       );
       if (!ok) return;
       markBusy(target.id);
@@ -459,11 +519,14 @@ export function SyncTargetsCard() {
         </span>
       </div>
 
-      <div className="stc-warning stc-warning-creds">
-        <span className="material-icons">key_off</span>
+      <div className="stc-warning stc-warning-creds" data-testid="stc-credentials-banner">
+        <span className="material-icons">key</span>
         <span>
-          <strong>Credentials are not synced.</strong> Provider passwords and API keys are never
-          pushed to B — re-enter them on B after the first sync.
+          <strong>Provider credentials are sent on every sync.</strong> B receives this
+          instance&apos;s real provider username, password and stream addresses, so it
+          authenticates and serves without you re-typing anything, and a password change here
+          reaches B on its next scheduled sync. Turning certificate checking off for a target
+          sends them in clear, every cycle.
         </span>
       </div>
 
@@ -500,12 +563,24 @@ export function SyncTargetsCard() {
                       <span
                         className="stc-badge stc-badge-insecure"
                         data-testid={`sync-target-insecure-${target.id}`}
-                        title="Certificate checking is turned off for this target. Only safe on a trusted instance with a self-signed certificate."
+                        title="Certificate checking is turned off for this target, and every sync sends your provider credentials to it in clear. Only do this on a trusted instance with a self-signed certificate."
                       >
                         <span className="material-icons" aria-hidden="true">
                           gpp_maybe
                         </span>
                         Certificate check off
+                      </span>
+                    )}
+                    {target.has_schedules_direct_password && (
+                      <span
+                        className="stc-badge stc-badge-sd"
+                        data-testid={`sync-target-sd-password-${target.id}`}
+                        title="A Schedules Direct password is stored for this target and is re-sent on every sync. Every other provider credential is read from this instance and needs no input."
+                      >
+                        <span className="material-icons" aria-hidden="true">
+                          vpn_key
+                        </span>
+                        Schedules Direct password stored
                       </span>
                     )}
                     <span className="stc-last-synced">
@@ -696,6 +771,27 @@ export function SyncTargetsCard() {
             </div>
           )}
 
+          {needsSdPassword && (
+            <div className="stc-field" data-testid="stc-sd-password-field">
+              <label htmlFor="stc-sd-password">Schedules Direct password</label>
+              <input
+                id="stc-sd-password"
+                type="password"
+                autoComplete="new-password"
+                value={form.schedulesDirectPassword}
+                disabled={saving}
+                onChange={(e) => updateForm('schedulesDirectPassword', e.target.value)}
+              />
+              <p className="form-hint" data-testid="stc-sd-password-hint">
+                The only credential you have to type. Dispatcharr never returns a Schedules
+                Direct password, so there is nothing on this instance to read — every other
+                provider credential is copied to B automatically. Enter it once and it is
+                re-sent on every sync.
+                {editing && ' Leave blank to keep the stored one.'}
+              </p>
+            </div>
+          )}
+
           <label className="stc-checkbox">
             <input
               type="checkbox"
@@ -705,7 +801,9 @@ export function SyncTargetsCard() {
             />
             <span>
               <strong>Allow insecure TLS.</strong> Skip certificate verification when connecting to
-              B. Only use this for a trusted instance with a self-signed certificate.
+              B. Every sync sends your provider credentials to B, so with this on they cross in
+              clear on every cycle. Only use it for a trusted instance with a self-signed
+              certificate.
             </span>
           </label>
 

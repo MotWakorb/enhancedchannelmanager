@@ -27,21 +27,38 @@ gate is what keeps the fix from mangling a path that merely resembles
 credentials; the containment rather than equality is what keeps a decorated
 segment (``/<pass>-hd/``) from being a way through.
 
-WHAT THE REPLICA GETS. The credential segments become the redaction sentinel and
-everything else about the address survives, so the operator can see where the
-stream pointed and the run says so in its one line — the reporting path bead
-``v7d37`` just built, reused rather than rebuilt.
+AMENDED 2026-08-22 — THE PO RULED THAT PROVIDER CREDENTIALS CROSS ON EVERY CYCLE
+--------------------------------------------------------------------------------
+ADR-013 amendment (b). The stream URL now crosses WHOLE, credential segments
+included, so the replica's channels are bound to addresses that play on the same
+cycle that writes them. Layers 2-4 below therefore assert the OPPOSITE of what
+they asserted when this file was written, and that inversion is deliberate
+rather than a regression: the suite is kept, not deleted, because the property
+it now pins is the one this bead actually cares about.
+
+**THE BEAD'S REAL SUBJECT SURVIVES UNCHANGED, and it is not "credentials must
+not cross".** ``msqf7`` was a defect about ECM TELLING THE OPERATOR credentials
+were stripped WHILE TRANSMITTING THEM ANYWAY — implicitly, in a field nothing
+inspected, with the run report, the user guide and the audit row's
+``redaction_mode`` all asserting the opposite. Deliberate transmission with the
+product's words matching is the opposite of that defect. So layer 4 below now
+checks that the audit row and the run SAY what crossed, and
+``test_ecm_own_secrets_still_never_reach_the_wire`` keeps the half of the
+original property that did not change.
+
+The redaction machinery in layer 1 is UNCHANGED and still shipped: it is what
+the standard backup ARTIFACT uses, and an artifact is a file that gets attached
+to support tickets. Only the SYNC path opted out of it.
 
 Four layers, because green at one proves nothing about the next:
 
 1. **The rewriter** — which segments are replaced, and which URLs are left
-   byte-identical.
-2. **The plan** — no known credential value survives anywhere in the payload
-   that goes on the wire.
+   byte-identical. Unchanged; still the artifact path's behaviour.
+2. **The plan** — the provider credential IS on the wire, and ECM's own secrets
+   are NOT.
 3. **The destination** — what B actually STORES after a real apply, read off B's
    stream rows rather than off the report.
-4. **The operator's line** — the summary built from that report names the
-   shortfall.
+4. **The operator's line** — the run and its audit row NAME what crossed.
 
 All values here are SYNTHETIC. The real provider's credentials were used for
 diagnosis only and appear in no file, fixture, bead or message.
@@ -288,16 +305,18 @@ def test_with_no_known_credentials_every_url_is_left_alone():
 
 
 # ---------------------------------------------------------------------------
-# 2. THE PLAN — nothing on the wire carries a credential.
+# 2. THE PLAN — the provider credential IS on the wire; ECM's own secrets are not.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_no_known_credential_survives_anywhere_in_the_outgoing_plan():
-    """The bead's acceptance criterion, stated as the property.
+async def test_the_provider_credential_reaches_the_wire_in_every_carrier():
+    """The 2026-08-22 property, stated as the inverse of the original one.
 
-    Not "the stream url is clean" — no credential value in ANY field, in ANY
-    position, anywhere in the serialized plan. The stream URL is one example.
+    Every position the sampled provider uses has to carry: the account's own
+    ``username``/``password`` FIELDS, and the PATH SEGMENTS of all three stream
+    shapes. Asserting only the fields would pass while the replica still could
+    not play anything, which is the whole point of the change.
     """
     from routers import backup as backup_mod
     from tasks.dbas_sync_engine import build_live_source_plan
@@ -315,13 +334,47 @@ async def test_no_known_credential_survives_anywhere_in_the_outgoing_plan():
         default=str,
     )
 
-    for secret in (_XC_PASS, _XC_USER, "SEED-M3U-SECRET", "SEED-EPG-SECRET"):
-        assert secret not in wire, f"{secret!r} reached the wire"
-    # And the addresses that carry no credential are still there, or this is a
-    # blanking pass rather than a redaction.
+    assert _XC_PASS in wire, "the provider password did not reach the wire"
+    assert _XC_USER in wire, "the provider username did not reach the wire"
+    for url in (_XC_LIVE_URL, _XC_MOVIE_URL, _XC_SERIES_URL):
+        assert url in wire, f"{url!r} did not cross whole"
+    # And the addresses that never carried a credential still cross untouched.
     assert _DECOY_RESEMBLING_URL in wire
     assert _DECOY_NUMERIC_URL in wire
     assert _STD_PLAIN_URL in wire
+    # Nothing anywhere is still wearing the sentinel.
+    assert backup_mod.REDACTED not in wire
+
+
+@pytest.mark.asyncio
+async def test_ecm_own_secrets_still_never_reach_the_wire():
+    """The half of the original property that did NOT change, pinned.
+
+    The ruling widened the sync payload by exactly two sections. An ECM settings
+    secret and an alert-method secret are not provider credentials, have no
+    purpose on a replica, and must still be sentinelled — otherwise the
+    exception has quietly become "redaction is off", which is the failure mode a
+    ``preserve_keys`` change makes easy and invisible.
+    """
+    from routers import backup as backup_mod
+    from tasks.dbas_sync_engine import _redact_sync_sections
+
+    sections = {
+        "m3u_accounts": [
+            {"name": _XC_ACCOUNT_NAME, "username": _XC_USER, "password": _XC_PASS}
+        ],
+        "settings": [{"key": "smtp_password", "password": "ECM-OWN-SETTINGS-SECRET"}],
+        "alert_methods": [{"name": "Ops", "bot_token": "ECM-OWN-BOT-TOKEN"}],
+    }
+    redacted = _redact_sync_sections(sections)
+    blob = json.dumps(redacted, default=str)
+
+    assert "ECM-OWN-SETTINGS-SECRET" not in blob
+    assert "ECM-OWN-BOT-TOKEN" not in blob
+    # ...while the provider half crossed, so this is a CONTRAST and not a test
+    # that would pass with redaction on everywhere.
+    assert _XC_PASS in blob
+    assert _XC_USER in blob
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +383,17 @@ async def test_no_known_credential_survives_anywhere_in_the_outgoing_plan():
 
 
 @pytest.mark.asyncio
-async def test_b_stores_no_provider_credential_in_any_stream_url(tmp_path):
-    """Read off B's stream rows, because the report is the thing that lied."""
+async def test_b_stores_the_provider_credential_in_every_stream_url(tmp_path):
+    """Read off B's stream rows, because the report is the thing that lied.
+
+    This is bead ``…-2jvvb`` / ``…-5bib5`` closed at the layer that produced
+    them: B's channels are bound to addresses that PLAY on this cycle, so there
+    are no placeholders to rebind and no orphan window for B's own refresh to
+    open. The outcome is back to ``SUCCESS`` and
+    ``channels_with_no_playable_stream`` is 0 — not because the counter was
+    silenced (bead ``…-1td94`` made it honest and it stays honest) but because
+    there is nothing left for it to count.
+    """
     source = _source_with_xc_streams()
     dest = StatefulDispatcharrFake.empty_dest()
 
@@ -340,29 +402,16 @@ async def test_b_stores_no_provider_credential_in_any_stream_url(tmp_path):
     )
 
     stored = json.dumps(dest.streams.list(), default=str)
-    assert _XC_PASS not in stored
-    assert _XC_USER not in stored
-    # The streams still landed — the fix must not cost the replica its rows.
+    assert _XC_PASS in stored
+    assert _XC_USER in stored
     assert len(dest.streams.list()) == len(source.streams.list())
-    # AMENDED BY BEAD ``…-1td94``. This line asserted ``SUCCESS``, and that was
-    # the defect written down as an expectation: three of B's channels are left
-    # on redacted placeholders that fetch HTTP 404, and calling that outcome a
-    # success is precisely the silence bead ``…-posm1`` exists to end. Measured
-    # live on 0.29.0 at the same time: 53 of B's 59 channels served 404 while the
-    # run reported ``channels_with_no_playable_stream: 0``.
-    #
-    # WHAT DID NOT CHANGE: the redaction, which is msqf7's and stays exactly as
-    # shipped. The credential assertions above are this test's subject and are
-    # untouched. What changed is that the run now SAYS what the redaction cost.
-    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
-    assert report.channels_with_no_playable_stream == 3
+    assert report.outcome == RestoreOutcome.SUCCESS
+    assert report.channels_with_no_playable_stream == 0
 
 
 @pytest.mark.asyncio
-async def test_b_keeps_the_address_of_a_credential_bearing_stream(tmp_path):
-    """The credential goes; the address stays, so the operator can see it."""
-    from routers.backup import REDACTED
-
+async def test_b_keeps_the_whole_address_of_a_credential_bearing_stream(tmp_path):
+    """Byte-identical, every carrier, no sentinel anywhere."""
     source = _source_with_xc_streams()
     dest = StatefulDispatcharrFake.empty_dest()
 
@@ -371,22 +420,86 @@ async def test_b_keeps_the_address_of_a_credential_bearing_stream(tmp_path):
     )
 
     by_name = {row["name"]: row.get("url") or "" for row in dest.streams.list()}
-    assert by_name["Summit Sports 1"] == f"{_XC_HOST}/live/{REDACTED}/{REDACTED}/200.ts"
-    # The credential-free rows on the same instance crossed byte-identical.
+    assert by_name["Summit Sports 1"] == _XC_LIVE_URL
+    assert by_name["Silverline Cinema"] == _XC_MOVIE_URL
+    assert by_name["Orbit Sci-Fi"] == _XC_SERIES_URL
+    # The credential-free rows on the same instance are unaffected either way.
     assert by_name["Pitchside FC"] == _DECOY_RESEMBLING_URL
     assert by_name["Matinee Family"] == _DECOY_NUMERIC_URL
     assert by_name["Valley Public"] == _STD_PLAIN_URL
 
 
+@pytest.mark.asyncio
+async def test_b_receives_the_accounts_own_credential_fields(tmp_path):
+    """The account authenticates in its own right, not only via stream URLs.
+
+    A replica whose stream rows play but whose M3U account cannot authenticate
+    stops serving the moment it refreshes. Both halves have to cross.
+    """
+    source = _source_with_xc_streams()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    await SyncHarness(source=source, dest=dest).run(
+        confirm_apply=True, ledger_dir=tmp_path
+    )
+
+    accounts = {row["name"]: row for row in dest.m3u_accounts.list()}
+    xc = accounts[_XC_ACCOUNT_NAME]
+    assert xc.get("username") == _XC_USER
+    assert xc.get("password") == _XC_PASS
+
+
 # ---------------------------------------------------------------------------
-# 4. THE OPERATOR'S LINE — the run says what it did.
+# 4. THE OPERATOR'S LINE — the run SAYS what crossed.
+#
+# This is the bead's surviving subject. The defect was never the transmission;
+# it was the product asserting the transmission had not happened.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_the_summary_names_the_streams_that_lost_their_credentials(tmp_path):
-    """Silence is the other half of this defect: the run claimed credentials
-    were stripped while shipping them, and must not now strip them silently.
+async def test_the_audit_row_states_that_credentials_crossed(tmp_path):
+    """``redaction_mode`` said ``topology_only`` while msqf7 was live.
+
+    That string is the audit trail asserting the exact thing that was false, so
+    it is pinned here rather than left to a docstring: the row must name the
+    mode, the count, and the records by label and FIELD NAME — and no value.
+    """
+    from unittest.mock import patch
+
+    import journal
+
+    source = _source_with_xc_streams()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    rows: list[dict] = []
+    with patch.object(journal, "log_entry", side_effect=lambda **kw: rows.append(kw)):
+        await SyncHarness(source=source, dest=dest).run(
+            confirm_apply=True, ledger_dir=tmp_path
+        )
+
+    sync_rows = [r for r in rows if r.get("action_type") == "sync_run"]
+    assert len(sync_rows) == 1, "a cycle must write exactly one sync_run row"
+    after = sync_rows[0]["after_value"]
+    assert after["redaction_mode"] == "topology_plus_provider_credentials"
+    assert after["provider_credentials_transmitted"] >= 1
+    named = " ".join(after["provider_credential_records"])
+    assert _XC_ACCOUNT_NAME in named
+    assert "username" in named and "password" in named
+    # FIELD NAMES ONLY. The row is the record that a secret moved; it must never
+    # be a place the secret can be read.
+    blob = json.dumps(sync_rows[0], default=str)
+    assert _XC_PASS not in blob
+    assert _XC_USER not in blob
+
+
+@pytest.mark.asyncio
+async def test_the_summary_no_longer_reports_stripped_stream_urls(tmp_path):
+    """The shortfall line must go quiet, because the shortfall is gone.
+
+    A counter that keeps firing after the condition it describes has been
+    removed is bead ``…-kcfru``'s crying wolf, and it would tell the operator to
+    perform a recovery that no longer exists.
     """
     source = _source_with_xc_streams()
     dest = StatefulDispatcharrFake.empty_dest()
@@ -396,15 +509,9 @@ async def test_the_summary_names_the_streams_that_lost_their_credentials(tmp_pat
     )
     message = DbasSyncTask._summary_message(report, False, report.outcome.value)
 
-    assert report.stream_urls_redacted == 3
-    assert "3 stream(s) restored without a playable URL" in message
-    # The decoys are NOT counted — an over-count is a false alarm the operator
-    # cannot act on.
-    assert {d.label for d in report.stream_url_redaction_details} == {
-        "Summit Sports 1",
-        "Silverline Cinema",
-        "Orbit Sci-Fi",
-    }
+    assert report.stream_urls_redacted == 0
+    assert report.stream_url_redaction_details == []
+    assert "without a playable URL" not in message
 
 
 @pytest.mark.asyncio

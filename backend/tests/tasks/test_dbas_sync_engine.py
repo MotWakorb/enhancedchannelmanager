@@ -429,14 +429,50 @@ async def test_plan_carries_schema_version_and_config_categories():
 
 
 @pytest.mark.asyncio
-async def test_plan_redacts_plaintext_secrets():
-    """D2: no plaintext secret from the source survives into the assembled plan."""
+async def test_plan_carries_the_provider_credential():
+    """AMENDED 2026-08-22 — this test asserted the exact opposite.
+
+    It was ``test_plan_redacts_plaintext_secrets`` and pinned D2's "no plaintext
+    secret from the source survives into the assembled plan". The PO ruled that
+    provider credentials cross on every cycle (ADR-013 amendment (b)), so the
+    provider half of that claim is now wrong. It is INVERTED here rather than
+    deleted: the assembled plan is where a regression would show up first.
+
+    The half that did NOT change is pinned by
+    :func:`test_plan_still_redacts_ecms_own_secrets` below, so the pair is a
+    CONTRAST — a redactor accidentally switched off everywhere turns that one
+    red while leaving this one green.
+    """
     with patch.object(backup_mod, "get_client", return_value=_source_client()):
         plan = await build_live_source_plan()
 
     blob = json.dumps(plan.model_dump(mode="json"))
-    assert SECRET_M3U_PASSWORD not in blob
-    assert SECRET_EPG_PASSWORD not in blob
+    assert SECRET_M3U_PASSWORD in blob
+    assert SECRET_EPG_PASSWORD in blob
+
+
+@pytest.mark.asyncio
+async def test_plan_still_redacts_ecms_own_secrets():
+    """The exception is TWO SECTIONS WIDE, and this is what proves it.
+
+    ECM's own settings secrets and alert-method secrets are not provider
+    credentials and have no purpose on a replica. Asserting the provider half
+    alone would pass just as happily if ``preserve_keys`` had been applied to
+    the whole gather, which is the easy and invisible way to widen this.
+    """
+    from tasks.dbas_sync_engine import _redact_sync_sections
+
+    redacted = _redact_sync_sections(
+        {
+            "m3u_accounts": [{"name": "P", "password": SECRET_M3U_PASSWORD}],
+            "settings": [{"key": "smtp_password", "password": "ECM-OWN-SECRET"}],
+            "alert_methods": [{"name": "Ops", "bot_token": "ECM-OWN-TOKEN"}],
+        }
+    )
+    blob = json.dumps(redacted, default=str)
+    assert "ECM-OWN-SECRET" not in blob
+    assert "ECM-OWN-TOKEN" not in blob
+    assert SECRET_M3U_PASSWORD in blob
 
 
 @pytest.mark.asyncio
@@ -1599,11 +1635,14 @@ async def test_an_ecm_local_mirror_still_wins_over_the_remote_pointer(tmp_path):
 # ---------------------------------------------------------------------------
 # CREDENTIAL INTERACTION with bead …-msqf7. A logo url is a provider-supplied
 # address on the same instances whose STREAM urls were found carrying the
-# account's username and password in PATH SEGMENTS. Copying one to the replica
-# is a new route to the hole …-msqf7 closed, so every candidate goes through the
-# same scrub — and a url the scrub touches is DROPPED, not carried scrubbed: a
-# sentinel-bearing address 404s on B, which importers/logos already rules is
-# strictly worse than an honest miss.
+# account's username and password in PATH SEGMENTS. Until 2026-08-22 such a url
+# was DROPPED rather than copied, and the logo reported as a named miss.
+#
+# AMENDED: the PO ruled that provider credentials cross on every cycle (ADR-013
+# amendment (b)), so the drop bought nothing — the replica holds the same
+# credential now — and cost it its branding. The two tests below are INVERTED
+# rather than deleted, because "the address crosses whole" is the property that
+# would silently regress if someone re-armed the scrub.
 # ---------------------------------------------------------------------------
 
 
@@ -1619,7 +1658,7 @@ async def test_an_ecm_local_mirror_still_wins_over_the_remote_pointer(tmp_path):
         "http://provider.test/live/operator/%s/cnn.png",
     ],
 )
-async def test_a_path_segment_credential_logo_url_is_not_copied(tmp_path, leaky_url):
+async def test_a_path_segment_credential_logo_url_is_copied(tmp_path, leaky_url):
     src = _source_client_with_remote_logos(
         logos=[{"id": 5, "name": "Leaky Logo", "url": leaky_url % SECRET_M3U_PASSWORD}]
     )
@@ -1628,23 +1667,15 @@ async def test_a_path_segment_credential_logo_url_is_not_copied(tmp_path, leaky_
         plan = await build_live_source_plan(include_logos=True)
 
     entity = plan.category(EntityType.LOGO).entities[0]
-    # The record TRAVELS — that is what makes the loss visible to the operator
-    # as a named miss rather than a logo that silently never existed.
     assert entity["id"] == 5
     assert entity["name"] == "Leaky Logo"
-    # ... but it carries no address, and neither half of the credential appears
-    # anywhere in the whole plan.
-    assert "url" not in entity
-    blob = json.dumps(
-        [c.entities for c in plan.categories], default=str
-    )
-    assert SECRET_M3U_PASSWORD not in blob
-    assert "operator" not in blob
+    # The address crosses WHOLE, so the replica loads the same picture A does.
+    assert entity["url"] == leaky_url % SECRET_M3U_PASSWORD
 
 
 @pytest.mark.asyncio
-async def test_a_query_string_credential_logo_url_is_not_copied(tmp_path):
-    """The other carrier shape, which the name-blind query rule already knew."""
+async def test_a_query_string_credential_logo_url_is_copied(tmp_path):
+    """The other carrier shape, same disposition."""
     src = _source_client_with_remote_logos(
         logos=[
             {"id": 6, "name": "Leaky Query Logo",
@@ -1657,7 +1688,7 @@ async def test_a_query_string_credential_logo_url_is_not_copied(tmp_path):
 
     entity = plan.category(EntityType.LOGO).entities[0]
     assert entity["id"] == 6
-    assert "url" not in entity
+    assert entity["url"] == "http://provider.test/logo.php?username=u1&password=p1"
 
 
 @pytest.mark.asyncio
@@ -2166,25 +2197,29 @@ async def test_logo_binding_pass_needs_both_categories(
 
 
 # ---------------------------------------------------------------------------
-# One-time credential provisioning: what the CYCLE must and must not do
-# (bead wd20y — ADR-013 INV-4 / INV-5 / S13).
+# Per-cycle provider-credential transmission (PO ruling 2026-08-22, ADR-013
+# amendment (b) — S13' / INV-5').
+#
+# WHAT THIS BLOCK REPLACED. Five tests pinned the one-time provisioning design:
+# that a cycle wrote no ``sync_provision_credentials`` journal row (INV-5), and
+# four that stamped and cleared ``destination_credential_observed_at`` from what
+# the cycle observed on B (INV-4). All five asserted properties of controls this
+# ruling deleted — the provisioning action, its journal action types, the
+# observed marker column and the ``insecure`` refusal it fed. Keeping them
+# pointed at absent machinery would have been a guard that reads as coverage and
+# enforces nothing, so they are replaced by the properties that ARE now
+# load-bearing: the cycle carries the credential, and the cycle SAYS it did.
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_a_full_cycle_writes_zero_provisioning_journal_rows(tmp_path):
-    """INV-5 / S13: only a provisioning attempt records one, and a cycle is not one.
+async def test_a_cycle_writes_exactly_one_audit_row_naming_what_it_carried(tmp_path):
+    """S13' / bead ``…-gad2p``'s surviving invariant.
 
-    This is the property that makes the audit row a DETECTOR rather than a
-    record. A ``sync_provision_credentials`` row whose actor is the scheduler is
-    not a log line, it is THE ALARM — the only detector for the failure mode of
-    the one-time path becoming recurring (threat model D12).
+    Under per-cycle transmission this row is the only record of how often a
+    secret moved, so it has to exist on every terminal route and it has to name
+    the records — labels and FIELD NAMES, never a value.
     """
-    from tasks.dbas_sync_provisioning import (
-        DEPROVISION_ACTION_TYPE,
-        PROVISION_ACTION_TYPE,
-    )
-
     src = _source_client()
     dest = _empty_dest_client()
     target = _sync_target()
@@ -2197,130 +2232,133 @@ async def test_a_full_cycle_writes_zero_provisioning_journal_rows(tmp_path):
             target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
         )
 
-    action_types = [
-        call.kwargs.get("action_type") for call in log_entry.call_args_list
+    rows = [
+        call.kwargs for call in log_entry.call_args_list
+        if call.kwargs.get("action_type") == "sync_run"
     ]
-    assert log_entry.call_count > 0, "the cycle journalled nothing at all — this "\
-        "assertion would pass vacuously"
-    assert PROVISION_ACTION_TYPE not in action_types
-    assert DEPROVISION_ACTION_TYPE not in action_types
+    assert len(rows) == 1, "a cycle must write exactly one sync_run row"
+    after = rows[0]["after_value"]
+    assert after["redaction_mode"] == "topology_plus_provider_credentials"
+    assert after["provider_credentials_transmitted"] >= 1
+    assert after["tls_verified"] is True
+    named = " ".join(after["provider_credential_records"])
+    assert "password" in named
+    # Names only. The audit row records THAT a secret moved; it is never a place
+    # the secret itself can be read back.
+    assert SECRET_M3U_PASSWORD not in json.dumps(rows[0], default=str)
 
 
 @pytest.mark.asyncio
-async def test_a_cycle_stamps_the_observed_marker_when_B_holds_a_credential(tmp_path):
-    """INV-4's OBSERVED half, from state the cycle ALREADY reads (row D16).
+async def test_an_aborted_cycle_still_writes_a_row_saying_it_carried_nothing(tmp_path):
+    """The routes that send nothing say so, rather than saying nothing.
 
-    B's account row carries a username and password ECM never wrote — the
-    by-hand recovery ECM's own guide documents. The credential re-entry reporter
-    already reads that row and already runs ``credential_is_present`` against
-    it; the marker is that same verdict, persisted, so the ``insecure`` refusal
-    can see a credential the provisioning marker is structurally blind to.
-
-    No new fetch, no comparison, and the column holds a timestamp.
+    Bead ``…-gad2p`` measured two failure routes that terminated with NO audit
+    row at all. Those two routes are gone with the action they belonged to; the
+    invariant that replaced them — no attempt terminates without a row — is only
+    meaningful if the abort paths honour it too.
     """
-    src = _source_client()
-    dest = _converged_dest_client()
-    dest.get_m3u_accounts = AsyncMock(
-        return_value=[
-            {
-                "id": 501,
-                "name": "Provider A",
-                "username": "entered-by-hand",
-                "password": "entered-by-hand-pass",
-            }
-        ]
-    )
     target = _sync_target()
-    target.destination_credential_observed_at = None
 
-    with patch.object(backup_mod, "get_client", return_value=src), \
-         patch.object(engine, "make_remote_client", return_value=dest), \
-         patch.object(engine, "sync_freshness_reason", return_value=None):
-        report = await run_sync(
+    with patch.object(engine, "sync_freshness_reason", return_value="token revoked"), \
+         patch.object(engine.journal, "log_entry") as log_entry:
+        await run_sync(
             target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
         )
 
-    assert report.destination_credentials_observed is True
-    assert target.destination_credential_observed_at is not None
-    # Presence only — no credential value reached the report.
-    assert "entered-by-hand-pass" not in report.model_dump_json()
+    rows = [
+        call.kwargs for call in log_entry.call_args_list
+        if call.kwargs.get("action_type") == "sync_run"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["after_value"]["provider_credentials_transmitted"] == 0
+    assert rows[0]["after_value"]["provider_credential_records"] == []
 
 
 @pytest.mark.asyncio
-async def test_a_cycle_against_a_credential_free_B_stamps_nothing(tmp_path):
-    """The gate must not close on a replica that holds nothing.
+async def test_an_insecure_target_is_warned_not_refused(tmp_path):
+    """S7' — the refusal came out; the warning went in, on EVERY cycle.
 
-    Without this the observed half would be a one-way ratchet that fires on
-    every target, and ``insecure`` would become permanently unavailable for
-    reasons unrelated to any credential.
+    The PO removed the 409: "I know the security risks. That's on the user to
+    mitigate, not us." What replaces it has to fire on every credential-carrying
+    cycle rather than once at setup, because under per-cycle transmission the
+    exposure recurs on the schedule.
     """
-    src = _source_client()
-    dest = _converged_dest_client()
-    target = _sync_target()
-    target.destination_credential_observed_at = None
-
-    with patch.object(backup_mod, "get_client", return_value=src), \
-         patch.object(engine, "make_remote_client", return_value=dest), \
-         patch.object(engine, "sync_freshness_reason", return_value=None):
-        report = await run_sync(
-            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
-        )
-
-    assert report.destination_credentials_observed is False
-    assert target.destination_credential_observed_at is None
-
-
-@pytest.mark.asyncio
-async def test_a_cycle_that_observes_ABSENCE_clears_the_observed_marker(tmp_path):
-    """The observed marker retires by the same presence check that set it.
-
-    ADR-013: "it clears when a cycle observes absence, by the same presence
-    check". The operator removed the credential on the replica — the second of
-    the two remedies the refusal names — so the gate must open again on its own.
-    A marker that could only ever be set would make that remedy a dead end.
-    """
-    from datetime import datetime, timezone
-
-    src = _source_client()
-    dest = _converged_dest_client()
-    target = _sync_target()
-    target.destination_credential_observed_at = datetime.now(timezone.utc)
-
-    with patch.object(backup_mod, "get_client", return_value=src), \
-         patch.object(engine, "make_remote_client", return_value=dest), \
-         patch.object(engine, "sync_freshness_reason", return_value=None):
-        report = await run_sync(
-            target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
-        )
-
-    assert report.destination_credentials_checked is True
-    assert report.destination_credentials_observed is False
-    assert target.destination_credential_observed_at is None
-
-
-@pytest.mark.asyncio
-async def test_a_cycle_that_never_LOOKED_leaves_the_observed_marker_alone(tmp_path):
-    """"Observed absent" and "never looked" are different, and only one clears.
-
-    Here the destination holds no matching account at all, so the presence check
-    never ran. Clearing on that would re-permit `insecure` on a target whose
-    replica still holds a live credential — the same failure INV-9 refuses on
-    the de-provision path, arriving by a different route.
-    """
-    from datetime import datetime, timezone
-
     src = _source_client()
     dest = _empty_dest_client()
     target = _sync_target()
-    stamped = datetime.now(timezone.utc)
-    target.destination_credential_observed_at = stamped
+    target.insecure = True
 
     with patch.object(backup_mod, "get_client", return_value=src), \
          patch.object(engine, "make_remote_client", return_value=dest), \
-         patch.object(engine, "sync_freshness_reason", return_value=None):
+         patch.object(engine, "sync_freshness_reason", return_value=None), \
+         patch.object(engine.journal, "log_entry") as log_entry:
         report = await run_sync(
             target, confirm_apply=True, session=MagicMock(), ledger_dir=tmp_path,
         )
 
-    assert report.destination_credentials_checked is False
-    assert target.destination_credential_observed_at == stamped
+    # Not refused: the cycle ran and carried the credential.
+    assert report.provider_credentials_transmitted >= 1
+    warnings = [n for n in report.notes if "TLS verification is DISABLED" in n]
+    assert warnings, "an insecure credential-carrying cycle said nothing: %r" % (
+        report.notes,
+    )
+    assert "repeats on the schedule" in warnings[0]
+    rows = [
+        call.kwargs for call in log_entry.call_args_list
+        if call.kwargs.get("action_type") == "sync_run"
+    ]
+    assert rows[0]["after_value"]["tls_verified"] is False
+
+
+def test_a_secure_target_produces_no_insecure_warning():
+    """The warning must mean something when it fires."""
+    from tasks.dbas_sync_engine import insecure_transmission_warning
+
+    secure = _sync_target()
+    secure.insecure = False
+    assert insecure_transmission_warning(secure, carrying_credentials=True) is None
+
+    insecure = _sync_target()
+    insecure.insecure = True
+    # ...and a cycle that carried nothing has nothing to warn about either.
+    assert insecure_transmission_warning(insecure, carrying_credentials=False) is None
+    assert insecure_transmission_warning(insecure, carrying_credentials=True)
+
+
+@pytest.mark.asyncio
+async def test_the_schedules_direct_password_is_written_onto_sd_sources_only(tmp_path):
+    """The one credential an operator types, cascading like everything else.
+
+    Driven by ``source_type``, never by a presence check: the SD password is
+    write-only upstream, so it is never in the gather, so a presence-driven
+    writer would skip every SD source forever.
+    """
+    from tasks.dbas_sync_engine import _inject_schedules_direct_password
+
+    sections = {
+        "epg_sources": [
+            {"name": "SD", "source_type": "schedules_direct", "username": "u"},
+            {"name": "XMLTV", "source_type": "xmltv", "url": "http://x/g.xml"},
+        ]
+    }
+    _inject_schedules_direct_password(sections, "sd-secret")
+    rows = {row["name"]: row for row in sections["epg_sources"]}
+    assert rows["SD"]["password"] == "sd-secret"
+    assert "password" not in rows["XMLTV"]
+
+
+def test_no_schedules_direct_password_leaves_the_replicas_alone():
+    """An empty value must not CLEAR a working password on the replica.
+
+    Writing ``""`` would take an SD source down on the first cycle after an
+    operator upgraded without filling the new field in — a regression caused by
+    the absence of input, which is the worst kind to diagnose.
+    """
+    from tasks.dbas_sync_engine import _inject_schedules_direct_password
+
+    sections = {
+        "epg_sources": [{"name": "SD", "source_type": "schedules_direct"}]
+    }
+    for empty in (None, ""):
+        _inject_schedules_direct_password(sections, empty)
+        assert "password" not in sections["epg_sources"][0]
