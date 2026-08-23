@@ -14,6 +14,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 
+from sqlalchemy import and_, or_
+
 import journal
 from database import get_session
 from log_throttle import should_log
@@ -30,6 +32,122 @@ from task_scheduler import (
 from journal import log_entry
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Execution history is scoped to the target INSTANCE, not the id (bead …-5dp92)
+# ---------------------------------------------------------------------------
+#
+# A per-target cross-instance-sync task is keyed ``dbas_sync_<target_id>``
+# (``tasks/dbas_sync.py`` → ``sync_task_id_for``), and ``SyncTarget.id`` is a
+# SQLite autoincrement primary key, so it is REUSED after a delete. Deleting a
+# target prunes its ``scheduled_tasks`` and ``task_schedules`` rows
+# (``remove_sync_target_task``) but not its ``task_executions`` rows — so the
+# next target handed the same id opened carrying its predecessor's runs,
+# including failures that were not its own, on the surface an operator uses to
+# judge whether the target is healthy.
+#
+# THE INVARIANT these helpers enforce (the specification — delete-then-recreate
+# is one example of it, not the definition): a ``task_executions`` row is
+# attributed to a per-target sync task only when the live ``SyncTarget`` behind
+# that id already existed when the run STARTED; an id with no live target
+# behind it has no history at all.
+#
+# ``started_at`` and not ``completed_at``: a run in flight when its target is
+# deleted is deliberately not interrupted, so it can finish after the
+# replacement is created. It still is not the replacement's run.
+#
+# Enforced at the READ rather than by purging on delete. Purging would be a
+# cleanup step, not a guarantee — ``remove_sync_target_task`` is best-effort by
+# contract, runs after the delete has already committed, and would do nothing
+# for installs already carrying orphaned rows. The rows are left in place (the
+# ordinary 30-day ``purge_old_history`` retires them) so the audit trail of what
+# a since-deleted target actually did is not destroyed.
+
+
+def _sync_target_id_from_task_id(task_id: Optional[str]) -> Optional[int]:
+    """The ``SyncTarget`` id inside ``dbas_sync_<n>``, or None if not one.
+
+    Deliberately NOT a SQL ``LIKE``: in SQL ``_`` is a single-character
+    wildcard, so ``LIKE 'dbas_sync_%'`` also matches ids like
+    ``dbas_syncx_report`` that this rule has no business touching. The suffix of
+    a real per-target id is an integer, and nothing else is.
+    """
+    from tasks.dbas_sync import SYNC_TASK_ID_PREFIX
+
+    if not task_id or not task_id.startswith(SYNC_TASK_ID_PREFIX):
+        return None
+    suffix = task_id[len(SYNC_TASK_ID_PREFIX):]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def _live_sync_target_lifetimes(session) -> dict[str, Optional[datetime]]:
+    """Per-target sync task id → the instant its live target came into being.
+
+    Key PRESENCE means "a live target owns this id"; a present-but-None value
+    means the row carries no creation instant and therefore imposes no time
+    restriction (``SyncTarget.created_at`` is NOT NULL, so this is a
+    degradation path, and it degrades toward showing a live target's real
+    history rather than hiding it).
+    """
+    from export_models import SyncTarget
+    from tasks.dbas_sync import sync_task_id_for
+
+    return {
+        sync_task_id_for(target_id): created_at
+        for target_id, created_at in session.query(
+            SyncTarget.id, SyncTarget.created_at
+        ).all()
+    }
+
+
+def _scope_to_sync_target_lifetimes(session, query, task_id: Optional[str]):
+    """Apply the instance scope to a ``TaskExecution`` query.
+
+    Returns ``(query, empty)``. ``empty`` is True when the requested id is a
+    per-target sync id that no live target owns — there is nothing to show and
+    no filter can express "nothing" as cleanly.
+
+    Tasks whose ids are release constants (``epg_refresh``, the legacy shared
+    ``dbas_sync`` from bead …-5gzg5) are not touched.
+    """
+    if task_id is not None:
+        # Ordinary tasks are the overwhelming majority of these reads and must
+        # not pay for a lookup that cannot apply to them.
+        if _sync_target_id_from_task_id(task_id) is None:
+            return query, False
+        lifetimes = _live_sync_target_lifetimes(session)
+        if task_id not in lifetimes:
+            return query, True
+        started_at_floor = lifetimes[task_id]
+        if started_at_floor is None:
+            return query, False
+        return query.filter(TaskExecution.started_at >= started_at_floor), False
+
+    # The all-tasks feed resolves the same ids to the same target names, so the
+    # violation would simply be reachable one screen over. Constrain every
+    # per-target sync id PRESENT in the table rather than pattern-matching in
+    # SQL (see `_sync_target_id_from_task_id` for why LIKE is wrong here).
+    lifetimes = _live_sync_target_lifetimes(session)
+    clauses = []
+    for (present_id,) in session.query(TaskExecution.task_id).distinct().all():
+        if _sync_target_id_from_task_id(present_id) is None:
+            continue
+        if present_id not in lifetimes:
+            clauses.append(TaskExecution.task_id != present_id)
+            continue
+        started_at_floor = lifetimes[present_id]
+        if started_at_floor is None:
+            continue
+        clauses.append(
+            or_(
+                TaskExecution.task_id != present_id,
+                TaskExecution.started_at >= started_at_floor,
+            )
+        )
+    if clauses:
+        query = query.filter(and_(*clauses))
+    return query, False
 
 
 @contextlib.contextmanager
@@ -1378,6 +1496,10 @@ class TaskEngine:
 
                 if task_id:
                     query = query.filter(TaskExecution.task_id == task_id)
+
+                query, empty = _scope_to_sync_target_lifetimes(session, query, task_id)
+                if empty:
+                    return []
 
                 executions = query.offset(offset).limit(limit).all()
                 return [e.to_dict() for e in executions]
