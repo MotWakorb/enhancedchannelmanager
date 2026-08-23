@@ -381,7 +381,7 @@ After purging, re-run the diagnosis in reverse: you are checking that every hop 
 Page the Project Engineer if:
 
 - Purge appears to succeed (HTTP 200 from the purge endpoint, vendor dashboard shows the purge event) but `EDGE_HASHES` still diverges from `CONTAINER_HASHES` after 5 minutes.
-- `curl` from inside the container matches the fresh deploy, `curl` through the proxy matches, **but** users still report stale bundles after a hard reload. This usually means a corporate / ISP transparent proxy sits between the user and your edge; operators rarely have control over this layer.
+- The in-container check matches the fresh deploy, `curl` through the proxy matches, **but** users still report stale bundles after a hard reload. This usually means a corporate / ISP transparent proxy sits between the user and your edge; operators rarely have control over this layer.
 - The reverse proxy or CDN is operated by a third party you cannot purge against (managed hosting, shared-edge provider): the escalation is to the third party, not to Engineering.
 
 Provide to the engineer: `/tmp/ecm-infra-cache-headers.txt`, the diff output from step 3 above, the list of purge attempts made (vendor, timestamp, response code), and the reporting-user report.

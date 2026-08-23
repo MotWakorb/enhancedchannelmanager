@@ -171,7 +171,7 @@ rather than a generic error. Common results:
 | What you see | Likely cause | Fix |
 |---|---|---|
 | **"401 unauthorized — check API key"** | Wrong, revoked, or mistyped API key | Recreate the key in the Emby Dashboard and paste it again. |
-| **"Emby request failed: …" / connection refused / timeout** | ECM container can't reach the Base URL | Verify reach with the `docker exec … wget` command above; check hostname/port and the container network. |
+| **"Emby request failed: …" / connection refused / timeout** | ECM container can't reach the Base URL | Verify reach with the `docker exec … python3` command above; check hostname/port and the container network. |
 | **"Invalid URL scheme — must be http or https"** | Base URL used `file://`, `ftp://`, etc. | Use an `http://` or `https://` URL. |
 | **"Invalid host — Destination IP … is denied by SSRF policy (…)"** | The Base URL resolved to an address your outbound policy denies. Link-local (`169.254.x.x`) is denied in every mode. Loopback (`localhost`, `127.0.0.1`, `::1`) and private LAN ranges are denied *only* in "Public internet only" mode; the default LAN-friendly mode permits them. | Check which mode is in the parentheses. If it says `public_only` and you meant to reach a LAN or loopback address, switch **Where backups can be sent** back to LAN-friendly under **Settings → Backup & Restore**. If it says `lan_friendly`, the address is link-local and is never permitted: use Emby's LAN IP, Docker service name, or public hostname. |
 | **"Emby /Sessions returned 5xx"** | Emby server-side error | Check the Emby server logs; confirm Emby is healthy. |
