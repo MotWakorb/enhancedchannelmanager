@@ -41,6 +41,11 @@ backend/static/
 *.egg-info/
 dist/
 build/
+# `mkdocs build` (a required gate, see docs/shipping.md) writes here by
+# default: mkdocs.yml sets no site_dir. Left untracked it trips the
+# binary-artifacts ratchet on site/sitemap.xml.gz, which reads as a real
+# finding rather than as build output nobody meant to keep.
+site/
 
 # Test coverage artifacts (enforced in CI, see docs/testing.md)
 frontend/coverage/

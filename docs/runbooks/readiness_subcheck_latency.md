@@ -28,7 +28,7 @@ If the related production SLO alert (`ECMReadinessDown`, `ECMHTTPLatencyHighP95`
 ### dispatcharr check slow (>500ms)
 - Expected shape: single HTTP HEAD / `/health` to Dispatcharr, should return in tens of ms on LAN.
 - Likely cause: network latency, Dispatcharr itself slow, DNS resolution delay.
-- Diagnose: `docker exec ecm-ecm-1 curl -w '%{time_total}\n' -so /dev/null <dispatcharr-health-url>`.
+- Diagnose: `docker exec ecm-ecm-1 python3 -c "import time, urllib.request; start = time.monotonic(); urllib.request.urlopen('<dispatcharr-health-url>', timeout=5).read(); print(f'{time.monotonic() - start:.3f}s')"` (the ECM image has no `curl` and no `wget`).
 
 ### ffprobe check slow (>100ms)
 - Expected shape: a spawn + quick probe, typically <50ms.

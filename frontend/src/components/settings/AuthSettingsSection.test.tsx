@@ -96,4 +96,134 @@ describe('AuthSettingsSection', () => {
       });
     });
   });
+  describe('disabling authentication (bead enhancedchannelmanager-04c0u.12)', () => {
+    // Turning Require Authentication off leaves the whole instance open to
+    // anyone who can reach it. It is saved by the same generic "Save" button
+    // as every other field on the page, so without a scoped confirmation the
+    // most dangerous setting here is the easiest one to change by accident.
+    const disableAuthAndSave = async () => {
+      render(<AuthSettingsSection isAdmin={true} />);
+      const toggle = await screen.findByLabelText('Require Authentication');
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByRole('button', { name: /save authentication settings/i }));
+    };
+
+    it('does not save until the operator confirms, and names what is lost', async () => {
+      await disableAuthAndSave();
+
+      const dialog = await screen.findByRole('dialog', { name: /disable authentication/i });
+      expect(dialog).toHaveTextContent(/anyone who can reach this ECM instance/i);
+      expect(api.updateAuthSettings).not.toHaveBeenCalled();
+    });
+
+    it('saves require_auth false once the exact phrase is typed', async () => {
+      await disableAuthAndSave();
+      await screen.findByRole('dialog', { name: /disable authentication/i });
+
+      fireEvent.change(screen.getByLabelText(/type DISABLE AUTHENTICATION to confirm/i), {
+        target: { value: 'DISABLE AUTHENTICATION' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^disable authentication$/i }));
+
+      await waitFor(() =>
+        expect(api.updateAuthSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ require_auth: false }),
+        ),
+      );
+    });
+
+    it('abandons the change when the confirmation is cancelled', async () => {
+      await disableAuthAndSave();
+      await screen.findByRole('dialog', { name: /disable authentication/i });
+
+      fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: /disable authentication/i })).not.toBeInTheDocument(),
+      );
+      expect(api.updateAuthSettings).not.toHaveBeenCalled();
+    });
+
+    it('names the MCP-capability caveat that turning auth off removes', async () => {
+      // The MCP guide promises a list of things a stolen MCP key cannot do.
+      // Most of that list is enforced only while auth is required, and this
+      // dialog is where the operator decides. Saying it in the guide alone
+      // puts it where the decision is not being made.
+      await disableAuthAndSave();
+
+      const dialog = await screen.findByRole('dialog', { name: /disable authentication/i });
+      expect(dialog).toHaveTextContent(/MCP/i);
+      expect(dialog).toHaveTextContent(/backup/i);
+    });
+
+    it('does not claim outbound connection tests open up when auth is disabled', async () => {
+      // `RequireHumanAdminForOutboundTest` carries `enforce_when_auth_disabled=True`
+      // (backend/auth/dependencies.py), so POST /api/cloud-targets/test,
+      // /api/cloud-targets/{id}/test and /api/alert-methods/{id}/test keep
+      // refusing in this mode. Listing "testing" alongside "creating" told the
+      // operator a credential oracle had opened that had not. The write verbs
+      // on those same routers run on RequireAdminIfEnabled /
+      // RequireHumanAdminForNotificationCredential, which do NOT enforce, so
+      // the two halves have to be stated separately.
+      await disableAuthAndSave();
+
+      const dialog = await screen.findByRole('dialog', { name: /disable authentication/i });
+      expect(dialog).toHaveTextContent(/creating, changing or deleting outbound destinations/i);
+      expect(dialog).toHaveTextContent(/Testing an outbound destination does not/i);
+      // The surviving gates hold only once the instance has an operator
+      // identity — the same caveat the MCP guide carries on them.
+      expect(dialog).toHaveTextContent(/once this instance has an operator identity/i);
+    });
+
+    it('does not re-confirm on every save once authentication is already off', async () => {
+      // Gating on `!requireAuth` rather than on the transition made the dialog
+      // fire on every unrelated save while auth was off — habituation training
+      // on exactly the least-protected instances (bead 04c0u.12).
+      vi.mocked(api.getAuthSettings).mockResolvedValue({ ...authSettings, require_auth: false });
+      render(<AuthSettingsSection isAdmin={true} />);
+
+      const input = await screen.findByLabelText('Minimum Password Length');
+      fireEvent.change(input, { target: { value: '12' } });
+      fireEvent.click(screen.getByRole('button', { name: /save authentication settings/i }));
+
+      await waitFor(() =>
+        expect(api.updateAuthSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ require_auth: false, local_min_password_length: 12 }),
+        ),
+      );
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('does not re-confirm on the next save after the disable has been saved', async () => {
+      // The gate reads the last persisted value, so a successful save has to
+      // move it. Otherwise the very next save re-prompts, which is the same
+      // habituation defect one step later.
+      await disableAuthAndSave();
+      await screen.findByRole('dialog', { name: /disable authentication/i });
+      fireEvent.change(screen.getByLabelText(/type DISABLE AUTHENTICATION to confirm/i), {
+        target: { value: 'DISABLE AUTHENTICATION' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /^disable authentication$/i }));
+      await waitFor(() => expect(api.updateAuthSettings).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /save authentication settings/i }));
+
+      await waitFor(() => expect(api.updateAuthSettings).toHaveBeenCalledTimes(2));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('saves without a confirmation when authentication stays on', async () => {
+      render(<AuthSettingsSection isAdmin={true} />);
+      await screen.findByLabelText('Require Authentication');
+      fireEvent.click(screen.getByRole('button', { name: /save authentication settings/i }));
+
+      await waitFor(() =>
+        expect(api.updateAuthSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ require_auth: true }),
+        ),
+      );
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+  });
 });

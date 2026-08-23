@@ -76,6 +76,18 @@ vi.mock('../../contexts/BackupDestinationPromptContext', () => ({
 
 import * as api from '../../services/api';
 
+/**
+ * Clear the scoped restore/delete confirmation (bead
+ * enhancedchannelmanager-04c0u.12). Typing the artifact's own name is what
+ * enables the confirm button, so the helper takes the name it must match.
+ */
+function confirmFullRestoreOf(filename: string) {
+  fireEvent.change(screen.getByLabelText(new RegExp(`type ${filename} to confirm`, 'i')), {
+    target: { value: filename },
+  });
+  fireEvent.click(screen.getByRole('button', { name: /^restore this backup$/i }));
+}
+
 describe('BackupRestoreSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -547,6 +559,7 @@ describe('BackupRestoreSection', () => {
       Object.defineProperty(input, 'files', { value: [file] });
 
       fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
 
       await waitFor(() => {
         expect(api.restoreBackup).toHaveBeenCalledWith(file);
@@ -567,6 +580,7 @@ describe('BackupRestoreSection', () => {
       Object.defineProperty(input, 'files', { value: [file] });
 
       fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
 
       await waitFor(() => {
         expect(mockError).toHaveBeenCalledWith('Server error', 'Restore Failed');
@@ -595,6 +609,7 @@ describe('BackupRestoreSection', () => {
       const input = document.querySelector('input[type="file"]') as HTMLInputElement;
       Object.defineProperty(input, 'files', { value: [file] });
       fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
 
       await waitFor(() => {
         expect(mockWarning).toHaveBeenCalledWith(notice, 'Account Setup Required');
@@ -617,6 +632,7 @@ describe('BackupRestoreSection', () => {
       const input = document.querySelector('input[type="file"]') as HTMLInputElement;
       Object.defineProperty(input, 'files', { value: [file] });
       fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
 
       await waitFor(() => {
         expect(mockSuccess).toHaveBeenCalledWith('Restored 1 files from backup');
@@ -725,5 +741,69 @@ describe('BackupRestoreSection', () => {
         expect(api.saveSecurityMode).toHaveBeenCalledWith('public_only');
       });
     });
+  });
+});
+
+describe('BackupRestoreSection — scoped destructive confirmations (04c0u.12)', () => {
+  const savedZip = {
+    filename: 'ecm-backup-2026-01-01_000000.zip',
+    size_bytes: 1024,
+    created_at: '2026-01-01T00:00:00Z',
+    type: 'zip' as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.listSavedBackups).mockResolvedValue([savedZip]);
+    vi.mocked(api.deleteSavedBackup).mockResolvedValue(undefined as never);
+  });
+
+  it('names the artifact before deleting it, and deletes nothing until confirmed', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    fireEvent.click(await screen.findByLabelText('Delete backup'));
+
+    const dialog = await screen.findByRole('dialog', { name: /delete saved backup/i });
+    expect(dialog).toHaveTextContent(savedZip.filename);
+    expect(api.deleteSavedBackup).not.toHaveBeenCalled();
+  });
+
+  it('deletes the named artifact once its exact filename is typed', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    fireEvent.click(await screen.findByLabelText('Delete backup'));
+    await screen.findByRole('dialog', { name: /delete saved backup/i });
+
+    fireEvent.change(screen.getByLabelText(new RegExp(`type ${savedZip.filename} to confirm`, 'i')), {
+      target: { value: savedZip.filename },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^delete this backup$/i }));
+
+    await waitFor(() => expect(api.deleteSavedBackup).toHaveBeenCalledWith(savedZip.filename));
+  });
+
+  it('keeps the artifact when the delete confirmation is cancelled', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    fireEvent.click(await screen.findByLabelText('Delete backup'));
+    await screen.findByRole('dialog', { name: /delete saved backup/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /delete saved backup/i })).not.toBeInTheDocument(),
+    );
+    expect(api.deleteSavedBackup).not.toHaveBeenCalled();
+  });
+
+  it('names the uploaded file before replacing all ECM state with it', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    const file = new File(['zip'], 'operator-full-backup.zip', { type: 'application/zip' });
+    const input = document.querySelector('input[accept=".zip"]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', { value: [file] });
+
+    fireEvent.click(screen.getByText('Restore'));
+
+    const dialog = await screen.findByRole('dialog', { name: /restore full backup/i });
+    expect(dialog).toHaveTextContent('operator-full-backup.zip');
+    expect(dialog).toHaveTextContent(/replace all current settings/i);
+    expect(api.restoreBackup).not.toHaveBeenCalled();
   });
 });

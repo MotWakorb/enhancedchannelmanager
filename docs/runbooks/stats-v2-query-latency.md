@@ -73,7 +73,8 @@ Look for `SCAN` (no index) vs `SEARCH` (index used). A `SCAN` on a large table i
 1. The structural fix is `bd-7i2vv` (rollup tables + retention policy): if not yet shipped, open a priority bump bead.
 2. Interim: run the nightly rollup task manually to prune old raw rows (if rollup task exists):
    ```bash
-   docker exec ecm-ecm-1 curl -s -X POST http://localhost:<port>/api/tasks/stats_v2_rollup/run
+   # YOUR_TOKEN is an ECM administrator's session token; the route is admin-only.
+   docker exec ecm-ecm-1 python3 -c "import os, urllib.request; port = os.environ.get('ECM_PORT', '6100'); request = urllib.request.Request(f'http://localhost:{port}/api/tasks/stats_v2_rollup/run', method='POST', headers={'Authorization': 'Bearer YOUR_TOKEN'}); print(urllib.request.urlopen(request, timeout=60).status)"
    ```
 3. After pruning, monitor `ecm_session_telemetry_row_count` gauge to confirm reduction and re-check p95 latency.
 

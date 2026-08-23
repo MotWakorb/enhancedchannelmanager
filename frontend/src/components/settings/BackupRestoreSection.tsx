@@ -37,6 +37,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [savedBackups, setSavedBackups] = useState<api.SavedBackup[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
+  // Scoped confirmations for the two destructive actions on this card that had
+  // none (bead enhancedchannelmanager-04c0u.12): permanently deleting a saved
+  // artifact, and replacing all ECM state from an uploaded one. Both name the
+  // exact file, matching the restore-from-saved dialog already below.
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [confirmFullRestore, setConfirmFullRestore] = useState<File | null>(null);
 
   // Restore-from-saved (bead rzhid): legacy full-ZIP restore-saved confirm
   // dialog target, and DBAS-format restore-dbas-saved modal target. GET
@@ -163,7 +169,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
     }
   };
 
-  const handleRestore = async () => {
+  const requestFullRestore = () => {
     const file = fileInputRef.current?.files?.[0];
     if (!file) {
       notifications.error('Please select a backup file', 'No File Selected');
@@ -174,6 +180,13 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       notifications.error('Please select a .zip backup file', 'Invalid File');
       return;
     }
+
+    setConfirmFullRestore(file);
+  };
+
+  const handleRestore = async () => {
+    const file = confirmFullRestore;
+    if (!file) return;
 
     setRestoring(true);
     setRestoreResult(null);
@@ -191,6 +204,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       notifications.error(err instanceof Error ? err.message : 'Restore failed', 'Restore Failed');
     } finally {
       setRestoring(false);
+      setConfirmFullRestore(null);
     }
   };
 
@@ -442,7 +456,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
                   </a>
                   <button
                     className="btn-secondary saved-backup-btn saved-backup-delete"
-                    onClick={() => handleDeleteSaved(backup.filename)}
+                    onClick={() => setDeleteTarget(backup.filename)}
                     disabled={deletingFile === backup.filename}
                     aria-label={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
                     title={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
@@ -587,7 +601,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
               Restoring...
             </div>
           ) : (
-            <button className="btn-primary" onClick={handleRestore}>
+            <button className="btn-primary" onClick={requestFullRestore}>
               Restore
             </button>
           )}
@@ -645,6 +659,46 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         <DbasRestoreSavedModal
           filename={dbasSavedTarget}
           onClose={() => setDbasSavedTarget(null)}
+        />
+      )}
+
+      {deleteTarget && (
+        <TypeToConfirmDialog
+          title="Delete Saved Backup"
+          message={
+            <>
+              This permanently removes <strong>{deleteTarget}</strong> from the
+              server. If it is your only copy, download it first — deleting a
+              recovery artifact cannot be undone.
+            </>
+          }
+          confirmText={deleteTarget}
+          confirmLabel="Delete this backup"
+          busy={deletingFile === deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            await handleDeleteSaved(deleteTarget);
+            setDeleteTarget(null);
+          }}
+        />
+      )}
+
+      {confirmFullRestore && (
+        <TypeToConfirmDialog
+          title="Restore Full Backup"
+          message={
+            <>
+              This will replace all current settings, database records, and
+              uploaded files with the contents of{' '}
+              <strong>{confirmFullRestore.name}</strong>. The page reloads once
+              the restore completes. This cannot be undone.
+            </>
+          }
+          confirmText={confirmFullRestore.name}
+          confirmLabel="Restore this backup"
+          busy={restoring}
+          onCancel={() => setConfirmFullRestore(null)}
+          onConfirm={handleRestore}
         />
       )}
     </div>

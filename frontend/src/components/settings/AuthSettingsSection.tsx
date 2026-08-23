@@ -9,6 +9,7 @@ import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
 import type { AuthSettingsPublic, AuthSettingsUpdate } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
 import {
   SettingsSectionHeader,
   SettingsSectionPlaceholders,
@@ -38,9 +39,14 @@ interface Props {
 
 export function AuthSettingsSection({ isAdmin }: Props) {
   const notifications = useNotifications();
-  const [, setSettings] = useState<AuthSettingsPublic | null>(null);
+  const [settings, setSettings] = useState<AuthSettingsPublic | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Scoped confirmation for the one setting on this page that can lock nobody
+  // out and let everybody in (bead enhancedchannelmanager-04c0u.12). Every
+  // other field shares the same generic Save button, so the danger is invisible
+  // at the point of click without this.
+  const [confirmDisableAuth, setConfirmDisableAuth] = useState(false);
 
   // Form state for each provider
   const [localEnabled, setLocalEnabled] = useState(true);
@@ -80,7 +86,7 @@ export function AuthSettingsSection({ isAdmin }: Props) {
     loadSettings();
   }, [isAdmin, notifications]);
 
-  const handleSave = useCallback(async () => {
+  const saveSettings = useCallback(async () => {
     setSaving(true);
 
     const update: AuthSettingsUpdate = {
@@ -93,6 +99,9 @@ export function AuthSettingsSection({ isAdmin }: Props) {
 
     try {
       await api.updateAuthSettings(update);
+      // Move the persisted snapshot the confirmation gate reads. Without this
+      // the very next save re-prompts for a disable that already happened.
+      setSettings((previous) => (previous ? { ...previous, ...update } : previous));
       notifications.success('Authentication settings saved');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to save settings';
@@ -106,6 +115,20 @@ export function AuthSettingsSection({ isAdmin }: Props) {
     dispatcharrEnabled, dispatcharrAutoCreate,
     notifications,
   ]);
+
+  // Confirm the *transition* into open mode, not the state of being in it.
+  // Gating on `!requireAuth` alone fired this dialog on every unrelated save
+  // while authentication was already off, which trains the operator to type
+  // the phrase without reading it — on precisely the instances that have the
+  // least protection left (bead enhancedchannelmanager-04c0u.12).
+  const handleSave = useCallback(() => {
+    const isDisablingAuth = (settings?.require_auth ?? true) && !requireAuth;
+    if (isDisablingAuth) {
+      setConfirmDisableAuth(true);
+      return;
+    }
+    void saveSettings();
+  }, [settings, requireAuth, saveSettings]);
 
   if (!isAdmin) {
     return (
@@ -230,6 +253,37 @@ export function AuthSettingsSection({ isAdmin }: Props) {
           {saving ? 'Saving...' : 'Save Authentication Settings'}
         </button>
       </div>
+
+      {confirmDisableAuth && (
+        <TypeToConfirmDialog
+          title="Disable Authentication"
+          message={
+            <>
+              Anyone who can reach this ECM instance over the network will be able
+              to use it — including every administrative page — without signing
+              in. Existing accounts are kept, but they stop protecting anything
+              until you turn this back on.
+              {' '}
+              This also removes most of what the MCP integration guide promises a
+              stolen MCP key cannot do: taking, downloading or restoring backups,
+              and creating, changing or deleting outbound destinations, become
+              reachable without any credential. Testing an outbound destination
+              does not. That, along with rotating the MCP key and changing TLS
+              certificate material, stays administrator-only once this instance
+              has an operator identity. Account administration stays closed to
+              anonymous callers and to the MCP key itself in this mode.
+            </>
+          }
+          confirmText="DISABLE AUTHENTICATION"
+          confirmLabel="Disable Authentication"
+          busy={saving}
+          onCancel={() => setConfirmDisableAuth(false)}
+          onConfirm={async () => {
+            await saveSettings();
+            setConfirmDisableAuth(false);
+          }}
+        />
+      )}
     </div>
   );
 }

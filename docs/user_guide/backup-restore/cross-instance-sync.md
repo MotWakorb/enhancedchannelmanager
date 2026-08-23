@@ -72,7 +72,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | Field | What goes here |
 |-|-|
 | **Name** | A label for this target (e.g., `DR standby`, `remote site`). |
-| **Base URL** | The base URL of Dispatcharr-B's API (e.g., `http://192.168.1.50:8080`). |
+| **Base URL** | The base URL of Dispatcharr-B's API (e.g., `http://192.168.1.50:9191`). Dispatcharr's default port is `9191`; nothing in this stack has ever served `8080`. |
 | **Username / Password** | Credentials ECM-A uses to authenticate against Dispatcharr-B's API. This is not what B syncs. It is how A reaches B. |
 | **Allow insecure TLS** | Disable TLS verification for self-signed certs. Use only on isolated LANs where you control both endpoints. Every sync cycle using this option is logged. |
 

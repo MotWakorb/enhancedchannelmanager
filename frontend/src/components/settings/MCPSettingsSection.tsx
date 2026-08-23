@@ -10,6 +10,7 @@ import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { MCP_TOOL_CATEGORIES } from './mcpToolCategories';
+import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
 import {
   SettingsSectionHeader,
   SettingsSectionPlaceholders,
@@ -45,6 +46,8 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+  // Which destructive key-lifecycle action is awaiting confirmation, if any.
+  const [keyAction, setKeyAction] = useState<'rotate' | 'revoke' | null>(null);
   const [mcpStatus, setMcpStatus] = useState<{
     reachable: boolean;
     tools_available?: number;
@@ -250,21 +253,27 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                 </div>
               )}
 
+              {/* Both actions break every configured MCP client the moment
+                  they land, so each goes through a scoped type-to-confirm
+                  naming which one it is (bead enhancedchannelmanager-04c0u.12).
+                  The icons are decorative: without aria-hidden the Material
+                  ligature ("refresh", "block") is read out as part of the
+                  button's accessible name. */}
               <div className="mcp-key-actions">
                 <button
                   className="btn btn-primary"
-                  onClick={handleGenerate}
+                  onClick={() => setKeyAction('rotate')}
                   disabled={generating}
                 >
-                  <span className="material-icons">{generating ? 'sync' : 'refresh'}</span>
+                  <span className="material-icons" aria-hidden="true">{generating ? 'sync' : 'refresh'}</span>
                   {generating ? 'Generating...' : 'Regenerate Key'}
                 </button>
                 <button
                   className="btn btn-danger"
-                  onClick={handleRevoke}
+                  onClick={() => setKeyAction('revoke')}
                   disabled={revoking}
                 >
-                  <span className="material-icons">{revoking ? 'sync' : 'block'}</span>
+                  <span className="material-icons" aria-hidden="true">{revoking ? 'sync' : 'block'}</span>
                   {revoking ? 'Revoking...' : 'Revoke Key'}
                 </button>
               </div>
@@ -281,7 +290,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                   onClick={handleGenerate}
                   disabled={generating}
                 >
-                  <span className="material-icons">{generating ? 'sync' : 'vpn_key'}</span>
+                  <span className="material-icons" aria-hidden="true">{generating ? 'sync' : 'vpn_key'}</span>
                   {generating ? 'Generating...' : 'Generate API Key'}
                 </button>
               </div>
@@ -363,6 +372,49 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             </div>
           </div>
         </div>
+      )}
+
+      {keyAction === 'rotate' && (
+        <TypeToConfirmDialog
+          title="Rotate MCP API Key"
+          message={
+            <>
+              Every configured MCP client — Claude Desktop, Claude Code, and any
+              other — disconnects immediately and stays disconnected until you
+              copy the new key into each one. The key shown here is the only
+              copy; ECM cannot show it again later.
+            </>
+          }
+          confirmText="ROTATE MCP KEY"
+          confirmLabel="Rotate MCP API Key"
+          busy={generating}
+          onCancel={() => setKeyAction(null)}
+          onConfirm={async () => {
+            await handleGenerate();
+            setKeyAction(null);
+          }}
+        />
+      )}
+
+      {keyAction === 'revoke' && (
+        <TypeToConfirmDialog
+          title="Revoke MCP API Key"
+          message={
+            <>
+              All MCP access stops immediately and no replacement is issued.
+              Every configured client stays disconnected until you generate a new
+              key here and update each one.
+            </>
+          }
+          confirmText="REVOKE MCP KEY"
+          confirmLabel="Revoke MCP API Key"
+          busy={revoking}
+          onCancel={() => setKeyAction(null)}
+          onConfirm={async () => {
+            await handleRevoke();
+            setKeyAction(null);
+          }}
+        />
       )}
 
       {/* Available Tools */}

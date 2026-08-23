@@ -4,7 +4,13 @@
 
 - **Severity**: P1 (complete configuration loss) / P2 (partial data loss, instance degraded)
 - **Owner**: SRE / Operator
-- **Last reviewed**: 2026-08-04
+- **Last exercised**: 2026-08-18 against a live ECM (`ecm-ecm-1`, build
+  `0.18.1-0116`) and Dispatcharr 0.28.2. What was actually run: Diagnosis
+  Steps 1, 3 and 5, and the log/database inspection block in Phase 1.1. Steps 2
+  and 4 read a backup artifact and that instance had none, so their commands are
+  unexercised against a real file. Every command that writes, deletes, or
+  authenticates against another system carries a `NOT EXECUTED` marker inline
+  (`grep -n 'NOT EXECUTED'` finds all of them); none of those was run.
 - **Related beads**: `enhancedchannelmanager-0i2vt` (epic), `enhancedchannelmanager-sxx9x` (this doc)
 - **Related ADR**: ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`)
 
@@ -29,10 +35,25 @@
 
 ## Diagnosis
 
+!!! note "Where these commands run"
+    `/config` is **inside the ECM container**, on the `ecm-config` volume that
+    `docker-compose.yml` declares. A default deployment gives it no host path at
+    all, so every `/config/...` command below is prefixed with `docker exec`.
+    Running one bare on the Docker host answers `No such file or directory`,
+    which mid-incident reads like the backups are gone.
+
+    `docker exec` starts your command directly: there is no shell in the
+    container to expand a wildcard. A bare `docker exec … ls /config/backups/*.zip`
+    is expanded by the shell **on the host**, where `/config` does not exist, so
+    it fails or is passed through literally and `ls` reports the pattern as
+    missing. That is the same false "the backups are gone" signal, one layer
+    down. Any `/config` command with a `*` in it therefore runs inside an
+    explicit `sh -c '…'`.
+
 ### Step 1: Confirm you have a usable backup
 
 ```bash
-ls -lh /config/backups/ecm-backup-*.zip
+docker exec ecm-ecm-1 sh -c 'ls -lh /config/backups/ecm-backup-*.zip'
 ```
 
 Expected: one or more `.zip` files sorted by timestamp. The most recent is the best candidate.
@@ -42,7 +63,8 @@ If no local backup exists, check your configured cloud destinations (S3 bucket, 
 ### Step 2: Verify the artifact integrity
 
 ```bash
-sha256sum -c /config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip.sha256
+docker exec -w /config/backups ecm-ecm-1 \
+  sha256sum -c ecm-backup-YYYY-MM-DD_HHMMSS.zip.sha256
 ```
 
 Expected output: `ecm-backup-YYYY-MM-DD_HHMMSS.zip: OK`
@@ -52,16 +74,46 @@ If the sidecar is absent or the hash does not match, the artifact is corrupted. 
 ### Step 3: Check ECM is running and can reach Dispatcharr
 
 ```bash
-docker exec ecm-ecm-1 curl -s http://localhost:8080/api/health/ready | python3 -m json.tool
+docker exec ecm-ecm-1 python3 -c "
+import json, os, urllib.error, urllib.request
+port = os.environ.get('ECM_PORT', '6100')
+try:
+    response = urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=5)
+except urllib.error.HTTPError as error:
+    response = error   # a degraded readiness answer is a 503 carrying the same body
+print(response.status)
+print(json.dumps(json.load(response), indent=2))
+"
 ```
 
-Expected: `"dispatcharr": "ok"` (or equivalent healthy state). If Dispatcharr is unreachable, resolve that first. The restore pipeline writes directly to the Dispatcharr API.
+!!! note "Why `python3`, and why the `HTTPError` branch"
+    The ECM image ships no `curl` and no `wget`. The command most operators
+    reach for first,
+    `docker exec ecm-ecm-1 curl -s http://localhost:6100/api/health/ready`,
+    fails with `executable file not found`, which during an incident reads like
+    a dead container. `python3` is always present (it is what runs ECM). The
+    backend listens on `ECM_PORT`, default `6100`. It has never served on
+    `8080`.
+
+    `urlopen` raises `HTTPError` on any non-2xx status, and `/api/health/ready`
+    answers **503** whenever a subcheck is degraded. That is the state named in
+    Symptoms above, and the reason you are running this step. Without the `except`
+    branch the command exits 1 with a traceback and prints no body at all, so the
+    `"dispatcharr"` field this step asks you to read never appears. `HTTPError`
+    is file-like, so reading the body off it needs nothing else.
+
+Expected: `"status": "ready"` with `"dispatcharr": {"status": "ok", …}`. This one
+call is also the Dispatcharr reachability check: ECM probes its **configured**
+Dispatcharr URL, so a green result here proves the exact path the restore
+pipeline uses. If Dispatcharr is unreachable, resolve that first: the restore
+writes directly to the Dispatcharr API.
+
+`/api/health/ready` is public, so this needs no credentials.
 
 ### Step 4: Determine if the artifact is encrypted
 
 ```bash
-python3 -c "
-import sys
+docker exec ecm-ecm-1 python3 -c "
 with open('/config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip','rb') as f:
     print('ENCRYPTED' if f.read(8)==b'ECMBKENC' else 'PLAINTEXT')
 "
@@ -98,13 +150,17 @@ None is retroactively fixable. If you are rolling ECM back, roll back to an arti
 
 If the Dispatcharr instance still has any configuration (even partial), snapshot it first:
 
+Use the UI: **Settings → Backup & Restore → Configuration Backup → Create
+Configuration Backup**. Or, from the Docker host, against ECM's published port
+(`ECM_PORT`, default `6100`):
+
 ```bash
-# Trigger a manual backup via the API
-curl -s -X POST http://localhost:8080/api/backup/save \
+# NOT EXECUTED during the last exercise: this writes a new artifact.
+# Trigger a manual backup via the API. YOUR_TOKEN is an ECM administrator's
+# session token — a signed-in human. The MCP API key is refused here (403).
+curl -s -X POST http://localhost:6100/api/backup/save \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
-
-Or use the UI: **Settings → Backup & Restore → Configuration Backup → Create Configuration Backup**.
 
 !!! danger "If this backup fails with a scrub error, that is the control working"
     ECM removes its accounts, credentials, telemetry and history from the artifact's copy of
@@ -197,7 +253,15 @@ If validation fails, stop and use an older backup.
 
 Read the notes section. Common causes:
 - Dispatcharr returned an API error for a specific entity. Check Dispatcharr logs: `docker logs dispatcharr 2>&1 | tail -100`.
-- Network timeout. Confirm ECM→Dispatcharr connectivity: `docker exec ecm-ecm-1 curl -s http://dispatcharr:8080/api/health`.
+- Network timeout. Confirm ECM-to-Dispatcharr connectivity by re-running the
+  Step 3 readiness command and reading its `"dispatcharr"` check. Expect a
+  **503** here rather than a 200: that is the degraded answer, and the Step 3
+  command prints its body. Do not probe a hardcoded `dispatcharr:8080`. That
+  host and port are wrong on every deployment this runbook has been exercised
+  against, and the name does not resolve at all when ECM runs with
+  `network_mode: host`. ECM's own probe uses the Dispatcharr URL configured in
+  **Settings → Dispatcharr Connection**, which is the URL the restore actually
+  writes to.
 - Name conflict on the destination. If the destination has existing entities with conflicting names, the restore skips or fails them. Consider wiping the destination first if this is a fresh install.
 
 After resolving the cause, re-attempt from Phase 3.
@@ -206,13 +270,105 @@ After resolving the cause, re-attempt from Phase 3.
 
 The restore created some entities and could not roll them back. The report lists the entity IDs.
 
+Get the residue list from the restore report (displayed in the UI), then delete
+each listed entity via the Dispatcharr UI or API.
+
+**First, mint a Dispatcharr token.** `DISPATCHARR_TOKEN` is not something ECM
+shows you: ECM obtains one for itself by posting its stored Dispatcharr
+credentials to `/api/accounts/token/` (`backend/dispatcharr_client.py`) and never
+surfaces the result. Do the same by hand with the same operator credentials you
+set in **Settings → Dispatcharr Connection**:
+
 ```bash
-# Get the residue list from the restore report (displayed in the UI)
-# Manually delete each listed entity via the Dispatcharr UI or API
-# Example: delete a channel group by its destination ID
-curl -s -X DELETE http://dispatcharr:8080/api/channel-groups/ID \
-  -H "Authorization: Bearer DISPATCHARR_TOKEN"
+# NOT EXECUTED during the last exercise: this authenticates to Dispatcharr.
+# DISPATCHARR_URL is the value from ECM Settings → Dispatcharr Connection
+# (for example http://192.0.2.20:9191) — Dispatcharr's default port is 9191.
+export DISPATCHARR_URL=http://192.0.2.20:9191
+read -r -p 'Dispatcharr username: ' DISPATCHARR_USER
+read -rs -p 'Dispatcharr password: ' DISPATCHARR_PASS; echo
+export DISPATCHARR_USER DISPATCHARR_PASS
+
+# Build the JSON body with python3 and stream it to curl as a config file on
+# stdin, so the password is never a command-line argument.
+DISPATCHARR_TOKEN=$(python3 <<'PY' | curl --config - -sS -X POST \
+  "$DISPATCHARR_URL/api/accounts/token/" -H 'Content-Type: application/json' \
+  | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    print(json.loads(raw)["access"])
+except Exception:
+    print(f"login failed; Dispatcharr answered: {raw[:200]!r}", file=sys.stderr)
+'
+import json, os
+body = json.dumps({"username": os.environ["DISPATCHARR_USER"],
+                   "password": os.environ["DISPATCHARR_PASS"]})
+print('data = "%s"' % body.replace("\\", "\\\\").replace('"', '\\"'))
+PY
+)
+
+# The password is no longer needed. Do not leave it in the environment.
+unset DISPATCHARR_PASS
 ```
+
+!!! warning "Why the password goes through stdin and not `-d`"
+    `read -rs` keeps the password off the terminal and out of shell history, but
+    that is only half of it. A password interpolated into `curl -d "{…}"` lands
+    in the process's argument list, which on Linux is **world-readable** at
+    `/proc/<pid>/cmdline` for as long as the request runs, so any other local
+    account can read it. `curl --config -` takes the same body off stdin
+    instead, which nothing outside the process can see. This is the shape
+    `docs/runbooks/mcp-release-verification.md` already uses for the MCP key.
+
+    `python3` builds the JSON rather than the shell, because a password
+    containing `"` or `\` (both are legal) produces malformed JSON when pasted
+    into a shell-quoted literal. Dispatcharr answers that with a `400`, and the
+    old one-line extractor met it with a Python traceback rather than the empty
+    token this runbook tells you to expect.
+
+    `export` puts the credential in the environment, which is readable only by
+    your own account (`/proc/<pid>/environ` is mode 0400), not by every local
+    user. `unset DISPATCHARR_PASS` as soon as the token is minted. The token
+    itself is a bearer credential too: `unset DISPATCHARR_TOKEN` when you are
+    finished, or close the shell.
+
+An empty `DISPATCHARR_TOKEN` means the login failed. Fix that before deleting
+anything, or every delete below will 401 while looking like it worked.
+
+**Then delete each residue entity**, checking the status code:
+
+```bash
+# NOT EXECUTED during the last exercise: this deletes Dispatcharr entities.
+# Example: delete a channel group by its destination ID.
+# `printf` is a shell builtin, so the token is not a separate process's argv
+# either; curl reads the header off stdin exactly as it read the body above.
+ID=123
+printf 'header = "Authorization: Bearer %s"\n' "$DISPATCHARR_TOKEN" | \
+  curl --config - -sS -o /dev/null -w 'DELETE -> %{http_code}\n' \
+    -X DELETE "$DISPATCHARR_URL/api/channels/groups/$ID/"
+
+# Confirm absence: re-GET the id. 404 means it is gone.
+printf 'header = "Authorization: Bearer %s"\n' "$DISPATCHARR_TOKEN" | \
+  curl --config - -sS -o /dev/null -w 'GET -> %{http_code}\n' \
+    "$DISPATCHARR_URL/api/channels/groups/$ID/"
+```
+
+!!! warning "Check the status code and the re-GET, not the content type"
+    Dispatcharr serves its web UI from the same origin, so a **mistyped API path
+    returns `200` with an HTML page** instead of `404`. `/api/channel-groups/` is
+    one such path: it looks like it worked and deletes nothing. The channel-group
+    route is `/api/channels/groups/`, which is what ECM itself calls.
+
+    A content-type check does not separate success from failure here. Dispatcharr
+    is a Django REST Framework app: a wrong ID (404) and an expired or wrong token
+    (401/403) both answer `application/json` while deleting nothing, and a
+    *successful* `DELETE` answers **204 with no body and no content type at all**.
+    So read `%{http_code}`: `204` (or `200`) is the delete, `401`/`403` is your
+    token, `404` is the wrong ID or the wrong path, and anything `text/html`-ish
+    with `200` is the SPA fallback.
+
+    The re-`GET` is the part that actually proves absence. `404` on the re-`GET`
+    is the only evidence the entity is gone.
 
 Repeat for each listed entity type and ID. Once all residue is deleted, take a fresh local backup and retry the restore from Phase 3.
 
@@ -231,7 +387,9 @@ provider stream, then removes the leftover placeholders and the synthetic
 it is why you re-enter the provider credential before running it.
 
 ```bash
-curl -s -X POST http://localhost:8080/api/tasks/m3u_refresh/run \
+# NOT EXECUTED during the last exercise: this starts a real M3U refresh.
+# YOUR_TOKEN is an ECM administrator's session token.
+curl -s -X POST http://localhost:6100/api/tasks/m3u_refresh/run \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
@@ -244,7 +402,37 @@ recovery required re-running the whole restore after the refresh.
 
 **6.4** Run an EPG refresh if guide data is absent.
 
-**6.4a** If you restored a **legacy full ZIP** (not the DBAS artifact), read the
+**6.4a Restored Dispatcharr accounts are deliberately unusable.** If you
+selected the Dispatcharr users category, every account it created:
+
+- has a **fresh random password that ECM generates and discards**. No password
+  or hash ever crosses from the archive: Dispatcharr's API never exposes one.
+  Nobody can sign in to a restored account until you set its password out of
+  band.
+- is forced **non-privileged**: `is_superuser` and `is_staff` are set false and
+  `user_level` to 0, whatever the archive claimed. Re-grant only the privileges
+  each account actually needs, deliberately.
+- is **skipped, never overwritten**, when its username already exists on the
+  destination. The account you are signed in as is likewise never overwritten,
+  deleted, disabled, or demoted. It is identified by the credential you
+  authenticated with, not by a name in the archive.
+
+Read the restore report's skip reasons before assuming an account was restored.
+This policy is enforced in `backend/dbas/importers/users.py` and pinned by
+`backend/tests/dbas/test_users_importer.py`.
+
+**6.4b TLS certificates are not part of a DBAS restore.** The DBAS artifact
+carries Dispatcharr entities and ECM settings; ECM's `tls/` directory is not one
+of its categories, so a DBAS restore never reinstates a certificate or private
+key. After host loss, reinstall or reissue the ECM certificate yourself
+(**Settings → TLS**) and expect HTTPS to be down until you do.
+
+A **legacy full ZIP** is different: it can contain `tls/`, including the private
+key, and a legacy restore does write that directory back. Treat every backup
+artifact as a secret regardless of format: store it with the same care as the
+key itself.
+
+**6.4c** If you restored a **legacy full ZIP** (not the DBAS artifact), read the
 notices on the restore response before anything else. A standard artifact carries no ECM
 accounts, so a rebuilt instance lands at first-run setup and the notice says so; create the
 admin account and sign in. A second notice names any configured surface this instance had

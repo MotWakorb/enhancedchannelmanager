@@ -69,7 +69,7 @@ Recovery from any half-state is manual and expensive. The page-severity alert ex
 
 3. **Check Dispatcharr connectivity.** If the proxy call to Dispatcharr is timing out, every merge fails the same way. This is a Dispatcharr incident, not a dedup-subsystem incident.
    ```bash
-   docker exec ecm-ecm-1 curl -sS http://<dispatcharr-host>:<port>/api/health || echo DOWN
+   docker exec ecm-ecm-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://<dispatcharr-host>:<port>/api/health', timeout=5).read().decode())" || echo DOWN
    ```
 
 4. **Cross-reference broader 5xx rate.** If `ECMHTTPError5xxElevated` is also firing, the merge endpoint is a downstream symptom of a broader backend failure. Go to [http_error_rate.md](./http_error_rate.md) first.

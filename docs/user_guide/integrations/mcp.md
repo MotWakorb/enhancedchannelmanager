@@ -8,6 +8,141 @@ Context Protocol. The [README MCP section](https://github.com/MotWakorb/enhanced
 covers quick-start setup; come here when you need the step-by-step setup, key
 rotation details, or troubleshooting.
 
+## What the MCP key is, and what it cannot do
+
+ECM's MCP integration uses **three separate credentials**. Only the first is
+yours to handle:
+
+| Credential | Who holds it | What it is for |
+|---|---|---|
+| `mcp_api_key` | You, and every MCP client you configure | Authenticates a client to the MCP sidecar. This is the key the Settings page generates. |
+| Sidecar backend key | ECM and the sidecar only | Authenticates the sidecar to the ECM backend. Generated automatically, stored owner-only, never displayed. |
+| Confirmation key | ECM and the sidecar only | Signs the short-lived tokens that authorize destructive tool calls. Also never displayed. |
+
+The last two are created and rotated by ECM itself. You never copy them into a
+client, and `mcp_api_key` is **not** sent to the backend: the backend refuses
+it outright.
+
+!!! info "The MCP key is a limited service credential, not an administrator"
+    Authenticating with the MCP key does not grant administrator authority.
+    Backend capabilities are deny-by-default: routes the sidecar has no explicit
+    verdict for are refused, and a defined set is reserved to a signed-in human
+    administrator and answers the MCP key with `403`:
+
+    - taking, listing, downloading, deleting or restoring backups;
+    - TLS certificate and private-key lifecycle, and the security settings blob;
+    - user, identity and authorization administration, including password change;
+    - generating or revoking the MCP API key itself;
+    - creating, changing, deleting or **testing** outbound destinations
+      (cloud-storage targets, sync targets, alert methods), and changing M3U or
+      EPG source credentials;
+    - running the Channel Pipeline in one shot (`POST /api/channel-pipeline/run`).
+      MCP reaches pipeline execution only through the mutation-free
+      prepare/commit pair described below.
+
+    The list above is enforced by `MCP_HUMAN_ONLY_ROUTES` in
+    `backend/auth/mcp_capabilities.py`.
+
+!!! warning "This list holds while ECM requires authentication"
+    The capability matrix is applied inside the backend's
+    `require_auth and setup_complete` branch, and the gates behind most of the
+    list (`RequireAdminIfEnabled`, `RequireHumanAdminIfEnabled`) allow the call
+    through when authentication is off. **With Settings → Authentication →
+    Require Authentication disabled (a supported mode), most of the list above
+    is reachable by anyone who can open a socket to ECM**, with or without a key.
+    `docs/auth_middleware.md` → "What `require_auth: false` permits" is the
+    authority on that mode and enumerates it; read it before turning
+    authentication off.
+
+    Four things hold in **every** mode, auth-disabled included:
+
+    - **The operator-facing `mcp_api_key` is never a backend credential.** ECM
+      refuses it with `403` before any route runs, so a stolen key cannot be
+      replayed straight at `/api/*` in any mode. This one has no preconditions:
+      the refusal happens before the `require_auth` branch is even consulted.
+    - **MCP-key rotation/revocation and the TLS certificate and private-key
+      lifecycle stay human-admin-only.** Those two gates carry
+      `enforce_when_auth_disabled=True`, so they keep enforcing once the
+      instance has an operator identity.
+    - **Outbound connection tests stay human-admin-only.** *Testing* a
+      cloud-storage target, sync target or alert method is gated by
+      `RequireHumanAdminForOutboundTest`, which also carries
+      `enforce_when_auth_disabled=True`, again once the instance has an
+      operator identity. These are the verbs that make ECM spend a stored
+      credential against a host the caller names and report the upstream
+      verdict back. Note that *creating, changing and deleting* those same
+      destinations is **not** in this group; see below.
+    - **Anonymous administrator administration stays blocked.**
+      `/api/auth/admin/*` chains `get_current_user`, which rejects a request
+      carrying no token in every mode, so a caller off the network cannot create
+      an administrator. This is narrower than it may read: `require_admin`
+      checks `is_admin` alone, and with authentication disabled the capability
+      matrix that normally keeps the sidecar's *private* backend key out of
+      these routes is not applied. The guarantee is against the
+      operator-facing `mcp_api_key` (refused outright, first bullet) and against
+      anonymous callers. It is not a guarantee against every credential ECM
+      issues.
+
+    A stolen MCP key is serious in every mode: it can read and modify your
+    channel, stream, EPG and pipeline configuration, and it can read your
+    household's viewing history (below). While authentication is required it
+    additionally cannot exfiltrate a backup, and it cannot create or change an
+    outbound destination. With authentication disabled, those two limits stop
+    applying to anyone on your network. The credential-oracle limit does not
+    follow them: running a connection test against a stored credential stays
+    administrator-only in both modes.
+
+!!! danger "What a leaked MCP key exposes, and what to do about it"
+    **The viewing history is the most sensitive thing the key reaches.** The MCP
+    principal is allowed `GET /api/stats/watch-history`, which returns
+    per-connection rows carrying an `ip_address` the caller can also filter by.
+    It is also allowed `/api/stats/unique-viewers`,
+    `/unique-viewers-by-channel`, `/top-watched`,
+    the per-user Dispatcharr and Emby stats routes, and `GET /api/journal`.
+    Together that is who in your household watched what, from which device, and
+    when. Rotating the key does not un-read any of it.
+
+    **Three properties of the key make a leak worse than it looks:**
+
+    - It **never expires**. It is valid until you rotate or revoke it.
+    - It is **one key shared by every client you configure**. There is no
+      per-client revocation: rotating to cut off one client cuts off all of
+      them, and you must re-enter the new key everywhere.
+    - A leak is **not detectable from ECM**. The sidecar's success log line
+      records only `auth_method=static_key`; no client IP, no client identity.
+      You cannot tell two clients apart, or a client from an attacker.
+
+    **If you believe the key leaked**, rotation is the first step, not the last:
+
+    1. Rotate the key (below) and re-enter it in every configured client.
+    2. Read `GET /api/journal` for the exposure window to see what was changed.
+    3. List your saved backups and delete any the attacker may have created.
+       An artifact taken with **Include credentials** is a credential file.
+    4. Re-verify channel, stream, EPG and Channel Pipeline configuration against
+       what you expect; a modification made with the key looks like your own.
+    5. If authentication was disabled during the window, treat everything in
+       `docs/auth_middleware.md` → "What `require_auth: false` permits" as
+       reachable too, not just the MCP surface.
+
+Destructive MCP tools additionally require two calls. The first is
+mutation-free: it resolves and shows you exactly what would be affected and
+returns a token bound to that content. The token expires after 5 minutes, is
+single-use, and is invalidated if the arguments or the resolved targets drift.
+An agent cannot delete anything in one step.
+
+!!! danger "Enabling TLS in ECM does not protect MCP"
+    ECM's **Settings → TLS** feature terminates HTTPS for ECM's own web
+    interface on `ECM_HTTPS_PORT` (default `6143`). It does **not** wrap the MCP
+    sidecar, which is a separate process listening on its own port (`6101`) with
+    no TLS of its own. Turning ECM's TLS on changes nothing about MCP traffic.
+
+    Because `mcp_api_key` travels in an `Authorization: Bearer` header on every
+    request, an unencrypted network hop exposes it. The Compose default
+    publishes MCP on loopback only, which is why it is safe without TLS. For any
+    client on another machine, put an HTTPS reverse proxy in front of port 6101
+    and use the remote overlay below. That proxy, not ECM's TLS setting, is
+    what encrypts MCP.
+
 ## Published image security
 
 The ECM backend and MCP sidecar must use the same `PUID` and `PGID` values
@@ -267,6 +402,15 @@ potentially exposed. Regeneration invalidates it immediately; update every MCP
 client with the new value afterward. The sidecar re-reads the key on each
 request, so it does not need a restart for the credential change itself.
 
+Rotation is a **human administrator** action in the ECM UI. `POST`/`DELETE` on
+`/api/settings/mcp-api-key` are reserved routes: a caller presenting the MCP key
+gets `403`, so a compromised key cannot rotate or revoke itself, and neither can
+an agent acting through MCP.
+
+Rotating `mcp_api_key` replaces only the client-facing credential. The sidecar's
+private backend and confirmation keys are separate, are never exposed to a
+client, and are not affected. There is nothing for you to update for them.
+
 Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias). That is
 the Dispatcharr REST API token and is separate from MCP auth.
 
@@ -457,7 +601,7 @@ services:
 
 Verify manually from inside the MCP container:
 ```bash
-docker exec ecm-ecm-mcp-1 curl -s http://localhost:6100/api/health
+docker exec ecm-ecm-mcp-1 python3 -c "import urllib.request; print(urllib.request.urlopen('http://localhost:6100/api/health', timeout=5).read().decode())"
 ```
 
 ### MCP server online but "API key not configured"

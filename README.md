@@ -117,6 +117,9 @@ docker compose -f docker-compose.yml -f docker-compose.mcp.yml \
 
 The proxy must terminate TLS and forward to port 6101. Do not expose port 6101
 through a router or firewall; remote mode rejects non-HTTPS `/mcp` requests.
+**ECM's own TLS setting does not protect MCP.** It terminates HTTPS for ECM's
+web interface on port 6143 only. The MCP sidecar is a separate listener with no
+TLS of its own, so the reverse proxy is what encrypts MCP traffic.
 `MCP_TRUSTED_PROXY_IPS` accepts only explicit IP addresses or bounded CIDRs.
 Trust-all values (`*`, `0.0.0.0/0`, and `::/0`) and malformed entries stop the
 sidecar at startup. Forwarded HTTPS is honored only from a configured peer.

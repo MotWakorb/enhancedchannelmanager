@@ -39,6 +39,13 @@ export function TypeToConfirmDialog({
   const canConfirm = typed === confirmText && !busy;
   const instanceId = useId();
   const titleId = `${instanceId}-title`;
+  // The warning body is the only place the dialog says what it is about to
+  // destroy, and focus lands on the confirmation input rather than on the
+  // body — so without aria-describedby a screen-reader user hears the title
+  // and the input label and never the warning (bead
+  // enhancedchannelmanager-04c0u.12). `useId` keeps it distinct when dialogs
+  // stack.
+  const messageId = `${instanceId}-message`;
   const inputId = `${instanceId}-confirmation`;
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -50,6 +57,7 @@ export function TypeToConfirmDialog({
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
+      aria-describedby={messageId}
     >
       <div ref={containerRef} className="modal-container modal-sm type-to-confirm-dialog">
         <div className="modal-header">
@@ -64,7 +72,7 @@ export function TypeToConfirmDialog({
         </div>
 
         <div className="modal-body">
-          <div className="type-to-confirm-message">{message}</div>
+          <div id={messageId} className="type-to-confirm-message">{message}</div>
           <label className="type-to-confirm-label" htmlFor={inputId}>
             Type <strong>{confirmText}</strong> to confirm
           </label>
