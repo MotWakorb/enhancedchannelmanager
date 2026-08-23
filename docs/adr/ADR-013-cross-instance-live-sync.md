@@ -755,7 +755,9 @@ Scheduled or automatic re-push is forbidden under every ruling.
 - **Amends**: **S3** (never-sync set) and **S7** (security controls) in the ADR body.
 - **Does not revert**: `enhancedchannelmanager-msqf7`. See
   [What msqf7 actually forbids](#what-msqf7-actually-forbids-and-it-is-not-this).
-- **Companion**: `docs/security/threat_model_dbas_import.md` §11.5, re-rated in the same branch.
+- **Companion**: `docs/security/threat_model_dbas_import.md` **§11.6**, which re-rates D2, D6, D9,
+  D14, D15 and D16, voids D11 and D13, and records D12 as REALISED AND ACCEPTED. Written in the same
+  branch, because §11.5 became a description of removed code the moment this shipped.
 
 ### The ruling
 
