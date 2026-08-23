@@ -58,10 +58,9 @@ def _prose(relative: str) -> str:
 
     A sentence in these guides is wrapped at ~80 columns and carries ``**bold**``
     inside it, so a literal substring search finds nothing and reports the
-    sentence missing. Like ``normalizedMarkdown`` in
-    ``scripts/check-operator-docs.mjs``, minus the underscore: these documents
-    name identifiers such as ``mcp_api_key``, and stripping ``_`` would make
-    every one of them unsearchable.
+    sentence missing. Emphasis markers are stripped but ``_`` deliberately is
+    not: these documents name identifiers such as ``mcp_api_key``, and
+    stripping ``_`` would make every one of them unsearchable.
     """
     return re.sub(r"\s+", " ", re.sub(r"[*`~]", "", _read(relative)))
 
@@ -70,7 +69,6 @@ def _prose(relative: str) -> str:
 # under numbered list items — so the delimiters must NOT be anchored at column
 # 0. An anchored version of this made every such block invisible, which is how
 # `docker exec … curl` survived in five indented blocks behind a passing guard.
-# `scripts/check-operator-docs.mjs` uses the same relaxed anchor.
 _FENCE = re.compile(r"^[ \t]*```[^\n]*\n(.*?)^[ \t]*```", re.MULTILINE | re.DOTALL)
 
 

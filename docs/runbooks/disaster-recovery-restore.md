@@ -89,7 +89,6 @@ print(json.dumps(json.load(response), indent=2))
 !!! note "Why `python3`, and why the `HTTPError` branch"
     The ECM image ships no `curl` and no `wget`. The command most operators
     reach for first,
-    <!-- operator-docs:allow-unrunnable: quoted so the operator recognises it -->
     `docker exec ecm-ecm-1 curl -s http://localhost:6100/api/health/ready`,
     fails with `executable file not found`, which during an incident reads like
     a dead container. `python3` is always present (it is what runs ECM). The
