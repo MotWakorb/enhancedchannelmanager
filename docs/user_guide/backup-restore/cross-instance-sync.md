@@ -123,7 +123,7 @@ carries them now, so an empty B converges to a working standby on its first appl
 encrypted backup is still worth doing — it is a restorable point-in-time snapshot, which sync is
 not — but it is a backup, not a prerequisite.
 
-After the initial seeding, sync keeps B current — credentials included. A new M3U or EPG source added on A arrives on B complete and working on the next cycle, and so does a changed provider password. There is nothing to re-enter on B.
+From then on sync keeps B current — credentials included. A new M3U or EPG source added on A arrives on B complete and working on the next cycle, and so does a changed provider password. There is nothing to re-enter on B, ever.
 
 ---
 
