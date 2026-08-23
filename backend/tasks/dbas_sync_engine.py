@@ -58,11 +58,18 @@ collision-safe floor applied for the continuous-sync context:
   bound to a wrong-but-similar destination stream while the cycle reported
   success. The floor is a property of the CYCLE, not of one importer.
 
-LOGOS are OPT-IN per target (bead ``7ipq2.1``), not per-cycle-unconditional
-(ADR-013 S9): the logos importer carries a DESTRUCTIVE ``clear_existing``
-bulk-delete plus a per-logo streaming-upload cost that does not belong in the
-default per-cycle slice. The guarded slice this engine ships is exactly the S9
-exit path: a ``SyncTarget.sync_logos`` flag (default OFF); when ON the LOGO
+LOGOS are SUB-INTERVALLED per target, not per-cycle-unconditional (ADR-013 S9):
+the logos importer carries a DESTRUCTIVE ``clear_existing`` bulk-delete plus a
+per-logo streaming-upload cost that does not belong in the default per-cycle
+slice. The guarded slice this engine ships is exactly the S9 exit path — but the
+exit is now taken through the interval rather than through the toggle.
+``SyncTarget.sync_logos`` DEFAULTS ON (bead ``…-2yq19``): it shipped OFF under
+``7ipq2.1``, and because the recorded reason was COST rather than correctness,
+ADR-013's faithful-copy principle rules an OFF default a silent omission — a
+replica arriving with no artwork at all is the second half of what epic
+``f5a5j`` is named for. The cost is answered by ``logo_sync_interval_hours``
+(default 24, ``0`` = every cycle) and ``last_logo_sync_at``; see
+:func:`logo_slice_is_due`. When the slice runs the LOGO
 category is assembled METADATA-ONLY (never bytes in the plan) and the REUSED
 logos importer runs with ``clear_existing`` hard-disabled (the sync path can
 NEVER bulk-delete B's logos) and a lazy ``content_provider`` that hydrates each
@@ -219,11 +226,15 @@ SYNC_CHANNEL_CATEGORIES: frozenset[str] = frozenset({"channels"})
 # auditable constant.
 SYNC_ALL_CATEGORIES: frozenset[str] = SYNC_CONFIG_CATEGORIES | SYNC_CHANNEL_CATEGORIES
 
-# Logos are OPT-IN per SyncTarget (``sync_logos``, default off — bead 7ipq2.1,
-# the ADR-013 S9 exit path). Deliberately NOT part of SYNC_ALL_CATEGORIES: the
-# unconditional per-cycle set stays exactly what S9 ratified, and the logo
-# slice only runs for a target whose operator opted in. When it runs it is
-# NEVER destructive (clear_existing is hard-disabled in the sync logos step).
+# Logos are per-SyncTarget and SUB-INTERVALLED (``sync_logos``, default ON since
+# bead …-2yq19; ``logo_sync_interval_hours``, default 24 — the ADR-013 S9 exit
+# path). Deliberately NOT part of SYNC_ALL_CATEGORIES: the UNCONDITIONAL
+# per-cycle set stays exactly what S9 ratified, and the logo slice runs on its
+# own slower clock (:func:`logo_slice_is_due`). What changed in …-2yq19 is only
+# the DEFAULT — the mechanism decision that kept logos off the every-cycle set
+# is untouched, because it is about cost and the principle does not overrule
+# cost, only silent omission. When it runs it is NEVER destructive
+# (clear_existing is hard-disabled in the sync logos step).
 SYNC_LOGO_CATEGORIES: frozenset[str] = frozenset({"logos"})
 
 
@@ -1017,6 +1028,65 @@ def target_schedules_direct_password(sync_target) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+def logo_slice_is_due(sync_target) -> bool:
+    """Whether THIS cycle carries the logo slice (bead ``…-2yq19``).
+
+    THE CHANGE THIS IMPLEMENTS. ``sync_logos`` shipped default OFF (bead
+    ``7ipq2.1``), so a replica silently arrived with no artwork unless an
+    operator found and flipped the toggle — the second half of the failure epic
+    ``f5a5j`` is named for. ADR-013's governing principle forbids exactly that
+    shape of silent omission, and the recorded reason for OFF was COST, not
+    correctness. So the default is ON and the cost is answered here, by a
+    throttle, rather than by leaving the replica unbranded.
+
+    WHAT IS AND IS NOT THROTTLED. Only the expensive slice. The config and
+    channel categories still run every cycle; the logos importer is the one that
+    carries a per-logo streaming upload, and logos are not high-churn state —
+    an operator adds artwork occasionally, and a replica that picks it up within
+    the sub-interval is faithful in every sense an operator can observe.
+
+    NULL MEANS DUE, deliberately. A freshly-created target has never run the
+    slice, so its first cycle carries logos immediately. Making a new replica
+    wait out a sub-interval with no artwork at all would reintroduce the very
+    window this bead exists to close, just shorter.
+
+    An interval of ``0`` (or negative) means EVERY CYCLE — the pre-throttle
+    behaviour, still available to an operator who wants it.
+
+    Args:
+        sync_target: the ``SyncTarget`` row (or any object exposing
+            ``sync_logos`` / ``logo_sync_interval_hours`` / ``last_logo_sync_at``).
+
+    Returns:
+        ``True`` when the slice should be gathered and applied this cycle.
+    """
+    if not bool(getattr(sync_target, "sync_logos", False)):
+        return False
+    try:
+        interval_hours = int(getattr(sync_target, "logo_sync_interval_hours", 0) or 0)
+    except (TypeError, ValueError):
+        # An unreadable interval must not silently mean "never". Falling back to
+        # every-cycle keeps the replica faithful, which is the direction the
+        # principle points when a value cannot be trusted.
+        interval_hours = 0
+    if interval_hours <= 0:
+        return True
+    last_run = getattr(sync_target, "last_logo_sync_at", None)
+    if last_run is None:
+        return True
+    from datetime import datetime, timedelta, timezone
+
+    if not isinstance(last_run, datetime):
+        return True
+    # The column is naive UTC (``datetime.utcnow``-shaped, like every other
+    # timestamp on this row), so compare in UTC and tolerate either flavour
+    # rather than raising on a tz-aware value some other writer stamped.
+    now = datetime.now(timezone.utc)
+    if last_run.tzinfo is None:
+        last_run = last_run.replace(tzinfo=timezone.utc)
+    return (now - last_run) >= timedelta(hours=interval_hours)
+
+
 def insecure_transmission_warning(
     sync_target, *, carrying_credentials: bool
 ) -> Optional[str]:
@@ -1077,8 +1147,10 @@ async def build_live_source_plan(
     restore and refuses a plan without it (spike ``xp6mp`` empirical find).
 
     Args:
-        include_logos: the per-target ``sync_logos`` opt-in (bead 7ipq2.1 —
-            ADR-013 S9 exit path). ``True`` appends a METADATA-ONLY ``LOGO``
+        include_logos: whether the LOGO slice is due this cycle
+            (:func:`logo_slice_is_due` — the per-target ``sync_logos`` flag,
+            default ON since bead …-2yq19, gated on
+            ``logo_sync_interval_hours``). ``True`` appends a METADATA-ONLY ``LOGO``
             category LAST covering BOTH logo sources — ECM's own upload dir and
             the Dispatcharr-hosted set (bead …-cfxml) — with no ``content_b64``
             in the plan (D8; bytes hydrate lazily per missed logo at import
@@ -1613,9 +1685,11 @@ def _sync_logos_step() -> ImporterCallable:
         # precondition of this fix, not an obstacle to it.
         #
         # SOURCE-WINS (``OVERWRITE``), matching the EPG-link pass on this same
-        # path. ``sync_logos`` is opt-in and defaults OFF (bead …-8gnik owns the
-        # control), so the realistic sequence is: cycles run, B gets its lineup,
-        # THEN the flag goes on. By then every channel on B already exists and is
+        # path. The slice runs on its own sub-interval (bead …-2yq19), and the
+        # flag can still be turned off and back on (bead …-8gnik owns the
+        # control), so the realistic sequence is unchanged: config cycles run, B
+        # gets its lineup, THEN a logo pass comes due. By then every channel on B
+        # already exists and is
         # MATCHED rather than created, so under PRESERVE this pass would bind
         # nothing, on that cycle or any later one, and the new control would look
         # broken. A replica's branding is the source's by definition.
@@ -2161,10 +2235,11 @@ async def run_sync(
     client = _ReadObservingClient(client, report)
 
     # --- 3. Redacted live-source plan (config categories, never users). The
-    # logos slice is per-target OPT-IN (sync_logos, default off — 7ipq2.1);
-    # when on, the plan gains a METADATA-ONLY logo category (bytes hydrate
-    # lazily at import time, misses only — D8). ---
-    include_logos = bool(getattr(sync_target, "sync_logos", False))
+    # logos slice is per-target (sync_logos, default ON since …-2yq19) and runs
+    # on its own SUB-INTERVAL rather than every cycle; when it runs, the plan
+    # gains a METADATA-ONLY logo category (bytes hydrate lazily at import time,
+    # misses only — D8). ---
+    include_logos = logo_slice_is_due(sync_target)
     # The provider credential crosses on THIS cycle and every cycle (PO ruling
     # 2026-08-22 — PROVIDER_CREDENTIAL_SECTIONS). The one value that cannot be
     # harvested off A is the Schedules Direct password, which the operator
@@ -2265,6 +2340,17 @@ async def run_sync(
             sync_target.last_outcome = result.outcome.value
             if result.outcome == RestoreOutcome.SUCCESS:
                 sync_target.last_full_sync_at = datetime.now(timezone.utc)
+            # The logo sub-interval clock (bead …-2yq19) starts when the slice
+            # ACTUALLY RAN, not when a cycle merely happened. Stamped on any
+            # realized apply that carried the slice, including a degraded one:
+            # the expensive work was paid, and re-paying it on the very next
+            # cycle because one unrelated category failed is the cost this
+            # throttle exists to avoid. Logo MISSES are already their own
+            # reported counter (``logo_misses``), so nothing goes silent here —
+            # and the next scheduled pass retries them, because the importer
+            # matches what is already on B and hydrates only what is not.
+            if include_logos:
+                sync_target.last_logo_sync_at = datetime.now(timezone.utc)
             session.commit()
         except Exception as exc:  # noqa: BLE001 - stamping is best-effort
             logger.warning("[SYNC] Failed to stamp persisted sync state: %s", exc)

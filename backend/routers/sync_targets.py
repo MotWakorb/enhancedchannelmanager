@@ -35,7 +35,7 @@ from typing import Optional
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from auth import RequireAdminIfEnabled
 from cloud_storage.crypto import encrypt_credentials, decrypt_credentials
@@ -96,8 +96,13 @@ class SyncTargetCreate(BaseModel):
     enabled: bool = True
     insecure: bool = False
     fuzzy_stream_matching: bool = False
-    # Opt-in logo replication (bead 7ipq2.1) — default OFF (ADR-013 S9).
-    sync_logos: bool = False
+    # Logo replication — DEFAULT ON since bead …-2yq19. It shipped OFF under
+    # bead 7ipq2.1 and the reason was COST, not correctness; under ADR-013's
+    # faithful-copy principle an OFF default is a silent omission, so the cost
+    # is answered by ``logo_sync_interval_hours`` below instead.
+    sync_logos: bool = True
+    # How often the logo slice may run, in hours. ``0`` means every cycle.
+    logo_sync_interval_hours: int = Field(default=24, ge=0)
     # THE ONE CREDENTIAL THE OPERATOR TYPES, and they type it once (PO ruling
     # 2026-08-22). Write-only: encrypted at rest and never echoed back — the
     # read shape carries ``has_schedules_direct_password``, a boolean.
@@ -123,6 +128,7 @@ class SyncTargetUpdate(BaseModel):
     insecure: Optional[bool] = None
     fuzzy_stream_matching: Optional[bool] = None
     sync_logos: Optional[bool] = None
+    logo_sync_interval_hours: Optional[int] = Field(default=None, ge=0)
     # Omitted => unchanged (the ``credentials`` precedent). An explicit empty
     # string CLEARS it, which is the only way to withdraw a stored SD password
     # without deleting the target.
@@ -151,6 +157,10 @@ class SyncTargetResponse(BaseModel):
     last_source_fingerprint: Optional[str] = None
     fuzzy_stream_matching: bool
     sync_logos: bool
+    logo_sync_interval_hours: int = 24
+    # When the logo slice last actually ran (bead …-2yq19); None == never, which
+    # is also what makes a new target carry logos on its FIRST cycle.
+    last_logo_sync_at: Optional[str] = None
     # PRESENCE of the stored Schedules Direct password — never the value. The
     # two one-time-provisioning markers this replaced
     # (``credentials_provisioned_at`` / ``destination_credential_observed_at``)
@@ -333,6 +343,7 @@ async def create_sync_target(
             insecure=req.insecure,
             fuzzy_stream_matching=req.fuzzy_stream_matching,
             sync_logos=req.sync_logos,
+            logo_sync_interval_hours=req.logo_sync_interval_hours,
             schedules_direct_password=_encrypt_sd_password(
                 req.schedules_direct_password
             ),
@@ -484,6 +495,8 @@ async def update_sync_target(
             target.fuzzy_stream_matching = req.fuzzy_stream_matching
         if req.sync_logos is not None:
             target.sync_logos = req.sync_logos
+        if req.logo_sync_interval_hours is not None:
+            target.logo_sync_interval_hours = req.logo_sync_interval_hours
         if req.credentials is not None:
             target.credentials = encrypt_credentials(req.credentials)
         if req.schedules_direct_password is not None:

@@ -5373,11 +5373,24 @@ export interface SyncTarget {
   insecure: boolean;
   fuzzy_stream_matching: boolean;
   /**
-   * Per-target logo-replication opt-in. Default OFF and it stays OFF (ADR-013
-   * S9): the logos importer carries a streaming-upload cost S9 judged wrong to
-   * run every interval. The card offers a toggle; nothing flips it implicitly.
+   * Per-target logo replication. DEFAULT ON since bead 2yq19.
+   *
+   * It shipped OFF (ADR-013 S9) because the logos importer carries a
+   * streaming-upload cost S9 judged wrong to run every interval — a COST
+   * decision, not a correctness one. Under the faithful-copy principle an OFF
+   * default is a silent omission: the operator who never finds the toggle gets
+   * a replica with no artwork. The cost is answered by
+   * `logo_sync_interval_hours` instead, so the slice still does not run every
+   * cycle. The card offers a toggle; nothing flips it implicitly.
    */
   sync_logos: boolean;
+  /**
+   * How often the logo slice may run, in hours (default 24). `0` means every
+   * cycle. This is the throttle that lets `sync_logos` default ON.
+   */
+  logo_sync_interval_hours: number;
+  /** When the logo slice last actually ran; null == never (so the next cycle carries it). */
+  last_logo_sync_at?: string | null;
   /**
    * PRESENCE of a stored Schedules Direct password — never the value. True once
    * the operator has supplied one; the backend re-sends it to the replica's
@@ -5401,8 +5414,10 @@ export interface SyncTargetCreateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
-  /** Omit to take the backend default (OFF) — see `SyncTarget.sync_logos`. */
+  /** Omit to take the backend default (ON) — see `SyncTarget.sync_logos`. */
   sync_logos?: boolean;
+  /** Omit to take the backend default (24). `0` means every cycle. */
+  logo_sync_interval_hours?: number;
   /**
    * The ONE credential an operator types, and they type it once. Ask for it
    * only when `getSyncSourceCredentialNeeds()` reports
@@ -5425,6 +5440,7 @@ export interface SyncTargetUpdateRequest {
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
   sync_logos?: boolean;
+  logo_sync_interval_hours?: number;
   /** Omit to leave the stored value untouched; `''` clears it. */
   schedules_direct_password?: string;
 }

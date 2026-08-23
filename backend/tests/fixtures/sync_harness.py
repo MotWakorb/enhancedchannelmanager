@@ -920,12 +920,25 @@ def make_sync_target(
     credential_version: int = 1,
     fuzzy_stream_matching: bool = False,
     sync_logos: bool = False,
+    logo_sync_interval_hours: int = 0,
+    last_logo_sync_at=None,
 ) -> MagicMock:
     """A fake ``SyncTarget`` row — enabled, fresh, never-insecure.
 
     Mirrors the shape ``run_sync`` reads (``id``/``name``/``base_url``/
     ``credentials``/``enabled``/``token_revoked_at``/``credential_version``/
-    ``insecure``/``fuzzy_stream_matching``/``sync_logos``).
+    ``insecure``/``fuzzy_stream_matching``/``sync_logos``/
+    ``logo_sync_interval_hours``/``last_logo_sync_at``).
+
+    ``sync_logos`` defaults ``False`` HERE while the product default is ``True``
+    (bead ``…-2yq19``), and the two are deliberately not the same knob: this
+    fixture's job is to let a test say "logos off" or "logos on" explicitly, and
+    most of the suite's logo tests were written to state one or the other. A
+    test that means to assert the PRODUCT default asserts it where the product
+    sets it — the ORM column and the create route — not through a mock.
+
+    ``logo_sync_interval_hours`` defaults ``0`` (= every cycle), which is the
+    pre-throttle behaviour every existing logo test was written against.
     """
     target = MagicMock()
     target.id = 7
@@ -938,6 +951,8 @@ def make_sync_target(
     target.credentials = "encrypted-blob"
     target.fuzzy_stream_matching = fuzzy_stream_matching
     target.sync_logos = sync_logos
+    target.logo_sync_interval_hours = logo_sync_interval_hours
+    target.last_logo_sync_at = last_logo_sync_at
     return target
 
 
