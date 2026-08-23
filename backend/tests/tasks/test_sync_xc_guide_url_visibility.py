@@ -109,7 +109,7 @@ def _strip_seeded_credentials(source: StatefulDispatcharrFake) -> None:
     """Blank every credential-class field the shared fixture seeds.
 
     ``seeded_source`` deliberately carries a plaintext M3U ``password``/
-    ``username`` and an EPG ``api_key`` so the redaction invariant is testable.
+    ``username`` and an EPG ``password`` so the redaction invariant is testable.
     Redaction only rewrites TRUTHY values, so blanking them is what makes a run
     with genuinely nothing to report possible.
     """
@@ -117,8 +117,9 @@ def _strip_seeded_credentials(source: StatefulDispatcharrFake) -> None:
         row["username"] = ""
         row["password"] = ""
     for row in source.epg_sources.rows.values():
-        if row.get("api_key"):
-            row["api_key"] = ""
+        for field in ("username", "password"):
+            if row.get(field):
+                row[field] = ""
 
 
 def _source_with_sentinelled_guide(name: str) -> StatefulDispatcharrFake:

@@ -814,14 +814,20 @@ class StatefulDispatcharrFake:
         *,
         label: str = "source-A",
         m3u_password: str = "SEED-M3U-SECRET",
-        epg_api_key: str = "SEED-EPG-SECRET",
+        epg_password: str = "SEED-EPG-SECRET",
         with_embedded_streams: bool = False,
     ) -> "StatefulDispatcharrFake":
         """A populated source-A holding a production-shaped config + channels.
 
         Carries plaintext credential fields (``password`` on the M3U account,
-        ``api_key`` on the EPG source) so the redaction end-to-end assertion is
-        REAL: those literal secrets must NEVER reach B (D2). Also seeds a config +
+        ``password`` on the EPG source) so the redaction end-to-end assertion is
+        REAL against the fields Dispatcharr actually exposes. The EPG seed was
+        ``api_key`` until bead ``…-fmtg0``; Dispatcharr REMOVED that field from
+        ``EPGSource`` in its ``epg/0024`` migration and replaced it with
+        ``username``/``password`` (``docs/dispatcharr_api.md`` says so, and the
+        live 0.29.0 ``epg_epgsource`` table has no ``api_key`` column), so a
+        fixture seeding it was asserting redaction of a field that cannot
+        occur. Also seeds a config +
         one non-colliding channel (``CNN``, number 5) so the channel slice
         converges.
 
@@ -842,10 +848,11 @@ class StatefulDispatcharrFake:
             {"name": "Provider A", "username": "operator", "password": m3u_password,
              "server_url": "http://provider-a.test/playlist.m3u"}
         )
-        # EPG source with a SECRET api_key (D2).
+        # EPG source with a SECRET password (D2) — the credential field
+        # ``EPGSourceSerializer`` actually carries.
         fake.epg_sources.create(
             {"name": "EPG One", "source_type": "xmltv", "m3u_account": None,
-             "api_key": epg_api_key, "url": "http://epg-one.test/guide.xml"}
+             "password": epg_password, "url": "http://epg-one.test/guide.xml"}
         )
         fake.channel_groups.create({"name": "News"})
         fake.channel_groups.create({"name": "Sports"})
