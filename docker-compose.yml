@@ -14,6 +14,8 @@ services:
       - CONFIG_DIR=/config
       - ECM_PORT=${ECM_PORT:-6100}
       - ECM_HTTPS_PORT=${ECM_HTTPS_PORT:-6143}
+      # Break-glass only: set true temporarily if TLS failure locks the UI out.
+      - ECM_ALLOW_HTTP_SESSION_COOKIES=${ECM_ALLOW_HTTP_SESSION_COOKIES:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

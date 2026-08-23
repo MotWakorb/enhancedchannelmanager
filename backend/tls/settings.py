@@ -94,6 +94,11 @@ class TLSSettings(BaseModel):
     # 3. Default value 6143
     https_port: int = int(os.environ.get("ECM_HTTPS_PORT", 6143))
 
+    # Emergency recovery only. When false, enabling ECM TLS makes browser
+    # session cookies Secure even on the still-listening HTTP port, so a
+    # browser cannot send an authenticated session over plaintext.
+    allow_http_session_cookies: bool = False
+
     @field_validator("domain")
     @classmethod
     def validate_domain(cls, v: str) -> str:
@@ -169,8 +174,96 @@ class TLSSettings(BaseModel):
         return days_left <= self.renew_days_before_expiry
 
 
-# In-memory cache of TLS settings
+# In-memory cache of TLS settings, guarded by the identity of the file it was
+# built from (bead 04c0u.9 remediation).
+#
+# ECM runs TLS as a SECOND uvicorn process (tls/https_server.py spawns it), and
+# ``POST /api/tls/configure`` is not in ``tls/subprocess_proxy._FORWARD_ALLOWLIST``,
+# so with TLS active the save that flips ``allow_http_session_cookies`` executes
+# in the HTTPS subprocess while the plain-HTTP listener the operator is trying to
+# recover on is the MAIN process. An unconditional per-process memo therefore
+# left the main process holding the pre-save value for the life of the container:
+# the break-glass checkbox was inert in exactly the situation it exists for.
+#
+# ``clear_tls_settings_cache()`` could not close that — it has no cross-process
+# reach, and had no production caller at all. The file is the shared state both
+# processes already agree on, so the cache is keyed to it: one ``os.stat`` per
+# read, which is cheaper than the two ``Path.is_file()`` stats the cookie-policy
+# caller does anyway, and it makes every process converge on the last write
+# without any invalidation protocol.
 _cached_tls_settings: Optional[TLSSettings] = None
+# (st_mtime_ns, st_size, st_ino) of the file the cache was built from, or None
+# when it was built from "no file on disk".
+_cached_tls_stamp: Optional[tuple] = None
+# True when the most recent load found a config file it could NOT parse. That
+# is not the same as "TLS is off" and callers making a security decision must
+# be able to tell the two apart — see ``tls_settings_load_failed``.
+_tls_settings_load_failed: bool = False
+
+
+# Returned instead of a stat tuple when the file cannot be stat-ed for a reason
+# OTHER than absence. Compares equal to itself, so it caches like any other
+# stamp, and is distinguishable from ``None`` ("there is genuinely no file").
+_STAMP_UNREADABLE = ("<unreadable>",)
+
+
+def _config_file_stamp() -> Optional[tuple]:
+    """Cheap identity of ``tls_settings.json``, or None when it is absent.
+
+    Inode is included so a replace-by-rename — which a backup restore does, and
+    which ``save_tls_settings`` below now does on every save — invalidates the
+    cache even if the new file lands with the same size and a coincident mtime.
+
+    "Absent" means ``ENOENT`` and nothing else. A bare ``except OSError`` here
+    reported an ``EACCES`` on the config directory as "no file", which made
+    ``load_tls_settings`` clear ``_tls_settings_load_failed`` and hand back
+    ``enabled=False`` — failing OPEN, so the plain-HTTP port silently resumed
+    issuing non-``Secure`` session cookies while a running HTTPS subprocess kept
+    serving. Every other ``OSError`` is "we cannot tell", which security callers
+    must be able to fail closed on.
+    """
+    try:
+        st = os.stat(TLS_CONFIG_FILE)
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        logger.error(
+            "[TLS-SETTINGS] Cannot stat %s (%s: %s); treating TLS state as "
+            "UNKNOWN rather than absent.",
+            TLS_CONFIG_FILE, type(e).__name__, e,
+        )
+        return _STAMP_UNREADABLE
+    return (st.st_mtime_ns, st.st_size, st.st_ino)
+
+
+def break_glass_environment_override() -> bool:
+    """True when ``ECM_ALLOW_HTTP_SESSION_COOKIES`` names an affirmative value.
+
+    Deliberately an allowlist of affirmative spellings and NOT plain
+    truthiness. ``docker-compose.yml`` ships
+    ``ECM_ALLOW_HTTP_SESSION_COOKIES=${ECM_ALLOW_HTTP_SESSION_COOKIES:-false}``,
+    so on a compose deployment the literal string ``false`` is present in the
+    environment of every container. Reading "non-empty" as "on" would therefore
+    disable the whole protection on every default install — a mutation the
+    suite is required to kill (see
+    ``tests/unit/test_04c0u9_session_transport.py``).
+    """
+    return os.environ.get(
+        "ECM_ALLOW_HTTP_SESSION_COOKIES", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def tls_settings_load_failed() -> bool:
+    """True when the last load found ``tls_settings.json`` present but unusable.
+
+    ``load_tls_settings`` degrades to ``TLSSettings()`` (``enabled=False``) on a
+    parse failure, which is the right default for renewal scheduling but the
+    WRONG one for cookie transport policy: the HTTPS listener may still be
+    serving from key material on disk, and answering "TLS is off" would emit
+    cleartext-replayable session cookies. Security callers read this alongside
+    the settings and treat "we could not tell" as "assume TLS is on".
+    """
+    return _tls_settings_load_failed
 
 
 def _ensure_tls_dir() -> bool:
@@ -196,15 +289,29 @@ def _ensure_config_dir() -> bool:
 
 
 def load_tls_settings() -> TLSSettings:
-    """Load TLS settings from file or return defaults."""
-    global _cached_tls_settings
+    """Load TLS settings from file, reloading when the file has changed.
 
-    if _cached_tls_settings is not None:
+    The cache is keyed to the file's stat identity rather than memoized once,
+    so a write from the HTTPS subprocess is picked up by the main process (and
+    vice versa) on the next read. See the module-level note on
+    ``_cached_tls_settings``.
+    """
+    global _cached_tls_settings, _cached_tls_stamp, _tls_settings_load_failed
+
+    stamp = _config_file_stamp()
+    if _cached_tls_settings is not None and stamp == _cached_tls_stamp:
         return _cached_tls_settings
+
+    _cached_tls_stamp = stamp
+    _tls_settings_load_failed = False
 
     logger.info("[TLS-SETTINGS] Loading TLS settings from %s", TLS_CONFIG_FILE)
 
-    if TLS_CONFIG_FILE.exists():
+    if stamp is _STAMP_UNREADABLE:
+        # ``_config_file_stamp`` already logged the errno. There is nothing to
+        # parse, but this is emphatically not the no-file case.
+        _tls_settings_load_failed = True
+    elif stamp is not None:
         try:
             data = json.loads(TLS_CONFIG_FILE.read_text())
             _cached_tls_settings = TLSSettings(**data)
@@ -214,6 +321,7 @@ def load_tls_settings() -> TLSSettings:
             )
             return _cached_tls_settings
         except ValidationError as e:
+            _tls_settings_load_failed = True
             # Bead 2owpi: pydantic v2 puts ``input_value=<the value>`` in its
             # error text, so formatting this exception would print a stored
             # credential into the log whenever the file holds one of these
@@ -231,35 +339,95 @@ def load_tls_settings() -> TLSSettings:
             # Non-validation failures (unreadable file, malformed JSON) carry
             # no field values. json.JSONDecodeError reports a position, not
             # content.
+            _tls_settings_load_failed = True
             logger.error(
                 "[TLS-SETTINGS] Failed to load TLS settings: %s: %s",
                 type(e).__name__, e,
             )
 
-    logger.info("[TLS-SETTINGS] Using default TLS settings (no config file found)")
+    if _tls_settings_load_failed:
+        # Loud, and distinguishable from the no-file case below. Callers that
+        # make a security decision read ``tls_settings_load_failed()`` and fail
+        # closed rather than reading ``enabled=False`` as "TLS is off".
+        logger.error(
+            "[TLS-SETTINGS] %s could not be read; falling back to defaults. "
+            "TLS-dependent security policy will assume TLS is ACTIVE until the "
+            "file is repaired.",
+            TLS_CONFIG_FILE,
+        )
+    else:
+        logger.info("[TLS-SETTINGS] Using default TLS settings (no config file found)")
     _cached_tls_settings = TLSSettings()
     return _cached_tls_settings
 
 
+def _write_config_atomically(settings_json: str) -> None:
+    """Write ``tls_settings.json`` so a failed write cannot truncate it.
+
+    ``TLS_CONFIG_FILE.write_text(...)`` truncates in place: a disk-full or a
+    container kill part-way through left a truncated or zero-byte file, which
+    the loader reports as a hard failure — and a load failure is what the
+    session-cookie policy fails closed on. The temporary file carries the
+    owner-only mode BEFORE the rename, so the credentials in it are never
+    briefly group- or world-readable, and ``fsync`` runs before the rename so
+    the rename cannot be ordered ahead of the data.
+
+    ``os.replace`` is also what gives the ``st_ino`` leg of the cache key in
+    ``_config_file_stamp`` anything to do: an in-place write kept the inode
+    forever, reducing the key to ``(st_mtime_ns, st_size)``.
+    """
+    # PID-qualified so two processes saving at once cannot share a temp file.
+    tmp_path = TLS_CONFIG_FILE.with_name(f".{TLS_CONFIG_FILE.name}.{os.getpid()}.tmp")
+    try:
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(settings_json)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # Explicit: os.open's mode argument is masked by umask.
+        os.chmod(tmp_path, 0o600)
+        os.replace(tmp_path, TLS_CONFIG_FILE)
+    finally:
+        # A no-op on the success path; os.replace consumed the name.
+        tmp_path.unlink(missing_ok=True)
+
+
 def save_tls_settings(settings: TLSSettings) -> bool:
-    """Save TLS settings to file. Returns True if successful."""
-    global _cached_tls_settings
+    """Save TLS settings to file. Returns True if successful.
+
+    The write goes through a temporary file and ``os.replace`` — see
+    :func:`_write_config_atomically` for why a truncating write here was a
+    security problem and not only a durability one.
+
+    The saving process's own cache is refreshed to the value it just wrote and
+    re-stamped to the file it wrote, so the very next read in this process does
+    not pay for a reload. Every OTHER process picks the write up through the
+    stat guard in ``load_tls_settings`` — there is no invalidation message to
+    send and none to miss.
+    """
+    global _cached_tls_settings, _cached_tls_stamp, _tls_settings_load_failed
 
     if not _ensure_config_dir():
         _cached_tls_settings = settings
+        _cached_tls_stamp = _config_file_stamp()
+        _tls_settings_load_failed = False
         return False
 
     try:
         settings_json = json.dumps(settings.model_dump(), indent=2)
-        TLS_CONFIG_FILE.write_text(settings_json)
-        # Restrictive permissions on settings file (contains API tokens)
-        os.chmod(TLS_CONFIG_FILE, 0o600)
+        # Restrictive permissions on settings file (contains API tokens) are
+        # applied to the temporary file before it is renamed into place.
+        _write_config_atomically(settings_json)
         _cached_tls_settings = settings
+        _cached_tls_stamp = _config_file_stamp()
+        _tls_settings_load_failed = False
         logger.info("[TLS-SETTINGS] TLS settings saved to %s", TLS_CONFIG_FILE)
         return True
     except (PermissionError, OSError) as e:
         logger.warning("[TLS-SETTINGS] Cannot save TLS settings to %s: %s", TLS_CONFIG_FILE, e)
         _cached_tls_settings = settings
+        _cached_tls_stamp = _config_file_stamp()
+        _tls_settings_load_failed = False
         return False
     except Exception as e:
         logger.error("[TLS-SETTINGS] Failed to save TLS settings: %s", e)
@@ -267,9 +435,19 @@ def save_tls_settings(settings: TLSSettings) -> bool:
 
 
 def clear_tls_settings_cache() -> None:
-    """Clear the cached TLS settings (forces reload)."""
-    global _cached_tls_settings
+    """Clear the cached TLS settings (forces reload).
+
+    Kept for callers that relocate ``CONFIG_DIR`` under them (tests, and the
+    backup-restore path), where the file identity the stat guard compares is
+    no longer meaningful. It is NOT the mechanism that propagates a write
+    between the main process and the HTTPS subprocess — that is the stat guard
+    in ``load_tls_settings``, because nothing can call this function in another
+    process.
+    """
+    global _cached_tls_settings, _cached_tls_stamp, _tls_settings_load_failed
     _cached_tls_settings = None
+    _cached_tls_stamp = None
+    _tls_settings_load_failed = False
     logger.info("[TLS-SETTINGS] TLS settings cache cleared")
 
 

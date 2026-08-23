@@ -145,7 +145,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0137",
+    version="0.18.1-0138",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -232,6 +232,26 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Assert HSTS only from the request scheme this process was handed. ECM's
+    # own code adds no trust in X-Forwarded-Proto / X-Forwarded-Host /
+    # Forwarded on top of that, because the ECM backend has no trusted-proxy
+    # allowlist of its own. Note the narrow claim: uvicorn's
+    # ProxyHeadersMiddleware is enabled by default (proxy_headers=True,
+    # forwarded_allow_ips defaulting to 127.0.0.1) and runs OUTSIDE this
+    # application, so for a loopback client it may itself have rewritten
+    # scope['scheme'] before anything here runs. That is uvicorn's policy, not
+    # ECM's, and HSTS asserted over genuine cleartext is ignored by the client
+    # anyway (RFC 6797 8.1).
+    #
+    # No includeSubDomains and no preload: this pin is deliberately scoped to
+    # this host, and both of those extend it past what ECM can promise.
+    # max-age is one year, which per RFC 6797 8.3 is HOST-scoped and
+    # PORT-AGNOSTIC — visiting the HTTPS listener also force-upgrades
+    # http://<host>:6100 for a year with no click-through. That interaction is
+    # documented in README.md under "Port Configuration", including how to
+    # reach the break-glass recovery once a pin exists.
+    if request.url.scheme.lower() == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
 
@@ -1639,6 +1659,25 @@ async def startup_event():
         logger.info("[MAIN] Update-availability check scheduled (every 24 hours)")
     except Exception as e:
         logger.warning("[MAIN] Failed to start update-availability check: %s", e)
+
+    # Break-glass visibility (bead 04c0u.9 remediation). The environment form
+    # of the escape hatch is read on every cookie issue and was previously
+    # silent everywhere: no startup line, no status field, no UI signal. An
+    # operator who set it at 02:00 to recover and then forgot it had every
+    # session cookie shipping without Secure indefinitely. Put it at the top of
+    # the log where a restart cannot hide it.
+    try:
+        from tls.settings import break_glass_environment_override
+        if break_glass_environment_override():
+            logger.warning(
+                "[MAIN] ECM_ALLOW_HTTP_SESSION_COOKIES is set: browser session "
+                "cookies will be issued WITHOUT Secure even when this instance "
+                "terminates TLS, so anyone who can observe the HTTP port can "
+                "steal a live session. This is emergency recovery only — unset "
+                "it and restart ECM once HTTPS is reachable."
+            )
+    except Exception as e:
+        logger.warning("[MAIN] Failed to check session-cookie break-glass state: %s", e)
 
     # Start TLS certificate renewal manager
     try:

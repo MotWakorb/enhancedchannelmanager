@@ -13,6 +13,8 @@ from .settings import (
     get_tls_settings,
     save_tls_settings,
     clear_tls_settings_cache,
+    tls_settings_load_failed,
+    break_glass_environment_override,
 )
 from .storage import CertificateStorage, CertificateInfo
 
@@ -28,6 +30,8 @@ __all__ = [
     "get_tls_settings",
     "save_tls_settings",
     "clear_tls_settings_cache",
+    "tls_settings_load_failed",
+    "break_glass_environment_override",
     "CertificateStorage",
     "CertificateInfo",
     "ACMEClient",

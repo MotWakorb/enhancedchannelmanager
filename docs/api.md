@@ -1554,6 +1554,65 @@ To reconstruct one batch:
 | `POST /api/tls/https/restart` | Restart HTTPS server |
 | `GET /api/tls/https/status` | Get HTTPS server status |
 
+**Session transport (bead `enhancedchannelmanager-04c0u.9`).** When ECM terminates
+TLS, browser authentication cookies are `Secure`, `HttpOnly` and `SameSite=Lax`, and
+the HTTP listener does not establish or refresh authenticated browser sessions:
+`POST /api/auth/login`, `POST /api/auth/dispatcharr/login` and `POST /api/auth/refresh`
+answer `403` there with a message naming the HTTPS address and both recovery options.
+The refusal is scoped to exactly that configuration: ECM terminating TLS, break-glass
+closed, a cleartext request, no `https://` `public_base_url`, and positive evidence of
+an HTTPS listener (`cert.pem`/`key.pem` present, or the listener running). A
+reverse-proxy deployment is unaffected, and neither is an instance whose
+`tls_settings.json` has become unreadable without ever having had a certificate.
+Cookies still carry `Secure` there, but sign-in is not refused, so a filesystem fault
+cannot lock every account out.
+
+**Activation revokes pre-activation sessions.** Whenever an instance goes from not
+terminating TLS to terminating it, every existing `UserSession` is revoked and every
+user's `auth_epoch` is bumped, so a browser holding a pre-activation non-`Secure`
+`refresh_token` cannot keep replaying it. This is a one-time forced sign-out and it
+applies to every route that can cause the transition: `POST /api/tls/configure`
+(switching `enabled` on with a certificate already present), `POST /api/tls/request-cert`
+and `POST /api/tls/complete-challenge` (landing the certificate an already-enabled
+instance was waiting for), `POST /api/tls/upload-cert` (which does both at once) and
+`POST /api/tls/renew` (which will issue a first certificate if none exists). Enabling
+TLS before any certificate exists is not an activation and does not revoke anything.
+
+**Break-glass.** `allow_http_session_cookies` is an explicit setting exposed by
+`GET /api/tls/settings` and `POST /api/tls/configure`; a locked-out operator can
+instead set `ECM_ALLOW_HTTP_SESSION_COOKIES` to `1`/`true`/`yes`/`on` for one recovery
+restart (any other value, including the `false` that `docker-compose.yml` ships, leaves
+protection on). Both work regardless of `public_base_url`, and both permit plaintext
+session theft, so they must be disabled once HTTPS is repaired. Both are reported by
+`GET /api/tls/status` as `allow_http_session_cookies`,
+`http_session_cookies_env_override` and `session_cookies_plaintext`, and ECM logs a
+warning at startup, on the first cookie the hatch downgrades, and whenever
+`POST /api/tls/configure` changes the stored flag. `session_cookies_plaintext` is true
+whenever either hatch is open **and** something would otherwise have protected the
+cookies (ECM's own TLS or an `https://` `public_base_url`). That is the same condition
+the downgrade warning is emitted on, so the log and the API cannot disagree.
+It stays false on a plain-HTTP install with no proxy and no TLS, where the hatch costs
+nothing.
+
+On `POST /api/tls/configure`, `allow_http_session_cookies` is **preserve-on-omit**: a
+request that does not carry the field leaves the stored value unchanged. A client that
+does not know the field cannot turn the hatch on, so it must not be able to turn it off
+either.
+
+**Header trust.** ECM trusts a configured HTTPS `public_base_url` for reverse-proxy
+cookie policy. ECM's own policy code does not consult `X-Forwarded-Proto`,
+`X-Forwarded-Host` or `Forwarded`; note that uvicorn's `ProxyHeadersMiddleware` is
+enabled by default and, for clients within `FORWARDED_ALLOW_IPS` (default
+`127.0.0.1`), may itself rewrite `scope['scheme']` before any ECM code runs.
+
+**HSTS** is emitted only by ECM's direct HTTPS listener, as
+`max-age=31536000` with no `includeSubDomains` and no `preload`. Per RFC 6797 §8.3 the
+pin is host-scoped and port-agnostic, so visiting the HTTPS listener also force-upgrades
+the plaintext listener on that hostname for a year; see the recovery notes in
+`README.md` (Port Configuration) for how to reach the HTTP port once a pin exists. ECM
+does not redirect the always-on HTTP port because the HTTPS listener may use a
+different port or be unavailable during recovery.
+
 **Authorization (bead `enhancedchannelmanager-9kwzp.11`):** every route above requires an admin when authentication is enabled. `GET /api/tls/status` and `GET /api/tls/https/status` disclose no credential material and accept the static MCP API key. The other eleven refuse it with `403`, because they manage certificate and private-key material, the DNS-provider credentials that issue it, the HTTPS listener that serves it, or (for `GET /api/tls/settings`) a response carrying masked credential fragments. Use an operator admin JWT for those.
 
 **Auth-disabled instances (beads `enhancedchannelmanager-jy006` and `enhancedchannelmanager-2u4e0`):** this paragraph used to end "all of these gates no-op while `require_auth` is false or setup is incomplete, so first-run and auth-disabled instances are unaffected." That is no longer true of eleven of the thirteen routes. Everything above except `GET /api/tls/status` and `GET /api/tls/https/status` requires an authenticated human admin even while `require_auth` is false, on any instance that already holds an operator identity: the ten certificate/key-material routes under `jy006`, and `POST /api/tls/test-dns-provider` under `2u4e0`, which closed the whole twelve-route connection-test family on the credential-oracle axis. An instance with no operator identity (genuine first run, or a headless auth-disabled deployment that never created a user) still reaches all thirteen anonymously. See `docs/auth_middleware.md` → "What `require_auth: false` permits" for the full rule and the other surfaces it covers.

@@ -1727,6 +1727,14 @@ export interface TLSStatus {
   last_renewal_error: string | null;
   has_certificate: boolean;
   certificate_valid: boolean;
+  // Break-glass visibility (bead enhancedchannelmanager-04c0u.9). The stored
+  // flag alone cannot show the hazard: an operator who recovered with the
+  // ECM_ALLOW_HTTP_SESSION_COOKIES environment variable and then forgot the
+  // line saw an unchecked box and an "Encrypted" badge while every session
+  // cookie shipped without Secure.
+  allow_http_session_cookies: boolean;
+  http_session_cookies_env_override: boolean;
+  session_cookies_plaintext: boolean;
 }
 
 // TLS settings (for form)
@@ -1746,6 +1754,7 @@ export interface TLSSettings {
   aws_region: string;
   auto_renew: boolean;
   renew_days_before_expiry: number;
+  allow_http_session_cookies: boolean;
 }
 
 // TLS configure request
@@ -1765,6 +1774,7 @@ export interface TLSConfigureRequest {
   aws_region: string;
   auto_renew: boolean;
   renew_days_before_expiry: number;
+  allow_http_session_cookies: boolean;
 }
 
 // Certificate request response
