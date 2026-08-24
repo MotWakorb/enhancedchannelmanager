@@ -466,3 +466,118 @@ class TestWebDAVEndToEnd:
         assert resp.status_code == 200
         assert resp.json()["success"] is True
         assert fake.requests[0]["method"] == "PROPFIND"
+
+
+class TestCredentialsReplaceNotMerge:
+    """PATCH replaces the credentials dict; it never merges (bead …-ybr3u).
+
+    Layer: API integration with REAL Fernet crypto — router, encryption and
+    the persisted row, only the key file redirected to ``tmp_path``.
+
+    This is the contract `CloudTargetEditor.tsx` now describes to the operator
+    ("entering any value replaces the whole set"). The editor used to promise
+    a per-field merge instead and submit only the box that was touched, so
+    rotating one S3 secret silently blanked ``bucket_name``, ``access_key_id``
+    and ``region``. The UI was corrected to send the complete dict rather than
+    the route being changed to merge, because a merge cannot express credential
+    REMOVAL — rotating to a smaller credential set, or moving a WebDAV target
+    from user+password to anonymous, would leave the superseded secret in the
+    store with no way to clear it short of delete-and-recreate.
+
+    If someone makes the route merge, this test fails, and the editor's hint
+    text is the thing to correct alongside it.
+    """
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.journal")
+    async def test_patch_replaces_the_whole_credentials_dict(
+        self, mock_journal, async_client, test_session, tmp_path
+    ):
+        from cloud_storage.crypto import decrypt_credentials, reset_key_cache
+        from export_models import CloudStorageTarget
+
+        reset_key_cache()
+        try:
+            with patch("cloud_storage.crypto.KEY_FILE", tmp_path / ".test_key"), \
+                 patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                resp = await async_client.post("/api/cloud-targets", json={
+                    "name": "Offsite S3",
+                    "provider_type": "s3",
+                    "credentials": {
+                        "bucket_name": "offsite-archives",
+                        "access_key_id": "AKIA00001111",
+                        "secret_access_key": "original-secret-value",
+                        "region": "us-east-1",
+                    },
+                    "upload_path": "/backups",
+                })
+                assert resp.status_code == 201, resp.text
+                target_id = resp.json()["id"]
+
+                # The partial edit the old UI submitted: one field only.
+                resp = await async_client.patch(
+                    f"/api/cloud-targets/{target_id}",
+                    json={"credentials": {"secret_access_key": "rotated-secret-value"}},
+                )
+                assert resp.status_code == 200, resp.text
+
+                row = test_session.query(CloudStorageTarget).filter(
+                    CloudStorageTarget.id == target_id
+                ).first()
+                stored = decrypt_credentials(row.credentials)
+
+                # REPLACED, not merged — the siblings are gone. This is the
+                # behaviour the editor's hint now states, not a merge.
+                assert stored == {"secret_access_key": "rotated-secret-value"}
+                assert "bucket_name" not in stored
+                assert "region" not in stored
+        finally:
+            reset_key_cache()
+
+    @pytest.mark.asyncio
+    @patch("routers.cloud_targets.journal")
+    async def test_patch_without_credentials_leaves_the_stored_set_intact(
+        self, mock_journal, async_client, test_session, tmp_path
+    ):
+        """Omitting the key is what preserves the set — the editor's other half.
+
+        The corrected editor omits ``credentials`` entirely when no credential
+        box was touched, so a rename or an enable/disable must not disturb the
+        stored secrets.
+        """
+        from cloud_storage.crypto import decrypt_credentials, reset_key_cache
+        from export_models import CloudStorageTarget
+
+        original = {
+            "bucket_name": "offsite-archives",
+            "access_key_id": "AKIA00001111",
+            "secret_access_key": "original-secret-value",
+            "region": "us-east-1",
+        }
+        reset_key_cache()
+        try:
+            with patch("cloud_storage.crypto.KEY_FILE", tmp_path / ".test_key"), \
+                 patch("cloud_storage.crypto.CONFIG_DIR", tmp_path):
+                resp = await async_client.post("/api/cloud-targets", json={
+                    "name": "Offsite S3",
+                    "provider_type": "s3",
+                    "credentials": dict(original),
+                    "upload_path": "/backups",
+                })
+                assert resp.status_code == 201, resp.text
+                target_id = resp.json()["id"]
+
+                resp = await async_client.patch(
+                    f"/api/cloud-targets/{target_id}",
+                    json={"name": "Offsite S3 (renamed)", "enabled": False},
+                )
+                assert resp.status_code == 200, resp.text
+
+                row = test_session.query(CloudStorageTarget).filter(
+                    CloudStorageTarget.id == target_id
+                ).first()
+                assert row.name == "Offsite S3 (renamed)"
+                assert row.enabled is False
+                assert decrypt_credentials(row.credentials) == original
+        finally:
+            reset_key_cache()
