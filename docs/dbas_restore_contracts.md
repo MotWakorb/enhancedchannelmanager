@@ -32,6 +32,7 @@ the ledger, so they are part of the on-disk format. Keep them stable.
 | `channel` | `…-4vouz` | remap consumer |
 | `user_agent` | `…-0i2vt.13` | n/a |
 | `dvr_rule` | `…-0i2vt.13` | n/a |
+| `upcoming_recording` | `…-ciabe` | remap consumer (`channel`) |
 | `user` | `…-l1p4p` | crown-jewel, opt-in |
 
 `plugins` is intentionally **absent**: removed from v0.18.0 per ADR-012 D10

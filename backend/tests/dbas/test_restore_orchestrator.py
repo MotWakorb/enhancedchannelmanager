@@ -1009,17 +1009,25 @@ async def test_user_category_failure_does_not_roll_back_the_restore(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_non_fatal_set_is_exactly_users_and_logos(tmp_path):
-    """Guard: only users and logos are non-fatal; the rest still roll back.
+async def test_non_fatal_set_is_exactly_the_leaf_categories(tmp_path):
+    """Guard: only the LEAF categories are non-fatal; the rest still roll back.
 
-    Both members pass the same admission test (nothing else in the restore holds
-    a hard FK into them). Widening this set silently is the failure this guard
-    exists to catch, so it is an equality assertion, not a membership one.
+    Every member passes the same admission test — nothing else in the restore
+    holds a hard FK into it, so a row that does not come back degrades only
+    itself. Widening this set silently is the failure this guard exists to catch,
+    so it is an equality assertion, not a membership one.
+
+    ``UPCOMING_RECORDING`` joined it with bead ``…-ciabe``: a recording is
+    referenced by nothing (a channel does not know its recordings, and a DVR
+    rule finds its own by querying rather than by reference), and the refusal it
+    most plausibly meets is a stale timestamp, which is a property of the
+    archive's age — a retry cannot fix it and a rollback would cost the operator
+    every other category for it. The reasoning per member is on the constant.
     """
     from dbas.restore_orchestrator import NON_FATAL_FAILURE_CATEGORIES
 
     assert NON_FATAL_FAILURE_CATEGORIES == frozenset(
-        {EntityType.USER, EntityType.LOGO}
+        {EntityType.USER, EntityType.LOGO, EntityType.UPCOMING_RECORDING}
     )
 
 

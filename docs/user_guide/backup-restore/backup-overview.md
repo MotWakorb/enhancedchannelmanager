@@ -10,7 +10,7 @@ Backups are built by the `dbas_backup` task (scheduled or on-demand) and stored 
 
 ---
 
-## What a backup contains (12 categories)
+## What a backup contains (13 categories)
 
 A backup covers the following configuration categories. All are included by default; a selective restore can opt individual categories out.
 
@@ -23,13 +23,30 @@ A backup covers the following configuration categories. All are included by defa
 | **Stream profiles** | All stream profile definitions. |
 | **User agents** | Configured user-agent strings. |
 | **Core settings** | ECM settings (`settings.json`). |
-| **DVR rules** | Any configured DVR recording rules. |
+| **DVR rules** | Any configured recurring DVR recording rules. |
+| **Upcoming recordings** | Recordings that are scheduled but have not started yet, so a restored instance still records them. Two kinds of recording are deliberately left out — see [Which recordings are backed up](#which-recordings-are-backed-up) below. |
 | **Comskip config** | Comskip commercial-detection configuration. |
 | **Users** | Dispatcharr user accounts (opt-in: see [User restore semantics](#user-restore-semantics)). |
 | **Channels (with embedded streams)** | The full channel list, with their embedded stream assignments. |
 | **Logos** | Logo files uploaded through ECM's own Logo Manager, plus their URL-mapping inventory. See [where an uploaded logo's bytes actually live](#where-an-uploaded-logos-bytes-actually-live) below; they are not stored under ECM's own `/config/uploads/logos/`. |
 
 > **Plugins are not backed up.** Plugin state is excluded from v0.18.0 backups. This is a deliberate safety decision. Plugin restore semantics are not yet defined. If you rely on plugins, document your plugin configuration separately.
+
+---
+
+## Which recordings are backed up
+
+A DVR recording is a scheduled slot on a channel. ECM backs up the ones a restored instance can still act on, and says so when it leaves one out — a backup run's message names the count.
+
+**Backed up: recordings that have not started yet.** These are portable. A scheduled recording is a start time, an end time and one channel, all of which survive the trip to another instance. Restoring the backup schedules them again, so a restored instance does not silently miss a recording you had lined up.
+
+**Not backed up: recordings that have already started or finished.** A finished recording *is* its video file, and that file lives on the disk of the Dispatcharr that recorded it. No backup ECM can take carries it, and Dispatcharr will not accept a recording scheduled in the past. A recording that is currently running is left out for the same reason plus one more: scheduling it on a second instance would start recording a programme that is already half over.
+
+> **If you need those files, copy them yourself.** They are under Dispatcharr's own recordings directory on the source machine — the same path Dispatcharr shows for each recording. Copy them across to the restored instance's recordings directory before or after the restore; the restore itself will never touch them.
+
+**Not backed up: recordings a recurring rule created.** Nothing is lost here. Those recordings are generated *from* a recurring rule, and the **DVR rules** category above carries the rule. Once it is restored, the destination Dispatcharr regenerates its own upcoming recordings from it, on its own schedule and in its own timezone. Backing up the generated recordings as well would give you two copies of each.
+
+**A backup taken long ago will restore fewer recordings than it holds.** Recordings are pinned to absolute dates. If the backup is older than the recordings in it, those slots have since passed, and the restore skips them rather than failing. Nothing is wrong; the recordings simply are not upcoming any more.
 
 ---
 

@@ -203,6 +203,11 @@ def _patched_build(
     mock_client.get_dvr_rules = AsyncMock(
         return_value=[{"id": 41, "name": "Record CNN", "channel": 5}]
     )
+    # …-ciabe — the recording INSTANCES. Left EMPTY here deliberately: this
+    # fixture's job is the artifact/degradation surface, and the upcoming/
+    # excluded split has its own suite. An unstubbed method would degrade the
+    # category on every build and make ``degraded_categories`` unreadable.
+    mock_client.get_recordings = AsyncMock(return_value=[])
     mock_client.get_core_settings = AsyncMock(
         return_value=[
             {"id": 1, "key": "default_user_agent", "value": "ECM/1.0"},
