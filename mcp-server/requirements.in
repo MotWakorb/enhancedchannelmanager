@@ -1,3 +1,15 @@
+# Capped below 2.0. MCP SDK 2.0.0 renames FastMCP -> MCPServer and moves the
+# whole mcp.server.fastmcp.* namespace to mcp.server.mcpserver.*, so two of the
+# symbols this server imports move on a 2.x jump: FastMCP (server.py, tools/*,
+# resources/*) and ToolError (mcp.server.fastmcp.exceptions). The other two mcp
+# imports -- mcp.types.ToolAnnotations and
+# mcp.server.transport_security.TransportSecuritySettings -- are not named in
+# the upstream migration guide, and that silence is not a stability guarantee:
+# check them against an installed 2.x before the cap lifts. The migration is
+# small (a rename plus import paths; the decorator API is unchanged upstream)
+# but it is a code change, not a currency bump, and is tracked as its own bead
+# (enhancedchannelmanager-wiezs). Lift the cap there, not in a dependency
+# sweep -- an unpinned jump fails at import time.
 mcp[cli]>=1.27.2,<2
 httpx>=0.28.0
 uvicorn[standard]>=0.32.0
