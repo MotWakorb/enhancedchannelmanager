@@ -71,6 +71,7 @@ const ENTITY_LABELS: Record<RestoreEntityType, string> = {
   channel: 'Channels',
   stream: 'Streams',
   user_agent: 'User agents',
+  server_group: 'Server groups',
   dvr_rule: 'DVR rules',
   upcoming_recording: 'Upcoming recordings',
   settings: 'Dispatcharr settings',

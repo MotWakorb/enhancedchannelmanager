@@ -4275,6 +4275,10 @@ export type RestoreEntityType =
   | 'channel'
   | 'stream'
   | 'user_agent'
+  // The Dispatcharr ServerGroup an M3U account's `server_group` FK points at
+  // (bead tyrg1). Its category is ordered before `m3u_account` in the restore
+  // and sync registries, so it appears in every sync report.
+  | 'server_group'
   | 'dvr_rule'
   // The DVR recording INSTANCES that had not started yet when the backup was
   // taken (bead ciabe). Distinct from `dvr_rule`, which is the recurring RULE
