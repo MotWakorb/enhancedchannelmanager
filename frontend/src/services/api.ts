@@ -4276,6 +4276,12 @@ export type RestoreEntityType =
   | 'stream'
   | 'user_agent'
   | 'dvr_rule'
+  // The DVR recording INSTANCES that had not started yet when the backup was
+  // taken (bead ciabe). Distinct from `dvr_rule`, which is the recurring RULE
+  // that generates them. Completed recordings are never in a backup at all —
+  // they reference a media file on the source instance's disk — so there is no
+  // second entity type for them.
+  | 'upcoming_recording'
   // Report-only category for core_settings + comskip apply results (updated/
   // skipped, never created) — mirrors backend EntityType.SETTINGS (bead lc6zu).
   | 'settings'
@@ -4313,7 +4319,16 @@ export type RestoreSkipReason =
    * naming it would fire on every unattended cycle forever. Render it as an
    * ordinary no-op beside `excluded_by_operator`, never as a problem.
    */
-  | 'dependency_deselected';
+  | 'dependency_deselected'
+  /**
+   * The archived entity is pinned to an absolute moment that has since passed
+   * (bead ciabe) — an upcoming recording in a backup older than the recording
+   * itself. NEVER a loss: the destination cannot hold it either (Dispatcharr
+   * refuses a recording scheduled in the past), so a replica missing a
+   * programme that already aired has lost nothing. Render it as an ordinary
+   * no-op, never as a problem.
+   */
+  | 'schedule_already_past';
 
 /** Why an entity failed to apply. */
 export type RestoreFailureReason =
