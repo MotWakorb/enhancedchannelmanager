@@ -30,6 +30,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Every dev-tag publish since the authorize gate reopened failed its own digest check, so no image had actually published under the fixed gate (bead `enhancedchannelmanager-5z48v`, build 0144).** The check was right to refuse — it was comparing two different objects. `docker/build-push-action` enables provenance attestations by default, so BuildKit wraps the platform image manifest in a nested index holding the image plus an `unknown/unknown` attestation manifest; the verification step read that wrapper index's digest, while `skopeo copy` resolves the archive to the inner image manifest and pushes that one. `--preserve-digests` was working correctly the whole time — it preserved the digest of the object it copied, which was never the object being compared against.
+
+  **This was ours, not a skopeo bug and not a registry problem.** Verified against all four real candidate archives from the run that failed: each carries the nested index, and resolving through it to the inner manifest reproduces exactly the digest GHCR stores for that image. The check is not weakened by this fix — it is stronger. The digest now names the one manifest that Trivy scanned, that skopeo pushes, and that `docker buildx imagetools create` dereferences when it assembles the multi-arch tag, instead of three different objects that happened to share a build.
+
+  **A third failure, not yet hit, was fixed by the same change.** `publish-manifests` dereferenced `$image@$ECM_AMD64` — a reference built from the wrapper index's digest, which is never pushed to any registry and so could never have resolved. It would have failed next.
+
+  Also: the digest comparison used a bare `test`, which printed nothing and exited 1 under `set -euo pipefail` — a step that died with no message at all, and part of why this took a full day to diagnose. The comparison now names both digests on a mismatch.
+
 - **Dev images stopped publishing on 2026-08-18 and nothing said so for six days; publication is restored (bead `enhancedchannelmanager-0dsa4`, build 0143).** If you run the `dev` tag, the image you have been pulling is build `0123` while `dev` itself had moved on to `0142` — **nineteen builds that never became an image**, among them two P1 fixes for provider credentials leaking into logs and the stream-probe fix for XC providers that redirect https to http. Pull `dev` again once this build lands and you get the whole backlog at once.
 
   **Nothing looked wrong the entire time, which is why it ran for six days.** Images built, Trivy scans passed, attestation passed, and all four required checks were green on every merge. The publish workflow was invoked on every one of those merges too — it declined to publish, and reported success for doing so.
