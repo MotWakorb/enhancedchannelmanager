@@ -151,6 +151,7 @@ from dbas.restore_contracts import (
     RollbackLedger,
 )
 from dbas.restore_orchestrator import (
+    NON_FATAL_FAILURE_CATEGORIES,
     ApplyContext,
     ImporterCallable,
     ImporterStep,
@@ -350,6 +351,39 @@ SYNC_CORE_SETTINGS_BLOBS: frozenset[str] = frozenset(
 # Code-enforced rather than merely omitted: :func:`select_core_settings_blobs`
 # subtracts this set unconditionally, so a per-target setting cannot opt INTO it.
 NEVER_SYNC_CORE_SETTINGS_BLOBS: frozenset[str] = frozenset({"network_access"})
+
+
+# The failure categories that must NOT roll a REPLICA back (bead …-10wnq).
+#
+# ``run_restore``'s module default stays exactly as the PO ruled it on
+# 2026-08-03 (bead ``…-zt3kf``): on a ONE-SHOT ARCHIVE RESTORE a settings-key
+# ``DEPENDENCY_UNRESOLVED`` aborts the whole run and rolls back. That ruling was
+# made about an operator action a human watches and can retry.
+#
+# CONTINUOUS SYNC IS THE OPPOSITE CONTEXT, and this constant is the whole of the
+# difference. It runs unattended, forever, on a schedule, with nobody reading
+# the result. Three facts make a rollback there strictly destructive:
+#
+# * A setting is NEVER LEDGERED — ``_delete_dispatch`` has no SETTINGS
+#   compensator by design — so the rollback cannot undo the settings. It only
+#   deletes the M3U accounts, EPG sources, groups, profiles and channels the
+#   cycle successfully created. It fixes nothing and costs everything.
+# * The trigger is as small as ONE unreadable ``GET /api/core/settings/`` on the
+#   destination, or one blob key a version-skewed B does not have. That is the
+#   ``…-d0agi`` trade — a whole replica for a cosmetic config defect — in a
+#   category that cannot even be compensated.
+# * ADR-013 S8 makes "just retry next interval" the recovery mechanism for this
+#   engine. A rollback is precisely what destroys the state that makes retry
+#   converge.
+#
+# The failures are still COUNTED, still in ``failure_details``, and still forbid
+# a SUCCESS outcome. Nothing goes silent; the replica just survives.
+#
+# This became REACHABLE when this bead built the core-settings category — before
+# it, ``core_settings`` synced nowhere and the step had nothing to fail on.
+SYNC_NON_FATAL_CATEGORIES: frozenset[EntityType] = (
+    NON_FATAL_FAILURE_CATEGORIES | frozenset({EntityType.SETTINGS})
+)
 
 # Bead kcxie adds the CHANNELS category (with embedded streams). It is gathered
 # separately from the config sections (channels are not a backup RESTORABLE_SECTION
@@ -2700,6 +2734,10 @@ async def run_sync(
         deferred_apply_fn=_apply_group_selection_only,
         ledger_dir=ledger_dir,
         allow_fuzzy_stream_match=allow_fuzzy,
+        # …-10wnq: a SETTINGS failure must not roll the replica back on the sync
+        # path. See SYNC_NON_FATAL_CATEGORIES for the reasoning and for why the
+        # archive-restore path deliberately keeps the PO's zt3kf ruling.
+        non_fatal_categories=SYNC_NON_FATAL_CATEGORIES,
     )
 
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
