@@ -25,7 +25,17 @@ boto3>=1.34.0  # AWS Route53 DNS provider
 
 pytz>=2024.1
 sqlalchemy>=2.0.0
-alembic>=1.13.0
+# Capped below 1.19. Alembic 1.19 added CHECK-constraint comparison to
+# autogenerate, and that surfaces a real pre-existing divergence rather than a
+# tool bug: migration 0012 creates ``ck_task_schedules_interval_positive``, but
+# ``TaskSchedule.__table_args__`` in backend/models.py never declared it. So
+# autogenerate now emits ``remove_constraint`` and
+# tests/unit/test_alembic_baseline.py::test_baseline_matches_metadata_no_drift
+# fails. Bisected to alembic alone: 1.18.4 passes and 1.19.1 fails with
+# sqlalchemy held at 2.0.49. Lifting this cap means declaring the constraint on
+# the model so metadata matches the migration DDL — a schema-correctness change
+# that needs its own bead, not a currency bump.
+alembic>=1.13.0,<1.19
 aiofiles>=23.0.0
 croniter>=2.0.0
 # 3.14.0 fixes CVE-2026-34993 + CVE-2026-47265 (flagged by pip-audit at the
