@@ -9,13 +9,13 @@ Follow these steps in order:
 ```bash
 # Backend (if backend changed)
 .venv/bin/python -m py_compile backend/main.py
-cd backend && ../.venv/bin/python -m pytest tests/ -q
+scripts/backend-gate.sh
 
 # Frontend (if frontend changed)
 cd frontend && npm test && npm run build
 ```
 
-Pin the project venv interpreter, not ambient `python`. Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so a green gate can mean 9 fewer tests ran than the command implies.
+`scripts/backend-gate.sh` is **the** backend gate — the same invocation CI runs to decide the PR, held there by `backend/tests/unit/test_backend_gate_contract.py`. Do not substitute a hand-typed pytest command: the two that used to circulate differed by 72 collected tests. It also pins the project interpreter, because ambient `python` resolves an older `cryptography` and silently self-skips 9 TLS tests instead of failing, so a green gate can mean 9 fewer tests ran than the command implies. Pin the venv for `py_compile` too. See [`docs/testing.md`](testing.md#what-the-backend-gate-runs).
 
 **CRITICAL**: If syntax checks or tests fail, fix errors before proceeding. Never commit broken code.
 
@@ -48,11 +48,16 @@ So the mechanical confirmation happens at **[step 6a](#6a-confirm-the-bump-decis
 
 > **Why the order matters.** A version touchpoint is a source file. If you bump first and classify afterwards, the diff contains `frontend/package.json`, `backend/main.py` and `backend/routers/backup.py`, the verdict is `code_paths_changed=true`, and the bump has justified itself. Nothing downstream ever contradicts you, because by then the change really is a code change. That self-justifying loop is how 15 of 40 consecutive merged PRs carried a version bump for changes that were nothing but Markdown.
 
-Nothing downstream will ask an inert machine-state PR for a bump, and as of the CI gate reduction nothing checks the bump at all. The `Version Consistency` job, `scripts/check_version_advances.py`, `scripts/check_version_consistency.py` and the local `version-advance-guard` PreToolUse hook have all been removed. The rule below is now a **convention you follow by hand**; no check enforces it and no check will tell you that you got it wrong.
+Nothing downstream will ask an inert machine-state PR for a bump. The `Version Consistency` job, `scripts/check_version_advances.py`, `scripts/check_version_consistency.py` and the local `version-advance-guard` PreToolUse hook have all been removed.
+
+Be precise about what that leaves, because the two halves of the rule are not in the same state:
+
+- **Whether to bump** — the decision made in this step — is a **convention you follow by hand**. No check enforces it and no check will tell you that you got it wrong.
+- **Bumping all three touchpoints together**, once you have decided to bump, **is** enforced — by the backend pytest suite, not by a CI job. See [3b](#3b-bump-the-three-touchpoints-code-changes-only).
 
 #### 3b. Bump the three touchpoints (code changes only)
 
-The version literal is hand-edited in **three** files, and all three must move in lockstep. See [`docs/versioning.md`](versioning.md#touchpoints) → Touchpoints for the canonical list. **Nothing enforces this any more.** The `version-consistency` job and `scripts/check_version_consistency.py` were removed with the CI gate reduction, so a divergence between the three touchpoints now merges silently and surfaces later as a wrong version string in the UI, the backup artifact, or the published image marker.
+The version literal is hand-edited in **three** files, and all three must move in lockstep. See [`docs/versioning.md`](versioning.md#touchpoints) → Touchpoints for the canonical list. **Lockstep is enforced**, by `backend/tests/unit/test_version_touchpoint_consistency.py` in the backend suite: bump two of the three and the Backend Tests check goes red naming the file you missed. Note what that does *and does not* cover — it checks the touchpoints **agree**, never that you **bumped** them. Skipping the bump entirely on a change that earns one still merges silently (see the paragraph above), and still surfaces later as a wrong version string in the UI, the backup artifact, or the published image marker.
 
 | File | Identifier to change |
 | --- | --- |

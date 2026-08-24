@@ -54,7 +54,12 @@ from config import (
 )
 from credential_sentinel import REDACTION_SENTINEL, strip_redaction_sentinels
 from dbas import artifact_crypto
-from dbas.archive_keys import ARCHIVE_EPG_TVG_ID_KEY, EPG_INDEX_MAX_ROWS, as_int
+from dbas.archive_keys import (
+    ARCHIVE_EPG_TVG_ID_KEY,
+    EPG_INDEX_MAX_ROWS,
+    as_instant,
+    as_int,
+)
 from dbas.importers.logos import MAX_LOGO_BYTES, remote_logo_url, safe_logo_basename
 from dbas.restore_contracts import ChannelReattachMode
 from dbas.importers.settings_agents import is_safe_setting_key
@@ -117,7 +122,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0144"
+APP_VERSION = "0.18.1-0146"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1728,18 +1733,38 @@ class BackupArtifact:
             index may be incomplete. Reported DISTINCTLY from the count above
             because it is a different diagnosis with a different remedy: some of
             those links may be perfectly good references the read never saw.
+        recordings_excluded_already_started: How many DVR recordings were NOT
+            archived because they had already started or finished (bead
+            …-ciabe). ADR-013 requires every exclusion to be VISIBLE, so this
+            number exists to be read out to the operator together with the
+            manual action — the media files sit on the source instance's disk
+            and only the operator can copy them across. Like
+            ``unresolved_epg_links`` it is INFORMATIONAL: a finished recording is
+            a named technical impossibility, not ECM failing to gather what it
+            could have, so it never sets ``failed_count`` and never joins
+            ``degraded_categories``.
+        recordings_excluded_regenerated_by_a_rule: How many upcoming recordings
+            were NOT archived because a recurring rule owns them and the
+            destination's own hourly maintainer recreates them from the
+            ``dvr_rules`` category. Reported DISTINCTLY from the count above
+            because it needs no operator action at all — nothing is lost — while
+            the other one does.
     """
 
     __slots__ = (
         "zip_path", "sidecar_path", "schema_version", "sha256", "file_count",
         "encrypted", "gathered_categories", "degraded_categories",
         "unarchived_logo_bytes", "unresolved_epg_links", "epg_index_truncated",
+        "recordings_excluded_already_started",
+        "recordings_excluded_regenerated_by_a_rule",
     )
 
     def __init__(self, zip_path, sidecar_path, schema_version, sha256, file_count,
                  encrypted=False, degraded_categories=None,
                  unarchived_logo_bytes=0, unresolved_epg_links=0,
-                 epg_index_truncated=False, gathered_categories=0):
+                 epg_index_truncated=False, gathered_categories=0,
+                 recordings_excluded_already_started=0,
+                 recordings_excluded_regenerated_by_a_rule=0):
         self.zip_path = zip_path
         self.sidecar_path = sidecar_path
         self.schema_version = schema_version
@@ -1751,6 +1776,28 @@ class BackupArtifact:
         self.unarchived_logo_bytes = int(unarchived_logo_bytes or 0)
         self.unresolved_epg_links = int(unresolved_epg_links or 0)
         self.epg_index_truncated = bool(epg_index_truncated)
+        self.recordings_excluded_already_started = int(
+            recordings_excluded_already_started or 0
+        )
+        self.recordings_excluded_regenerated_by_a_rule = int(
+            recordings_excluded_regenerated_by_a_rule or 0
+        )
+
+
+def _recording_exclusion_kwargs() -> dict[str, int]:
+    """Read this run's recordings census into :class:`BackupArtifact` kwargs.
+
+    A run that never gathered the category (``None``) reports zeros — the same
+    thing an operator sees for a run with nothing to exclude, because there is
+    nothing to tell them either way.
+    """
+    census = _RECORDINGS_EXCLUDED.get() or {}
+    return {
+        "recordings_excluded_already_started": census.get("already_started", 0),
+        "recordings_excluded_regenerated_by_a_rule": census.get(
+            "regenerated_by_a_rule", 0
+        ),
+    }
 
 
 def _compute_sha256_streaming(path: Path) -> str:
@@ -2607,8 +2654,11 @@ async def build_backup_artifact(
     _check_free_disk(dest_dir, _estimate_artifact_source_bytes())
 
     # Re-arm the per-run EPG truncation flag so this build can never inherit a
-    # previous one's value (see _EPG_INDEX_TRUNCATED).
+    # previous one's value (see _EPG_INDEX_TRUNCATED). Same for the recordings
+    # exclusion census, which re-arms to None — "this run gathered no recordings
+    # category", distinct from "it gathered one and excluded nothing".
     _EPG_INDEX_TRUNCATED.set(False)
+    _RECORDINGS_EXCLUDED.set(None)
 
     # Gather redacted payloads BEFORE opening the archive so a gather failure
     # never leaves a half-written ZIP on disk. include_credentials only ever
@@ -2833,6 +2883,7 @@ async def build_backup_artifact(
             unarchived_logo_bytes=unarchived_logos,
             unresolved_epg_links=unresolved_epg_links,
             epg_index_truncated=_EPG_INDEX_TRUNCATED.get(),
+            **_recording_exclusion_kwargs(),
         )
     except Exception:
         # Clean up partial temp artifacts on ANY failure.
@@ -4513,6 +4564,113 @@ _EPG_INDEX_TRUNCATED: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "ecm_backup_epg_index_truncated", default=False
 )
 
+# What the ``upcoming_recordings`` gather LEFT BEHIND on this run, by reason
+# (bead …-ciabe). Same ContextVar mechanism, and the same justification, as
+# ``_EPG_INDEX_TRUNCATED`` above: the producer that learns it sits four call
+# frames below :func:`build_backup_artifact`, asyncio gives each Task its own
+# context so two concurrent backups cannot read each other's value, and
+# ``build_backup_artifact`` re-arms it on entry so a value never survives into a
+# later run.
+#
+# WHY A CENSUS AND NOT A BOOLEAN. ADR-013's principle is that every exclusion is
+# "named, individually justified and VISIBLE". A disclaimer that prints on every
+# run whether or not anything was excluded is wallpaper — the operator stops
+# reading it, which is the same end state as not printing it. A COUNT is the
+# difference between "some things are not backed up" and "4 finished recordings
+# were not backed up, and here is what to do about them".
+#
+# ``None`` (the default) means the category was never gathered on this run and is
+# reported as nothing at all — distinct from a gather that ran and excluded zero,
+# which is the operator's cue that the category is clean.
+_RECORDINGS_EXCLUDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    "ecm_backup_recordings_excluded", default=None
+)
+
+# Where a recurring rule stamps its own id on the recordings it generates
+# (Dispatcharr ``apps/channels/tasks.py`` -> ``sync_recurring_rule_impl``:
+# ``custom_properties = {"rule": {"type": "recurring", "id": rule.id, ...}, ...}``).
+_RECORDING_RULE_KEY = "rule"
+
+
+def _recording_is_regenerated_by_a_rule(record: dict) -> bool:
+    """True when a recurring rule OWNS this recording and will recreate it.
+
+    Dispatcharr's ``maintain_recurring_recordings`` beat runs hourly on every
+    instance (``dispatcharr/settings.py`` schedules it at 3600s) and, for each
+    enabled ``RecurringRecordingRule``, materializes the next 14 days of
+    recordings that do not already exist. So a rule-generated recording is not
+    independent state: it is OUTPUT of the ``dvr_rules`` category, and restoring
+    the rule is what restores it.
+
+    Archiving it as well would apply the same state twice — the identical
+    reasoning that already keeps SERIES rules out of ``dvr_rules`` (they live
+    inside the ``dvr_settings`` core setting ``core_settings`` carries). Here it
+    is worse than redundant, because the two copies would not merge:
+
+    * the maintainer de-duplicates on ``custom_properties__rule__id`` against the
+      DESTINATION rule's id, which an archived row cannot carry; and
+    * it recomputes each ``start_time`` from the rule's naive ``start_time``
+      field in the DESTINATION's own timezone, so a replica in a different zone
+      computes a different absolute instant than the one archived.
+
+    Either mismatch alone turns "restore the rule and its recordings" into two
+    recordings per occurrence. Carrying only the rule cannot produce that.
+    """
+    props = record.get("custom_properties")
+    if not isinstance(props, dict):
+        return False
+    rule = props.get(_RECORDING_RULE_KEY)
+    if isinstance(rule, dict):
+        return as_int(rule.get("id")) is not None
+    return as_int(rule) is not None
+
+
+def _partition_upcoming_recordings(rows) -> tuple[list[dict], dict[str, int]]:
+    """Split Dispatcharr's recordings into the portable ones and a census of the rest.
+
+    THE FILTER, and why it is ``start_time > now`` and nothing else. Dispatcharr's
+    ``Recording`` model has NO status column (measured on 0.29.0 — the whole
+    serializer is ``{id, start_time, end_time, task_id, custom_properties,
+    channel}``). ``custom_properties["status"]`` exists but is a free-form
+    JSONField key the DVR pipeline writes and is absent on a manually created
+    row, so it cannot be the discriminator. The absolute ``start_time`` is the
+    only always-present one — and it is the same predicate Dispatcharr itself
+    uses to mean "upcoming" in ``BulkDeleteUpcomingRecordingsAPIView``
+    (``Recording.objects.filter(start_time__gt=now)``).
+
+    An IN-PROGRESS recording is therefore excluded alongside the finished ones,
+    and deliberately: it is already writing a file on the source's disk, and
+    scheduling it on a replica would start a partial capture of a programme
+    that is half over.
+
+    Returns:
+        ``(upcoming, census)``. ``census`` counts what was left behind, keyed by
+        the reason, and is what the run report turns into an operator-facing
+        line. Its keys are stable — they are read by ``tasks.dbas_backup``.
+    """
+    now = datetime.now(timezone.utc)
+    upcoming: list[dict] = []
+    census = {"already_started": 0, "regenerated_by_a_rule": 0, "unreadable_schedule": 0}
+    for record in rows or []:
+        if not isinstance(record, dict):
+            census["unreadable_schedule"] += 1
+            continue
+        start = as_instant(record.get("start_time"))
+        if start is None:
+            # Fail-safe. A row ECM cannot place in time is not PROVEN upcoming,
+            # and the cost of guessing wrong is a phantom recording on the
+            # replica — worse than the missing one, because it records.
+            census["unreadable_schedule"] += 1
+            continue
+        if start <= now:
+            census["already_started"] += 1
+            continue
+        if _recording_is_regenerated_by_a_rule(record):
+            census["regenerated_by_a_rule"] += 1
+            continue
+        upcoming.append(record)
+    return upcoming, census
+
 
 def _epg_link_id(channel: dict) -> int | None:
     """The channel's ``epg_data_id`` as an int, or ``None`` when it has no link.
@@ -4936,6 +5094,38 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
             logger.warning("[BACKUP] Failed to fetch dvr_rules: %s", e)
             result["dvr_rules"] = _degraded_section("dvr_rules", e)
 
+    if "server_groups" in needed:
+        # tyrg1 — a bare {id, name} list; no credential class at any depth. The
+        # deep redactor still runs over it as defense in depth.
+        try:
+            groups = await client.get_server_groups()
+            result["server_groups"] = groups or []
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch server_groups: %s", e)
+            result["server_groups"] = _degraded_section("server_groups", e)
+
+    if "upcoming_recordings" in needed:
+        # …-ciabe. The ONE fetch returns every recording instance; the split into
+        # what replicates and what cannot is ECM's, and the half left behind is
+        # counted rather than silently dropped (see _RECORDINGS_EXCLUDED).
+        try:
+            recordings = await client.get_recordings()
+            upcoming, census = _partition_upcoming_recordings(recordings)
+            result["upcoming_recordings"] = upcoming
+            _RECORDINGS_EXCLUDED.set(census)
+            logger.info(
+                "[BACKUP] Archived %d upcoming recording(s); left behind "
+                "%d already started, %d regenerated by a recurring rule, "
+                "%d with an unreadable schedule.",
+                len(upcoming),
+                census["already_started"],
+                census["regenerated_by_a_rule"],
+                census["unreadable_schedule"],
+            )
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch upcoming_recordings: %s", e)
+            result["upcoming_recordings"] = _degraded_section("upcoming_recordings", e)
+
     if "core_settings" in needed or "comskip" in needed:
         # ONE fetch backs both sections (no comskip endpoint exists — see
         # _COMSKIP_KEY_PREFIX). Dangerous-marked setting VALUES are redacted
@@ -5148,16 +5338,47 @@ RESTORABLE_SECTIONS = {
     # ``comskip`` key prefix.
     #
     # ``dvr_rules`` (lsa0s) carries Dispatcharr's RECURRING RECORDING RULES
-    # (client.get_dvr_rules -> /api/channels/recurring-rules/). Two neighbouring
-    # DVR surfaces are deliberately NOT in this category: SERIES rules, which
-    # Dispatcharr stores inside the ``dvr_settings`` row that ``core_settings``
-    # already carries (routing them here as well would apply the same state
-    # twice), and RECORDINGS (/api/channels/recordings/), which are individual
-    # scheduled/completed recording INSTANCES pinned to absolute timestamps and,
-    # once completed, to a media file on the SOURCE instance's disk — restoring
-    # those would manufacture phantom DVR entries, not restore configuration.
+    # (client.get_dvr_rules -> /api/channels/recurring-rules/). SERIES rules are
+    # deliberately NOT in this category: Dispatcharr stores them inside the
+    # ``dvr_settings`` row that ``core_settings`` already carries, so routing
+    # them here as well would apply the same state twice.
+    #
+    # ``upcoming_recordings`` (…-ciabe) carries the recording INSTANCES
+    # (client.get_recordings -> /api/channels/recordings/) that have not started
+    # yet. This used to be excluded wholesale as "per-instance state", which left
+    # NO category covering recordings at all — a restore produced a replica whose
+    # scheduled recordings had silently vanished. ADR-013's governing principle
+    # splits the population three ways, and every exclusion below is named,
+    # justified and reported to the operator (``_partition_upcoming_recordings``
+    # + ``_RECORDINGS_EXCLUDED`` -> the run report):
+    #
+    #   * NOT STARTED YET -> replicates. Portable: an absolute start time and one
+    #     channel FK, nothing else. Losing it is a silently missed recording.
+    #   * ALREADY STARTED OR FINISHED -> technically impossible. The row points at
+    #     a media file on the SOURCE instance's disk, which no API can carry, and
+    #     Dispatcharr refuses the create outright (``400 "End time must be in the
+    #     future."``, measured on 0.29.0). The operator copies those files across
+    #     by hand if they want them; the run report says so.
+    #   * GENERATED BY A RECURRING RULE -> already replicated, by ``dvr_rules``.
+    #     The destination's own hourly maintainer recreates them from the rule.
+    #     See :func:`_recording_is_regenerated_by_a_rule` for why carrying them
+    #     too would DUPLICATE rather than merge.
     "user_agents": {"label": "User Agents", "dispatcharr": True, "artifact_only": True},
+    # tyrg1 — Dispatcharr SERVER GROUPS (client.get_server_groups ->
+    # /api/m3u/server-groups/). A ServerGroup groups M3U accounts that share
+    # provider credentials so they share a credential-scoped connection
+    # counter; measured on 0.29.0 it carries EXACTLY ONE field, a unique name.
+    # It is in this producer set because it is the FK target an M3U account's
+    # ``server_group`` resolves through — the restore/sync importers order it
+    # BEFORE M3U_ACCOUNT for that reason. ``artifact_only`` for the same reason
+    # as its neighbours: the legacy per-section YAML path has no restorer.
+    "server_groups": {
+        "label": "Server Groups", "dispatcharr": True, "artifact_only": True,
+    },
     "dvr_rules": {"label": "DVR Rules", "dispatcharr": True, "artifact_only": True},
+    "upcoming_recordings": {
+        "label": "Upcoming Recordings", "dispatcharr": True, "artifact_only": True,
+    },
     "core_settings": {
         "label": "Core Settings", "dispatcharr": True, "artifact_only": True,
     },

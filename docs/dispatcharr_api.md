@@ -31,7 +31,8 @@ Three of ECM's Dispatcharr integration bugs (`q6xjl`, `lsa0s`, and the settings-
    - `backend/tests/fixtures/dispatcharr_openapi_recorded.json` — a slice of the `/api/schema/?format=json` document (the `/api/core/settings/` and `/api/core/settings/{id}/` path items, plus the `User` component schema).
    - `backend/tests/fixtures/dispatcharr_core_settings_recorded.json` — the shape of `GET /api/core/settings/` (a bare list, non-contiguous integer ids).
    - `backend/tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json` — the shape of `GET /api/channels/recurring-rules/` and the dead-endpoint capture for the old `/api/dvr/rules/` guess.
-   - `backend/tests/fixtures/dispatcharr_openapi_paths_manifest.json` — **every** path and method the live 0.28.2 document exposes (all 224), with bodies stripped. Use it to answer "does this path exist, and does it allow this method?" without a live instance; use the three fixtures above when you need the *shape* of a response.
+   - `backend/tests/fixtures/dispatcharr_recordings_recorded.json` — `GET`/`POST`/`DELETE` on `/api/channels/recordings/`, captured on **0.29.0** (the others are 0.28.2). The only fixture here with populated rows *and* a refused request: it records the `400 "End time must be in the future."` a past-dated create earns, and the destination writing its own key into `custom_properties` between the 201 and the next GET.
+   - `backend/tests/fixtures/dispatcharr_openapi_paths_manifest.json` — **every** path and method the live 0.28.2 document exposes (all 224), with bodies stripped. Use it to answer "does this path exist, and does it allow this method?" without a live instance; use the fixtures above when you need the *shape* of a response.
 4. A path that "sounds right" by analogy to another resource is a guess, not a fact — Dispatcharr's namespacing is not fully consistent (see the DVR rules case below), and a wrong guess here has shipped a JSON-parse failure, a 404 on every apply, and a silently-empty backup category.
 
 ### The automated sweep (ADR-014)
@@ -112,13 +113,33 @@ The live 0.28.2 response is a **bare JSON list** of rows (confirmed by the recor
 | POST | `/api/channels/recurring-rules/` | Create a recurring rule. |
 | DELETE | `/api/channels/recurring-rules/{id}/` | Delete a recurring rule. |
 
-The real recurring-rules resource is `/api/channels/recurring-rules/` — this is what ECM's `dvr_rules` backup/restore category now targets. Two related Dispatcharr DVR surfaces are deliberately **not** part of this category:
+The real recurring-rules resource is `/api/channels/recurring-rules/` — this is what ECM's `dvr_rules` backup/restore category targets. Two related Dispatcharr DVR surfaces are deliberately **not** part of *this* category:
 
 - **Series rules** live inside the `dvr_settings` key of the `/api/core/settings/` blob (the `core_settings` category already carries them) — they are not a separate REST resource.
-- **Recordings** (`/api/channels/recordings/`) are per-instance runtime state, not a rule definition, and are out of scope for a config backup.
+- **Recordings** (`/api/channels/recordings/`) are recording INSTANCES rather than rule definitions, so they are not `dvr_rules`. They get their **own** category — see [Recordings](#recordings) below. (An earlier note here said they were "out of scope for a config backup" outright; bead `enhancedchannelmanager-ciabe` corrected that. The consequence of the blanket exclusion was that NO category covered recordings at all, so a restore silently produced a replica with none of the operator's scheduled recordings.)
 - **`/api/channels/dvr/comskip-config/` exists** (an earlier note here claimed Dispatcharr had no separate comskip endpoint — wrong; it does). But it is **not a usable backup source**: `GET` returns only `{"path": "...", "exists": bool}` — never the `comskip.ini` file *content* — and `POST` takes a multipart `.ini` file upload, not a JSON body. There is nothing to export from it and nothing to restore into it via JSON. Comskip *config values* that ECM does back up live as ordinary keys inside the same `/api/core/settings/` blob (split out client-side by a `comskip`-prefixed key match, not fetched from this endpoint).
 
 The live response for `/api/channels/recurring-rules/` is a **bare JSON list** on 0.28.2 (same shape caveat as core settings above: a destination that paginates this ViewSet would return a DRF `{"results": [...]}` envelope instead, and `get_dvr_rules()` normalizes both shapes to a list).
+
+## Recordings
+
+> Added 2026-08-23 (bead `enhancedchannelmanager-ciabe`). Measured live against **Dispatcharr 0.29.0** (`GET /api/core/version/`); the full capture, including the two behaviours below that the model source does not reveal, is in `backend/tests/fixtures/dispatcharr_recordings_recorded.json`.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/channels/recordings/` | List recording instances. **Bare JSON list**, same pagination caveat as recurring-rules; `get_recordings()` normalizes both shapes. |
+| POST | `/api/channels/recordings/` | Schedule a recording. |
+| DELETE | `/api/channels/recordings/{id}/` | Delete a recording (204). |
+
+The `Recording` serializer is the whole model: `{id, start_time, end_time, task_id, custom_properties, channel}`. `id` and `task_id` are `readOnly` — `task_id` is Dispatcharr's own celery handle (`dvr-recording-<id>`) and must never be sent on a create.
+
+Three facts that are **not** derivable from the model source and each of which would ship as a defect if assumed:
+
+1. **There is no status column.** The upcoming/completed distinction is not a field. `custom_properties["status"]` exists (`scheduled` / `recording` / `completed` / `interrupted` / `stopped`) but it is a free-form JSONField key the DVR pipeline writes, absent on a manually created row. The only always-present discriminator is the absolute `start_time` — which is also what Dispatcharr itself uses to mean "upcoming" in `BulkDeleteUpcomingRecordingsAPIView` (`Recording.objects.filter(start_time__gt=now)`).
+2. **A past-dated create is refused**: `400 {"non_field_errors": ["End time must be in the future."]}`. ECM's own filter gates on `start_time`, which is strictly stricter, so it never hands upstream a create this validator would reject.
+3. **The destination rewrites `custom_properties` after the create.** A recording POSTed with `custom_properties: {}` came back from the very next GET carrying `{"poster_logo_id": 316}` that Dispatcharr's artwork pass had written. It is therefore unusable as an identity field; ECM matches recordings on `(channel, start_time, end_time)`, comparing timestamps as parsed instants because the server also re-serializes them (a second-precision `start_time` came back at microsecond precision).
+
+ECM's `upcoming_recordings` category carries only recordings that have not started. Already-started/finished ones name a media file on the source instance's disk and cannot be carried by any API; rule-generated ones are regenerated on the destination by its own hourly `maintain_recurring_recordings` beat from the restored `dvr_rules`. Both exclusions are reported to the operator in the backup run message (ADR-013).
 
 ## Key Logo Endpoints
 

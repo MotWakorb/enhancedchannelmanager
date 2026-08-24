@@ -245,6 +245,40 @@ class StatefulDispatcharrFake:
         self.label = label
         # Distinct id bases per entity type so a leaked A-id is obvious on B.
         self.m3u_accounts = _Store("m3u_account", _name_key, id_base=id_base + 100)
+        # tyrg1 — the ServerGroup an M3U account's ``server_group`` FK points at.
+        # On Dispatcharr 0.29.0 the row is exactly ``{id, name}``, so a
+        # name-keyed store models it completely rather than approximately.
+        self.server_groups = _Store("server_group", _name_key, id_base=id_base + 900)
+        # 10wnq / hiacv — user agents. An M3U account, a stream profile AND the
+        # ``stream_settings`` core-settings blob all carry a ``user_agent`` FK
+        # that resolves through this namespace.
+        self.user_agents = _Store("user_agent", _name_key, id_base=id_base + 950)
+        # 10wnq — CORE SETTINGS, modelled the way Dispatcharr really returns
+        # them: a BARE JSON LIST of ``{id, key, name, value}`` rows with
+        # NON-CONTIGUOUS ids that do not correlate with list position (the shape
+        # ``tests/fixtures/dispatcharr_core_settings_recorded.json`` captured
+        # live, and the shape that made a key-string PATCH 404 in bead q6xjl).
+        # EVERY instance has these rows — Dispatcharr's own app-ready hook
+        # creates them — so they are seeded here rather than in ``seeded_source``:
+        # an "empty" destination still has its settings rows, and modelling it
+        # otherwise would let the key->id resolver pass on a shape that cannot
+        # occur.
+        self.core_settings: list[dict] = [
+            {"id": 6, "key": "network_access", "name": "Network Access",
+             "value": {"UI": ["10.0.0.0/8"]}},
+            {"id": 7, "key": "proxy_settings", "name": "Proxy Settings",
+             "value": {"buffering_timeout": 15}},
+            {"id": 17, "key": "stream_settings", "name": "Stream Settings",
+             "value": {"default_output_format": "mpegts"}},
+            {"id": 18, "key": "dvr_settings", "name": "DVR Settings",
+             "value": {"tv_fallback_dir": "TV_Shows"}},
+            {"id": 19, "key": "backup_settings", "name": "Backup Settings",
+             "value": {"schedule_enabled": False}},
+            {"id": 20, "key": "system_settings", "name": "System Settings",
+             "value": {"time_zone": "UTC"}},
+            {"id": 21, "key": "user_limit_settings", "name": "User Limit Settings",
+             "value": {"terminate_oldest": True}},
+        ]
         self.epg_sources = _Store("epg_source", _name_key, id_base=id_base + 200)
         # Guide rows are not a synced entity. They model independently minted
         # ids on A/B so channel-link tests must resolve by the portable tvg_id.
@@ -394,10 +428,44 @@ class StatefulDispatcharrFake:
         return {"success": True}
 
     async def patch_m3u_account(self, account_id: int, data: dict) -> dict:
-        """The is_active toggle the restore path uses to coax a provider fetch."""
+        """PATCH an account — the restore path's is_active toggle, and the
+        sync path's field convergence (bead ``…-zszjd``).
+
+        MODELS ``M3UAccountSerializer.update``, read off Dispatcharr 0.29.0 on
+        2026-08-23, because two of its behaviours decide whether a convergence
+        test can fail at all:
+
+        * **The four preference booleans are POPPED off the top level and written
+          into ``custom_properties``** — the same asymmetry ``create`` has (see
+          ``_PREFERENCE_DEFAULTS``). A fake that stored them at the top level
+          would be contradicted by ``get_m3u_accounts``, which projects them
+          back OUT of the blob, so the round trip has to go through the blob or
+          the value never survives a read.
+        * **``custom_properties`` is MERGED, not replaced**:
+          ``custom_props = {**existing_custom, **incoming_custom}``. A key the
+          destination holds and the source does not therefore SURVIVES a PATCH.
+          That is the honest ceiling on convergence through this endpoint, and
+          modelling replacement instead would let a test assert a deletion the
+          real API cannot perform.
+
+        Unlike ``update`` the booleans are only written when PRESENT — a partial
+        PATCH that omits them must not reset them to the create-time defaults.
+        """
         self._check_fault("patch_m3u_account", data)
         self.m3u_patch_calls.append((account_id, dict(data)))
-        return self.m3u_accounts.update(account_id, data)
+        payload = dict(data)
+        existing = self.m3u_accounts.rows.get(account_id) or {}
+        existing_custom = dict(existing.get("custom_properties") or {})
+        incoming_custom = dict(payload.pop("custom_properties", None) or {})
+        merged_custom = {**existing_custom, **incoming_custom}
+        touched_custom = bool(incoming_custom)
+        for key in self._PREFERENCE_DEFAULTS:
+            if key in payload:
+                merged_custom[key] = payload.pop(key)
+                touched_custom = True
+        if touched_custom:
+            payload["custom_properties"] = merged_custom
+        return self.m3u_accounts.update(account_id, payload)
 
     # THE FOUR PREFERENCE BOOLEANS AND WHERE THEY REALLY LIVE (bead …-avrix).
     # On Dispatcharr 0.29.0 (``apps/m3u/serializers.py``, read 2026-08-22) each
@@ -462,6 +530,78 @@ class StatefulDispatcharrFake:
         self.streams.delete(stream_id)
 
     # ----- EPG sources -----------------------------------------------------
+
+    # ----- user agents (hiacv) ---------------------------------------------
+
+    async def get_user_agents(self) -> list:
+        return self.user_agents.list()
+
+    async def create_user_agent(self, data: dict) -> dict:
+        self._check_fault("create_user_agent", data)
+        return self.user_agents.create(data)
+
+    async def delete_user_agent(self, user_agent_id: int) -> None:
+        self.user_agents.delete(user_agent_id)
+
+    # ----- core settings (10wnq) -------------------------------------------
+
+    async def get_core_settings(self):
+        """The BARE LIST shape the real endpoint returns (never an envelope)."""
+        return [dict(row) for row in self.core_settings]
+
+    async def update_core_setting(self, setting_id: int, setting_value) -> dict:
+        """PATCH ONE settings row BY INTEGER ID — the real route's contract.
+
+        Keyed by id rather than by key name on purpose: a key-string URL matches
+        no route and 404s on a real instance (bead ``…-q6xjl``), so a fake that
+        accepted a key would let a broken resolver pass.
+        """
+        self._check_fault("update_core_setting", setting_value)
+        for row in self.core_settings:
+            if row["id"] == setting_id:
+                row["value"] = setting_value
+                return dict(row)
+        raise FakeNotFoundError("core_setting", setting_id)
+
+    async def get_core_setting_id_map(self) -> dict:
+        """``{key -> row id}``. This is what CoreSettingIdResolver ACTUALLY calls.
+
+        Modelled because omitting it is how the settings step degraded into
+        something far louder than a missing fake: the resolver caught the
+        AttributeError, reported every key unresolvable, and — SETTINGS being a
+        FATAL failure category — the compensating rollback deleted every entity
+        the cycle had created. 73 tests across nine files failed on the
+        rolled-back state, almost none of them about settings.
+
+        A fake that answers ``get_core_settings`` but not this one cannot tell a
+        working resolver from a broken one: ``CoreSettingIdResolver`` calls THIS
+        method, and the detail route is keyed by integer pk (a key-string URL
+        404s on a real instance — bead ``…-q6xjl``).
+        """
+        return {row["key"]: row["id"] for row in self.core_settings}
+
+    def core_setting(self, key: str):
+        """This instance's stored value for one blob (test-side reader)."""
+        for row in self.core_settings:
+            if row["key"] == key:
+                return row["value"]
+        return None
+
+    # ----- server groups (tyrg1) -------------------------------------------
+
+    async def get_server_groups(self) -> list:
+        return self.server_groups.list()
+
+    async def create_server_group(self, data: dict) -> dict:
+        self._check_fault("create_server_group", data)
+        return self.server_groups.create(data)
+
+    async def update_server_group(self, group_id: int, data: dict) -> dict:
+        self._check_fault("update_server_group", data)
+        return self.server_groups.update(group_id, data)
+
+    async def delete_server_group(self, group_id: int) -> None:
+        self.server_groups.delete(group_id)
 
     async def get_epg_sources(self) -> list:
         return self.epg_sources.list()
@@ -661,6 +801,12 @@ class StatefulDispatcharrFake:
     async def delete_dvr_rule(self, rule_id: int) -> None:
         raise FakeNotFoundError("dvr_rule", rule_id)
 
+    async def delete_recording(self, recording_id: int) -> None:
+        # …-ciabe. Upcoming recordings are not in SYNC_CONFIG_CATEGORIES, so a
+        # sync cycle never creates one and this is never a real rollback target
+        # — it exists for the same reason ``delete_user`` above does.
+        raise FakeNotFoundError("upcoming_recording", recording_id)
+
     # ----- logos (bead 7ipq2.1 — the opt-in sync slice's write surface) -----
 
     async def get_all_logos_paginated(self, page_size: int = 500) -> list:
@@ -782,6 +928,7 @@ class StatefulDispatcharrFake:
             "channel_groups": {_name_key(r) for r in self.channel_groups.list()},
             "channel_profiles": {_name_key(r) for r in self.channel_profiles.list()},
             "stream_profiles": {_name_key(r) for r in self.stream_profiles.list()},
+            "server_groups": {_name_key(r) for r in self.server_groups.list()},
             "channels": {_channel_key(r) for r in self.channels.list()},
         }
 
@@ -795,6 +942,7 @@ class StatefulDispatcharrFake:
                 self.channel_groups,
                 self.channel_profiles,
                 self.stream_profiles,
+                self.server_groups,
                 self.channels,
                 self.streams,
                 self.logos,
@@ -843,10 +991,17 @@ class StatefulDispatcharrFake:
                 the dedicated channels+streams slice test that expects the synth.
         """
         fake = cls(label=label, id_base=1)
+        # tyrg1 — a SERVER GROUP, and the account below belongs to it. Seeding
+        # the FK rather than leaving it null is what makes the remap testable at
+        # all: a null ``server_group`` takes the same code path whether the
+        # namespace resolves or not, so a fixture without one cannot tell a
+        # working remap from the old unconditional drop.
+        server_group = fake.server_groups.create({"name": "Shared Provider Pool"})
         # M3U account with a SECRET that must not reach B (D2).
         fake.m3u_accounts.create(
             {"name": "Provider A", "username": "operator", "password": m3u_password,
-             "server_url": "http://provider-a.test/playlist.m3u"}
+             "server_url": "http://provider-a.test/playlist.m3u",
+             "server_group": server_group["id"]}
         )
         # EPG source with a SECRET password (D2) — the credential field
         # ``EPGSourceSerializer`` actually carries.
@@ -854,6 +1009,28 @@ class StatefulDispatcharrFake:
             {"name": "EPG One", "source_type": "xmltv", "m3u_account": None,
              "password": epg_password, "url": "http://epg-one.test/guide.xml"}
         )
+        # hiacv / 10wnq — a custom user agent, and the ``stream_settings`` blob
+        # pointing its ``default_user_agent`` at A's id for it. Seeding that FK
+        # is what makes the remap testable: a blob without one takes the same
+        # path whether the namespace resolves or not.
+        agent = fake.user_agents.create(
+            {"name": "ECM UA", "user_agent": "ECM/1.0"}
+        )
+        for row in fake.core_settings:
+            if row["key"] == "stream_settings":
+                row["value"] = {
+                    "default_user_agent": agent["id"],
+                    "default_output_format": "hls",
+                    # No ECM category corresponds to a Dispatcharr OutputProfile,
+                    # so this one can only ever be dropped (see the …-g8tyd
+                    # disposition in remap_stream_settings_fks).
+                    "hdhr_output_profile_id": 77,
+                }
+            elif row["key"] == "system_settings":
+                row["value"] = {"time_zone": "Europe/London", "catchup_enabled": False}
+            elif row["key"] == "network_access":
+                # A's allowlist. It must NEVER appear on B.
+                row["value"] = {"UI": ["192.168.50.0/24"]}
         fake.channel_groups.create({"name": "News"})
         fake.channel_groups.create({"name": "Sports"})
         fake.channel_profiles.create({"name": "Default Profile"})
@@ -886,12 +1063,25 @@ def make_sync_target(
     credential_version: int = 1,
     fuzzy_stream_matching: bool = False,
     sync_logos: bool = False,
+    logo_sync_interval_hours: int = 0,
+    last_logo_sync_at=None,
 ) -> MagicMock:
     """A fake ``SyncTarget`` row — enabled, fresh, never-insecure.
 
     Mirrors the shape ``run_sync`` reads (``id``/``name``/``base_url``/
     ``credentials``/``enabled``/``token_revoked_at``/``credential_version``/
-    ``insecure``/``fuzzy_stream_matching``/``sync_logos``).
+    ``insecure``/``fuzzy_stream_matching``/``sync_logos``/
+    ``logo_sync_interval_hours``/``last_logo_sync_at``).
+
+    ``sync_logos`` defaults ``False`` HERE while the product default is ``True``
+    (bead ``…-2yq19``), and the two are deliberately not the same knob: this
+    fixture's job is to let a test say "logos off" or "logos on" explicitly, and
+    most of the suite's logo tests were written to state one or the other. A
+    test that means to assert the PRODUCT default asserts it where the product
+    sets it — the ORM column and the create route — not through a mock.
+
+    ``logo_sync_interval_hours`` defaults ``0`` (= every cycle), which is the
+    pre-throttle behaviour every existing logo test was written against.
     """
     target = MagicMock()
     target.id = 7
@@ -904,6 +1094,8 @@ def make_sync_target(
     target.credentials = "encrypted-blob"
     target.fuzzy_stream_matching = fuzzy_stream_matching
     target.sync_logos = sync_logos
+    target.logo_sync_interval_hours = logo_sync_interval_hours
+    target.last_logo_sync_at = last_logo_sync_at
     return target
 
 

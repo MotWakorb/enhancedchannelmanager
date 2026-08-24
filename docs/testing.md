@@ -34,7 +34,7 @@ This project has comprehensive test coverage at three levels.
 > (`scripts/check_secrets.py`) that used to enforce it was removed with the CI
 > gate reduction, so nothing fails the build if you ignore it.
 
-Located in `backend/tests/`, run with `cd backend && ../.venv/bin/python -m pytest tests/ -q`
+Located in `backend/tests/`. **Run them with `scripts/backend-gate.sh`** — see [What the backend gate runs](#what-the-backend-gate-runs) below. Do not hand-type a pytest invocation and report it as the gate.
 
 **Router Tests** (`backend/tests/routers/`): Tests for extracted router modules.
 - `test_channels.py`, `test_channel_groups.py` - Channel management
@@ -78,6 +78,43 @@ Located in `backend/tests/`, run with `cd backend && ../.venv/bin/python -m pyte
 - `test_normalize_channel_create.py` - Normalization on create
 - `test_router_registration.py` - Route uniqueness validation
 - `test_lifecycle.py` - App startup/shutdown lifecycle
+
+## What the backend gate runs
+
+**One invocation: `scripts/backend-gate.sh`.** It takes no arguments, selects the project interpreter itself, and runs exactly what `.github/workflows/test.yml` runs. `backend/tests/unit/test_backend_gate_contract.py` asserts the two still match flag for flag, so they cannot drift apart.
+
+```bash
+scripts/backend-gate.sh    # THE gate. Check $? — do not pipe to `tail` and read that.
+```
+
+Two invocations used to circulate — one from `backend/CLAUDE.md` prose, one from CI — differing by **72 collected tests** (bead `enhancedchannelmanager-c9lb9`). Nothing was failing, so it was an instrument gap rather than a live defect, but it is the false-green class: "backend gate green" could be reported by a run that never executed those 72, and the figure looked authoritative because every handover repeated it.
+
+### What the backend gate excludes, and why
+
+Every exclusion is named. A bare "2 deselected" is an unreadable signal.
+
+| Excluded | How | Why |
+| --- | --- | --- |
+| `tests/e2e/` (10 files) | `--ignore` | Hits a live ECM container on `localhost:6100`. Without one it self-skips; with one it exercises whatever that container happens to be running — a result that depends on unrelated local state cannot gate a PR. E2E as a CI gate is deferred to bead `enhancedchannelmanager-2lw25`. |
+| `tests/performance/` (2 files) | `--ignore` | Seeds a 250k-row fixture; runs in the dedicated `perf-benchmarks` workflow (`bd-skqln.10`). |
+| `test_find_candidate_under_5ms_per_call_for_500_candidates` | `-m "not slow"` | Wall-clock microbenchmark with a 5 ms soft cap. Host contention on a runner false-fails it, and the latency figure is informational, not a gate. Still runs under an explicit `-m slow`. |
+| `test_migration_up_down_against_5m_rows` | `-m "not slow"` | Times an Alembic up/down against ~5M `session_telemetry` rows. Local pre-merge only (`bd-skqln.2`); also guarded by `ECM_RUN_VOLUME_TESTS`, so it self-skips even when selected. |
+
+Expected shape on a green `dev`: **`3 skipped, 2 deselected`**. A full-tree run (`pytest tests/`, no ignores) reports **9 skipped** instead — the other 6 live in the excluded trees. **`18 skipped` from either means the wrong interpreter** (see below).
+
+### The interpreter is part of the gate
+
+Ambient `python` commonly resolves an older `cryptography` build and **silently self-skips 9 TLS tests** instead of failing, so the run still reports success. The gap is invisible unless you compare skip counts. `scripts/backend-gate.sh` resolves the interpreter itself — `$ECM_PYTHON`, else the repo `.venv`, else (in a git worktree, which has no `.venv` of its own) the main checkout's, derived from `git rev-parse --git-common-dir` — and **refuses to run rather than fall back** to ambient `python`.
+
+### The subset-run coverage trap
+
+`pytest.ini` sets `--cov=. --cov-fail-under=56`, and coverage is measured over the **whole tree** regardless of what you selected. So *any* subset run exits non-zero even when every test in it passes — a bare `--collect-only` reports `Required test coverage of 56% not reached. Total coverage: 18.39%`. Read as a real failure, that has sent agents off to "fix" a healthy tree.
+
+```bash
+scripts/backend-gate.sh --subset tests/unit/test_foo.py -k some_case
+```
+
+`--subset` adds `--no-cov` and prints a banner. **A `--subset` run is not the gate** and must never be reported as one.
 
 ## Backend Test Layers: `integration/` vs `routers/`
 
@@ -490,15 +527,17 @@ rates above) and the whole-codebase thresholds stay as a floor.
 ### Running coverage locally
 
 ```bash
-# Backend — inside the container (matches the CI invocation).
-docker exec ecm-ecm-1 sh -c 'cd /app && python -m pytest \
-  --ignore=tests/e2e -m "not slow" --no-header -p no:warnings'
-# Coverage is auto-enabled via pytest.ini addopts. To disable for a quick
-# single-file run: add --no-cov.
+# Backend — from the host. This IS the CI invocation; coverage is auto-enabled
+# via pytest.ini addopts, so the ratchet is enforced by the same run.
+scripts/backend-gate.sh
 
 # Frontend — from the host.
 cd frontend && npm run test:coverage
 ```
+
+For a quick single-file run, use `scripts/backend-gate.sh --subset <path>`; it
+adds `--no-cov`, without which the run fails on whole-tree coverage no matter
+how the selected tests do. See [The subset-run coverage trap](#the-subset-run-coverage-trap).
 
 If a local run drops below threshold, fix the root cause (add a test, remove
 dead code, or adjust .coveragerc omit if the file is genuinely non-runtime).
@@ -717,13 +756,13 @@ the build pipeline.
 
 ```bash
 # Backend
-.venv/bin/python -m py_compile backend/main.py && cd backend && ../.venv/bin/python -m pytest tests/ -q
+.venv/bin/python -m py_compile backend/main.py && scripts/backend-gate.sh
 
 # Frontend
 cd frontend && npm test && npm run build
 ```
 
-Pin the project venv interpreter for both backend commands, not ambient `python`. Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so the gate reports success either way. See the callout under "Backend Tests" above for the measured skip-count difference.
+`scripts/backend-gate.sh` pins the project interpreter itself and refuses to fall back to ambient `python` — which resolves an older `cryptography` and silently self-skips 9 TLS tests, so the gate would report success either way. Pin the venv for the `py_compile` call too. See [The interpreter is part of the gate](#the-interpreter-is-part-of-the-gate).
 
 ## Mock Patch Targets
 
@@ -784,8 +823,8 @@ Every quarter (tracked via recurring beads), the QA persona (or on-call
 engineer in its absence) runs the 3-run cadence from bead `tp681`:
 
 1. Pull the current `flaky`-labelled beads list.
-2. Execute BE (`pytest tests/ --ignore=tests/e2e -m "not slow"`) and FE
-   (`npx vitest run`) three consecutive times on `dev` tip.
+2. Execute BE (`scripts/backend-gate.sh`) and FE (`npx vitest run`) three
+   consecutive times on `dev` tip.
 3. Any test that fails in exactly one of the three runs → new `flaky`-labelled
    bead (or comment on the existing one if already known).
 4. Any test that fails in all three runs → it is a real regression; escalate
@@ -862,14 +901,22 @@ under `enhancedchannelmanager-hhsz0`.
 The exact command used for the `tp681` baseline and the quarterly sweep:
 
 ```bash
-# BE — from inside ecm-ecm-1
-python -m pytest tests/ --ignore=tests/e2e \
+# BE — the gate, plus the flake sweep's own deselects.
+scripts/backend-gate.sh \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_trace_id_appears_in_log_line \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_generated_trace_id_matches_uuidv4_format_in_logs \
-  -p no:cacheprovider --tb=line -q
+  -p no:cacheprovider --tb=line
 
 # FE — from host (ecm-ecm-1 has no Node tooling)
 cd frontend && npx vitest run --reporter=default
 ```
 
 Remove the relevant `--deselect` once a flake/drift bead closes.
+
+> **Reading the deselect count here.** This sweep passes two `--deselect`s of
+> its own *on top of* the gate's `-m "not slow"`, so it reports **`4
+> deselected`**, not 2. That is expected and is the only invocation in this
+> repo that should report 4. If a sweep run reports 2, the `--deselect` flags
+> did not take effect; if a plain gate run reports 4, something is deselecting
+> tests that this table does not name. Either way, find out before reading the
+> run as green.

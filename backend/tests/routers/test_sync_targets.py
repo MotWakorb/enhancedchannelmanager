@@ -44,8 +44,16 @@ class TestCreateSyncTarget:
         assert body["last_outcome"] is None
         assert body["last_source_fingerprint"] is None
         assert body["fuzzy_stream_matching"] is False
-        # Logo sync is OPT-IN (bead 7ipq2.1) — default OFF on a fresh target.
-        assert body["sync_logos"] is False
+        # Logo sync DEFAULTS ON since bead …-2yq19 — a replica that silently
+        # arrives with no artwork is the failure epic f5a5j is named for, and
+        # the recorded reason for the old OFF default was cost, not
+        # correctness. The cost is answered by the sub-interval below, not by
+        # leaving the replica unbranded.
+        assert body["sync_logos"] is True
+        assert body["logo_sync_interval_hours"] == 24
+        # Never run for a fresh target, which is what makes its FIRST cycle
+        # carry logos rather than waiting out an interval.
+        assert body["last_logo_sync_at"] is None
         # Credentials masked — never the plaintext value.
         assert body["credentials"] == {"token": "***2345"}
         assert "supersecrettoken12345" not in str(body)

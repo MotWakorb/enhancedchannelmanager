@@ -4275,7 +4275,17 @@ export type RestoreEntityType =
   | 'channel'
   | 'stream'
   | 'user_agent'
+  // The Dispatcharr ServerGroup an M3U account's `server_group` FK points at
+  // (bead tyrg1). Its category is ordered before `m3u_account` in the restore
+  // and sync registries, so it appears in every sync report.
+  | 'server_group'
   | 'dvr_rule'
+  // The DVR recording INSTANCES that had not started yet when the backup was
+  // taken (bead ciabe). Distinct from `dvr_rule`, which is the recurring RULE
+  // that generates them. Completed recordings are never in a backup at all —
+  // they reference a media file on the source instance's disk — so there is no
+  // second entity type for them.
+  | 'upcoming_recording'
   // Report-only category for core_settings + comskip apply results (updated/
   // skipped, never created) — mirrors backend EntityType.SETTINGS (bead lc6zu).
   | 'settings'
@@ -4313,7 +4323,16 @@ export type RestoreSkipReason =
    * naming it would fire on every unattended cycle forever. Render it as an
    * ordinary no-op beside `excluded_by_operator`, never as a problem.
    */
-  | 'dependency_deselected';
+  | 'dependency_deselected'
+  /**
+   * The archived entity is pinned to an absolute moment that has since passed
+   * (bead ciabe) — an upcoming recording in a backup older than the recording
+   * itself. NEVER a loss: the destination cannot hold it either (Dispatcharr
+   * refuses a recording scheduled in the past), so a replica missing a
+   * programme that already aired has lost nothing. Render it as an ordinary
+   * no-op, never as a problem.
+   */
+  | 'schedule_already_past';
 
 /** Why an entity failed to apply. */
 export type RestoreFailureReason =
@@ -4596,6 +4615,31 @@ export interface RestoreReport {
    */
   provider_group_selection_details?: ProviderGroupSelectionDetail[];
   /**
+   * Fields on an ALREADY-EXISTING replica M3U account that differ from the
+   * source's (bead zszjd). Counts FIELDS, not accounts — "3 settings on this
+   * account are not what you set on the primary".
+   *
+   * Deliberately NOT one of the counters that move the outcome, for the same
+   * reason `profile_membership_drift` is not: it counts every difference the
+   * cycle FOUND, including the ones it then converged, so downgrading on it
+   * would put a red mark on exactly the cycle that fixed the problem. The half
+   * that does move the outcome is `account_convergence_unapplied`.
+   */
+  account_field_drift?: number;
+  /**
+   * Which accounts drifted, WHICH FIELD NAMES (never values — a converging
+   * account carries `username`, `password` and a credential-bearing
+   * `server_url`), and whether this cycle wrote them (bead zszjd).
+   */
+  account_field_drift_details?: AccountFieldDriftDetail[];
+  /**
+   * Drifted fields an APPLY tried to write onto the replica and could not
+   * (bead zszjd). One of the counters that forbid a SUCCESS outcome: the
+   * replica is missing something the source has and the run tried to deliver
+   * it. Clears by itself once a later cycle's write lands.
+   */
+  account_convergence_unapplied?: number;
+  /**
    * Set when the channel-group check did NOT run, because the operator
    * deselected the channel groups category (bead r1ei7). Its absence is what
    * makes `channel_group_drift: 0` trustworthy; when it is present that zero
@@ -4753,6 +4797,26 @@ export interface ProviderGroupSelectionDetail {
   selections_unapplied?: number;
   enabled_applied?: number;
   reason: string;
+}
+
+/**
+ * One replicated M3U account whose fields differ from the source's (bead zszjd).
+ *
+ * An account that already exists on the replica used to be matched
+ * ALREADY_EXISTS_IDENTICAL and never written to again — for every field, not
+ * one — so a setting changed on the primary afterwards diverged silently and
+ * permanently. The cycle now converges the account and reports what it moved.
+ *
+ * FIELD NAMES ONLY, NEVER VALUES: a converging account carries `username`,
+ * `password` and a credential-bearing `server_url`. `reason` is a sanitized
+ * phrase saying why a write did not happen, and is null when it did.
+ */
+export interface AccountFieldDriftDetail {
+  destination_account_id?: number | null;
+  name: string;
+  fields?: string[];
+  applied?: boolean;
+  reason?: string | null;
 }
 
 export async function getExportSections(): Promise<{key: string; label: string}[]> {
@@ -5328,11 +5392,37 @@ export interface SyncTarget {
   insecure: boolean;
   fuzzy_stream_matching: boolean;
   /**
-   * Per-target logo-replication opt-in. Default OFF and it stays OFF (ADR-013
-   * S9): the logos importer carries a streaming-upload cost S9 judged wrong to
-   * run every interval. The card offers a toggle; nothing flips it implicitly.
+   * Per-target logo replication. DEFAULT ON since bead 2yq19.
+   *
+   * It shipped OFF (ADR-013 S9) because the logos importer carries a
+   * streaming-upload cost S9 judged wrong to run every interval — a COST
+   * decision, not a correctness one. Under the faithful-copy principle an OFF
+   * default is a silent omission: the operator who never finds the toggle gets
+   * a replica with no artwork. The cost is answered by
+   * `logo_sync_interval_hours` instead, so the slice still does not run every
+   * cycle. The card offers a toggle; nothing flips it implicitly.
    */
   sync_logos: boolean;
+  /**
+   * How often the logo slice may run, in hours (default 24). `0` means every
+   * cycle. This is the throttle that lets `sync_logos` default ON.
+   */
+  logo_sync_interval_hours: number;
+  /** When the logo slice last actually ran; null == never (so the next cycle carries it). */
+  last_logo_sync_at?: string | null;
+  /**
+   * Core-settings blobs this target declines (bead 10wnq). Empty means
+   * "replicate every blob the engine allows", which is the default.
+   *
+   * Only two blobs have a real reason to be declined: `proxy_settings`
+   * (buffering tuning copied onto slower hardware) and `backup_settings` (both
+   * instances backing themselves up on one schedule, with the replica's
+   * retention bounded by the replica's storage). `network_access` is never
+   * replicated at all and cannot be named here — naming it is rejected rather
+   * than silently accepted, because accepting it would tell the operator their
+   * choice mattered.
+   */
+  core_settings_excluded: string[];
   /**
    * PRESENCE of a stored Schedules Direct password — never the value. True once
    * the operator has supplied one; the backend re-sends it to the replica's
@@ -5356,8 +5446,12 @@ export interface SyncTargetCreateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
-  /** Omit to take the backend default (OFF) — see `SyncTarget.sync_logos`. */
+  /** Omit to take the backend default (ON) — see `SyncTarget.sync_logos`. */
   sync_logos?: boolean;
+  /** Omit to take the backend default (24). `0` means every cycle. */
+  logo_sync_interval_hours?: number;
+  /** Core-settings blobs to decline. Omit to replicate all of them. */
+  core_settings_excluded?: string[];
   /**
    * The ONE credential an operator types, and they type it once. Ask for it
    * only when `getSyncSourceCredentialNeeds()` reports
@@ -5380,6 +5474,9 @@ export interface SyncTargetUpdateRequest {
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
   sync_logos?: boolean;
+  logo_sync_interval_hours?: number;
+  /** Omit to leave the stored list untouched; `[]` clears it. */
+  core_settings_excluded?: string[];
   /** Omit to leave the stored value untouched; `''` clears it. */
   schedules_direct_password?: string;
 }

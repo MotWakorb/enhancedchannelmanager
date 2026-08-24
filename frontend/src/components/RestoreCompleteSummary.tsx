@@ -71,7 +71,9 @@ const ENTITY_LABELS: Record<RestoreEntityType, string> = {
   channel: 'Channels',
   stream: 'Streams',
   user_agent: 'User agents',
+  server_group: 'Server groups',
   dvr_rule: 'DVR rules',
+  upcoming_recording: 'Upcoming recordings',
   settings: 'Dispatcharr settings',
   ecm_settings: 'ECM settings',
   user: 'Users',
@@ -93,6 +95,11 @@ const SKIP_REASON_LABELS: Record<RestoreSkipReason, string> = {
   // excluded the category the dependency lives in, which makes it an ordinary
   // no-op beside "Excluded by operator" — not the shortfall above it.
   dependency_deselected: 'Dependency excluded by operator',
+  // Bead ciabe. Says what happened rather than naming a dependency, because
+  // nothing is missing: the recording's slot passed while the backup sat on
+  // disk, and the destination would refuse to schedule it either. Sits beside
+  // the two no-op reasons above, not beside the shortfall.
+  schedule_already_past: 'Scheduled time has passed',
 };
 
 const FAILURE_REASON_LABELS: Record<RestoreFailureReason, string> = {

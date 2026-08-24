@@ -89,6 +89,18 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
     # and decode through their own seam (_decode_settings_category).
     "user_agents": EntityType.USER_AGENT,
     "dvr_rules": EntityType.DVR_RULE,
+    # tyrg1 — the Dispatcharr ServerGroup an M3U account's ``server_group`` FK
+    # points at. Its category is ordered BEFORE M3U_ACCOUNT in all three
+    # registries so the account's FK has a populated namespace to remap
+    # through; without this row the account could only drop the FK (g8tyd) and
+    # the replica lost its provider connection-limit grouping.
+    "server_groups": EntityType.SERVER_GROUP,
+    # …-ciabe — the DVR category's instance half. The producer has already done
+    # the upcoming/completed split, so every row in this section is one the
+    # importer may schedule; it re-checks staleness against the clock at apply
+    # time, because the interval between the backup and the restore is exactly
+    # when "upcoming" stops being true.
+    "upcoming_recordings": EntityType.UPCOMING_RECORDING,
 }
 
 # The SETTINGS-blob artifact sections (key/value mappings, not entity lists).

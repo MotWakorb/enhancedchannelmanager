@@ -198,9 +198,15 @@ class TestMigration0039WidenPipelineStatus:
 class TestMigration0040SyncTargetSyncLogos:
     """0040 adds the per-target ``sync_logos`` opt-in column (bead 7ipq2.1).
 
-    NOT NULL BOOLEAN with server_default='0' so pre-existing sync_targets rows
-    backfill to False (logos stay opt-in per ADR-013 S9 — the unconditional
-    per-cycle set is unchanged).
+    NOT NULL BOOLEAN. It shipped with server_default='0'; migration 0048 (bead
+    …-2yq19) flipped that to '1' because an OFF default meant a replica silently
+    arrived with no artwork. The unconditional per-cycle set is STILL unchanged —
+    logos run on their own sub-interval, not every cycle.
+
+    These tests upgrade to HEAD, so they read the CURRENT default rather than
+    0040's. That is deliberate: what matters to an operator is what a target
+    created today gets, and pinning 0040's historical value here would make this
+    file disagree with the product.
     """
 
     @staticmethod
@@ -212,9 +218,9 @@ class TestMigration0040SyncTargetSyncLogos:
                 return col
         return None
 
-    def test_upgrade_adds_column_with_false_backfill(self, tmp_path):
-        """After upgrade head the column exists NOT NULL and a pre-existing row
-        reads sync_logos=False (server_default backfill)."""
+    def test_upgrade_adds_column_defaulting_logos_on(self, tmp_path):
+        """After upgrade head the column exists NOT NULL and a NEW row reads
+        sync_logos=True (bead …-2yq19 — a replica arrives WITH its branding)."""
         from alembic import command
         from sqlalchemy.orm import Session
 
@@ -243,7 +249,7 @@ class TestMigration0040SyncTargetSyncLogos:
             with Session(engine) as session:
                 stored = session.get(SyncTarget, row_id)
                 assert stored is not None
-                assert stored.sync_logos is False  # opt-in default OFF
+                assert stored.sync_logos is True  # …-2yq19: default ON
         finally:
             engine.dispose()
 

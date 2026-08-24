@@ -25,8 +25,9 @@ import './SyncTargetsCard.css';
  * weigh, which is that a target with certificate checking off carries those
  * credentials in clear on every cycle.
  *
- * Logo replication is a per-target OPT-IN (`sync_logos`, default OFF per
- * ADR-013 S9) with its own row toggle — see `handleToggleLogos`.
+ * Logo replication is per-target (`sync_logos`, default ON since bead 2yq19)
+ * with its own row toggle — see `handleToggleLogos`. It still does not run
+ * every cycle: `logo_sync_interval_hours` throttles the slice instead.
  *
  * Safety model for "Sync now": the default action is a counts-only DRY-RUN
  * preview (confirm_apply:false). Only after a successful preview does an
@@ -42,7 +43,7 @@ import './SyncTargetsCard.css';
  *
  * Correcting a target in place (bead …-a3lby) — see `handleSave`. Every field
  * the create form sets was WRITE-ONCE here, so a mistyped base URL or password
- * meant delete-and-recreate: that resets `sync_logos` to its default OFF and
+ * meant delete-and-recreate: that resets `sync_logos` to its default and
  * hands the replacement the deleted target's execution history, which is keyed
  * on a REUSABLE target id (bead …-5dp92). The backend PUT and the api.ts client
  * already accepted every one of those fields; only this affordance was absent.
@@ -348,10 +349,16 @@ export function SyncTargetsCard() {
    *
    * `sync_logos` had no UI: enabling logo replication meant a raw
    * `PUT /api/sync-targets/{id}` or the MCP tool, and the operator guide said
-   * so. This is the missing control — nothing more. The DEFAULT stays OFF
-   * (ADR-013 S9: the logos importer carries a streaming-upload cost S9 judged
-   * wrong to run every interval), so the create path never sets it and only an
-   * explicit click here turns it on.
+   * so. This is that control.
+   *
+   * The DEFAULT is now ON (bead 2yq19). It was OFF because the logos importer
+   * carries a streaming-upload cost ADR-013 S9 judged wrong to run every
+   * interval — a COST decision, which the faithful-copy principle does not
+   * overrule; what it does overrule is answering that cost with a replica that
+   * has no artwork. The cost is answered by `logo_sync_interval_hours` (default
+   * 24h) instead. The create path still never SETS the field: it omits it and
+   * takes the backend default, so this toggle remains the only explicit
+   * operator choice in either direction.
    *
    * Unlike preview/apply this is not gated on `enabled`: it is configuration,
    * and an operator should be able to set it on a target whose kill switch is
