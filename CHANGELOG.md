@@ -172,6 +172,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **60 dependency updates across backend, mcp-server and frontend, with no functional change intended and everything gated green (epic `enhancedchannelmanager-gflo5`, build 0146).** 39 backend packages, 2 mcp-server packages and 17 frontend packages move to their latest compatible release, plus `starlette` and `uvicorn` moving separately — 60 in total. Every gate ran green against a venv and lock built fresh from the new pins: backend `pytest tests/` 11522 passed / 9 skipped, the canonical `scripts/backend-gate.sh` 11456 passed / 3 skipped / 2 deselected, and frontend 253 files / 3568 tests passed, with lint and `tsc --noEmit` clean and `npm ci` reproducing the lock.
+
+  **Zero known vulnerabilities were introduced or remain outstanding.** The single standing advisory, `ecdsa` PYSEC-2026-1325 (transitive via `python-jose`), has no published fix, is already ignored in CI by explicit flag, and is unchanged by this work. This is a currency sweep, not a security fix — nothing here hardens ECM against a threat it wasn't already resistant to.
+
+  **Frontend dependencies are now hard-pinned.** Every caret and tilde in `frontend/package.json` is gone, so an install resolves exactly the versions that were tested rather than a range.
+
+  **`starlette` moves to 1.6.0, converging the backend with `mcp-server`**, which already ran that version. `fastapi` is deliberately held at 0.136.1 — see below.
+
+  **Deliberately not upgraded, and why:**
+  - `fastapi` 0.137+ stops flattening included routers into `app.routes`, which breaks the MCP capability gate's route-template resolution (bead `enhancedchannelmanager-g4pnh`)
+  - `mcp` 2.x renames `FastMCP` to `MCPServer` and moves its import paths, which fails at import time (bead `enhancedchannelmanager-wiezs`)
+  - `alembic` 1.19 adds a CHECK-constraint comparison that trips a tool bug against migration 0012 (bead `enhancedchannelmanager-y6j4g`)
+  - Four frontend majors — `typescript` 7, `recharts` 3, `jsdom` 30, `@testing-library/jest-dom` 7 — are held for individual evaluation, one major per PR (bead `enhancedchannelmanager-4ba6m`)
+
+  All four are tracked under epic `enhancedchannelmanager-gflo5`.
+
 - **Logo replication to a sync target is now ON by default, on a 24-hour clock (bead `enhancedchannelmanager-2yq19`, build 0145).** It shipped OFF, and the recorded reason was cost rather than correctness — which meant a replica silently arrived with no artwork unless you found and flipped the toggle. The cost is now answered by a throttle instead of by an unbranded replica: the logo slice still does not run on every cycle, but a new **logo sync interval** (default 24 hours, `0` meaning every cycle) decides when it does. A brand-new target carries its logos on its **first** cycle rather than waiting out an interval with nothing on the replica at all.
 
   **A target you have already turned logos off on stays off.** The change moves the default for targets you create from here on and rewrites no stored value, because a stored *off* is indistinguishable from a deliberate choice you made and a migration is the wrong place to overturn it. If ECM cannot read a target's interval it falls back to running the slice every cycle rather than never — a value that cannot be trusted has to fail toward the faithful copy, because failing the other way reinstates the silent omission invisibly.
