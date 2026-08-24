@@ -284,7 +284,7 @@
         "authorize",
         "if"
       ],
-      "value": "(github.event_name == 'workflow_call' && inputs.tests_attested && inputs.candidate_branch == 'dev') || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')"
+      "value": "(inputs.tests_attested && inputs.candidate_branch == 'dev') || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')"
     },
     {
       "file": "release-cut-gate.yml",

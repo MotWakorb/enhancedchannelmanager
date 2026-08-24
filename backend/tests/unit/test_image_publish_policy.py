@@ -166,6 +166,11 @@ def test_workflows_separate_verification_from_publication():
     assert "uses: ./.github/workflows/publish-images.yml" in tests
     assert "tests_attested: true" in tests
     assert "github.event.workflow_run.head_sha" in publish
+    # A called workflow sees the caller's github context, so gating the dev
+    # path on `github.event_name == 'workflow_call'` never matches and every
+    # publish job skips silently (enhancedchannelmanager-0dsa4).
+    assert "github.event_name == 'workflow_call'" not in publish
+    assert "(inputs.tests_attested && inputs.candidate_branch == 'dev')" in publish
     assert "image_publish_policy.py" in publish
     assert "docker/build-push-action" not in publish
     assert "skopeo copy --preserve-digests" in publish
