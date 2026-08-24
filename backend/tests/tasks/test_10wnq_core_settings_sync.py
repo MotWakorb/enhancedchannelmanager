@@ -54,7 +54,12 @@ import json
 import pytest
 
 from dbas.restore_artifact import _SECTION_TO_ENTITY
-from dbas.restore_contracts import EntityType, IdRemapTable, RestoreReport
+from dbas.restore_contracts import (
+    EntityType,
+    IdRemapTable,
+    RestoreOutcome,
+    RestoreReport,
+)
 from tasks.dbas_sync_engine import (
     NEVER_SYNC_CORE_SETTINGS_BLOBS,
     SYNC_CONFIG_CATEGORIES,
@@ -65,6 +70,15 @@ from tasks.dbas_sync_engine import (
     sync_config_importer_steps,
     target_excluded_core_settings,
 )
+
+
+#: The fake's real resolver method, held so the vacuity guard below can delete
+#: it from the class and put it back. Captured at import time rather than
+#: re-derived, so a failed restore cannot leave the class permanently broken for
+#: every later test in the session.
+from tests.fixtures.sync_harness import StatefulDispatcharrFake as _Fake  # noqa: E402
+
+_RESOLVER_METHOD = _Fake.get_core_setting_id_map
 
 
 #: Every blob Dispatcharr 0.29.0 exposes, and the ruling this bead recorded for
@@ -445,10 +459,113 @@ async def test_a_settings_failure_does_not_delete_the_replica(tmp_path):
     harness = SyncHarness(source=source, dest=dest)
     report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
 
-    # Counted and surfaced — the failure is never silent…
+    # NON-FATAL IS NOT UNREPORTED, and bead ``…-06gax`` is the reason this half
+    # is asserted at all: seven importers once swallowed a failed destination
+    # read into "the destination is empty", which is the DANGEROUS direction.
+    # Making settings non-fatal must not drift into making them invisible, so
+    # all three independent surfaces are pinned here rather than trusted.
+    #
+    # 1. the ``…-bj442`` marker — ``get_core_setting_id_map`` starts with
+    #    ``get_``, so ``_ReadObservingClient`` stamps the report at the moment
+    #    the read raises;
+    assert report.destination_unreadable, "a failed destination read went unmarked"
+    assert "get_core_setting_id_map" in report.destination_unreadable
+    # 2. the per-key counts and their drill-down;
     assert report.category(EntityType.SETTINGS).failed > 0
+    assert report.category(EntityType.SETTINGS).failure_details
+    # 3. and the outcome, which may never read as a clean success.
     assert report.outcome is not None
-    assert report.outcome.value != "success"
-    # …and the replica the cycle built is STILL THERE.
+    assert report.outcome != RestoreOutcome.SUCCESS
+
+    # …and the replica the cycle built is STILL THERE. This is the half the
+    # non-fatal set buys; everything above is the half it must not cost.
     assert [a["name"] for a in dest.m3u_accounts.list()], "the replica was rolled back"
     assert dest.server_groups.list(), "the replica was rolled back"
+    assert dest.channels.list(), "the replica was rolled back"
+
+
+@pytest.mark.asyncio
+async def test_a_category_with_a_compensator_still_rolls_the_replica_back(tmp_path):
+    """THE OTHER HALF, and without it the test above proves almost nothing.
+
+    A test showing only the new leniency would pass just as well against a build
+    with rollback disabled everywhere — which is the opposite of what this bead
+    wants. So the contrast is asserted in the same file, on the same harness,
+    with the only difference being WHICH category fails.
+
+    ``CHANNEL`` is the contrast because it is everything ``SETTINGS`` is not: it
+    HAS a compensator (``_delete_dispatch`` maps it to ``delete_channel``), so a
+    rollback can actually undo the thing that failed, and partial channel state
+    is genuinely worse than none. That difference — can the rollback undo the
+    category that failed? — is the whole line, and it is why this does not
+    generalise into "make everything non-fatal".
+    """
+    from tests.fixtures.sync_harness import StatefulDispatcharrFake, SyncHarness
+
+    source = StatefulDispatcharrFake.seeded_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+
+    def _refuse_channels(method: str, payload) -> None:
+        if method == "create_channel":
+            raise RuntimeError("destination refused the channel")
+
+    dest.inject_fault(_refuse_channels)
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert report.outcome is not None
+    assert report.outcome != RestoreOutcome.SUCCESS
+    # The rollback ran and took the replica with it — deliberately, because a
+    # channel failure CAN be compensated and half a lineup is worse than none.
+    assert dest.m3u_accounts.list() == []
+    assert dest.server_groups.list() == []
+
+
+@pytest.mark.asyncio
+async def test_a_fake_missing_the_resolvers_method_cannot_pass_these_tests(tmp_path):
+    """VACUITY GUARD on the fixture itself.
+
+    ``CoreSettingIdResolver`` calls ``get_core_setting_id_map``, NOT
+    ``get_core_settings``. Adding the latter to the fake changed nothing and the
+    settings step went on failing — a fake that answers only the read the
+    resolver does not use cannot tell a working resolver from a broken one, and
+    every settings assertion written against it would be vacuous.
+
+    So the missing-method case is pinned as the ORIGINAL failure it caused: an
+    ``AttributeError``, reported rather than swallowed, with nothing landing on
+    the replica. If someone deletes the method from the fake to "simplify" it,
+    this fails instead of the whole suite quietly re-degrading.
+    """
+    from tests.fixtures.sync_harness import StatefulDispatcharrFake, SyncHarness
+
+    source = StatefulDispatcharrFake.seeded_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+    before = dest.core_setting("system_settings")
+
+    # Exactly the shape the fake had before the fixture fix.
+    del StatefulDispatcharrFake.get_core_setting_id_map
+    try:
+        harness = SyncHarness(source=source, dest=dest)
+        report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+    finally:
+        StatefulDispatcharrFake.get_core_setting_id_map = (
+            _RESOLVER_METHOD  # restore for every other test in the session
+        )
+
+    # Nothing landed…
+    assert dest.core_setting("system_settings") == before
+    # …and it was LOUD, not swallowed (…-06gax).
+    assert report.category(EntityType.SETTINGS).failed > 0
+    assert report.outcome != RestoreOutcome.SUCCESS
+
+    # NOTE, and it is a real distinction rather than a weakened assertion:
+    # ``destination_unreadable`` is NOT set in this case, and must not be
+    # asserted here. ``_ReadObservingClient`` builds its observing wrapper
+    # inside ``__getattr__``, so a method that RAISES is caught and marked,
+    # while a method that is ABSENT raises ``AttributeError`` out of
+    # ``__getattr__`` itself, before any wrapper exists. Only the first is
+    # reachable against a real ``DispatcharrClient``, which always has the
+    # method — and that case is pinned by
+    # ``test_a_settings_failure_does_not_delete_the_replica`` above, which does
+    # assert the marker. This test covers the FIXTURE hazard; that one covers
+    # the production one.
