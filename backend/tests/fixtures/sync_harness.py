@@ -249,6 +249,36 @@ class StatefulDispatcharrFake:
         # On Dispatcharr 0.29.0 the row is exactly ``{id, name}``, so a
         # name-keyed store models it completely rather than approximately.
         self.server_groups = _Store("server_group", _name_key, id_base=id_base + 900)
+        # 10wnq / hiacv — user agents. An M3U account, a stream profile AND the
+        # ``stream_settings`` core-settings blob all carry a ``user_agent`` FK
+        # that resolves through this namespace.
+        self.user_agents = _Store("user_agent", _name_key, id_base=id_base + 950)
+        # 10wnq — CORE SETTINGS, modelled the way Dispatcharr really returns
+        # them: a BARE JSON LIST of ``{id, key, name, value}`` rows with
+        # NON-CONTIGUOUS ids that do not correlate with list position (the shape
+        # ``tests/fixtures/dispatcharr_core_settings_recorded.json`` captured
+        # live, and the shape that made a key-string PATCH 404 in bead q6xjl).
+        # EVERY instance has these rows — Dispatcharr's own app-ready hook
+        # creates them — so they are seeded here rather than in ``seeded_source``:
+        # an "empty" destination still has its settings rows, and modelling it
+        # otherwise would let the key->id resolver pass on a shape that cannot
+        # occur.
+        self.core_settings: list[dict] = [
+            {"id": 6, "key": "network_access", "name": "Network Access",
+             "value": {"UI": ["10.0.0.0/8"]}},
+            {"id": 7, "key": "proxy_settings", "name": "Proxy Settings",
+             "value": {"buffering_timeout": 15}},
+            {"id": 17, "key": "stream_settings", "name": "Stream Settings",
+             "value": {"default_output_format": "mpegts"}},
+            {"id": 18, "key": "dvr_settings", "name": "DVR Settings",
+             "value": {"tv_fallback_dir": "TV_Shows"}},
+            {"id": 19, "key": "backup_settings", "name": "Backup Settings",
+             "value": {"schedule_enabled": False}},
+            {"id": 20, "key": "system_settings", "name": "System Settings",
+             "value": {"time_zone": "UTC"}},
+            {"id": 21, "key": "user_limit_settings", "name": "User Limit Settings",
+             "value": {"terminate_oldest": True}},
+        ]
         self.epg_sources = _Store("epg_source", _name_key, id_base=id_base + 200)
         # Guide rows are not a synced entity. They model independently minted
         # ids on A/B so channel-link tests must resolve by the portable tvg_id.
@@ -500,6 +530,45 @@ class StatefulDispatcharrFake:
         self.streams.delete(stream_id)
 
     # ----- EPG sources -----------------------------------------------------
+
+    # ----- user agents (hiacv) ---------------------------------------------
+
+    async def get_user_agents(self) -> list:
+        return self.user_agents.list()
+
+    async def create_user_agent(self, data: dict) -> dict:
+        self._check_fault("create_user_agent", data)
+        return self.user_agents.create(data)
+
+    async def delete_user_agent(self, user_agent_id: int) -> None:
+        self.user_agents.delete(user_agent_id)
+
+    # ----- core settings (10wnq) -------------------------------------------
+
+    async def get_core_settings(self):
+        """The BARE LIST shape the real endpoint returns (never an envelope)."""
+        return [dict(row) for row in self.core_settings]
+
+    async def update_core_setting(self, setting_id: int, setting_value) -> dict:
+        """PATCH ONE settings row BY INTEGER ID — the real route's contract.
+
+        Keyed by id rather than by key name on purpose: a key-string URL matches
+        no route and 404s on a real instance (bead ``…-q6xjl``), so a fake that
+        accepted a key would let a broken resolver pass.
+        """
+        self._check_fault("update_core_setting", setting_value)
+        for row in self.core_settings:
+            if row["id"] == setting_id:
+                row["value"] = setting_value
+                return dict(row)
+        raise FakeNotFoundError("core_setting", setting_id)
+
+    def core_setting(self, key: str):
+        """This instance's stored value for one blob (test-side reader)."""
+        for row in self.core_settings:
+            if row["key"] == key:
+                return row["value"]
+        return None
 
     # ----- server groups (tyrg1) -------------------------------------------
 
@@ -917,6 +986,28 @@ class StatefulDispatcharrFake:
             {"name": "EPG One", "source_type": "xmltv", "m3u_account": None,
              "password": epg_password, "url": "http://epg-one.test/guide.xml"}
         )
+        # hiacv / 10wnq — a custom user agent, and the ``stream_settings`` blob
+        # pointing its ``default_user_agent`` at A's id for it. Seeding that FK
+        # is what makes the remap testable: a blob without one takes the same
+        # path whether the namespace resolves or not.
+        agent = fake.user_agents.create(
+            {"name": "ECM UA", "user_agent": "ECM/1.0"}
+        )
+        for row in fake.core_settings:
+            if row["key"] == "stream_settings":
+                row["value"] = {
+                    "default_user_agent": agent["id"],
+                    "default_output_format": "hls",
+                    # No ECM category corresponds to a Dispatcharr OutputProfile,
+                    # so this one can only ever be dropped (see the …-g8tyd
+                    # disposition in remap_stream_settings_fks).
+                    "hdhr_output_profile_id": 77,
+                }
+            elif row["key"] == "system_settings":
+                row["value"] = {"time_zone": "Europe/London", "catchup_enabled": False}
+            elif row["key"] == "network_access":
+                # A's allowlist. It must NEVER appear on B.
+                row["value"] = {"UI": ["192.168.50.0/24"]}
         fake.channel_groups.create({"name": "News"})
         fake.channel_groups.create({"name": "Sports"})
         fake.channel_profiles.create({"name": "Default Profile"})

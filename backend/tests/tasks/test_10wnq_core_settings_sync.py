@@ -325,3 +325,83 @@ def test_the_report_is_a_plain_settings_category_the_shared_importer_fills():
     report = RestoreReport(is_dry_run=True)
     cat = report.category(EntityType.SETTINGS)
     assert cat.created == 0
+
+
+# ---------------------------------------------------------------------------
+# 13-15. ACROSS THE REAL SEAM — the half a structural assertion cannot give.
+#
+# Everything above is unit level. "The step is in the registry" is exactly the
+# kind of claim that passes on a step that was wired and inert, which is the
+# failure this bead was warned about by name. These three run a real cycle
+# (gather -> run_sync -> run_restore -> the reused settings importer -> B's
+# stateful settings rows) and look at what the replica ended up holding.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_the_replicated_blobs_actually_land_on_the_replica(tmp_path):
+    """The blobs cross, with the source's values, through the real path."""
+    from tests.fixtures.sync_harness import StatefulDispatcharrFake, SyncHarness
+
+    source = StatefulDispatcharrFake.seeded_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+    harness = SyncHarness(source=source, dest=dest)
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert dest.core_setting("system_settings") == {
+        "time_zone": "Europe/London",
+        "catchup_enabled": False,
+    }
+    assert dest.core_setting("stream_settings")["default_output_format"] == "hls"
+
+
+@pytest.mark.asyncio
+async def test_network_access_never_reaches_the_replica(tmp_path):
+    """The one surviving exclusion, proven against the destination's own row.
+
+    B keeps ITS allowlist. Had A's crossed, an operator reaching B from a
+    different network would be locked out of their own replica.
+    """
+    from tests.fixtures.sync_harness import StatefulDispatcharrFake, SyncHarness
+
+    source = StatefulDispatcharrFake.seeded_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+    before = dest.core_setting("network_access")
+    assert before != source.core_setting("network_access"), "fixture does not differ"
+
+    harness = SyncHarness(source=source, dest=dest)
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    assert dest.core_setting("network_access") == before
+
+
+@pytest.mark.asyncio
+async def test_the_replicas_default_user_agent_points_at_ITS_OWN_row(tmp_path):
+    """THE SILENT DEFECT, proven end to end.
+
+    A settings blob is a JSON value Dispatcharr stores without validating, so
+    forwarding A's ``default_user_agent`` pk would have left B's default pointing
+    at whatever row holds that number — with no 400, no counter and no report.
+    The harness gives A and B disjoint id bases precisely so a leaked source pk
+    is visible here rather than coincidentally correct.
+
+    ``hdhr_output_profile_id`` is asserted absent in the same breath: it names a
+    Dispatcharr ``OutputProfile``, ECM has no category for one, and the honest
+    outcome is "unset on B" rather than "pointed at an unrelated profile".
+    """
+    from tests.fixtures.sync_harness import StatefulDispatcharrFake, SyncHarness
+
+    source = StatefulDispatcharrFake.seeded_source()
+    dest = StatefulDispatcharrFake.empty_dest()
+    source_agent_id = source.user_agents.list()[0]["id"]
+
+    harness = SyncHarness(source=source, dest=dest)
+    await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    dest_agent_id = next(
+        a["id"] for a in dest.user_agents.list() if a["name"] == "ECM UA"
+    )
+    landed = dest.core_setting("stream_settings")
+    assert landed["default_user_agent"] == dest_agent_id
+    assert landed["default_user_agent"] != source_agent_id
+    assert "hdhr_output_profile_id" not in landed
