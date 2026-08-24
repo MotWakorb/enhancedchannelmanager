@@ -39,7 +39,7 @@ httpx==0.28.1
     #   mcp
 httpx-sse==0.4.3
     # via mcp
-idna==3.18
+idna==3.19
     # via
     #   anyio
     #   httpx
@@ -102,16 +102,19 @@ typer==0.27.1
     # via mcp
 typing-extensions==4.16.0
     # via
+    #   anyio
     #   mcp
     #   pydantic
     #   pydantic-core
+    #   referencing
+    #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
     # via
     #   mcp
     #   pydantic
     #   pydantic-settings
-uvicorn==0.52.3
+uvicorn==0.52.4
     # via
     #   -r mcp-server/requirements.in
     #   mcp
