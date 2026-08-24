@@ -19,7 +19,13 @@ The canonical version string lives in [`frontend/package.json`](../frontend/pack
 
 ## Touchpoints
 
-The version literal is hand-edited in **three** files. All three must move in lockstep on every bump. **Nothing enforces this.** The `version-consistency` job and `scripts/check_version_consistency.py` were removed in the CI gate reduction, so this is a convention held by review alone; a divergence between the three touchpoints merges silently.
+The version literal is hand-edited in **three** files. All three must move in lockstep on every bump.
+
+**This is enforced** by [`backend/tests/unit/test_version_touchpoint_consistency.py`](../backend/tests/unit/test_version_touchpoint_consistency.py), which runs in the backend pytest suite (a required PR check). The invariant it pins is *every declaration of the ECM application version agrees with the canonical source* — stated as a property, not as a list of three paths, because the guard it replaces was a hardcoded list and a fourth declaration added elsewhere was outside it by construction. The test discovers declarations by scanning the product tree, and separately requires the discovered set and the table below to be **the same set**, so a fourth touchpoint cannot be added silently in either direction: undocumented code fails, and undiscoverable documentation fails.
+
+It lives in the pytest suite rather than a dedicated CI job on purpose. Its predecessor — the `version-consistency` job and `scripts/check_version_consistency.py` — was deleted wholesale in the CI gate reduction, and the lockstep then went unguarded for months. A test inside the suite cannot be removed by trimming workflow files.
+
+**What it does not check: advancement.** It asserts the touchpoints *agree*, not that a code change *bumped* them. `scripts/check_version_advances.py` covered that and is also gone; deciding whether a change earns a bump remains a convention followed by hand ([`docs/shipping.md`](shipping.md#3a-first-decide-whether-this-change-gets-a-version-bump-at-all) steps 3a/3b).
 
 **Lockstep governs how you bump, not whether you bump.** A change containing only approved root machine-generated `.beads` state gets **no** bump: it carries no build to advance, and taking a build number a concurrent branch already holds is pure conflict. Every other path, including documentation, images, workflow support files, and beads configuration, is a code-gate input. [`scripts/classify_changed_paths.py`](../scripts/classify_changed_paths.py) is the arbiter. Decide with [`docs/shipping.md`](shipping.md#3a-first-decide-whether-this-change-gets-a-version-bump-at-all) → step 3a, and confirm it mechanically at [step 6a](shipping.md#6a-confirm-the-bump-decision-before-opening-the-pr), after the branch is committed. Do not run the classifier before the commit: with no branch diff to read it reports `code_paths_changed=true` for every change, which is an empty-input default rather than a verdict. Leaving all three touchpoints untouched keeps them agreeing, which is what the rule wants on an exempt machine-state PR.
 
@@ -32,13 +38,27 @@ The version literal is hand-edited in **three** files. All three must move in lo
 When you add a fourth touchpoint:
 
 1. Edit the file with the new literal in lockstep with the other three.
-2. Add it to the list below, and to any local tooling that reads the version. There is no longer a `TOUCHPOINTS` registry to update: the consistency checker that owned it was removed.
-3. Add a row to the table above so the next agent doing a manual bump sees the full surface.
+2. **Add a row to the table above.** This is not documentation hygiene — the table *is* the registry. `test_documented_touchpoints_and_discovered_touchpoints_are_the_same_set` parses it, and a declaration the table does not list fails the backend suite with the offending path named.
+3. Confirm the guard can actually read your new file. It dispatches on file type (`.py` via AST, `.json` via `json.loads`, anything else via a text scan for a `version`-shaped assignment). If your touchpoint declares the version in a shape none of those recognise, the same test fails — extend `declared_versions_in_file()` rather than exempting the file.
+4. Update any local tooling that reads the version.
+
+### Not a touchpoint: `frontend/package-lock.json`
+
+[`frontend/package-lock.json`](../frontend/package-lock.json) declares `"version"` twice — at the root and at the `packages[""]` self-entry — and is **deliberately not a touchpoint**. It is allowed to lag, and the guard excludes it by name.
+
+The reasoning, so this is a decision on the record rather than an oversight:
+
+- It has never tracked the `-BUILD` suffix. Today it reads `0.18.0` while the canonical version is on the `0.18.1` line; that is its normal condition, not drift that appeared.
+- Nothing reads it for the application version. `build.yml` takes `jq -r .version frontend/package.json`; the lockfile's copy is npm's record of the package's own identity, consumed by npm alone.
+- npm rewrites it only on install. Making it track would mean regenerating the lockfile on every build bump — turning a one-line edit into a dependency-resolution event, and producing a guaranteed conflict on every pair of concurrent PRs, since each would rewrite the same generated file.
+
+It resyncs to whatever `MAJOR.MINOR.PATCH` is current the next time someone runs `npm install`. That is expected and needs no action. `test_package_lock_is_documented_as_a_non_touchpoint` pins this section in place, so the exclusion cannot quietly lose its rationale.
 
 History of why this guard exists:
 
 - **PR #277** (cherry-pick of bd-lkyg5 from `release/v0.16.1` to `dev`, 2026-05-13): the cherry-pick agent noticed `backend/routers/backup.py` was at `"0.16.0"` while `frontend/package.json` had been bumped 27 times to `"0.17.0-0027"`. The skew had been latent for months. It was only caught because the cherry-picked commit happened to touch `backup.py`. Fixed inline; bd-9rtlc filed.
-- **bd-9rtlc audit** (2026-05-14): grep across the codebase surfaced a second long-standing skew: `backend/main.py` was at `"0.16.0-0003"` (FastAPI kwarg) while `frontend/package.json` was at `"0.17.0-0033"`. The FastAPI version only shows in the OpenAPI schema, which no external consumer cited, so nobody noticed for ~30 builds. Both touchpoints are now bumped in lockstep at `"0.17.0-0034"` and the CI guard (this job) blocks any future divergence.
+- **bd-9rtlc audit** (2026-05-14): grep across the codebase surfaced a second long-standing skew: `backend/main.py` was at `"0.16.0-0003"` (FastAPI kwarg) while `frontend/package.json` was at `"0.17.0-0033"`. The FastAPI version only shows in the OpenAPI schema, which no external consumer cited, so nobody noticed for ~30 builds. Both touchpoints were re-synced at `"0.17.0-0034"`.
+- **Guard removed, then restored** (bead `enhancedchannelmanager-ipcqx`): the `version-consistency` CI job that caught neither of the above — it postdated them — was itself deleted in the CI gate reduction at commit `3404d2d5`, along with `scripts/check_version_consistency.py`. The lockstep then ran unguarded. Until 2026-08-23 this section still ended by crediting that job with blocking all future divergence: a claim that was true when written, never revisited when the job was deleted, and directly contradicted by the Touchpoints section immediately above it. A reader who stopped at the history came away believing they were protected. Enforcement now lives in the backend pytest suite — see [Touchpoints](#touchpoints) — and `test_versioning_doc_does_not_claim_a_ci_guard_that_was_removed` pins the retired sentence out of this file so it cannot be reinstated.
 
 ## 0.16.0: yanked first attempt, then re-cut
 

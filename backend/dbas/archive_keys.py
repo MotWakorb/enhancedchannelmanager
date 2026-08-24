@@ -22,6 +22,8 @@ Conventions (``docs/style_guide.md``): ``snake_case``; Google-style docstrings.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 # Archived-channel key carrying the ``tvg_id`` of the EPG-DATA ROW the channel
 # was linked to on the source, resolved at backup time.
 #
@@ -64,3 +66,54 @@ def as_int(value) -> int | None:
     if isinstance(value, int):
         return value
     return None
+
+
+def as_instant(value) -> datetime | None:
+    """Parse an archived absolute timestamp to an aware UTC ``datetime``.
+
+    Lives here for the same reason :func:`as_int` does: BOTH halves of the
+    ``upcoming_recordings`` round trip depend on it and must not drift (bead
+    ``enhancedchannelmanager-ciabe``). The PRODUCER decides which recordings are
+    still upcoming with it; the CONSUMER re-checks staleness at restore time and
+    builds its collision identity with it. Two copies of this rule would let the
+    producer archive a row the importer then treats as a different instant.
+
+    Why parse at all rather than compare the strings. Dispatcharr re-serializes
+    what it stores: a recording POSTed at second precision came back from the
+    very next GET as ``2026-08-23T23:16:58.511980Z`` (recorded live on 0.29.0,
+    ``tests/fixtures/dispatcharr_recordings_recorded.json`` ->
+    ``create_responses[3]``). A string identity would have read that as a
+    different recording and duplicated it on the next restore.
+
+    ``Z`` is normalized to ``+00:00`` because :meth:`datetime.fromisoformat` did
+    not accept the military suffix before Python 3.11 and the archive is written
+    with it. A NAIVE timestamp is read as UTC — that is what Dispatcharr's own
+    serializer does with one (``timezone.make_aware`` under the instance's
+    current zone) and reading it as local time here would shift the instant by
+    the host's offset.
+
+    Args:
+        value: Any archived timestamp field value.
+
+    Returns:
+        An aware UTC ``datetime``, or ``None`` when the value is absent or is
+        not a timestamp this contract can read. ``None`` NEVER means "now" and
+        never means "upcoming" — every caller treats an unreadable timestamp as
+        not-portable, because a row ECM cannot place in time is a row it cannot
+        prove is still in the future.
+    """
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        text = value.strip()
+        if text.endswith(("Z", "z")):
+            text = text[:-1] + "+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

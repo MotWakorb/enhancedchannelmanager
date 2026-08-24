@@ -730,9 +730,13 @@ async def test_logo_slice_never_deletes_b_only_logos(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_logo_slice_off_by_default_b_logos_untouched(tmp_path):
-    """Default target (sync_logos=False): source logo files on disk are NEVER
-    pushed — B's logo surface stays empty."""
+async def test_logo_slice_off_leaves_b_logos_untouched(tmp_path):
+    """A target with ``sync_logos`` OFF never pushes source logo files.
+
+    The PRODUCT default moved to ON in bead …-2yq19; this fixture sets the flag
+    OFF explicitly (``make_sync_target``'s own default), so the test still means
+    what its name says — it guards the OFF path, not the default.
+    """
     config_dir = tmp_path / "config"
     _seed_source_logo_files(config_dir)
 
@@ -1030,7 +1034,7 @@ async def test_logo_sync_enabled_after_the_channels_already_replicated(tmp_path)
     """The operator flow bead …-8gnik will actually produce, and the reason the
     sync path binds SOURCE-WINS rather than preserving.
 
-    ``sync_logos`` defaults OFF and has no UI, so the realistic sequence is:
+    ``sync_logos`` runs on a slower sub-interval, so the realistic sequence is:
     cycles run, B gets its lineup, THEN the flag goes on. By that point every
     channel on B already exists and is MATCHED, not created — so a pass that
     only touched channels this cycle created would bind nothing at all, forever,
@@ -1154,11 +1158,12 @@ async def test_a_logo_b_never_received_is_a_named_miss_not_a_silent_null(tmp_pat
 
 @pytest.mark.asyncio
 async def test_logos_off_leaves_bs_channel_logos_alone(tmp_path):
-    """The default target (``sync_logos`` OFF) binds nothing.
+    """A target with ``sync_logos`` OFF binds nothing.
 
-    Bead …-8gnik owns the toggle and its default OFF; this pass must not reach
-    across either. Green before the fix as well as after — it is a REGRESSION
-    guard on the opt-in boundary, not a demonstration of the defect.
+    Bead …-8gnik owns the toggle; this pass must not reach across it. Green
+    before the fix as well as after — it is a REGRESSION guard on the off/on
+    boundary, not a demonstration of the defect. (The product default moved to
+    ON in …-2yq19; the flag is set OFF here explicitly.)
     """
     source, source_logo = _channel_with_a_hosted_logo()
     dest = _dest_with_a_decoy_at(source_logo["id"])

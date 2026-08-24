@@ -133,6 +133,7 @@ def _seed_journal_db(path):
 def _patched_build(
     tmp_path, *, with_logos=False, dest_dir=None, client_overrides=None,
     get_client_override=None, source_logos=None, logo_images=None, capture=None,
+    recordings=None,
 ):
     """Run build_backup_artifact with CONFIG_DIR/JOURNAL_DB_FILE pointed at
     tmp_path, settings carrying secrets, and Dispatcharr returning M3U accounts
@@ -203,6 +204,15 @@ def _patched_build(
     mock_client.get_dvr_rules = AsyncMock(
         return_value=[{"id": 41, "name": "Record CNN", "channel": 5}]
     )
+    # tyrg1 — a Dispatcharr ServerGroup is exactly ``{id, name}`` on 0.29.0.
+    mock_client.get_server_groups = AsyncMock(
+        return_value=[{"id": 51, "name": "Shared Provider Pool"}]
+    )
+    # …-ciabe — the recording INSTANCES. Left EMPTY here deliberately: this
+    # fixture's job is the artifact/degradation surface, and the upcoming/
+    # excluded split has its own suite. An unstubbed method would degrade the
+    # category on every build and make ``degraded_categories`` unreadable.
+    mock_client.get_recordings = AsyncMock(return_value=[])
     mock_client.get_core_settings = AsyncMock(
         return_value=[
             {"id": 1, "key": "default_user_agent", "value": "ECM/1.0"},
@@ -233,6 +243,12 @@ def _patched_build(
         return outcome
 
     mock_client.fetch_logo_image = AsyncMock(side_effect=_fetch_logo_image)
+
+    if recordings is not None:
+        # …-ciabe. The RAW upstream recording population for this build — the
+        # producer's upcoming/excluded split runs over it inside the real
+        # builder, which is the only place the census reaches BackupArtifact.
+        mock_client.get_recordings = AsyncMock(return_value=recordings)
 
     for method_name, exc in (client_overrides or {}).items():
         getattr(mock_client, method_name).side_effect = exc
@@ -1150,3 +1166,103 @@ class TestOrphanedLogoSpoolSweep:
 
         _patched_build(tmp_path, dest_dir=tmp_path)
         assert live.exists()
+
+
+class TestUpcomingRecordingsThroughTheRealBuilder:
+    """…-ciabe, crossing the seam the unit tests cannot.
+
+    ``tests/dbas/test_ciabe_upcoming_recordings.py`` proves the split and the
+    census in isolation. What it CANNOT prove is that the census survives the
+    four call frames between the gather that learns it and the
+    :class:`BackupArtifact` that reports it — it travels by ContextVar, and a
+    ContextVar set in the wrong context reads back as its default with nothing
+    raised anywhere. So these tests run the REAL ``build_backup_artifact``, read
+    the numbers off the artifact it returns, and open the ZIP to confirm the
+    category YAML carries exactly the rows those counts imply.
+    """
+
+    @staticmethod
+    def _rows():
+        from datetime import datetime, timedelta, timezone
+
+        def iso(dt):
+            return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+        now = datetime.now(timezone.utc)
+
+        def row(rec_id, offset, **extra):
+            start = now + offset
+            base = {
+                "id": rec_id,
+                "channel": 5,
+                "start_time": iso(start),
+                "end_time": iso(start + timedelta(hours=1)),
+                "task_id": "dvr-recording-%d" % rec_id,
+                "custom_properties": {},
+            }
+            base.update(extra)
+            return base
+
+        return [
+            row(1, timedelta(hours=6)),                       # archived
+            row(2, timedelta(days=3)),                        # archived
+            row(3, timedelta(minutes=-10)),                   # in progress
+            row(4, timedelta(days=-2)),                       # finished
+            row(5, timedelta(days=-9)),                       # finished
+            row(6, timedelta(hours=8),
+                custom_properties={"rule": {"id": 41}}),      # rule-generated
+        ]
+
+    def test_the_artifact_reports_the_recordings_it_left_behind(self, tmp_path):
+        art = _patched_build(tmp_path, recordings=self._rows())
+        assert art.recordings_excluded_already_started == 3
+        assert art.recordings_excluded_regenerated_by_a_rule == 1
+        # An exclusion is not a gather failure: the category is intact.
+        assert "upcoming_recordings" not in art.degraded_categories
+
+    def test_the_archived_category_holds_only_the_upcoming_rows(self, tmp_path):
+        art = _patched_build(tmp_path, recordings=self._rows())
+        with zipfile.ZipFile(art.zip_path) as zf:
+            parsed = yaml.safe_load(zf.read("categories/upcoming_recordings.yaml"))
+        archived = parsed["dispatcharr"]["upcoming_recordings"]
+        assert [r["id"] for r in archived] == [1, 2]
+
+    def test_a_build_with_nothing_to_exclude_reports_nothing(self, tmp_path):
+        """The counts have to be able to be ZERO, or a non-zero one proves
+        nothing. This is the adversarial case for the two assertions above."""
+        art = _patched_build(tmp_path, recordings=[self._rows()[0]])
+        assert art.recordings_excluded_already_started == 0
+        assert art.recordings_excluded_regenerated_by_a_rule == 0
+
+    def test_a_build_that_could_not_read_the_recordings_reports_no_exclusions(
+        self, tmp_path
+    ):
+        """A DEGRADED recordings fetch must report ZERO excluded, never a stale
+        value — that is what the per-build re-arm buys.
+
+        The stale value is seeded here deliberately, in the caller's context,
+        because that is the only arrangement in which the leak is observable:
+        ``build_backup_artifact`` runs inside an asyncio Task, which COPIES the
+        caller's context, so a value set before the call is visible inside while
+        a value set inside never escapes. Seeding it is therefore the adversarial
+        case for the re-arm and not a contrived one — an exclusion notice the
+        operator cannot act on ("go and copy 99 files") is worse than silence,
+        and a run that could not even read the recordings has nothing to report.
+
+        The category IS degraded here, which is a separate and correct signal.
+        """
+        backup_mod._RECORDINGS_EXCLUDED.set(
+            {"already_started": 99, "regenerated_by_a_rule": 99,
+             "unreadable_schedule": 0}
+        )
+        try:
+            art = _patched_build(
+                tmp_path,
+                client_overrides={"get_recordings": RuntimeError("upstream 500")},
+            )
+        finally:
+            backup_mod._RECORDINGS_EXCLUDED.set(None)
+
+        assert art.recordings_excluded_already_started == 0
+        assert art.recordings_excluded_regenerated_by_a_rule == 0
+        assert "upcoming_recordings" in art.degraded_categories

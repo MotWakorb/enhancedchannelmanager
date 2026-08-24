@@ -33,7 +33,15 @@ constant.
 Scope of THIS engine (ADR-013 phasing / S9)
 -------------------------------------------
 CONFIG categories (bead ``tjaey``): ``m3u_accounts``, ``epg_sources``,
-``channel_groups``, ``channel_profiles``, ``stream_profiles``.
+``channel_groups``, ``channel_profiles``, ``stream_profiles``, plus the two
+FK-OWNER categories their dependents resolve through — ``user_agents`` (bead
+``…-hiacv``) and ``server_groups`` (bead ``…-tyrg1``) — and ``core_settings``
+(bead ``…-10wnq``), which S9 and S3 have listed since this ADR was written and
+which appeared nowhere in this engine until that bead. Core settings are
+key/value BLOBS rather than an entity list, so they are absent from
+``_SECTION_TO_ENTITY`` by design and the plan assembler gives them their own
+branch; WHICH blobs cross is the per-blob register
+(:data:`SYNC_CORE_SETTINGS_BLOBS` / :data:`NEVER_SYNC_CORE_SETTINGS_BLOBS`).
 
 CHANNELS + STREAMS (bead ``kcxie``, Phase-2): the channels category is gathered
 WITH its embedded streams and synced AFTER the config categories, through the
@@ -58,11 +66,18 @@ collision-safe floor applied for the continuous-sync context:
   bound to a wrong-but-similar destination stream while the cycle reported
   success. The floor is a property of the CYCLE, not of one importer.
 
-LOGOS are OPT-IN per target (bead ``7ipq2.1``), not per-cycle-unconditional
-(ADR-013 S9): the logos importer carries a DESTRUCTIVE ``clear_existing``
-bulk-delete plus a per-logo streaming-upload cost that does not belong in the
-default per-cycle slice. The guarded slice this engine ships is exactly the S9
-exit path: a ``SyncTarget.sync_logos`` flag (default OFF); when ON the LOGO
+LOGOS are SUB-INTERVALLED per target, not per-cycle-unconditional (ADR-013 S9):
+the logos importer carries a DESTRUCTIVE ``clear_existing`` bulk-delete plus a
+per-logo streaming-upload cost that does not belong in the default per-cycle
+slice. The guarded slice this engine ships is exactly the S9 exit path — but the
+exit is now taken through the interval rather than through the toggle.
+``SyncTarget.sync_logos`` DEFAULTS ON (bead ``…-2yq19``): it shipped OFF under
+``7ipq2.1``, and because the recorded reason was COST rather than correctness,
+ADR-013's faithful-copy principle rules an OFF default a silent omission — a
+replica arriving with no artwork at all is the second half of what epic
+``f5a5j`` is named for. The cost is answered by ``logo_sync_interval_hours``
+(default 24, ``0`` = every cycle) and ``last_logo_sync_at``; see
+:func:`logo_slice_is_due`. When the slice runs the LOGO
 category is assembled METADATA-ONLY (never bytes in the plan) and the REUSED
 logos importer runs with ``clear_existing`` hard-disabled (the sync path can
 NEVER bulk-delete B's logos) and a lazy ``content_provider`` that hydrates each
@@ -136,6 +151,7 @@ from dbas.restore_contracts import (
     RollbackLedger,
 )
 from dbas.restore_orchestrator import (
+    NON_FATAL_FAILURE_CATEGORIES,
     ApplyContext,
     ImporterCallable,
     ImporterStep,
@@ -147,7 +163,8 @@ from dbas.restore_orchestrator import (
 from dbas.importers import logos as logos_mod
 from dbas.importers.channels import import_channels
 from dbas.importers.logos import import_logos
-from credential_sentinel import credential_is_present
+from dbas.importers.m3u_accounts import import_m3u_accounts
+from credential_sentinel import credential_is_present, strip_redaction_sentinels
 from routers import backup as backup_mod
 from routers.backup import (
     BACKUP_SCHEMA_VERSION,
@@ -195,6 +212,11 @@ SYNC_NEVER_CREDENTIAL_COLUMNS: frozenset[str] = frozenset(
 # and each needs a matching ImporterStep in sync_config_importer_steps(): a
 # gathered category with no step is never imported, and a step with no gathered
 # category is a no-op, so the two must be edited together.
+# The gathered section name for Dispatcharr's core-settings blobs. Declared
+# ahead of SYNC_CONFIG_CATEGORIES because that set references it; the per-blob
+# register that decides which blobs actually cross is below the set.
+_CORE_SETTINGS_SECTION = "core_settings"
+
 SYNC_CONFIG_CATEGORIES: frozenset[str] = frozenset(
     {
         "m3u_accounts",
@@ -203,7 +225,164 @@ SYNC_CONFIG_CATEGORIES: frozenset[str] = frozenset(
         "channel_profiles",
         "user_agents",
         "stream_profiles",
+        # …-tyrg1: the Dispatcharr ServerGroup an M3U account's ``server_group``
+        # FK points at. Gathered so the SERVER_GROUP step ordered ahead of
+        # M3U_ACCOUNT has rows to create and a namespace to fill; without it the
+        # account's FK could only be dropped and the replica lost the grouping
+        # that makes its accounts share a provider connection limit.
+        "server_groups",
+        # …-10wnq: the core-settings BLOBS ADR-013 S9 has always listed and the
+        # engine never carried. Present here so the GATHER fetches them; the
+        # plan assembler gives them their own branch, because they are key/value
+        # blobs rather than an entity list and are therefore absent from
+        # ``_SECTION_TO_ENTITY`` by design. See SYNC_CORE_SETTINGS_BLOBS for the
+        # per-blob register and NEVER_SYNC_CORE_SETTINGS_BLOBS for the one
+        # exclusion.
+        _CORE_SETTINGS_SECTION,
     }
+)
+
+# ---------------------------------------------------------------------------
+# CORE SETTINGS (bead ``…-10wnq``) — the per-blob register.
+# ---------------------------------------------------------------------------
+#
+# ADR-013 S9 and S3 have listed "core settings" in the per-cycle set since the
+# ADR was written, and until this bead ``core_settings`` appeared NOWHERE in
+# this engine: not in the category set, not in the step registry, not anywhere.
+# It was the last S9 category still missing after bead ``…-hiacv`` added user
+# agents.
+#
+# THE TRAP THIS AVOIDS, named on the bead: core settings are key/value BLOBS and
+# are deliberately absent from ``_SECTION_TO_ENTITY`` (which maps sections to
+# ENTITY-LIST categories). The plan assembler below iterates that table, so
+# adding a category key alone would have been INERT — wired-looking and moving
+# nothing. The SETTINGS category is therefore assembled by its own branch, in
+# the ``{"section", "values"}`` shape the orchestrator's settings step consumes.
+#
+# THE SEVEN BLOBS, read off dispatcharr:latest (0.29.0 ``core/models.py``) on
+# 2026-08-23 rather than from the recorded fixture, because the fixture is a
+# 0.28.2 shape capture with the values stripped. Each entry below states what
+# the blob actually contains and why it is in or out.
+
+# REPLICATED. Each was either ruled SYNC by the PO on 2026-08-21 and never
+# built, or re-examined here against the 2026-08-22 faithful-copy principle.
+SYNC_CORE_SETTINGS_BLOBS: frozenset[str] = frozenset(
+    {
+        # PO-ruled SYNC 2026-08-21, never built until now.
+        #
+        # ``stream_settings`` — default_user_agent, default_stream_profile,
+        # m3u_hash_key, default_output_format, hdhr_output_profile_id. THREE of
+        # those five are instance-local FOREIGN KEY IDS, which the 2026-08-21
+        # ruling did not account for and which a blob PATCH would carry
+        # SILENTLY: unlike an entity create, Dispatcharr does not validate them,
+        # so a raw source id is simply stored and B's defaults quietly point at
+        # whichever rows happen to hold those numbers. That is the ``…-9h6cv`` /
+        # ``…-g8tyd`` defect class without the 400 that made those two visible.
+        # :func:`_remap_stream_settings_fks` handles them.
+        "stream_settings",
+        # ``dvr_settings`` — recording path templates, comskip flags, pre/post
+        # offsets, and ``series_rules``. Operator policy throughout. Note this
+        # also makes an existing claim TRUE: ``RESTORABLE_SECTIONS``' dvr_rules
+        # comment says SERIES rules are excluded from that category because
+        # "core_settings already carries" them — which was not so while
+        # core_settings synced nowhere.
+        "dvr_settings",
+        # ``system_settings`` — time_zone, max_system_events, preferred_region,
+        # auto_import_mapped_files, enable_ip_lookup, catchup_enabled. Operator
+        # policy throughout, no ids, no addresses.
+        "system_settings",
+        # TENSION RESOLVED **TOWARD REPLICATION**, and the measurement gap the
+        # bead flagged is now CLOSED. ``user_limit_settings`` was excluded on
+        # 2026-08-21 for ADJACENCY to the never-sync ``users`` category, with the
+        # ADR recording that the real harm ("limits keyed to user accounts that
+        # never cross") was UNVERIFIED because the blob is empty on the live
+        # instance. It is resolved from the SOURCE rather than from that empty
+        # case, exactly as the bead required: 0.29.0 ``core/models.py:756``
+        # declares the blob as four GLOBAL BOOLEANS —
+        # ``terminate_on_limit_exceeded``, ``prioritize_single_client_channels``,
+        # ``ignore_same_channel_connections``, ``terminate_oldest`` — and its
+        # only consumers (``apps/proxy/utils.py:148-151, 308-309, 358``) read
+        # them as proxy behaviour when a connection limit is breached. There is
+        # no user reference in the blob at any depth. The suspected harm does not
+        # exist, so under the principle there is nothing left to exclude on.
+        "user_limit_settings",
+        # TENSION RESOLVED **TOWARD REPLICATION, WITH A PER-TARGET OPT-OUT**.
+        # ``proxy_settings`` is buffering_timeout/speed, redis_chunk_ttl,
+        # channel_shutdown_delay, channel_init_grace_period,
+        # channel_client_wait_period, new_client_behind_seconds. The recorded
+        # 2026-08-21 reason was "may legitimately differ if the replica has
+        # different hardware" — a PREFERENCE, which the principle rejects as a
+        # class. But a real functional risk does exist behind it: tuning copied
+        # onto slower hardware can degrade playback on B. The ADR's own reading
+        # is that this argues for an opt-out rather than omission, so it
+        # replicates by default and an operator who needs B tuned differently
+        # names it in ``SyncTarget.core_settings_excluded``.
+        "proxy_settings",
+        # TENSION RESOLVED **TOWARD REPLICATION, WITH A PER-TARGET OPT-OUT** —
+        # and this is the closest call of the three. ``backup_settings`` is
+        # schedule_enabled / schedule_frequency / schedule_time /
+        # schedule_day_of_week / schedule_cron_expression / retention_count
+        # (0.29.0 ``apps/backups/scheduler.py``), and unlike the other two it
+        # DOES name a specific harm: both instances then run their backup job on
+        # the same schedule, and B's retention count is bounded by B's storage,
+        # not A's. Against that: a standby with no backup schedule at all is a
+        # replica missing settings, and it is missing them silently. The ADR
+        # names two ways out — replicate-with-offset, or a per-target opt-out —
+        # and this takes the opt-out, because an OFFSET would have ECM inventing
+        # a schedule neither instance was configured with, which is a third
+        # state rather than a faithful copy. An operator who does not want B
+        # backing itself up names the blob in the same exclusion list.
+        "backup_settings",
+    }
+)
+
+# NEVER REPLICATED — the one exclusion that survives the principle intact.
+#
+# ``network_access`` is Dispatcharr's per-endpoint CIDR ALLOWLIST
+# (0.29.0 ``core/models.py:714``), and ``dispatcharr.utils.network_access_allowed``
+# gates every surface it has: the UI, the stream proxy, the Xtream Codes API and
+# the M3U/EPG output (measured across ``apps/accounts``, ``apps/timeshift``,
+# ``apps/output`` and ``apps/proxy``). Replicating A's allowlist onto a replica
+# that sits somewhere else on the network either LOCKS THE OPERATOR OUT OF B or
+# OPENS B UP, depending on which way the two differ. That is a specific,
+# named harm of the same class as ``dispatcharr_users``, not an unease, and it
+# is the ONLY core-settings blob that keeps its exclusion.
+#
+# Code-enforced rather than merely omitted: :func:`select_core_settings_blobs`
+# subtracts this set unconditionally, so a per-target setting cannot opt INTO it.
+NEVER_SYNC_CORE_SETTINGS_BLOBS: frozenset[str] = frozenset({"network_access"})
+
+
+# The failure categories that must NOT roll a REPLICA back (bead …-10wnq).
+#
+# ``run_restore``'s module default stays exactly as the PO ruled it on
+# 2026-08-03 (bead ``…-zt3kf``): on a ONE-SHOT ARCHIVE RESTORE a settings-key
+# ``DEPENDENCY_UNRESOLVED`` aborts the whole run and rolls back. That ruling was
+# made about an operator action a human watches and can retry.
+#
+# CONTINUOUS SYNC IS THE OPPOSITE CONTEXT, and this constant is the whole of the
+# difference. It runs unattended, forever, on a schedule, with nobody reading
+# the result. Three facts make a rollback there strictly destructive:
+#
+# * A setting is NEVER LEDGERED — ``_delete_dispatch`` has no SETTINGS
+#   compensator by design — so the rollback cannot undo the settings. It only
+#   deletes the M3U accounts, EPG sources, groups, profiles and channels the
+#   cycle successfully created. It fixes nothing and costs everything.
+# * The trigger is as small as ONE unreadable ``GET /api/core/settings/`` on the
+#   destination, or one blob key a version-skewed B does not have. That is the
+#   ``…-d0agi`` trade — a whole replica for a cosmetic config defect — in a
+#   category that cannot even be compensated.
+# * ADR-013 S8 makes "just retry next interval" the recovery mechanism for this
+#   engine. A rollback is precisely what destroys the state that makes retry
+#   converge.
+#
+# The failures are still COUNTED, still in ``failure_details``, and still forbid
+# a SUCCESS outcome. Nothing goes silent; the replica just survives.
+#
+# This became REACHABLE when this bead built the core-settings category — before
+# it, ``core_settings`` synced nowhere and the step had nothing to fail on.
+SYNC_NON_FATAL_CATEGORIES: frozenset[EntityType] = (
+    NON_FATAL_FAILURE_CATEGORIES | frozenset({EntityType.SETTINGS})
 )
 
 # Bead kcxie adds the CHANNELS category (with embedded streams). It is gathered
@@ -218,11 +397,15 @@ SYNC_CHANNEL_CATEGORIES: frozenset[str] = frozenset({"channels"})
 # auditable constant.
 SYNC_ALL_CATEGORIES: frozenset[str] = SYNC_CONFIG_CATEGORIES | SYNC_CHANNEL_CATEGORIES
 
-# Logos are OPT-IN per SyncTarget (``sync_logos``, default off — bead 7ipq2.1,
-# the ADR-013 S9 exit path). Deliberately NOT part of SYNC_ALL_CATEGORIES: the
-# unconditional per-cycle set stays exactly what S9 ratified, and the logo
-# slice only runs for a target whose operator opted in. When it runs it is
-# NEVER destructive (clear_existing is hard-disabled in the sync logos step).
+# Logos are per-SyncTarget and SUB-INTERVALLED (``sync_logos``, default ON since
+# bead …-2yq19; ``logo_sync_interval_hours``, default 24 — the ADR-013 S9 exit
+# path). Deliberately NOT part of SYNC_ALL_CATEGORIES: the UNCONDITIONAL
+# per-cycle set stays exactly what S9 ratified, and the logo slice runs on its
+# own slower clock (:func:`logo_slice_is_due`). What changed in …-2yq19 is only
+# the DEFAULT — the mechanism decision that kept logos off the every-cycle set
+# is untouched, because it is about cost and the principle does not overrule
+# cost, only silent omission. When it runs it is NEVER destructive
+# (clear_existing is hard-disabled in the sync logos step).
 SYNC_LOGO_CATEGORIES: frozenset[str] = frozenset({"logos"})
 
 
@@ -1016,6 +1199,160 @@ def target_schedules_direct_password(sync_target) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
 
+def target_excluded_core_settings(sync_target) -> frozenset[str]:
+    """The core-settings blobs THIS target's operator opted out of (…-10wnq).
+
+    The per-target opt-out the ADR's reading of ``proxy_settings`` and
+    ``backup_settings`` calls for: both replicate by default, and an operator
+    with a real reason (B on slower hardware; B should not run its own backup
+    job) names the blob instead of losing every other setting with it.
+
+    Stored as a JSON list on ``SyncTarget.core_settings_excluded``. Unreadable or
+    absent means "exclude nothing", which is the direction the faithful-copy
+    principle points when a value cannot be trusted — the opposite default would
+    let a corrupt column silently stop settings replicating.
+    """
+    raw = getattr(sync_target, "core_settings_excluded", None)
+    if not raw:
+        return frozenset()
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        names = raw
+    elif isinstance(raw, str):
+        import json
+
+        try:
+            names = json.loads(raw)
+        except (ValueError, TypeError):
+            logger.warning(
+                "[SYNC] Target %s has an unreadable core_settings_excluded "
+                "value; excluding nothing.", getattr(sync_target, "id", "?"),
+            )
+            return frozenset()
+        if not isinstance(names, list):
+            return frozenset()
+    else:
+        return frozenset()
+    return frozenset(n for n in names if isinstance(n, str) and n)
+
+
+def select_core_settings_blobs(
+    blob: dict, excluded: frozenset[str] = frozenset()
+) -> dict:
+    """Narrow a gathered ``core_settings`` map to the blobs that may cross.
+
+    THE CHOKEPOINT. Three rules, applied in this order, and the first two are
+    code-enforced rather than conventional:
+
+    1. :data:`NEVER_SYNC_CORE_SETTINGS_BLOBS` is subtracted UNCONDITIONALLY, so
+       a per-target setting cannot opt back INTO ``network_access``. Its harm
+       (locking the operator out of B, or opening B up) does not become
+       acceptable because someone ticked a box.
+    2. Only :data:`SYNC_CORE_SETTINGS_BLOBS` members survive. A blob Dispatcharr
+       adds in a future release therefore does NOT cross until someone has read
+       it and made a decision — the one place in this engine where the
+       faithful-copy default is deliberately inverted, because a settings blob's
+       content is unknowable in advance and the register is the ADR's whole
+       mechanism for "every exclusion is named".
+    3. The target's own opt-outs are subtracted last.
+
+    Args:
+        blob: the gathered ``core_settings`` map (``{blob key: value}``).
+        excluded: this target's opt-outs (:func:`target_excluded_core_settings`).
+
+    Returns:
+        A new dict carrying only the blobs that may cross. Empty when the gather
+        degraded (a ``{"_warning": ...}`` stub carries no known blob key).
+    """
+    if not isinstance(blob, dict):
+        return {}
+    allowed = (SYNC_CORE_SETTINGS_BLOBS - NEVER_SYNC_CORE_SETTINGS_BLOBS) - excluded
+    return {key: value for key, value in blob.items() if key in allowed}
+
+
+# The ``stream_settings`` members that are INSTANCE-LOCAL FOREIGN KEY IDS, and
+# the remap namespace each resolves through. Read off dispatcharr:latest
+# (0.29.0) on 2026-08-23, not guessed from the key names:
+#
+# * ``default_user_agent`` -> ``core/models.py:437`` reads it as a ``UserAgent``
+#   pk (``UserAgent.objects.get(id=int(ua_id))`` at ``:450``).
+# * ``default_stream_profile`` -> ``core/models.py:507``, compared against
+#   ``StreamProfile`` ids at ``:512`` / ``:555``.
+_STREAM_SETTINGS_FK_FIELDS: dict[str, EntityType] = {
+    "default_user_agent": EntityType.USER_AGENT,
+    "default_stream_profile": EntityType.STREAM_PROFILE,
+}
+
+# The ``stream_settings`` FK with NO namespace to resolve through.
+#
+# ``hdhr_output_profile_id`` addresses a ``core.models.OutputProfile``
+# (0.29.0 ``apps/hdhr/api_views.py:108`` resolves it as one). ECM's DBAS has no
+# OutputProfile entity category, so there is nothing on the destination that
+# corresponds to A's pk — exactly the position ``server_group`` was in before
+# bead ``…-tyrg1``, and it gets the same disposition: DROPPED and REPORTED,
+# never forwarded. Dispatcharr treats an unresolvable id as "serve without
+# transcoding" (``api_views.py:115``), so an absent value is a valid state.
+_STREAM_SETTINGS_UNRESOLVABLE_FK = "hdhr_output_profile_id"
+
+
+def logo_slice_is_due(sync_target) -> bool:
+    """Whether THIS cycle carries the logo slice (bead ``…-2yq19``).
+
+    THE CHANGE THIS IMPLEMENTS. ``sync_logos`` shipped default OFF (bead
+    ``7ipq2.1``), so a replica silently arrived with no artwork unless an
+    operator found and flipped the toggle — the second half of the failure epic
+    ``f5a5j`` is named for. ADR-013's governing principle forbids exactly that
+    shape of silent omission, and the recorded reason for OFF was COST, not
+    correctness. So the default is ON and the cost is answered here, by a
+    throttle, rather than by leaving the replica unbranded.
+
+    WHAT IS AND IS NOT THROTTLED. Only the expensive slice. The config and
+    channel categories still run every cycle; the logos importer is the one that
+    carries a per-logo streaming upload, and logos are not high-churn state —
+    an operator adds artwork occasionally, and a replica that picks it up within
+    the sub-interval is faithful in every sense an operator can observe.
+
+    NULL MEANS DUE, deliberately. A freshly-created target has never run the
+    slice, so its first cycle carries logos immediately. Making a new replica
+    wait out a sub-interval with no artwork at all would reintroduce the very
+    window this bead exists to close, just shorter.
+
+    An interval of ``0`` (or negative) means EVERY CYCLE — the pre-throttle
+    behaviour, still available to an operator who wants it.
+
+    Args:
+        sync_target: the ``SyncTarget`` row (or any object exposing
+            ``sync_logos`` / ``logo_sync_interval_hours`` / ``last_logo_sync_at``).
+
+    Returns:
+        ``True`` when the slice should be gathered and applied this cycle.
+    """
+    if not bool(getattr(sync_target, "sync_logos", False)):
+        return False
+    try:
+        interval_hours = int(getattr(sync_target, "logo_sync_interval_hours", 0) or 0)
+    except (TypeError, ValueError):
+        # An unreadable interval must not silently mean "never". Falling back to
+        # every-cycle keeps the replica faithful, which is the direction the
+        # principle points when a value cannot be trusted.
+        interval_hours = 0
+    if interval_hours <= 0:
+        return True
+    last_run = getattr(sync_target, "last_logo_sync_at", None)
+    if last_run is None:
+        return True
+    from datetime import datetime, timedelta, timezone
+
+    if not isinstance(last_run, datetime):
+        return True
+    # The column is naive UTC (``datetime.utcnow``-shaped, like every other
+    # timestamp on this row), so compare in UTC and tolerate either flavour
+    # rather than raising on a tz-aware value some other writer stamped.
+    now = datetime.now(timezone.utc)
+    if last_run.tzinfo is None:
+        last_run = last_run.replace(tzinfo=timezone.utc)
+    return (now - last_run) >= timedelta(hours=interval_hours)
+
+
 def insecure_transmission_warning(
     sync_target, *, carrying_credentials: bool
 ) -> Optional[str]:
@@ -1055,6 +1392,7 @@ async def build_live_source_plan(
     *,
     include_logos: bool = False,
     schedules_direct_password: Optional[str] = None,
+    excluded_core_settings: frozenset[str] = frozenset(),
 ) -> ImportPlan:
     """Gather the LOCAL source-A config, redact it, and assemble an ImportPlan.
 
@@ -1076,8 +1414,10 @@ async def build_live_source_plan(
     restore and refuses a plan without it (spike ``xp6mp`` empirical find).
 
     Args:
-        include_logos: the per-target ``sync_logos`` opt-in (bead 7ipq2.1 —
-            ADR-013 S9 exit path). ``True`` appends a METADATA-ONLY ``LOGO``
+        include_logos: whether the LOGO slice is due this cycle
+            (:func:`logo_slice_is_due` — the per-target ``sync_logos`` flag,
+            default ON since bead …-2yq19, gated on
+            ``logo_sync_interval_hours``). ``True`` appends a METADATA-ONLY ``LOGO``
             category LAST covering BOTH logo sources — ECM's own upload dir and
             the Dispatcharr-hosted set (bead …-cfxml) — with no ``content_b64``
             in the plan (D8; bytes hydrate lazily per missed logo at import
@@ -1085,6 +1425,11 @@ async def build_live_source_plan(
         schedules_direct_password: the target's stored Schedules Direct password,
             already decrypted. ``None`` leaves every SD source's password
             untouched on the replica.
+        excluded_core_settings: the core-settings blobs THIS target's operator
+            opted out of (bead …-10wnq — the ADR's answer to the
+            ``proxy_settings`` / ``backup_settings`` tensions). Subtracted on top
+            of the code-enforced :data:`NEVER_SYNC_CORE_SETTINGS_BLOBS`, which
+            it can never override.
 
     Returns:
         An :class:`ImportPlan` of the config categories PLUS the channels
@@ -1113,6 +1458,31 @@ async def build_live_source_plan(
         rows = redacted_sections.get(section_key) if isinstance(redacted_sections, dict) else None
         entities = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
         categories.append(PlanCategory(entity_type=entity_type, entities=entities))
+
+    # CORE SETTINGS (bead …-10wnq) — a SEPARATE BRANCH, and that is the whole
+    # trap the bead named. Settings are key/value BLOBS, so they are absent from
+    # ``_SECTION_TO_ENTITY`` by design and the loop above cannot see them: a
+    # category key added without this branch would look wired and move nothing.
+    #
+    # The record shape is ``{"section": "core_settings", "values": {...}}`` —
+    # the contract ``restore_orchestrator._settings`` already consumes, so the
+    # REUSED settings importer runs unchanged (S1). The category is emitted even
+    # when empty, so a fully opted-out target still reports the category rather
+    # than silently having none.
+    categories.append(
+        PlanCategory(
+            entity_type=EntityType.SETTINGS,
+            entities=[
+                {
+                    "section": _CORE_SETTINGS_SECTION,
+                    "values": select_core_settings_blobs(
+                        redacted_sections.get(_CORE_SETTINGS_SECTION) or {},
+                        excluded_core_settings,
+                    ),
+                }
+            ],
+        )
+    )
 
     # CHANNELS (bead kcxie) — gathered separately (not a config RESTORABLE_SECTION)
     # WITH embedded streams, then redacted through the SAME deep denylist. The
@@ -1368,6 +1738,192 @@ def _apply_name_conflict_details(
 # ---------------------------------------------------------------------------
 
 
+def remap_stream_settings_fks(
+    values: dict, remap: IdRemapTable
+) -> tuple[dict, list[str]]:
+    """Rewrite ``stream_settings``' instance-local FK ids for the replica (…-10wnq).
+
+    THE SILENT HALF OF THIS BEAD, and the reason its "just sync the blob" ruling
+    could not be implemented as written. Three of ``stream_settings``' five
+    members are FOREIGN KEY IDS the destination assigns itself:
+    ``default_user_agent`` and ``default_stream_profile`` (both remappable —
+    ECM syncs those categories) and ``hdhr_output_profile_id`` (not — ECM has no
+    ``OutputProfile`` category).
+
+    IT IS SILENT WHERE ITS SIBLINGS WERE LOUD. When bead ``…-9h6cv`` forwarded a
+    raw ``user_agent`` pk on an M3U account, B answered
+    ``400 {"user_agent": ["Invalid pk \\"4\\" ..."]}`` and the whole apply rolled
+    back — painful, but the defect announced itself. A settings blob is a JSON
+    value: Dispatcharr stores whatever integer it is handed and validates
+    nothing, so forwarding A's ids here would simply point B's default user agent
+    and default stream profile at whichever rows happen to hold those numbers.
+    No error, no counter, no report — precisely the failure mode this epic keeps
+    removing.
+
+    SENTINELS ARE STRIPPED, NOT WRITTEN. The gather runs the deep redactor over
+    every non-provider section, so a nested member whose key name looks
+    credential-class arrives as the redaction placeholder. Writing that through
+    would replace B's real value with the literal string ``***REDACTED***`` —
+    the ``…-6pilh`` defect, one layer down. A sentinel-valued member is DROPPED
+    instead, so B keeps what it has.
+
+    Args:
+        values: the ``stream_settings`` blob as gathered.
+        remap: the shared remap table. The SETTINGS step is ordered after
+            USER_AGENT and STREAM_PROFILE precisely so both namespaces are
+            populated when this runs.
+
+    Returns:
+        ``(values, dropped)`` — a NEW blob safe to apply, and the member NAMES
+        that were dropped (never their values) so the caller can report the
+        degradation.
+    """
+    if not isinstance(values, dict):
+        return {}, []
+    cleaned, _sentinels = strip_redaction_sentinels(dict(values))
+    dropped: list[str] = []
+    for field, namespace in _STREAM_SETTINGS_FK_FIELDS.items():
+        if field not in cleaned:
+            continue
+        source_value = cleaned[field]
+        if source_value is None or source_value == "":
+            # An explicitly-unset default is a meaningful value, not an id.
+            continue
+        try:
+            source_id = int(source_value)
+        except (TypeError, ValueError):
+            cleaned.pop(field)
+            dropped.append(field)
+            continue
+        dest_id = remap.resolve(namespace, source_id)
+        if dest_id is None:
+            cleaned.pop(field)
+            dropped.append(field)
+            continue
+        cleaned[field] = dest_id
+    if cleaned.get(_STREAM_SETTINGS_UNRESOLVABLE_FK) not in (None, ""):
+        # No OutputProfile category exists to remap through, so this can only be
+        # dropped — the ``…-g8tyd`` disposition, reported rather than silent.
+        # Dispatcharr treats an unresolvable id as "serve without transcoding",
+        # so an absent value is a valid state on B.
+        cleaned.pop(_STREAM_SETTINGS_UNRESOLVABLE_FK)
+        dropped.append(_STREAM_SETTINGS_UNRESOLVABLE_FK)
+    return cleaned, dropped
+
+
+def _sync_core_settings_step() -> ImporterCallable:
+    """Build the SETTINGS importer step for the sync path (bead ``…-10wnq``).
+
+    Reuses ``import_core_settings`` unchanged (S1) and adds exactly one thing the
+    archive-restore path does not need: the ``stream_settings`` FK rewrite (see
+    :func:`remap_stream_settings_fks`). Archive restore applies a snapshot of the
+    SAME instance, where those ids are already correct; cross-instance sync is
+    the only caller for which they are not.
+
+    Ordered AFTER USER_AGENT and STREAM_PROFILE in the registry, which is what
+    makes the two remap namespaces populated when this runs — the same
+    FK-owner-before-dependent rule beads ``…-9h6cv`` and ``…-tyrg1`` follow.
+    """
+
+    async def _settings(ctx: ApplyContext) -> list[dict] | None:
+        from dbas.importers.settings_agents import (
+            CoreSettingIdResolver,
+            import_core_settings,
+        )
+
+        cat = ctx.plan.category(EntityType.SETTINGS)
+        if cat is None:
+            return None
+        resolver = CoreSettingIdResolver(ctx.client)
+        for record in list(cat.entities) or []:
+            if not isinstance(record, dict):
+                continue
+            if record.get("section") != _CORE_SETTINGS_SECTION:
+                continue
+            values = dict(record.get("values") or {})
+            if "stream_settings" in values:
+                remapped, dropped = remap_stream_settings_fks(
+                    values["stream_settings"], ctx.remap
+                )
+                values["stream_settings"] = remapped
+                for field in dropped:
+                    # Field NAMES only. Reported on the preview AND the apply so
+                    # the two agree about what the replica will not receive.
+                    ctx.report.notes.append(
+                        "Stream settings: '%s' points at a row this replica does "
+                        "not have, so it was left unset there rather than pointed "
+                        "at an unrelated row. Set it on the replica if it "
+                        "matters." % field
+                    )
+            await import_core_settings(
+                archive_core_settings=values,
+                client=ctx.client,
+                selected=bool(cat.selected),
+                report=ctx.report,
+                ledger=ctx.ledger,
+                is_dry_run=ctx.is_dry_run,
+                id_resolver=resolver,
+            )
+        return None
+
+    return _settings
+
+
+def _sync_m3u_step() -> ImporterCallable:
+    """Build the M3U_ACCOUNT importer step for the sync path (bead ``…-zszjd``).
+
+    Identical to the orchestrator's shared ``_m3u`` builder except that it turns
+    FIELD CONVERGENCE on: an account that already exists on the replica has its
+    fields written toward the source instead of being left frozen at whatever
+    they were on the cycle that first created it.
+
+    THE INVARIANT THIS DELIVERS, and it is a property rather than the case that
+    exposed it: **a field set on A is the field set on B after the next cycle,
+    for every field except those in
+    :data:`dbas.importers.m3u_accounts.NEVER_CONVERGE_FIELDS`**, each of which
+    names a specific harm or a specific impossibility. Spike ``xp6mp`` ruled an
+    existing account ``ALREADY_EXISTS_IDENTICAL`` and never overwritten, which
+    covered every field on the row — ``server_url``, ``max_streams``,
+    ``user_agent``, ``refresh_interval``, ``custom_properties``, the credential
+    fields and the four preference booleans alike. ADR-013 S5 says source-wins.
+    The two disagreed, and this step is the reconciliation the bead asked for:
+    S5 governs, and every field xp6mp froze is now either converged or carries a
+    written exclusion.
+
+    WHY THE FLAG RATHER THAN A UNIFORM CHANGE. The archive-restore registries
+    keep the old behaviour, on the same reasoning bead ``…-avrix`` used for its
+    ``created: False`` flag. Continuous sync is what turns a frozen field into
+    permanent silent divergence — it runs unattended, forever, and nobody looks.
+    A one-shot restore onto a populated instance is an operator action with a
+    different blast radius and a different question behind it, and answering it
+    is not this bead's to decide.
+
+    IT DOES NOT DUPLICATE THE PER-CYCLE CREDENTIAL CASCADE — it COMPLETES it.
+    Measured on this branch's base: the cascade puts the real ``username`` /
+    ``password`` / credential-bearing address into the PLAN, and the CREATE path
+    writes them, but the existing-account branch issued no write at all, so a
+    credential rotated on A never reached a replica that already had the
+    account. There is exactly one writer for the row, here, and the credential
+    fields ride it like every other field.
+    """
+
+    async def _m3u(ctx: ApplyContext) -> list[dict] | None:
+        cat = ctx.plan.category(EntityType.M3U_ACCOUNT)
+        result = await import_m3u_accounts(
+            archive_accounts=list(cat.entities) if cat else [],
+            client=ctx.client,
+            selected=bool(cat.selected) if cat else False,
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+            converge_existing=True,
+        )
+        return result.deferred_auto_sync_settings or None
+
+    return _m3u
+
+
 def _sync_channels_step(*, allow_fuzzy_stream_match: bool) -> ImporterCallable:
     """Build the CHANNELS importer step for the sync path (bead kcxie).
 
@@ -1557,9 +2113,11 @@ def _sync_logos_step() -> ImporterCallable:
         # precondition of this fix, not an obstacle to it.
         #
         # SOURCE-WINS (``OVERWRITE``), matching the EPG-link pass on this same
-        # path. ``sync_logos`` is opt-in and defaults OFF (bead …-8gnik owns the
-        # control), so the realistic sequence is: cycles run, B gets its lineup,
-        # THEN the flag goes on. By then every channel on B already exists and is
+        # path. The slice runs on its own sub-interval (bead …-2yq19), and the
+        # flag can still be turned off and back on (bead …-8gnik owns the
+        # control), so the realistic sequence is unchanged: config cycles run, B
+        # gets its lineup, THEN a logo pass comes due. By then every channel on B
+        # already exists and is
         # MATCHED rather than created, so under PRESERVE this pass would bind
         # nothing, on that cycle or any later one, and the new control would look
         # broken. A replica's branding is the source's by definition.
@@ -1650,15 +2208,33 @@ def sync_config_importer_steps(
         # ``user_agents`` is in SYNC_CONFIG_CATEGORIES so the gather feeds this
         # step. Distinct from the USERS category, which stays never-sync (D3).
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        # SERVER GROUPS BEFORE M3U ACCOUNTS (…-tyrg1) — the same
+        # FK-owner-before-dependent rule the user agents above follow, in the
+        # same position the two archive-restore registries put it (…-efvyg: all
+        # three registries move together). ``server_groups`` is in
+        # SYNC_CONFIG_CATEGORIES so the gather feeds this step.
+        ImporterStep(EntityType.SERVER_GROUP, s["server_groups"]),
         # M3U before EPG (EPG sources resolve their m3u_account FK through the
         # remap M3U writes). defers=True: the step DOES return settings for the
         # final phase — but the fn that consumes them there is the
         # group-selection-only apply, never the provider refresh (S9).
-        ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
+        # …-zszjd: the sync path's OWN M3U step, so an account that already
+        # exists on the replica converges instead of staying frozen at its
+        # first-sync values. See _sync_m3u_step for the invariant and for why
+        # the archive-restore registries keep the old behaviour.
+        ImporterStep(EntityType.M3U_ACCOUNT, _sync_m3u_step(), defers=True),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
         ImporterStep(EntityType.CHANNEL_PROFILE, s["channel_profiles"]),
         ImporterStep(EntityType.STREAM_PROFILE, s["stream_profiles"]),
+        # CORE SETTINGS AFTER THE TWO CATEGORIES ITS FKs RESOLVE THROUGH
+        # (…-10wnq). ``stream_settings`` carries ``default_user_agent`` and
+        # ``default_stream_profile``, both instance-local pks, so this step has
+        # to run once USER_AGENT and STREAM_PROFILE have filled their namespaces
+        # — the same FK-owner-before-dependent rule …-9h6cv and …-tyrg1 follow.
+        # Unlike those two the failure would be SILENT: Dispatcharr stores a
+        # settings blob's integers without validating them.
+        ImporterStep(EntityType.SETTINGS, _sync_core_settings_step()),
         # CHANNELS (+ embedded streams) after every config dependency.
         ImporterStep(
             EntityType.CHANNEL,
@@ -2101,10 +2677,11 @@ async def run_sync(
     client = _ReadObservingClient(client, report)
 
     # --- 3. Redacted live-source plan (config categories, never users). The
-    # logos slice is per-target OPT-IN (sync_logos, default off — 7ipq2.1);
-    # when on, the plan gains a METADATA-ONLY logo category (bytes hydrate
-    # lazily at import time, misses only — D8). ---
-    include_logos = bool(getattr(sync_target, "sync_logos", False))
+    # logos slice is per-target (sync_logos, default ON since …-2yq19) and runs
+    # on its own SUB-INTERVAL rather than every cycle; when it runs, the plan
+    # gains a METADATA-ONLY logo category (bytes hydrate lazily at import time,
+    # misses only — D8). ---
+    include_logos = logo_slice_is_due(sync_target)
     # The provider credential crosses on THIS cycle and every cycle (PO ruling
     # 2026-08-22 — PROVIDER_CREDENTIAL_SECTIONS). The one value that cannot be
     # harvested off A is the Schedules Direct password, which the operator
@@ -2113,6 +2690,10 @@ async def run_sync(
     plan = await build_live_source_plan(
         include_logos=include_logos,
         schedules_direct_password=target_schedules_direct_password(sync_target),
+        # …-10wnq: the per-target core-settings opt-out. It narrows an
+        # already-narrowed set — NEVER_SYNC_CORE_SETTINGS_BLOBS is subtracted
+        # first and unconditionally, so this can never opt INTO network_access.
+        excluded_core_settings=target_excluded_core_settings(sync_target),
     )
     credential_records = credential_bearing_records(plan)
     for detail in credential_records:
@@ -2153,6 +2734,10 @@ async def run_sync(
         deferred_apply_fn=_apply_group_selection_only,
         ledger_dir=ledger_dir,
         allow_fuzzy_stream_match=allow_fuzzy,
+        # …-10wnq: a SETTINGS failure must not roll the replica back on the sync
+        # path. See SYNC_NON_FATAL_CATEGORIES for the reasoning and for why the
+        # archive-restore path deliberately keeps the PO's zt3kf ruling.
+        non_fatal_categories=SYNC_NON_FATAL_CATEGORIES,
     )
 
     # --- 4b. Surface each deduped-out duplicate name as a per-item CONFLICT. ---
@@ -2205,6 +2790,17 @@ async def run_sync(
             sync_target.last_outcome = result.outcome.value
             if result.outcome == RestoreOutcome.SUCCESS:
                 sync_target.last_full_sync_at = datetime.now(timezone.utc)
+            # The logo sub-interval clock (bead …-2yq19) starts when the slice
+            # ACTUALLY RAN, not when a cycle merely happened. Stamped on any
+            # realized apply that carried the slice, including a degraded one:
+            # the expensive work was paid, and re-paying it on the very next
+            # cycle because one unrelated category failed is the cost this
+            # throttle exists to avoid. Logo MISSES are already their own
+            # reported counter (``logo_misses``), so nothing goes silent here —
+            # and the next scheduled pass retries them, because the importer
+            # matches what is already on B and hydrates only what is not.
+            if include_logos:
+                sync_target.last_logo_sync_at = datetime.now(timezone.utc)
             session.commit()
         except Exception as exc:  # noqa: BLE001 - stamping is best-effort
             logger.warning("[SYNC] Failed to stamp persisted sync state: %s", exc)

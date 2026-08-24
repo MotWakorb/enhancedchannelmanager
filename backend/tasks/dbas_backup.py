@@ -147,6 +147,47 @@ BACKUPS_DIR = CONFIG_DIR / "backups"
 _SUPPORTED_UPLOAD_PROVIDERS = SUPPORTED_PROVIDERS
 
 
+def describe_recording_exclusions(already_started: int) -> str:
+    """The operator-facing sentence for the recordings this backup left behind.
+
+    Bead ``…-ciabe``. PUBLIC (no leading underscore) because it is the visible
+    half of an ADR-013 exclusion, and its own test asserts what it says — an
+    exclusion notice that nothing pins is one word away from silently becoming a
+    disclaimer with no content.
+
+    Two properties it has to hold, both learned from the counts already in this
+    message:
+
+    * It NAMES THE REMEDY, not just the number. The recordings are absent because
+      their media files sit on the SOURCE instance's disk and no API can carry
+      them; the only thing that can is the operator copying them. A count with no
+      remedy reads as a defect report rather than a boundary of the product.
+    * It says NOTHING WHEN THERE IS NOTHING TO SAY. A standing disclaimer on
+      every run is wallpaper — the operator stops reading it, which is the same
+      end state as never having printed it, and it would drown the counts beside
+      it that DO vary.
+
+    Recordings excluded because a recurring rule regenerates them are
+    deliberately not mentioned: nothing is lost, the ``dvr_rules`` category
+    carries their generator, and there is no action to take. That count is in
+    ``details`` for anyone who wants it.
+
+    Args:
+        already_started: How many recordings had already started or finished.
+
+    Returns:
+        A ``"; ..."`` fragment to append to the run message, or ``""``.
+    """
+    if not already_started:
+        return ""
+    return (
+        "; %d recording(s) had already started or finished and were not backed "
+        "up — their media files live on this Dispatcharr's disk, so copy them "
+        "across by hand if you need them on the restored instance"
+        % already_started
+    )
+
+
 def _bump_metric(result: str) -> None:
     """Increment ecm_backup_runs_total for a result label, best-effort."""
     try:
@@ -487,6 +528,27 @@ class DbasBackupTask(TaskScheduler):
                     # read hit its ceiling, so some of those may be good links
                     # the read never saw. Never conflate the two.
                     details["epg_index_truncated"] = True
+            # bead …-ciabe: the DVR recordings this run deliberately did NOT
+            # archive. ADR-013's governing principle is that every exclusion is
+            # named, individually justified and VISIBLE — a gap the operator
+            # cannot see is indistinguishable from one nobody decided on. Same
+            # INFORMATIONAL shape as unresolved_epg_links above: a finished
+            # recording names a media file on the source instance's own disk,
+            # which is a technical impossibility rather than ECM failing to
+            # gather what it could have, so it never sets failed_count and never
+            # joins degraded_categories.
+            recordings_left_behind = (
+                getattr(artifact, "recordings_excluded_already_started", 0) or 0
+            )
+            recordings_from_rules = (
+                getattr(artifact, "recordings_excluded_regenerated_by_a_rule", 0) or 0
+            )
+            if recordings_left_behind:
+                details["recordings_excluded_already_started"] = recordings_left_behind
+            if recordings_from_rules:
+                details["recordings_excluded_regenerated_by_a_rule"] = (
+                    recordings_from_rules
+                )
             if upload_summary["attempted"]:
                 details["upload"] = {
                     "run_result": run_result,
@@ -521,6 +583,7 @@ class DbasBackupTask(TaskScheduler):
                         "longer exists and will not be restored"
                         % unresolved_epg_links
                     )
+            message += describe_recording_exclusions(recordings_left_behind)
             if upload_summary["attempted"]:
                 message += "; cloud upload: %s (%d ok, %d failed)" % (
                     run_result, upload_summary["succeeded"], upload_summary["failed"],

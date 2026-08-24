@@ -156,14 +156,69 @@ class SyncTarget(Base):
     # Opt-in: include the stream floor in the sync and fuzzy-match streams on the
     # remote instead of requiring exact identity. Default False (exact matching).
     fuzzy_stream_matching = Column(Boolean, nullable=False, server_default=text("0"), default=False)
-    # Opt-in (v0.18.1, bead 7ipq2.1 — the ADR-013 S9 exit path): include the
-    # LOGO slice in this target's sync cycles. Default False — logos stay out
-    # of the unconditional per-cycle set S9 ratified. When on, the sync path
-    # streams missed logos one at a time (D8) and can never bulk-delete B's
-    # logos (clear_existing is hard-disabled in the sync logos step). NOT NULL
-    # add to a possibly-populated table, so it carries a server_default like
-    # fuzzy_stream_matching above.
-    sync_logos = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    # Include the LOGO slice in this target's sync cycles.
+    #
+    # DEFAULT ON since bead ``…-2yq19`` (migration 0048). It shipped default
+    # OFF under bead ``7ipq2.1``, and the reason was COST, not correctness: the
+    # logos importer carries a destructive ``clear_existing`` bulk-delete plus a
+    # per-logo streaming upload that is wrong to pay every interval. ADR-013's
+    # 2026-08-22 governing principle does not disturb that mechanism decision —
+    # it disturbs the DEFAULT. An operator who never finds the toggle gets a
+    # replica with NO ARTWORK, which is the second half of the failure epic
+    # ``f5a5j`` is literally named for ("...has lost its guide data and its
+    # branding"). A silent omission is precisely what the principle forbids.
+    #
+    # The cost is handled by a SUB-INTERVAL rather than by omission — see
+    # ``logo_sync_interval_hours`` below. When the slice runs, it still streams
+    # missed logos one at a time (D8) and can still never bulk-delete B's logos
+    # (``clear_existing`` is hard-disabled in the sync logos step).
+    #
+    # NOT NULL add to a possibly-populated table, so it carries a
+    # server_default like fuzzy_stream_matching above. EXISTING ROWS KEEP THEIR
+    # STORED VALUE: migration 0048 changes what a NEW target defaults to and
+    # rewrites nobody's saved choice, because a stored ``False`` is
+    # indistinguishable from an operator who deliberately turned it off.
+    sync_logos = Column(Boolean, nullable=False, server_default=text("1"), default=True)
+    # How often the LOGO slice may run, in hours (bead ``…-2yq19``).
+    #
+    # This is the whole of the cost answer, and it is why the default above can
+    # be ON. Logos are not high-churn state: an operator adds artwork
+    # occasionally, and a replica that picks it up within a day is faithful in
+    # every sense an operator can observe. The config/channel slices stay on the
+    # cycle interval; only the expensive slice is throttled.
+    #
+    # ``0`` means "every cycle" — the pre-sub-interval behaviour, available to
+    # an operator who wants it and cheap to reason about. NOT NULL add to a
+    # possibly-populated table, so it carries a server_default.
+    logo_sync_interval_hours = Column(
+        Integer, nullable=False, server_default=text("24"), default=24
+    )
+    # When the LOGO slice last actually ran for this target (NULL == never).
+    #
+    # Nullable additive DDL with no server_default, matching the three
+    # persisted-state columns above: NULL is the correct "never ran" backfill,
+    # and it is also what makes the FIRST cycle after a target is created carry
+    # logos immediately rather than making the operator wait out a sub-interval
+    # for a replica that has no artwork at all.
+    last_logo_sync_at = Column(DateTime, nullable=True)
+    # Core-settings blobs THIS target's operator opted out of (bead …-10wnq).
+    #
+    # A JSON list of blob keys. Empty / NULL means "replicate every blob the
+    # engine's register allows", which is the faithful-copy default; this column
+    # exists only so the two blobs with a REAL functional risk behind them —
+    # ``proxy_settings`` (tuning copied onto different hardware) and
+    # ``backup_settings`` (two instances backing themselves up on one schedule,
+    # with B's retention bounded by B's storage) — can be declined individually
+    # instead of costing the operator every other setting with them. That is the
+    # ADR's own reading of both tensions: opt-out, not omission.
+    #
+    # It can only ever NARROW. ``NEVER_SYNC_CORE_SETTINGS_BLOBS`` is subtracted
+    # in the engine before this list is consulted, so naming ``network_access``
+    # here opts into nothing.
+    #
+    # Nullable additive DDL, no server_default — NULL is the correct "excludes
+    # nothing" backfill for every existing row.
+    core_settings_excluded = Column(Text, nullable=True)
     # --- Schedules Direct password (PO ruling 2026-08-22) --------------------
     # THE ONE CREDENTIAL THE OPERATOR TYPES, and they type it ONCE, ever.
     #
@@ -209,6 +264,13 @@ class SyncTarget(Base):
             "last_source_fingerprint": self.last_source_fingerprint,
             "fuzzy_stream_matching": self.fuzzy_stream_matching,
             "sync_logos": self.sync_logos,
+            "logo_sync_interval_hours": self.logo_sync_interval_hours,
+            "core_settings_excluded": self.core_settings_excluded,
+            "last_logo_sync_at": (
+                self.last_logo_sync_at.isoformat() + "Z"
+                if self.last_logo_sync_at
+                else None
+            ),
             # PRESENCE, never the value and never the ciphertext.
             "has_schedules_direct_password": bool(self.schedules_direct_password),
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,

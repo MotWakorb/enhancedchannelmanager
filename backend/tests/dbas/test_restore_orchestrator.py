@@ -1009,18 +1009,85 @@ async def test_user_category_failure_does_not_roll_back_the_restore(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_non_fatal_set_is_exactly_users_and_logos(tmp_path):
-    """Guard: only users and logos are non-fatal; the rest still roll back.
+async def test_non_fatal_set_is_exactly_the_leaf_categories(tmp_path):
+    """Guard: only the LEAF categories are non-fatal; the rest still roll back.
 
-    Both members pass the same admission test (nothing else in the restore holds
-    a hard FK into them). Widening this set silently is the failure this guard
-    exists to catch, so it is an equality assertion, not a membership one.
+    Every member passes the same admission test — nothing else in the restore
+    holds a hard FK into it, so a row that does not come back degrades only
+    itself. Widening this set silently is the failure this guard exists to catch,
+    so it is an equality assertion, not a membership one.
+
+    ``UPCOMING_RECORDING`` joined it with bead ``…-ciabe``: a recording is
+    referenced by nothing (a channel does not know its recordings, and a DVR
+    rule finds its own by querying rather than by reference), and the refusal it
+    most plausibly meets is a stale timestamp, which is a property of the
+    archive's age — a retry cannot fix it and a rollback would cost the operator
+    every other category for it. The reasoning per member is on the constant.
+
+    THE DEFAULT IS THE ARCHIVE-RESTORE CONTRACT and it does not move. In
+    particular it still carries the PO's 2026-08-03 ruling on bead ``…-zt3kf``:
+    a settings-key ``DEPENDENCY_UNRESOLVED`` aborts the whole restore and rolls
+    back. A per-run widening exists for cross-instance sync (see the test
+    below), and it is a PARAMETER precisely so it cannot reach this default.
     """
     from dbas.restore_orchestrator import NON_FATAL_FAILURE_CATEGORIES
 
     assert NON_FATAL_FAILURE_CATEGORIES == frozenset(
-        {EntityType.USER, EntityType.LOGO}
+        {EntityType.USER, EntityType.LOGO, EntityType.UPCOMING_RECORDING}
     )
+
+
+@pytest.mark.asyncio
+async def test_a_run_may_widen_the_non_fatal_set_without_touching_the_default(
+    tmp_path,
+):
+    """``non_fatal_categories`` is per-run (bead ``…-10wnq``).
+
+    Cross-instance sync widens it to include SETTINGS, because a replica that
+    deletes every entity it just created over one unreadable
+    ``GET /api/core/settings/`` is the ``…-d0agi`` trade in a category that is
+    never ledgered and therefore cannot be rolled back anyway. The archive
+    restore keeps the zt3kf ruling. Asserted by BEHAVIOUR — the created entity
+    survives — rather than by reading the constant back, because the constant
+    being right proves nothing about the branch that consumes it.
+    """
+    client = _client()
+
+    async def _settings_step(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.SETTINGS)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                label="some_setting_key",
+                message="setting key not found on destination",
+            )
+        )
+        return None
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[
+            _creating_step(EntityType.M3U_ACCOUNT, 901),
+            ImporterStep(EntityType.SETTINGS, _settings_step),
+        ],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+        non_fatal_categories=frozenset(
+            {EntityType.USER, EntityType.LOGO, EntityType.SETTINGS}
+        ),
+    )
+    # Counted and surfaced — nothing goes silent…
+    assert out.category(EntityType.SETTINGS).failed == 1
+    assert out.outcome != RestoreOutcome.SUCCESS
+    # …but the account this run created was NOT deleted around it.
+    assert out.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert not any(c.args[0] == 901 for c in client.delete_m3u_account.call_args_list)
 
 
 @pytest.mark.asyncio
