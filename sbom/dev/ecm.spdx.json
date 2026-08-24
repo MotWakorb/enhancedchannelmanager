@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "ecm-0.18.1-0144",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.1-0144/ecm",
+  "name": "ecm-0.18.1-0147",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.1-0147/ecm",
   "creationInfo": {
-    "created": "2026-08-24T15:19:03Z",
+    "created": "2026-08-24T18:56:15Z",
     "creators": [
       "Tool: scripts/generate_sbom.py"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-ecm",
       "name": "enhanced-channel-manager",
-      "versionInfo": "0.18.1-0144",
+      "versionInfo": "0.18.1-0147",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -674,63 +674,6 @@
       "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.emnapi.core-1.10.0",
-      "name": "@emnapi/core",
-      "versionInfo": "1.10.0",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@emnapi/core@1.10.0"
-        }
-      ],
-      "comment": "Build-time only; not present in the published image."
-    },
-    {
-      "SPDXID": "SPDXRef-Package-npm-.emnapi.runtime-1.10.0",
-      "name": "@emnapi/runtime",
-      "versionInfo": "1.10.0",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@emnapi/runtime@1.10.0"
-        }
-      ],
-      "comment": "Build-time only; not present in the published image."
-    },
-    {
-      "SPDXID": "SPDXRef-Package-npm-.emnapi.wasi-threads-1.2.1",
-      "name": "@emnapi/wasi-threads",
-      "versionInfo": "1.2.1",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@emnapi/wasi-threads@1.2.1"
-        }
-      ],
-      "comment": "Build-time only; not present in the published image."
-    },
-    {
       "SPDXID": "SPDXRef-Package-npm-.eslint-community.eslint-utils-4.10.1",
       "name": "@eslint-community/eslint-utils",
       "versionInfo": "4.10.1",
@@ -788,9 +731,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.eslint.config-helpers-0.5.5",
+      "SPDXID": "SPDXRef-Package-npm-.eslint.config-helpers-0.7.0",
       "name": "@eslint/config-helpers",
-      "versionInfo": "0.5.5",
+      "versionInfo": "0.7.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -801,7 +744,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@eslint/config-helpers@0.5.5"
+          "referenceLocator": "pkg:npm/@eslint/config-helpers@0.7.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -1035,9 +978,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.inquirer.confirm-6.1.1",
+      "SPDXID": "SPDXRef-Package-npm-.inquirer.confirm-6.2.0",
       "name": "@inquirer/confirm",
-      "versionInfo": "6.1.1",
+      "versionInfo": "6.2.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1048,15 +991,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@inquirer/confirm@6.1.1"
+          "referenceLocator": "pkg:npm/@inquirer/confirm@6.2.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.inquirer.core-11.2.1",
+      "SPDXID": "SPDXRef-Package-npm-.inquirer.core-12.0.0",
       "name": "@inquirer/core",
-      "versionInfo": "11.2.1",
+      "versionInfo": "12.0.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1067,15 +1010,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@inquirer/core@11.2.1"
+          "referenceLocator": "pkg:npm/@inquirer/core@12.0.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.inquirer.figures-2.0.7",
+      "SPDXID": "SPDXRef-Package-npm-.inquirer.figures-2.0.8",
       "name": "@inquirer/figures",
-      "versionInfo": "2.0.7",
+      "versionInfo": "2.0.8",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1086,7 +1029,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@inquirer/figures@2.0.7"
+          "referenceLocator": "pkg:npm/@inquirer/figures@2.0.8"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -1225,25 +1168,6 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.napi-rs.wasm-runtime-1.1.6",
-      "name": "@napi-rs/wasm-runtime",
-      "versionInfo": "1.1.6",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@napi-rs/wasm-runtime@1.1.6"
-        }
-      ],
-      "comment": "Build-time only; not present in the published image."
-    },
-    {
       "SPDXID": "SPDXRef-Package-npm-.open-draft.deferred-promise-2.2.0",
       "name": "@open-draft/deferred-promise",
       "versionInfo": "2.2.0",
@@ -1320,9 +1244,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.oxc-project.types-0.133.0",
+      "SPDXID": "SPDXRef-Package-npm-.oxc-project.types-0.146.0",
       "name": "@oxc-project/types",
-      "versionInfo": "0.133.0",
+      "versionInfo": "0.146.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1333,15 +1257,34 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@oxc-project/types@0.133.0"
+          "referenceLocator": "pkg:npm/@oxc-project/types@0.146.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-android-arm64-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-android-arm-eabi-1.2.5",
+      "name": "@rolldown/binding-android-arm-eabi",
+      "versionInfo": "1.2.5",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/@rolldown/binding-android-arm-eabi@1.2.5"
+        }
+      ],
+      "comment": "Build-time only; not present in the published image."
+    },
+    {
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-android-arm64-1.2.5",
       "name": "@rolldown/binding-android-arm64",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1352,15 +1295,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-android-arm64@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-android-arm64@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-darwin-arm64-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-darwin-arm64-1.2.5",
       "name": "@rolldown/binding-darwin-arm64",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1371,15 +1314,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-darwin-arm64@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-darwin-arm64@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-darwin-x64-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-darwin-x64-1.2.5",
       "name": "@rolldown/binding-darwin-x64",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1390,15 +1333,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-darwin-x64@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-darwin-x64@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-freebsd-x64-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-freebsd-x64-1.2.5",
       "name": "@rolldown/binding-freebsd-x64",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1409,15 +1352,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-freebsd-x64@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-freebsd-x64@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-arm-gnueabihf-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-arm-gnueabihf-1.2.5",
       "name": "@rolldown/binding-linux-arm-gnueabihf",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1428,15 +1371,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-linux-arm-gnueabihf@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-linux-arm-gnueabihf@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-gnu-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-gnu-1.2.5",
       "name": "@rolldown/binding-linux-arm64-gnu",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1447,15 +1390,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-linux-arm64-gnu@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-linux-arm64-gnu@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-musl-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-musl-1.2.5",
       "name": "@rolldown/binding-linux-arm64-musl",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1466,15 +1409,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-linux-arm64-musl@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-linux-arm64-musl@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-ppc64-gnu-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-ppc64-gnu-1.2.5",
       "name": "@rolldown/binding-linux-ppc64-gnu",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1485,15 +1428,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-linux-ppc64-gnu@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-linux-ppc64-gnu@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-s390x-gnu-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-s390x-gnu-1.2.5",
       "name": "@rolldown/binding-linux-s390x-gnu",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1504,15 +1447,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-linux-s390x-gnu@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-linux-s390x-gnu@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-gnu-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-gnu-1.2.5",
       "name": "@rolldown/binding-linux-x64-gnu",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1523,15 +1466,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-linux-x64-gnu@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-linux-x64-gnu@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-musl-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-musl-1.2.5",
       "name": "@rolldown/binding-linux-x64-musl",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1542,15 +1485,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-linux-x64-musl@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-linux-x64-musl@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-openharmony-arm64-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-openharmony-arm64-1.2.5",
       "name": "@rolldown/binding-openharmony-arm64",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1561,34 +1504,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-openharmony-arm64@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-openharmony-arm64@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-wasm32-wasi-1.0.3",
-      "name": "@rolldown/binding-wasm32-wasi",
-      "versionInfo": "1.0.3",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-wasm32-wasi@1.0.3"
-        }
-      ],
-      "comment": "Build-time only; not present in the published image."
-    },
-    {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-win32-arm64-msvc-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-win32-arm64-msvc-1.2.5",
       "name": "@rolldown/binding-win32-arm64-msvc",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1599,15 +1523,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-win32-arm64-msvc@1.0.3"
+          "referenceLocator": "pkg:npm/@rolldown/binding-win32-arm64-msvc@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-win32-x64-msvc-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-.rolldown.binding-win32-x64-msvc-1.2.5",
       "name": "@rolldown/binding-win32-x64-msvc",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1618,26 +1542,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/binding-win32-x64-msvc@1.0.3"
-        }
-      ],
-      "comment": "Build-time only; not present in the published image."
-    },
-    {
-      "SPDXID": "SPDXRef-Package-npm-.rolldown.pluginutils-1.0.0-rc.7",
-      "name": "@rolldown/pluginutils",
-      "versionInfo": "1.0.0-rc.7",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@rolldown/pluginutils@1.0.0-rc.7"
+          "referenceLocator": "pkg:npm/@rolldown/binding-win32-x64-msvc@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -1738,9 +1643,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.testing-library.user-event-14.6.1",
+      "SPDXID": "SPDXRef-Package-npm-.testing-library.user-event-14.6.6",
       "name": "@testing-library/user-event",
-      "versionInfo": "14.6.1",
+      "versionInfo": "14.6.6",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -1751,26 +1656,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@testing-library/user-event@14.6.1"
-        }
-      ],
-      "comment": "Build-time only; not present in the published image."
-    },
-    {
-      "SPDXID": "SPDXRef-Package-npm-.tybys.wasm-util-0.10.3",
-      "name": "@tybys/wasm-util",
-      "versionInfo": "0.10.3",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@tybys/wasm-util@0.10.3"
+          "referenceLocator": "pkg:npm/@testing-library/user-event@14.6.6"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -2080,9 +1966,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.types.react-19.2.14",
+      "SPDXID": "SPDXRef-Package-npm-.types.react-19.2.18",
       "name": "@types/react",
-      "versionInfo": "19.2.14",
+      "versionInfo": "19.2.18",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2093,15 +1979,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@types/react@19.2.14"
+          "referenceLocator": "pkg:npm/@types/react@19.2.18"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.types.react-dom-19.2.3",
+      "SPDXID": "SPDXRef-Package-npm-.types.react-dom-19.2.5",
       "name": "@types/react-dom",
-      "versionInfo": "19.2.3",
+      "versionInfo": "19.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2112,7 +1998,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@types/react-dom@19.2.3"
+          "referenceLocator": "pkg:npm/@types/react-dom@19.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -2156,9 +2042,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.eslint-plugin-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.eslint-plugin-8.67.0",
       "name": "@typescript-eslint/eslint-plugin",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2169,15 +2055,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/eslint-plugin@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/eslint-plugin@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.parser-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.parser-8.67.0",
       "name": "@typescript-eslint/parser",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2188,15 +2074,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/parser@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/parser@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.project-service-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.project-service-8.67.0",
       "name": "@typescript-eslint/project-service",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2207,15 +2093,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/project-service@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/project-service@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.scope-manager-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.scope-manager-8.67.0",
       "name": "@typescript-eslint/scope-manager",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2226,15 +2112,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/scope-manager@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/scope-manager@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.tsconfig-utils-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.tsconfig-utils-8.67.0",
       "name": "@typescript-eslint/tsconfig-utils",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2245,15 +2131,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/tsconfig-utils@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/tsconfig-utils@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.type-utils-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.type-utils-8.67.0",
       "name": "@typescript-eslint/type-utils",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2264,15 +2150,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/type-utils@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/type-utils@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.types-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.types-8.67.0",
       "name": "@typescript-eslint/types",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2283,15 +2169,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/types@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/types@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.typescript-estree-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.typescript-estree-8.67.0",
       "name": "@typescript-eslint/typescript-estree",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2302,15 +2188,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/typescript-estree@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/typescript-estree@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.utils-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.utils-8.67.0",
       "name": "@typescript-eslint/utils",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2321,15 +2207,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/utils@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/utils@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.visitor-keys-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-.typescript-eslint.visitor-keys-8.67.0",
       "name": "@typescript-eslint/visitor-keys",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2340,15 +2226,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@typescript-eslint/visitor-keys@8.59.0"
+          "referenceLocator": "pkg:npm/@typescript-eslint/visitor-keys@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitejs.plugin-react-6.0.1",
+      "SPDXID": "SPDXRef-Package-npm-.vitejs.plugin-react-6.1.0",
       "name": "@vitejs/plugin-react",
-      "versionInfo": "6.0.1",
+      "versionInfo": "6.1.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2359,15 +2245,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitejs/plugin-react@6.0.1"
+          "referenceLocator": "pkg:npm/@vitejs/plugin-react@6.1.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.11",
       "name": "@vitest/coverage-v8",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2378,15 +2264,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/coverage-v8@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/coverage-v8@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.expect-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.expect-4.1.11",
       "name": "@vitest/expect",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2397,15 +2283,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/expect@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/expect@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.mocker-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.mocker-4.1.11",
       "name": "@vitest/mocker",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2416,15 +2302,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/mocker@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/mocker@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.11",
       "name": "@vitest/pretty-format",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2435,15 +2321,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/pretty-format@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/pretty-format@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.runner-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.runner-4.1.11",
       "name": "@vitest/runner",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2454,15 +2340,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/runner@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/runner@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.snapshot-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.snapshot-4.1.11",
       "name": "@vitest/snapshot",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2473,15 +2359,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/snapshot@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/snapshot@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.spy-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.spy-4.1.11",
       "name": "@vitest/spy",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2492,15 +2378,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/spy@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/spy@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-.vitest.utils-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-.vitest.utils-4.1.11",
       "name": "@vitest/utils",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -2511,7 +2397,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/@vitest/utils@4.1.4"
+          "referenceLocator": "pkg:npm/@vitest/utils@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -3486,9 +3372,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-es-module-lexer-2.3.1",
+      "SPDXID": "SPDXRef-Package-npm-es-module-lexer-2.3.2",
       "name": "es-module-lexer",
-      "versionInfo": "2.3.1",
+      "versionInfo": "2.3.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -3499,7 +3385,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/es-module-lexer@2.3.1"
+          "referenceLocator": "pkg:npm/es-module-lexer@2.3.2"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -3562,9 +3448,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-eslint-10.2.1",
+      "SPDXID": "SPDXRef-Package-npm-eslint-10.9.0",
       "name": "eslint",
-      "versionInfo": "10.2.1",
+      "versionInfo": "10.9.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -3575,7 +3461,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/eslint@10.2.1"
+          "referenceLocator": "pkg:npm/eslint@10.9.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -3600,9 +3486,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-eslint-plugin-react-refresh-0.5.2",
+      "SPDXID": "SPDXRef-Package-npm-eslint-plugin-react-refresh-0.5.4",
       "name": "eslint-plugin-react-refresh",
-      "versionInfo": "0.5.2",
+      "versionInfo": "0.5.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -3613,7 +3499,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/eslint-plugin-react-refresh@0.5.2"
+          "referenceLocator": "pkg:npm/eslint-plugin-react-refresh@0.5.4"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -3804,6 +3690,25 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/eventemitter3@4.0.7"
+        }
+      ],
+      "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
+    },
+    {
+      "SPDXID": "SPDXRef-Package-npm-events-3.3.0",
+      "name": "events",
+      "versionInfo": "3.3.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "supplier": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/events@3.3.0"
         }
       ],
       "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
@@ -4132,9 +4037,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-globals-17.5.0",
+      "SPDXID": "SPDXRef-Package-npm-globals-17.11.0",
       "name": "globals",
-      "versionInfo": "17.5.0",
+      "versionInfo": "17.11.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -4145,7 +4050,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/globals@17.5.0"
+          "referenceLocator": "pkg:npm/globals@17.11.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -4550,9 +4455,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-jiti-2.6.1",
+      "SPDXID": "SPDXRef-Package-npm-jiti-2.7.0",
       "name": "jiti",
-      "versionInfo": "2.6.1",
+      "versionInfo": "2.7.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -4563,7 +4468,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/jiti@2.6.1"
+          "referenceLocator": "pkg:npm/jiti@2.7.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -5215,9 +5120,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-mpegts.js-1.8.0",
+      "SPDXID": "SPDXRef-Package-npm-mpegts.js-1.8.2",
       "name": "mpegts.js",
-      "versionInfo": "1.8.0",
+      "versionInfo": "1.8.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -5228,7 +5133,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/mpegts.js@1.8.0"
+          "referenceLocator": "pkg:npm/mpegts.js@1.8.2"
         }
       ],
       "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
@@ -5253,9 +5158,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-msw-2.13.4",
+      "SPDXID": "SPDXRef-Package-npm-msw-2.15.0",
       "name": "msw",
-      "versionInfo": "2.13.4",
+      "versionInfo": "2.15.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -5266,7 +5171,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/msw@2.13.4"
+          "referenceLocator": "pkg:npm/msw@2.15.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -5595,9 +5500,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-postcss-8.5.23",
+      "SPDXID": "SPDXRef-Package-npm-postcss-8.5.26",
       "name": "postcss",
-      "versionInfo": "8.5.23",
+      "versionInfo": "8.5.26",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -5608,7 +5513,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/postcss@8.5.23"
+          "referenceLocator": "pkg:npm/postcss@8.5.26"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -5690,9 +5595,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-react-19.2.5",
+      "SPDXID": "SPDXRef-Package-npm-react-19.2.8",
       "name": "react",
-      "versionInfo": "19.2.5",
+      "versionInfo": "19.2.8",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -5703,15 +5608,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/react@19.2.5"
+          "referenceLocator": "pkg:npm/react@19.2.8"
         }
       ],
       "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-react-dom-19.2.5",
+      "SPDXID": "SPDXRef-Package-npm-react-dom-19.2.8",
       "name": "react-dom",
-      "versionInfo": "19.2.5",
+      "versionInfo": "19.2.8",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -5722,7 +5627,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/react-dom@19.2.5"
+          "referenceLocator": "pkg:npm/react-dom@19.2.8"
         }
       ],
       "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
@@ -5937,9 +5842,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-rolldown-1.0.3",
+      "SPDXID": "SPDXRef-Package-npm-rolldown-1.2.5",
       "name": "rolldown",
-      "versionInfo": "1.0.3",
+      "versionInfo": "1.2.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -5950,7 +5855,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/rolldown@1.0.3"
+          "referenceLocator": "pkg:npm/rolldown@1.2.5"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6393,9 +6298,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-tinyexec-1.2.4",
+      "SPDXID": "SPDXRef-Package-npm-tinyexec-1.3.0",
       "name": "tinyexec",
-      "versionInfo": "1.2.4",
+      "versionInfo": "1.3.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6406,7 +6311,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/tinyexec@1.2.4"
+          "referenceLocator": "pkg:npm/tinyexec@1.3.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6431,9 +6336,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-tinyrainbow-3.1.0",
+      "SPDXID": "SPDXRef-Package-npm-tinyrainbow-3.1.1",
       "name": "tinyrainbow",
-      "versionInfo": "3.1.0",
+      "versionInfo": "3.1.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6444,7 +6349,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/tinyrainbow@3.1.0"
+          "referenceLocator": "pkg:npm/tinyrainbow@3.1.1"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6621,9 +6526,9 @@
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-typescript-eslint-8.59.0",
+      "SPDXID": "SPDXRef-Package-npm-typescript-eslint-8.67.0",
       "name": "typescript-eslint",
-      "versionInfo": "8.59.0",
+      "versionInfo": "8.67.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6634,7 +6539,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/typescript-eslint@8.59.0"
+          "referenceLocator": "pkg:npm/typescript-eslint@8.67.0"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6754,9 +6659,9 @@
       "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-vite-8.0.16",
+      "SPDXID": "SPDXRef-Package-npm-vite-8.2.2",
       "name": "vite",
-      "versionInfo": "8.0.16",
+      "versionInfo": "8.2.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6767,15 +6672,15 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/vite@8.0.16"
+          "referenceLocator": "pkg:npm/vite@8.2.2"
         }
       ],
       "comment": "Build-time only; not present in the published image."
     },
     {
-      "SPDXID": "SPDXRef-Package-npm-vitest-4.1.4",
+      "SPDXID": "SPDXRef-Package-npm-vitest-4.1.11",
       "name": "vitest",
-      "versionInfo": "4.1.4",
+      "versionInfo": "4.1.11",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -6786,7 +6691,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:npm/vitest@4.1.4"
+          "referenceLocator": "pkg:npm/vitest@4.1.11"
         }
       ],
       "comment": "Build-time only; not present in the published image."
@@ -6828,25 +6733,6 @@
         }
       ],
       "comment": "Build-time only; not present in the published image."
-    },
-    {
-      "SPDXID": "SPDXRef-Package-npm-webworkify-webpack-2.1.5",
-      "name": "webworkify-webpack",
-      "versionInfo": "2.1.5",
-      "downloadLocation": "NOASSERTION",
-      "filesAnalyzed": false,
-      "supplier": "NOASSERTION",
-      "licenseConcluded": "NOASSERTION",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/webworkify-webpack@2.1.5"
-        }
-      ],
-      "comment": "node_modules is not copied into the published image; this package's code reaches the image only insofar as the bundler emitted it into /app/static."
     },
     {
       "SPDXID": "SPDXRef-Package-npm-whatwg-mimetype-5.0.0",
@@ -7227,9 +7113,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-aiohappyeyeballs-2.6.1",
+      "SPDXID": "SPDXRef-Package-pypi-aiohappyeyeballs-2.7.1",
       "name": "aiohappyeyeballs",
-      "versionInfo": "2.6.1",
+      "versionInfo": "2.7.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7240,7 +7126,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/aiohappyeyeballs@2.6.1"
+          "referenceLocator": "pkg:pypi/aiohappyeyeballs@2.7.1"
         }
       ]
     },
@@ -7281,9 +7167,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-alembic-1.18.4",
+      "SPDXID": "SPDXRef-Package-pypi-alembic-1.18.5",
       "name": "alembic",
-      "versionInfo": "1.18.4",
+      "versionInfo": "1.18.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7294,14 +7180,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/alembic@1.18.4"
+          "referenceLocator": "pkg:pypi/alembic@1.18.5"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-annotated-doc-0.0.4",
+      "SPDXID": "SPDXRef-Package-pypi-annotated-doc-0.0.5",
       "name": "annotated-doc",
-      "versionInfo": "0.0.4",
+      "versionInfo": "0.0.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7312,14 +7198,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/annotated-doc@0.0.4"
+          "referenceLocator": "pkg:pypi/annotated-doc@0.0.5"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-annotated-types-0.7.0",
+      "SPDXID": "SPDXRef-Package-pypi-annotated-types-0.8.0",
       "name": "annotated-types",
-      "versionInfo": "0.7.0",
+      "versionInfo": "0.8.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7330,14 +7216,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/annotated-types@0.7.0"
+          "referenceLocator": "pkg:pypi/annotated-types@0.8.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-anyio-4.13.0",
+      "SPDXID": "SPDXRef-Package-pypi-anyio-4.14.2",
       "name": "anyio",
-      "versionInfo": "4.13.0",
+      "versionInfo": "4.14.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7348,7 +7234,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/anyio@4.13.0"
+          "referenceLocator": "pkg:pypi/anyio@4.14.2"
         }
       ]
     },
@@ -7389,9 +7275,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-boto3-1.42.92",
+      "SPDXID": "SPDXRef-Package-pypi-boto3-1.43.78",
       "name": "boto3",
-      "versionInfo": "1.42.92",
+      "versionInfo": "1.43.78",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7402,14 +7288,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/boto3@1.42.92"
+          "referenceLocator": "pkg:pypi/boto3@1.43.78"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-botocore-1.42.92",
+      "SPDXID": "SPDXRef-Package-pypi-botocore-1.43.78",
       "name": "botocore",
-      "versionInfo": "1.42.92",
+      "versionInfo": "1.43.78",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7420,14 +7306,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/botocore@1.42.92"
+          "referenceLocator": "pkg:pypi/botocore@1.43.78"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-certifi-2026.2.25",
+      "SPDXID": "SPDXRef-Package-pypi-certifi-2026.7.22",
       "name": "certifi",
-      "versionInfo": "2026.2.25",
+      "versionInfo": "2026.7.22",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7438,14 +7324,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/certifi@2026.2.25"
+          "referenceLocator": "pkg:pypi/certifi@2026.7.22"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-cffi-2.0.0",
+      "SPDXID": "SPDXRef-Package-pypi-cffi-2.1.1",
       "name": "cffi",
-      "versionInfo": "2.0.0",
+      "versionInfo": "2.1.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7456,14 +7342,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/cffi@2.0.0"
+          "referenceLocator": "pkg:pypi/cffi@2.1.1"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-click-8.3.3",
+      "SPDXID": "SPDXRef-Package-pypi-click-8.4.2",
       "name": "click",
-      "versionInfo": "8.3.3",
+      "versionInfo": "8.4.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7474,14 +7360,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/click@8.3.3"
+          "referenceLocator": "pkg:pypi/click@8.4.2"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-coverage-7.13.5",
+      "SPDXID": "SPDXRef-Package-pypi-coverage-7.15.4",
       "name": "coverage",
-      "versionInfo": "7.13.5",
+      "versionInfo": "7.15.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7492,14 +7378,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/coverage@7.13.5"
+          "referenceLocator": "pkg:pypi/coverage@7.15.4"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-croniter-6.2.2",
+      "SPDXID": "SPDXRef-Package-pypi-croniter-6.2.4",
       "name": "croniter",
-      "versionInfo": "6.2.2",
+      "versionInfo": "6.2.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7510,7 +7396,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/croniter@6.2.2"
+          "referenceLocator": "pkg:pypi/croniter@6.2.4"
         }
       ]
     },
@@ -7641,9 +7527,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-greenlet-3.4.0",
+      "SPDXID": "SPDXRef-Package-pypi-greenlet-3.5.5",
       "name": "greenlet",
-      "versionInfo": "3.4.0",
+      "versionInfo": "3.5.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7654,7 +7540,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/greenlet@3.4.0"
+          "referenceLocator": "pkg:pypi/greenlet@3.5.5"
         }
       ]
     },
@@ -7695,9 +7581,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-httptools-0.7.1",
+      "SPDXID": "SPDXRef-Package-pypi-httptools-0.8.0",
       "name": "httptools",
-      "versionInfo": "0.7.1",
+      "versionInfo": "0.8.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7708,7 +7594,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/httptools@0.7.1"
+          "referenceLocator": "pkg:pypi/httptools@0.8.0"
         }
       ]
     },
@@ -7731,9 +7617,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-hypothesis-6.152.1",
+      "SPDXID": "SPDXRef-Package-pypi-hypothesis-6.165.10",
       "name": "hypothesis",
-      "versionInfo": "6.152.1",
+      "versionInfo": "6.165.10",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7744,14 +7630,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/hypothesis@6.152.1"
+          "referenceLocator": "pkg:pypi/hypothesis@6.165.10"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-idna-3.15",
+      "SPDXID": "SPDXRef-Package-pypi-idna-3.19",
       "name": "idna",
-      "versionInfo": "3.15",
+      "versionInfo": "3.19",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7762,7 +7648,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/idna@3.15"
+          "referenceLocator": "pkg:pypi/idna@3.19"
         }
       ]
     },
@@ -7839,9 +7725,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-mako-1.3.12",
+      "SPDXID": "SPDXRef-Package-pypi-mako-1.4.1",
       "name": "mako",
-      "versionInfo": "1.3.12",
+      "versionInfo": "1.4.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7852,7 +7738,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/mako@1.3.12"
+          "referenceLocator": "pkg:pypi/mako@1.4.1"
         }
       ]
     },
@@ -7893,9 +7779,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-packaging-26.1",
+      "SPDXID": "SPDXRef-Package-pypi-packaging-26.3",
       "name": "packaging",
-      "versionInfo": "26.1",
+      "versionInfo": "26.3",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7906,7 +7792,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/packaging@26.1"
+          "referenceLocator": "pkg:pypi/packaging@26.3"
         }
       ]
     },
@@ -7929,9 +7815,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-prometheus-client-0.25.0",
+      "SPDXID": "SPDXRef-Package-pypi-prometheus-client-0.26.0",
       "name": "prometheus-client",
-      "versionInfo": "0.25.0",
+      "versionInfo": "0.26.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7942,14 +7828,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/prometheus-client@0.25.0"
+          "referenceLocator": "pkg:pypi/prometheus-client@0.26.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-propcache-0.4.1",
+      "SPDXID": "SPDXRef-Package-pypi-propcache-0.5.2",
       "name": "propcache",
-      "versionInfo": "0.4.1",
+      "versionInfo": "0.5.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7960,14 +7846,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/propcache@0.4.1"
+          "referenceLocator": "pkg:pypi/propcache@0.5.2"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-py-cpuinfo-9.0.0",
-      "name": "py-cpuinfo",
-      "versionInfo": "9.0.0",
+      "SPDXID": "SPDXRef-Package-pypi-py-cpuinfo2-10.1.1",
+      "name": "py-cpuinfo2",
+      "versionInfo": "10.1.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -7978,7 +7864,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/py-cpuinfo@9.0.0"
+          "referenceLocator": "pkg:pypi/py-cpuinfo2@10.1.1"
         }
       ]
     },
@@ -8019,9 +7905,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pydantic-2.13.3",
+      "SPDXID": "SPDXRef-Package-pypi-pydantic-2.13.4",
       "name": "pydantic",
-      "versionInfo": "2.13.3",
+      "versionInfo": "2.13.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8032,14 +7918,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pydantic@2.13.3"
+          "referenceLocator": "pkg:pypi/pydantic@2.13.4"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pydantic-core-2.46.3",
+      "SPDXID": "SPDXRef-Package-pypi-pydantic-core-2.46.4",
       "name": "pydantic-core",
-      "versionInfo": "2.46.3",
+      "versionInfo": "2.46.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8050,14 +7936,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pydantic-core@2.46.3"
+          "referenceLocator": "pkg:pypi/pydantic-core@2.46.4"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pygments-2.20.0",
+      "SPDXID": "SPDXRef-Package-pypi-pygments-2.21.0",
       "name": "pygments",
-      "versionInfo": "2.20.0",
+      "versionInfo": "2.21.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8068,14 +7954,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pygments@2.20.0"
+          "referenceLocator": "pkg:pypi/pygments@2.21.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pytest-9.0.3",
+      "SPDXID": "SPDXRef-Package-pypi-pytest-9.1.1",
       "name": "pytest",
-      "versionInfo": "9.0.3",
+      "versionInfo": "9.1.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8086,14 +7972,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pytest@9.0.3"
+          "referenceLocator": "pkg:pypi/pytest@9.1.1"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pytest-asyncio-1.3.0",
+      "SPDXID": "SPDXRef-Package-pypi-pytest-asyncio-1.4.0",
       "name": "pytest-asyncio",
-      "versionInfo": "1.3.0",
+      "versionInfo": "1.4.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8104,14 +7990,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pytest-asyncio@1.3.0"
+          "referenceLocator": "pkg:pypi/pytest-asyncio@1.4.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pytest-benchmark-5.2.3",
+      "SPDXID": "SPDXRef-Package-pypi-pytest-benchmark-5.3.0",
       "name": "pytest-benchmark",
-      "versionInfo": "5.2.3",
+      "versionInfo": "5.3.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8122,7 +8008,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pytest-benchmark@5.2.3"
+          "referenceLocator": "pkg:pypi/pytest-benchmark@5.3.0"
         }
       ]
     },
@@ -8163,9 +8049,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-python-dotenv-1.2.2",
+      "SPDXID": "SPDXRef-Package-pypi-python-dotenv-1.2.3",
       "name": "python-dotenv",
-      "versionInfo": "1.2.2",
+      "versionInfo": "1.2.3",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8176,7 +8062,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/python-dotenv@1.2.2"
+          "referenceLocator": "pkg:pypi/python-dotenv@1.2.3"
         }
       ]
     },
@@ -8217,9 +8103,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-pytz-2026.1.post1",
+      "SPDXID": "SPDXRef-Package-pypi-pytz-2026.3.post1",
       "name": "pytz",
-      "versionInfo": "2026.1.post1",
+      "versionInfo": "2026.3.post1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8230,7 +8116,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/pytz@2026.1.post1"
+          "referenceLocator": "pkg:pypi/pytz@2026.3.post1"
         }
       ]
     },
@@ -8271,9 +8157,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-regex-2026.4.4",
+      "SPDXID": "SPDXRef-Package-pypi-regex-2026.7.19",
       "name": "regex",
-      "versionInfo": "2026.4.4",
+      "versionInfo": "2026.7.19",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8284,7 +8170,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/regex@2026.4.4"
+          "referenceLocator": "pkg:pypi/regex@2026.7.19"
         }
       ]
     },
@@ -8325,9 +8211,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-s3transfer-0.16.0",
+      "SPDXID": "SPDXRef-Package-pypi-s3transfer-0.19.2",
       "name": "s3transfer",
-      "versionInfo": "0.16.0",
+      "versionInfo": "0.19.2",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8338,7 +8224,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/s3transfer@0.16.0"
+          "referenceLocator": "pkg:pypi/s3transfer@0.19.2"
         }
       ]
     },
@@ -8361,9 +8247,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-slowapi-0.1.9",
+      "SPDXID": "SPDXRef-Package-pypi-slowapi-0.1.10",
       "name": "slowapi",
-      "versionInfo": "0.1.9",
+      "versionInfo": "0.1.10",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8374,7 +8260,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/slowapi@0.1.9"
+          "referenceLocator": "pkg:pypi/slowapi@0.1.10"
         }
       ]
     },
@@ -8397,9 +8283,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-sqlalchemy-2.0.49",
+      "SPDXID": "SPDXRef-Package-pypi-sqlalchemy-2.0.52",
       "name": "sqlalchemy",
-      "versionInfo": "2.0.49",
+      "versionInfo": "2.0.52",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8410,14 +8296,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/sqlalchemy@2.0.49"
+          "referenceLocator": "pkg:pypi/sqlalchemy@2.0.52"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-starlette-1.3.1",
+      "SPDXID": "SPDXRef-Package-pypi-starlette-1.6.0",
       "name": "starlette",
-      "versionInfo": "1.3.1",
+      "versionInfo": "1.6.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8428,14 +8314,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/starlette@1.3.1"
+          "referenceLocator": "pkg:pypi/starlette@1.6.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-typing-extensions-4.15.0",
+      "SPDXID": "SPDXRef-Package-pypi-typing-extensions-4.16.0",
       "name": "typing-extensions",
-      "versionInfo": "4.15.0",
+      "versionInfo": "4.16.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8446,14 +8332,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/typing-extensions@4.15.0"
+          "referenceLocator": "pkg:pypi/typing-extensions@4.16.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-typing-inspection-0.4.2",
+      "SPDXID": "SPDXRef-Package-pypi-typing-inspection-0.4.4",
       "name": "typing-inspection",
-      "versionInfo": "0.4.2",
+      "versionInfo": "0.4.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8464,7 +8350,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/typing-inspection@0.4.2"
+          "referenceLocator": "pkg:pypi/typing-inspection@0.4.4"
         }
       ]
     },
@@ -8487,9 +8373,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-uvicorn-0.46.0",
+      "SPDXID": "SPDXRef-Package-pypi-uvicorn-0.52.4",
       "name": "uvicorn",
-      "versionInfo": "0.46.0",
+      "versionInfo": "0.52.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8500,7 +8386,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/uvicorn@0.46.0"
+          "referenceLocator": "pkg:pypi/uvicorn@0.52.4"
         }
       ]
     },
@@ -8523,9 +8409,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-watchfiles-1.1.1",
+      "SPDXID": "SPDXRef-Package-pypi-watchfiles-1.2.0",
       "name": "watchfiles",
-      "versionInfo": "1.1.1",
+      "versionInfo": "1.2.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8536,14 +8422,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/watchfiles@1.1.1"
+          "referenceLocator": "pkg:pypi/watchfiles@1.2.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-websockets-16.0",
+      "SPDXID": "SPDXRef-Package-pypi-websockets-17.0.1",
       "name": "websockets",
-      "versionInfo": "16.0",
+      "versionInfo": "17.0.1",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8554,14 +8440,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/websockets@16.0"
+          "referenceLocator": "pkg:pypi/websockets@17.0.1"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-wrapt-2.1.2",
+      "SPDXID": "SPDXRef-Package-pypi-wrapt-2.3.0",
       "name": "wrapt",
-      "versionInfo": "2.1.2",
+      "versionInfo": "2.3.0",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8572,14 +8458,14 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/wrapt@2.1.2"
+          "referenceLocator": "pkg:pypi/wrapt@2.3.0"
         }
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-yarl-1.23.0",
+      "SPDXID": "SPDXRef-Package-pypi-yarl-1.24.5",
       "name": "yarl",
-      "versionInfo": "1.23.0",
+      "versionInfo": "1.24.5",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -8590,7 +8476,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/yarl@1.23.0"
+          "referenceLocator": "pkg:pypi/yarl@1.24.5"
         }
       ]
     }
@@ -8762,6 +8648,11 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
+      "spdxElementId": "SPDXRef-Package-npm-events-3.3.0",
+      "relationshipType": "BUILD_DEPENDENCY_OF",
+      "relatedSpdxElement": "SPDXRef-Package-ecm"
+    },
+    {
       "spdxElementId": "SPDXRef-Package-npm-fast-equals-5.4.1",
       "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
@@ -8787,7 +8678,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-mpegts.js-1.8.0",
+      "spdxElementId": "SPDXRef-Package-npm-mpegts.js-1.8.2",
       "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -8802,12 +8693,12 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-react-19.2.5",
+      "spdxElementId": "SPDXRef-Package-npm-react-19.2.8",
       "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-react-dom-19.2.5",
+      "spdxElementId": "SPDXRef-Package-npm-react-dom-19.2.8",
       "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -8858,11 +8749,6 @@
     },
     {
       "spdxElementId": "SPDXRef-Package-npm-victory-vendor-36.9.2",
-      "relationshipType": "BUILD_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-npm-webworkify-webpack-2.1.5",
       "relationshipType": "BUILD_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9027,21 +8913,6 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.emnapi.core-1.10.0",
-      "relationshipType": "DEV_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-npm-.emnapi.runtime-1.10.0",
-      "relationshipType": "DEV_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-npm-.emnapi.wasi-threads-1.2.1",
-      "relationshipType": "DEV_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
       "spdxElementId": "SPDXRef-Package-npm-.eslint-community.eslint-utils-4.10.1",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
@@ -9057,7 +8928,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.eslint.config-helpers-0.5.5",
+      "spdxElementId": "SPDXRef-Package-npm-.eslint.config-helpers-0.7.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9117,17 +8988,17 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.inquirer.confirm-6.1.1",
+      "spdxElementId": "SPDXRef-Package-npm-.inquirer.confirm-6.2.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.inquirer.core-11.2.1",
+      "spdxElementId": "SPDXRef-Package-npm-.inquirer.core-12.0.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.inquirer.figures-2.0.7",
+      "spdxElementId": "SPDXRef-Package-npm-.inquirer.figures-2.0.8",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9167,11 +9038,6 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.napi-rs.wasm-runtime-1.1.6",
-      "relationshipType": "DEV_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
       "spdxElementId": "SPDXRef-Package-npm-.open-draft.deferred-promise-2.2.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
@@ -9192,87 +9058,82 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.oxc-project.types-0.133.0",
+      "spdxElementId": "SPDXRef-Package-npm-.oxc-project.types-0.146.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-android-arm64-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-android-arm-eabi-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-darwin-arm64-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-android-arm64-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-darwin-x64-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-darwin-arm64-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-freebsd-x64-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-darwin-x64-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-arm-gnueabihf-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-freebsd-x64-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-gnu-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-arm-gnueabihf-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-musl-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-gnu-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-ppc64-gnu-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-arm64-musl-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-s390x-gnu-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-ppc64-gnu-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-gnu-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-s390x-gnu-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-musl-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-gnu-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-openharmony-arm64-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-linux-x64-musl-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-wasm32-wasi-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-openharmony-arm64-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-win32-arm64-msvc-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-win32-arm64-msvc-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-win32-x64-msvc-1.0.3",
-      "relationshipType": "DEV_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-npm-.rolldown.pluginutils-1.0.0-rc.7",
+      "spdxElementId": "SPDXRef-Package-npm-.rolldown.binding-win32-x64-msvc-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9302,12 +9163,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.testing-library.user-event-14.6.1",
-      "relationshipType": "DEV_DEPENDENCY_OF",
-      "relatedSpdxElement": "SPDXRef-Package-ecm"
-    },
-    {
-      "spdxElementId": "SPDXRef-Package-npm-.tybys.wasm-util-0.10.3",
+      "spdxElementId": "SPDXRef-Package-npm-.testing-library.user-event-14.6.6",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9347,12 +9203,12 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.types.react-19.2.14",
+      "spdxElementId": "SPDXRef-Package-npm-.types.react-19.2.18",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.types.react-dom-19.2.3",
+      "spdxElementId": "SPDXRef-Package-npm-.types.react-dom-19.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9367,97 +9223,97 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.eslint-plugin-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.eslint-plugin-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.parser-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.parser-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.project-service-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.project-service-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.scope-manager-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.scope-manager-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.tsconfig-utils-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.tsconfig-utils-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.type-utils-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.type-utils-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.types-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.types-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.typescript-estree-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.typescript-estree-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.utils-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.utils-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.visitor-keys-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-.typescript-eslint.visitor-keys-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitejs.plugin-react-6.0.1",
+      "spdxElementId": "SPDXRef-Package-npm-.vitejs.plugin-react-6.1.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.coverage-v8-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.expect-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.expect-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.mocker-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.mocker-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.pretty-format-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.runner-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.runner-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.snapshot-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.snapshot-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.spy-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.spy-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-.vitest.utils-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-.vitest.utils-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9642,7 +9498,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-es-module-lexer-2.3.1",
+      "spdxElementId": "SPDXRef-Package-npm-es-module-lexer-2.3.2",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9657,7 +9513,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-eslint-10.2.1",
+      "spdxElementId": "SPDXRef-Package-npm-eslint-10.9.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9667,7 +9523,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-eslint-plugin-react-refresh-0.5.2",
+      "spdxElementId": "SPDXRef-Package-npm-eslint-plugin-react-refresh-0.5.4",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9797,7 +9653,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-globals-17.5.0",
+      "spdxElementId": "SPDXRef-Package-npm-globals-17.11.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -9902,7 +9758,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-jiti-2.6.1",
+      "spdxElementId": "SPDXRef-Package-npm-jiti-2.7.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10067,7 +9923,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-msw-2.13.4",
+      "spdxElementId": "SPDXRef-Package-npm-msw-2.15.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10152,7 +10008,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-postcss-8.5.23",
+      "spdxElementId": "SPDXRef-Package-npm-postcss-8.5.26",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10197,7 +10053,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-rolldown-1.0.3",
+      "spdxElementId": "SPDXRef-Package-npm-rolldown-1.2.5",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10307,7 +10163,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-tinyexec-1.2.4",
+      "spdxElementId": "SPDXRef-Package-npm-tinyexec-1.3.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10317,7 +10173,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-tinyrainbow-3.1.0",
+      "spdxElementId": "SPDXRef-Package-npm-tinyrainbow-3.1.1",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10362,7 +10218,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-typescript-eslint-8.59.0",
+      "spdxElementId": "SPDXRef-Package-npm-typescript-eslint-8.67.0",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10392,12 +10248,12 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-vite-8.0.16",
+      "spdxElementId": "SPDXRef-Package-npm-vite-8.2.2",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-npm-vitest-4.1.4",
+      "spdxElementId": "SPDXRef-Package-npm-vitest-4.1.11",
       "relationshipType": "DEV_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10492,7 +10348,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-aiohappyeyeballs-2.6.1",
+      "spdxElementId": "SPDXRef-Package-pypi-aiohappyeyeballs-2.7.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10507,22 +10363,22 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-alembic-1.18.4",
+      "spdxElementId": "SPDXRef-Package-pypi-alembic-1.18.5",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-annotated-doc-0.0.4",
+      "spdxElementId": "SPDXRef-Package-pypi-annotated-doc-0.0.5",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-annotated-types-0.7.0",
+      "spdxElementId": "SPDXRef-Package-pypi-annotated-types-0.8.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-anyio-4.13.0",
+      "spdxElementId": "SPDXRef-Package-pypi-anyio-4.14.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10537,37 +10393,37 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-boto3-1.42.92",
+      "spdxElementId": "SPDXRef-Package-pypi-boto3-1.43.78",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-botocore-1.42.92",
+      "spdxElementId": "SPDXRef-Package-pypi-botocore-1.43.78",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-certifi-2026.2.25",
+      "spdxElementId": "SPDXRef-Package-pypi-certifi-2026.7.22",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-cffi-2.0.0",
+      "spdxElementId": "SPDXRef-Package-pypi-cffi-2.1.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-click-8.3.3",
+      "spdxElementId": "SPDXRef-Package-pypi-click-8.4.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-coverage-7.13.5",
+      "spdxElementId": "SPDXRef-Package-pypi-coverage-7.15.4",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-croniter-6.2.2",
+      "spdxElementId": "SPDXRef-Package-pypi-croniter-6.2.4",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10607,7 +10463,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-greenlet-3.4.0",
+      "spdxElementId": "SPDXRef-Package-pypi-greenlet-3.5.5",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10622,7 +10478,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-httptools-0.7.1",
+      "spdxElementId": "SPDXRef-Package-pypi-httptools-0.8.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10632,12 +10488,12 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-hypothesis-6.152.1",
+      "spdxElementId": "SPDXRef-Package-pypi-hypothesis-6.165.10",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-idna-3.15",
+      "spdxElementId": "SPDXRef-Package-pypi-idna-3.19",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10662,7 +10518,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-mako-1.3.12",
+      "spdxElementId": "SPDXRef-Package-pypi-mako-1.4.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10677,7 +10533,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-packaging-26.1",
+      "spdxElementId": "SPDXRef-Package-pypi-packaging-26.3",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10687,17 +10543,17 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-prometheus-client-0.25.0",
+      "spdxElementId": "SPDXRef-Package-pypi-prometheus-client-0.26.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-propcache-0.4.1",
+      "spdxElementId": "SPDXRef-Package-pypi-propcache-0.5.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-py-cpuinfo-9.0.0",
+      "spdxElementId": "SPDXRef-Package-pypi-py-cpuinfo2-10.1.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10712,32 +10568,32 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pydantic-2.13.3",
+      "spdxElementId": "SPDXRef-Package-pypi-pydantic-2.13.4",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pydantic-core-2.46.3",
+      "spdxElementId": "SPDXRef-Package-pypi-pydantic-core-2.46.4",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pygments-2.20.0",
+      "spdxElementId": "SPDXRef-Package-pypi-pygments-2.21.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pytest-9.0.3",
+      "spdxElementId": "SPDXRef-Package-pypi-pytest-9.1.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pytest-asyncio-1.3.0",
+      "spdxElementId": "SPDXRef-Package-pypi-pytest-asyncio-1.4.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pytest-benchmark-5.2.3",
+      "spdxElementId": "SPDXRef-Package-pypi-pytest-benchmark-5.3.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10752,7 +10608,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-python-dotenv-1.2.2",
+      "spdxElementId": "SPDXRef-Package-pypi-python-dotenv-1.2.3",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10767,7 +10623,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-pytz-2026.1.post1",
+      "spdxElementId": "SPDXRef-Package-pypi-pytz-2026.3.post1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10782,7 +10638,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-regex-2026.4.4",
+      "spdxElementId": "SPDXRef-Package-pypi-regex-2026.7.19",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10797,7 +10653,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-s3transfer-0.16.0",
+      "spdxElementId": "SPDXRef-Package-pypi-s3transfer-0.19.2",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10807,7 +10663,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-slowapi-0.1.9",
+      "spdxElementId": "SPDXRef-Package-pypi-slowapi-0.1.10",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10817,22 +10673,22 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-sqlalchemy-2.0.49",
+      "spdxElementId": "SPDXRef-Package-pypi-sqlalchemy-2.0.52",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-starlette-1.3.1",
+      "spdxElementId": "SPDXRef-Package-pypi-starlette-1.6.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-typing-extensions-4.15.0",
+      "spdxElementId": "SPDXRef-Package-pypi-typing-extensions-4.16.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-typing-inspection-0.4.2",
+      "spdxElementId": "SPDXRef-Package-pypi-typing-inspection-0.4.4",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10842,7 +10698,7 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-uvicorn-0.46.0",
+      "spdxElementId": "SPDXRef-Package-pypi-uvicorn-0.52.4",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
@@ -10852,22 +10708,22 @@
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-watchfiles-1.1.1",
+      "spdxElementId": "SPDXRef-Package-pypi-watchfiles-1.2.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-websockets-16.0",
+      "spdxElementId": "SPDXRef-Package-pypi-websockets-17.0.1",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-wrapt-2.1.2",
+      "spdxElementId": "SPDXRef-Package-pypi-wrapt-2.3.0",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-yarl-1.23.0",
+      "spdxElementId": "SPDXRef-Package-pypi-yarl-1.24.5",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-ecm"
     }

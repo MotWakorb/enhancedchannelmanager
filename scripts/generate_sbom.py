@@ -26,6 +26,30 @@ different digests even though their contents are otherwise identical. Building
 on ``release/**`` and inventorying *that* image would therefore commit a
 document naming a digest that is not, and never will be, in the registry.
 
+TWO KINDS OF DIRECTORY, SEPARATED BY PATH RATHER THAN BY CONVENTION
+-------------------------------------------------------------------
+``sbom/vX.Y.Z/`` is a **release record**. Release records accumulate and are kept
+forever: when an advisory lands the question is *which shipped versions contain
+the affected package*, and that is only answerable if the history is there.
+
+``sbom/dev/`` is a **transient snapshot** of whatever ``dev`` currently carries.
+There is at most one, and it is superseded rather than accumulated. It is not an
+artifact of record and no released version is described by it.
+
+The two are told apart by the **shape of the version string**, which decides the
+path, so they cannot be confused and cannot occupy each other's namespace.
+``docs/versioning.md`` §Format: a release drops the ``-BUILD`` suffix, so
+``X.Y.Z`` is a release and ``X.Y.Z-NNNN`` is a dev build. ``channel_for`` is the
+single place that judgement is made and ``directory_for`` is the single place a
+path is derived from it, so ``generate --version 0.18.1-0147`` cannot create a
+release directory no matter who types it.
+
+This mattered: ``sbom/v0.18.1-0144/`` was committed for a build number that was
+never released, and its contents became wrong when a 60-package dependency sweep
+landed one build later. A directory holding an inventory matching nothing that
+ever shipped is worse than no directory, because it is the first thing somebody
+finds when they go looking during an incident.
+
 BINDING
 -------
 Because there is no image digest to bind to, this document binds to what it can
@@ -65,6 +89,29 @@ DOCKER_IMAGE_REF = re.compile(
     r"^(?P<image>[^\s@:]+(?::[^\s@]+)?)@(?P<digest>sha256:[0-9a-f]{64})$"
 )
 SPDX_ID_UNSAFE = re.compile(r"[^A-Za-z0-9.-]")
+
+# docs/versioning.md §Format: `BUILD` is a zero-padded CI build counter used on
+# dev builds only, and a release cut drops the `-BUILD` suffix entirely. So the
+# version string alone says which kind of directory it belongs in.
+CHANNEL_RELEASE = "release"
+CHANNEL_DEV = "dev"
+DEV_DIRNAME = "dev"
+RELEASE_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+DEV_VERSION = re.compile(r"^\d+\.\d+\.\d+-\d{4,}$")
+
+CHANNEL_NOTE = {
+    CHANNEL_RELEASE: (
+        "Release record. Kept forever alongside every other release, because "
+        "answering 'which shipped versions contain this package' requires the "
+        "history to be present."
+    ),
+    CHANNEL_DEV: (
+        "Transient snapshot of the dev branch, NOT an artifact of record. There "
+        "is at most one and it is superseded rather than accumulated. The "
+        "version below names the build this snapshot was taken at, not what dev "
+        "carries now; the binding that matters is the source-manifest hashes."
+    ),
+}
 
 COVERAGE_INCLUDES = (
     "Python distributions pinned in the image's requirements.txt, with versions",
@@ -423,6 +470,48 @@ def read_version(root: Path) -> str:
     return version
 
 
+def channel_for(version: str) -> str:
+    """Return the channel a version string belongs to, or reject the string.
+
+    This is the *only* place the release/dev judgement is made. An unrecognised
+    shape is rejected rather than defaulted, because both defaults are wrong:
+    calling a dev build a release puts a transient snapshot in the permanent
+    namespace (which is how ``sbom/v0.18.1-0144/`` happened), and calling a
+    release a dev build silently declines to keep the record that matters.
+    """
+    if RELEASE_VERSION.fullmatch(version):
+        return CHANNEL_RELEASE
+    if DEV_VERSION.fullmatch(version):
+        return CHANNEL_DEV
+    raise SbomError(
+        f"{version!r} is neither a release version (X.Y.Z) nor a dev build "
+        "(X.Y.Z-NNNN); see docs/versioning.md"
+    )
+
+
+def directory_for(root: Path, version: str) -> Path:
+    """Return the directory a version's SBOM belongs in, derived from its channel."""
+    if channel_for(version) == CHANNEL_DEV:
+        return root / "sbom" / DEV_DIRNAME
+    return root / "sbom" / f"v{version}"
+
+
+def committed_directories(root: Path) -> list[Path]:
+    """Return every SBOM directory in the tree: the release records and the snapshot.
+
+    One definition, used by both ``audit --all`` and the repository tests, so a
+    directory cannot be audited by one and skipped by the other.
+    """
+    sbom_root = root / "sbom"
+    if not sbom_root.is_dir():
+        return []
+    found = sorted(path for path in sbom_root.glob("v*") if path.is_dir())
+    snapshot = sbom_root / DEV_DIRNAME
+    if snapshot.is_dir():
+        found.append(snapshot)
+    return found
+
+
 def render(root: Path, version: str, created: str) -> dict[str, Any]:
     """Return ``{relative path: serialized bytes}`` for the whole SBOM directory."""
     sources: dict[str, str] = {}
@@ -457,11 +546,15 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
         f"{subject}.spdx.json": _serialize(document)
         for subject, document in documents.items()
     }
+    channel = channel_for(version)
     index = {
         "schema": INDEX_SCHEMA,
         "version": version,
         "created": created,
         "kind": "source-manifest",
+        "channel": channel,
+        "permanent": channel == CHANNEL_RELEASE,
+        "channelNote": CHANNEL_NOTE[channel],
         "subject": {
             "type": "source-tree",
             "note": (
@@ -506,6 +599,55 @@ def committed_created(directory: Path) -> str:
     return created
 
 
+def audit_placement(directory: Path, index: dict[str, Any]) -> list[str]:
+    """Return every disagreement between a directory's name and its own index.
+
+    This is the check that stops a transient dev snapshot from being read as a
+    release record, which is the specific failure ``sbom/v0.18.1-0144/``
+    produced. ``audit`` walks every committed directory, so without it a dev
+    snapshot sitting in the release namespace would audit clean and then be
+    quoted to somebody holding a CVE as though a release contained it.
+    """
+    problems: list[str] = []
+    name = directory.name
+    version = index.get("version")
+    channel = index.get("channel")
+    if channel not in (CHANNEL_RELEASE, CHANNEL_DEV):
+        return [f"{name}/index.json declares no recognised channel ({channel!r})"]
+    if not isinstance(version, str) or not version:
+        return [f"{name}/index.json has no version string"]
+    try:
+        expected = channel_for(version)
+    except SbomError as exc:
+        return [f"{name}/index.json: {exc}"]
+    if channel != expected:
+        problems.append(
+            f"{name}/index.json declares channel {channel!r} but version "
+            f"{version!r} is a {expected} version"
+        )
+    if name == DEV_DIRNAME:
+        if channel != CHANNEL_DEV:
+            problems.append(
+                f"{name}/ is the transient dev snapshot but its index claims "
+                f"channel {channel!r}"
+            )
+    elif name.startswith("v"):
+        if channel != CHANNEL_RELEASE:
+            problems.append(
+                f"{name}/ sits in the permanent release namespace but its index "
+                f"claims channel {channel!r}; a dev snapshot belongs in sbom/{DEV_DIRNAME}/"
+            )
+        elif name[1:] != version:
+            problems.append(
+                f"{name}/ is named for {name[1:]!r} but its index records {version!r}"
+            )
+    else:
+        problems.append(
+            f"{name}/ is neither sbom/{DEV_DIRNAME}/ nor sbom/vX.Y.Z/"
+        )
+    return problems
+
+
 def audit(directory: Path) -> list[str]:
     """Return every internal inconsistency in a committed SBOM directory.
 
@@ -520,6 +662,7 @@ def audit(directory: Path) -> list[str]:
         return [f"{directory.name}/index.json is not a JSON object"]
     if index.get("schema") != INDEX_SCHEMA:
         problems.append(f"{directory.name}/index.json schema is {index.get('schema')!r}")
+    problems.extend(audit_placement(directory, index))
     entries = index.get("documents")
     if not isinstance(entries, list) or not entries:
         return problems + [f"{directory.name}/index.json lists no documents"]
@@ -564,12 +707,39 @@ def verify(root: Path, directory: Path, version: str) -> list[str]:
             f"no SBOM committed at {directory}; run "
             f"'python scripts/generate_sbom.py generate --version {version}'"
         )
-    declared = read_version(root)
-    if declared != version:
+    channel = channel_for(version)
+    index = _read_json(directory / "index.json")
+    if not isinstance(index, dict):
+        raise SbomError(f"{directory}/index.json is not a JSON object")
+    if index.get("channel") != channel:
         raise SbomError(
-            f"frontend/package.json is {declared} but the SBOM directory demands {version}"
+            f"{directory}/index.json declares channel {index.get('channel')!r} "
+            f"but {version} is a {channel} version"
         )
-    rendered = render(root, version, committed_created(directory))
+    declared = read_version(root)
+    if channel == CHANNEL_RELEASE:
+        if declared != version:
+            raise SbomError(
+                f"frontend/package.json is {declared} but the SBOM directory demands {version}"
+            )
+        effective = version
+    else:
+        # A dev snapshot records the build it was taken at, not what dev carries
+        # now. The build counter moves on nearly every PR and re-cutting the
+        # inventory each time is a tax that buys nothing, because the binding
+        # that matters is the source-manifest hashes compared below: change a
+        # dependency and this goes red, move only the build counter and it does
+        # not. Release currency is a different and stricter question, and it is
+        # the branch above.
+        if channel_for(declared) != CHANNEL_DEV:
+            raise SbomError(
+                f"frontend/package.json is {declared}, a release version; "
+                f"sbom/{DEV_DIRNAME}/ describes dev builds only"
+            )
+        effective = index.get("version")
+        if not isinstance(effective, str) or channel_for(effective) != CHANNEL_DEV:
+            raise SbomError(f"{directory}/index.json records no dev version")
+    rendered = render(root, effective, committed_created(directory))
     present = {path.name for path in directory.iterdir() if path.is_file()}
     drifted = sorted(set(rendered) ^ present)
     for name, payload in sorted(rendered.items()):
@@ -599,8 +769,17 @@ def _parser() -> argparse.ArgumentParser:
         sub.add_argument(
             "--out",
             type=Path,
-            help="SBOM directory; defaults to <repo-root>/sbom/v<version>.",
+            help=(
+                "SBOM directory; defaults to <repo-root>/sbom/v<version> for a "
+                "release version and <repo-root>/sbom/dev for a dev build."
+            ),
         )
+        if name == "audit":
+            sub.add_argument(
+                "--all",
+                action="store_true",
+                help="Audit every committed directory under sbom/ instead of one.",
+            )
         if name == "generate":
             sub.add_argument(
                 "--created",
@@ -614,7 +793,21 @@ def main(argv: list[str] | None = None) -> int:
     root: Path = args.repo_root
     try:
         version = args.version or read_version(root)
-        directory = args.out or root / "sbom" / f"v{version}"
+        directory = args.out or directory_for(root, version)
+        if args.command == "audit" and getattr(args, "all", False):
+            directories = committed_directories(root)
+            if not directories:
+                print("SBOM FAIL: nothing committed under sbom/", file=sys.stderr)
+                return 1
+            failed = False
+            for candidate in directories:
+                problems = audit(candidate)
+                if problems:
+                    failed = True
+                    print("SBOM FAIL: " + "; ".join(problems), file=sys.stderr)
+                else:
+                    print(f"SBOM PASS: {candidate} is internally consistent")
+            return 1 if failed else 0
         if args.command == "generate":
             created = args.created or datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"

@@ -2,10 +2,10 @@
   "spdxVersion": "SPDX-2.3",
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
-  "name": "mcp-0.18.1-0144",
-  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.1-0144/mcp",
+  "name": "mcp-0.18.1-0147",
+  "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.1-0147/mcp",
   "creationInfo": {
-    "created": "2026-08-24T15:19:03Z",
+    "created": "2026-08-24T18:56:15Z",
     "creators": [
       "Tool: scripts/generate_sbom.py"
     ],
@@ -18,7 +18,7 @@
     {
       "SPDXID": "SPDXRef-Package-mcp",
       "name": "enhanced-channel-manager-mcp",
-      "versionInfo": "0.18.1-0144",
+      "versionInfo": "0.18.1-0147",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -287,9 +287,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-idna-3.18",
+      "SPDXID": "SPDXRef-Package-pypi-idna-3.19",
       "name": "idna",
-      "versionInfo": "3.18",
+      "versionInfo": "3.19",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -300,7 +300,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/idna@3.18"
+          "referenceLocator": "pkg:pypi/idna@3.19"
         }
       ]
     },
@@ -719,9 +719,9 @@
       ]
     },
     {
-      "SPDXID": "SPDXRef-Package-pypi-uvicorn-0.52.3",
+      "SPDXID": "SPDXRef-Package-pypi-uvicorn-0.52.4",
       "name": "uvicorn",
-      "versionInfo": "0.52.3",
+      "versionInfo": "0.52.4",
       "downloadLocation": "NOASSERTION",
       "filesAnalyzed": false,
       "supplier": "NOASSERTION",
@@ -732,7 +732,7 @@
         {
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
-          "referenceLocator": "pkg:pypi/uvicorn@0.52.3"
+          "referenceLocator": "pkg:pypi/uvicorn@0.52.4"
         }
       ]
     },
@@ -868,7 +868,7 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-idna-3.18",
+      "spdxElementId": "SPDXRef-Package-pypi-idna-3.19",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
@@ -988,7 +988,7 @@
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },
     {
-      "spdxElementId": "SPDXRef-Package-pypi-uvicorn-0.52.3",
+      "spdxElementId": "SPDXRef-Package-pypi-uvicorn-0.52.4",
       "relationshipType": "RUNTIME_DEPENDENCY_OF",
       "relatedSpdxElement": "SPDXRef-Package-mcp"
     },

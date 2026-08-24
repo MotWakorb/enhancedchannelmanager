@@ -419,7 +419,9 @@ cd ..
 
 # 4. Generate the release SBOM, then commit on the release branch
 # Runs after the version bump: the SBOM directory is named for the release
-# version and G8 fails if the two disagree. See sbom/README.md for what these
+# version and G8 fails if the two disagree. A release version (no -BUILD suffix)
+# routes to sbom/vX.Y.Z/, which is a permanent record — never delete an older
+# one. See sbom/README.md for the two-directory-kinds rule and for what these
 # documents do and do not cover.
 python scripts/generate_sbom.py generate --version 0.17.0
 python scripts/generate_sbom.py verify --version 0.17.0   # what G8 will run in CI
@@ -530,6 +532,16 @@ is guaranteed to carry a different digest from the one that ships. Committing a
 document that named that digest would be an inventory of an artifact nobody ever
 receives. `sbom/README.md` carries the full statement and points at the Trivy
 image scans for the OS-layer question.
+
+**G8 governs release records only.** `sbom/vX.Y.Z/` directories accumulate and
+are kept forever — that history is what answers "which shipped versions contain
+this package". `sbom/dev/` is a different animal: a single transient snapshot of
+whatever `dev` carries, superseded rather than accumulated, and not an artifact
+of record. The two are separated by path, not by convention, because the version
+shape decides the path; a build-numbered version cannot produce a release
+directory. Do not delete a `vX.Y.Z` directory, and do not add a second dev
+snapshot. Refresh `sbom/dev/` in any PR that changes a dependency manifest or a
+Dockerfile base image — the backend suite goes red if you forget.
 
 #### `Release Cut Gate` workflow output
 

@@ -4,13 +4,42 @@
 at the repository root, not under `docs/`, because it is an artifact you reach
 for while holding a CVE and a deadline — not documentation.
 
+## Two kinds of directory, and they have opposite lifecycles
+
+Read this first; conflating them is the one mistake that makes this whole
+directory misleading.
+
+| Path | What it is | Lifecycle |
+| --- | --- | --- |
+| `sbom/vX.Y.Z/` | **Release record.** The inventory of record for a promoted release. | **Accumulates. Kept forever.** `v1.0.0/`, `v1.1.0/` and `v1.2.0/` all sit side by side. That is the entire point: when an advisory lands, the question is *which shipped versions contain the affected package*, and only the history can answer it. Never delete one. |
+| `sbom/dev/` | **Transient snapshot** of whatever `dev` currently carries. Not an artifact of record; no released version is described by it. | **Superseded, never accumulated.** There is at most one, and regenerating it replaces it. |
+
+The two are told apart by the **shape of the version string**, which decides the
+path — not by a convention a reader has to know. [`docs/versioning.md`](../docs/versioning.md#format)
+§Format: a release cut drops the `-BUILD` suffix, so `X.Y.Z` is a release and
+`X.Y.Z-NNNN` is a dev build. `channel_for()` in the generator is the only place
+that judgement is made and `directory_for()` is the only place a path comes out
+of it, so `generate --version 0.18.1-0147` writes `sbom/dev/` no matter who
+types it. `audit` fails any directory whose name and recorded channel disagree,
+and a backend test asserts no committed directory is a dev snapshot wearing a
+release name.
+
+### Why the rule is written down this hard
+
+`sbom/v0.18.1-0144/` was committed for a build number that was never released.
+One build later a 60-package dependency sweep landed, and its contents described
+a dependency set that no longer existed anywhere. A directory holding an
+inventory matching nothing that ever shipped is worse than no directory: it is
+the first thing somebody finds when they go looking during an incident, and its
+name says "release record". It was removed rather than kept as a sibling.
+
 Each directory holds three files:
 
 | File | What it is |
 | --- | --- |
 | `ecm.spdx.json` | SPDX 2.3 document for the ECM image's dependencies |
 | `mcp.spdx.json` | SPDX 2.3 document for the MCP image's dependencies |
-| `index.json` | The version, the SHA-256 of every source manifest the documents were derived from, and the SHA-256 of each document |
+| `index.json` | The version, the channel (`release` or `dev`) and whether it is permanent, the SHA-256 of every source manifest the documents were derived from, and the SHA-256 of each document |
 
 ## Read this before you trust a document
 
@@ -71,23 +100,37 @@ The one field `verify` does not police is `creationInfo.created`: a timestamp
 cannot be re-derived from the tree, so it is read back out of the committed
 `index.json` and reused. Every other byte is re-derived.
 
+What `verify` holds the two kinds to is deliberately different, because the
+questions are different:
+
+- **A release record** must match its tree exactly, *including* the version:
+  `frontend/package.json` and the directory must agree, or G8 fails.
+- **The dev snapshot** is held to **manifest currency, not build-counter
+  currency.** Change a dependency without regenerating and it goes red; move
+  only the build counter and it does not. `dev` bumps its counter on nearly
+  every PR, and re-cutting the inventory each time buys nothing — the binding
+  that matters is the source-manifest hashes. The recorded version names the
+  build the snapshot was taken at, and `index.json` says so in `channelNote`.
+  A dependency sweep landing without a regeneration is exactly the drift that
+  made the `0144` documents wrong, and that is the case this catches.
+
 `scripts/generate_sbom.py audit` checks a directory against its own index
-without needing that release's source tree, so past releases stay checkable.
-It runs over every committed directory as a test.
+without needing that release's source tree, so past releases stay checkable. It
+also checks that the directory's name, its recorded channel and its recorded
+version agree — the check that stops a transient snapshot from being read as a
+release record. It runs over every committed directory as a test.
 
 ## Commands
 
 ```bash
-python scripts/generate_sbom.py generate            # for the current package.json version
-python scripts/generate_sbom.py generate --version 0.19.0
+python scripts/generate_sbom.py generate                   # current package.json version; routes by channel
+python scripts/generate_sbom.py generate --version 0.19.0  # release record -> sbom/v0.19.0/
 python scripts/generate_sbom.py verify --version 0.19.0    # what the Release Cut Gate runs
-python scripts/generate_sbom.py audit --out sbom/v0.18.0   # internal consistency only
+python scripts/generate_sbom.py verify                     # on dev: checks sbom/dev/ against the manifests
+python scripts/generate_sbom.py audit --all                # every committed directory, internal consistency only
+python scripts/generate_sbom.py audit --out sbom/v0.18.0   # one directory
 ```
 
-## Directories that are not releases
-
-`dev` moves its build counter on nearly every PR, and regenerating an SBOM on
-each one is a tax nobody asked for — so a directory named for a
-build-counter version (`v0.18.1-0144`) is a snapshot taken deliberately, not a
-per-commit guarantee. It is held to the same standard as a release directory
-while the tree still carries that version: `verify` must pass.
+Refresh `sbom/dev/` whenever a PR changes `backend/requirements.txt`,
+`mcp-server/requirements.txt`, `frontend/package-lock.json` or a Dockerfile base
+image — the backend suite will tell you if you forget.

@@ -234,6 +234,12 @@ jobs:
       # structural — the images a release publishes are built from the merge
       # commit this PR creates, which does not exist yet and whose SHA is baked
       # into the ECM image as GIT_COMMIT. See sbom/README.md.
+      #
+      # Scope: release records only. A release version has no -BUILD suffix, so
+      # `verify --version X.Y.Z` resolves to sbom/vX.Y.Z/ and never to the
+      # transient sbom/dev/ snapshot; the version shape decides the path. Those
+      # release directories accumulate and are kept forever — the archive is
+      # what answers "which shipped versions contain this package".
       - name: G8 — SBOM committed for this release and current
         if: steps.shape.outputs.kind == 'release'
         env:

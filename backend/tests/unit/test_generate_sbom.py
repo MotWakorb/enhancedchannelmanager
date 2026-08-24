@@ -41,13 +41,23 @@ UV_DIGEST = "c" * 64
 ALPINE_DIGEST = "d" * 64
 
 
-@pytest.fixture(scope="module")
-def sbom():
+def _load():
     spec = importlib.util.spec_from_file_location("generate_sbom", SCRIPT)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# Loaded at import time as well as via the fixture: the repository sweep below
+# parametrizes over the committed directories, which is a collection-time
+# question and cannot wait for a fixture.
+_SBOM = _load()
+
+
+@pytest.fixture(scope="module")
+def sbom():
+    return _SBOM
 
 
 def _write(path: Path, text: str) -> None:
@@ -324,16 +334,122 @@ def test_audit_catches_an_unlisted_file(sbom, generated):
     assert any("not listed in the index" in problem for problem in sbom.audit(generated))
 
 
+# ─── Release records vs the transient dev snapshot ─────────────────────
+#
+# Two kinds of directory with opposite lifecycles: release records accumulate
+# and are kept forever, the dev snapshot is superseded and there is only ever
+# one. `sbom/v0.18.1-0144/` was the second kind sitting in the first kind's
+# namespace, so these guards make the distinction structural rather than a
+# convention a reader has to know.
+
+
+@pytest.fixture
+def dev_tree(tree: Path) -> Path:
+    _write(tree / "frontend" / "package.json", json.dumps({"version": "9.9.9-0001"}))
+    return tree
+
+
+def test_a_dev_build_version_routes_to_the_transient_snapshot_directory(sbom, tree):
+    assert sbom.channel_for("9.9.9-0001") == sbom.CHANNEL_DEV
+    assert sbom.directory_for(tree, "9.9.9-0001") == tree / "sbom" / "dev"
+
+
+def test_a_release_version_routes_to_a_permanent_release_directory(sbom, tree):
+    assert sbom.channel_for("9.9.9") == sbom.CHANNEL_RELEASE
+    assert sbom.directory_for(tree, "9.9.9") == tree / "sbom" / "v9.9.9"
+
+
+@pytest.mark.parametrize("version", ["9.9.9-rc1", "9.9", "v9.9.9", "9.9.9-12", ""])
+def test_an_unrecognised_version_shape_is_rejected_rather_than_defaulted(sbom, version):
+    """Both defaults are wrong, so there is no default."""
+    with pytest.raises(sbom.SbomError):
+        sbom.channel_for(version)
+
+
+def test_the_index_says_which_kind_of_directory_it_is(sbom, tree, dev_tree):
+    release = json.loads(
+        sbom.render(tree, "9.9.9", CREATED)["index.json"]
+    )
+    snapshot = json.loads(
+        sbom.render(dev_tree, "9.9.9-0001", CREATED)["index.json"]
+    )
+    assert (release["channel"], release["permanent"]) == ("release", True)
+    assert (snapshot["channel"], snapshot["permanent"]) == ("dev", False)
+    assert "not an artifact of record" in snapshot["channelNote"].lower()
+
+
+def test_audit_catches_a_dev_snapshot_in_the_release_namespace(sbom, dev_tree):
+    """The v0.18.1-0144 shape: transient contents under a permanent name."""
+    smuggled = dev_tree / "sbom" / "v9.9.9-0001"
+    sbom.generate(dev_tree, smuggled, "9.9.9-0001", CREATED)
+    assert any("release namespace" in problem for problem in sbom.audit(smuggled))
+
+
+def test_audit_catches_a_release_directory_named_for_another_version(sbom, tree):
+    misnamed = tree / "sbom" / "v9.9.8"
+    sbom.generate(tree, misnamed, "9.9.9", CREATED)
+    assert any("is named for" in problem for problem in sbom.audit(misnamed))
+
+
+def test_audit_catches_a_release_index_relabelled_as_a_snapshot(sbom, generated):
+    index_path = generated / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    index["channel"] = "dev"
+    index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert any("channel 'dev'" in problem for problem in sbom.audit(generated))
+
+
+def test_verify_refuses_a_directory_whose_channel_disagrees_with_the_version(sbom, dev_tree):
+    """A snapshot cannot be verified as though it were the release record."""
+    snapshot = dev_tree / "sbom" / "dev"
+    sbom.generate(dev_tree, snapshot, "9.9.9-0001", CREATED)
+    with pytest.raises(sbom.SbomError):
+        sbom.verify(dev_tree, snapshot, "9.9.9")
+
+
+def test_a_snapshot_survives_a_build_bump_but_not_a_dependency_change(sbom, dev_tree):
+    """The snapshot binds to the manifests, not to the build counter.
+
+    Regenerating on every build-counter bump is a tax that buys nothing. Not
+    regenerating on a dependency sweep is exactly what made the 0144 documents
+    describe a dependency set that no longer existed, so that must go red.
+    """
+    snapshot = dev_tree / "sbom" / "dev"
+    sbom.generate(dev_tree, snapshot, "9.9.9-0001", CREATED)
+
+    _write(dev_tree / "frontend" / "package.json", json.dumps({"version": "9.9.9-0002"}))
+    assert sbom.verify(dev_tree, snapshot, "9.9.9-0002") == []
+
+    _write(
+        dev_tree / "backend" / "requirements.txt",
+        "fastapi==0.136.1\ncryptography==50.0.1\n",
+    )
+    assert sbom.verify(dev_tree, snapshot, "9.9.9-0002") == ["ecm.spdx.json", "index.json"]
+
+
+def test_a_release_tree_cannot_carry_a_dev_snapshot(sbom, dev_tree):
+    snapshot = dev_tree / "sbom" / "dev"
+    sbom.generate(dev_tree, snapshot, "9.9.9-0001", CREATED)
+    _write(dev_tree / "frontend" / "package.json", json.dumps({"version": "9.9.9"}))
+    with pytest.raises(sbom.SbomError):
+        sbom.verify(dev_tree, snapshot, "9.9.9-0001")
+
+
+def test_committed_directories_finds_both_kinds(sbom, dev_tree):
+    sbom.generate(dev_tree, dev_tree / "sbom" / "dev", "9.9.9-0001", CREATED)
+    sbom.generate(dev_tree, dev_tree / "sbom" / "v9.9.8", "9.9.8", CREATED)
+    assert [path.name for path in sbom.committed_directories(dev_tree)] == ["v9.9.8", "dev"]
+
+
 # ─── The real repository ───────────────────────────────────────────────
 
 
 def _committed_directories() -> list[Path]:
-    root = ROOT / "sbom"
-    return sorted(path for path in root.glob("v*") if path.is_dir()) if root.is_dir() else []
+    return _SBOM.committed_directories(ROOT)
 
 
 def test_the_repository_carries_at_least_one_sbom(sbom):
-    assert _committed_directories(), "sbom/vX.Y.Z is the artifact of record; none is committed"
+    assert _committed_directories(), "an SBOM is the artifact of record; none is committed"
 
 
 @pytest.mark.parametrize("directory", _committed_directories(), ids=lambda path: path.name)
@@ -344,19 +460,42 @@ def test_every_committed_sbom_is_internally_consistent(sbom, directory):
 def test_the_sbom_for_the_current_version_matches_the_current_tree(sbom):
     """Committed for this version means current, or the inventory is a fiction.
 
-    Absence is not asserted against here: `dev` moves its build counter on
-    nearly every PR, and demanding a regenerated SBOM on each one would be a
-    tax this bead did not buy. Currency *for a release* is enforced by the
-    Release Cut Gate, which `test_release_cut_gate_enforces_the_sbom` proves is
-    still wired up. Older directories are historical records of their own cut
-    and are covered by `audit` alone.
+    On `dev` this is the transient snapshot, and what it is held to is
+    *manifest* currency, not build-counter currency: `verify` re-derives both
+    documents from the tree and byte-compares, so a dependency change goes red
+    here while a bare build-counter bump does not. That is deliberate — the
+    build counter moves on nearly every PR and re-cutting the inventory each
+    time buys nothing, while a dependency sweep landing without a regeneration
+    is exactly the drift that made `sbom/v0.18.1-0144/` wrong.
+
+    Release currency is the stricter question and is enforced by the Release Cut
+    Gate, which `test_release_cut_gate_enforces_the_sbom` proves is wired up.
+    Past releases are historical records of their own cut and covered by `audit`.
     """
     version = sbom.read_version(ROOT)
-    directory = ROOT / "sbom" / f"v{version}"
+    directory = sbom.directory_for(ROOT, version)
     if directory.is_dir():
         assert sbom.verify(ROOT, directory, version) == []
     else:
         assert _committed_directories()
+
+
+def test_no_committed_directory_is_a_dev_snapshot_in_the_release_namespace(sbom):
+    """`sbom/v0.18.1-0144/` is the failure this exists to make impossible.
+
+    A build-numbered directory under `sbom/vX.Y.Z/` reads as a release record
+    and will be quoted as one during an incident, while its contents describe a
+    build nobody ever received.
+    """
+    offenders = [
+        path.name
+        for path in _committed_directories()
+        if path.name != sbom.DEV_DIRNAME and not sbom.RELEASE_VERSION.fullmatch(path.name[1:])
+    ]
+    assert offenders == [], (
+        f"{offenders} name dev builds but sit in the permanent release namespace; "
+        f"a transient snapshot belongs in sbom/{sbom.DEV_DIRNAME}/"
+    )
 
 
 def test_release_cut_gate_enforces_the_sbom():

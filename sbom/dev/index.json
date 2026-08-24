@@ -1,8 +1,11 @@
 {
   "schema": 1,
-  "version": "0.18.1-0144",
-  "created": "2026-08-24T15:19:03Z",
+  "version": "0.18.1-0147",
+  "created": "2026-08-24T18:56:15Z",
   "kind": "source-manifest",
+  "channel": "dev",
+  "permanent": false,
+  "channelNote": "Transient snapshot of the dev branch, NOT an artifact of record. There is at most one and it is superseded rather than accumulated. The version below names the build this snapshot was taken at, not what dev carries now; the binding that matters is the source-manifest hashes.",
   "subject": {
     "type": "source-tree",
     "note": "These documents describe the dependency manifests of the release source tree. They do NOT describe a container image and assert no image digest; see sbom/README.md."
@@ -21,23 +24,23 @@
   },
   "sources": {
     "Dockerfile": "sha256:c1d48b34c475b42239d5757a89994d064395ea784cf05f6533ab886dfb427088",
-    "backend/requirements.txt": "sha256:c82ca81c087dc79fae6a6f94642075e2f277dbad659024a3248b904bd3096a0b",
-    "frontend/package-lock.json": "sha256:26991e14b92b9b730acd27fbf75c2d1a03d8a4225399a2cbdf619c549e1376fe",
+    "backend/requirements.txt": "sha256:7b59116ccfcb742b425ea1731035e52ee0b0a3d8ba38cdbe7dd18059f6b3f57e",
+    "frontend/package-lock.json": "sha256:c1c0ac5f168feadf122bd32c1b8e714916b0a513d3c212a9e518afd10ebc7140",
     "mcp-server/Dockerfile": "sha256:fa0a3732268f67e51161b0c064963567f1743cbcf12ad25b1e3821cbe20a0cc2",
-    "mcp-server/requirements.txt": "sha256:0483f830ae3d7748bf03d894951e18e463047b46025919077466dfcea845ebf3"
+    "mcp-server/requirements.txt": "sha256:c226a10129c51750977051f1d5efe54f1e9177f4ed240400ab3a89c56a6f1a37"
   },
   "documents": [
     {
       "path": "ecm.spdx.json",
       "subject": "ecm",
-      "packages": 455,
-      "sha256": "a3ae63ae60f334e9d7470d8ca18f7e770fe370581c32a12bb5dbaacad3d20ce7"
+      "packages": 449,
+      "sha256": "82f2024848e26bf387c7365237f23f922a28212ed735dd31069405abb777dbb4"
     },
     {
       "path": "mcp.spdx.json",
       "subject": "mcp",
       "packages": 43,
-      "sha256": "4bdc7d574ef607705c72f195803831eb12c54d4aab8026cd7351b895a1657d3e"
+      "sha256": "b016beb4c63d60d40d069c9b97b5709dafcc18270623369646252d5b11aaf48b"
     }
   ]
 }
