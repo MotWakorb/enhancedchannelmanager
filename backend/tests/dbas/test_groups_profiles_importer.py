@@ -605,11 +605,13 @@ async def test_import_groups_profiles_defaults_selection_to_off():
 # ---------------------------------------------------------------------------
 
 
-def test_category_configs_cover_the_three_entity_types():
-    """The module's canonical config table covers exactly the three categories.
+def test_category_configs_cover_the_four_entity_types():
+    """The module's canonical config table covers exactly the four categories.
 
-    Channel groups and channel profiles are genuine leaf dependencies with NO
-    outbound remappable FK. STREAM PROFILES ARE NOT (bead
+    Channel groups, channel profiles and SERVER GROUPS (bead ``…-tyrg1``) are
+    genuine leaf dependencies with NO outbound remappable FK — a Dispatcharr
+    ServerGroup is a unique ``name`` and nothing else (0.29.0
+    ``apps/m3u/models.py:216``). STREAM PROFILES ARE NOT (bead
     ``enhancedchannelmanager-lvfwd``): a Dispatcharr stream profile carries a
     ``user_agent`` FK, so its config MUST declare that remap.
     """
@@ -617,10 +619,12 @@ def test_category_configs_cover_the_three_entity_types():
     assert etypes == {
         EntityType.CHANNEL_GROUP,
         EntityType.CHANNEL_PROFILE,
+        EntityType.SERVER_GROUP,
         EntityType.STREAM_PROFILE,
     }
     assert _CATEGORY_CONFIGS["channel_groups"].remappable_fk_fields == {}
     assert _CATEGORY_CONFIGS["channel_profiles"].remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["server_groups"].remappable_fk_fields == {}
     assert _CATEGORY_CONFIGS["stream_profiles"].remappable_fk_fields == {
         "user_agent": EntityType.USER_AGENT
     }

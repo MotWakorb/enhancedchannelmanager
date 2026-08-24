@@ -187,6 +187,27 @@ _CATEGORY_CONFIGS: dict[str, CategoryConfig] = {
             "this preview shows and skip the rest. The end state is the same."
         ),
     ),
+    # …-tyrg1. A Dispatcharr ``ServerGroup`` groups M3U accounts that share
+    # provider credentials so they share a credential-scoped connection counter.
+    # Measured against dispatcharr:latest (0.29.0) on 2026-08-23 rather than
+    # carried over from the 0.28.2 reading the bead was filed on: the model has
+    # EXACTLY ONE field, a unique ``name``, and its serializer exposes exactly
+    # ``["id", "name"]``. So this is the smallest possible entity category, and
+    # it exists for the FK — an M3U account's ``server_group`` had no namespace
+    # to remap through and was therefore always dropped (bead ``…-g8tyd``),
+    # leaving a replica whose accounts do not share a connection limit until an
+    # operator recreates the grouping by hand.
+    #
+    # A NAME MATCH IS ALL THERE IS, and ``ALREADY_EXISTS_IDENTICAL`` is honest
+    # here in a way it is not for channel groups: the name IS the whole row, so
+    # a name match genuinely is an identical row. Nothing is left uncompared.
+    "server_groups": CategoryConfig(
+        entity_type=EntityType.SERVER_GROUP,
+        getter="get_server_groups",
+        creator="create_server_group",
+        log_prefix="DBAS-SRVGROUP",
+        payload_style="dict",
+    ),
     "channel_profiles": CategoryConfig(
         entity_type=EntityType.CHANNEL_PROFILE,
         getter="get_channel_profiles",
@@ -498,6 +519,41 @@ async def import_channel_groups(
     (case-insensitive / trimmed). Created via ``create_channel_group(name)``."""
     await _import_category(
         config=_CATEGORY_CONFIGS["channel_groups"],
+        archive_rows=archive_rows,
+        client=client,
+        selected=selected,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        is_dry_run=is_dry_run,
+    )
+
+
+async def import_server_groups(
+    *,
+    archive_rows: list[dict],
+    client: DispatcharrClient,
+    selected: bool,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: IdRemapTable,
+    is_dry_run: bool = False,
+) -> None:
+    """Restore the SERVER_GROUP category (bead ``…-tyrg1``).
+
+    Identity match key: name (case-insensitive / trimmed) — which is the WHOLE
+    ROW on Dispatcharr 0.29.0, so an ``ALREADY_EXISTS_IDENTICAL`` skip here
+    leaves nothing uncompared.
+
+    Runs BEFORE M3U_ACCOUNT in every registry: the account's ``server_group`` FK
+    resolves through the namespace this importer fills. Before it existed the FK
+    could only be DROPPED (bead ``…-g8tyd``), and a replica's M3U accounts
+    therefore did not share a connection limit until an operator recreated the
+    grouping by hand — a replica that behaves differently from its source until
+    a human intervenes, which is what ADR-013's faithful-copy principle forbids.
+    """
+    await _import_category(
+        config=_CATEGORY_CONFIGS["server_groups"],
         archive_rows=archive_rows,
         client=client,
         selected=selected,

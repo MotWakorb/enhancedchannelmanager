@@ -72,11 +72,16 @@ THE ``server_group`` FK (bead ``…-g8tyd``)
 
 An M3U account's ``server_group`` is ALSO a foreign key — to a Dispatcharr
 ``ServerGroup`` row whose id the destination assigns itself — and it is
-serialized on GET, so it reaches the create payload. Unlike ``user_agent`` there
-is no namespace to translate it through: ECM's DBAS has no ``ServerGroup``
-entity category and no ServerGroup importer, so nothing on the destination
-corresponds to A's pk. The field is therefore ALWAYS DROPPED
-(:func:`_drop_server_group_fk`), and the drop is reported.
+serialized on GET, so it reaches the create payload.
+
+It used to have no namespace to translate through, so bead ``…-g8tyd`` made it
+ALWAYS DROPPED. Bead ``…-tyrg1`` built the ``SERVER_GROUP`` entity category, so
+it now behaves exactly like ``user_agent``: rewritten in place through the
+``SERVER_GROUP`` remap namespace (which the step registries populate BEFORE this
+importer runs), and DROPPED with a reported degradation only when it cannot be
+resolved. The drop stays as the fallback rather than being removed — forwarding
+a raw source pk is what made a live B answer 400 and roll the whole apply back,
+and that floor must survive the feature. See :func:`_resolve_server_group_fk`.
 
 The INVARIANT both cases serve: no importer forwards a source-side foreign key
 to the destination without either resolving it through its remap namespace or
@@ -201,6 +206,94 @@ _SERVER_GROUP_FK = "server_group"
 # Credential markers scrubbed from any operator-facing failure message. An
 # upstream error body can echo a server_url; we never let it through.
 _CREDENTIAL_MESSAGE_KEYS = frozenset({"server_url", "username", "password", "url"})
+
+# ---------------------------------------------------------------------------
+# FIELD CONVERGENCE ON AN ALREADY-EXISTING ACCOUNT (bead ``…-zszjd``)
+# ---------------------------------------------------------------------------
+#
+# THE INVARIANT, stated as a property and not as the case that exposed it: **a
+# field set on the source is the field set on the replica after the next cycle,
+# for every field except those named in :data:`NEVER_CONVERGE_FIELDS` below.**
+# ``auto_enable_new_groups_live`` is one example of that property, not its
+# specification — spike ``xp6mp``'s ALREADY_EXISTS_IDENTICAL ruling froze EVERY
+# field on an existing account, so a fix scoped to one flag would leave the
+# other nineteen silently diverging.
+#
+# THE SET IS BUILT BY SUBTRACTION, deliberately. The convergeable payload is the
+# SAME payload :func:`_build_create_payload` produces (so a field Dispatcharr
+# adds in a future release converges the day the create payload carries it),
+# minus the exclusions named here. An allowlist would make "we did not get to
+# it" the default outcome for every new field, which is exactly the non-reason
+# ADR-013's governing principle rules out.
+#
+# EACH EXCLUSION NAMES A SPECIFIC HARM OR A SPECIFIC IMPOSSIBILITY. There is no
+# "it seemed risky" member; see the ADR-013 exclusion register, which carries
+# the same list.
+NEVER_CONVERGE_FIELDS: frozenset[str] = frozenset(
+    {
+        # IMPOSSIBILITY — ``name`` is the MATCH KEY. The two rows are the same
+        # account BECAUSE their names match (trimmed, case-insensitive), so
+        # within a matched pair the only reachable difference is casing, and a
+        # genuine rename on the source is not drift at all: it presents as a NEW
+        # account, which this importer creates. Converging a cross-instance
+        # rename needs a stable identity Dispatcharr does not expose on an M3U
+        # account (there is no export key, no uuid, and the id is instance-
+        # local). Recorded in ADR-013 as a named gap, not resolved here.
+        "name",
+        # HARM — ``channel_groups`` carries the SOURCE instance's channel-group
+        # pks. On the destination those integers address DIFFERENT groups, so
+        # writing them verbatim mis-assigns the account's per-group selection,
+        # which is the setting bead ``…-avrix`` proved decides whether the
+        # replica ingests nothing or the provider's whole 53,661-stream
+        # catalogue. The selection converges through the deferred
+        # group-selection path instead, which remaps each pk through the
+        # CHANNEL_GROUP namespace. Two writers on one setting, one of them
+        # unremapped, is strictly worse than one.
+        "channel_groups",
+        # HARM — ``status`` and ``last_message`` are the DESTINATION's own
+        # account health, written by B's own refresh. They are the exact two
+        # fields :func:`destination_account_looks_stale` reads to tell an
+        # operator their replica cannot authenticate. Overwriting B's
+        # ``status='error'`` with A's ``status='success'`` would blind that
+        # detector on every cycle, which turns a reported failure into a silent
+        # one — the failure mode this whole epic exists to remove.
+        "status",
+        "last_message",
+        # IMPOSSIBILITY — read-only on Dispatcharr's serializer, so a PATCH
+        # cannot move them at all. ``filters``, ``earliest_expiration`` and
+        # ``all_expirations`` are ``SerializerMethodField``s and ``profiles`` is
+        # ``read_only=True`` (0.29.0 ``apps/m3u/serializers.py``); ``locked`` is
+        # in its ``read_only_fields``. Including them would produce a payload
+        # Dispatcharr silently ignores while this importer reported a
+        # convergence that never happened.
+        "filters",
+        "profiles",
+        "earliest_expiration",
+        "all_expirations",
+        "locked",
+    }
+)
+
+# The one convergeable field a destination may legitimately not RETURN.
+#
+# Dispatcharr marks ``password`` ``write_only`` and re-adds it in
+# ``to_representation`` only for a caller at ``user_level >= 10`` (0.29.0
+# ``apps/m3u/serializers.py``). So a replica read with a lower-privileged token
+# answers with no ``password`` key at all — which is UNREADABLE, not equal and
+# not different. A diff cannot decide it in either direction.
+#
+# It is therefore written on every cycle rather than on a detected difference,
+# which is the PO's 2026-08-22 per-cycle credential ruling applied to the
+# account that already exists: "we should be sending credentials every time so
+# that we don't need the user to deal with needing to re-type anything." Until
+# this bead that ruling reached only the CREATE path — the plan carried the real
+# value, the existing-account branch wrote nothing at all, and a password
+# rotated on A never reached a replica that already had the account.
+#
+# It is NOT reported as drift when the destination did not return it: nothing is
+# known to have differed, and a counter that can never reach zero is noise
+# rather than a signal.
+_ALWAYS_WRITE_UNREADABLE_FIELDS: frozenset[str] = frozenset({"password"})
 
 
 class M3uImportResult(BaseModel):
@@ -328,27 +421,48 @@ def _resolve_user_agent_fk(
     return (True, dest_id)
 
 
-def _drop_server_group_fk(payload: dict) -> bool:
-    """Remove the account's ``server_group`` FK from the create payload.
+def _resolve_server_group_fk(payload: dict, remap: IdRemapTable) -> bool:
+    """Remap the account's ``server_group`` FK, or DROP it as the fallback.
 
     ``server_group`` is a foreign key to a Dispatcharr ``ServerGroup`` row whose
-    id the DESTINATION assigns itself. There is no ``ServerGroup`` entity
-    category and no ServerGroup importer in ECM's DBAS, so no remap namespace
-    can translate A's pk — the field can only be DROPPED. Dispatcharr declares
-    the column ``null=True, blank=True, on_delete=SET_NULL``, so an account
-    without one is valid; forwarding a stale pk is not (live B answered
-    ``400 {"server_group": ["Invalid pk \"20\" - object does not exist."]}``).
+    id the DESTINATION assigns itself, so A's pk means nothing on B: forwarding
+    it made a live B answer ``400 {"server_group": ["Invalid pk \"20\" - object
+    does not exist."]}``, and because M3U_ACCOUNT is a FATAL failure category
+    that rolled the WHOLE apply back (bead ``…-g8tyd``).
 
-    Returns ``True`` only when a NON-NULL FK was actually removed — that is the
-    degradation the caller reports. An absent or null ``server_group`` is the
-    common shape and is left exactly as it is (``None`` is a legal value the
-    destination accepts), so it is neither dropped nor reported.
+    THE DROP WAS THE CORRECTNESS FLOOR, AND IT STAYS. Bead ``…-g8tyd`` made the
+    field always-dropped because there was no ``SERVER_GROUP`` namespace to
+    translate through. Bead ``…-tyrg1`` builds that namespace, so the field is
+    now REMAPPED when it resolves — but the drop remains as the fallback for the
+    unresolvable case, because the alternative is the 400 that cost the operator
+    their entire replica. This replaces the drop; it does not revert to
+    forwarding a raw source pk.
+
+    Dispatcharr declares the column ``null=True, blank=True,
+    on_delete=SET_NULL`` (0.29.0 ``apps/m3u/models.py:39``), so an account
+    without one is valid.
+
+    Returns:
+        ``True`` only when a NON-NULL FK could NOT be resolved and was removed —
+        that is the degradation the caller reports. A resolved FK is rewritten
+        in place and reports nothing (it is not a degradation). An absent or
+        null ``server_group`` is the common shape and is left exactly as it is
+        (``None`` is a legal value the destination accepts).
     """
     source_group = payload.get(_SERVER_GROUP_FK)
     if source_group is None:
         return False
-    payload.pop(_SERVER_GROUP_FK)
-    return True
+    try:
+        source_group_id = int(source_group)
+    except (TypeError, ValueError):
+        payload.pop(_SERVER_GROUP_FK)
+        return True
+    dest_id = remap.resolve(EntityType.SERVER_GROUP, source_group_id)
+    if dest_id is None:
+        payload.pop(_SERVER_GROUP_FK)
+        return True
+    payload[_SERVER_GROUP_FK] = dest_id
+    return False
 
 
 def _build_create_payload(
@@ -380,19 +494,17 @@ def _build_create_payload(
     the agent and the degradation is reported (never silent): the operator
     re-selects one agent instead of losing the entire replica.
 
-    THE ``server_group`` FK (bead ``…-g8tyd``). ``server_group`` is a SECOND
-    foreign key on the same record — to a Dispatcharr ``ServerGroup`` row, which
-    groups M3U accounts that share provider credentials so they share
-    credential-scoped connection counters. It is serialized on GET, so A's raw pk
-    reached the create payload and B answered ``400 {"server_group": ["Invalid pk
-    \"20\" - object does not exist."]}`` — the same total-blast-radius rollback
-    as the ``user_agent`` case. There is no ``ServerGroup`` entity category and no
-    ServerGroup importer, so unlike ``user_agent`` there is nothing to remap
-    through: the field is ALWAYS DROPPED. ``ServerGroup`` carries no
-    configuration of its own (a unique ``name`` and nothing else; the stream
-    limits come from each account profile's ``max_streams``), so the replica
-    loses a grouping label it can be given back in one action, not settings. The
-    drop is reported like its sibling, never silent.
+    THE ``server_group`` FK (beads ``…-g8tyd`` then ``…-tyrg1``).
+    ``server_group`` is a SECOND foreign key on the same record — to a
+    Dispatcharr ``ServerGroup`` row, which groups M3U accounts that share
+    provider credentials so they share credential-scoped connection counters. It
+    is serialized on GET, so A's raw pk reached the create payload and B answered
+    ``400 {"server_group": ["Invalid pk \"20\" - object does not exist."]}`` —
+    the same total-blast-radius rollback as the ``user_agent`` case. ``g8tyd``
+    stopped that by always dropping the field, because no ``SERVER_GROUP``
+    namespace existed. ``tyrg1`` built one, so the field is now REMAPPED like
+    ``user_agent`` and dropped only when it does not resolve — the correctness
+    floor survives the feature rather than being traded for it.
 
     A STANDARD (redact-by-default) artifact carries the ``***REDACTED***``
     placeholder in place of each credential. Writing that through produced an XC
@@ -421,9 +533,190 @@ def _build_create_payload(
             payload[_USER_AGENT_FK] = dest_agent_id
         else:
             payload.pop(_USER_AGENT_FK)
-    server_group_dropped = _drop_server_group_fk(payload)
+    server_group_dropped = _resolve_server_group_fk(payload, remap)
     stripped, redacted_fields = strip_redaction_sentinels(payload)
     return stripped, redacted_fields, user_agent_resolved, server_group_dropped
+
+
+def _values_converged(key: str, source_value, dest_value) -> bool:
+    """True when the destination already holds what the source has for ``key``.
+
+    ``custom_properties`` is compared as a SUBSET rather than for equality, and
+    that is load-bearing rather than lenient. Dispatcharr's update path MERGES
+    the incoming blob over the stored one — ``custom_props = {**existing,
+    **incoming}`` (0.29.0 ``apps/m3u/serializers.py``) — so a key the destination
+    holds and the source does not is one a PATCH physically cannot remove.
+    Equality would report that key as drift on every cycle forever, and every
+    cycle would issue a write that could not clear it: a counter that never
+    reaches zero, which is the shape bead ``…-4mkoe`` exists to keep out of this
+    report. Subset comparison reports exactly what a PATCH can fix, so the
+    counter clears when the drift does.
+
+    That merge is also why the destination-only key survives at all, which is
+    the honest limit of this convergence and is recorded as such in ADR-013:
+    ECM can make every key the source sets true on the replica; it cannot make
+    the replica's extra keys go away through this endpoint.
+    """
+    if key == "custom_properties":
+        if not isinstance(source_value, dict):
+            return source_value == dest_value
+        if not isinstance(dest_value, dict):
+            return not source_value
+        return all(
+            sub_key in dest_value and dest_value[sub_key] == sub_value
+            for sub_key, sub_value in source_value.items()
+        )
+    return source_value == dest_value
+
+
+def build_convergence_patch(
+    archive_account: dict, existing_acc: dict, remap: IdRemapTable
+) -> tuple[dict, list[str]]:
+    """Build the PATCH that converges an EXISTING replica account (bead …-zszjd).
+
+    Starts from the SAME payload :func:`_build_create_payload` produces — so the
+    FK resolution (``user_agent`` through its remap namespace, ``server_group``
+    through its own) and the redaction-sentinel strip are shared with the create
+    path rather than re-derived — then removes :data:`NEVER_CONVERGE_FIELDS` and
+    keeps only what actually differs from the destination row.
+
+    A key the DESTINATION did not return is treated as UNREADABLE, never as
+    different: comparing against a key that is not there would report drift the
+    next cycle cannot clear. The one field that is routinely unreadable and must
+    cross anyway is handled by :data:`_ALWAYS_WRITE_UNREADABLE_FIELDS` — it joins
+    the payload without joining the drift list.
+
+    Args:
+        archive_account: the SOURCE account record.
+        existing_acc: the DESTINATION account row as the destination returned it.
+        remap: the shared remap table (``USER_AGENT`` / ``SERVER_GROUP``
+            namespaces are populated by the steps ordered ahead of this one).
+
+    Returns:
+        ``(patch, drifted_fields)`` — the PATCH body (empty when the replica
+        already matches) and the FIELD NAMES that differed, sorted, never any
+        value. ``drifted_fields`` is what the report shows; ``patch`` may carry
+        one more key than that (see above), and never fewer.
+    """
+    payload, _redacted, _agent_ok, _group_dropped = _build_create_payload(
+        archive_account, remap
+    )
+    patch: dict = {}
+    drifted: list[str] = []
+    for key, source_value in payload.items():
+        if key in NEVER_CONVERGE_FIELDS:
+            continue
+        if key not in existing_acc:
+            # Unreadable on the destination — not comparable in either
+            # direction. Only a field whose absence is a KNOWN property of the
+            # serializer (never a guess) is written blind.
+            if key in _ALWAYS_WRITE_UNREADABLE_FIELDS and credential_is_present(
+                source_value
+            ):
+                patch[key] = source_value
+            continue
+        if _values_converged(key, source_value, existing_acc.get(key)):
+            continue
+        patch[key] = source_value
+        drifted.append(key)
+    return patch, sorted(drifted)
+
+
+async def _converge_existing_account(
+    *,
+    archive_account: dict,
+    existing_acc: dict,
+    existing_id: int | None,
+    client: DispatcharrClient,
+    remap: IdRemapTable,
+    report: RestoreReport,
+    cat,
+    label: str,
+    is_dry_run: bool,
+) -> None:
+    """Converge one already-existing replica account toward the source (…-zszjd).
+
+    WHY A FAILED WRITE IS NOT ``cat.failed``. M3U_ACCOUNT is a FATAL failure
+    category: a non-zero ``failed`` there aborts the cycle and runs the
+    compensating rollback, deleting everything the run created. That disposition
+    is right for an account that could not be CREATED — the whole Phase-2 tree
+    hangs off it. It is wrong for a field write onto an account that is already
+    there: nothing downstream resolves through the write (the remap entry is
+    added from the destination row regardless), so a refused PATCH degrades only
+    itself, and rolling back a whole replica over one setting is the
+    catastrophe-for-a-cosmetic-defect trade the ``…-d0agi`` logos drill already
+    paid once.
+
+    It is reported instead, through the ONE recorder, and the shortfall half of
+    that recorder forbids a SUCCESS outcome — so the cycle is visibly degraded
+    without being destructive. The drift is re-derived from a fresh read of the
+    destination next cycle, so a transient refusal clears itself and a permanent
+    one keeps saying so.
+    """
+    patch, drifted = build_convergence_patch(archive_account, existing_acc, remap)
+    if not patch:
+        return
+
+    if is_dry_run:
+        # A preview attempted nothing, so it can have fallen short of nothing:
+        # ``reason=None`` keeps it out of the shortfall counter while the drift
+        # itself is still shown. The preview is the prediction, not a finding.
+        report.record_account_field_drift(
+            name=label,
+            fields=drifted,
+            destination_account_id=existing_id,
+            applied=False,
+            reason=None,
+        )
+        if drifted:
+            cat.would_update += 1
+        return
+
+    if existing_id is None:
+        report.record_account_field_drift(
+            name=label,
+            fields=drifted,
+            destination_account_id=None,
+            applied=False,
+            reason="the destination did not report an id for this account, so "
+            "there was no row to write to.",
+        )
+        return
+
+    try:
+        await client.patch_m3u_account(int(existing_id), patch)
+    except Exception as exc:  # noqa: BLE001 - reported, never fatal (see docstring)
+        logger.warning(
+            "[DBAS-M3U] Could not converge account '%s' (id=%s): %s",
+            label,
+            existing_id,
+            type(exc).__name__,
+        )
+        report.record_account_field_drift(
+            name=label,
+            fields=drifted,
+            destination_account_id=existing_id,
+            applied=False,
+            reason=_sanitize_failure(exc),
+        )
+        return
+
+    report.record_account_field_drift(
+        name=label,
+        fields=drifted,
+        destination_account_id=existing_id,
+        applied=True,
+        reason=None,
+    )
+    if drifted:
+        cat.updated += 1
+        # Field NAMES only — a converging account carries username/password.
+        logger.info(
+            "[DBAS-M3U] Converged account '%s' (id=%s): %s.",
+            label,
+            existing_id,
+            ", ".join(drifted),
+        )
 
 
 def _extract_group_settings(archive_account: dict) -> dict | None:
@@ -601,6 +894,7 @@ async def import_m3u_accounts(
     ledger: RollbackLedger,
     remap: IdRemapTable,
     is_dry_run: bool = False,
+    converge_existing: bool = False,
 ) -> M3uImportResult:
     """Restore the M3U_ACCOUNT category: create accounts; defer auto-sync.
 
@@ -619,6 +913,18 @@ async def import_m3u_accounts(
             ``EntityType.M3U_ACCOUNT`` so later importers resolve FK references.
         is_dry_run: When ``True``, nothing is created — the importer only reports
             ``would_create`` / ``would_skip`` and returns no deferred settings.
+        converge_existing: When ``True``, an account that ALREADY EXISTS on the
+            destination has its fields converged toward the source rather than
+            left frozen at whatever they were when it was first created (bead
+            ``…-zszjd``; see :func:`build_convergence_patch` for the invariant
+            and :data:`NEVER_CONVERGE_FIELDS` for every exclusion). ``False``
+            (the default) is the ONE-SHOT ARCHIVE RESTORE behaviour and is
+            deliberately unchanged: the same ``created: False`` reasoning bead
+            ``…-avrix`` used for the group selection applies here. Continuous
+            sync is where a frozen field becomes permanent silent divergence;
+            a one-shot restore onto a populated instance is an operator action
+            with a different blast radius, and widening it is not this bead's to
+            decide. The sync engine passes ``True`` through its own step.
 
     Returns:
         An :class:`M3uImportResult` carrying ``deferred_auto_sync_settings`` for
@@ -682,6 +988,27 @@ async def import_m3u_accounts(
                 label=label,
                 source_id=source_id,
             )
+            # THE FIELDS SURVIVE THE SKIP AS WELL (bead …-zszjd). Skipping the
+            # CREATE is not the same fact as "the replica already holds what the
+            # source holds": spike ``xp6mp``'s ALREADY_EXISTS_IDENTICAL ruling
+            # froze EVERY field on this row at its first-sync value, so a
+            # setting changed on A afterwards diverged silently and permanently.
+            # Measured on 2026-08-21: ``auto_enable_new_groups_live`` flipped on
+            # A, a cycle run, and B unchanged with every counter at zero. That
+            # flag was one field of twenty; the fix is the invariant, not the
+            # flag (see :func:`build_convergence_patch`).
+            if converge_existing:
+                await _converge_existing_account(
+                    archive_account=archive_account,
+                    existing_acc=existing_acc,
+                    existing_id=int(existing_id) if existing_id is not None else None,
+                    client=client,
+                    remap=remap,
+                    report=report,
+                    cat=cat,
+                    label=label,
+                    is_dry_run=is_dry_run,
+                )
             # THE GROUP SELECTION SURVIVES THE SKIP TOO (bead …-avrix, the same
             # shape as the credential action item above). Deferring only on the
             # CREATE path made the selection a property of the cycle that first
@@ -751,10 +1078,10 @@ async def import_m3u_accounts(
                 label,
             )
             report.notes.append(
-                "M3U account '%s': its server group does not exist on this "
-                "destination and cannot be recreated by a sync, so the account "
-                "was created without one. Re-assign it to a server group if it "
-                "shares provider connection limits with other accounts." % label
+                "M3U account '%s': its server group could not be resolved on "
+                "this destination, so the account was created without one. "
+                "Re-assign it to a server group if it shares provider "
+                "connection limits with other accounts." % label
             )
 
         if is_dry_run:

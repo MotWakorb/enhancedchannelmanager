@@ -9,7 +9,8 @@
  *     the flipped `enabled` value.
  *   - The logo-replication toggle (bead …-8gnik) calls updateSyncTarget with the
  *     flipped `sync_logos` value, reflects the target's stored value, and is
- *     never flipped on implicitly — `sync_logos` stays default OFF (ADR-013 S9).
+ *     never set implicitly by the create form — which is what lets the BACKEND
+ *     own the default (ON since bead 2yq19).
  *   - Delete confirms first, then calls deleteSyncTarget.
  *   - "Sync now" runs a DRY-RUN preview — runTask(`dbas_sync_${id}`, undefined,
  *     { sync_target_id, confirm_apply: false }) — and only an explicit Apply
@@ -52,6 +53,8 @@ const TARGET: api.SyncTarget = {
   insecure: false,
   fuzzy_stream_matching: false,
   sync_logos: false,
+  logo_sync_interval_hours: 24,
+  core_settings_excluded: [],
   has_schedules_direct_password: false,
   credential_version: 1,
   last_full_sync_at: '2026-06-18T12:00:00Z',
@@ -297,9 +300,11 @@ describe('SyncTargetsCard', () => {
   //
   // `sync_logos` had no UI at all: the only ways to turn logo replication on
   // were PUT /api/sync-targets/{id} or the MCP tool, and the operator guide
-  // said so in as many words. The toggle below is that missing control. It
-  // ADDS a control; it does not change the default, which ADR-013 S9 ratified
-  // as OFF because the logos importer is not a per-cycle cost.
+  // said so in as many words. The toggle below is that missing control.
+  //
+  // The DEFAULT moved to ON in bead …-2yq19, and it moved in the BACKEND. This
+  // card's create form omits `sync_logos` entirely, which is exactly what makes
+  // that possible — see the create-path test at the end of this block.
   // -------------------------------------------------------------------------
 
   it('logo toggle calls updateSyncTarget with the flipped sync_logos (off -> on)', async () => {
@@ -338,7 +343,7 @@ describe('SyncTargetsCard', () => {
     expect(toggle).toHaveTextContent(/logos off/i);
   });
 
-  it('creating a target never opts it into logo replication (default stays OFF)', async () => {
+  it('creating a target lets the BACKEND decide logo replication (bead …-2yq19)', async () => {
     (api.createSyncTarget as Mock).mockResolvedValue({ ...TARGET, id: 8, name: 'New B' });
     await renderCard([]);
 
@@ -350,10 +355,15 @@ describe('SyncTargetsCard', () => {
     fireEvent.click(screen.getByRole('button', { name: /create target/i }));
 
     await waitFor(() => expect(api.createSyncTarget).toHaveBeenCalledTimes(1));
-    // ADR-013 S9: the create path must not carry a truthy sync_logos. Omitted
-    // is correct (the backend default is False); explicitly true is not.
+    // The create path must not carry `sync_logos` AT ALL, in either direction.
+    // This used to assert `payload.sync_logos ?? false === false`, which passed
+    // both on omission and on an explicit `false` — indistinguishable, and only
+    // one of them is right now that the backend default is ON. An explicit
+    // `false` here would silently re-impose the old default from the client and
+    // hand every new replica a lineup with no artwork, which is the failure
+    // epic f5a5j is named for. Omission is the assertion.
     const payload = (api.createSyncTarget as Mock).mock.calls[0][0];
-    expect(payload.sync_logos ?? false).toBe(false);
+    expect('sync_logos' in payload).toBe(false);
   });
 
   // -------------------------------------------------------------------------

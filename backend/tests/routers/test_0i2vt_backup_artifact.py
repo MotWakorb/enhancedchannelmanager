@@ -204,6 +204,10 @@ def _patched_build(
     mock_client.get_dvr_rules = AsyncMock(
         return_value=[{"id": 41, "name": "Record CNN", "channel": 5}]
     )
+    # tyrg1 — a Dispatcharr ServerGroup is exactly ``{id, name}`` on 0.29.0.
+    mock_client.get_server_groups = AsyncMock(
+        return_value=[{"id": 51, "name": "Shared Provider Pool"}]
+    )
     # …-ciabe — the recording INSTANCES. Left EMPTY here deliberately: this
     # fixture's job is the artifact/degradation surface, and the upcoming/
     # excluded split has its own suite. An unstubbed method would degrade the

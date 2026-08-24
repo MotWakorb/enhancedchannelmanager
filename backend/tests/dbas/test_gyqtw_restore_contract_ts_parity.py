@@ -73,6 +73,7 @@ _MIRRORS: dict[str, str] = {
     "ProfileMembershipDriftDetail": "ProfileMembershipDriftDetail",
     "ChannelGroupDriftDetail": "ChannelGroupDriftDetail",
     "ProviderGroupSelectionDetail": "ProviderGroupSelectionDetail",
+    "AccountFieldDriftDetail": "AccountFieldDriftDetail",
 }
 
 # Models the restore engine never puts on the wire, so the frontend has no

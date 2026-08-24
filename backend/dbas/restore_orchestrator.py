@@ -327,6 +327,11 @@ def _delete_dispatch(client: DispatcharrClient) -> dict[EntityType, Callable[[in
         EntityType.CHANNEL_GROUP: client.delete_channel_group,
         EntityType.CHANNEL_PROFILE: client.delete_channel_profile,
         EntityType.STREAM_PROFILE: client.delete_stream_profile,
+        # tyrg1 — a ServerGroup is a created entity like any other, so it is
+        # ledgered and must be compensable. It is ordered FIRST in the
+        # registries and therefore LAST in compensation order, which is what
+        # lets the accounts referencing it be deleted before it is.
+        EntityType.SERVER_GROUP: client.delete_server_group,
         EntityType.CHANNEL: client.delete_channel,
         EntityType.STREAM: client.delete_stream,
         EntityType.USER: client.delete_user,
@@ -752,7 +757,26 @@ async def run_restore(
     max_entities_per_category: int = None,  # type: ignore[assignment]
     channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
     allow_fuzzy_stream_match: bool = True,
+    non_fatal_categories: frozenset[EntityType] | None = None,
 ) -> RestoreReport:
+    # ``non_fatal_categories`` (bead …-10wnq): override
+    # :data:`NON_FATAL_FAILURE_CATEGORIES` for THIS run. ``None`` keeps the
+    # module default, so the archive-restore path is bit-for-bit unchanged —
+    # including the PO's 2026-08-03 ruling on bead ``…-zt3kf`` that a
+    # settings-key DEPENDENCY_UNRESOLVED aborts the whole restore and rolls
+    # back. That ruling was made about a ONE-SHOT operator action, where a
+    # human sees the result and decides whether to retry.
+    #
+    # Cross-instance sync passes a widened set because its context is the
+    # opposite: it runs UNATTENDED, FOREVER, on a schedule, and nobody sees the
+    # result. Rolling a whole replica back there costs the operator every entity
+    # the cycle created, on every cycle, for a category that is never LEDGERED
+    # and therefore cannot be rolled back anyway (``_delete_dispatch`` has no
+    # SETTINGS compensator by design). ADR-013 S8 makes "retry next interval"
+    # the recovery mechanism, which is exactly what a rollback destroys.
+    #
+    # A widened category's failures are still COUNTED, still listed in
+    # ``failure_details``, and still forbid a ``SUCCESS`` outcome.
     """Run a full restore: pre-flight → ordered apply → rollback-on-failure.
 
     The single orchestration chokepoint. Behaviour:
@@ -906,6 +930,10 @@ async def run_restore(
     # --- 2. Ordered apply (the hard Phase-2 sequence). ---
     failure_occurred = False
     failed_step: EntityType | None = None
+    non_fatal = (
+        NON_FATAL_FAILURE_CATEGORIES if non_fatal_categories is None
+        else non_fatal_categories
+    )
     for step in steps:
         if step.importer is None:
             logger.info(
@@ -938,7 +966,7 @@ async def run_restore(
         # — mixed state must never be reported as success.
         cat = report.category(step.entity_type)
         if cat.failed > 0:
-            if step.entity_type in NON_FATAL_FAILURE_CATEGORIES:
+            if step.entity_type in non_fatal:
                 # y65si / d0agi: counted, surfaced, and NOT fatal. Nothing
                 # downstream depends on this category, so the operator keeps
                 # everything the run has applied and will apply. The failure
@@ -1326,6 +1354,16 @@ def default_importer_steps() -> list[ImporterStep]:
         # so a compensating rollback deletes the accounts/profiles that reference
         # them before the agents themselves.
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        # SERVER GROUPS BEFORE M3U ACCOUNTS (…-tyrg1), for exactly the reason
+        # user agents come before them: an M3U account carries a
+        # ``server_group`` FK whose destination id resolves through this
+        # namespace, and a consumer must never meet an empty one. Before this
+        # category existed the FK could only be dropped (…-g8tyd), so a replica
+        # lost the grouping that makes its accounts share a provider connection
+        # limit. Ordering it here also puts it ahead of the accounts in the
+        # rollback ledger, so a compensating rollback deletes the accounts that
+        # reference a group before the group itself.
+        ImporterStep(EntityType.SERVER_GROUP, s["server_groups"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(s["epg"])),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
@@ -1369,6 +1407,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
     from dbas.importers.groups_profiles import (
         import_channel_groups,
         import_channel_profiles,
+        import_server_groups,
         import_stream_profiles,
     )
     from dbas.importers.logos import import_logos
@@ -1408,6 +1447,18 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             archive_sources=_entities(ctx, EntityType.EPG_SOURCE),
             client=ctx.client,
             selected=_selected(ctx, EntityType.EPG_SOURCE),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _server_groups(ctx: ApplyContext) -> list[dict] | None:
+        await import_server_groups(
+            archive_rows=_entities(ctx, EntityType.SERVER_GROUP),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.SERVER_GROUP),
             report=ctx.report,
             ledger=ctx.ledger,
             remap=ctx.remap,
@@ -1742,6 +1793,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         "m3u": _m3u,
         "ecm_settings": _ecm_settings,
         "epg": _epg,
+        "server_groups": _server_groups,
         "channel_groups": _channel_groups,
         "channel_profiles": _channel_profiles,
         "stream_profiles": _stream_profiles,
@@ -1776,6 +1828,16 @@ def dry_run_importer_steps() -> list[ImporterStep]:
         # that ordered these differently would promise an M3U-account or
         # stream-profile outcome the apply cannot deliver.
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        # SERVER GROUPS BEFORE M3U ACCOUNTS (…-tyrg1), for exactly the reason
+        # user agents come before them: an M3U account carries a
+        # ``server_group`` FK whose destination id resolves through this
+        # namespace, and a consumer must never meet an empty one. Before this
+        # category existed the FK could only be dropped (…-g8tyd), so a replica
+        # lost the grouping that makes its accounts share a provider connection
+        # limit. Ordering it here also puts it ahead of the accounts in the
+        # rollback ledger, so a compensating rollback deletes the accounts that
+        # reference a group before the group itself.
+        ImporterStep(EntityType.SERVER_GROUP, s["server_groups"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
