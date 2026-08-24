@@ -203,6 +203,10 @@ def _patched_build(
     mock_client.get_dvr_rules = AsyncMock(
         return_value=[{"id": 41, "name": "Record CNN", "channel": 5}]
     )
+    # tyrg1 — a Dispatcharr ServerGroup is exactly ``{id, name}`` on 0.29.0.
+    mock_client.get_server_groups = AsyncMock(
+        return_value=[{"id": 51, "name": "Shared Provider Pool"}]
+    )
     mock_client.get_core_settings = AsyncMock(
         return_value=[
             {"id": 1, "key": "default_user_agent", "value": "ECM/1.0"},

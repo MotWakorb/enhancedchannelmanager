@@ -85,6 +85,22 @@ class EntityType(str, Enum):
     CHANNEL = "channel"                    # …-4vouz (consumer of remap)
     STREAM = "stream"                      # …-ahygg (synthesized custom-stream orphans)
     USER_AGENT = "user_agent"              # …-0i2vt.13
+    # …-tyrg1. The Dispatcharr ``ServerGroup`` an M3U account's ``server_group``
+    # FK points at. Measured against dispatcharr:latest (0.29.0) on 2026-08-23,
+    # not inherited from the 0.28.2 reading the bead was filed on: the model
+    # still carries EXACTLY ONE field, a unique ``name``
+    # (``apps/m3u/models.py:216``); its serializer still exposes exactly
+    # ``["id", "name"]`` (``apps/m3u/serializers.py:420``); and its only
+    # behavioural consumer is still ``apps/m3u/connection_pool.py``, which keys
+    # a Redis counter on ``(group_id, credential fingerprint)``. (The two other
+    # references are a ``select_related`` hint in ``apps/channels/models.py``
+    # and the Django admin — neither reads the row's content.)
+    #
+    # It is a LEAF and it is ordered BEFORE M3U_ACCOUNT in all three registries,
+    # because the account's FK resolves through this namespace (bead ``…-9h6cv``
+    # established FK-owner-before-dependent as the pattern; ``…-efvyg``
+    # established that all three registries move together).
+    SERVER_GROUP = "server_group"          # …-tyrg1
     DVR_RULE = "dvr_rule"                  # …-0i2vt.13
     SETTINGS = "settings"                  # …-0i2vt.13 REPORT-ONLY category key for
                                            # core settings + comskip. NOT remappable,

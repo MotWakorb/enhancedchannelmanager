@@ -245,6 +245,10 @@ class StatefulDispatcharrFake:
         self.label = label
         # Distinct id bases per entity type so a leaked A-id is obvious on B.
         self.m3u_accounts = _Store("m3u_account", _name_key, id_base=id_base + 100)
+        # tyrg1 — the ServerGroup an M3U account's ``server_group`` FK points at.
+        # On Dispatcharr 0.29.0 the row is exactly ``{id, name}``, so a
+        # name-keyed store models it completely rather than approximately.
+        self.server_groups = _Store("server_group", _name_key, id_base=id_base + 900)
         self.epg_sources = _Store("epg_source", _name_key, id_base=id_base + 200)
         # Guide rows are not a synced entity. They model independently minted
         # ids on A/B so channel-link tests must resolve by the portable tvg_id.
@@ -496,6 +500,22 @@ class StatefulDispatcharrFake:
         self.streams.delete(stream_id)
 
     # ----- EPG sources -----------------------------------------------------
+
+    # ----- server groups (tyrg1) -------------------------------------------
+
+    async def get_server_groups(self) -> list:
+        return self.server_groups.list()
+
+    async def create_server_group(self, data: dict) -> dict:
+        self._check_fault("create_server_group", data)
+        return self.server_groups.create(data)
+
+    async def update_server_group(self, group_id: int, data: dict) -> dict:
+        self._check_fault("update_server_group", data)
+        return self.server_groups.update(group_id, data)
+
+    async def delete_server_group(self, group_id: int) -> None:
+        self.server_groups.delete(group_id)
 
     async def get_epg_sources(self) -> list:
         return self.epg_sources.list()
@@ -816,6 +836,7 @@ class StatefulDispatcharrFake:
             "channel_groups": {_name_key(r) for r in self.channel_groups.list()},
             "channel_profiles": {_name_key(r) for r in self.channel_profiles.list()},
             "stream_profiles": {_name_key(r) for r in self.stream_profiles.list()},
+            "server_groups": {_name_key(r) for r in self.server_groups.list()},
             "channels": {_channel_key(r) for r in self.channels.list()},
         }
 
@@ -829,6 +850,7 @@ class StatefulDispatcharrFake:
                 self.channel_groups,
                 self.channel_profiles,
                 self.stream_profiles,
+                self.server_groups,
                 self.channels,
                 self.streams,
                 self.logos,
@@ -877,10 +899,17 @@ class StatefulDispatcharrFake:
                 the dedicated channels+streams slice test that expects the synth.
         """
         fake = cls(label=label, id_base=1)
+        # tyrg1 — a SERVER GROUP, and the account below belongs to it. Seeding
+        # the FK rather than leaving it null is what makes the remap testable at
+        # all: a null ``server_group`` takes the same code path whether the
+        # namespace resolves or not, so a fixture without one cannot tell a
+        # working remap from the old unconditional drop.
+        server_group = fake.server_groups.create({"name": "Shared Provider Pool"})
         # M3U account with a SECRET that must not reach B (D2).
         fake.m3u_accounts.create(
             {"name": "Provider A", "username": "operator", "password": m3u_password,
-             "server_url": "http://provider-a.test/playlist.m3u"}
+             "server_url": "http://provider-a.test/playlist.m3u",
+             "server_group": server_group["id"]}
         )
         # EPG source with a SECRET password (D2) — the credential field
         # ``EPGSourceSerializer`` actually carries.

@@ -89,6 +89,12 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
     # and decode through their own seam (_decode_settings_category).
     "user_agents": EntityType.USER_AGENT,
     "dvr_rules": EntityType.DVR_RULE,
+    # tyrg1 — the Dispatcharr ServerGroup an M3U account's ``server_group`` FK
+    # points at. Its category is ordered BEFORE M3U_ACCOUNT in all three
+    # registries so the account's FK has a populated namespace to remap
+    # through; without this row the account could only drop the FK (g8tyd) and
+    # the replica lost its provider connection-limit grouping.
+    "server_groups": EntityType.SERVER_GROUP,
 }
 
 # The SETTINGS-blob artifact sections (key/value mappings, not entity lists).

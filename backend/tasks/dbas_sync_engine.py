@@ -211,6 +211,12 @@ SYNC_CONFIG_CATEGORIES: frozenset[str] = frozenset(
         "channel_profiles",
         "user_agents",
         "stream_profiles",
+        # …-tyrg1: the Dispatcharr ServerGroup an M3U account's ``server_group``
+        # FK points at. Gathered so the SERVER_GROUP step ordered ahead of
+        # M3U_ACCOUNT has rows to create and a namespace to fill; without it the
+        # account's FK could only be dropped and the replica lost the grouping
+        # that makes its accounts share a provider connection limit.
+        "server_groups",
     }
 )
 
@@ -1780,6 +1786,12 @@ def sync_config_importer_steps(
         # ``user_agents`` is in SYNC_CONFIG_CATEGORIES so the gather feeds this
         # step. Distinct from the USERS category, which stays never-sync (D3).
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        # SERVER GROUPS BEFORE M3U ACCOUNTS (…-tyrg1) — the same
+        # FK-owner-before-dependent rule the user agents above follow, in the
+        # same position the two archive-restore registries put it (…-efvyg: all
+        # three registries move together). ``server_groups`` is in
+        # SYNC_CONFIG_CATEGORIES so the gather feeds this step.
+        ImporterStep(EntityType.SERVER_GROUP, s["server_groups"]),
         # M3U before EPG (EPG sources resolve their m3u_account FK through the
         # remap M3U writes). defers=True: the step DOES return settings for the
         # final phase — but the fn that consumes them there is the

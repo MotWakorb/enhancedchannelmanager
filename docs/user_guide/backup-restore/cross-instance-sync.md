@@ -38,6 +38,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 |-|-|
 | M3U accounts | Source URL, settings **and credentials**. An **Xtream Codes** account's `username` and `password` cross as themselves; a **plain-M3U** account's whole playlist URL crosses intact, credentials and all, because that account type has no password field and the secret is inside the address. Nothing is left for you to re-enter. An HDHomeRun-style LAN tuner URL carries no credential and crosses as it always did. |
 | EPG sources | Source URL, settings **and credentials**. An Xtream Codes guide URL (`xmltv.php?username=…&password=…`) crosses whole, so B's guide fills in without you touching it. The one exception is a **Schedules Direct** source: Dispatcharr marks that password write-only and never returns it, so there is nothing on A to copy — supply it once on the sync target and it is sent every cycle with everything else. |
+| Server groups | Dispatcharr's server groups — the grouping that makes several M3U accounts share one provider's connection limit. Synced before the M3U accounts, so each account arrives on B already pointing at B's own copy of its group and the shared connection limit works without you touching anything. If a group somehow cannot be matched on B the account is still created, just without one, and the sync report names it so you can re-assign it. |
 | Channel groups | Group names and ordering. |
 | Channel profiles | Profile definitions. |
 | User agents | The custom user-agent strings an M3U account fetches with and a stream profile plays through. Synced first, before both, so each one's user-agent link is re-pointed at B's copy. Distinct from user *accounts*, which are never synced. |
@@ -56,7 +57,6 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 |-|-|
 | **Users** | Continuous one-way push of `users` would overwrite B's privilege flags and could lock out B's operator. This exclusion is permanent and code-enforced. It cannot be configured away. |
 | **ECM's own secrets** | ECM's settings secrets, alert-method secrets (SMTP passwords, bot tokens, webhooks), and the credentials of your cloud-storage and sync targets. These are not provider credentials and have no business on a replica; they are redacted before transmission and always will be. Your *provider* credentials are a different matter and now cross every cycle — see the row for M3U accounts above. |
-| **Server groups** | Dispatcharr's server groups — the grouping that makes several M3U accounts share one provider's connection limit. ECM has no server-group category, so a group cannot be created on B and an account's assignment cannot be re-pointed at one. An account that belongs to a server group on A is created on B without one; the sync report names the account so you can re-assign it on B. Create the server group on B yourself if the accounts sharing it need a shared connection limit. |
 
 ---
 

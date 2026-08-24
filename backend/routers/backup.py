@@ -4936,6 +4936,16 @@ async def _gather_dispatcharr_sections(selected: set[str]) -> dict:
             logger.warning("[BACKUP] Failed to fetch dvr_rules: %s", e)
             result["dvr_rules"] = _degraded_section("dvr_rules", e)
 
+    if "server_groups" in needed:
+        # tyrg1 — a bare {id, name} list; no credential class at any depth. The
+        # deep redactor still runs over it as defense in depth.
+        try:
+            groups = await client.get_server_groups()
+            result["server_groups"] = groups or []
+        except Exception as e:
+            logger.warning("[BACKUP] Failed to fetch server_groups: %s", e)
+            result["server_groups"] = _degraded_section("server_groups", e)
+
     if "core_settings" in needed or "comskip" in needed:
         # ONE fetch backs both sections (no comskip endpoint exists — see
         # _COMSKIP_KEY_PREFIX). Dangerous-marked setting VALUES are redacted
@@ -5157,6 +5167,17 @@ RESTORABLE_SECTIONS = {
     # once completed, to a media file on the SOURCE instance's disk — restoring
     # those would manufacture phantom DVR entries, not restore configuration.
     "user_agents": {"label": "User Agents", "dispatcharr": True, "artifact_only": True},
+    # tyrg1 — Dispatcharr SERVER GROUPS (client.get_server_groups ->
+    # /api/m3u/server-groups/). A ServerGroup groups M3U accounts that share
+    # provider credentials so they share a credential-scoped connection
+    # counter; measured on 0.29.0 it carries EXACTLY ONE field, a unique name.
+    # It is in this producer set because it is the FK target an M3U account's
+    # ``server_group`` resolves through — the restore/sync importers order it
+    # BEFORE M3U_ACCOUNT for that reason. ``artifact_only`` for the same reason
+    # as its neighbours: the legacy per-section YAML path has no restorer.
+    "server_groups": {
+        "label": "Server Groups", "dispatcharr": True, "artifact_only": True,
+    },
     "dvr_rules": {"label": "DVR Rules", "dispatcharr": True, "artifact_only": True},
     "core_settings": {
         "label": "Core Settings", "dispatcharr": True, "artifact_only": True,

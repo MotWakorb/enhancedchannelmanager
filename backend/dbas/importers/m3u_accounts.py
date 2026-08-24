@@ -72,11 +72,16 @@ THE ``server_group`` FK (bead ``…-g8tyd``)
 
 An M3U account's ``server_group`` is ALSO a foreign key — to a Dispatcharr
 ``ServerGroup`` row whose id the destination assigns itself — and it is
-serialized on GET, so it reaches the create payload. Unlike ``user_agent`` there
-is no namespace to translate it through: ECM's DBAS has no ``ServerGroup``
-entity category and no ServerGroup importer, so nothing on the destination
-corresponds to A's pk. The field is therefore ALWAYS DROPPED
-(:func:`_drop_server_group_fk`), and the drop is reported.
+serialized on GET, so it reaches the create payload.
+
+It used to have no namespace to translate through, so bead ``…-g8tyd`` made it
+ALWAYS DROPPED. Bead ``…-tyrg1`` built the ``SERVER_GROUP`` entity category, so
+it now behaves exactly like ``user_agent``: rewritten in place through the
+``SERVER_GROUP`` remap namespace (which the step registries populate BEFORE this
+importer runs), and DROPPED with a reported degradation only when it cannot be
+resolved. The drop stays as the fallback rather than being removed — forwarding
+a raw source pk is what made a live B answer 400 and roll the whole apply back,
+and that floor must survive the feature. See :func:`_resolve_server_group_fk`.
 
 The INVARIANT both cases serve: no importer forwards a source-side foreign key
 to the destination without either resolving it through its remap namespace or
@@ -416,27 +421,48 @@ def _resolve_user_agent_fk(
     return (True, dest_id)
 
 
-def _drop_server_group_fk(payload: dict) -> bool:
-    """Remove the account's ``server_group`` FK from the create payload.
+def _resolve_server_group_fk(payload: dict, remap: IdRemapTable) -> bool:
+    """Remap the account's ``server_group`` FK, or DROP it as the fallback.
 
     ``server_group`` is a foreign key to a Dispatcharr ``ServerGroup`` row whose
-    id the DESTINATION assigns itself. There is no ``ServerGroup`` entity
-    category and no ServerGroup importer in ECM's DBAS, so no remap namespace
-    can translate A's pk — the field can only be DROPPED. Dispatcharr declares
-    the column ``null=True, blank=True, on_delete=SET_NULL``, so an account
-    without one is valid; forwarding a stale pk is not (live B answered
-    ``400 {"server_group": ["Invalid pk \"20\" - object does not exist."]}``).
+    id the DESTINATION assigns itself, so A's pk means nothing on B: forwarding
+    it made a live B answer ``400 {"server_group": ["Invalid pk \"20\" - object
+    does not exist."]}``, and because M3U_ACCOUNT is a FATAL failure category
+    that rolled the WHOLE apply back (bead ``…-g8tyd``).
 
-    Returns ``True`` only when a NON-NULL FK was actually removed — that is the
-    degradation the caller reports. An absent or null ``server_group`` is the
-    common shape and is left exactly as it is (``None`` is a legal value the
-    destination accepts), so it is neither dropped nor reported.
+    THE DROP WAS THE CORRECTNESS FLOOR, AND IT STAYS. Bead ``…-g8tyd`` made the
+    field always-dropped because there was no ``SERVER_GROUP`` namespace to
+    translate through. Bead ``…-tyrg1`` builds that namespace, so the field is
+    now REMAPPED when it resolves — but the drop remains as the fallback for the
+    unresolvable case, because the alternative is the 400 that cost the operator
+    their entire replica. This replaces the drop; it does not revert to
+    forwarding a raw source pk.
+
+    Dispatcharr declares the column ``null=True, blank=True,
+    on_delete=SET_NULL`` (0.29.0 ``apps/m3u/models.py:39``), so an account
+    without one is valid.
+
+    Returns:
+        ``True`` only when a NON-NULL FK could NOT be resolved and was removed —
+        that is the degradation the caller reports. A resolved FK is rewritten
+        in place and reports nothing (it is not a degradation). An absent or
+        null ``server_group`` is the common shape and is left exactly as it is
+        (``None`` is a legal value the destination accepts).
     """
     source_group = payload.get(_SERVER_GROUP_FK)
     if source_group is None:
         return False
-    payload.pop(_SERVER_GROUP_FK)
-    return True
+    try:
+        source_group_id = int(source_group)
+    except (TypeError, ValueError):
+        payload.pop(_SERVER_GROUP_FK)
+        return True
+    dest_id = remap.resolve(EntityType.SERVER_GROUP, source_group_id)
+    if dest_id is None:
+        payload.pop(_SERVER_GROUP_FK)
+        return True
+    payload[_SERVER_GROUP_FK] = dest_id
+    return False
 
 
 def _build_create_payload(
@@ -468,19 +494,17 @@ def _build_create_payload(
     the agent and the degradation is reported (never silent): the operator
     re-selects one agent instead of losing the entire replica.
 
-    THE ``server_group`` FK (bead ``…-g8tyd``). ``server_group`` is a SECOND
-    foreign key on the same record — to a Dispatcharr ``ServerGroup`` row, which
-    groups M3U accounts that share provider credentials so they share
-    credential-scoped connection counters. It is serialized on GET, so A's raw pk
-    reached the create payload and B answered ``400 {"server_group": ["Invalid pk
-    \"20\" - object does not exist."]}`` — the same total-blast-radius rollback
-    as the ``user_agent`` case. There is no ``ServerGroup`` entity category and no
-    ServerGroup importer, so unlike ``user_agent`` there is nothing to remap
-    through: the field is ALWAYS DROPPED. ``ServerGroup`` carries no
-    configuration of its own (a unique ``name`` and nothing else; the stream
-    limits come from each account profile's ``max_streams``), so the replica
-    loses a grouping label it can be given back in one action, not settings. The
-    drop is reported like its sibling, never silent.
+    THE ``server_group`` FK (beads ``…-g8tyd`` then ``…-tyrg1``).
+    ``server_group`` is a SECOND foreign key on the same record — to a
+    Dispatcharr ``ServerGroup`` row, which groups M3U accounts that share
+    provider credentials so they share credential-scoped connection counters. It
+    is serialized on GET, so A's raw pk reached the create payload and B answered
+    ``400 {"server_group": ["Invalid pk \"20\" - object does not exist."]}`` —
+    the same total-blast-radius rollback as the ``user_agent`` case. ``g8tyd``
+    stopped that by always dropping the field, because no ``SERVER_GROUP``
+    namespace existed. ``tyrg1`` built one, so the field is now REMAPPED like
+    ``user_agent`` and dropped only when it does not resolve — the correctness
+    floor survives the feature rather than being traded for it.
 
     A STANDARD (redact-by-default) artifact carries the ``***REDACTED***``
     placeholder in place of each credential. Writing that through produced an XC
@@ -509,7 +533,7 @@ def _build_create_payload(
             payload[_USER_AGENT_FK] = dest_agent_id
         else:
             payload.pop(_USER_AGENT_FK)
-    server_group_dropped = _drop_server_group_fk(payload)
+    server_group_dropped = _resolve_server_group_fk(payload, remap)
     stripped, redacted_fields = strip_redaction_sentinels(payload)
     return stripped, redacted_fields, user_agent_resolved, server_group_dropped
 
@@ -1054,10 +1078,10 @@ async def import_m3u_accounts(
                 label,
             )
             report.notes.append(
-                "M3U account '%s': its server group does not exist on this "
-                "destination and cannot be recreated by a sync, so the account "
-                "was created without one. Re-assign it to a server group if it "
-                "shares provider connection limits with other accounts." % label
+                "M3U account '%s': its server group could not be resolved on "
+                "this destination, so the account was created without one. "
+                "Re-assign it to a server group if it shares provider "
+                "connection limits with other accounts." % label
             )
 
         if is_dry_run:

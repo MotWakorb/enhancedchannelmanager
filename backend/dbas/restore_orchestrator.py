@@ -315,6 +315,11 @@ def _delete_dispatch(client: DispatcharrClient) -> dict[EntityType, Callable[[in
         EntityType.CHANNEL_GROUP: client.delete_channel_group,
         EntityType.CHANNEL_PROFILE: client.delete_channel_profile,
         EntityType.STREAM_PROFILE: client.delete_stream_profile,
+        # tyrg1 — a ServerGroup is a created entity like any other, so it is
+        # ledgered and must be compensable. It is ordered FIRST in the
+        # registries and therefore LAST in compensation order, which is what
+        # lets the accounts referencing it be deleted before it is.
+        EntityType.SERVER_GROUP: client.delete_server_group,
         EntityType.CHANNEL: client.delete_channel,
         EntityType.STREAM: client.delete_stream,
         EntityType.USER: client.delete_user,
@@ -1313,6 +1318,16 @@ def default_importer_steps() -> list[ImporterStep]:
         # so a compensating rollback deletes the accounts/profiles that reference
         # them before the agents themselves.
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        # SERVER GROUPS BEFORE M3U ACCOUNTS (…-tyrg1), for exactly the reason
+        # user agents come before them: an M3U account carries a
+        # ``server_group`` FK whose destination id resolves through this
+        # namespace, and a consumer must never meet an empty one. Before this
+        # category existed the FK could only be dropped (…-g8tyd), so a replica
+        # lost the grouping that makes its accounts share a provider connection
+        # limit. Ordering it here also puts it ahead of the accounts in the
+        # rollback ledger, so a compensating rollback deletes the accounts that
+        # reference a group before the group itself.
+        ImporterStep(EntityType.SERVER_GROUP, s["server_groups"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, _epg_step_with_download_wait(s["epg"])),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
@@ -1352,6 +1367,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
     from dbas.importers.groups_profiles import (
         import_channel_groups,
         import_channel_profiles,
+        import_server_groups,
         import_stream_profiles,
     )
     from dbas.importers.logos import import_logos
@@ -1390,6 +1406,18 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             archive_sources=_entities(ctx, EntityType.EPG_SOURCE),
             client=ctx.client,
             selected=_selected(ctx, EntityType.EPG_SOURCE),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _server_groups(ctx: ApplyContext) -> list[dict] | None:
+        await import_server_groups(
+            archive_rows=_entities(ctx, EntityType.SERVER_GROUP),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.SERVER_GROUP),
             report=ctx.report,
             ledger=ctx.ledger,
             remap=ctx.remap,
@@ -1712,6 +1740,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         "m3u": _m3u,
         "ecm_settings": _ecm_settings,
         "epg": _epg,
+        "server_groups": _server_groups,
         "channel_groups": _channel_groups,
         "channel_profiles": _channel_profiles,
         "stream_profiles": _stream_profiles,
@@ -1745,6 +1774,16 @@ def dry_run_importer_steps() -> list[ImporterStep]:
         # that ordered these differently would promise an M3U-account or
         # stream-profile outcome the apply cannot deliver.
         ImporterStep(EntityType.USER_AGENT, s["user_agents"]),
+        # SERVER GROUPS BEFORE M3U ACCOUNTS (…-tyrg1), for exactly the reason
+        # user agents come before them: an M3U account carries a
+        # ``server_group`` FK whose destination id resolves through this
+        # namespace, and a consumer must never meet an empty one. Before this
+        # category existed the FK could only be dropped (…-g8tyd), so a replica
+        # lost the grouping that makes its accounts share a provider connection
+        # limit. Ordering it here also puts it ahead of the accounts in the
+        # rollback ledger, so a compensating rollback deletes the accounts that
+        # reference a group before the group itself.
+        ImporterStep(EntityType.SERVER_GROUP, s["server_groups"]),
         ImporterStep(EntityType.M3U_ACCOUNT, s["m3u"], defers=True),
         ImporterStep(EntityType.EPG_SOURCE, s["epg"]),
         ImporterStep(EntityType.CHANNEL_GROUP, s["channel_groups"]),
