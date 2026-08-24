@@ -215,6 +215,143 @@ def test_tampered_nested_manifest_blob_is_rejected(candidate, tmp_path):
         candidate.verify_archive(archive)
 
 
+SBOM_FIXTURE = ROOT / "backend" / "tests" / "fixtures" / "buildx_sbom_oci_index.json"
+
+
+def _sbom_archive(path: Path, *, attestation_manifests: int = 1) -> str:
+    """Reproduce the archive buildx writes with BOTH `sbom:` and provenance on.
+
+    The shape is taken from `buildx_sbom_oci_index.json`, recorded from a real
+    `docker buildx build --sbom=true --provenance=true` run rather than guessed:
+    one image manifest plus ONE `unknown/unknown` attestation manifest whose
+    layers carry the SPDX document and the SLSA provenance side by side.
+
+    `attestation_manifests` exists to cover the arrangement bead
+    enhancedchannelmanager-3t0ht anticipated -- SBOM as a SECOND unknown/unknown
+    child -- which the recorded run does not produce but a future BuildKit could.
+    Either way the descent must reach the same single publishable manifest.
+    """
+    recorded = json.loads(SBOM_FIXTURE.read_text(encoding="utf-8"))
+    with tarfile.open(path, "w") as archive:
+        config = _blob(archive, json.dumps({"architecture": "amd64", "os": "linux"}).encode())
+        image = _blob(
+            archive,
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "mediaType": IMAGE_MEDIA_TYPE,
+                    "config": {
+                        "mediaType": "application/vnd.oci.image.config.v1+json",
+                        "digest": config,
+                    },
+                    "layers": [],
+                }
+            ).encode(),
+        )
+        entries = [
+            {
+                "mediaType": IMAGE_MEDIA_TYPE,
+                "digest": image,
+                "platform": {"architecture": "amd64", "os": "linux"},
+            }
+        ]
+        for index in range(attestation_manifests):
+            layers = recorded["attestation_manifest_layers"]
+            if attestation_manifests > 1:
+                layers = [layers[index % len(layers)]]
+            attest = _blob(
+                archive,
+                json.dumps(
+                    {
+                        "schemaVersion": 2,
+                        "mediaType": IMAGE_MEDIA_TYPE,
+                        "layers": [
+                            {
+                                "mediaType": layer["mediaType"],
+                                "digest": _blob(archive, json.dumps(layer).encode()),
+                                "annotations": layer["annotations"],
+                            }
+                            for layer in layers
+                        ],
+                    }
+                ).encode(),
+            )
+            entries.append(
+                {
+                    "mediaType": IMAGE_MEDIA_TYPE,
+                    "digest": attest,
+                    "annotations": {
+                        "vnd.docker.reference.digest": image,
+                        "vnd.docker.reference.type": "attestation-manifest",
+                    },
+                    "platform": {"architecture": "unknown", "os": "unknown"},
+                }
+            )
+        inner = _blob(
+            archive,
+            json.dumps(
+                {"schemaVersion": 2, "mediaType": INDEX_MEDIA_TYPE, "manifests": entries}
+            ).encode(),
+        )
+        _write(
+            archive,
+            "index.json",
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "mediaType": INDEX_MEDIA_TYPE,
+                    "manifests": [{"mediaType": INDEX_MEDIA_TYPE, "digest": inner}],
+                }
+            ).encode(),
+        )
+    return image
+
+
+def test_recorded_buildx_shape_still_has_one_attestation_child():
+    """Pin the observed structure: `sbom:` did not add a second child.
+
+    If a future BuildKit changes this, the recorded fixture and this assertion
+    are where the change becomes visible, instead of surfacing as a publication
+    failure the way bead enhancedchannelmanager-5z48v did.
+    """
+    recorded = json.loads(SBOM_FIXTURE.read_text(encoding="utf-8"))
+    children = recorded["inner_index"]["manifests"]
+    assert len(children) == 2
+    unknown = [
+        child
+        for child in children
+        if child.get("platform", {}).get("architecture") == "unknown"
+    ]
+    assert len(unknown) == 1
+    predicates = {
+        layer["annotations"]["in-toto.io/predicate-type"]
+        for layer in recorded["attestation_manifest_layers"]
+    }
+    assert predicates == {"https://spdx.dev/Document", "https://slsa.dev/provenance/v1"}
+
+
+def test_sbom_bearing_archive_resolves_to_the_image_manifest(candidate, tmp_path):
+    archive = tmp_path / "candidate.oci.tar"
+    image = _sbom_archive(archive)
+    assert candidate.verify_archive(archive) == image
+    assert candidate.verify_archive(archive, image) == image
+
+
+def test_sbom_as_a_second_unknown_child_still_resolves(candidate, tmp_path):
+    archive = tmp_path / "candidate.oci.tar"
+    image = _sbom_archive(archive, attestation_manifests=2)
+    assert candidate.verify_archive(archive) == image
+
+
+def test_sbom_bearing_archive_rejects_the_wrapping_index_digest(candidate, tmp_path):
+    archive = tmp_path / "candidate.oci.tar"
+    _sbom_archive(archive)
+    with tarfile.open(archive) as opened:
+        index = json.load(opened.extractfile("index.json"))
+    with pytest.raises(candidate.CandidateError):
+        candidate.verify_archive(archive, index["manifests"][0]["digest"])
+
+
 def test_index_recursion_is_bounded(candidate, tmp_path):
     """A deeply nested index must fail closed rather than spin."""
     archive = tmp_path / "candidate.oci.tar"

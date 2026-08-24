@@ -373,7 +373,7 @@ Before cutting any release that touches MCP code, the releaser must walk the man
 2. Making a tool call over the static-key connection
 3. Settings panel smoke check (MCP server status, key generate/regenerate)
 
-Sign-off text from the checklist goes in the release PR description alongside the G1a–G7 gate checklist.
+Sign-off text from the checklist goes in the release PR description alongside the G1a–G8 gate checklist.
 
 > **Note (bd-9axgc):** the MCP OAuth "Custom Connector" offering was retired. The
 > static Bearer-header path is the supported MCP authentication method. The OAuth
@@ -385,7 +385,7 @@ Releases that do not touch `mcp-server/` or `MCPSettingsSection.tsx` may skip th
 
 Release cuts are **intentional, gated acts**, not emergent side effects of whatever PR next targets `main`. This workflow is authoritative per [ADR-004: Release-Cut Promotion Discipline](adr/ADR-004-release-cut-promotion-discipline.md); read that ADR for full context on why each step exists and which alternatives were rejected.
 
-**Who**: PO (authorizes the cut) + Project Engineer (executes the mechanics). **When**: on PO decision to promote a specific `dev` SHA to `main`. **Why this shape**: the short-lived `release/vX.Y.Z` branch creates an explicit cut point, the merge-commit PR preserves per-commit bisection/forensics into `main`, and the pre-cut gate (G1a–G7 below) closes the 0.16.0-rollback failure mode (shipped with open P0/P1 bugs) and the PR #82 failure mode (scope-sprawl doc PR swept 90 unrelated commits).
+**Who**: PO (authorizes the cut) + Project Engineer (executes the mechanics). **When**: on PO decision to promote a specific `dev` SHA to `main`. **Why this shape**: the short-lived `release/vX.Y.Z` branch creates an explicit cut point, the merge-commit PR preserves per-commit bisection/forensics into `main`, and the pre-cut gate (G1a–G8 below) closes the 0.16.0-rollback failure mode (shipped with open P0/P1 bugs) and the PR #82 failure mode (scope-sprawl doc PR swept 90 unrelated commits).
 
 Non-release PRs to `main` are forbidden: documentation, dep bumps, config tweaks, and feature work all flow through `dev` and reach `main` only via the next release cut. The one exception is the hotfix path below.
 
@@ -417,8 +417,15 @@ cd ..
 #   - Rename [Unreleased] heading to "[0.17.0] — 2026-MM-DD"
 #   - Insert a fresh empty [Unreleased] section above it
 
-# 4. Commit on release branch
-git add frontend/package.json CHANGELOG.md
+# 4. Generate the release SBOM, then commit on the release branch
+# Runs after the version bump: the SBOM directory is named for the release
+# version and G8 fails if the two disagree. A release version (no -BUILD suffix)
+# routes to sbom/vX.Y.Z/, which is a permanent record — never delete an older
+# one. See sbom/README.md for the two-directory-kinds rule and for what these
+# documents do and do not cover.
+python scripts/generate_sbom.py generate --version 0.17.0
+python scripts/generate_sbom.py verify --version 0.17.0   # what G8 will run in CI
+git add frontend/package.json CHANGELOG.md sbom/v0.17.0
 git commit -m "Release v0.17.0"
 git push -u origin release/v0.17.0
 
@@ -440,6 +447,7 @@ PR_URL=$(gh pr create --base main --head release/v0.17.0 \
 - [ ] G5: CHANGELOG [Unreleased] promoted to [0.17.0] with today's date, fresh empty [Unreleased] above
 - [ ] G6: Version in frontend/package.json matches `0.17.0` (release branch name)
 - [ ] G7: No other release-cut or hotfix PR targeting main is open
+- [ ] G8: sbom/v0.17.0/ committed and regenerating it from this tree is a no-op
 EOF
 )")
 PR_NUM="${PR_URL##*/}"                             # extract trailing number from gh pr create URL
@@ -495,7 +503,7 @@ git checkout dev && git pull
 
 ### Pre-Cut Gate Checklist
 
-All seven items must pass before the release-cut PR can merge. Copy-paste this block into the release-cut PR description (step 5 above already includes it). **Phase 2 (`bd-3d0tv`) lifted G1a, G1b, G5, G6, G7 to mechanical CI enforcement** via `.github/workflows/release-cut-gate.yml`. The workflow runs on every PR opened against `main`; exact matching release and hotfix title/branch pairs are the only admitted shapes, and every other main-bound PR fails closed. The PR-description checklist is now a redundant safety net (kept for the cut-authorizer to read; no longer the primary gate). G2, G3, G4 are mechanically enforced via existing required checks (`Backend Tests`, `Frontend Tests`, `CodeQL Analysis (python|javascript-typescript)`).
+All eight items must pass before the release-cut PR can merge. Copy-paste this block into the release-cut PR description (step 5 above already includes it). **Phase 2 (`bd-3d0tv`) lifted G1a, G1b, G5, G6, G7 to mechanical CI enforcement**, and `enhancedchannelmanager-3t0ht` added G8, via `.github/workflows/release-cut-gate.yml`. The workflow runs on every PR opened against `main`; exact matching release and hotfix title/branch pairs are the only admitted shapes, and every other main-bound PR fails closed. The PR-description checklist is now a redundant safety net (kept for the cut-authorizer to read; no longer the primary gate). G2, G3, G4 are mechanically enforced via existing required checks (`Backend Tests`, `Frontend Tests`, `CodeQL Analysis (python|javascript-typescript)`).
 
 | # | Gate | Enforcement | Cites |
 |---|---|---|---|
@@ -507,6 +515,33 @@ All seven items must pass before the release-cut PR can merge. Copy-paste this b
 | G5 | `CHANGELOG.md` `[Unreleased]` has been promoted to `[X.Y.Z]` with today's date and a fresh empty `[Unreleased]` above | Mechanical: `Release Cut Gate` workflow asserts (a) `[Unreleased]` heading present, (b) `[X.Y.Z] — YYYY-MM-DD` heading present with today's UTC date, (c) `[Unreleased]` line-number is above `[X.Y.Z]` (Keep-a-Changelog ordering) | `shipping.md` §CHANGELOG convention; `bd-3d0tv` automation |
 | G6 | Version updated in `frontend/package.json` from the current `0.A.B-NNNN` dev build to the target release version `X.Y.Z`. The target is not necessarily `A.B` with the suffix stripped: a minor or patch bump is permitted (e.g., current dev tip `0.16.0-0041` → release `0.17.0`), but it must match the release-branch name (`release/vX.Y.Z`) | Mechanical: `Release Cut Gate` workflow extracts version from branch name and asserts `jq -r .version frontend/package.json` returns the same string | `shipping.md` §Increment the Version; `bd-3d0tv` automation |
 | G7 | **No other release-cut or hotfix PR targeting `main` is open at merge time.** If a hotfix PR and a release-cut PR contend simultaneously, the **hotfix has priority**: the release-cut PR rebases on the merged hotfix and re-runs the gate. Prevents live-lock during an incident. | Mechanical at PR-open/sync (steady-state catch): `Release Cut Gate` workflow lists open PRs against `main` and fails on any other release/hotfix branch. The merge-time race window between the last sync and the merge click is still author/reviewer-verified | PR #82 root cause; `bd-3d0tv` automation |
+| G8 | **`sbom/vX.Y.Z/` is committed and describes this tree.** Two SPDX 2.3 documents (`ecm`, `mcp`) plus an index recording the SHA-256 of every manifest they were derived from | Mechanical: `Release Cut Gate` runs `scripts/generate_sbom.py verify --version X.Y.Z`, which regenerates both documents from the release branch and byte-compares. A dependency bumped without regenerating, a hand-edited document, a deleted document, an extra file, and a wrong-version directory each fail; every one is red-proven in `backend/tests/unit/test_generate_sbom.py` | `sbom/README.md`; bead `enhancedchannelmanager-3t0ht` |
+
+#### G8 coverage — read this before quoting an SBOM to anyone
+
+The committed documents are **source-manifest** SBOMs. They cover the Python and
+npm dependency sets and name the base images by digest. They do **not** enumerate
+the OS packages inside those base images, and they assert **no image digest**.
+
+That is structural, not an oversight: `build.yml` triggers on `main` and `dev`,
+so the images a release publishes are built by the push to `main` that the
+release PR's merge commit creates — after the branch is frozen. That merge commit
+has a different SHA from the release branch tip, and `Dockerfile` bakes
+`GIT_COMMIT` into the ECM image as an `ENV`, so an image built on `release/**`
+is guaranteed to carry a different digest from the one that ships. Committing a
+document that named that digest would be an inventory of an artifact nobody ever
+receives. `sbom/README.md` carries the full statement and points at the Trivy
+image scans for the OS-layer question.
+
+**G8 governs release records only.** `sbom/vX.Y.Z/` directories accumulate and
+are kept forever — that history is what answers "which shipped versions contain
+this package". `sbom/dev/` is a different animal: a single transient snapshot of
+whatever `dev` carries, superseded rather than accumulated, and not an artifact
+of record. The two are separated by path, not by convention, because the version
+shape decides the path; a build-numbered version cannot produce a release
+directory. Do not delete a `vX.Y.Z` directory, and do not add a second dev
+snapshot. Refresh `sbom/dev/` in any PR that changes a dependency manifest or a
+Dockerfile base image — the backend suite goes red if you forget.
 
 #### `Release Cut Gate` workflow output
 
@@ -553,7 +588,7 @@ Step-by-step hotfix commands follow the same shell pattern as the release cut ab
 
 `main` is protected (configured via bead `enhancedchannelmanager-8w33i`). Enforced rules:
 
-- **Required status checks** (strict, branch must be up-to-date): `Backend Tests`, `Frontend Tests` (both in `.github/workflows/test.yml`), `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)` (matrix in `.github/workflows/build.yml`), and `Release Cut Gate` (mechanical G1a/G1b/G5/G6/G7 verification in `.github/workflows/release-cut-gate.yml` per `bd-3d0tv`).
+- **Required status checks** (strict, branch must be up-to-date): `Backend Tests`, `Frontend Tests` (both in `.github/workflows/test.yml`), `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)` (matrix in `.github/workflows/build.yml`), and `Release Cut Gate` (mechanical G1a/G1b/G5/G6/G7/G8 verification in `.github/workflows/release-cut-gate.yml` per `bd-3d0tv` and `enhancedchannelmanager-3t0ht`).
 - **Force-pushes blocked** and **deletions blocked**.
 - **Required conversation resolution** on PRs.
 - **Admins are NOT enforced**: the PO can push hotfixes directly if a check outage would otherwise block a release. Use sparingly.

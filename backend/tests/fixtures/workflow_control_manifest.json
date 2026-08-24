@@ -361,6 +361,17 @@
         8,
         "if"
       ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        9,
+        "if"
+      ],
       "value": "always()"
     },
     {
