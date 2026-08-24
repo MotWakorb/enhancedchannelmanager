@@ -66,7 +66,7 @@ BACKEND = Path(__file__).resolve().parents[2]
 # again in the path, so both placements are exercised.
 USER = "xcuser7391"
 PASSWORD = "xcpass8137"
-CRED_URL = f"https://{USER}:{PASSWORD}@crx.watch/live/{USER}/{PASSWORD}/13365.ts"
+CRED_URL = f"https://{USER}:{PASSWORD}@provider.example/live/{USER}/{PASSWORD}/13365.ts"
 
 
 def _patch_dns(*ips: str):
@@ -216,7 +216,7 @@ def _guard_rejections():
     (validation, redirect re-validation, depth cap) and
     ``security.stream_outbound`` (direct subprocess transports, relay limits).
     """
-    edge = f"http://{USER}:{PASSWORD}@50.7.4.250/opaque-token/serve"
+    edge = f"http://{USER}:{PASSWORD}@93.184.216.35/opaque-token/serve"
 
     def relay_over_cap():
         relay = _LocalStreamRelay(CRED_URL, None, None)
@@ -254,7 +254,7 @@ def _guard_rejections():
         (
             "disallowed-scheme",
             lambda: validate_outbound_url(
-                f"file://{USER}:{PASSWORD}@crx.watch/etc/passwd", SSRFMode.LAN_FRIENDLY
+                f"file://{USER}:{PASSWORD}@provider.example/etc/passwd", SSRFMode.LAN_FRIENDLY
             ),
         ),
         (
@@ -266,7 +266,7 @@ def _guard_rejections():
         (
             "invalid-port",
             lambda: validate_outbound_url(
-                f"https://{USER}:{PASSWORD}@crx.watch:not-a-port/live.ts",
+                f"https://{USER}:{PASSWORD}@provider.example:not-a-port/live.ts",
                 SSRFMode.LAN_FRIENDLY,
             ),
         ),
@@ -280,7 +280,7 @@ def _guard_rejections():
         (
             "subprocess-disallowed-scheme",
             lambda: validate_stream_subprocess_url(
-                f"srt://{USER}:{PASSWORD}@crx.watch:9000"
+                f"srt://{USER}:{PASSWORD}@provider.example:9000"
             ),
         ),
         (
@@ -290,7 +290,7 @@ def _guard_rejections():
         (
             "subprocess-invalid-port",
             lambda: validate_stream_subprocess_url(
-                f"udp://{USER}:{PASSWORD}@crx.watch:not-a-port"
+                f"udp://{USER}:{PASSWORD}@provider.example:not-a-port"
             ),
         ),
         ("relay-resource-cap", relay_over_cap),

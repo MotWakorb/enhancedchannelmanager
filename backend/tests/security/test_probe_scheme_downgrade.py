@@ -59,9 +59,9 @@ from security.stream_outbound import (
 BACKEND = Path(__file__).resolve().parents[2]
 
 # The measured incident, with the credentials replaced by synthetic values.
-PORTAL_URL = "https://crx.watch/live/probe-user/probe-pass/13365.ts"
-EDGE_URL = "http://50.7.4.250/f3386e51aa0e4f0f9c5f2f0c9f7a1b2c/serve"
-EDGE_IP = "50.7.4.250"
+PORTAL_URL = "https://provider.example/live/probe-user/probe-pass/13365.ts"
+EDGE_URL = "http://93.184.216.35/f3386e51aa0e4f0f9c5f2f0c9f7a1b2c/serve"
+EDGE_IP = "93.184.216.35"
 
 
 def _patch_dns(*ips: str):
