@@ -201,6 +201,24 @@ class SyncTarget(Base):
     # logos immediately rather than making the operator wait out a sub-interval
     # for a replica that has no artwork at all.
     last_logo_sync_at = Column(DateTime, nullable=True)
+    # Core-settings blobs THIS target's operator opted out of (bead …-10wnq).
+    #
+    # A JSON list of blob keys. Empty / NULL means "replicate every blob the
+    # engine's register allows", which is the faithful-copy default; this column
+    # exists only so the two blobs with a REAL functional risk behind them —
+    # ``proxy_settings`` (tuning copied onto different hardware) and
+    # ``backup_settings`` (two instances backing themselves up on one schedule,
+    # with B's retention bounded by B's storage) — can be declined individually
+    # instead of costing the operator every other setting with them. That is the
+    # ADR's own reading of both tensions: opt-out, not omission.
+    #
+    # It can only ever NARROW. ``NEVER_SYNC_CORE_SETTINGS_BLOBS`` is subtracted
+    # in the engine before this list is consulted, so naming ``network_access``
+    # here opts into nothing.
+    #
+    # Nullable additive DDL, no server_default — NULL is the correct "excludes
+    # nothing" backfill for every existing row.
+    core_settings_excluded = Column(Text, nullable=True)
     # --- Schedules Direct password (PO ruling 2026-08-22) --------------------
     # THE ONE CREDENTIAL THE OPERATOR TYPES, and they type it ONCE, ever.
     #
@@ -247,6 +265,7 @@ class SyncTarget(Base):
             "fuzzy_stream_matching": self.fuzzy_stream_matching,
             "sync_logos": self.sync_logos,
             "logo_sync_interval_hours": self.logo_sync_interval_hours,
+            "core_settings_excluded": self.core_settings_excluded,
             "last_logo_sync_at": (
                 self.last_logo_sync_at.isoformat() + "Z"
                 if self.last_logo_sync_at

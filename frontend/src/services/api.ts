@@ -5392,6 +5392,19 @@ export interface SyncTarget {
   /** When the logo slice last actually ran; null == never (so the next cycle carries it). */
   last_logo_sync_at?: string | null;
   /**
+   * Core-settings blobs this target declines (bead 10wnq). Empty means
+   * "replicate every blob the engine allows", which is the default.
+   *
+   * Only two blobs have a real reason to be declined: `proxy_settings`
+   * (buffering tuning copied onto slower hardware) and `backup_settings` (both
+   * instances backing themselves up on one schedule, with the replica's
+   * retention bounded by the replica's storage). `network_access` is never
+   * replicated at all and cannot be named here — naming it is rejected rather
+   * than silently accepted, because accepting it would tell the operator their
+   * choice mattered.
+   */
+  core_settings_excluded: string[];
+  /**
    * PRESENCE of a stored Schedules Direct password — never the value. True once
    * the operator has supplied one; the backend re-sends it to the replica's
    * Schedules Direct EPG sources on every cycle so it is never typed twice.
@@ -5418,6 +5431,8 @@ export interface SyncTargetCreateRequest {
   sync_logos?: boolean;
   /** Omit to take the backend default (24). `0` means every cycle. */
   logo_sync_interval_hours?: number;
+  /** Core-settings blobs to decline. Omit to replicate all of them. */
+  core_settings_excluded?: string[];
   /**
    * The ONE credential an operator types, and they type it once. Ask for it
    * only when `getSyncSourceCredentialNeeds()` reports
@@ -5441,6 +5456,8 @@ export interface SyncTargetUpdateRequest {
   fuzzy_stream_matching?: boolean;
   sync_logos?: boolean;
   logo_sync_interval_hours?: number;
+  /** Omit to leave the stored list untouched; `[]` clears it. */
+  core_settings_excluded?: string[];
   /** Omit to leave the stored value untouched; `''` clears it. */
   schedules_direct_password?: string;
 }

@@ -54,6 +54,7 @@ const TARGET: api.SyncTarget = {
   fuzzy_stream_matching: false,
   sync_logos: false,
   logo_sync_interval_hours: 24,
+  core_settings_excluded: [],
   has_schedules_direct_password: false,
   credential_version: 1,
   last_full_sync_at: '2026-06-18T12:00:00Z',

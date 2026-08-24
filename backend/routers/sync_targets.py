@@ -30,6 +30,7 @@ fail-closed) ``validate_outbound_url`` at write time: it would reject a
 legitimately-configured target whose host is merely unresolvable at the moment
 of saving, and DNS done here proves nothing about DNS at execute time.
 """
+import json
 import logging
 from typing import Optional
 from urllib.parse import urlsplit
@@ -103,6 +104,9 @@ class SyncTargetCreate(BaseModel):
     sync_logos: bool = True
     # How often the logo slice may run, in hours. ``0`` means every cycle.
     logo_sync_interval_hours: int = Field(default=24, ge=0)
+    # Core-settings blobs this target declines (bead …-10wnq). Omit or leave
+    # empty to replicate every blob the engine's register allows.
+    core_settings_excluded: Optional[list[str]] = None
     # THE ONE CREDENTIAL THE OPERATOR TYPES, and they type it once (PO ruling
     # 2026-08-22). Write-only: encrypted at rest and never echoed back — the
     # read shape carries ``has_schedules_direct_password``, a boolean.
@@ -129,6 +133,7 @@ class SyncTargetUpdate(BaseModel):
     fuzzy_stream_matching: Optional[bool] = None
     sync_logos: Optional[bool] = None
     logo_sync_interval_hours: Optional[int] = Field(default=None, ge=0)
+    core_settings_excluded: Optional[list[str]] = None
     # Omitted => unchanged (the ``credentials`` precedent). An explicit empty
     # string CLEARS it, which is the only way to withdraw a stored SD password
     # without deleting the target.
@@ -158,6 +163,10 @@ class SyncTargetResponse(BaseModel):
     fuzzy_stream_matching: bool
     sync_logos: bool
     logo_sync_interval_hours: int = 24
+    # The blobs this target declines. Always a list on the read shape, even
+    # when the column is NULL — an operator surface should not have to tell
+    # "excludes nothing" from "not set".
+    core_settings_excluded: list[str] = []
     # When the logo slice last actually ran (bead …-2yq19); None == never, which
     # is also what makes a new target carry logos on its FIRST cycle.
     last_logo_sync_at: Optional[str] = None
@@ -208,6 +217,64 @@ def _encrypt_sd_password(value: Optional[str]) -> Optional[str]:
     return encrypt_credentials({SCHEDULES_DIRECT_PASSWORD_FIELD: value})
 
 
+def _decode_excluded_core_settings(raw) -> list[str]:
+    """Read the stored JSON list back, fail-soft to "excludes nothing".
+
+    A corrupt column must not stop settings replicating (the faithful-copy
+    direction), and it must not 500 a read of the whole target either.
+    """
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        logger.warning("[SYNC-TARGETS] Unreadable core_settings_excluded; treating as empty.")
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return sorted({n for n in parsed if isinstance(n, str) and n})
+
+
+def _encode_excluded_core_settings(names: Optional[list[str]]) -> Optional[str]:
+    """Validate and store an opt-out list, or ``None`` for "excludes nothing".
+
+    VALIDATED AGAINST THE ENGINE'S OWN REGISTER, not against a copy of it, so
+    the API cannot accept a blob name the engine has never heard of and leave an
+    operator believing they excluded something. Naming a never-sync blob is
+    rejected rather than silently accepted: it opts into nothing either way, and
+    accepting it would tell the operator their choice mattered.
+    """
+    if names is None:
+        return None
+    from tasks.dbas_sync_engine import (
+        NEVER_SYNC_CORE_SETTINGS_BLOBS,
+        SYNC_CORE_SETTINGS_BLOBS,
+    )
+
+    cleaned = sorted({n.strip() for n in names if isinstance(n, str) and n.strip()})
+    if not cleaned:
+        return None
+    unknown = [n for n in cleaned if n not in SYNC_CORE_SETTINGS_BLOBS]
+    if unknown:
+        never = [n for n in unknown if n in NEVER_SYNC_CORE_SETTINGS_BLOBS]
+        if never:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "%s is never replicated to a sync target, so it cannot be "
+                    "excluded per target." % ", ".join(never)
+                ),
+            )
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Unknown core-settings blob(s): %s. Valid values: %s."
+                % (", ".join(unknown), ", ".join(sorted(SYNC_CORE_SETTINGS_BLOBS)))
+            ),
+        )
+    return json.dumps(cleaned)
+
+
 def _serialize(target: SyncTarget, plaintext_creds: Optional[dict] = None) -> dict:
     """Build a response dict with masked credentials.
 
@@ -216,6 +283,12 @@ def _serialize(target: SyncTarget, plaintext_creds: Optional[dict] = None) -> di
     fail-soft (FERNET_KEY rotation) — falls back to the empty masked placeholder.
     """
     data = target.to_dict(mask_credentials=True)
+    # The column stores a JSON list; the read shape is a real list, always
+    # present (bead …-10wnq). An operator surface should not have to tell
+    # "excludes nothing" from "column never set".
+    data["core_settings_excluded"] = _decode_excluded_core_settings(
+        target.core_settings_excluded
+    )
     if plaintext_creds is not None:
         data["credentials"] = _mask_credentials(plaintext_creds)
     else:
@@ -344,6 +417,9 @@ async def create_sync_target(
             fuzzy_stream_matching=req.fuzzy_stream_matching,
             sync_logos=req.sync_logos,
             logo_sync_interval_hours=req.logo_sync_interval_hours,
+            core_settings_excluded=_encode_excluded_core_settings(
+                req.core_settings_excluded
+            ),
             schedules_direct_password=_encrypt_sd_password(
                 req.schedules_direct_password
             ),
@@ -497,6 +573,10 @@ async def update_sync_target(
             target.sync_logos = req.sync_logos
         if req.logo_sync_interval_hours is not None:
             target.logo_sync_interval_hours = req.logo_sync_interval_hours
+        if req.core_settings_excluded is not None:
+            target.core_settings_excluded = _encode_excluded_core_settings(
+                req.core_settings_excluded
+            )
         if req.credentials is not None:
             target.credentials = encrypt_credentials(req.credentials)
         if req.schedules_direct_password is not None:

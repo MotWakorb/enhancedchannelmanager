@@ -174,14 +174,22 @@ def test_never_sync_constant_contains_users():
 
 
 def test_config_categories_exclude_users_channels_streams_logos():
-    """The CONFIG set stays topology-config-only — M3U/EPG/groups/profiles plus
-    the two FK-owner categories an M3U account and a stream profile resolve
-    through: USER AGENTS (bead …-hiacv) and SERVER GROUPS (bead …-tyrg1).
-    Channels are a SEPARATE set (kcxie); users/logos are never in either."""
+    """The CONFIG set stays topology-config-only — M3U/EPG/groups/profiles, the
+    two FK-owner categories an M3U account and a stream profile resolve through
+    (USER AGENTS, bead …-hiacv; SERVER GROUPS, bead …-tyrg1), and the CORE
+    SETTINGS blobs ADR-013 S9 has always listed (bead …-10wnq). Channels are a
+    SEPARATE set (kcxie); users/logos are never in either.
+
+    Note ``core_settings`` being here means only that the GATHER fetches it —
+    it is a key/value blob, absent from ``_SECTION_TO_ENTITY``, so the plan
+    assembler gives it its own branch. Which BLOBS actually cross is the
+    separate per-blob register (``SYNC_CORE_SETTINGS_BLOBS`` /
+    ``NEVER_SYNC_CORE_SETTINGS_BLOBS``), pinned in
+    ``test_10wnq_core_settings_sync.py``."""
     assert SYNC_CONFIG_CATEGORIES == frozenset(
         {"m3u_accounts", "epg_sources", "channel_groups",
          "channel_profiles", "stream_profiles", "user_agents",
-         "server_groups"}
+         "server_groups", "core_settings"}
     )
     assert "users" not in SYNC_CONFIG_CATEGORIES
     # Channels are NOT a config category — they are gathered separately (kcxie).
