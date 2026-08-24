@@ -296,7 +296,9 @@ async def test_cross_origin_redirect_strips_authorization_header():
         ),
     }
 
-    def validate_redirect(_from, to, _mode):
+    def validate_redirect(_from, to, _mode, **_policy):
+        # **_policy absorbs scheme_downgrade (bead enhancedchannelmanager-iyvl9);
+        # this double is exercising header stripping, not redirect policy.
         return targets[to]
 
     transport = SSRFPinnedTransport(

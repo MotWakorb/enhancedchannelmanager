@@ -675,6 +675,18 @@ DNS-rebinding coverage that `zbt74` does not.)
 4. **Redirect handling.** Do not transparently follow 3xx to a different host. Either block all
    cross-host redirects, or re-run steps 2–3 on each redirect target before following. Reject any
    redirect that downgrades `https` → `http`. Cap redirect chain length (≤ 5).
+
+   *Scope note (bead `enhancedchannelmanager-iyvl9`, 2026-08-24).* The downgrade refusal is
+   unchanged for every destination this document covers — cloud backup targets, sync targets,
+   EPG sources. `security/ssrf.py::validate_redirect` is shared with the **stream-probe** path,
+   which is outside this threat model's scope, and that one caller may waive the downgrade clause
+   by passing `SchemeDowngrade.ALLOW_STREAM_PROBE`. It waives nothing else: steps 2–3 and the
+   chain cap still apply. The waiver is a keyword argument defaulting to `REFUSE`, so no
+   destination in scope here can acquire it without an explicit code change, and
+   `tests/security/test_probe_scheme_downgrade.py` fails if any module other than the prober
+   names it. Rationale: XC providers 302 onto a plain-HTTP edge and serve the media over HTTP
+   there regardless, so the media is already unencrypted and the redirect target carries no
+   credentials — unlike the credentialed APIs in scope here, where a downgrade is a real loss.
 5. **Credential-freshness binding (with `0i2vt.4`).** Honour `credential_version` /
    `token_revoked_at`: scheduler captures `credential_version` at enqueue; worker aborts (WARN +
    `journal.log_entry`) if it changed or `token_revoked_at` is set at execute time.

@@ -13,6 +13,23 @@ remain denied in both modes. RFC1918, shared-address-space, and loopback targets
 remain available only in `lan_friendly` mode so configured local IPTV and
 Dispatcharr installations continue to work.
 
+## Redirect scheme downgrades
+
+Redirect re-validation refuses an `https` → `http` downgrade on every outbound
+path except stream probing, where it is allowed. Providers commonly answer
+`https://<portal>/live/<user>/<pass>/<id>.ts` with a 302 onto a plain-HTTP edge
+node and serve the media over HTTP there in any case, so the hop is already
+unencrypted and the redirect target's opaque-token path carries no credentials.
+Refusing it therefore protected nothing and instead failed every probe against
+such a provider.
+
+The waiver is scoped to the probe path (ffprobe metadata, bitrate measurement,
+black-screen detection) and covers the scheme downgrade only. The denylist,
+resolve-once connection pinning, per-hop re-validation, redirect chain cap, and
+cross-origin credential stripping all still apply to probes. Stream preview,
+EPG fetches, cloud backup targets, and sync targets keep the refusal. Each
+downgrade that is followed is logged.
+
 ## FFmpeg and ffprobe boundary
 
 FFmpeg and ffprobe do not receive provider HTTP(S) URLs. ECM first resolves and
@@ -38,6 +55,16 @@ UDP, RTP, and RTMP remain direct subprocess inputs because they are not HTTP
 redirect protocols. ECM validates their literal or resolved destination under
 the configured LAN policy immediately before every spawn and retry. Other
 direct schemes are rejected.
+
+## Probe failure diagnostics
+
+A failed probe reports its cause without reporting the provider URL. ffmpeg and
+ffprobe diagnostics may embed the provider URL and its credentials, so
+subprocess text is never copied into logs or persisted state. Exceptions ECM's
+own guards raise are classified separately, by exception type rather than by
+inspecting the message, and their fixed messages are logged and surfaced in the
+probe run report. The run report also groups failures by cause, so a wholesale
+guard rejection reads as one named reason rather than an unexplained count.
 
 The only remaining resolution race is on direct UDP, RTP, and RTMP inputs:
 their subprocess libraries resolve again after ECM validates the destination.
