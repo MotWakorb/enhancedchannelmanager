@@ -154,14 +154,27 @@ jobs:
           MCP_DIGEST: ${{ needs.authorize.outputs.mcp_amd64 }}
         run: |
           set -euo pipefail
+          # A bare `test` here printed nothing and exited 1, so a digest
+          # mismatch surfaced as a step that died with no message at all.
+          # Name both digests: the mismatch itself is the diagnosis.
+          assert_published() {
+            local reference="$1" expected="$2" actual
+            actual=$(skopeo inspect --format '{{.Digest}}' "docker://$reference")
+            if test "$actual" != "$expected"; then
+              echo "::error::$reference stores $actual but the verified candidate is $expected"
+              echo "::error::Registry content differs from the artifact that was built, scanned and attested; refusing to promote it."
+              return 1
+            fi
+            echo "$reference published at its verified digest $actual"
+          }
           python scripts/candidate_image.py verify-archive /tmp/candidates/ecm-amd64.oci.tar --expected "$ECM_DIGEST"
           python scripts/candidate_image.py verify-archive /tmp/candidates/mcp-amd64.oci.tar --expected "$MCP_DIGEST"
           image="${GITHUB_REPOSITORY,,}"
           echo "$REGISTRY_AUTH" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           skopeo copy --preserve-digests oci-archive:/tmp/candidates/ecm-amd64.oci.tar "docker://ghcr.io/$image:candidate-$SHA-amd64"
           skopeo copy --preserve-digests oci-archive:/tmp/candidates/mcp-amd64.oci.tar "docker://ghcr.io/$image-mcp:candidate-$SHA-amd64"
-          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image:candidate-$SHA-amd64")" = "$ECM_DIGEST"
-          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image-mcp:candidate-$SHA-amd64")" = "$MCP_DIGEST"
+          assert_published "ghcr.io/$image:candidate-$SHA-amd64" "$ECM_DIGEST"
+          assert_published "ghcr.io/$image-mcp:candidate-$SHA-amd64" "$MCP_DIGEST"
           echo "ecm_digest=$ECM_DIGEST" >> "$GITHUB_OUTPUT"
           echo "mcp_digest=$MCP_DIGEST" >> "$GITHUB_OUTPUT"
 
@@ -195,14 +208,27 @@ jobs:
           MCP_DIGEST: ${{ needs.authorize.outputs.mcp_arm64 }}
         run: |
           set -euo pipefail
+          # A bare `test` here printed nothing and exited 1, so a digest
+          # mismatch surfaced as a step that died with no message at all.
+          # Name both digests: the mismatch itself is the diagnosis.
+          assert_published() {
+            local reference="$1" expected="$2" actual
+            actual=$(skopeo inspect --format '{{.Digest}}' "docker://$reference")
+            if test "$actual" != "$expected"; then
+              echo "::error::$reference stores $actual but the verified candidate is $expected"
+              echo "::error::Registry content differs from the artifact that was built, scanned and attested; refusing to promote it."
+              return 1
+            fi
+            echo "$reference published at its verified digest $actual"
+          }
           python scripts/candidate_image.py verify-archive /tmp/candidates/ecm-arm64.oci.tar --expected "$ECM_DIGEST"
           python scripts/candidate_image.py verify-archive /tmp/candidates/mcp-arm64.oci.tar --expected "$MCP_DIGEST"
           image="${GITHUB_REPOSITORY,,}"
           echo "$REGISTRY_AUTH" | skopeo login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
           skopeo copy --preserve-digests oci-archive:/tmp/candidates/ecm-arm64.oci.tar "docker://ghcr.io/$image:candidate-$SHA-arm64"
           skopeo copy --preserve-digests oci-archive:/tmp/candidates/mcp-arm64.oci.tar "docker://ghcr.io/$image-mcp:candidate-$SHA-arm64"
-          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image:candidate-$SHA-arm64")" = "$ECM_DIGEST"
-          test "$(skopeo inspect --format '{{.Digest}}' "docker://ghcr.io/$image-mcp:candidate-$SHA-arm64")" = "$MCP_DIGEST"
+          assert_published "ghcr.io/$image:candidate-$SHA-arm64" "$ECM_DIGEST"
+          assert_published "ghcr.io/$image-mcp:candidate-$SHA-arm64" "$MCP_DIGEST"
           echo "ecm_digest=$ECM_DIGEST" >> "$GITHUB_OUTPUT"
           echo "mcp_digest=$MCP_DIGEST" >> "$GITHUB_OUTPUT"
 

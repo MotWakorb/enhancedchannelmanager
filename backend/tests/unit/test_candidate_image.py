@@ -14,6 +14,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "scripts" / "candidate_image.py"
 
+IMAGE_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
+INDEX_MEDIA_TYPE = "application/vnd.oci.image.index.v1+json"
+
 
 @pytest.fixture(scope="module")
 def candidate():
@@ -24,16 +27,93 @@ def candidate():
     return module
 
 
+def _write(archive: tarfile.TarFile, name: str, value: bytes) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = len(value)
+    archive.addfile(info, io.BytesIO(value))
+
+
+def _blob(archive: tarfile.TarFile, value: bytes) -> str:
+    digest = "sha256:" + hashlib.sha256(value).hexdigest()
+    _write(archive, f"blobs/sha256/{digest[7:]}", value)
+    return digest
+
+
 def _archive(path: Path) -> str:
     manifest = b"candidate-manifest"
     digest = "sha256:" + hashlib.sha256(manifest).hexdigest()
     index = json.dumps({"manifests": [{"digest": digest}]}).encode()
     with tarfile.open(path, "w") as archive:
         for name, value in (("index.json", index), (f"blobs/sha256/{digest[7:]}", manifest)):
-            info = tarfile.TarInfo(name)
-            info.size = len(value)
-            archive.addfile(info, io.BytesIO(value))
+            _write(archive, name, value)
     return digest
+
+
+def _buildx_archive(path: Path, *, attestation: bool = True) -> tuple[str, str]:
+    """Reproduce the archive docker/build-push-action writes for one platform.
+
+    Returns ``(image_manifest_digest, wrapping_index_digest)``. With provenance
+    attestations enabled -- the action's default -- the root ``index.json``
+    points at an *index* wrapping the image manifest alongside an
+    ``unknown/unknown`` attestation manifest, so the two digests differ.
+    """
+    with tarfile.open(path, "w") as archive:
+        config = _blob(archive, json.dumps({"architecture": "amd64", "os": "linux"}).encode())
+        image = _blob(
+            archive,
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "mediaType": IMAGE_MEDIA_TYPE,
+                    "config": {
+                        "mediaType": "application/vnd.oci.image.config.v1+json",
+                        "digest": config,
+                    },
+                    "layers": [],
+                }
+            ).encode(),
+        )
+        entries = [
+            {
+                "mediaType": IMAGE_MEDIA_TYPE,
+                "digest": image,
+                "platform": {"architecture": "amd64", "os": "linux"},
+            }
+        ]
+        if attestation:
+            attest = _blob(
+                archive,
+                json.dumps({"schemaVersion": 2, "mediaType": IMAGE_MEDIA_TYPE}).encode(),
+            )
+            entries.append(
+                {
+                    "mediaType": IMAGE_MEDIA_TYPE,
+                    "digest": attest,
+                    "annotations": {
+                        "vnd.docker.reference.digest": image,
+                        "vnd.docker.reference.type": "attestation-manifest",
+                    },
+                    "platform": {"architecture": "unknown", "os": "unknown"},
+                }
+            )
+        inner = _blob(
+            archive,
+            json.dumps(
+                {"schemaVersion": 2, "mediaType": INDEX_MEDIA_TYPE, "manifests": entries}
+            ).encode(),
+        )
+        _write(
+            archive,
+            "index.json",
+            json.dumps(
+                {
+                    "schemaVersion": 2,
+                    "mediaType": INDEX_MEDIA_TYPE,
+                    "manifests": [{"mediaType": INDEX_MEDIA_TYPE, "digest": inner}],
+                }
+            ).encode(),
+        )
+    return image, inner
 
 
 def test_exact_oci_manifest_digest_is_returned(candidate, tmp_path):
@@ -52,9 +132,106 @@ def test_digest_substitution_is_rejected(candidate, tmp_path):
 def test_missing_or_empty_manifest_digest_is_rejected(candidate, tmp_path):
     archive = tmp_path / "candidate.oci.tar"
     with tarfile.open(archive, "w") as output:
-        value = b'{"manifests": []}'
-        info = tarfile.TarInfo("index.json")
-        info.size = len(value)
-        output.addfile(info, io.BytesIO(value))
+        _write(output, "index.json", b'{"manifests": []}')
+    with pytest.raises(candidate.CandidateError):
+        candidate.verify_archive(archive)
+
+
+def test_attestation_wrapped_archive_resolves_to_the_image_manifest(candidate, tmp_path):
+    """The digest must be the image manifest a registry push actually stores.
+
+    ``skopeo copy`` resolves an oci-archive to the single entry matching the
+    host platform, so the wrapping index digest is never written to the
+    registry. Binding to it made every publish fail its own equality check.
+    """
+    archive = tmp_path / "candidate.oci.tar"
+    image, index = _buildx_archive(archive)
+    assert image != index
+    assert candidate.verify_archive(archive) == image
+    assert candidate.verify_archive(archive, image) == image
+
+
+def test_attestation_wrapped_archive_rejects_the_wrapping_index_digest(candidate, tmp_path):
+    archive = tmp_path / "candidate.oci.tar"
+    _, index = _buildx_archive(archive)
+    with pytest.raises(candidate.CandidateError):
+        candidate.verify_archive(archive, index)
+
+
+def test_single_platform_archive_without_attestations_still_resolves(candidate, tmp_path):
+    archive = tmp_path / "candidate.oci.tar"
+    image, _ = _buildx_archive(archive, attestation=False)
+    assert candidate.verify_archive(archive) == image
+
+
+def test_ambiguous_multi_platform_index_is_rejected(candidate, tmp_path):
+    """Two publishable platforms give skopeo a choice; refuse rather than guess."""
+    archive = tmp_path / "candidate.oci.tar"
+    with tarfile.open(archive, "w") as output:
+        first = _blob(output, json.dumps({"mediaType": IMAGE_MEDIA_TYPE}).encode())
+        second = _blob(output, json.dumps({"mediaType": IMAGE_MEDIA_TYPE, "x": 1}).encode())
+        inner = _blob(
+            output,
+            json.dumps(
+                {
+                    "mediaType": INDEX_MEDIA_TYPE,
+                    "manifests": [
+                        {
+                            "mediaType": IMAGE_MEDIA_TYPE,
+                            "digest": first,
+                            "platform": {"architecture": "amd64", "os": "linux"},
+                        },
+                        {
+                            "mediaType": IMAGE_MEDIA_TYPE,
+                            "digest": second,
+                            "platform": {"architecture": "arm64", "os": "linux"},
+                        },
+                    ],
+                }
+            ).encode(),
+        )
+        _write(output, "index.json", json.dumps({"manifests": [{"digest": inner}]}).encode())
+    with pytest.raises(candidate.CandidateError):
+        candidate.verify_archive(archive)
+
+
+def test_tampered_nested_manifest_blob_is_rejected(candidate, tmp_path):
+    """Every descent step re-hashes the blob; a substituted child must fail."""
+    archive = tmp_path / "candidate.oci.tar"
+    with tarfile.open(archive, "w") as output:
+        image = "sha256:" + hashlib.sha256(b"honest").hexdigest()
+        _write(output, f"blobs/sha256/{image[7:]}", b"tampered")
+        inner = _blob(
+            output,
+            json.dumps(
+                {
+                    "mediaType": INDEX_MEDIA_TYPE,
+                    "manifests": [{"mediaType": IMAGE_MEDIA_TYPE, "digest": image}],
+                }
+            ).encode(),
+        )
+        _write(output, "index.json", json.dumps({"manifests": [{"digest": inner}]}).encode())
+    with pytest.raises(candidate.CandidateError):
+        candidate.verify_archive(archive)
+
+
+def test_index_recursion_is_bounded(candidate, tmp_path):
+    """A deeply nested index must fail closed rather than spin."""
+    archive = tmp_path / "candidate.oci.tar"
+    with tarfile.open(archive, "w") as output:
+        digest = _blob(
+            output, json.dumps({"mediaType": INDEX_MEDIA_TYPE, "manifests": []}).encode()
+        )
+        for _ in range(12):
+            digest = _blob(
+                output,
+                json.dumps(
+                    {
+                        "mediaType": INDEX_MEDIA_TYPE,
+                        "manifests": [{"mediaType": INDEX_MEDIA_TYPE, "digest": digest}],
+                    }
+                ).encode(),
+            )
+        _write(output, "index.json", json.dumps({"manifests": [{"digest": digest}]}).encode())
     with pytest.raises(candidate.CandidateError):
         candidate.verify_archive(archive)
