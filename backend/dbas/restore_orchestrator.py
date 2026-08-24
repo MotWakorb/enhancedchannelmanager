@@ -744,7 +744,26 @@ async def run_restore(
     max_entities_per_category: int = None,  # type: ignore[assignment]
     channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
     allow_fuzzy_stream_match: bool = True,
+    non_fatal_categories: frozenset[EntityType] | None = None,
 ) -> RestoreReport:
+    # ``non_fatal_categories`` (bead …-10wnq): override
+    # :data:`NON_FATAL_FAILURE_CATEGORIES` for THIS run. ``None`` keeps the
+    # module default, so the archive-restore path is bit-for-bit unchanged —
+    # including the PO's 2026-08-03 ruling on bead ``…-zt3kf`` that a
+    # settings-key DEPENDENCY_UNRESOLVED aborts the whole restore and rolls
+    # back. That ruling was made about a ONE-SHOT operator action, where a
+    # human sees the result and decides whether to retry.
+    #
+    # Cross-instance sync passes a widened set because its context is the
+    # opposite: it runs UNATTENDED, FOREVER, on a schedule, and nobody sees the
+    # result. Rolling a whole replica back there costs the operator every entity
+    # the cycle created, on every cycle, for a category that is never LEDGERED
+    # and therefore cannot be rolled back anyway (``_delete_dispatch`` has no
+    # SETTINGS compensator by design). ADR-013 S8 makes "retry next interval"
+    # the recovery mechanism, which is exactly what a rollback destroys.
+    #
+    # A widened category's failures are still COUNTED, still listed in
+    # ``failure_details``, and still forbid a ``SUCCESS`` outcome.
     """Run a full restore: pre-flight → ordered apply → rollback-on-failure.
 
     The single orchestration chokepoint. Behaviour:
@@ -898,6 +917,10 @@ async def run_restore(
     # --- 2. Ordered apply (the hard Phase-2 sequence). ---
     failure_occurred = False
     failed_step: EntityType | None = None
+    non_fatal = (
+        NON_FATAL_FAILURE_CATEGORIES if non_fatal_categories is None
+        else non_fatal_categories
+    )
     for step in steps:
         if step.importer is None:
             logger.info(
@@ -930,7 +953,7 @@ async def run_restore(
         # — mixed state must never be reported as success.
         cat = report.category(step.entity_type)
         if cat.failed > 0:
-            if step.entity_type in NON_FATAL_FAILURE_CATEGORIES:
+            if step.entity_type in non_fatal:
                 # y65si / d0agi: counted, surfaced, and NOT fatal. Nothing
                 # downstream depends on this category, so the operator keeps
                 # everything the run has applied and will apply. The failure

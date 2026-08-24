@@ -563,6 +563,17 @@ class StatefulDispatcharrFake:
                 return dict(row)
         raise FakeNotFoundError("core_setting", setting_id)
 
+    async def get_core_setting_id_map(self) -> dict:
+        """``{key -> row id}``. This is what CoreSettingIdResolver ACTUALLY calls.
+
+        Modelled because omitting it is how the settings step silently degraded:
+        the resolver caught the AttributeError, reported every key unresolvable,
+        and — SETTINGS being a fatal category at the time — rolled the whole
+        cycle back. A fake that answers ``get_core_settings`` but not this is a
+        fake that cannot tell a working resolver from a broken one.
+        """
+        return {row["key"]: row["id"] for row in self.core_settings}
+
     def core_setting(self, key: str):
         """This instance's stored value for one blob (test-side reader)."""
         for row in self.core_settings:
