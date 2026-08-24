@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "version": "0.18.1-0144",
+  "created": "2026-08-24T15:19:03Z",
+  "kind": "source-manifest",
+  "subject": {
+    "type": "source-tree",
+    "note": "These documents describe the dependency manifests of the release source tree. They do NOT describe a container image and assert no image digest; see sbom/README.md."
+  },
+  "coverage": {
+    "includes": [
+      "Python distributions pinned in the image's requirements.txt, with versions",
+      "npm packages resolved in frontend/package-lock.json, with versions (ECM only)",
+      "Base and build images referenced by digest in the Dockerfile"
+    ],
+    "excludes": [
+      "Operating-system packages inside the base images (apt/apk); the Dockerfiles also run `apt-get upgrade` / `apk upgrade` at build time, so the installed OS package set is not derivable from the source tree at all",
+      "Transitive native libraries vendored inside Python wheels",
+      "Any image digest: no release image exists when this document is cut"
+    ]
+  },
+  "sources": {
+    "Dockerfile": "sha256:c1d48b34c475b42239d5757a89994d064395ea784cf05f6533ab886dfb427088",
+    "backend/requirements.txt": "sha256:c82ca81c087dc79fae6a6f94642075e2f277dbad659024a3248b904bd3096a0b",
+    "frontend/package-lock.json": "sha256:26991e14b92b9b730acd27fbf75c2d1a03d8a4225399a2cbdf619c549e1376fe",
+    "mcp-server/Dockerfile": "sha256:fa0a3732268f67e51161b0c064963567f1743cbcf12ad25b1e3821cbe20a0cc2",
+    "mcp-server/requirements.txt": "sha256:0483f830ae3d7748bf03d894951e18e463047b46025919077466dfcea845ebf3"
+  },
+  "documents": [
+    {
+      "path": "ecm.spdx.json",
+      "subject": "ecm",
+      "packages": 455,
+      "sha256": "a3ae63ae60f334e9d7470d8ca18f7e770fe370581c32a12bb5dbaacad3d20ce7"
+    },
+    {
+      "path": "mcp.spdx.json",
+      "subject": "mcp",
+      "packages": 43,
+      "sha256": "4bdc7d574ef607705c72f195803831eb12c54d4aab8026cd7351b895a1657d3e"
+    }
+  ]
+}

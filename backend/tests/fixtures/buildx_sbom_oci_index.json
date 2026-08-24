@@ -1,0 +1,69 @@
+{
+  "_comment": [
+    "Recorded from a real `docker buildx build --sbom=true --provenance=true",
+    "--platform linux/amd64 --output type=oci` run (buildx v0.36.1, BuildKit",
+    "v0.32.2, buildkit-syft-scanner stable-1, 2026-08-24) for bead",
+    "enhancedchannelmanager-3t0ht. Digests and sizes are elided; the SHAPE is",
+    "the load-bearing part and it is what scripts/candidate_image.py descends.",
+    "",
+    "The finding this file exists to record: enabling `sbom:` does NOT add a",
+    "second unknown/unknown child. BuildKit emits ONE attestation manifest per",
+    "platform and puts the SPDX document and the SLSA provenance in it as two",
+    "in-toto layers. The index therefore has exactly two children with and",
+    "without `sbom:`, and the image manifest digest is byte-identical between",
+    "the two builds -- verified by building both and comparing.",
+    "",
+    "Consumed by backend/tests/unit/test_candidate_image.py, which rebuilds an",
+    "archive of this shape and asserts the descent still resolves to the one",
+    "publishable image manifest."
+  ],
+  "root_index": {
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [
+      {
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "annotations": {
+          "org.opencontainers.image.created": "2026-08-24T15:09:48Z"
+        }
+      }
+    ]
+  },
+  "inner_index": {
+    "schemaVersion": 2,
+    "mediaType": "application/vnd.oci.image.index.v1+json",
+    "manifests": [
+      {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "platform": {
+          "architecture": "amd64",
+          "os": "linux"
+        }
+      },
+      {
+        "mediaType": "application/vnd.oci.image.manifest.v1+json",
+        "annotations": {
+          "vnd.docker.reference.type": "attestation-manifest"
+        },
+        "platform": {
+          "architecture": "unknown",
+          "os": "unknown"
+        }
+      }
+    ]
+  },
+  "attestation_manifest_layers": [
+    {
+      "mediaType": "application/vnd.in-toto+json",
+      "annotations": {
+        "in-toto.io/predicate-type": "https://spdx.dev/Document"
+      }
+    },
+    {
+      "mediaType": "application/vnd.in-toto+json",
+      "annotations": {
+        "in-toto.io/predicate-type": "https://slsa.dev/provenance/v1"
+      }
+    }
+  ]
+}

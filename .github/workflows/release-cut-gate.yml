@@ -1,4 +1,5 @@
-# Mechanical verification of ADR-004 Pre-Cut Gate items G1a, G1b, G5, G6, G7
+# Mechanical verification of ADR-004 Pre-Cut Gate items G1a, G1b, G5, G6, G7,
+# plus G8 (the committed release SBOM, bead enhancedchannelmanager-3t0ht),
 # on every PR targeting `main`. Only exact release-cut and hotfix shapes are
 # admitted; an unrecognized main-bound PR fails instead of bypassing policy.
 #
@@ -19,7 +20,7 @@
 # hotfix subset; any other shape is rejected by the policy classifier.
 #
 # Hotfix PRs (branch `hotfix/vX.Y.(Z+1)-description`) use ADR-004's subset
-# (G2, G3, G4 + scoped G1a/G1b/G5/G6/G7 per the hotfix carve-outs in
+# (G2, G3, G4 + scoped G1a/G1b/G5/G6/G7/G8 per the hotfix carve-outs in
 # docs/shipping.md §"Hotfix Path").
 name: Release Cut Gate
 
@@ -219,6 +220,26 @@ jobs:
         if: steps.shape.outputs.kind == 'release'
         run: python scripts/release_gate_policy.py check-board authoritative-board/.beads/issues.jsonl
 
+      # ─── G8: SBOM committed for this release, and current ─────────────
+      # `sbom/vX.Y.Z/` is an artifact of record, so the gate's job is to make
+      # sure it describes THIS tree rather than merely existing. `verify`
+      # regenerates both documents from the checked-out release branch and
+      # byte-compares; a dependency bumped without regenerating, a document
+      # hand-edited afterwards, a deleted document, an extra file, or a
+      # directory cut for a different version all fail here. Each mutation is
+      # red-proven in backend/tests/unit/test_generate_sbom.py.
+      #
+      # What it is NOT: these are source-manifest documents, so no image digest
+      # is asserted and none is checked against the registry. The reason is
+      # structural — the images a release publishes are built from the merge
+      # commit this PR creates, which does not exist yet and whose SHA is baked
+      # into the ECM image as GIT_COMMIT. See sbom/README.md.
+      - name: G8 — SBOM committed for this release and current
+        if: steps.shape.outputs.kind == 'release'
+        env:
+          EXPECTED_VERSION: ${{ steps.shape.outputs.version }}
+        run: python scripts/generate_sbom.py verify --version "$EXPECTED_VERSION"
+
       # ─── Summary ──────────────────────────────────────────────────────
       # If we reach here, all enabled gates passed. The summary step
       # exists so the check-run output has a clear final marker for the
@@ -227,8 +248,8 @@ jobs:
         if: always()
         run: |
           if [[ "${{ steps.shape.outputs.kind }}" == "release" ]]; then
-            echo "All mechanical pre-cut gates (G1a, G1b, G5, G6, G7) passed for release v${{ steps.shape.outputs.version }}."
+            echo "All mechanical pre-cut gates (G1a, G1b, G5, G6, G7, G8) passed for release v${{ steps.shape.outputs.version }}."
             echo "G2/G3/G4 are enforced via separate required checks (Backend Tests, Frontend Tests, CodeQL Analysis [python|javascript-typescript])."
           else
-            echo "Allowed hotfix v${{ steps.shape.outputs.version }}; release-only G1a/G1b/G5/G6/G7 are governed by the documented hotfix carve-outs."
+            echo "Allowed hotfix v${{ steps.shape.outputs.version }}; release-only G1a/G1b/G5/G6/G7/G8 are governed by the documented hotfix carve-outs."
           fi
