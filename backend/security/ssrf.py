@@ -63,6 +63,30 @@ Design (per §9.4)
   on a redirect target, rejects ``https → http`` downgrades, and
   :func:`check_redirect_depth` caps the chain at :data:`MAX_REDIRECTS`.
 
+Scheme-downgrade scope (bead ``enhancedchannelmanager-iyvl9``)
+-------------------------------------------------------------
+The ``https → http`` refusal is the DEFAULT for every outbound path and stays
+that way. Exactly one caller may opt out: the stream-probe path, via the
+explicit :class:`SchemeDowngrade` parameter on :func:`validate_redirect`
+(``SchemeDowngrade.ALLOW_STREAM_PROBE``). It is a per-call argument on purpose —
+not a global flag, not a settings key, not an environment variable — so that
+reading :func:`validate_redirect` tells you who is allowed to downgrade, and so
+that ``grep -rn ALLOW_STREAM_PROBE`` enumerates every site that does.
+
+Why the probe path and nothing else: XC providers routinely 302 an
+``https://<portal>/live/<user>/<pass>/<id>.ts`` request onto a plain-HTTP edge
+node, and they serve the video over HTTP at that edge regardless. Playback is
+already unencrypted in transit, and the redirect target's path is an opaque
+token carrying no credentials, so refusing the hop buys no confidentiality — it
+only costs the operator the ability to learn whether a stream works. Every other
+outbound destination (cloud backup targets, EPG sources, a second Dispatcharr
+instance) is a credentialed API where a downgrade IS a real loss, so those keep
+the refusal.
+
+The relaxation is narrow in a second sense: it waives ONLY the scheme-downgrade
+clause. The denylist, resolve-then-connect-by-IP, redirect depth capping and
+origin pinning all still apply to the probe path unchanged.
+
 Seam for bead .8
 ----------------
 :func:`validate_outbound_url` returns a :class:`ResolvedTarget` (validated IP +
@@ -116,6 +140,30 @@ class SSRFMode(str, Enum):
     LAN_FRIENDLY = "lan_friendly"
     #: RFC1918 private + loopback BLOCKED (public destinations only).
     PUBLIC_ONLY = "public_only"
+
+
+class SchemeDowngrade(str, Enum):
+    """Whether a caller may follow an ``https → http`` redirect.
+
+    Bead ``enhancedchannelmanager-iyvl9``. This is a per-call argument to
+    :func:`validate_redirect`, deliberately NOT a global flag or a setting: the
+    only way to obtain the relaxation is to name it at the call site, which
+    makes every site that has it greppable
+    (``grep -rn ALLOW_STREAM_PROBE backend/``).
+
+    The default is :data:`REFUSE` and every existing caller gets it implicitly,
+    so a new outbound path cannot acquire the relaxation by accident — only by
+    writing the member name.
+    """
+
+    #: Refuse the downgrade. The default, and the policy for EVERY outbound
+    #: path other than the stream probe.
+    REFUSE = "refuse"
+    #: Follow the downgrade. Reserved for the stream-probe path (ffprobe /
+    #: bitrate measurement / black-screen detection), where the provider serves
+    #: the media over plain HTTP anyway and the redirect target carries no
+    #: credentials. See the module docstring for the full rationale.
+    ALLOW_STREAM_PROBE = "allow_stream_probe"
 
 
 class SSRFError(Exception):
@@ -419,30 +467,63 @@ def validate_outbound_url(url: str, mode: SSRFMode) -> ResolvedTarget:
     return target
 
 
-def validate_redirect(from_url: str, to_url: str, mode: SSRFMode) -> ResolvedTarget:
+def validate_redirect(
+    from_url: str,
+    to_url: str,
+    mode: SSRFMode,
+    *,
+    scheme_downgrade: SchemeDowngrade = SchemeDowngrade.REFUSE,
+) -> ResolvedTarget:
     """Re-validate a redirect target before following it (§9.4 item 4).
 
     * Re-runs the full denylist + resolve-by-IP on ``to_url``.
-    * Rejects an ``https → http`` scheme downgrade.
+    * Rejects an ``https → http`` scheme downgrade UNLESS the caller explicitly
+      passes ``scheme_downgrade=SchemeDowngrade.ALLOW_STREAM_PROBE``.
 
     The caller is responsible for capping the chain length via
     :func:`check_redirect_depth`.
+
+    Who may downgrade
+    -----------------
+    Only the stream-probe path
+    (:mod:`stream_prober` → :mod:`security.stream_outbound`). ``scheme_downgrade``
+    is keyword-only and defaults to :data:`SchemeDowngrade.REFUSE`, so every
+    other caller — cloud backup targets, EPG source fetches, the
+    cross-instance sync client, the browser stream preview — keeps the refusal
+    without doing anything, and a new caller cannot inherit the relaxation by
+    accident. Waiving the downgrade waives ONLY the downgrade: the denylist,
+    resolve-then-connect-by-IP, depth cap and origin pinning are unaffected.
+    See the module docstring for why the probe path is the exception.
 
     Args:
         from_url: the URL that issued the 3xx (its scheme governs downgrade).
         to_url: the ``Location:`` target.
         mode: active SSRF mode.
+        scheme_downgrade: downgrade policy for THIS hop. Defaults to
+            :data:`SchemeDowngrade.REFUSE`; only the stream-probe path passes
+            :data:`SchemeDowngrade.ALLOW_STREAM_PROBE`.
 
     Returns:
         A validated :class:`ResolvedTarget` for ``to_url``.
 
     Raises:
-        SSRFError: downgrade, or any reason :func:`validate_outbound_url` would.
+        SSRFError: downgrade (unless explicitly allowed for this hop), or any
+            reason :func:`validate_outbound_url` would.
     """
     from_scheme, _, _ = _split(from_url)
     to_scheme = (urlsplit(to_url).scheme or "").lower()
     if from_scheme == "https" and to_scheme == "http":
-        raise SSRFError("Refusing redirect that downgrades https → http")
+        if scheme_downgrade is not SchemeDowngrade.ALLOW_STREAM_PROBE:
+            raise SSRFError("Refusing redirect that downgrades https → http")
+        # Deliberate, scoped waiver — record it so the downgrade is never
+        # silent. No URL or credential in the message (bead
+        # ``enhancedchannelmanager-3dn59``): the probe path surfaces guard
+        # messages to the operator, so they must stay credential-free.
+        logger.warning(
+            "[SSRF] Following an https → http redirect on the stream-probe "
+            "path (policy=%s); this hop is not confidential",
+            scheme_downgrade.value,
+        )
     return validate_outbound_url(to_url, mode)
 
 

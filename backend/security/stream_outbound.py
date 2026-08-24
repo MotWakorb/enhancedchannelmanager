@@ -5,6 +5,16 @@ manually follow redirects so every hop is validated and pinned independently.
 HTTP subprocess inputs use ECM's tokenized loopback relay; direct UDP/RTP/RTMP
 inputs use ``validate_stream_subprocess_url`` as documented in
 ``docs/security/stream_outbound_ssrf.md``.
+
+Scheme-downgrade policy (bead ``enhancedchannelmanager-iyvl9``)
+--------------------------------------------------------------
+This module serves TWO consumers: the stream **prober** and the browser stream
+**preview** router. They do not share a redirect policy. Every entrypoint here
+takes an explicit ``scheme_downgrade`` argument that defaults to
+:data:`~security.ssrf.SchemeDowngrade.REFUSE` and is forwarded verbatim to
+:func:`~security.ssrf.validate_redirect`; only :mod:`stream_prober` passes
+:data:`~security.ssrf.SchemeDowngrade.ALLOW_STREAM_PROBE`. Preview, and any
+future caller, keeps the refusal by doing nothing.
 """
 
 from __future__ import annotations
@@ -21,6 +31,7 @@ import httpx
 from aiohttp import web
 
 from security.ssrf import (
+    SchemeDowngrade,
     SSRFError,
     SSRFMode,
     ResolvedTarget,
@@ -41,6 +52,7 @@ class SSRFPinnedTransport(httpx.AsyncBaseTransport):
         inner_factory: Callable[[], httpx.AsyncBaseTransport] | None = None,
         mode: SSRFMode | None = None,
         verify: bool = True,
+        scheme_downgrade: SchemeDowngrade = SchemeDowngrade.REFUSE,
     ) -> None:
         if inner is not None and inner_factory is not None:
             raise ValueError("Pass inner or inner_factory, not both")
@@ -49,6 +61,10 @@ class SSRFPinnedTransport(httpx.AsyncBaseTransport):
         )
         self._inner = inner or self._inner_factory()
         self._mode = mode
+        # Redirect scheme-downgrade policy for every hop this transport follows.
+        # Defaults to REFUSE; only the stream-probe path overrides it (bead
+        # enhancedchannelmanager-iyvl9).
+        self._scheme_downgrade = scheme_downgrade
         self._origin: tuple[str, str, int] | None = None
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
@@ -59,7 +75,12 @@ class SSRFPinnedTransport(httpx.AsyncBaseTransport):
         if prepared_target is not None:
             target = prepared_target
         elif from_url:
-            target = validate_redirect(str(from_url), original_url, mode)
+            target = validate_redirect(
+                str(from_url),
+                original_url,
+                mode,
+                scheme_downgrade=self._scheme_downgrade,
+            )
         else:
             target = validate_outbound_url(original_url, mode)
 
@@ -100,10 +121,27 @@ async def stream_request(
     timeout: httpx.Timeout | float | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     initial_target: ResolvedTarget | None = None,
+    scheme_downgrade: SchemeDowngrade = SchemeDowngrade.REFUSE,
 ) -> AsyncIterator[httpx.Response]:
-    """Open a pinned streaming GET, revalidating and capping redirects."""
+    """Open a pinned streaming GET, revalidating and capping redirects.
 
-    pinned_transport = transport or SSRFPinnedTransport()
+    ``scheme_downgrade`` is forwarded to the transport and from there to
+    :func:`~security.ssrf.validate_redirect`. It defaults to REFUSE; only the
+    stream-probe path passes ``ALLOW_STREAM_PROBE`` (bead
+    ``enhancedchannelmanager-iyvl9``).
+    """
+
+    if transport is not None and scheme_downgrade is not SchemeDowngrade.REFUSE:
+        # A caller-supplied transport carries its OWN policy, so honouring the
+        # argument here would be a lie and ignoring it would silently drop a
+        # security-relevant request. Fail loudly instead.
+        raise ValueError(
+            "scheme_downgrade applies to the transport this function builds; "
+            "pass it to SSRFPinnedTransport when supplying your own transport"
+        )
+    pinned_transport = transport or SSRFPinnedTransport(
+        scheme_downgrade=scheme_downgrade
+    )
     async with httpx.AsyncClient(
         timeout=timeout,
         follow_redirects=False,
@@ -160,10 +198,20 @@ _MAX_RELAY_RESOURCES = 1024
 class _LocalStreamRelay:
     """Loopback-only token relay whose every upstream fetch uses ``stream_request``."""
 
-    def __init__(self, url: str, headers: Mapping[str, str] | None, timeout) -> None:
+    def __init__(
+        self,
+        url: str,
+        headers: Mapping[str, str] | None,
+        timeout,
+        scheme_downgrade: SchemeDowngrade = SchemeDowngrade.REFUSE,
+    ) -> None:
         self._initial_url = url
         self._headers = dict(headers or {})
         self._timeout = timeout
+        # Applies to the initial fetch AND to every per-resource fetch the relay
+        # makes on behalf of ffmpeg, so an HLS segment follows the same policy
+        # as the manifest that named it.
+        self._scheme_downgrade = scheme_downgrade
         self._targets: dict[str, str] = {}
         self._tokens_by_target: dict[str, str] = {}
         self._runner: web.AppRunner | None = None
@@ -206,7 +254,10 @@ class _LocalStreamRelay:
     async def start(self) -> str:
         # Resolve the initial redirect chain before any subprocess can start.
         self._initial_context = stream_request(
-            self._initial_url, headers=self._headers, timeout=self._timeout
+            self._initial_url,
+            headers=self._headers,
+            timeout=self._timeout,
+            scheme_downgrade=self._scheme_downgrade,
         )
         self._initial_response = await self._initial_context.__aenter__()
         self._initial_response.raise_for_status()
@@ -284,7 +335,10 @@ class _LocalStreamRelay:
             return await self._serve(request, response, url)
         try:
             async with stream_request(
-                url, headers=self._headers_for(url), timeout=self._timeout
+                url,
+                headers=self._headers_for(url),
+                timeout=self._timeout,
+                scheme_downgrade=self._scheme_downgrade,
             ) as response:
                 response.raise_for_status()
                 return await self._serve(request, response, url)
@@ -298,12 +352,17 @@ async def validated_subprocess_input(
     *,
     headers: Mapping[str, str] | None = None,
     timeout: httpx.Timeout | float | None = None,
+    scheme_downgrade: SchemeDowngrade = SchemeDowngrade.REFUSE,
 ) -> AsyncIterator[ValidatedSubprocessInput]:
     """Resolve redirects before spawn and expose HTTP through a loopback relay.
 
     Direct IPTV transports remain subprocess-owned after address validation.
     For HTTP(S), ECM owns DNS, redirects, TLS identity and credentials for the
     lifetime of every resource; FFmpeg receives only opaque loopback URLs.
+
+    ``scheme_downgrade`` defaults to REFUSE and is forwarded to the relay's
+    redirect validation; only the stream-probe path passes
+    ``ALLOW_STREAM_PROBE`` (bead ``enhancedchannelmanager-iyvl9``).
     """
 
     scheme = urlsplit(url).scheme.lower()
@@ -312,7 +371,7 @@ async def validated_subprocess_input(
         yield ValidatedSubprocessInput(argument=url)
         return
 
-    relay = _LocalStreamRelay(url, headers, timeout)
+    relay = _LocalStreamRelay(url, headers, timeout, scheme_downgrade)
     try:
         relay_url = await relay.start()
         yield ValidatedSubprocessInput(
