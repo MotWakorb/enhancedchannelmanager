@@ -661,6 +661,12 @@ class StatefulDispatcharrFake:
     async def delete_dvr_rule(self, rule_id: int) -> None:
         raise FakeNotFoundError("dvr_rule", rule_id)
 
+    async def delete_recording(self, recording_id: int) -> None:
+        # …-ciabe. Upcoming recordings are not in SYNC_CONFIG_CATEGORIES, so a
+        # sync cycle never creates one and this is never a real rollback target
+        # — it exists for the same reason ``delete_user`` above does.
+        raise FakeNotFoundError("upcoming_recording", recording_id)
+
     # ----- logos (bead 7ipq2.1 — the opt-in sync slice's write surface) -----
 
     async def get_all_logos_paginated(self, page_size: int = 500) -> list:

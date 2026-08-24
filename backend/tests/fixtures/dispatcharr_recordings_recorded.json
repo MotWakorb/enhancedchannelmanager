@@ -1,0 +1,202 @@
+{
+  "capture": {
+    "source": "Live reads AND writes against the throwaway dbas-test-env node A (tests/dbas-test-env, ghcr.io/dispatcharr/dispatcharr:latest) over its host port 9601: POST /api/accounts/token/, GET /api/core/version/, GET /api/schema/?format=json, POST /api/channels/recordings/ (x4), GET /api/channels/recordings/, DELETE /api/channels/recordings/{id}/ (x3). Bead enhancedchannelmanager-ciabe.",
+    "fixture_kind": "literal slice of real responses",
+    "literal_raw_capture": true,
+    "captured_at": "2026-08-23",
+    "dispatcharr_version": "0.29.0",
+    "version_read_from": "GET /api/core/version/ -> {\"version\":\"0.29.0\",\"timestamp\":null} (the test env tracks :latest literally -- tests/dbas-test-env/README.md version policy; a run that cannot name its Dispatcharr is not a result)",
+    "why_writes_were_allowed": "The doc-test and production instances both hold ZERO recordings, so a read-only capture could only ever have produced an empty array -- exactly the gap the lsa0s fixture had to admit for recurring rules (capture.known_gap_no_populated_rule). tests/dbas-test-env is declared THROWAWAY by its own README, so the rows below were CREATED there, captured, and DELETED again (three 204s, and a final GET returning []). Nothing was written to the operator's live Dispatcharr.",
+    "redaction": "Nothing was edited. Every field below is operator-data-free by construction: the channel is a seeded test-env channel and the two program blobs are strings this capture supplied.",
+    "why": "Pins the contract facts the upcoming_recordings backup category rests on. Four of them were NOT knowable from the model/serializer source and two of those would have shipped as defects:\n(1) GET /api/channels/recordings/ answers a BARE JSON ARRAY, not a DRF paginated envelope -- same shape as recurring-rules.\n(2) Recording has NO status column. The upcoming/completed distinction is NOT a first-class field; custom_properties.status is a free-form JSONField key the DVR pipeline writes ('scheduled' / 'recording' / 'completed' / 'interrupted' / 'stopped'). The only field-level, always-present discriminator is the absolute start_time, which is why ECM's filter is start_time > now -- the same predicate Dispatcharr's OWN BulkDeleteUpcomingRecordingsAPIView uses to mean 'upcoming' (apps/channels/api_views.py: Recording.objects.filter(start_time__gt=now)).\n(3) THE DESTINATION REFUSES A PAST-DATED CREATE: posting a recording whose end_time has passed answers 400 {\"non_field_errors\":[\"End time must be in the future.\"]}. A restore that replayed archived absolute timestamps unfiltered would fail every stale row upstream instead of skipping it. ECM's restore-side staleness gate is STRICTER than this (it requires start_time in the future, not merely end_time), so ECM never hands upstream a create this validator would reject.\n(4) THE DESTINATION MUTATES custom_properties AFTER THE CREATE: the 201 for id=1 returned custom_properties {} and the GET moments later returned {\"poster_logo_id\": 316} -- Dispatcharr's own artwork pass wrote it. custom_properties is therefore NOT usable as an identity/collision field. ECM matches on (channel, start_time, end_time) instead.\n(5) task_id is server-assigned and read-only ('dvr-recording-<id>'); it is never sent on a create.\n(6) The server may normalize start_time to a DIFFERENT STRING than the one posted -- id=3 was posted at second precision and came back as '2026-08-23T23:16:58.511980Z'. Timestamp identity must compare parsed instants, never strings.",
+    "known_gap_no_completed_row": "No COMPLETED recording is captured here, and none can be: the create validator above rejects any row whose end_time has already passed, so a completed row can only come into existence by a recording actually running to completion on the instance. That is precisely why completed recordings are excluded from the backup category (they reference a media file on the source instance's disk and are not portable) -- the exclusion is not load-bearing on this fixture. The completed shape is documented from Dispatcharr's own apps/channels/tasks.py, which sets custom_properties['status'] = 'completed' alongside file_name / file_path keys naming a path under the source's recordings volume."
+  },
+  "version_response": {
+    "path": "/api/core/version/",
+    "status_code": 200,
+    "content_type": "application/json",
+    "body": {
+      "version": "0.29.0",
+      "timestamp": null
+    }
+  },
+  "empty_list_response": {
+    "path": "/api/channels/recordings/",
+    "status_code": 200,
+    "content_type": "application/json",
+    "body": [],
+    "body_shape": "bare JSON array (NOT a DRF paginated envelope)"
+  },
+  "create_responses": [
+    {
+      "note": "Manual one-off upcoming recording, no custom_properties supplied.",
+      "request_body": {
+        "channel": 316,
+        "start_time": "2026-08-24T05:16:36Z",
+        "end_time": "2026-08-24T06:16:36Z"
+      },
+      "status_code": 201,
+      "body": {
+        "id": 1,
+        "start_time": "2026-08-24T05:16:36Z",
+        "end_time": "2026-08-24T06:16:36Z",
+        "task_id": "dvr-recording-1",
+        "custom_properties": {},
+        "channel": 316
+      }
+    },
+    {
+      "note": "EPG-program-based upcoming recording.",
+      "request_body": {
+        "channel": 316,
+        "start_time": "2026-08-25T05:16:36Z",
+        "end_time": "2026-08-25T06:16:36Z",
+        "custom_properties": {
+          "program": {
+            "title": "Fishing Hour",
+            "description": "Recorded for the ciabe fixture",
+            "tvg_id": "wfn.us"
+          },
+          "status": "scheduled"
+        }
+      },
+      "status_code": 201,
+      "body": {
+        "id": 2,
+        "start_time": "2026-08-25T05:16:36Z",
+        "end_time": "2026-08-25T06:16:36Z",
+        "task_id": "dvr-recording-2",
+        "custom_properties": {
+          "program": {
+            "title": "Fishing Hour",
+            "description": "Recorded for the ciabe fixture",
+            "tvg_id": "wfn.us"
+          },
+          "status": "scheduled"
+        },
+        "channel": 316
+      }
+    },
+    {
+      "note": "PAST-DATED create -- REFUSED. This is the measured destination-side gate that makes the restore's staleness skip mandatory rather than cosmetic.",
+      "request_body": {
+        "channel": 316,
+        "start_time": "2026-08-21T23:16:58Z",
+        "end_time": "2026-08-22T00:16:58Z",
+        "custom_properties": {
+          "status": "completed",
+          "program": {
+            "title": "Aired Already"
+          },
+          "file_name": "Aired Already - 2026-08-21.mkv",
+          "file_path": "/data/recordings/Aired Already - 2026-08-21.mkv"
+        }
+      },
+      "status_code": 400,
+      "body": {
+        "non_field_errors": [
+          "End time must be in the future."
+        ]
+      }
+    },
+    {
+      "note": "IN-PROGRESS recording (started 10 minutes ago). Accepted -- the upstream validator gates on end_time, not start_time. ECM still excludes it: it is not upcoming, and restoring it would start a partial capture on the destination. Note the server-normalized start_time string differs from the one posted.",
+      "request_body": {
+        "channel": 316,
+        "start_time": "2026-08-23T23:06:58Z",
+        "end_time": "2026-08-24T00:06:58Z",
+        "custom_properties": {
+          "status": "recording"
+        }
+      },
+      "status_code": 201,
+      "body": {
+        "id": 3,
+        "start_time": "2026-08-23T23:16:58.511980Z",
+        "end_time": "2026-08-24T00:06:58Z",
+        "task_id": "dvr-recording-3",
+        "custom_properties": {
+          "status": "recording"
+        },
+        "channel": 316
+      }
+    }
+  ],
+  "populated_list_response": {
+    "path": "/api/channels/recordings/",
+    "status_code": 200,
+    "content_type": "application/json",
+    "body_shape": "bare JSON array (NOT a DRF paginated envelope)",
+    "body": [
+      {
+        "id": 1,
+        "start_time": "2026-08-24T05:16:36Z",
+        "end_time": "2026-08-24T06:16:36Z",
+        "task_id": "dvr-recording-1",
+        "custom_properties": {
+          "poster_logo_id": 316
+        },
+        "channel": 316
+      },
+      {
+        "id": 2,
+        "start_time": "2026-08-25T05:16:36Z",
+        "end_time": "2026-08-25T06:16:36Z",
+        "task_id": "dvr-recording-2",
+        "custom_properties": {
+          "status": "scheduled",
+          "program": {
+            "title": "Fishing Hour",
+            "tvg_id": "wfn.us",
+            "description": "Recorded for the ciabe fixture"
+          },
+          "poster_logo_id": 316
+        },
+        "channel": 316
+      },
+      {
+        "id": 3,
+        "start_time": "2026-08-23T23:16:58.511980Z",
+        "end_time": "2026-08-24T00:06:58Z",
+        "task_id": "dvr-recording-3",
+        "custom_properties": {
+          "status": "recording"
+        },
+        "channel": 316
+      }
+    ]
+  },
+  "delete_responses": [
+    {"path": "/api/channels/recordings/1/", "status_code": 204},
+    {"path": "/api/channels/recordings/2/", "status_code": 204},
+    {"path": "/api/channels/recordings/3/", "status_code": 204}
+  ],
+  "list_after_cleanup": {
+    "path": "/api/channels/recordings/",
+    "status_code": 200,
+    "body": []
+  },
+  "openapi_slice": {
+    "paths": {
+      "/api/channels/recordings/": ["get", "post"],
+      "/api/channels/recordings/{id}/": ["delete", "get", "patch", "put"],
+      "/api/channels/recordings/bulk-delete-upcoming/": ["post"]
+    },
+    "components": {
+      "schemas": {
+        "Recording": {
+          "type": "object",
+          "properties": {
+            "id": {"type": "integer", "readOnly": true},
+            "start_time": {"type": "string", "format": "date-time"},
+            "end_time": {"type": "string", "format": "date-time"},
+            "task_id": {"type": "string", "readOnly": true, "nullable": true},
+            "custom_properties": {"nullable": true},
+            "channel": {"type": "integer"}
+          },
+          "required": ["channel", "end_time", "id", "start_time", "task_id"]
+        }
+      }
+    }
+  }
+}

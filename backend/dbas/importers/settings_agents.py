@@ -1,9 +1,15 @@
-"""The settings/agents DBAS restore importer (Phase-2 bulk importer).
+"""The settings/agents/DVR DBAS restore importer (Phase-2 bulk importer).
 
-Bead ``enhancedchannelmanager-0i2vt.13``. Restores FOUR net-new categories that
-split into TWO shapes. PLUGINS are EXCLUDED (ADR-012 D10 — RCE-vs-config
-unresolved). USERS are restored by a SEPARATE crown-jewel importer
+Bead ``enhancedchannelmanager-0i2vt.13``, extended by ``…-ciabe``. Restores FIVE
+categories that split into TWO shapes. PLUGINS are EXCLUDED (ADR-012 D10 —
+RCE-vs-config unresolved). USERS are restored by a SEPARATE crown-jewel importer
 (``importers/users.py`` — bead ``…-l1p4p``); they are NOT touched here.
+
+The whole DVR surface lives in this ONE module — rules and the recording
+instances alike — because they share every helper that decides identity,
+payload shape and failure classification. Splitting the recordings half into its
+own file would have meant either duplicating those helpers or importing another
+module's private names across a seam.
 
 ----------------------------------------------------------------------------
 TWO SHAPES
@@ -28,9 +34,23 @@ ENTITY categories — create rows, remappable, ledger-tracked (mirror
   ``channel`` FK is remapped through the IdRemapTable; an unresolvable FK is
   failed ``DEPENDENCY_UNRESOLVED`` — identically on apply and on dry-run, per the
   y6zg6 preview-parity rule — and never sent upstream with a dangling source id.
-  Dispatcharr's other two DVR surfaces are deliberately out of this category:
-  SERIES rules live inside the ``dvr_settings`` core-setting the ``core_settings``
-  category already carries, and RECORDINGS are per-instance state, not rules.
+  Dispatcharr's SERIES rules are deliberately out of this category: they live
+  inside the ``dvr_settings`` core-setting the ``core_settings`` category
+  already carries.
+
+* **upcoming_recordings** (:func:`import_upcoming_recordings`) ->
+  ``EntityType.UPCOMING_RECORDING`` (bead ``…-ciabe``). The recording INSTANCES
+  (``/api/channels/recordings/``) that have not started yet — the half of the DVR
+  surface that used to be excluded wholesale, leaving a replica with no scheduled
+  recordings at all. Identity is (destination channel, start instant, end
+  instant); its ``channel`` FK remaps through the same namespace the DVR rule's
+  does, and an unresolvable one is recorded through
+  :meth:`RestoreReport.record_dependency_unresolved` so the blocked entity is
+  NAMED and COUNTED rather than filed as a no-op skip. A row whose absolute start
+  has passed since the backup was taken is skipped ``SCHEDULE_ALREADY_PAST`` —
+  the destination refuses a past-dated create anyway. COMPLETED recordings never
+  reach this importer: they are not archived at all, and the BACKUP producer
+  reports that exclusion to the operator (ADR-013).
 
 SETTINGS categories — APPLY key/value config; NOT entity-create, NOT
 id-remapped, NOT ledgered as creates:
@@ -93,7 +113,9 @@ This module imports the contracts module READ-ONLY.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
+from dbas.archive_keys import as_instant
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -721,6 +743,269 @@ async def import_dvr_rules(
                 remap.add(EntityType.DVR_RULE, int(source_id), dest_id)
             ledger.record_created(EntityType.DVR_RULE, dest_id, label)
         logger.info("[DBAS-SETTINGS] Restored DVR rule '%s' (id=%s).", label, dest_id)
+
+
+# ===========================================================================
+# UPCOMING RECORDINGS (…-ciabe) — the DVR category's instance half
+# ===========================================================================
+
+# Read-only / server-assigned keys a recording GET echoes back that must never
+# be sent on a create. ``task_id`` is Dispatcharr's own celery handle
+# (``dvr-recording-<id>``) and is ``readOnly`` in the recorded 0.29.0 schema;
+# forwarding the source's would name a task that does not exist on the
+# destination.
+_RECORDING_NON_CREATE_KEYS = frozenset({"task_id"})
+
+
+def _recording_identity(record: dict, channel_id) -> tuple | None:
+    """Identity key for one recording, or None when it cannot be formed.
+
+    ``channel_id`` must ALWAYS be a DESTINATION channel id — the archive side
+    passes its remapped id, the existing-destination side passes the id the
+    destination already reports. Without a channel there is nothing to be
+    identical to, so the caller falls back to the FK check that names the
+    unresolved dependency.
+
+    THE KEY IS (channel, start instant, end instant) AND NOTHING ELSE, and the
+    exclusions are the load-bearing part:
+
+    * ``custom_properties`` is NOT in it. The destination REWRITES that blob of
+      its own accord — a recording created with ``custom_properties: {}`` came
+      back from the very next GET carrying ``{"poster_logo_id": 316}`` that
+      Dispatcharr's artwork pass had written (measured on 0.29.0, recorded in
+      ``tests/fixtures/dispatcharr_recordings_recorded.json``). Including it
+      would make every restore after the first duplicate every recording.
+    * The timestamps are compared as INSTANTS, never as strings, for the same
+      measured reason: the server re-serialized a second-precision ``start_time``
+      to microsecond precision on the way back out.
+    * ``id`` is not in it either — it is the SOURCE instance's row id and means
+      nothing on the destination.
+    """
+    if channel_id is None:
+        return None
+    try:
+        channel_key = int(channel_id)
+    except (TypeError, ValueError):
+        return None
+    start = as_instant(record.get("start_time"))
+    end = as_instant(record.get("end_time"))
+    if start is None:
+        return None
+    return (channel_key, start, end)
+
+
+def _index_existing_recordings(records: list[dict]) -> dict[tuple, dict]:
+    """Index destination recordings by :func:`_recording_identity`."""
+    index: dict[tuple, dict] = {}
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        key = _recording_identity(rec, rec.get("channel"))
+        if key is not None and key not in index:
+            index[key] = rec
+    return index
+
+
+def _recording_label(record: dict) -> str:
+    """Operator-facing identifier for a recording — never a secret.
+
+    A recording has no name of its own. Its programme title, when the source had
+    one, lives in ``custom_properties.program.title``; otherwise the start time
+    is the only thing that distinguishes it to a human reading the report.
+    """
+    props = record.get("custom_properties")
+    if isinstance(props, dict):
+        program = props.get("program")
+        if isinstance(program, dict):
+            title = program.get("title")
+            if title:
+                return str(title)
+    start = record.get("start_time")
+    return str(start) if start else "<unknown>"
+
+
+def _build_recording_payload(archive_record: dict) -> dict:
+    """Strip source ids and server-assigned fields from a recording create."""
+    return {
+        k: v
+        for k, v in archive_record.items()
+        if k not in _DROPPED_CREATE_KEYS and k not in _RECORDING_NON_CREATE_KEYS
+    }
+
+
+async def import_upcoming_recordings(
+    *,
+    archive_recordings: list[dict],
+    client: DispatcharrClient,
+    selected: bool,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: IdRemapTable,
+    is_dry_run: bool = False,
+) -> None:
+    """Restore the UPCOMING_RECORDING category (bead …-ciabe).
+
+    THE INVARIANT, stated as a property rather than as the cases below::
+
+        Never create a recording the destination already holds, never create one
+        whose scheduled start has already passed, and never send a source
+        instance's id upstream — an unresolvable reference is NAMED and COUNTED
+        rather than silently dropped.
+
+    Three consequences, in the order the loop reaches them:
+
+    STALENESS IS CHECKED AGAIN AT RESTORE TIME, not only at backup time. The
+    archive pins ABSOLUTE timestamps, and the time between the backup and the
+    restore is exactly the interval over which "upcoming" stops being true — a
+    week-old artifact can carry nothing but stale rows. The row is skipped
+    :attr:`~dbas.restore_contracts.SkipReason.SCHEDULE_ALREADY_PAST`, which is a
+    faithful absence and never a delivery shortfall: the destination REFUSES a
+    past-dated create outright (``400 "End time must be in the future."``,
+    measured on 0.29.0), so this is not ECM declining to deliver something the
+    destination could have held. ECM's gate is on ``start_time`` where upstream's
+    is on ``end_time``, so it is strictly the stricter of the two and can never
+    hand upstream a create that validator would reject.
+
+    THE ``channel`` FK RESOLVES THROUGH THE REMAP or the recording is not
+    created. Recorded through :meth:`RestoreReport.record_dependency_unresolved`
+    (bead …-4mkoe) rather than a bespoke counter, so the per-entity reason, the
+    category count and ``entities_blocked_by_dependency`` are three views of ONE
+    decision instead of three that can drift. That recorder is also what
+    distinguishes the two opposite facts an unresolved FK can be — and a
+    recording is a first-class entity the operator selected, so an unresolvable
+    channel is a genuine shortfall in every case it can reach here.
+
+    IDENTITY IS (channel, start, end) — see :func:`_recording_identity` for the
+    two measured reasons ``custom_properties`` and string timestamps are excluded
+    from it. A collision is skipped ``ALREADY_EXISTS_IDENTICAL``, so restoring
+    the same artifact twice schedules each recording once.
+
+    Like its DVR-rule sibling the destination index is a SNAPSHOT taken once
+    before the loop, so two identical recordings within ONE archive are both
+    created — duplicating rather than clobbering, which is the safe direction.
+
+    Every outcome above is reported IDENTICALLY on dry-run and on apply (the
+    y6zg6 preview-parity rule): staleness is a fact about the clock and FK
+    resolution is a fact about the run's remap state, and neither depends on
+    whether this run is going to write. Opt-in via ``selected``.
+    """
+    cat = report.category(EntityType.UPCOMING_RECORDING)
+
+    if not selected:
+        logger.info("[DBAS-SETTINGS] Upcoming recordings not selected; skipping category.")
+        for rec in archive_recordings:
+            _skip(
+                cat,
+                SkipReason.EXCLUDED_BY_OPERATOR,
+                _recording_label(rec),
+                rec.get("id"),
+                is_dry_run,
+            )
+        return
+
+    logger.info(
+        "[DBAS-SETTINGS] Restoring upcoming recordings (dry_run=%s); %d archived.",
+        is_dry_run,
+        len(archive_recordings),
+    )
+    try:
+        existing = await client.get_recordings()
+    except Exception as exc:
+        logger.warning("[DBAS-SETTINGS] Could not list existing recordings: %s", exc)
+        existing = []
+    existing_by_identity = _index_existing_recordings(existing)
+
+    now = datetime.now(timezone.utc)
+
+    for rec in archive_recordings:
+        label = _recording_label(rec)
+        source_id = rec.get("id")
+
+        start = as_instant(rec.get("start_time"))
+        if start is None or start <= now:
+            _skip(cat, SkipReason.SCHEDULE_ALREADY_PAST, label, source_id, is_dry_run)
+            logger.info(
+                "[DBAS-SETTINGS] Recording '%s' is no longer upcoming; not scheduled.",
+                label,
+            )
+            continue
+
+        source_channel = _as_int(rec.get("channel"))
+        dest_channel = (
+            remap.resolve(EntityType.CHANNEL, source_channel)
+            if source_channel is not None
+            else None
+        )
+        if dest_channel is None:
+            reason = report.record_dependency_unresolved(
+                recorded_under=EntityType.UPCOMING_RECORDING,
+                dependency=EntityType.CHANNEL,
+                label=label,
+                remap=remap,
+                is_dry_run=is_dry_run,
+                source_export_id=source_id,
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] Recording '%s' references a channel that is not "
+                "on the destination (%s); nothing was scheduled for it.",
+                label,
+                reason.value,
+            )
+            continue
+
+        identity = _recording_identity(rec, dest_channel)
+        existing_rec = existing_by_identity.get(identity) if identity else None
+        if existing_rec is not None:
+            _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
+            existing_id = existing_rec.get("id")
+            if source_id is not None and existing_id is not None:
+                remap.add(
+                    EntityType.UPCOMING_RECORDING, int(source_id), int(existing_id)
+                )
+            logger.info(
+                "[DBAS-SETTINGS] Recording '%s' already scheduled (id=%s); skipped.",
+                label,
+                existing_id,
+            )
+            continue
+
+        payload = _build_recording_payload(rec)
+        payload["channel"] = dest_channel
+
+        if is_dry_run:
+            cat.would_create += 1
+            continue
+
+        try:
+            created = await client.create_recording(payload)
+        except Exception as exc:
+            reason = _failure_reason_for(exc)
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=reason,
+                    label=label,
+                    message=_sanitize_failure(
+                        exc, "Upstream rejected the recording create."
+                    ),
+                    source_export_id=source_id,
+                )
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] Failed to schedule recording '%s': %s",
+                label,
+                reason.value,
+            )
+            continue
+
+        dest_id = created.get("id") if isinstance(created, dict) else None
+        cat.created += 1
+        if dest_id is not None:
+            dest_id = int(dest_id)
+            if source_id is not None:
+                remap.add(EntityType.UPCOMING_RECORDING, int(source_id), dest_id)
+            ledger.record_created(EntityType.UPCOMING_RECORDING, dest_id, label)
+        logger.info("[DBAS-SETTINGS] Scheduled recording '%s' (id=%s).", label, dest_id)
 
 
 # ===========================================================================

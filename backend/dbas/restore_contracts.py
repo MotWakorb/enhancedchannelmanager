@@ -86,6 +86,14 @@ class EntityType(str, Enum):
     STREAM = "stream"                      # …-ahygg (synthesized custom-stream orphans)
     USER_AGENT = "user_agent"              # …-0i2vt.13
     DVR_RULE = "dvr_rule"                  # …-0i2vt.13
+    # …-ciabe. The DVR recording INSTANCES that have not started yet. Named for
+    # what it holds rather than by contrast with its sibling: a row leaves this
+    # category the moment its start time passes, and the name says so without
+    # needing DVR_RULE for context. COMPLETED recordings are NOT a second
+    # EntityType — they are never archived at all (they reference a media file on
+    # the source instance's disk), and the exclusion is reported by the backup
+    # producer rather than modelled here.
+    UPCOMING_RECORDING = "upcoming_recording"
     SETTINGS = "settings"                  # …-0i2vt.13 REPORT-ONLY category key for
                                            # core settings + comskip. NOT remappable,
                                            # NOT ledgered (a setting is config, not a
@@ -136,6 +144,19 @@ class SkipReason(str, Enum):
     EXCLUDED_BY_OPERATOR = "excluded_by_operator"           # category opt-out / selection
     CURRENT_ADMIN_PRESERVED = "current_admin_preserved"     # …-l1p4p D11 guard
     UNSUPPORTED_IN_THIS_VERSION = "unsupported_in_this_version"  # e.g. plugins (ADR-012 D10)
+    # The archived entity is pinned to an ABSOLUTE moment that has since passed,
+    # so applying it would schedule work in the past (bead …-ciabe). Today only
+    # the UPCOMING_RECORDING category can reach it: a recording archived last
+    # week whose start time is now behind us.
+    #
+    # NEVER A SHORTFALL, and the reason is not "it is only a skip". The
+    # destination CANNOT hold this row: Dispatcharr answers a past-dated create
+    # ``400 "End time must be in the future."`` (measured on 0.29.0 — see
+    # ``tests/fixtures/dispatcharr_recordings_recorded.json``). A replica that
+    # does not carry a programme which has already aired has lost nothing, and
+    # counting it would put a permanent non-zero beside every restore of an
+    # archive older than its own recordings — bead …-15g1j's crying wolf.
+    SCHEDULE_ALREADY_PAST = "schedule_already_past"
     # A required remap target is missing AND the run was asked to deliver it —
     # so the replica is missing something the operator selected. Its aggregate,
     # :attr:`RestoreReport.entities_blocked_by_dependency`, is a member of

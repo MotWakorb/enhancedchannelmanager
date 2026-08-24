@@ -138,6 +138,18 @@ degrades only itself. Do not widen this set without demonstrating that.
   ``2026-08-04-run2``) saw exactly that: ONE image that could not be written
   rolled back 44 successfully-restored entities. A channel with no artwork is a
   cosmetic defect; a rolled-back restore is a data-loss event.
+* **upcoming_recordings** (…-ciabe): a recording is a pure LEAF. Nothing in the
+  restore holds an FK into one — a channel does not know its recordings, and
+  neither does a DVR rule (the rule's own generator finds them by querying, not
+  by reference). It also runs after every category it depends on, so a refusal
+  here can only ever destroy work that already succeeded. Weigh the two
+  directions: one recording Dispatcharr will not schedule is one programme the
+  operator records by hand, while rolling the run back over it costs them their
+  channels, groups, profiles and settings. The upstream refusal this most
+  plausibly comes from is a stale timestamp (``400 "End time must be in the
+  future."``), which is a property of the ARCHIVE's age rather than of the
+  destination — so a retry cannot fix it and a rollback would punish an operator
+  for restoring an old backup.
 
 Scope: this covers a REPORTED per-row failure. An importer that RAISES stays
 fatal even for these categories. ``UsersCapabilityError`` (the fail-closed
@@ -199,7 +211,7 @@ _LEDGER_DIR = CONFIG_DIR / "dbas"
 # each member had to pass and what it would take to add another). A raising
 # importer is still fatal regardless of category.
 NON_FATAL_FAILURE_CATEGORIES: frozenset[EntityType] = frozenset(
-    {EntityType.USER, EntityType.LOGO}
+    {EntityType.USER, EntityType.LOGO, EntityType.UPCOMING_RECORDING}
 )
 
 
@@ -325,6 +337,7 @@ def _delete_dispatch(client: DispatcharrClient) -> dict[EntityType, Callable[[in
         # silently claiming a full rollback.
         EntityType.USER_AGENT: client.delete_user_agent,
         EntityType.DVR_RULE: client.delete_dvr_rule,
+        EntityType.UPCOMING_RECORDING: client.delete_recording,
         EntityType.LOGO: client.delete_logo,
     }
 
@@ -1326,6 +1339,10 @@ def default_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.USER, s["users"]),
         ImporterStep(EntityType.CHANNEL, s["channels"]),
         ImporterStep(EntityType.DVR_RULE, s["dvr_rules"]),
+        # …-ciabe. AFTER the DVR rules and after CHANNEL, whose namespace a
+        # recording's only FK resolves through. A pure leaf — nothing holds a
+        # reference into it — so it is also in NON_FATAL_FAILURE_CATEGORIES.
+        ImporterStep(EntityType.UPCOMING_RECORDING, s["upcoming_recordings"]),
         ImporterStep(EntityType.LOGO, s["logos"]),
     ]
 
@@ -1361,6 +1378,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         import_comskip,
         import_core_settings,
         import_dvr_rules,
+        import_upcoming_recordings,
         import_user_agents,
     )
     from dbas.importers.users import import_users
@@ -1450,6 +1468,18 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             archive_dvr_rules=_entities(ctx, EntityType.DVR_RULE),
             client=ctx.client,
             selected=_selected(ctx, EntityType.DVR_RULE),
+            report=ctx.report,
+            ledger=ctx.ledger,
+            remap=ctx.remap,
+            is_dry_run=ctx.is_dry_run,
+        )
+        return None
+
+    async def _upcoming_recordings(ctx: ApplyContext) -> list[dict] | None:
+        await import_upcoming_recordings(
+            archive_recordings=_entities(ctx, EntityType.UPCOMING_RECORDING),
+            client=ctx.client,
+            selected=_selected(ctx, EntityType.UPCOMING_RECORDING),
             report=ctx.report,
             ledger=ctx.ledger,
             remap=ctx.remap,
@@ -1717,6 +1747,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
         "stream_profiles": _stream_profiles,
         "user_agents": _user_agents,
         "dvr_rules": _dvr_rules,
+        "upcoming_recordings": _upcoming_recordings,
         "settings": _settings,
         "users": _users,
         "channels": _channels,
@@ -1758,6 +1789,10 @@ def dry_run_importer_steps() -> list[ImporterStep]:
         ImporterStep(EntityType.USER, s["users"]),
         ImporterStep(EntityType.CHANNEL, s["channels"]),
         ImporterStep(EntityType.DVR_RULE, s["dvr_rules"]),
+        # …-ciabe. AFTER the DVR rules and after CHANNEL, whose namespace a
+        # recording's only FK resolves through. A pure leaf — nothing holds a
+        # reference into it — so it is also in NON_FATAL_FAILURE_CATEGORIES.
+        ImporterStep(EntityType.UPCOMING_RECORDING, s["upcoming_recordings"]),
         ImporterStep(EntityType.LOGO, s["logos"]),
     ]
 

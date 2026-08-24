@@ -129,16 +129,24 @@ _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 # ``{id}/``. Live-verified against 0.28.2 and recorded in
 # ``tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json``.
 #
-# Two neighbouring DVR surfaces deliberately NOT bound here:
+# One neighbouring DVR surface is deliberately NOT bound here:
 #   * ``/api/channels/series-rules/`` — series rules are stored INSIDE the
 #     ``dvr_settings`` core-settings row, which the ``core_settings`` backup
 #     category already carries and the settings importer already applies. Going
 #     through this client too would apply the same state twice.
-#   * ``/api/channels/recordings/`` — individual scheduled/completed recording
-#     INSTANCES, not rules; see routers/backup.py's dvr_rules section note.
+#
+# RECORDINGS (enhancedchannelmanager-ciabe): ``/api/channels/recordings/`` IS
+# bound, below. It used to be excluded alongside series rules on the grounds that
+# a recording is per-instance state rather than configuration — which is true of
+# a COMPLETED recording (it names a media file on the source's own disk) and
+# false of an UPCOMING one, whose loss on restore is a silently missed recording.
+# ADR-013's governing principle splits the two: the upcoming half replicates
+# through the ``upcoming_recordings`` backup category, the completed half is a
+# named technical impossibility. See routers/backup.py's category note.
 _USER_AGENTS_PATH = "/api/core/useragents/"
 _CORE_SETTINGS_PATH = "/api/core/settings/"
 _DVR_RECURRING_RULES_PATH = "/api/channels/recurring-rules/"
+_RECORDINGS_PATH = "/api/channels/recordings/"
 # Defensive cap on how many DRF-paginated pages ``get_core_setting_id_map`` will
 # follow via ``next`` before giving up loudly. The recorded live response is a
 # bare (unpaginated) list of ~7 rows (see
@@ -2036,6 +2044,57 @@ class DispatcharrClient:
         response = await self._request(
             "DELETE", f"{_DVR_RECURRING_RULES_PATH}{rule_id}/"
         )
+        response.raise_for_status()
+
+    async def get_recordings(self) -> list:
+        """Get all Dispatcharr recording INSTANCES (scheduled, running, finished).
+
+        The caller decides which of them are portable — this method returns the
+        upstream population unfiltered. ``routers.backup`` keeps only the ones
+        that have not started yet (the ``upcoming_recordings`` category, bead
+        enhancedchannelmanager-ciabe); the restore importer reads the same shape
+        back out of the archive.
+
+        ALWAYS returns a list. Measured against 0.29.0 the live response is a
+        bare JSON array (``tests/fixtures/dispatcharr_recordings_recorded.json``
+        -> ``populated_list_response``), but a destination that paginates this
+        ViewSet would answer a DRF ``{"results": [...]}`` envelope; returning
+        that dict raw would make the importer's collision index empty and
+        duplicate every recording on restore, so both shapes normalize here —
+        the same normalization, for the same reason, as ``get_dvr_rules``.
+        """
+        response = await self._request("GET", _RECORDINGS_PATH)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            results = payload.get("results")
+            return results if isinstance(results, list) else []
+        return payload if isinstance(payload, list) else []
+
+    async def create_recording(self, data: dict) -> dict:
+        """Schedule one Dispatcharr recording.
+
+        FK references (``channel``) MUST already be remapped to destination ids
+        by the caller — this method forwards the payload as given. ``id`` and
+        ``task_id`` are assigned by the destination and must not be sent (both
+        are ``readOnly`` in the recorded 0.29.0 schema).
+
+        The destination REFUSES a recording whose ``end_time`` has already passed
+        (``400 {"non_field_errors": ["End time must be in the future."]}`` —
+        recorded live). Callers filter stale rows out rather than relying on that
+        refusal, so a restore of a week-old archive skips them instead of
+        reporting a wall of upstream failures.
+        """
+        response = await self._request("POST", _RECORDINGS_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_recording(self, recording_id: int) -> None:
+        """Delete a Dispatcharr recording by ID (rollback compensation).
+
+        A 404 means already-gone — treated as successful idempotent compensation.
+        """
+        response = await self._request("DELETE", f"{_RECORDINGS_PATH}{recording_id}/")
         response.raise_for_status()
 
     async def get_core_settings(self) -> dict:
