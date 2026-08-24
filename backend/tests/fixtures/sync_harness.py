@@ -566,11 +566,17 @@ class StatefulDispatcharrFake:
     async def get_core_setting_id_map(self) -> dict:
         """``{key -> row id}``. This is what CoreSettingIdResolver ACTUALLY calls.
 
-        Modelled because omitting it is how the settings step silently degraded:
-        the resolver caught the AttributeError, reported every key unresolvable,
-        and — SETTINGS being a fatal category at the time — rolled the whole
-        cycle back. A fake that answers ``get_core_settings`` but not this is a
-        fake that cannot tell a working resolver from a broken one.
+        Modelled because omitting it is how the settings step degraded into
+        something far louder than a missing fake: the resolver caught the
+        AttributeError, reported every key unresolvable, and — SETTINGS being a
+        FATAL failure category — the compensating rollback deleted every entity
+        the cycle had created. 73 tests across nine files failed on the
+        rolled-back state, almost none of them about settings.
+
+        A fake that answers ``get_core_settings`` but not this one cannot tell a
+        working resolver from a broken one: ``CoreSettingIdResolver`` calls THIS
+        method, and the detail route is keyed by integer pk (a key-string URL
+        404s on a real instance — bead ``…-q6xjl``).
         """
         return {row["key"]: row["id"] for row in self.core_settings}
 
