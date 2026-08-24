@@ -1,17 +1,20 @@
 # Pytest Conventions
 
-When running backend tests, use this exact command (from `backend/`):
+When running backend tests, run the gate script. It takes no arguments and works from any directory:
+
 ```bash
-../.venv/bin/python -m pytest tests/ --tb=short --no-header -p no:warnings 2>&1 | tail -1
+scripts/backend-gate.sh
+echo $?          # 0 = green
 ```
 
-Pin the project venv interpreter, not ambient `python`. Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so a passing tail line looks identical either way. The only tell is the skip count.
+**Do not hand-type a pytest invocation.** This page used to specify one here and instruct "never vary it" — while CI ran a different one. That is precisely how two gate figures ended up in circulation, 72 collected tests apart (bead `enhancedchannelmanager-c9lb9`). The script is now the single invocation, and `backend/tests/unit/test_backend_gate_contract.py` asserts it still matches `.github/workflows/test.yml` flag for flag. Full detail — what it excludes and why, the expected `3 skipped, 2 deselected` shape, the interpreter trap, and the subset-run coverage trap — is in [`docs/testing.md`](testing.md#what-the-backend-gate-runs).
 
-Do NOT use `-q`. It suppresses the summary line (`2147 passed in 50s`) when all tests pass, leaving only dots and `[100%]`. Without `-q`, the summary is always the last line.
+Two things the script handles that a typed command does not:
 
-**Why:** Agents waste extra test runs trying different grep/tail patterns because `-q` mode hides the pass count and warnings bury everything else.
+- **The interpreter.** Ambient `python` commonly resolves an older `cryptography` build and silently self-skips 9 TLS tests instead of failing, so a passing summary line looks identical either way; the only tell is the skip count. The script selects the project interpreter and refuses to fall back.
+- **Reading the result.** Check `$?`. Do not pipe the run through `tail` and read that — `cmd | tail` reports `tail`'s exit status, not pytest's, so a failed suite can read as a pass. If you want the summary line, redirect to a file, check `$?`, then read the file.
 
-**How to apply:** Use the exact command above. Never vary it. One run, one `tail -1`, done.
+Do NOT add `-q`. It suppresses the summary line (`2147 passed in 50s`) when all tests pass, leaving only dots and `[100%]`.
 
 ## A Fake `journal.db` Must Be a Real SQLite File
 
