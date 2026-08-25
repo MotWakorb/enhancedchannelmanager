@@ -452,6 +452,16 @@ class TaskScheduler(ABC):
         """
         pass
 
+    def restore_invocation_config(self, config: dict) -> None:
+        """Restore a config snapshot after an invocation-specific overlay.
+
+        The task engine uses this after every run so schedule and ad-hoc
+        parameters cannot become state on the registry singleton. Subclasses
+        only need to override this when ``update_config(get_config())`` is not
+        round-trippable.
+        """
+        self.update_config(config)
+
     # -------------------------------------------------------------------------
     # Notification Callbacks (set by task_engine for progress notifications)
     # -------------------------------------------------------------------------

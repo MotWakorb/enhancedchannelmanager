@@ -9,6 +9,7 @@ Background service that manages and executes scheduled tasks:
 - Provides error handling and retry logic
 """
 import asyncio
+import copy
 import contextlib
 import logging
 from datetime import datetime
@@ -1037,8 +1038,15 @@ class TaskEngine:
             if triggered_by == "scheduled"
             else None
         )
+        invocation_config = None
 
         try:
+            # Registry instances are long-lived singletons. Treat run parameters
+            # as an overlay on their hydrated persisted/default configuration,
+            # then restore that baseline in ``finally`` before another schedule
+            # or manual run can observe it.
+            invocation_config = copy.deepcopy(instance.get_config())
+
             # Apply schedule parameters to the task instance
             if parameters and hasattr(instance, 'update_config'):
                 try:
@@ -1400,11 +1408,17 @@ class TaskEngine:
             )
 
         finally:
-            instance.set_run_trigger("manual")
-            if _scheduler_source_token is not None:
-                journal.reset_mutation_source(_scheduler_source_token)
-            async with self._lock:
-                self._active_tasks.discard(task_id)
+            try:
+                if invocation_config is not None:
+                    instance.restore_invocation_config(invocation_config)
+            except Exception as e:
+                logger.exception("[%s] Failed to restore invocation config: %s", task_id, e)
+            finally:
+                instance.set_run_trigger("manual")
+                if _scheduler_source_token is not None:
+                    journal.reset_mutation_source(_scheduler_source_token)
+                async with self._lock:
+                    self._active_tasks.discard(task_id)
 
     async def run_task(self, task_id: str, schedule_id: Optional[int] = None, parameters: Optional[dict] = None) -> Optional[TaskResult]:
         """
