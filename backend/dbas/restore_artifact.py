@@ -12,10 +12,9 @@ unpacked into structured records.
 Decode pipeline (validate-before-decode, never the reverse)
 -----------------------------------------------------------
 1. :func:`routers.backup.validate_artifact_manifest` runs FIRST (version gate +
-   per-member SHA-256). It is the caller's responsibility to call it before
-   :func:`decode_artifact_to_plan`; this module re-asserts the manifest is
-   present and parses it but does NOT re-run integrity (the caller already did,
-   on the same open ``ZipFile``). The orchestrator then re-checks the
+   per-member SHA-256) and passes its parsed manifest to
+   :func:`decode_artifact_to_plan`; decode never reads it a second time. The
+   orchestrator then re-checks the
    schema-version a SECOND time in pre-flight (defence in depth — .17 + .18).
 
 2. Per-category YAML (``categories/<section>.yaml``) is parsed and the entity
@@ -62,7 +61,6 @@ logger = logging.getLogger(__name__)
 _CATEGORY_DIR = "categories"
 _LOGO_DIR = "binary/logos"
 _BINARY_METADATA = "binary/metadata.json"
-_MANIFEST_NAME = "manifest.json"
 _LOGO_READ_CHUNK_BYTES = (64 * 1024) - 1  # divisible by 3 for base64 chunking
 
 # Artifact category-file (section) -> the EntityType it restores. The section
@@ -460,27 +458,7 @@ def logo_content_provider(
     return load
 
 
-def _parse_manifest(zf: zipfile.ZipFile) -> dict:
-    """Parse the cleartext ``manifest.json`` header, or return ``{}`` if absent.
-
-    The caller is expected to have already run
-    :func:`routers.backup.validate_artifact_manifest` (which refuses a missing /
-    malformed / newer-version manifest). This is a best-effort re-parse so the
-    plan carries the manifest for pre-flight's second version check.
-    """
-    import json
-
-    if _MANIFEST_NAME not in zf.namelist():
-        return {}
-    try:
-        manifest = json.loads(zf.read(_MANIFEST_NAME))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        logger.warning("[DBAS-RESTORE] Manifest unreadable during decode: %s", exc)
-        return {}
-    return manifest if isinstance(manifest, dict) else {}
-
-
-def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
+def decode_artifact_to_plan(zf: zipfile.ZipFile, *, manifest: dict) -> ImportPlan:
     """Decode a validated DBAS artifact into an :class:`ImportPlan`.
 
     PRECONDITION: the caller has already run
@@ -496,6 +474,7 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     Args:
         zf: An OPEN, already-validated artifact ``ZipFile`` (read mode).
+        manifest: The parsed object returned by ``validate_artifact_manifest``.
 
     Returns:
         The :class:`ImportPlan` — categories default to ``selected=True`` so the
@@ -511,7 +490,6 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     guard_artifact_against_zip_bomb(zf)
 
-    manifest = _parse_manifest(zf)
     categories = _decode_categories(zf)
 
     # lc6zu — the SETTINGS category (core_settings + comskip blobs) decodes

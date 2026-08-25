@@ -186,8 +186,8 @@ async def test_build_then_decode_then_dry_run(tmp_path):
 
     with zipfile.ZipFile(art.zip_path, "r") as zf:
         # .17 validation passes on a freshly built artifact (version + integrity).
-        validate_artifact_manifest(zf)
-        plan = decode_artifact_to_plan(zf)
+        manifest = validate_artifact_manifest(zf)
+        plan = decode_artifact_to_plan(zf, manifest=manifest)
 
     # The decoded plan carries the two M3U accounts the builder gathered...
     assert len(plan.category(EntityType.M3U_ACCOUNT).entities) == 2
@@ -414,8 +414,8 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
 
     art = await _build_real_artifact(tmp_path)
     with zipfile.ZipFile(art.zip_path, "r") as zf:
-        validate_artifact_manifest(zf)
-        plan = decode_artifact_to_plan(zf)
+        manifest = validate_artifact_manifest(zf)
+        plan = decode_artifact_to_plan(zf, manifest=manifest)
     plan = _augment_plan_all_categories(plan)
 
     # --- 1. Dry-run first (the default-ON preview the operator sees). --------
@@ -990,8 +990,8 @@ async def _build_artifact_with_source_logos(
 
 def _decoded_logo_entities(art):
     with zipfile.ZipFile(art.zip_path, "r") as zf:
-        validate_artifact_manifest(zf)
-        plan = decode_artifact_to_plan(zf)
+        manifest = validate_artifact_manifest(zf)
+        plan = decode_artifact_to_plan(zf, manifest=manifest)
     return plan.category(EntityType.LOGO).entities
 
 
@@ -1159,8 +1159,8 @@ async def test_unrestorable_logo_reports_its_affected_channels(tmp_path):
     )
 
     with zipfile.ZipFile(art.zip_path, "r") as zf:
-        validate_artifact_manifest(zf)
-        plan = decode_artifact_to_plan(zf)
+        manifest = validate_artifact_manifest(zf)
+        plan = decode_artifact_to_plan(zf, manifest=manifest)
     logo_entities = plan.category(EntityType.LOGO).entities
     archive_channels = plan.category(EntityType.CHANNEL).entities
     assert [e["id"] for e in logo_entities] == [30]
@@ -1254,8 +1254,8 @@ async def test_channel_ends_up_on_the_dispatcharr_bytes_not_a_stale_local_copy(t
     )
 
     with zipfile.ZipFile(art.zip_path, "r") as zf:
-        validate_artifact_manifest(zf)
-        plan = decode_artifact_to_plan(zf)
+        manifest = validate_artifact_manifest(zf)
+        plan = decode_artifact_to_plan(zf, manifest=manifest)
     logo_entities = plan.category(EntityType.LOGO).entities
     archive_channels = plan.category(EntityType.CHANNEL).entities
 
@@ -1316,8 +1316,8 @@ async def test_channel_ends_up_on_the_dispatcharr_bytes_not_a_stale_local_copy(t
 
 def _decoded_channel_entities(art):
     with zipfile.ZipFile(art.zip_path, "r") as zf:
-        validate_artifact_manifest(zf)
-        plan = decode_artifact_to_plan(zf)
+        manifest = validate_artifact_manifest(zf)
+        plan = decode_artifact_to_plan(zf, manifest=manifest)
     return plan.category(EntityType.CHANNEL).entities
 
 

@@ -21,7 +21,7 @@ import yaml
 
 from dbas.restore_artifact import (
     _is_safe_member,
-    decode_artifact_to_plan,
+    decode_artifact_to_plan as _decode_artifact_to_plan,
 )
 from dbas.restore_contracts import EntityType
 
@@ -99,6 +99,10 @@ def _build_artifact(
 
 def _open(zip_bytes: bytes) -> zipfile.ZipFile:
     return zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
+
+
+def decode_artifact_to_plan(zf: zipfile.ZipFile):
+    return _decode_artifact_to_plan(zf, manifest={"schema_version": 1})
 
 
 class TestCategoryDecode:

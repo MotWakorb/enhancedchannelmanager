@@ -356,8 +356,8 @@ class DbasRestoreTask(TaskScheduler):
         zf = None
         try:
             zf = zipfile.ZipFile(artifact_path, "r")
-            validate_artifact_manifest(zf)   # .17 — raises HTTPException(400) on refusal
-            plan = decode_artifact_to_plan(zf)  # decode metadata from the validated ZIP
+            manifest = validate_artifact_manifest(zf)  # .17 — raises HTTPException(400)
+            plan = decode_artifact_to_plan(zf, manifest=manifest)
         except zipfile.BadZipFile:
             if zf is not None:
                 zf.close()
