@@ -745,6 +745,26 @@ class DbasSyncTask(TaskScheduler):
         return report.outcome.is_degraded_not_failed
 
     @staticmethod
+    def _account_field_convergence_suffix(report, *, is_preview: bool = False) -> str:
+        """Name converged M3U account fields without exposing their values."""
+        parts: list[str] = []
+        for detail in getattr(report, "account_field_drift_details", None) or []:
+            fields = sorted({str(field) for field in (detail.fields or []) if field})
+            if not fields:
+                continue
+            if is_preview:
+                action = "would converge"
+            elif detail.applied:
+                action = "converged"
+            else:
+                action = "could not converge"
+            parts.append(
+                "M3U account '%s' %s field(s): %s"
+                % (detail.name, action, ", ".join(fields))
+            )
+        return ("; " + "; ".join(parts)) if parts else ""
+
+    @staticmethod
     def _summary_message(report, is_dry_run: bool, outcome: str) -> str:
         if is_dry_run:
             total_create = sum(c.would_create for c in report.categories)
@@ -763,7 +783,11 @@ class DbasSyncTask(TaskScheduler):
                     total_create, total_update, total_skip, total_conflict,
                     len(report.categories),
                 )
-            ) + DbasRestoreTask._credential_reentry_suffix(report, is_preview=True)
+            ) + DbasRestoreTask._credential_reentry_suffix(
+                report, is_preview=True
+            ) + DbasSyncTask._account_field_convergence_suffix(
+                report, is_preview=True
+            )
         total_created = sum(c.created for c in report.categories)
         total_updated = sum(c.updated for c in report.categories)
         total_failed = sum(c.failed for c in report.categories)
@@ -802,7 +826,11 @@ class DbasSyncTask(TaskScheduler):
         # This makes the success QUALIFIED; posm1 decides whether it stays one.
         from tasks.dbas_restore import DbasRestoreTask
 
-        return summary + DbasRestoreTask._credential_reentry_suffix(report)
+        return (
+            summary
+            + DbasRestoreTask._credential_reentry_suffix(report)
+            + DbasSyncTask._account_field_convergence_suffix(report)
+        )
 
     def _fail(
         self, started_at: datetime, message: str, *, error: Optional[str] = None
