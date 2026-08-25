@@ -1080,6 +1080,51 @@ class TestLogoByteBudgets:
         assert misses == 2
         assert client.fetch_logo_image.await_count == 1
 
+    @pytest.mark.asyncio
+    async def test_wall_clock_budget_discards_a_result_after_suppressed_cancellation(
+        self, tmp_path, monkeypatch
+    ):
+        """A client that mishandles cancellation still cannot extend the gather."""
+        monkeypatch.setattr(backup_mod, "_LOGO_FETCH_BUDGET_SECONDS", 0.01)
+        monkeypatch.setattr(
+            backup_mod,
+            "_logo_byte_budget",
+            lambda _spool_dir, _committed_bytes: 1024,
+        )
+        late_fetch_finished = asyncio.Event()
+
+        async def _suppress_cancellation(_logo_id):
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                await asyncio.sleep(0.2)
+                late_fetch_finished.set()
+                return PNG_1X1
+
+        client = MagicMock()
+        client.fetch_logo_image = AsyncMock(side_effect=_suppress_cancellation)
+        started = asyncio.get_running_loop().time()
+
+        result = await asyncio.wait_for(
+            backup_mod._gather_dispatcharr_logo_payloads(
+                [{"id": 1, "name": "One", "url": "/data/logos/one.png"}],
+                client=client,
+                spool_dir=tmp_path,
+                taken_filenames=set(),
+            ),
+            timeout=0.1,
+        )
+        elapsed = asyncio.get_running_loop().time() - started
+
+        entries, metadata, mappings, misses = result
+        assert elapsed < 0.1
+        assert entries == []
+        assert metadata == []
+        assert mappings == {}
+        assert misses == 1
+        await asyncio.wait_for(late_fetch_finished.wait(), timeout=0.5)
+        assert list(tmp_path.iterdir()) == []
+
     def test_a_logo_over_the_per_logo_cap_is_not_archived(self, tmp_path):
         """The per-logo cap mirrors the restore-side validator's own cap, so the
         builder never archives a payload the importer would reject."""

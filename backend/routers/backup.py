@@ -2238,6 +2238,27 @@ def _safe_get_client():
         return None
 
 
+def _discard_late_logo_fetch(task: asyncio.Task, logo_id: int) -> None:
+    """Consume a timed-out fetch result without accepting its late bytes."""
+    try:
+        data = task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as e:  # noqa: BLE001 - late best-effort fetch result
+        logger.warning(
+            "[BACKUP] Timed-out logo fetch id=%s later failed with %s.",
+            logo_id,
+            type(e).__name__,
+        )
+        return
+    if data:
+        logger.warning(
+            "[BACKUP] Timed-out logo fetch id=%s completed after its deadline; "
+            "the late image bytes were discarded.",
+            logo_id,
+        )
+
+
 def _sweep_orphaned_logo_spools(dest_dir: Path) -> None:
     """Remove logo spool dirs left behind by a build that never finished.
 
@@ -2539,12 +2560,28 @@ async def _gather_dispatcharr_logo_payloads(
             _LOGO_FETCH_TIMEOUT_SECONDS,
             remaining_fetch_seconds,
         )
+        fetch_task = asyncio.create_task(client.fetch_logo_image(logo_id))
         try:
-            data = await asyncio.wait_for(
-                client.fetch_logo_image(logo_id),
+            done, _pending = await asyncio.wait(
+                {fetch_task},
                 timeout=fetch_timeout,
             )
-        except asyncio.TimeoutError:
+        except asyncio.CancelledError:
+            fetch_task.cancel()
+            fetch_task.add_done_callback(
+                lambda task, fetch_logo_id=logo_id: _discard_late_logo_fetch(
+                    task, fetch_logo_id
+                )
+            )
+            raise
+
+        if not done:
+            fetch_task.cancel()
+            fetch_task.add_done_callback(
+                lambda task, fetch_logo_id=logo_id: _discard_late_logo_fetch(
+                    task, fetch_logo_id
+                )
+            )
             if fetch_timeout >= remaining_fetch_seconds:
                 misses += len(hosted) - index
                 logger.warning(
@@ -2562,6 +2599,11 @@ async def _gather_dispatcharr_logo_payloads(
                 _LOGO_FETCH_TIMEOUT_SECONDS,
             )
             continue
+
+        try:
+            data = fetch_task.result()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:  # noqa: BLE001 - one logo must never fail a backup
             # Only the exception TYPE: an httpx error's text embeds the full URL.
             logger.warning(
