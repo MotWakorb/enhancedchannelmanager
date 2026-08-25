@@ -19,6 +19,7 @@ These tests exercise the builder directly (block-level) rather than through an
 HTTP route, mirroring the unit-test style in test_backup.py while targeting the
 new sealed-artifact seam that Phase-1 .6/.8 and Phase-2 restore will consume.
 """
+import asyncio
 import base64
 import io
 import json
@@ -1039,6 +1040,45 @@ class TestLogoByteBudgets:
         with zipfile.ZipFile(art.zip_path) as zf:
             logo_members = [n for n in zf.namelist() if n.startswith("binary/logos/")]
         assert logo_members == ["binary/logos/one.png"]
+
+    @pytest.mark.asyncio
+    async def test_wall_clock_budget_stops_a_hung_fetch_and_counts_the_rest(
+        self, tmp_path, monkeypatch
+    ):
+        """One unanswered logo request cannot stall the whole backup."""
+        monkeypatch.setattr(backup_mod, "_LOGO_FETCH_BUDGET_SECONDS", 0.01)
+        monkeypatch.setattr(
+            backup_mod,
+            "_logo_byte_budget",
+            lambda _spool_dir, _committed_bytes: 1024,
+        )
+
+        async def _hang(_logo_id):
+            await asyncio.Event().wait()
+
+        client = MagicMock()
+        client.fetch_logo_image = AsyncMock(side_effect=_hang)
+        source_logos = [
+            {"id": 1, "name": "One", "url": "/data/logos/one.png"},
+            {"id": 2, "name": "Two", "url": "/data/logos/two.png"},
+        ]
+
+        result = await asyncio.wait_for(
+            backup_mod._gather_dispatcharr_logo_payloads(
+                source_logos,
+                client=client,
+                spool_dir=tmp_path,
+                taken_filenames=set(),
+            ),
+            timeout=0.5,
+        )
+
+        entries, metadata, mappings, misses = result
+        assert entries == []
+        assert metadata == []
+        assert mappings == {}
+        assert misses == 2
+        assert client.fetch_logo_image.await_count == 1
 
     def test_a_logo_over_the_per_logo_cap_is_not_archived(self, tmp_path):
         """The per-logo cap mirrors the restore-side validator's own cap, so the

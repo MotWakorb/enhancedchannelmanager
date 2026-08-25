@@ -2204,6 +2204,12 @@ _MAX_FETCHED_LOGO_TOTAL_BYTES = 512 * 1024 * 1024  # 512 MiB
 # would be writing a silently unrestorable backup.
 _MAX_FETCHED_LOGO_COUNT = _ARTIFACT_MAX_ENTRIES // 2
 
+# Network bounds for Dispatcharr-hosted logo bytes. A backup may encounter
+# thousands of logos, so the per-request timeout alone is not enough: repeated
+# slow responses could still occupy an unattended scheduled run for hours.
+_LOGO_FETCH_TIMEOUT_SECONDS = 30.0
+_LOGO_FETCH_BUDGET_SECONDS = 300.0
+
 # Spool dirs older than this are orphans from a build that was killed before its
 # cleanup ran (the normal path removes the dir in build_backup_artifact's
 # finally). Nothing else owns them: retention's _BACKUP_ZIP_FILENAME_RE
@@ -2489,6 +2495,7 @@ async def _gather_dispatcharr_logo_payloads(
         )
         return entries, files_meta, url_mappings, len(hosted)
 
+    fetch_deadline: Optional[float] = None
     for index, logo in enumerate(hosted):
         if len(entries) >= _MAX_FETCHED_LOGO_COUNT:
             # Every logo from here on is unarchived, so count them all.
@@ -2515,8 +2522,46 @@ async def _gather_dispatcharr_logo_payloads(
             )
             continue
 
+        now = time.monotonic()
+        if fetch_deadline is None:
+            fetch_deadline = now + _LOGO_FETCH_BUDGET_SECONDS
+        remaining_fetch_seconds = fetch_deadline - now
+        if remaining_fetch_seconds <= 0:
+            misses += len(hosted) - index
+            logger.warning(
+                "[BACKUP] Logo fetch budget (%.0fs) spent; the remaining "
+                "Dispatcharr-hosted logos were archived without their image bytes.",
+                _LOGO_FETCH_BUDGET_SECONDS,
+            )
+            break
+
+        fetch_timeout = min(
+            _LOGO_FETCH_TIMEOUT_SECONDS,
+            remaining_fetch_seconds,
+        )
         try:
-            data = await client.fetch_logo_image(logo_id)
+            data = await asyncio.wait_for(
+                client.fetch_logo_image(logo_id),
+                timeout=fetch_timeout,
+            )
+        except asyncio.TimeoutError:
+            if fetch_timeout >= remaining_fetch_seconds:
+                misses += len(hosted) - index
+                logger.warning(
+                    "[BACKUP] Logo fetch budget (%.0fs) spent while fetching "
+                    "logo id=%s; the remaining Dispatcharr-hosted logos were "
+                    "archived without their image bytes.",
+                    _LOGO_FETCH_BUDGET_SECONDS,
+                    logo_id,
+                )
+                break
+            misses += 1
+            logger.warning(
+                "[BACKUP] Timed out fetching image bytes for logo id=%s after %.0fs.",
+                logo_id,
+                _LOGO_FETCH_TIMEOUT_SECONDS,
+            )
+            continue
         except Exception as e:  # noqa: BLE001 - one logo must never fail a backup
             # Only the exception TYPE: an httpx error's text embeds the full URL.
             logger.warning(
