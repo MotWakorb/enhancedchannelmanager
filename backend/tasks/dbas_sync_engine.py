@@ -639,9 +639,8 @@ _LOGO_FETCH_ID_KEY = "_ecm_logo_fetch_id"
 _LOGO_FETCH_TIMEOUT_SECONDS = 30.0
 
 # Wall-clock budget for ALL logo-byte fetches in ONE cycle. The backup builder
-# bounds its equivalent by file count and byte total but has no wall-clock bound
-# at all (open bead …-sj32h); an unattended, recurring task needs one, because
-# nobody is watching it run long. Spending the budget is not data loss: the
+# applies the same unattended-work bound at its own gather seam. Spending the
+# budget is not data loss: the
 # logos already uploaded MATCH on the next cycle, so each cycle makes progress
 # and the target converges. A count cap would not — it would truncate the same
 # tail every cycle, forever.
@@ -2002,8 +2001,7 @@ class _LogoFetchBudget:
     """Per-cycle wall-clock bound on the Dispatcharr logo-byte fetches.
 
     Sync is a SCHEDULED, unattended task, so "however long the logo set takes"
-    is not an acceptable answer the way it is for an operator-initiated backup
-    (whose own missing wall-clock bound is open bead …-sj32h). One budget is
+    is not an acceptable answer. One budget is
     created per cycle by :func:`_sync_logos_step` and wraps the content
     provider; it starts when the FIRST fetch does, so a cycle whose logos all
     match on B never starts a clock at all.
