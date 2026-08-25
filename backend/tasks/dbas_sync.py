@@ -118,6 +118,10 @@ LEGACY_SYNC_TASK_ID = "dbas_sync"
 SYNC_TASK_ID_PREFIX = "dbas_sync_"
 
 
+class _ScheduleApplyNotConfirmedError(ValueError):
+    error_code = "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
 def sync_task_id_for(target_id: int) -> str:
     """The registered task id for one SyncTarget (``dbas_sync_<id>``)."""
     return "%s%d" % (SYNC_TASK_ID_PREFIX, target_id)
@@ -318,7 +322,7 @@ class DbasSyncTask(TaskScheduler):
     @classmethod
     def validate_schedule_parameters(cls, parameters: Optional[dict]) -> None:
         if not parameters or parameters.get("confirm_apply") is not True:
-            raise ValueError(
+            raise _ScheduleApplyNotConfirmedError(
                 "Cross-instance sync schedules require confirm_apply=true so "
                 "they cannot silently run as previews"
             )

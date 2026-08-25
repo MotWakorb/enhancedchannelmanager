@@ -1047,14 +1047,16 @@ class TaskEngine:
             # or manual run can observe it.
             invocation_config = copy.deepcopy(instance.get_config())
 
+            if triggered_by == "scheduled":
+                validator = getattr(instance, "validate_schedule_parameters", None)
+                if validator:
+                    validator(parameters)
+
             # Apply schedule parameters to the task instance
             if parameters and hasattr(instance, 'update_config'):
-                try:
-                    instance.update_config(parameters)
-                    logger.info("[%s] Applied schedule parameters: %s", task_id,
-                                _param_keys(parameters))
-                except Exception as e:
-                    logger.warning("[%s] Failed to apply parameters: %s", task_id, e)
+                instance.update_config(parameters)
+                logger.info("[%s] Applied schedule parameters: %s", task_id,
+                            _param_keys(parameters))
 
             logger.info("[%s] Starting task execution (triggered_by=%s)", task_id, triggered_by)
 
@@ -1354,6 +1356,7 @@ class TaskEngine:
 
         except Exception as e:
             logger.exception("[%s] Task execution failed: %s", task_id, e)
+            failure_error = getattr(e, "error_code", str(e))
 
             # Determine alert category for granular filtering
             alert_category = "probe_failures" if task_id == "stream_probe" else None
@@ -1393,7 +1396,7 @@ class TaskEngine:
                         execution.completed_at = datetime.utcnow()
                         execution.status = "failed"
                         execution.success = False
-                        execution.error = str(e)
+                        execution.error = failure_error
                         session.commit()
                     session.close()
                 except Exception as db_err:
@@ -1402,7 +1405,7 @@ class TaskEngine:
             return TaskResult(
                 success=False,
                 message=f"Task execution failed: {str(e)}",
-                error=str(e),
+                error=failure_error,
                 started_at=datetime.utcnow(),
                 completed_at=datetime.utcnow(),
             )

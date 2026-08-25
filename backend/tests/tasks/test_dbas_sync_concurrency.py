@@ -1096,6 +1096,113 @@ async def test_due_schedule_without_apply_confirmation_fails_instead_of_previewi
 
 
 @pytest.mark.asyncio
+async def test_parent_apply_confirmation_cannot_authorize_empty_legacy_schedule(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """Only the current schedule row may authorize a destructive apply."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    instance = registry.get_task_instance(task_id)
+    instance.update_config({"confirm_apply": True})
+
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    session.add(TaskSchedule(
+        task_id=task_id,
+        name="empty legacy schedule",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=None,
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),
+    ))
+    session.commit()
+    session.close()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        execution = None
+        for _ in range(200):
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
+                break
+            await asyncio.sleep(0.01)
+
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.error == "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_partially_applied_invalid_schedule_parameters_abort_before_sync(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """A later conversion error must invalidate an earlier confirm_apply mutation."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    session.add(TaskSchedule(
+        task_id=task_id,
+        name="invalid credential version",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=json.dumps({
+            "confirm_apply": True,
+            "cloud_credential_version": "invalid",
+        }),
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),
+    ))
+    session.commit()
+    session.close()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        execution = None
+        for _ in range(200):
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
+                break
+            await asyncio.sleep(0.01)
+
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.success is False
+    assert "invalid literal" in execution.error
+
+
+@pytest.mark.asyncio
 async def test_co_due_sync_schedules_keep_independent_confirmation_lifecycles(
     _wire_db, _clean_registry, _fresh_semaphore
 ):
