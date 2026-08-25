@@ -128,6 +128,51 @@ class TestDryRunDefault:
         assert apply.await_args.kwargs["confirm_apply"] is True
         assert result.details["is_dry_run"] is False
 
+    async def test_logo_payload_is_loaded_lazily_while_archive_is_open(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        loaded = []
+        captured = []
+
+        async def dry_run(*, plan, logo_content_provider, **_kwargs):
+            record = plan.category(EntityType.LOGO).entities[0]
+            assert "content_b64" not in record
+            loaded.append(base64.b64decode(await logo_content_provider(record)))
+            captured.append((logo_content_provider, record))
+            return _dry_run_report()
+
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(side_effect=dry_run),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is True
+        assert loaded == [_PNG_BYTES]
+        with pytest.raises(ValueError, match="already closed"):
+            await captured[0][0](captured[0][1])
+
+    async def test_archive_closes_when_orchestration_raises(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        captured = []
+
+        async def failing_dry_run(*, plan, logo_content_provider, **_kwargs):
+            captured.append(
+                (logo_content_provider, plan.category(EntityType.LOGO).entities[0])
+            )
+            raise RuntimeError("boom")
+
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(side_effect=failing_dry_run),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is False
+        with pytest.raises(ValueError, match="already closed"):
+            await captured[0][0](captured[0][1])
+
     async def test_apply_states_the_archive_restores_full_ladder_policy(self, tmp_path):
         """The archive restore STATES ``allow_fuzzy_stream_match=True``.
 

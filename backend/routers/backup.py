@@ -1655,6 +1655,7 @@ _ARTIFACT_MAX_ENTRIES = 10_000
 _ARTIFACT_MAX_MEMBER_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB per member
 _ARTIFACT_MAX_TOTAL_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB cumulative
 _ARTIFACT_MAX_ENTRY_RATIO = 100  # max decompressed:compressed per entry
+_ARTIFACT_HASH_CHUNK_BYTES = 1024 * 1024
 # A small stored entry (e.g. a 12-byte manifest) has a degenerate ratio; only
 # entries whose compressed size exceeds this floor are ratio-checked, so a tiny
 # stored file is not falsely flagged. The cumulative + per-entry-size caps still
@@ -3104,6 +3105,15 @@ def guard_artifact_against_zip_bomb(
     for info in infos:
         uncompressed = info.file_size
         compressed = info.compress_size
+        if (
+            info.filename.startswith(ARTIFACT_LOGO_DIR + "/")
+            and uncompressed > MAX_LOGO_BYTES
+        ):
+            logger.warning(
+                "[BACKUP] Refusing restore: logo member %s declared size exceeds %d bytes",
+                info.filename, MAX_LOGO_BYTES,
+            )
+            raise HTTPException(status_code=400, detail="Backup archive rejected")
         if uncompressed > _ARTIFACT_MAX_MEMBER_UNCOMPRESSED:
             logger.warning(
                 "[BACKUP] Refusing restore: member %s declared size exceeds %d bytes",
@@ -3169,7 +3179,11 @@ def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> No
         if path not in names:
             logger.warning("[BACKUP] Refusing restore: manifest member %s absent from artifact", path)
             raise HTTPException(status_code=400, detail="Backup integrity check failed")
-        actual = hashlib.sha256(zf.read(path)).hexdigest()
+        digest = hashlib.sha256()
+        with zf.open(path, "r") as member:
+            while chunk := member.read(_ARTIFACT_HASH_CHUNK_BYTES):
+                digest.update(chunk)
+        actual = digest.hexdigest()
         if actual != expected:
             logger.warning(
                 "[BACKUP] Refusing restore: integrity mismatch on member %s "

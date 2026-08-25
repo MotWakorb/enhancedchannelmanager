@@ -140,6 +140,19 @@ class TestGuardAgainstZipBomb:
         finally:
             zf.close()
 
+    def test_oversized_logo_refused_from_metadata(self):
+        zf = _open_with_declared_sizes([
+            ("manifest.json", 200, 120),
+            ("binary/logos/oversized.png", backup_mod.MAX_LOGO_BYTES + 1, 49_000_000),
+        ])
+        try:
+            with pytest.raises(HTTPException) as ei:
+                guard_artifact_against_zip_bomb(zf)
+            assert ei.value.status_code == 400
+            assert ei.value.detail == "Backup archive rejected"
+        finally:
+            zf.close()
+
 
 class TestGuardWiredIntoReadSites:
     """The guard must run at BOTH read sites before any zf.read()."""
@@ -197,3 +210,36 @@ class TestGuardWiredIntoReadSites:
             assert "bomb.bin" not in read_targets
         finally:
             zf.close()
+
+
+class TestManifestIntegrityMemoryShape:
+    def test_integrity_hashes_logo_without_reading_it_whole(self):
+        import hashlib
+        import json
+
+        from routers.backup import validate_artifact_manifest
+
+        logo = b"\x89PNG\r\n\x1a\n" + (b"x" * 128_000)
+        manifest = {
+            "schema_version": 1,
+            "files": [{
+                "path": "binary/logos/a.png",
+                "sha256": hashlib.sha256(logo).hexdigest(),
+            }],
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as out:
+            out.writestr("manifest.json", json.dumps(manifest))
+            out.writestr("binary/logos/a.png", logo)
+        buf.seek(0)
+
+        with zipfile.ZipFile(buf, "r") as zf:
+            original_read = zf.read
+
+            def tracked_read(member, *args, **kwargs):
+                name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+                assert name != "binary/logos/a.png"
+                return original_read(member, *args, **kwargs)
+
+            zf.read = tracked_read
+            validate_artifact_manifest(zf)

@@ -20,7 +20,7 @@ import pytest
 
 from routers import backup as backup_mod
 from routers.backup import build_backup_artifact, validate_artifact_manifest
-from dbas.restore_artifact import decode_artifact_to_plan
+from dbas.restore_artifact import decode_artifact_to_plan, logo_content_provider
 from dbas.restore_contracts import EntityType
 from dbas.restore_orchestrator import run_dry_run
 
@@ -226,7 +226,12 @@ async def test_build_then_decode_then_dry_run(tmp_path):
     assert "sekrit-core-value" not in str(core_values)
     assert settings_cat.entities[1]["values"] == {"comskip_ini": "[main]"}
 
-    report = await run_dry_run(plan=plan, client=_restore_client())
+    with zipfile.ZipFile(art.zip_path, "r") as logo_zf:
+        report = await run_dry_run(
+            plan=plan,
+            client=_restore_client(),
+            logo_content_provider=logo_content_provider(logo_zf),
+        )
 
     # Dry-run produced a coherent plan (no mutation, no realized outcome).
     assert report.is_dry_run is True
@@ -414,27 +419,34 @@ async def test_real_apply_roundtrip_mutates_every_category_with_dry_run_parity(t
     plan = _augment_plan_all_categories(plan)
 
     # --- 1. Dry-run first (the default-ON preview the operator sees). --------
-    dry_report = await run_dry_run(plan=plan, client=_restore_client())
-    assert dry_report.is_dry_run is True
+    with zipfile.ZipFile(art.zip_path, "r") as logo_zf:
+        provider = logo_content_provider(logo_zf)
+        dry_report = await run_dry_run(
+            plan=plan,
+            client=_restore_client(),
+            logo_content_provider=provider,
+        )
+        assert dry_report.is_dry_run is True
 
-    # Every registry category has non-zero planned work — nothing previews empty.
-    for entity_type in _ALL_REGISTRY_CATEGORIES:
-        dry_cat = dry_report.category(entity_type)
-        planned = dry_cat.would_create + dry_cat.would_update + dry_cat.would_skip
-        assert planned > 0, "dry-run planned nothing for %s" % entity_type.value
+        # Every registry category has non-zero planned work — nothing previews empty.
+        for entity_type in _ALL_REGISTRY_CATEGORIES:
+            dry_cat = dry_report.category(entity_type)
+            planned = dry_cat.would_create + dry_cat.would_update + dry_cat.would_skip
+            assert planned > 0, "dry-run planned nothing for %s" % entity_type.value
 
-    # --- 2. Real apply (confirm_apply=True) through the FULL apply registry. --
-    client = _apply_client()
-    apply_report = await run_restore(
-        plan=plan,
-        client=client,
-        steps=default_importer_steps(),
-        report=RestoreReport(is_dry_run=False),
-        ledger=RollbackLedger(restore_id=new_restore_id()),
-        remap=IdRemapTable(),
-        confirm_apply=True,
-        ledger_dir=tmp_path,
-    )
+        # --- 2. Real apply (confirm_apply=True) through the FULL apply registry. --
+        client = _apply_client()
+        apply_report = await run_restore(
+            plan=plan,
+            client=client,
+            steps=default_importer_steps(),
+            report=RestoreReport(is_dry_run=False),
+            ledger=RollbackLedger(restore_id=new_restore_id()),
+            remap=IdRemapTable(),
+            confirm_apply=True,
+            ledger_dir=tmp_path,
+            logo_content_provider=provider,
+        )
     assert apply_report.is_dry_run is False
     assert apply_report.outcome == RestoreOutcome.SUCCESS
 
@@ -1011,18 +1023,20 @@ async def test_uploaded_logo_round_trips_from_archived_bytes(tmp_path):
     assert record["id"] == 13
     assert record["name"] == "Drill Uploaded Logo"
     assert record["filename"] == "drill-logo.png"
-    assert base64.b64decode(record["content_b64"]) == png
-
     client = AsyncMock()
     client.get_all_logos_paginated = AsyncMock(return_value=[])
     client.upload_logo_file = AsyncMock(return_value={"id": 995})
     report = RestoreReport(is_dry_run=False)
     remap = IdRemapTable()
 
-    await import_logos(
-        archive_logos=entities, client=client, selected=True, report=report,
-        ledger=RollbackLedger(restore_id="r"), remap=remap,
-    )
+    with zipfile.ZipFile(art.zip_path, "r") as zf:
+        provider = logo_content_provider(zf)
+        assert base64.b64decode(await provider(record)) == png
+        await import_logos(
+            archive_logos=entities, client=client, selected=True, report=report,
+            ledger=RollbackLedger(restore_id="r"), remap=remap,
+            content_provider=provider,
+        )
 
     client.create_logo.assert_not_awaited()
     client.upload_logo_file.assert_awaited_once()
@@ -1098,18 +1112,22 @@ async def test_preview_of_a_real_artifact_predicts_the_apply_exactly(tmp_path):
         client.create_logo = AsyncMock(return_value={"id": 996})
         return client
 
-    dry_report = RestoreReport(is_dry_run=True)
-    await import_logos(
-        archive_logos=entities, client=_fresh_client(), selected=True,
-        report=dry_report, ledger=RollbackLedger(restore_id="d"),
-        remap=IdRemapTable(), is_dry_run=True,
-    )
-    apply_report = RestoreReport(is_dry_run=False)
-    await import_logos(
-        archive_logos=entities, client=_fresh_client(), selected=True,
-        report=apply_report, ledger=RollbackLedger(restore_id="a"),
-        remap=IdRemapTable(), is_dry_run=False,
-    )
+    with zipfile.ZipFile(art.zip_path, "r") as zf:
+        provider = logo_content_provider(zf)
+        dry_report = RestoreReport(is_dry_run=True)
+        await import_logos(
+            archive_logos=entities, client=_fresh_client(), selected=True,
+            report=dry_report, ledger=RollbackLedger(restore_id="d"),
+            remap=IdRemapTable(), is_dry_run=True,
+            content_provider=provider,
+        )
+        apply_report = RestoreReport(is_dry_run=False)
+        await import_logos(
+            archive_logos=entities, client=_fresh_client(), selected=True,
+            report=apply_report, ledger=RollbackLedger(restore_id="a"),
+            remap=IdRemapTable(), is_dry_run=False,
+            content_provider=provider,
+        )
 
     dry = dry_report.category(EntityType.LOGO)
     applied = apply_report.category(EntityType.LOGO)
@@ -1245,8 +1263,6 @@ async def test_channel_ends_up_on_the_dispatcharr_bytes_not_a_stale_local_copy(t
     # authoritative copy. Two would be unresolvable on the restore side.
     claiming_44 = [e for e in logo_entities if e.get("id") == 44]
     assert len(claiming_44) == 1
-    assert base64.b64decode(claiming_44[0]["content_b64"]) == png
-
     client = AsyncMock()
     client.get_all_logos_paginated = AsyncMock(return_value=[])
     client.upload_logo_file = AsyncMock(return_value={"id": 995})
@@ -1254,11 +1270,15 @@ async def test_channel_ends_up_on_the_dispatcharr_bytes_not_a_stale_local_copy(t
     remap.add(EntityType.CHANNEL, 5, 505)
     report = RestoreReport(is_dry_run=False)
 
-    await import_logos(
-        archive_logos=logo_entities, archive_channels=archive_channels,
-        client=client, selected=True, report=report,
-        ledger=RollbackLedger(restore_id="r"), remap=remap,
-    )
+    with zipfile.ZipFile(art.zip_path, "r") as zf:
+        provider = logo_content_provider(zf)
+        assert base64.b64decode(await provider(claiming_44[0])) == png
+        await import_logos(
+            archive_logos=logo_entities, archive_channels=archive_channels,
+            client=client, selected=True, report=report,
+            ledger=RollbackLedger(restore_id="r"), remap=remap,
+            content_provider=provider,
+        )
     await reattach_channel_logos(
         # Predates the mode: no population information, so nothing
         # is preserved and the pass behaves as it always did.

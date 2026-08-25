@@ -769,8 +769,9 @@ async def import_logos(
             declared-size cap) run BEFORE hydration so a logo that is already
             rejectable is never read. A provider failure (``None`` / raise) is
             a per-logo ``VALIDATION_ERROR`` with a path-free message, never a
-            crash. ``None`` (the default, the archive-restore path) leaves
-            behaviour byte-for-byte unchanged.
+            crash. Archive restore supplies this loader from its still-open,
+            already-validated ZIP; legacy in-memory records still work with the
+            default ``None`` because they carry ``content_b64`` directly.
 
     Returns:
         A :class:`LogoImportResult` with safe aggregate counters.

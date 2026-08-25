@@ -286,6 +286,9 @@ class ApplyContext:
     # ``channel_group_id`` from it; nothing else in the run can supply that
     # without a second full channel list and a race against this run's creates.
     matched_existing_channels: dict[int, dict] = field(default_factory=dict)
+    # Optional lazy loader for metadata-only archived logo records. Archive
+    # restore wires this to its still-open validated ZIP; sync uses its own step.
+    logo_content_provider: Callable[[dict], Awaitable[str | None]] | None = None
 
     def flush_ledger(self) -> None:
         """Durably persist the shared ledger (per-create flush; no-op on dry-run).
@@ -758,6 +761,7 @@ async def run_restore(
     channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
     allow_fuzzy_stream_match: bool = True,
     non_fatal_categories: frozenset[EntityType] | None = None,
+    logo_content_provider: Callable[[dict], Awaitable[str | None]] | None = None,
 ) -> RestoreReport:
     # ``non_fatal_categories`` (bead …-10wnq): override
     # :data:`NON_FATAL_FAILURE_CATEGORIES` for THIS run. ``None`` keeps the
@@ -925,6 +929,7 @@ async def run_restore(
         is_dry_run=report.is_dry_run,
         persist_ledger=per_create_persist,
         channel_reattach_mode=channel_reattach_mode,
+        logo_content_provider=logo_content_provider,
     )
 
     # --- 2. Ordered apply (the hard Phase-2 sequence). ---
@@ -1753,6 +1758,7 @@ def _importer_step_builders() -> dict[str, ImporterCallable]:
             # with destination ids resolved through the CHANNEL remap the
             # channels step populated earlier in this same run.
             archive_channels=_entities(ctx, EntityType.CHANNEL),
+            content_provider=ctx.logo_content_provider,
         )
         # Put each restored channel's logo BACK on it (bead …-dfkbn item 1).
         # ``logo_id`` is dropped from the channel create payload (source id), and
@@ -1867,6 +1873,7 @@ async def run_dry_run(
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
     channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE,
+    logo_content_provider: Callable[[dict], Awaitable[str | None]] | None = None,
 ) -> RestoreReport:
     """Produce the counts-only restore PLAN for an archive — never mutates.
 
@@ -1915,4 +1922,5 @@ async def run_dry_run(
         ledger_dir=ledger_dir,
         max_entities_per_category=max_entities_per_category,
         channel_reattach_mode=channel_reattach_mode,
+        logo_content_provider=logo_content_provider,
     )
