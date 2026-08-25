@@ -313,7 +313,11 @@ async def test_execute_calls_run_sync_with_target_and_confirm_apply(_wire_db):
 
     with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync) as mock_run:
         task = DbasSyncTask()
-        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        task.update_config({
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        })
         result = await task.execute()
 
     assert mock_run.await_count == 1
@@ -344,7 +348,11 @@ async def test_scheduled_execute_applies_only_with_explicit_confirmation(_wire_d
     with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
         task = DbasSyncTask()
         task.set_run_trigger("scheduled")
-        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        task.update_config({
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        })
         result = await task.execute()
 
     assert captured["confirm_apply"] is True
@@ -375,6 +383,28 @@ async def test_scheduled_execute_refuses_missing_apply_confirmation(_wire_db):
 
 
 @pytest.mark.asyncio
+async def test_scheduled_execute_refuses_missing_credential_version(_wire_db):
+    """Legacy schedules must be reauthorized before destructive execution."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.success is False
+    assert result.error == "SCHEDULE_CREDENTIAL_VERSION_MISSING"
+
+
+@pytest.mark.asyncio
 async def test_confirmed_scheduled_run_resets_before_direct_manual_run(_wire_db):
     """The same bound singleton must return to manual-preview state after apply."""
     from tasks import dbas_sync
@@ -393,7 +423,7 @@ async def test_confirmed_scheduled_run_resets_before_direct_manual_run(_wire_db)
 
     with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
         task.set_run_trigger("scheduled")
-        task.update_config({"confirm_apply": True})
+        task.update_config({"confirm_apply": True, "cloud_credential_version": 1})
         scheduled_result = await task.execute()
         task.set_run_trigger("manual")
         manual_result = await task.execute()

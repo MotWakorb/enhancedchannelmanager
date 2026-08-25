@@ -253,6 +253,7 @@ class TestPrivilegedTaskScheduleGate:
     async def test_auth_disabled_privileged_schedule_write_is_allowed(
         self, async_client, test_session
     ):
+        from export_models import SyncTarget
         from models import ScheduledTask
         from tasks.dbas_sync import make_sync_task_class
 
@@ -262,6 +263,15 @@ class TestPrivilegedTaskScheduleGate:
             description="Sync",
             enabled=True,
             schedule_type="manual",
+        ))
+        test_session.add(SyncTarget(
+            id=7,
+            name="Replica",
+            base_url="https://replica.example.com",
+            credentials="{}",
+            enabled=True,
+            credential_version=3,
+            insecure=False,
         ))
         test_session.commit()
         registry = MagicMock()
@@ -278,3 +288,4 @@ class TestPrivilegedTaskScheduleGate:
             )
 
         assert response.status_code == 200
+        assert response.json()["parameters"]["cloud_credential_version"] == 3

@@ -1047,6 +1047,10 @@ class TaskEngine:
             # or manual run can observe it.
             invocation_config = copy.deepcopy(instance.get_config())
 
+            prepare_invocation = getattr(instance, "prepare_invocation", None)
+            if prepare_invocation:
+                prepare_invocation(triggered_by)
+
             if triggered_by == "scheduled":
                 validator = getattr(instance, "validate_schedule_parameters", None)
                 if validator:

@@ -16,6 +16,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from models import ScheduledTask, TaskSchedule
+from export_models import SyncTarget
 
 
 def _create_scheduled_task(session, task_id="stream_probe", **overrides):
@@ -49,6 +50,21 @@ def _create_task_schedule(session, task_id="stream_probe", **overrides):
     session.add(record)
     session.commit()
     session.refresh(record)
+    return record
+
+
+def _create_sync_target(session, target_id=7, credential_version=1):
+    record = SyncTarget(
+        id=target_id,
+        name="Living Room B",
+        base_url="https://living-room.example.com",
+        credentials="{}",
+        enabled=True,
+        credential_version=credential_version,
+        insecure=False,
+    )
+    session.add(record)
+    session.commit()
     return record
 
 
@@ -626,6 +642,7 @@ class TestCreateTaskSchedule:
         from tasks.dbas_sync import make_sync_task_class
 
         _create_scheduled_task(test_session, task_id="dbas_sync_7")
+        _create_sync_target(test_session, credential_version=4)
         registry = MagicMock()
         registry.get_task_class.return_value = make_sync_task_class(7, "Living Room B")
 
@@ -640,7 +657,37 @@ class TestCreateTaskSchedule:
             )
 
         assert response.status_code == 200
-        assert response.json()["parameters"] == {"confirm_apply": True}
+        assert response.json()["parameters"] == {
+            "confirm_apply": True,
+            "cloud_credential_version": 4,
+        }
+
+    @pytest.mark.asyncio
+    async def test_sync_schedule_replaces_client_forged_credential_version(
+        self, async_client, test_session
+    ):
+        from tasks.dbas_sync import make_sync_task_class
+
+        _create_scheduled_task(test_session, task_id="dbas_sync_7")
+        _create_sync_target(test_session, credential_version=6)
+        registry = MagicMock()
+        registry.get_task_class.return_value = make_sync_task_class(7, "Living Room B")
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.post(
+                "/api/tasks/dbas_sync_7/schedules",
+                json={
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {
+                        "confirm_apply": True,
+                        "cloud_credential_version": 999,
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"]["cloud_credential_version"] == 6
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("lookup_result", [None, RuntimeError("registry unavailable")])
@@ -722,6 +769,36 @@ class TestUpdateTaskSchedule:
 
         assert response.status_code == 422
         assert "confirm_apply=true" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_sync_schedule_reauthorization_refreshes_credential_version(
+        self, async_client, test_session
+    ):
+        from tasks.dbas_sync import make_sync_task_class
+
+        _create_scheduled_task(test_session, task_id="dbas_sync_7")
+        _create_sync_target(test_session, credential_version=8)
+        schedule = _create_task_schedule(
+            test_session,
+            task_id="dbas_sync_7",
+            parameters='{"confirm_apply": true, "cloud_credential_version": 2}',
+        )
+        registry = MagicMock()
+        registry.get_task_class.return_value = make_sync_task_class(7, "Living Room B")
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.patch(
+                f"/api/tasks/dbas_sync_7/schedules/{schedule.id}",
+                json={
+                    "parameters": {
+                        "confirm_apply": True,
+                        "cloud_credential_version": 2,
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"]["cloud_credential_version"] == 8
 
 
 class TestDeleteTaskSchedule:

@@ -783,6 +783,36 @@ def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> N
             raise HTTPException(status_code=422, detail=str(e)) from e
 
 
+def _bind_sync_schedule_credential_version(
+    session, task_id: str, parameters: dict
+) -> dict:
+    """Bind confirmed sync apply to the target's current server-side version."""
+    if not task_id.startswith(PRIVILEGED_TASK_ID_PREFIXES):
+        return parameters
+
+    from export_models import SyncTarget
+    from task_registry import get_registry
+
+    task_class = get_registry().get_task_class(task_id)
+    target_id = getattr(task_class, "bound_sync_target_id", None)
+    if target_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot authorize sync schedule: task has no bound sync target",
+        )
+
+    target = session.query(SyncTarget).filter(SyncTarget.id == target_id).first()
+    if target is None or target.credential_version is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot authorize sync schedule: sync target is unavailable",
+        )
+
+    bound = dict(parameters)
+    bound["cloud_credential_version"] = int(target.credential_version)
+    return bound
+
+
 @router.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
     """Get the parameter schema for a task type.
@@ -1000,6 +1030,9 @@ async def create_task_schedule(
             # Set task-specific parameters if provided (strip internal metadata keys)
             if data.parameters:
                 clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                clean_params = _bind_sync_schedule_credential_version(
+                    session, task_id, clean_params
+                )
                 schedule.set_parameters(clean_params)
 
             # Calculate next run time
@@ -1114,6 +1147,9 @@ async def update_task_schedule(
                 schedule.day_of_month = data.day_of_month
             if data.parameters is not None:
                 clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                clean_params = _bind_sync_schedule_credential_version(
+                    session, task_id, clean_params
+                )
                 schedule.set_parameters(clean_params)
 
             # Recalculate next run time

@@ -352,6 +352,11 @@ class DbasSyncTask(TaskScheduler):
             "cloud_credential_version": self.cloud_credential_version,
         }
 
+    def prepare_invocation(self, triggered_by: str) -> None:
+        """Disarm inherited singleton state before this run's explicit overlay."""
+        self.confirm_apply = False
+        self.cloud_credential_version = None
+
     def update_config(self, config: dict) -> None:
         if "sync_target_id" in config:
             val = config["sync_target_id"]
@@ -392,6 +397,17 @@ class DbasSyncTask(TaskScheduler):
                         "Scheduled sync refused: confirm_apply=true is required. "
                         "Edit this schedule and explicitly enable apply.",
                         error="SCHEDULE_APPLY_NOT_CONFIRMED",
+                    )
+                if (
+                    self._run_trigger == "scheduled"
+                    and self.cloud_credential_version is None
+                ):
+                    return self._fail(
+                        datetime.now(timezone.utc),
+                        "Scheduled sync refused: no server-captured credential "
+                        "version is present. Edit and save this schedule to "
+                        "reauthorize apply.",
+                        error="SCHEDULE_CREDENTIAL_VERSION_MISSING",
                     )
                 if self._bound_target_conflict is not None:
                     return self._fail(

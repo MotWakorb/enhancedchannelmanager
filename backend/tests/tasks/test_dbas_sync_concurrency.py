@@ -722,16 +722,10 @@ def test_migration_leaves_parent_off_when_child_was_disabled(_wire_db, _clean_re
 
 
 @pytest.mark.asyncio
-async def test_migrated_schedule_fires_on_first_due_tick(
+async def test_migrated_schedule_fails_visibly_until_reauthorized(
     _wire_db, _clean_registry, _fresh_semaphore
 ):
-    """END-TO-END through the scheduler, not just registration state: seed the
-    legacy working schedule with a DUE next_run_at, run the real startup
-    sequence (register_sync_target_tasks -> sync_from_database), then let the
-    engine's due-task scan run. The migrated schedule must actually FIRE.
-
-    This is the regression the review demanded: asserting on row/registry state
-    alone passed while the run silently never happened (parent gate off)."""
+    """Migration cannot invent a server-bound destructive authorization."""
     from task_engine import TaskEngine
 
     session = _wire_db()
@@ -748,28 +742,24 @@ async def test_migrated_schedule_fires_on_first_due_tick(
     registry = get_registry()
     registry.sync_from_database()
 
-    fired = asyncio.Event()
-    seen = {}
-
-    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
-        seen["target_id"] = sync_target.id
-        seen["confirm_apply"] = confirm_apply
-        fired.set()
-        return _success_report()
-
     engine = TaskEngine()
-    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
         await engine._check_and_run_due_tasks()
-        await asyncio.wait_for(fired.wait(), timeout=5)
-        # Let the spawned run finish before the patch is torn down.
+        execution = None
         for _ in range(200):
-            if not engine._active_tasks:
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == dbas_sync.sync_task_id_for(target_id),
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
                 break
             await asyncio.sleep(0.01)
 
-    assert seen["target_id"] == target_id
-    # The migrated schedule's own parameters still drive the run.
-    assert seen["confirm_apply"] is True
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.error == "SCHEDULE_CREDENTIAL_VERSION_MISSING"
 
 
 # ---------------------------------------------------------------------------
@@ -1015,7 +1005,10 @@ def _seed_per_target_schedule(session, task_id, *, enabled=True, next_run_at=Non
     session.add(TaskSchedule(
         task_id=task_id, name="hourly", enabled=enabled,
         schedule_type="interval", interval_seconds=3600,
-        parameters=json.dumps(parameters or {"confirm_apply": True}),
+        parameters=json.dumps(parameters or {
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        }),
         next_run_at=next_run_at,
     ))
     session.commit()
@@ -1042,6 +1035,22 @@ async def _tick_and_wait(engine, fired, *, timeout=5) -> bool:
                 break
             await asyncio.sleep(0.01)
     return True
+
+
+async def _wait_for_execution_count(session_factory, task_id, error, count):
+    for _ in range(200):
+        session = session_factory()
+        actual = session.query(TaskExecution).filter(
+            TaskExecution.task_id == task_id,
+            TaskExecution.error == error,
+        ).count()
+        session.close()
+        if actual == count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(
+        f"expected {count} {error} executions for {task_id}, found {actual}"
+    )
 
 
 @pytest.mark.asyncio
@@ -1149,6 +1158,72 @@ async def test_parent_apply_confirmation_cannot_authorize_empty_legacy_schedule(
 
 
 @pytest.mark.asyncio
+async def test_parent_apply_confirmation_cannot_authorize_parameterless_manual_run(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """A generic manual Run Now must preview despite inherited singleton config."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    instance = registry.get_task_instance(task_id)
+    instance.update_config({"confirm_apply": True})
+
+    confirmations = []
+
+    async def _fake_run_sync(_target, *, confirm_apply=False, **_kwargs):
+        confirmations.append(confirm_apply)
+        report = RestoreReport(is_dry_run=not confirm_apply)
+        if confirm_apply:
+            report.outcome = RestoreOutcome.SUCCESS
+        return report
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        result = await engine.run_task(task_id)
+
+    assert result.success is True
+    assert result.details["is_dry_run"] is True
+    assert confirmations == [False]
+
+
+@pytest.mark.asyncio
+async def test_explicit_manual_apply_confirmation_still_authorizes_current_run(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """The dedicated interactive Apply path remains an explicit one-shot apply."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    confirmations = []
+
+    async def _fake_run_sync(_target, *, confirm_apply=False, **_kwargs):
+        confirmations.append(confirm_apply)
+        return _success_report()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        result = await engine.run_task(
+            task_id, parameters={"confirm_apply": True}
+        )
+
+    assert result.success is True
+    assert result.details["is_dry_run"] is False
+    assert confirmations == [True]
+
+
+@pytest.mark.asyncio
 async def test_partially_applied_invalid_schedule_parameters_abort_before_sync(
     _wire_db, _clean_registry, _fresh_semaphore
 ):
@@ -1227,7 +1302,10 @@ async def test_co_due_sync_schedules_keep_independent_confirmation_lifecycles(
         enabled=True,
         schedule_type="interval",
         interval_seconds=3600,
-        parameters=json.dumps({"confirm_apply": True}),
+        parameters=json.dumps({
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        }),
         next_run_at=due_at,
     )
     legacy = TaskSchedule(
@@ -1379,13 +1457,10 @@ async def test_disabled_parent_stays_disabled_across_restart(
 
 
 @pytest.mark.asyncio
-async def test_migrated_schedule_still_fires_on_the_second_startup(
+async def test_migrated_schedule_stays_enabled_but_unauthorized_after_restart(
     _wire_db, _clean_registry, _fresh_semaphore
 ):
-    """The upgrade path end to end: legacy migration on startup #1 (fires), then
-    a plain restart on startup #2 with NO legacy rows left. The second boot is
-    where the freshly materialized default-disabled instance used to overwrite
-    the parent the migration had just enabled."""
+    """Restart preserves the parent gate without authorizing a legacy apply."""
     from task_engine import TaskEngine
 
     registry = _clean_registry
@@ -1399,20 +1474,15 @@ async def test_migrated_schedule_still_fires_on_the_second_startup(
     session.close()
     task_id = dbas_sync.sync_task_id_for(target_id)
 
-    fired = asyncio.Event()
-    seen = {}
-
-    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
-        seen["target_id"] = sync_target.id
-        seen["confirm_apply"] = confirm_apply
-        fired.set()
-        return _success_report()
-
-    # --- startup #1: migration + first due run ----------------------------
+    # --- startup #1: migration + refused due run --------------------------
     _startup(registry)
     engine = TaskEngine()
-    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
-        assert await _tick_and_wait(engine, fired), "migrated schedule never fired"
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        await _wait_for_execution_count(
+            _wire_db, task_id, "SCHEDULE_CREDENTIAL_VERSION_MISSING", 1
+        )
+    assert mock_run.await_count == 0
 
     session = _wire_db()
     assert session.query(TaskSchedule).filter(
@@ -1429,15 +1499,13 @@ async def test_migrated_schedule_still_fires_on_the_second_startup(
     _simulate_process_restart(registry)
     _startup(registry)
 
-    fired.clear()
-    seen.clear()
     engine = TaskEngine()
-    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
-        assert await _tick_and_wait(engine, fired), (
-            "migrated schedule stopped firing after a restart"
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        await _wait_for_execution_count(
+            _wire_db, task_id, "SCHEDULE_CREDENTIAL_VERSION_MISSING", 2
         )
-    assert seen["target_id"] == target_id
-    assert seen["confirm_apply"] is True
+    assert mock_run.await_count == 0
 
     session = _wire_db()
     assert _parent_enabled(session, task_id) is True, (
