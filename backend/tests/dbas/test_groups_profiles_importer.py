@@ -516,6 +516,83 @@ async def test_channel_group_create_race_adopts_exact_conflicting_case_variant()
 
 
 @pytest.mark.asyncio
+async def test_channel_group_create_race_adopts_trimmed_case_preserving_owner():
+    """Dispatcharr trims a group name before unique validation and persistence."""
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_after_serializer_trim(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name.strip()},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(
+        side_effect=_create_races_after_serializer_trim
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "  Sports  "}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.created == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    client.create_channel_group.assert_awaited_once_with("  Sports  ")
+
+
+@pytest.mark.asyncio
+async def test_channel_group_retry_keeps_trimmed_race_owner_with_case_variant():
+    """A retry adopts the same trimmed owner selected during race recovery."""
+    client = _client(
+        groups=[
+            {"id": 100, "name": "sports"},
+            {"id": 200, "name": "Sports"},
+        ]
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "  Sports  "}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.created == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    client.create_channel_group.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_channel_group_create_race_preserves_exact_case_matches_in_batch_and_follow_up():
     """A raced exact adoption must not replace another raw name's cache entry."""
     destination_groups = []
@@ -589,14 +666,14 @@ async def test_channel_group_create_race_preserves_exact_case_matches_in_batch_a
 
 @pytest.mark.asyncio
 async def test_channel_group_create_race_remains_fatal_when_exact_owner_is_ambiguous():
-    """Multiple exact rows cannot be attributed safely, even if upstream forbids them."""
+    """Multiple canonical rows cannot be attributed safely."""
     client = _client()
     client.get_channel_groups = AsyncMock(
         side_effect=[
             [],
             [
                 {"id": 100, "name": "Sports"},
-                {"id": 200, "name": "Sports"},
+                {"id": 200, "name": " Sports "},
             ],
         ]
     )

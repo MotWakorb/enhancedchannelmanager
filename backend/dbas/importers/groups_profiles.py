@@ -283,6 +283,34 @@ def _existing_by_raw_name(existing_rows: list) -> dict[str, dict]:
     return index
 
 
+def _channel_group_write_name(value) -> str | None:
+    """Apply Dispatcharr's channel-group serializer name normalization."""
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def _channel_groups_by_write_name(
+    existing_rows: list,
+) -> tuple[dict[str, dict], set[str]]:
+    """Index unique serializer-normalized names and retain ambiguous keys."""
+    index: dict[str, dict] = {}
+    ambiguous: set[str] = set()
+    for row in existing_rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = _channel_group_write_name(row.get("name"))
+        if name is None or name in ambiguous:
+            continue
+        if name in index:
+            index.pop(name)
+            ambiguous.add(name)
+            continue
+        index[name] = row
+    return index, ambiguous
+
+
 def _failure_reason_for(exc: Exception) -> FailureReason:
     """Classify a create failure into a restore-contract FailureReason.
 
@@ -376,9 +404,10 @@ async def _import_category(
       unresolvable -> ``DEPENDENCY_UNRESOLVED`` (never a stale id upstream).
     * Dry-run — reports ``would_create`` / ``would_skip``; no creates, no ledger.
     * Failure taxonomy — the observed channel-group name-uniqueness race is
-      re-listed and adopted if exactly one row has the submitted raw name. Any
-      race without an unambiguous owner remains a fatal ``CONFLICT``; other
-      errors are ``UPSTREAM_API_ERROR``.
+      re-listed and adopted if exactly one row has the submitted name after
+      Dispatcharr's whitespace trimming. Case is preserved. Any race without an
+      unambiguous owner remains a fatal ``CONFLICT``; other errors are
+      ``UPSTREAM_API_ERROR``.
 
     Args:
         config: The per-category configuration (entity type, client methods,
@@ -435,6 +464,11 @@ async def _import_category(
         existing = []
     existing_by_name = _existing_by_name(existing)
     existing_by_raw_name = _existing_by_raw_name(existing)
+    channel_groups_by_write_name, ambiguous_channel_group_write_names = (
+        _channel_groups_by_write_name(existing)
+        if config.entity_type == EntityType.CHANNEL_GROUP
+        else ({}, set())
+    )
 
     for archive_row in archive_rows:
         label = _row_label(archive_row)
@@ -443,10 +477,16 @@ async def _import_category(
         # Collision: a row with the same name already on the destination.
         raw_name = archive_row.get("name")
         name_key = _norm_name(raw_name)
-        existing_row = (
-            existing_by_raw_name.get(raw_name) if isinstance(raw_name, str) else None
-        )
-        if existing_row is None and name_key:
+        write_name = _channel_group_write_name(raw_name)
+        write_name_is_ambiguous = write_name in ambiguous_channel_group_write_names
+        existing_row = channel_groups_by_write_name.get(write_name)
+        if (
+            existing_row is None
+            and not write_name_is_ambiguous
+            and isinstance(raw_name, str)
+        ):
+            existing_row = existing_by_raw_name.get(raw_name)
+        if existing_row is None and not write_name_is_ambiguous and name_key:
             existing_row = existing_by_name.get(name_key)
         if existing_row is not None:
             _skip(cat, config.name_match_skip_reason, label, source_id, is_dry_run)
@@ -520,20 +560,24 @@ async def _import_category(
                     )
                     refreshed = []
 
-                # Dispatcharr 0.29.0 stores ChannelGroup.name in a plain unique
-                # TextField and its serializer performs no canonicalization.
-                # The conflict therefore belongs only to the exact submitted
-                # value; case/whitespace variants may legally coexist.
-                attempted_name = payload.get("name")
+                # Dispatcharr 0.29.0's DRF CharField trims whitespace before
+                # unique validation and persistence. PostgreSQL uniqueness is
+                # case-sensitive, so preserve case when identifying the owner.
+                attempted_name = _channel_group_write_name(payload.get("name"))
                 raced_candidates = [
                     row
                     for row in refreshed or []
-                    if isinstance(row, dict) and row.get("name") == attempted_name
+                    if isinstance(row, dict)
+                    and _channel_group_write_name(row.get("name")) == attempted_name
                 ]
                 raced_row = raced_candidates[0] if len(raced_candidates) == 1 else None
                 if raced_row is not None:
                     existing_by_name = _existing_by_name(refreshed)
                     existing_by_raw_name = _existing_by_raw_name(refreshed)
+                    (
+                        channel_groups_by_write_name,
+                        ambiguous_channel_group_write_names,
+                    ) = _channel_groups_by_write_name(refreshed)
                     _skip(
                         cat,
                         config.name_match_skip_reason,
