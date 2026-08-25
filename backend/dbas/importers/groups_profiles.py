@@ -358,9 +358,9 @@ async def _import_category(
       unresolvable -> ``DEPENDENCY_UNRESOLVED`` (never a stale id upstream).
     * Dry-run — reports ``would_create`` / ``would_skip``; no creates, no ledger.
     * Failure taxonomy — the observed channel-group name-uniqueness race is
-      re-listed and adopted if the row is now present. Any race without a row to
-      adopt remains a fatal ``CONFLICT``; other errors are
-      ``UPSTREAM_API_ERROR``.
+      re-listed and adopted if exactly one row has the submitted raw name. Any
+      race without an unambiguous owner remains a fatal ``CONFLICT``; other
+      errors are ``UPSTREAM_API_ERROR``.
 
     Args:
         config: The per-category configuration (entity type, client methods,
@@ -486,9 +486,7 @@ async def _import_category(
         except Exception as exc:
             if _is_channel_group_name_create_race(config, exc):
                 try:
-                    refreshed_by_name = _existing_by_name(
-                        await getattr(client, config.getter)()
-                    )
+                    refreshed = await getattr(client, config.getter)()
                 except Exception as relist_exc:
                     logger.warning(
                         "[%s] Could not re-list %ss after create conflict: %s",
@@ -496,11 +494,24 @@ async def _import_category(
                         noun,
                         relist_exc,
                     )
-                    refreshed_by_name = {}
+                    refreshed = []
 
-                raced_row = refreshed_by_name.get(name_key) if name_key else None
+                # Dispatcharr 0.29.0 stores ChannelGroup.name in a plain unique
+                # TextField and its serializer performs no canonicalization.
+                # The conflict therefore belongs only to the exact submitted
+                # value; case/whitespace variants may legally coexist.
+                attempted_name = payload.get("name")
+                raced_candidates = [
+                    row
+                    for row in refreshed or []
+                    if isinstance(row, dict) and row.get("name") == attempted_name
+                ]
+                raced_row = raced_candidates[0] if len(raced_candidates) == 1 else None
                 if raced_row is not None:
+                    refreshed_by_name = _existing_by_name(refreshed)
                     existing_by_name.update(refreshed_by_name)
+                    if name_key:
+                        existing_by_name[name_key] = raced_row
                     _skip(
                         cat,
                         config.name_match_skip_reason,
