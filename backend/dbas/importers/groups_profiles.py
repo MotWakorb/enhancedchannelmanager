@@ -277,6 +277,17 @@ def _failure_reason_for(exc: Exception) -> FailureReason:
     return FailureReason.UPSTREAM_API_ERROR
 
 
+def _is_channel_group_name_create_race(config: CategoryConfig, exc: Exception) -> bool:
+    """Recognize the observed Dispatcharr channel-group uniqueness response."""
+    text = str(exc).lower()
+    return (
+        config.entity_type == EntityType.CHANNEL_GROUP
+        and "channel group creation failed: 400 -" in text
+        and '"name"' in text
+        and "channel group with this name already exists." in text
+    )
+
+
 def _sanitize_failure(exc: Exception, noun: str) -> str:
     """Produce a sanitized, operator-facing failure message (no raw traces)."""
     return (str(exc) or "").strip() or f"Upstream rejected the {noun} creation request."
@@ -346,7 +357,9 @@ async def _import_category(
     * FK remap — any ``remappable_fk_fields`` are rewritten through the remap;
       unresolvable -> ``DEPENDENCY_UNRESOLVED`` (never a stale id upstream).
     * Dry-run — reports ``would_create`` / ``would_skip``; no creates, no ledger.
-    * Failure taxonomy — a uniqueness race is ``CONFLICT``; other errors are
+    * Failure taxonomy — the observed channel-group name-uniqueness race is
+      re-listed and adopted if the row is now present. Any race without a row to
+      adopt remains a fatal ``CONFLICT``; other errors are
       ``UPSTREAM_API_ERROR``.
 
     Args:
@@ -471,6 +484,47 @@ async def _import_category(
             else:
                 created = await getattr(client, config.creator)(payload)
         except Exception as exc:
+            if _is_channel_group_name_create_race(config, exc):
+                try:
+                    refreshed_by_name = _existing_by_name(
+                        await getattr(client, config.getter)()
+                    )
+                except Exception as relist_exc:
+                    logger.warning(
+                        "[%s] Could not re-list %ss after create conflict: %s",
+                        config.log_prefix,
+                        noun,
+                        relist_exc,
+                    )
+                    refreshed_by_name = {}
+
+                raced_row = refreshed_by_name.get(name_key) if name_key else None
+                if raced_row is not None:
+                    existing_by_name.update(refreshed_by_name)
+                    _skip(
+                        cat,
+                        config.name_match_skip_reason,
+                        label,
+                        source_id,
+                        is_dry_run,
+                    )
+                    destination_id = raced_row.get("id")
+                    if source_id is not None and destination_id is not None:
+                        remap.add(
+                            config.entity_type,
+                            int(source_id),
+                            int(destination_id),
+                        )
+                    logger.info(
+                        "[%s] %s '%s' appeared after a create conflict "
+                        "(dest id=%s); adopted, nothing created.",
+                        config.log_prefix,
+                        noun,
+                        label,
+                        destination_id,
+                    )
+                    continue
+
             reason = _failure_reason_for(exc)
             cat.failed += 1
             cat.failure_details.append(
