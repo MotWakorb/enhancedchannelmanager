@@ -433,8 +433,10 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
       {parameterSchema && parameterSchema.length > 0 && (
         <div className="parameters-section">
           <h4 className="section-title">Task Parameters</h4>
-          {parameterSchema.map((param) => (
-            <div key={param.name} className="form-group">
+          {parameterSchema.map((param) => {
+            const descriptionId = `schedule-parameter-${param.name}-description`;
+            return (
+              <div key={param.name} className="form-group">
               {/* Show note before timeout for stream_probe */}
               {taskId === 'stream_probe' && param.name === 'timeout' && (
                 <p className="parameters-note">
@@ -442,7 +444,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
                 </p>
               )}
               <label>{param.label}</label>
-              <p className="param-description">{param.description}</p>
+              <p id={descriptionId} className="param-description">{param.description}</p>
 
               {/* Number input */}
               {param.type === 'number' && (
@@ -473,6 +475,8 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
                     type="checkbox"
                     checked={(parameters[param.name] as boolean) ?? param.default ?? false}
                     onChange={(e) => updateParameter(param.name, e.target.checked)}
+                    required={param.required}
+                    aria-describedby={descriptionId}
                   />
                   <span>{param.label || 'Enabled'}</span>
                 </label>
@@ -527,8 +531,9 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
                   Empty = applies to all. Options not yet loaded.
                 </div>
               )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
 

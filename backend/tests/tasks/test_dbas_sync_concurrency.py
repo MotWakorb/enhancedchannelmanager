@@ -1096,6 +1096,84 @@ async def test_due_schedule_without_apply_confirmation_fails_instead_of_previewi
 
 
 @pytest.mark.asyncio
+async def test_co_due_sync_schedules_keep_independent_confirmation_lifecycles(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """A confirmed row cannot authorize or successfully advance a legacy row."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    due_at = datetime.utcnow() - timedelta(minutes=5)
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    confirmed = TaskSchedule(
+        task_id=task_id,
+        name="confirmed",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=json.dumps({"confirm_apply": True}),
+        next_run_at=due_at,
+    )
+    legacy = TaskSchedule(
+        task_id=task_id,
+        name="legacy unconfirmed",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=None,
+        next_run_at=due_at,
+    )
+    session.add_all([confirmed, legacy])
+    session.commit()
+    confirmed_id = confirmed.id
+    legacy_id = legacy.id
+    session.close()
+
+    applied = []
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        applied.append(confirm_apply)
+        return _success_report()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        await engine._check_and_run_due_tasks()
+        for _ in range(300):
+            session = _wire_db()
+            executions = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).order_by(TaskExecution.id).all()
+            session.close()
+            if len(executions) == 2:
+                break
+            await asyncio.sleep(0.01)
+
+    assert applied == [True]
+    assert len(executions) == 2
+    assert sum(execution.success is True for execution in executions) == 1
+    assert [execution.error for execution in executions].count(
+        "SCHEDULE_APPLY_NOT_CONFIRMED"
+    ) == 1
+
+    session = _wire_db()
+    confirmed_row = session.query(TaskSchedule).get(confirmed_id)
+    legacy_row = session.query(TaskSchedule).get(legacy_id)
+    assert confirmed_row.last_run_at is not None
+    assert legacy_row.last_run_at is not None
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_enabled_parent_survives_a_normal_restart_and_fires(
     _wire_db, _clean_registry, _fresh_semaphore
 ):

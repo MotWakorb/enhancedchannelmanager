@@ -901,23 +901,27 @@ class TaskEngine:
         Returns:
             TaskResult or None if task not found
         """
-        # Get parameters from the first triggered schedule (if any)
-        # Multiple schedules could trigger at the same time; use the first one's parameters
-        schedule_parameters = None
-        schedule_id = None
-        if triggered_schedules:
-            first_schedule = triggered_schedules[0]
-            schedule_parameters = first_schedule.get_parameters()
-            schedule_id = first_schedule.id
+        results = []
+        for schedule in triggered_schedules:
+            schedule_parameters = schedule.get_parameters()
             if schedule_parameters:
-                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id,
-                            _param_keys(schedule_parameters))
-
-        # Execute the task with parameters
-        result = await self._execute_task(task_id, triggered_by, parameters=schedule_parameters, schedule_id=schedule_id)
+                logger.info(
+                    "[%s] Using parameters from schedule %s: %s",
+                    task_id,
+                    schedule.id,
+                    _param_keys(schedule_parameters),
+                )
+            result = await self._execute_task(
+                task_id,
+                triggered_by,
+                parameters=schedule_parameters,
+                schedule_id=schedule.id,
+            )
+            if result:
+                results.append((schedule.id, result))
 
         # Update next_run_at for triggered schedules
-        if result:
+        if results:
             try:
                 from database import get_session
                 from models import TaskSchedule, ScheduledTask
@@ -925,11 +929,11 @@ class TaskEngine:
 
                 session = get_session()
                 try:
-                    for schedule in triggered_schedules:
+                    for schedule_id, schedule_result in results:
                         # Update last_run_at and recalculate next run time
-                        db_schedule = session.query(TaskSchedule).get(schedule.id)
+                        db_schedule = session.query(TaskSchedule).get(schedule_id)
                         if db_schedule:
-                            db_schedule.last_run_at = result.completed_at
+                            db_schedule.last_run_at = schedule_result.completed_at
                             if db_schedule.enabled:
                                 db_schedule.next_run_at = calculate_next_run(
                                     schedule_type=db_schedule.schedule_type,
@@ -938,9 +942,9 @@ class TaskEngine:
                                     timezone=db_schedule.timezone,
                                     days_of_week=db_schedule.get_days_of_week_list(),
                                     day_of_month=db_schedule.day_of_month,
-                                    last_run=result.completed_at,
+                                    last_run=schedule_result.completed_at,
                                 )
-                            logger.debug("[%s] Updated schedule %s last_run_at=%s, next_run_at=%s", task_id, db_schedule.id, result.completed_at, db_schedule.next_run_at)
+                            logger.debug("[%s] Updated schedule %s last_run_at=%s, next_run_at=%s", task_id, db_schedule.id, schedule_result.completed_at, db_schedule.next_run_at)
 
                     # Update parent task's next_run_at (earliest of all enabled schedules)
                     all_schedules = session.query(TaskSchedule).filter(
@@ -964,7 +968,7 @@ class TaskEngine:
             except Exception as e:
                 logger.exception("[%s] Failed to update schedule next_run_at: %s", task_id, e)
 
-        return result
+        return results[-1][1] if results else None
 
     async def _execute_task(
         self,

@@ -642,6 +642,31 @@ class TestCreateTaskSchedule:
         assert response.status_code == 200
         assert response.json()["parameters"] == {"confirm_apply": True}
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("lookup_result", [None, RuntimeError("registry unavailable")])
+    async def test_privileged_schedule_fails_closed_when_task_class_unavailable(
+        self, async_client, test_session, lookup_result
+    ):
+        _create_scheduled_task(test_session, task_id="dbas_sync_7")
+        registry = MagicMock()
+        if isinstance(lookup_result, Exception):
+            registry.get_task_class.side_effect = lookup_result
+        else:
+            registry.get_task_class.return_value = lookup_result
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.post(
+                "/api/tasks/dbas_sync_7/schedules",
+                json={
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {"confirm_apply": True},
+                },
+            )
+
+        assert response.status_code == 503
+        assert "cannot validate privileged task schedule" in response.json()["detail"].lower()
+
 
 class TestUpdateTaskSchedule:
     """Tests for PATCH /api/tasks/{task_id}/schedules/{schedule_id}."""

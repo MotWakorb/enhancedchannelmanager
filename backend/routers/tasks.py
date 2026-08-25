@@ -63,6 +63,15 @@ def _reject_mcp_privileged_task(task_id: str, caller_is_mcp: bool) -> None:
         )
 
 
+def _authorize_privileged_task_write(
+    task_id: str, is_admin: bool, caller_is_mcp: bool
+) -> None:
+    """Require a human admin for privileged task configuration or activation."""
+    if is_privileged_task_id(task_id) and not is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+
+
 # -------------------------------------------------------------------------
 # Request / Response models
 # -------------------------------------------------------------------------
@@ -569,8 +578,14 @@ async def get_task(task_id: str):
 
 
 @router.patch("/api/tasks/{task_id}", tags=["Tasks"])
-async def update_task(task_id: str, config: TaskConfigUpdate):
+async def update_task(
+    task_id: str,
+    config: TaskConfigUpdate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Update task configuration."""
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s", task_id)
     try:
         from task_registry import get_registry
@@ -736,9 +751,30 @@ def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> N
     try:
         from task_registry import get_registry
         task_class = get_registry().get_task_class(task_id)
-    except Exception as e:  # pragma: no cover - registry lookup is best-effort
+    except Exception as e:
+        if is_privileged_task_id(task_id):
+            logger.error(
+                "[TASKS] Cannot validate privileged task schedule for %s: %s",
+                task_id,
+                e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Cannot validate privileged task schedule for {task_id}: "
+                    "task registry is unavailable"
+                ),
+            ) from e
         logger.debug("[TASKS] Could not validate schedule parameters for %s: %s", task_id, e)
         return
+    if task_class is None and is_privileged_task_id(task_id):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cannot validate privileged task schedule for {task_id}: "
+                "task is not registered"
+            ),
+        )
     validator = getattr(task_class, "validate_schedule_parameters", None) if task_class else None
     if validator:
         try:
@@ -926,10 +962,11 @@ async def list_task_schedules(task_id: str):
 async def create_task_schedule(
     task_id: str,
     data: TaskScheduleCreate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Create a new schedule for a task."""
-    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] POST /api/tasks/%s/schedules - type=%s", task_id, data.schedule_type)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -1010,10 +1047,11 @@ async def update_task_schedule(
     task_id: str,
     schedule_id: int,
     data: TaskScheduleUpdate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Update a task schedule."""
-    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -1123,10 +1161,11 @@ async def update_task_schedule(
 async def delete_task_schedule(
     task_id: str,
     schedule_id: int,
+    is_admin: bool = ResolveIsAdminIfEnabled,
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Delete a task schedule."""
-    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] DELETE /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule

@@ -220,6 +220,12 @@ describe('ScheduleEditor', () => {
       });
       const save = screen.getByRole('button', { name: /add schedule/i });
       expect(apply).not.toBeChecked();
+      expect(apply).toBeRequired();
+      const helpId = apply.getAttribute('aria-describedby');
+      expect(helpId).toBeTruthy();
+      expect(document.getElementById(helpId!)).toHaveTextContent(
+        /scheduled runs write source changes to the managed replica/i,
+      );
       expect(save).toBeDisabled();
 
       await user.click(apply);

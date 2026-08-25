@@ -375,6 +375,35 @@ async def test_scheduled_execute_refuses_missing_apply_confirmation(_wire_db):
 
 
 @pytest.mark.asyncio
+async def test_confirmed_scheduled_run_resets_before_direct_manual_run(_wire_db):
+    """The same bound singleton must return to manual-preview state after apply."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import make_sync_task_class
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+    task = make_sync_task_class(target_id, "Replica")()
+    confirmations = []
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        confirmations.append(confirm_apply)
+        return _success_report() if confirm_apply else _dry_run_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task.set_run_trigger("scheduled")
+        task.update_config({"confirm_apply": True})
+        scheduled_result = await task.execute()
+        task.set_run_trigger("manual")
+        manual_result = await task.execute()
+
+    assert scheduled_result.details["is_dry_run"] is False
+    assert manual_result.details["is_dry_run"] is True
+    assert confirmations == [True, False]
+
+
+@pytest.mark.asyncio
 async def test_execute_dry_run_default_maps_to_success(_wire_db):
     """confirm_apply defaults False -> run_sync called with confirm_apply=False;
     a dry-run report (no outcome) maps to a successful TaskResult."""
