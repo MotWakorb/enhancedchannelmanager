@@ -265,6 +265,24 @@ def _existing_by_name(existing_rows: list) -> dict[str, dict]:
     return index
 
 
+def _existing_by_raw_name(existing_rows: list) -> dict[str, dict]:
+    """Index rows by exact raw name, omitting any ambiguous duplicate."""
+    index: dict[str, dict] = {}
+    ambiguous: set[str] = set()
+    for row in existing_rows or []:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        if not isinstance(name, str) or name in ambiguous:
+            continue
+        if name in index:
+            index.pop(name)
+            ambiguous.add(name)
+            continue
+        index[name] = row
+    return index
+
+
 def _failure_reason_for(exc: Exception) -> FailureReason:
     """Classify a create failure into a restore-contract FailureReason.
 
@@ -416,14 +434,20 @@ async def _import_category(
         )
         existing = []
     existing_by_name = _existing_by_name(existing)
+    existing_by_raw_name = _existing_by_raw_name(existing)
 
     for archive_row in archive_rows:
         label = _row_label(archive_row)
         source_id = archive_row.get("id")
 
         # Collision: a row with the same name already on the destination.
-        name_key = _norm_name(archive_row.get("name"))
-        existing_row = existing_by_name.get(name_key) if name_key else None
+        raw_name = archive_row.get("name")
+        name_key = _norm_name(raw_name)
+        existing_row = (
+            existing_by_raw_name.get(raw_name) if isinstance(raw_name, str) else None
+        )
+        if existing_row is None and name_key:
+            existing_row = existing_by_name.get(name_key)
         if existing_row is not None:
             _skip(cat, config.name_match_skip_reason, label, source_id, is_dry_run)
             existing_id = existing_row.get("id")
@@ -508,10 +532,8 @@ async def _import_category(
                 ]
                 raced_row = raced_candidates[0] if len(raced_candidates) == 1 else None
                 if raced_row is not None:
-                    refreshed_by_name = _existing_by_name(refreshed)
-                    existing_by_name.update(refreshed_by_name)
-                    if name_key:
-                        existing_by_name[name_key] = raced_row
+                    existing_by_name = _existing_by_name(refreshed)
+                    existing_by_raw_name = _existing_by_raw_name(refreshed)
                     _skip(
                         cat,
                         config.name_match_skip_reason,

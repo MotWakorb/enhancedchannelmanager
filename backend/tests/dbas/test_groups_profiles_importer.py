@@ -516,6 +516,78 @@ async def test_channel_group_create_race_adopts_exact_conflicting_case_variant()
 
 
 @pytest.mark.asyncio
+async def test_channel_group_create_race_preserves_exact_case_matches_in_batch_and_follow_up():
+    """A raced exact adoption must not replace another raw name's cache entry."""
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_with_case_variants(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(side_effect=_create_races_with_case_variants)
+    archive_rows = [
+        {"id": 11, "name": "Sports"},
+        {"id": 12, "name": "sports"},
+    ]
+
+    first_report = _report()
+    first_ledger = _ledger()
+    first_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=first_report,
+        ledger=first_ledger,
+        remap=first_remap,
+    )
+
+    first = first_report.category(EntityType.CHANNEL_GROUP)
+    assert first.failed == 0
+    assert first.created == 0
+    assert first.skipped == 2
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 200
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 100
+    assert len(first_ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 2
+    client.create_channel_group.assert_awaited_once_with("Sports")
+
+    follow_up_report = _report()
+    follow_up_ledger = _ledger()
+    follow_up_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=follow_up_report,
+        ledger=follow_up_ledger,
+        remap=follow_up_remap,
+    )
+
+    follow_up = follow_up_report.category(EntityType.CHANNEL_GROUP)
+    assert follow_up.failed == 0
+    assert follow_up.created == 0
+    assert follow_up.skipped == 2
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 200
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 100
+    assert len(follow_up_ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 3
+    assert client.create_channel_group.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_channel_group_create_race_remains_fatal_when_exact_owner_is_ambiguous():
     """Multiple exact rows cannot be attributed safely, even if upstream forbids them."""
     client = _client()
