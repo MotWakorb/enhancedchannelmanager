@@ -40,6 +40,8 @@ at all. A fake that stored the booleans at the top level would contradict its ow
 ``get_m3u_accounts``, which projects them back out of the blob.
 """
 
+import json
+
 import pytest
 
 from dbas.importers.m3u_accounts import (
@@ -57,6 +59,7 @@ from tests.fixtures.sync_harness import (
     SyncHarness,
     make_sync_target,
 )
+from tasks.dbas_sync import DbasSyncTask
 
 
 # ---------------------------------------------------------------------------
@@ -153,6 +156,14 @@ async def _dest_account(dest: StatefulDispatcharrFake) -> dict:
     return matching[0]
 
 
+def _assert_execution_is_credential_safe(report, message: str) -> None:
+    rendered_execution = json.dumps(
+        {"message": message, "sync_report": report.model_dump(mode="json")}
+    )
+    assert "ROTATED-SECRET" not in rendered_execution
+    assert "provider-a.test" not in rendered_execution
+
+
 # ---------------------------------------------------------------------------
 # 1. THE INVARIANT, through the real engine, parameterised over the field
 #    surface rather than over the one flag that exposed it.
@@ -228,13 +239,84 @@ async def test_the_apply_reports_which_fields_drifted_by_name(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_the_execution_summary_names_the_fields_it_converged(tmp_path):
+    """The task-history sentence exposes the report's existing field detail."""
+    source, dest = _two_instances_with_a_drifted_account()
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    message = DbasSyncTask._summary_message(report, False, report.outcome.value)
+
+    assert report.category(EntityType.M3U_ACCOUNT).updated == 1
+    assert f"updated {sum(cat.updated for cat in report.categories)}" in message
+    assert "converged" in message
+    assert ACCOUNT_NAME in message
+    for field_name in (
+        "password",
+        "max_streams",
+        "refresh_interval",
+        "auto_enable_new_groups_live",
+    ):
+        assert field_name in message
+
+    _assert_execution_is_credential_safe(report, message)
+
+
+@pytest.mark.asyncio
+async def test_the_execution_summary_covers_remapped_user_agent_by_field_name(
+    tmp_path,
+):
+    """The real convergence path reports the remapped user_agent field."""
+    source, dest = _two_instances_with_a_drifted_account(
+        drifted={"max_streams": (12, 12)}
+    )
+    source_agent = source.user_agents.list()[0]
+    source_account = source.m3u_accounts.list()[0]
+    source.m3u_accounts.update(
+        source_account["id"], {"user_agent": source_agent["id"]}
+    )
+
+    stale_agent = dest.user_agents.create(
+        {"name": "Destination UA", "user_agent": "Destination/1.0"}
+    )
+    dest_account = dest.m3u_accounts.list()[0]
+    dest.m3u_accounts.update(dest_account["id"], {"user_agent": stale_agent["id"]})
+
+    harness = SyncHarness(source=source, dest=dest)
+    report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
+
+    message = DbasSyncTask._summary_message(report, False, report.outcome.value)
+
+    remapped_agent = next(
+        agent
+        for agent in dest.user_agents.list()
+        if agent["name"] == source_agent["name"]
+    )
+    assert (await _dest_account(dest))["user_agent"] == remapped_agent["id"]
+    detail = next(
+        detail
+        for detail in report.account_field_drift_details
+        if detail.name == ACCOUNT_NAME
+    )
+    assert detail.fields == ["user_agent"]
+    assert ACCOUNT_NAME in message
+    assert "user_agent" in message
+
+
+@pytest.mark.asyncio
 async def test_a_preview_reports_the_drift_and_writes_nothing(tmp_path):
     """The preview is the prediction: same drift, zero writes, zero shortfall."""
     source, dest = _two_instances_with_a_drifted_account()
     harness = SyncHarness(source=source, dest=dest)
     report = await harness.run(confirm_apply=False, ledger_dir=tmp_path)
 
+    message = DbasSyncTask._summary_message(report, True, "dry_run")
+
     assert report.account_field_drift > 0
+    assert report.category(EntityType.M3U_ACCOUNT).would_update == 1
+    assert f"update {sum(cat.would_update for cat in report.categories)}" in message
+    assert "would converge" in message
+    _assert_execution_is_credential_safe(report, message)
     # Nothing was attempted, so nothing can have fallen short. A preview that
     # manufactured a shortfall would report a loss the apply it previews would
     # not have produced.
@@ -285,6 +367,8 @@ async def test_a_refused_convergence_write_degrades_without_rolling_back(tmp_pat
     harness = SyncHarness(source=source, dest=dest)
     report = await harness.run(confirm_apply=True, ledger_dir=tmp_path)
 
+    message = DbasSyncTask._summary_message(report, False, report.outcome.value)
+
     detail = next(
         d for d in report.account_field_drift_details if d.name == ACCOUNT_NAME
     )
@@ -297,6 +381,8 @@ async def test_a_refused_convergence_write_degrades_without_rolling_back(tmp_pat
     # …and the account itself is still there. Nothing was rolled back.
     assert [r["name"] for r in dest.m3u_accounts.list()].count(ACCOUNT_NAME) == 1
     assert report.category(EntityType.M3U_ACCOUNT).failed == 0
+    assert "could not converge" in message
+    _assert_execution_is_credential_safe(report, message)
 
 
 # ---------------------------------------------------------------------------
