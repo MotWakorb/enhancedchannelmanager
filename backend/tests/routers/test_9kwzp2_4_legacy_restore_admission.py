@@ -13,12 +13,22 @@ import pytest
 from routers import backup as backup_mod
 
 
-def _sqlite_bytes(tmp_path: Path, tables: tuple[str, ...]) -> bytes:
+_BASELINE_SCHEMA = {
+    "journal_entries": ("timestamp", "category", "action_type", "entity_name", "description"),
+    "scheduled_tasks": ("task_id", "task_name", "enabled", "schedule_type"),
+    "auto_creation_rules": ("name", "enabled", "priority", "conditions", "actions"),
+}
+
+
+def _sqlite_bytes(tmp_path: Path, tables: tuple[str, ...], *, baseline_columns: bool = False) -> bytes:
     path = tmp_path / ("-".join(tables) + ".db")
     connection = sqlite3.connect(path)
     try:
         for table in tables:
-            connection.execute(f'CREATE TABLE "{table}" (id INTEGER PRIMARY KEY)')
+            columns = ["id INTEGER PRIMARY KEY"]
+            if baseline_columns:
+                columns.extend(f'"{name}" TEXT' for name in _BASELINE_SCHEMA.get(table, ()))
+            connection.execute(f'CREATE TABLE "{table}" ({", ".join(columns)})')
         connection.commit()
     finally:
         connection.close()
@@ -52,7 +62,7 @@ async def test_invalid_known_setting_is_rejected_before_close_or_live_write(
     journal_path.write_bytes(b"live journal sentinel")
     artifact = _legacy_zip(
         settings={"linked_m3u_accounts": "not-a-list"},
-        journal=_sqlite_bytes(tmp_path, ("journal_entries", "scheduled_tasks")),
+        journal=_sqlite_bytes(tmp_path, tuple(_BASELINE_SCHEMA), baseline_columns=True),
     )
 
     with (
@@ -103,6 +113,29 @@ def test_settings_merge_preserves_destination_mcp_key_and_drops_unknown_keys(tmp
     assert "obsolete_destination_key" not in restored
 
 
+def test_historical_nulls_and_legacy_api_key_use_loader_compatibility(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"mcp_api_key": "destination-key"}))
+    archived = json.dumps(
+        {
+            "url": "http://restored:9191",
+            "user_timezone": None,
+            "stats_poll_interval": None,
+            "api_key": "legacy-dispatcharr-key",
+            "mcp_api_key": "artifact-key",
+        }
+    ).encode()
+
+    with patch.object(backup_mod, "CONFIG_FILE", settings_path):
+        restored = json.loads(backup_mod._merge_settings_preserving_redacted(archived))
+
+    assert restored["user_timezone"] == ""
+    assert restored["stats_poll_interval"] == 10
+    assert restored["dispatcharr_api_key"] == "legacy-dispatcharr-key"
+    assert restored["api_key"] == "legacy-dispatcharr-key"
+    assert restored["mcp_api_key"] == "destination-key"
+
+
 def test_schema_mismatched_sqlite_is_rejected_before_close_db(tmp_path):
     archive = tmp_path / "wrong-schema.zip"
     archive.write_bytes(
@@ -122,7 +155,7 @@ def test_legacy_baseline_schema_is_accepted_without_current_full_schema(tmp_path
     archive = tmp_path / "old-valid.zip"
     archive.write_bytes(
         _legacy_zip(
-            journal=_sqlite_bytes(tmp_path, ("journal_entries", "scheduled_tasks"))
+            journal=_sqlite_bytes(tmp_path, tuple(_BASELINE_SCHEMA), baseline_columns=True)
         )
     )
 
@@ -132,11 +165,47 @@ def test_legacy_baseline_schema_is_accepted_without_current_full_schema(tmp_path
     assert manifest["version"] == "0.15.0"
 
 
+def test_table_names_without_historical_columns_are_rejected(tmp_path):
+    archive = tmp_path / "unusable-schema.zip"
+    archive.write_bytes(_legacy_zip(journal=_sqlite_bytes(tmp_path, tuple(_BASELINE_SCHEMA))))
+
+    with zipfile.ZipFile(archive) as zf, pytest.raises(backup_mod.HTTPException) as exc:
+        backup_mod._validate_backup_zip(zf)
+
+    assert exc.value.detail == "Backup contains incompatible journal.db"
+
+
+def test_corrupt_sqlite_with_readable_schema_is_rejected(tmp_path):
+    path = tmp_path / "corrupt-source.db"
+    path.write_bytes(
+        _sqlite_bytes(tmp_path, tuple(_BASELINE_SCHEMA), baseline_columns=True)
+    )
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("CREATE TABLE payloads (data BLOB)")
+        connection.executemany(
+            "INSERT INTO payloads VALUES (?)", [(b"x" * 3000,)] * 20
+        )
+        connection.commit()
+        page_size = connection.execute("PRAGMA page_size").fetchone()[0]
+    finally:
+        connection.close()
+    journal = bytearray(path.read_bytes())
+    journal[-page_size:] = b"\0" * page_size
+    archive = tmp_path / "corrupt.zip"
+    archive.write_bytes(_legacy_zip(journal=bytes(journal)))
+
+    with zipfile.ZipFile(archive) as zf, pytest.raises(backup_mod.HTTPException) as exc:
+        backup_mod._validate_backup_zip(zf)
+
+    assert exc.value.detail == "Backup contains invalid journal.db"
+
+
 def test_journal_validation_streams_to_private_temp_and_opens_read_only(tmp_path):
     archive = tmp_path / "valid.zip"
     archive.write_bytes(
         _legacy_zip(
-            journal=_sqlite_bytes(tmp_path, ("journal_entries", "scheduled_tasks"))
+            journal=_sqlite_bytes(tmp_path, tuple(_BASELINE_SCHEMA), baseline_columns=True)
         )
     )
     real_connect = sqlite3.connect
@@ -162,7 +231,37 @@ def test_journal_validation_streams_to_private_temp_and_opens_read_only(tmp_path
             patch.object(zf, "read", side_effect=reject_whole_journal_read),
             patch.object(backup_mod.sqlite3, "connect", side_effect=checked_connect),
         ):
-            backup_mod._validate_backup_zip(zf)
+            plan = backup_mod._validate_backup_zip(zf)
+            plan.close()
 
     assert observed_temp is not None
     assert not observed_temp.exists()
+
+
+def test_restore_installs_validated_journal_inode_after_path_substitution(tmp_path):
+    original = _sqlite_bytes(tmp_path, tuple(_BASELINE_SCHEMA), baseline_columns=True)
+    replacement = _sqlite_bytes(tmp_path, ("users",))
+    archive = tmp_path / "valid.zip"
+    archive.write_bytes(_legacy_zip(journal=original))
+    live = tmp_path / "live-journal.db"
+
+    with zipfile.ZipFile(archive) as zf:
+        plan = backup_mod._validate_backup_zip(zf)
+        staged_path = plan.staged_paths["journal.db"]
+        staged_path.unlink()
+        staged_path.write_bytes(replacement)
+        with (
+            patch.object(backup_mod, "JOURNAL_DB_FILE", live),
+            patch.object(backup_mod, "CONFIG_DIR", tmp_path),
+            patch.object(backup_mod, "close_db"),
+            patch.object(backup_mod, "init_db"),
+            patch.object(backup_mod, "clear_settings_cache"),
+            patch.object(backup_mod, "reset_client"),
+            patch.object(backup_mod, "_capture_existing_alert_method_configs", return_value={}),
+            patch.object(backup_mod, "_capture_existing_auth_rows", return_value={}),
+            patch.object(backup_mod, "_count_reestablish_rows", return_value={}),
+        ):
+            backup_mod._restore_from_zip(zf, plan)
+        plan.close()
+
+    assert live.read_bytes() == original

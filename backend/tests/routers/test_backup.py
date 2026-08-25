@@ -49,8 +49,20 @@ def _add_legacy_baseline_tables(path):
     """Add the tables present throughout the legacy ZIP backup era."""
     connection = sqlite3.connect(str(path))
     try:
-        connection.execute("CREATE TABLE IF NOT EXISTS journal_entries (id INTEGER PRIMARY KEY)")
-        connection.execute("CREATE TABLE IF NOT EXISTS scheduled_tasks (id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS journal_entries "
+            "(id INTEGER PRIMARY KEY, timestamp TEXT, category TEXT, action_type TEXT, "
+            "entity_name TEXT, description TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS scheduled_tasks "
+            "(id INTEGER PRIMARY KEY, task_id TEXT, task_name TEXT, enabled INTEGER, schedule_type TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS auto_creation_rules "
+            "(id INTEGER PRIMARY KEY, name TEXT, enabled INTEGER, priority INTEGER, "
+            "conditions TEXT, actions TEXT)"
+        )
         connection.commit()
     finally:
         connection.close()
@@ -1816,10 +1828,9 @@ def _create_journal_db_with_alert_methods(path, rows):
     and the supplied rows. Each row is a dict with at least name, method_type,
     config (dict — will be JSON-encoded for storage)."""
     import sqlite3
+    _add_legacy_baseline_tables(path)
     conn = sqlite3.connect(str(path))
     try:
-        conn.execute("CREATE TABLE journal_entries (id INTEGER PRIMARY KEY)")
-        conn.execute("CREATE TABLE scheduled_tasks (id INTEGER PRIMARY KEY)")
         conn.execute(
             "CREATE TABLE alert_methods ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, "

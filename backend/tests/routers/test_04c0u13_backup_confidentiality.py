@@ -291,9 +291,11 @@ def _run_legacy_restore(zip_path, config_dir):
             patch.object(backup_mod, "_capture_existing_auth_rows", return_value={}),
             patch.object(backup_mod, "_count_reestablish_rows", return_value={}),
         ):
-            return backup_mod._restore_from_zip(
-                zf, {"version": "0.17.0", "files": zf.namelist()}
-            )
+            plan = backup_mod._validate_backup_zip(zf)
+            try:
+                return backup_mod._restore_from_zip(zf, plan)
+            finally:
+                plan.close()
 
 
 # --- policy mechanics ------------------------------------------------------

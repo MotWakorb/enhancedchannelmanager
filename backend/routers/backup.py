@@ -22,7 +22,7 @@ import time
 import zipfile
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import BinaryIO, Optional
 from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 import yaml
@@ -49,6 +49,7 @@ from config import (
     CONFIG_FILE,
     DispatcharrSettings,
     get_settings,
+    prepare_settings_data,
     save_settings,
     clear_settings_cache,
 )
@@ -3226,7 +3227,55 @@ def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
     return manifest
 
 
-def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
+class _ValidatedLegacyBackup(dict):
+    """Validated metadata plus retained, private member inodes for installation."""
+
+    def __init__(self, manifest: dict):
+        super().__init__(manifest)
+        self._workspace = Path(tempfile.mkdtemp(prefix="ecm-legacy-restore-"))
+        os.chmod(self._workspace, stat.S_IRWXU)
+        self._files: dict[str, BinaryIO] = {}
+        self.staged_paths: dict[str, Path] = {}
+        self.staged_inodes: dict[str, int] = {}
+
+    def stage(self, zf: zipfile.ZipFile, name: str) -> None:
+        path = self._workspace / ("member-%d" % len(self._files))
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o600)
+        staged = os.fdopen(fd, "w+b")
+        try:
+            with zf.open(name) as member:
+                while chunk := member.read(_RESTORE_UPLOAD_CHUNK):
+                    staged.write(chunk)
+            staged.flush()
+            staged.seek(0)
+        except Exception:
+            staged.close()
+            raise
+        self._files[name] = staged
+        self.staged_paths[name] = path
+        self.staged_inodes[name] = os.fstat(staged.fileno()).st_ino
+
+    def file(self, name: str):
+        staged = self._files[name]
+        staged.seek(0)
+        return staged
+
+    def load_json(self, name: str):
+        duplicate = os.fdopen(os.dup(self.file(name).fileno()), "rb")
+        with duplicate, io.TextIOWrapper(duplicate, encoding="utf-8") as text_stream:
+            return json.load(text_stream)
+
+    def close(self) -> None:
+        for staged in self._files.values():
+            staged.close()
+        self._files.clear()
+        shutil.rmtree(self._workspace, ignore_errors=True)
+
+    def __del__(self):
+        self.close()
+
+
+def _validate_backup_zip(zf: zipfile.ZipFile) -> _ValidatedLegacyBackup:
     """Validate a backup zip file and return its manifest."""
     # Bound metadata before reading the legacy manifest. Only ECM's historical
     # SQLite/M3U members receive the documented 1000x compatibility ceiling;
@@ -3239,85 +3288,105 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
 
     # Parse manifest
     try:
-        manifest = json.loads(zf.read("ecm_backup.json"))
-    except (json.JSONDecodeError, KeyError) as e:
+        with zf.open("ecm_backup.json") as manifest_member, io.TextIOWrapper(
+            manifest_member, encoding="utf-8"
+        ) as manifest_stream:
+            manifest = json.load(manifest_stream)
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
         raise HTTPException(status_code=400, detail="Invalid backup manifest: %s" % str(e))
 
     if not isinstance(manifest, dict) or "version" not in manifest:
         raise HTTPException(status_code=400, detail="Invalid backup manifest: missing version")
 
-    # Validate settings.json if present
-    if "settings.json" in zf.namelist():
-        try:
-            settings = json.loads(zf.read("settings.json"))
-            if not isinstance(settings, dict):
-                raise ValueError("settings must be an object")
-            DispatcharrSettings.model_validate(settings)
-        except (json.JSONDecodeError, UnicodeDecodeError, ValidationError, ValueError):
-            raise HTTPException(status_code=400, detail="Backup contains invalid settings.json")
-
-    # Validate journal.db if present. Bounds have already been checked above, so
-    # it is safe to stream the member into a private disposable file for SQLite.
-    if "journal.db" in zf.namelist():
-        _validate_legacy_journal_db(zf)
-
-    # Check for path traversal in zip entries
+    # Check path safety before materializing any member.
     for name in zf.namelist():
         if name.startswith("/") or ".." in name:
             raise HTTPException(status_code=400, detail="Backup contains unsafe file paths")
-        # Canonicalize and verify resolved path stays within CONFIG_DIR
         resolved = (CONFIG_DIR / name).resolve()
         if not str(resolved).startswith(str(CONFIG_DIR.resolve())):
             raise HTTPException(status_code=400, detail="Backup contains unsafe file paths")
 
-    return manifest
+    plan = _ValidatedLegacyBackup(manifest)
+    try:
+        restorable = {
+            name
+            for name in zf.namelist()
+            if name in {"settings.json", "journal.db"}
+            or any(name.startswith(directory + "/") for directory in LEGACY_RESTORE_DIRS)
+        }
+        for name in sorted(restorable):
+            if not name.endswith("/"):
+                plan.stage(zf, name)
+
+        # Validate settings using the same historical migrations and null
+        # sanitation as config.load_settings().
+        if "settings.json" in plan.staged_paths:
+            settings = plan.load_json("settings.json")
+            if not isinstance(settings, dict):
+                raise ValueError("settings must be an object")
+            DispatcharrSettings.model_validate(prepare_settings_data(settings))
+
+        if "journal.db" in plan.staged_paths:
+            _validate_legacy_journal_db(plan)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValidationError, ValueError):
+        plan.close()
+        raise HTTPException(status_code=400, detail="Backup contains invalid settings.json")
+    except Exception:
+        plan.close()
+        raise
+
+    return plan
 
 
-_LEGACY_JOURNAL_BASELINE_TABLES = frozenset({"journal_entries", "scheduled_tasks"})
+_LEGACY_JOURNAL_BASELINE_SCHEMA = {
+    "journal_entries": frozenset(
+        {"id", "timestamp", "category", "action_type", "entity_name", "description"}
+    ),
+    "scheduled_tasks": frozenset(
+        {"id", "task_id", "task_name", "enabled", "schedule_type"}
+    ),
+    "auto_creation_rules": frozenset(
+        {"id", "name", "enabled", "priority", "conditions", "actions"}
+    ),
+}
 
 
-def _validate_legacy_journal_db(zf: zipfile.ZipFile) -> None:
-    """Stream and validate a legacy journal without touching the live database."""
-    fd, tmp_name = tempfile.mkstemp(prefix="ecm-legacy-journal-", suffix=".db")
-    tmp_path = Path(tmp_name)
+def _validate_legacy_journal_db(plan: _ValidatedLegacyBackup) -> None:
+    """Validate the retained journal inode without touching the live database."""
+    staged = plan.file("journal.db")
+    tmp_path = plan.staged_paths["journal.db"]
     connection = None
     try:
-        try:
-            os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:  # pragma: no cover - platform without fchmod
-            pass
-        with os.fdopen(fd, "wb") as out, zf.open("journal.db") as db_member:
-            while chunk := db_member.read(_RESTORE_UPLOAD_CHUNK):
-                out.write(chunk)
+        if not staged.read(16).startswith(b"SQLite format 3"):
+            raise HTTPException(
+                status_code=400,
+                detail="Backup contains invalid journal.db (not a SQLite database)",
+            )
+        staged.seek(0)
 
-        with tmp_path.open("rb") as candidate:
-            if not candidate.read(16).startswith(b"SQLite format 3"):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Backup contains invalid journal.db (not a SQLite database)",
-                )
-
+        # The workspace is 0700 and the member is 0600. Confirm the pathname
+        # SQLite opens still names the retained descriptor's inode.
+        if os.fstat(staged.fileno()).st_ino != tmp_path.stat().st_ino:
+            raise HTTPException(status_code=400, detail="Backup contains invalid journal.db")
         connection = sqlite3.connect(f"{tmp_path.resolve().as_uri()}?mode=ro", uri=True)
-        rows = connection.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table'"
-        ).fetchall()
-        tables = {row[0] for row in rows}
-        if not _LEGACY_JOURNAL_BASELINE_TABLES.issubset(tables):
-            raise HTTPException(status_code=400, detail="Backup contains incompatible journal.db")
+        if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+            raise HTTPException(status_code=400, detail="Backup contains invalid journal.db")
+
+        for table, required_columns in _LEGACY_JOURNAL_BASELINE_SCHEMA.items():
+            columns = {
+                row[1]
+                for row in connection.execute('PRAGMA table_info("%s")' % table).fetchall()
+            }
+            if not required_columns.issubset(columns):
+                raise HTTPException(status_code=400, detail="Backup contains incompatible journal.db")
     except HTTPException:
         raise
-    except (OSError, sqlite3.Error, zipfile.BadZipFile, RuntimeError) as exc:
+    except (OSError, sqlite3.Error, RuntimeError) as exc:
         logger.warning("[BACKUP] Refusing invalid legacy journal.db: %s", exc)
         raise HTTPException(status_code=400, detail="Backup contains invalid journal.db") from exc
     finally:
         if connection is not None:
             connection.close()
-        try:
-            tmp_path.unlink()
-        except FileNotFoundError:
-            pass
-        except OSError as exc:
-            logger.warning("[BACKUP] Failed to remove journal validation temp file: %s", exc)
 
 
 def _merge_settings_preserving_redacted(zip_settings_bytes: bytes) -> bytes:
@@ -3355,7 +3424,7 @@ def _merge_settings_preserving_redacted(zip_settings_bytes: bytes) -> bytes:
     if skipped:
         logger.info("[BACKUP] Preserved existing protected settings: %s", skipped)
     try:
-        validated = DispatcharrSettings.model_validate(merged)
+        validated = DispatcharrSettings.model_validate(prepare_settings_data(merged))
     except ValidationError as exc:
         raise HTTPException(status_code=400, detail="Backup contains invalid settings.json") from exc
     return json.dumps(validated.model_dump(mode="json"), indent=2).encode("utf-8")
@@ -3834,8 +3903,11 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     # Finish settings validation and normalization before any database shutdown
     # or live write. The resulting bytes are the only settings bytes installed.
     restored_settings = None
-    if "settings.json" in zf.namelist():
-        restored_settings = _merge_settings_preserving_redacted(zf.read("settings.json"))
+    if "settings.json" in manifest.staged_paths:
+        settings = manifest.load_json("settings.json")
+        restored_settings = _merge_settings_preserving_redacted(
+            json.dumps(settings).encode("utf-8")
+        )
 
     # Capture existing alert_methods.config BEFORE we close/replace the DB so
     # we can merge real creds back where the restored ZIP has REDACTED.
@@ -3864,8 +3936,11 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
             logger.info("[BACKUP] Restored settings.json")
 
         # Restore journal.db
-        if "journal.db" in zf.namelist():
-            JOURNAL_DB_FILE.write_bytes(zf.read("journal.db"))
+        if "journal.db" in manifest.staged_paths:
+            with JOURNAL_DB_FILE.open("wb") as destination:
+                shutil.copyfileobj(
+                    manifest.file("journal.db"), destination, _RESTORE_UPLOAD_CHUNK
+                )
             restored.append("journal.db")
             logger.info("[BACKUP] Restored journal.db")
             # Merge any REDACTED alert_methods.config creds back from the
@@ -3887,7 +3962,9 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
             dir_path = CONFIG_DIR / dir_rel
             # Find files in this directory from the zip
             prefix = dir_rel + "/"
-            dir_files = [n for n in zf.namelist() if n.startswith(prefix) and not n.endswith("/")]
+            dir_files = [
+                name for name in manifest.staged_paths if name.startswith(prefix)
+            ]
 
             if dir_files:
                 # Clear existing directory
@@ -3898,7 +3975,10 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
                 for name in dir_files:
                     target = CONFIG_DIR / name
                     target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_bytes(zf.read(name))
+                    with target.open("wb") as destination:
+                        shutil.copyfileobj(
+                            manifest.file(name), destination, _RESTORE_UPLOAD_CHUNK
+                        )
                     restored.append(name)
                 _apply_restored_directory_modes(dir_rel, dir_path, dir_files)
                 logger.info("[BACKUP] Restored %d files to %s", len(dir_files), dir_rel)
@@ -3974,7 +4054,10 @@ async def restore_backup(file: UploadFile = File(...), _admin=RequireHumanAdminI
 
         with zf:
             manifest = _validate_backup_zip(zf)
-            restored = _restore_from_zip(zf, manifest)
+            try:
+                restored = _restore_from_zip(zf, manifest)
+            finally:
+                manifest.close()
     finally:
         try:
             tmp_path.unlink()
@@ -4140,7 +4223,10 @@ async def restore_backup_initial(
 
         with zf:
             manifest = _validate_backup_zip(zf)
-            restored = _restore_from_zip(zf, manifest)
+            try:
+                restored = _restore_from_zip(zf, manifest)
+            finally:
+                manifest.close()
     finally:
         try:
             tmp_path.unlink()
@@ -6437,14 +6523,18 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdmi
 
     # Open + validate + restore via the SAME path the uploaded-ZIP restore uses.
     try:
-        buf = io.BytesIO(path.read_bytes())
-        zf = zipfile.ZipFile(buf, "r")
+        archive = path.open("rb")
+        zf = zipfile.ZipFile(archive, "r")
     except zipfile.BadZipFile:
+        archive.close()
         raise HTTPException(status_code=400, detail="Saved file is not a valid zip archive")
 
-    with zf:
+    with archive, zf:
         manifest = _validate_backup_zip(zf)
-        restored = _restore_from_zip(zf, manifest)
+        try:
+            restored = _restore_from_zip(zf, manifest)
+        finally:
+            manifest.close()
 
     logger.info("[BACKUP] Restore-from-saved complete, %d files restored", len(restored))
     return {

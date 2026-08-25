@@ -3,6 +3,7 @@
 import io
 import json
 import sqlite3
+import stat
 import zipfile
 from unittest.mock import AsyncMock, patch
 
@@ -32,8 +33,18 @@ def _compressible_journal_bytes(tmp_path) -> bytes:
     path = tmp_path / "compressible-journal.db"
     connection = sqlite3.connect(path)
     try:
-        connection.execute("CREATE TABLE journal_entries (id INTEGER PRIMARY KEY)")
-        connection.execute("CREATE TABLE scheduled_tasks (id INTEGER PRIMARY KEY)")
+        connection.execute(
+            "CREATE TABLE journal_entries (id INTEGER PRIMARY KEY, timestamp TEXT, "
+            "category TEXT, action_type TEXT, entity_name TEXT, description TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE scheduled_tasks (id INTEGER PRIMARY KEY, task_id TEXT, "
+            "task_name TEXT, enabled INTEGER, schedule_type TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE auto_creation_rules (id INTEGER PRIMARY KEY, name TEXT, "
+            "enabled INTEGER, priority INTEGER, conditions TEXT, actions TEXT)"
+        )
         connection.execute("CREATE TABLE payloads (data BLOB)")
         connection.execute("INSERT INTO payloads VALUES (zeroblob(?))", (1024 * 1024,))
         connection.commit()
@@ -188,3 +199,68 @@ def test_legacy_validator_streams_journal_in_bounded_chunks(tmp_path):
 
     assert manifest["version"] == "1.0"
     assert journal_reads == [backup_mod._RESTORE_UPLOAD_CHUNK] * 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["restore", "restore-initial", "restore-saved"])
+async def test_legacy_restore_endpoints_never_whole_read_archive_or_payload_members(
+    async_client, tmp_path, endpoint
+):
+    artifact = _legacy_zip()
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    backups_dir = tmp_path / "backups"
+    backups_dir.mkdir()
+    filename = "ecm-backup-2026-01-01_000000.zip"
+    (backups_dir / filename).write_bytes(artifact)
+
+    def guarded_read(self, name, *args, **kwargs):
+        raise AssertionError(f"whole-member read: {name}")
+
+    saved_path = backups_dir / filename
+    real_path_read_bytes = type(saved_path).read_bytes
+
+    def guarded_path_read_bytes(self):
+        if self == saved_path:
+            raise AssertionError("whole saved archive read")
+        return real_path_read_bytes(self)
+
+    settings = type("Settings", (), {"is_configured": lambda self: False})()
+    with (
+        patch.object(zipfile.ZipFile, "read", guarded_read),
+        patch.object(type(saved_path), "read_bytes", guarded_path_read_bytes),
+        patch.object(backup_mod, "CONFIG_DIR", config_dir),
+        patch.object(backup_mod, "CONFIG_FILE", config_dir / "settings.json"),
+        patch.object(backup_mod, "JOURNAL_DB_FILE", config_dir / "journal.db"),
+        patch.object(backup_mod, "BACKUPS_DIR", backups_dir),
+        patch.object(backup_mod, "get_settings", return_value=settings),
+        patch.object(backup_mod, "_guard_initial_restore", new=AsyncMock()),
+        patch.object(backup_mod, "close_db"),
+        patch.object(backup_mod, "init_db"),
+        patch.object(backup_mod, "clear_settings_cache"),
+        patch.object(backup_mod, "reset_client"),
+    ):
+        if endpoint == "restore-saved":
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": filename}
+            )
+        else:
+            response = await async_client.post(
+                f"/api/backup/{endpoint}",
+                files={"file": ("backup.zip", artifact, "application/zip")},
+            )
+
+    assert response.status_code == 200, response.text
+
+
+def test_validation_workspace_is_private_and_retains_staged_inode(tmp_path):
+    archive = tmp_path / "backup.zip"
+    archive.write_bytes(_legacy_zip())
+
+    with zipfile.ZipFile(archive) as zf:
+        plan = backup_mod._validate_backup_zip(zf)
+        staged = plan.staged_paths["journal.db"]
+        assert stat.S_IMODE(staged.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(staged.stat().st_mode) == 0o600
+        assert plan.staged_inodes["journal.db"] == staged.stat().st_ino
+        plan.close()
