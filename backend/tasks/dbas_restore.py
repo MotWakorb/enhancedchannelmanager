@@ -379,7 +379,7 @@ class DbasRestoreTask(TaskScheduler):
                 % unread_reason,
             )
         report = RestoreReport(is_dry_run=not is_apply)
-        client = ReadObservingClient(client, report)
+        client = ReadObservingClient(client, report, reject_mutations=True)
 
         try:
             if is_apply:

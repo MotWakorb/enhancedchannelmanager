@@ -14,6 +14,18 @@ from security.ssrf import SSRFError
 # that cannot be read. Importers read this category again as part of their plan.
 _DESTINATION_PROBE = "get_channel_groups"
 _DESTINATION_READ_PREFIX = "get_"
+_DESTINATION_MUTATION_PREFIXES = (
+    "bulk_delete_",
+    "create_",
+    "patch_",
+    "refresh_",
+    "update_",
+    "upload_",
+)
+
+
+class DestinationUnreadableError(RuntimeError):
+    """Raised when an importer tries to mutate after a failed destination read."""
 
 
 def _describe_destination_error(exc: BaseException) -> str:
@@ -66,13 +78,39 @@ def mark_destination_unread(report: RestoreReport, reason: str) -> None:
 class ReadObservingClient:
     """Transparent client proxy that records every failed destination read."""
 
-    def __init__(self, inner, report: RestoreReport) -> None:
+    def __init__(
+        self,
+        inner,
+        report: RestoreReport,
+        *,
+        reject_mutations: bool = False,
+    ) -> None:
         object.__setattr__(self, "_inner", inner)
         object.__setattr__(self, "_report", report)
+        object.__setattr__(self, "_reject_mutations", reject_mutations)
 
     def __getattr__(self, name: str):
         attr = getattr(self._inner, name)
-        if not name.startswith(_DESTINATION_READ_PREFIX) or not callable(attr):
+        if not callable(attr):
+            return attr
+
+        if self._reject_mutations and name.startswith(_DESTINATION_MUTATION_PREFIXES):
+
+            async def _guarded_mutation(*args, **kwargs):
+                reason = self._report.destination_unreadable
+                if reason is not None:
+                    raise DestinationUnreadableError(
+                        "refusing %s after destination read failure: %s"
+                        % (name, reason)
+                    )
+                result = attr(*args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                return result
+
+            return _guarded_mutation
+
+        if not name.startswith(_DESTINATION_READ_PREFIX):
             return attr
 
         async def _observed_read(*args, **kwargs):

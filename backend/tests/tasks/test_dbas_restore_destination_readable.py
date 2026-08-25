@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
-from dbas.destination_read import ReadObservingClient, destination_read_reason
+from dbas.destination_read import (
+    DestinationUnreadableError,
+    ReadObservingClient,
+    destination_read_reason,
+)
 from dbas.restore_contracts import RestoreReport
 from tasks.dbas_restore import DbasRestoreTask
 from tests.tasks.test_dbas_restore_task import (
@@ -98,6 +102,8 @@ async def test_read_failure_after_gate_fails_the_preview_with_the_read_named(tmp
             await client.get_m3u_accounts()
         except httpx.HTTPStatusError:
             pass  # Mirrors the importer fallback that currently uses existing = [].
+        with pytest.raises(DestinationUnreadableError):
+            await client.create_m3u_account({"name": "must not be written"})
         return report
 
     with patch("dispatcharr_client.get_client", return_value=client), patch(
@@ -110,6 +116,7 @@ async def test_read_failure_after_gate_fails_the_preview_with_the_read_named(tmp
     assert "get_m3u_accounts" in report["destination_unreadable"]
     assert "503" in result.message
     assert "do-not-disclose" not in result.message
+    client.create_m3u_account.assert_not_awaited()
 
 
 _SWALLOWED_IMPORTER_READS = (
@@ -153,3 +160,24 @@ async def test_every_swallowed_importer_read_marks_the_destination_unreadable(
     assert method_name in report.destination_unreadable
     assert "503" in report.destination_unreadable
     assert "do-not-disclose" not in report.destination_unreadable
+
+
+@pytest.mark.asyncio
+async def test_failed_read_blocks_fallback_mutation_but_allows_rollback_delete():
+    inner = AsyncMock()
+    inner.get_m3u_accounts.side_effect = _http_error(503)
+    report = RestoreReport(is_dry_run=False)
+    client = ReadObservingClient(inner, report, reject_mutations=True)
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.get_m3u_accounts()
+
+    with pytest.raises(DestinationUnreadableError) as refused:
+        await client.create_m3u_account({"name": "would duplicate"})
+
+    assert "get_m3u_accounts" in str(refused.value)
+    assert "do-not-disclose" not in str(refused.value)
+    inner.create_m3u_account.assert_not_awaited()
+
+    await client.delete_m3u_account(42)
+    inner.delete_m3u_account.assert_awaited_once_with(42)
