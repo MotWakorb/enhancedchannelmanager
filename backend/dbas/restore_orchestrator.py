@@ -1863,6 +1863,7 @@ async def run_dry_run(
     *,
     plan: ImportPlan,
     client: DispatcharrClient,
+    report: RestoreReport | None = None,
     steps: list[ImporterStep] | None = None,
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
@@ -1900,7 +1901,8 @@ async def run_dry_run(
         ``would_*`` counts, the ``logo_misses`` aggregate, and the
         ``epg_link_reattach`` / ``logo_reattach`` population splits.
     """
-    report = RestoreReport(is_dry_run=True)
+    if report is None:
+        report = RestoreReport(is_dry_run=True)
     ledger = RollbackLedger(restore_id=new_restore_id())
     from dbas.restore_contracts import IdRemapTable
 
