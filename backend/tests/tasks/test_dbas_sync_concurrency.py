@@ -42,7 +42,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -51,7 +51,7 @@ import database
 import observability
 from dbas.restore_contracts import RestoreOutcome, RestoreReport
 from export_models import SyncTarget
-from models import ScheduledTask, TaskSchedule
+from models import ScheduledTask, TaskExecution, TaskSchedule
 from task_registry import get_registry
 from tasks import dbas_sync
 
@@ -1042,6 +1042,57 @@ async def _tick_and_wait(engine, fired, *, timeout=5) -> bool:
                 break
             await asyncio.sleep(0.01)
     return True
+
+
+@pytest.mark.asyncio
+async def test_due_schedule_without_apply_confirmation_fails_instead_of_previewing(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """The real scheduler seam must carry trigger context into DbasSyncTask."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    session.close()
+    task_id = dbas_sync.sync_task_id_for(target_id)
+    _startup(registry)
+
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    session.add(TaskSchedule(
+        task_id=task_id,
+        name="legacy preview schedule",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=None,
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),
+    ))
+    session.commit()
+    session.close()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        execution = None
+        for _ in range(200):
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
+                break
+            await asyncio.sleep(0.01)
+
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.error == "SCHEDULE_APPLY_NOT_CONFIRMED"
 
 
 @pytest.mark.asyncio

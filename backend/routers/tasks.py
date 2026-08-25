@@ -713,6 +713,40 @@ def _run_parameter_schema(task_id: str) -> Optional[dict]:
     return schema
 
 
+def _schedule_parameter_schema(task_id: str) -> Optional[dict]:
+    """Return schedule-only parameters declared by the registered task class."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:  # pragma: no cover - registry lookup is best-effort
+        logger.debug("[TASKS] Could not read schedule parameters for %s: %s", task_id, e)
+        return None
+    schema = (
+        getattr(task_class, "schedule_parameter_schema", None)
+        if task_class
+        else None
+    )
+    if not schema or not schema.get("parameters"):
+        return None
+    return schema
+
+
+def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> None:
+    """Apply task-specific invariants before a schedule can be persisted."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:  # pragma: no cover - registry lookup is best-effort
+        logger.debug("[TASKS] Could not validate schedule parameters for %s: %s", task_id, e)
+        return
+    validator = getattr(task_class, "validate_schedule_parameters", None) if task_class else None
+    if validator:
+        try:
+            validator(parameters)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 @router.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
     """Get the parameter schema for a task type.
@@ -725,7 +759,8 @@ async def get_task_parameter_schema(task_id: str):
     per-entry shape; the keys are separate because their lifetimes are.
     """
     logger.debug("[TASKS] GET /api/tasks/%s/parameter-schema", task_id)
-    schema = TASK_PARAMETER_SCHEMAS.get(task_id)
+    declared_schedule_schema = _schedule_parameter_schema(task_id)
+    schema = declared_schedule_schema or TASK_PARAMETER_SCHEMAS.get(task_id)
     run_schema = _run_parameter_schema(task_id)
     if not schema and not run_schema:
         # Return empty schema for tasks without special parameters
@@ -907,6 +942,8 @@ async def create_task_schedule(
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
+            _validate_schedule_parameters(task_id, data.parameters)
+
             # Create the schedule
             schedule = TaskSchedule(
                 task_id=task_id,
@@ -992,6 +1029,13 @@ async def update_task_schedule(
 
             if not schedule:
                 raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
+
+            effective_parameters = (
+                data.parameters
+                if data.parameters is not None
+                else schedule.get_parameters()
+            )
+            _validate_schedule_parameters(task_id, effective_parameters)
 
             # Update fields if provided
             if data.name is not None:

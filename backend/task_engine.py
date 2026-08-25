@@ -1100,6 +1100,7 @@ class TaskEngine:
                 user_initiated=(triggered_by == "manual"),
             )
 
+            instance.set_run_trigger(triggered_by)
             result = await instance.run()
 
             # Update execution record
@@ -1395,6 +1396,7 @@ class TaskEngine:
             )
 
         finally:
+            instance.set_run_trigger("manual")
             if _scheduler_source_token is not None:
                 journal.reset_mutation_source(_scheduler_source_token)
             async with self._lock:

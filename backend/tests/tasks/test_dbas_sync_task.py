@@ -325,6 +325,56 @@ async def test_execute_calls_run_sync_with_target_and_confirm_apply(_wire_db):
 
 
 @pytest.mark.asyncio
+async def test_scheduled_execute_applies_only_with_explicit_confirmation(_wire_db):
+    """A recurring invocation is an apply operation, not a dry-run preview."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    captured = {}
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        captured["confirm_apply"] = confirm_apply
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert captured["confirm_apply"] is True
+    assert result.success is True
+    assert result.details["is_dry_run"] is False
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_refuses_missing_apply_confirmation(_wire_db):
+    """A malformed/legacy schedule must fail loudly, never fall back to preview."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({"sync_target_id": target_id})
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.success is False
+    assert result.error == "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
+@pytest.mark.asyncio
 async def test_execute_dry_run_default_maps_to_success(_wire_db):
     """confirm_apply defaults False -> run_sync called with confirm_apply=False;
     a dry-run report (no outcome) maps to a successful TaskResult."""

@@ -325,6 +325,7 @@ class TaskScheduler(ABC):
     # — the dbas_backup passphrase is a manual-run transient that must never be
     # written to a schedule.
     run_parameter_schema: Optional[dict] = None
+    schedule_parameter_schema: Optional[dict] = None
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         """Initialize the task scheduler."""
@@ -347,6 +348,11 @@ class TaskScheduler(ABC):
         self._send_alerts: bool = True  # Whether to send external alerts (Discord, Telegram, etc.)
         self._last_notification_update: float = 0
         self._notification_update_interval: float = 2.0  # Update every 2 seconds max
+        self._run_trigger = "manual"
+
+    def set_run_trigger(self, triggered_by: str) -> None:
+        """Set whether the current invocation is manual or scheduler-driven."""
+        self._run_trigger = triggered_by
 
     # -------------------------------------------------------------------------
     # Abstract methods (must be implemented by subclasses)

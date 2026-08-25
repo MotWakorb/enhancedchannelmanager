@@ -143,6 +143,12 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
     await onSave(data);
   };
 
+  const missingRequiredParameter = parameterSchema?.some((param) => {
+    if (!param.required) return false;
+    const value = parameters[param.name] ?? param.default;
+    return param.type === 'boolean' ? value !== true : value === undefined || value === '';
+  }) ?? false;
+
   const handleIntervalPreset = (value: number) => {
     setIntervalSeconds(value);
     setUseCustomInterval(false);
@@ -536,7 +542,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving || (scheduleType !== 'interval' && !scheduleTime)}
+          disabled={saving || missingRequiredParameter || (scheduleType !== 'interval' && !scheduleTime)}
           className="modal-btn modal-btn-primary"
         >
           {saving ? (

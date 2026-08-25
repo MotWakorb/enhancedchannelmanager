@@ -349,6 +349,36 @@ class TestGetParameterSchema:
         data = response.json()
         assert data["parameters"] == []
 
+    @pytest.mark.asyncio
+    async def test_sync_schedule_schema_requires_visible_apply_confirmation(
+        self, async_client
+    ):
+        from tasks.dbas_sync import make_sync_task_class
+
+        task_class = make_sync_task_class(7, "Living Room B")
+        registry = MagicMock()
+        registry.get_task_class.return_value = task_class
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.get(
+                "/api/tasks/dbas_sync_7/parameter-schema"
+            )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"] == [
+            {
+                "name": "confirm_apply",
+                "type": "boolean",
+                "label": "Apply changes on every scheduled run",
+                "description": (
+                    "Required. Each scheduled run writes source changes to the "
+                    "managed replica; manual Sync now remains a preview."
+                ),
+                "default": False,
+                "required": True,
+            }
+        ]
+
 
 class TestGetRunParameterSchema:
     """Ad-hoc run parameters are discoverable (bead ``enhancedchannelmanager-sdpzy``).
@@ -564,6 +594,54 @@ class TestCreateTaskSchedule:
 
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("parameters", [None, {}, {"confirm_apply": False}])
+    async def test_sync_schedule_requires_explicit_apply(
+        self, async_client, test_session, parameters
+    ):
+        from tasks.dbas_sync import make_sync_task_class
+
+        _create_scheduled_task(test_session, task_id="dbas_sync_7")
+        registry = MagicMock()
+        registry.get_task_class.return_value = make_sync_task_class(7, "Living Room B")
+        payload = {
+            "schedule_type": "daily",
+            "schedule_time": "06:00",
+        }
+        if parameters is not None:
+            payload["parameters"] = parameters
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.post(
+                "/api/tasks/dbas_sync_7/schedules", json=payload
+            )
+
+        assert response.status_code == 422
+        assert "confirm_apply=true" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_sync_schedule_persists_explicit_apply(
+        self, async_client, test_session
+    ):
+        from tasks.dbas_sync import make_sync_task_class
+
+        _create_scheduled_task(test_session, task_id="dbas_sync_7")
+        registry = MagicMock()
+        registry.get_task_class.return_value = make_sync_task_class(7, "Living Room B")
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.post(
+                "/api/tasks/dbas_sync_7/schedules",
+                json={
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {"confirm_apply": True},
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"] == {"confirm_apply": True}
+
 
 class TestUpdateTaskSchedule:
     """Tests for PATCH /api/tasks/{task_id}/schedules/{schedule_id}."""
@@ -599,6 +677,26 @@ class TestUpdateTaskSchedule:
         )
 
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_legacy_sync_schedule_cannot_remain_implicit_preview(
+        self, async_client, test_session
+    ):
+        from tasks.dbas_sync import make_sync_task_class
+
+        _create_scheduled_task(test_session, task_id="dbas_sync_7")
+        schedule = _create_task_schedule(test_session, task_id="dbas_sync_7")
+        registry = MagicMock()
+        registry.get_task_class.return_value = make_sync_task_class(7, "Living Room B")
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.patch(
+                f"/api/tasks/dbas_sync_7/schedules/{schedule.id}",
+                json={"schedule_time": "09:00"},
+            )
+
+        assert response.status_code == 422
+        assert "confirm_apply=true" in response.json()["detail"]
 
 
 class TestDeleteTaskSchedule:
