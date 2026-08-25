@@ -264,3 +264,135 @@ def test_validation_workspace_is_private_and_retains_staged_inode(tmp_path):
         assert stat.S_IMODE(staged.stat().st_mode) == 0o600
         assert plan.staged_inodes["journal.db"] == staged.stat().st_ino
         plan.close()
+
+
+def test_dbas_manifest_cap_is_checked_from_zipinfo_before_open(tmp_path, monkeypatch):
+    archive = tmp_path / "oversized-manifest.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr(
+            "manifest.json",
+            json.dumps({"schema_version": 1, "padding": "x" * 128, "files": []}),
+        )
+    monkeypatch.setattr(backup_mod, "_MAX_DBAS_MANIFEST_BYTES", 64)
+
+    with zipfile.ZipFile(archive) as zf:
+        with patch.object(zf, "open", side_effect=AssertionError("member opened")):
+            with pytest.raises(backup_mod.HTTPException) as exc:
+                backup_mod.validate_artifact_manifest(zf)
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid backup manifest"
+
+
+def test_dbas_manifest_parser_never_uses_unbounded_member_read(tmp_path):
+    archive = tmp_path / "manifest.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("manifest.json", json.dumps({"schema_version": 1, "files": []}))
+
+    with zipfile.ZipFile(archive) as zf:
+        original_open = zf.open
+        reads = []
+
+        def tracked_open(name, *args, **kwargs):
+            member = original_open(name, *args, **kwargs)
+            if getattr(name, "filename", name) != "manifest.json":
+                return member
+
+            class TrackedMember:
+                def __enter__(self):
+                    member.__enter__()
+                    return self
+
+                def __exit__(self, *exc):
+                    return member.__exit__(*exc)
+
+                def read(self, size=-1):
+                    reads.append(size)
+                    assert size >= 0
+                    return member.read(size)
+
+            return TrackedMember()
+
+        with patch.object(zf, "open", side_effect=tracked_open):
+            backup_mod.validate_artifact_manifest(zf)
+
+    assert reads
+
+
+@pytest.mark.asyncio
+async def test_initial_restore_rejects_oversized_settings_before_open_or_shutdown(
+    async_client, tmp_path, monkeypatch
+):
+    artifact = io.BytesIO()
+    with zipfile.ZipFile(artifact, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("ecm_backup.json", json.dumps({"version": "1.0"}))
+        zf.writestr("settings.json", json.dumps({"padding": "x" * 128}))
+    monkeypatch.setattr(backup_mod, "_MAX_LEGACY_SETTINGS_BYTES", 64)
+    settings = type("Settings", (), {"is_configured": lambda self: False})()
+    real_open = zipfile.ZipFile.open
+
+    def reject_settings_open(self, name, *args, **kwargs):
+        if name == "settings.json":
+            raise AssertionError("oversized settings member opened")
+        return real_open(self, name, *args, **kwargs)
+
+    with (
+        patch.object(backup_mod, "get_settings", return_value=settings),
+        patch.object(backup_mod, "_guard_initial_restore", new=AsyncMock()),
+        patch.object(zipfile.ZipFile, "open", reject_settings_open),
+        patch.object(backup_mod, "close_db") as close_db,
+    ):
+        response = await async_client.post(
+            "/api/backup/restore-initial",
+            files={"file": ("backup.zip", artifact.getvalue(), "application/zip")},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Backup contains invalid settings.json"
+    close_db.assert_not_called()
+
+
+def test_settings_cap_retains_multi_megabyte_operator_configuration(tmp_path):
+    archive = tmp_path / "large-settings.zip"
+    settings = json.dumps({"url": "http://test:9191"}).encode() + b" " * (2 * 1024 * 1024)
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("ecm_backup.json", json.dumps({"version": "1.0"}))
+        zf.writestr("settings.json", settings)
+
+    with zipfile.ZipFile(archive) as zf:
+        plan = backup_mod._validate_backup_zip(zf)
+        plan.close()
+
+
+def test_staged_settings_parser_never_uses_unbounded_read(tmp_path):
+    archive = tmp_path / "settings.zip"
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("ecm_backup.json", json.dumps({"version": "1.0"}))
+        zf.writestr("settings.json", json.dumps({"url": "http://test:9191"}))
+
+    with zipfile.ZipFile(archive) as zf:
+        plan = backup_mod._validate_backup_zip(zf)
+        original = plan._files["settings.json"]
+        reads = []
+
+        class TrackedStagedFile:
+            def read(self, size=-1):
+                reads.append(size)
+                assert size >= 0
+                return original.read(size)
+
+            def seek(self, *args):
+                return original.seek(*args)
+
+            def close(self):
+                return original.close()
+
+        plan._files["settings.json"] = TrackedStagedFile()
+        try:
+            assert plan.load_json(
+                "settings.json", backup_mod._MAX_LEGACY_SETTINGS_BYTES
+            )["url"] == "http://test:9191"
+        finally:
+            plan.close()
+
+    assert reads

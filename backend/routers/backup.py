@@ -1662,6 +1662,15 @@ _ARTIFACT_MAX_ENTRY_RATIO = 100  # max decompressed:compressed per entry
 # bound everything below the floor.
 _ARTIFACT_RATIO_MIN_COMPRESSED = 1024  # 1 KiB
 
+# JSON control members are parsed in memory and therefore need limits far below
+# the generic 1 GiB data-member ceiling. A manifest is metadata, so 1 MiB is
+# ample even for thousands of hash entries. settings.json can contain sizable
+# operator-authored rule/tag configuration; 8 MiB preserves useful headroom
+# while bounding both validation and the unauthenticated first-run restore.
+_MAX_DBAS_MANIFEST_BYTES = 1 * 1024 * 1024
+_MAX_LEGACY_MANIFEST_BYTES = 1 * 1024 * 1024
+_MAX_LEGACY_SETTINGS_BYTES = 8 * 1024 * 1024
+
 # Legacy ZIPs produced by ECM can hold its SQLite database and uploaded M3U
 # files with a 292x--650x DEFLATE ratio. Keep the DBAS 100x policy unchanged,
 # but accept only those known legacy data members up to 1000x: the demonstrated
@@ -3179,6 +3188,46 @@ def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> No
             raise HTTPException(status_code=400, detail="Backup integrity check failed")
 
 
+def _read_zip_member_bounded(
+    zf: zipfile.ZipFile,
+    name: str,
+    max_bytes: int,
+    *,
+    detail: str,
+) -> bytes:
+    """Read one small control member without an unbounded ``read()`` call."""
+    try:
+        info = zf.getinfo(name)
+    except KeyError:
+        raise HTTPException(status_code=400, detail=detail)
+    if info.file_size > max_bytes:
+        logger.warning(
+            "[BACKUP] Refusing restore: %s declares %d bytes (member cap %d)",
+            name,
+            info.file_size,
+            max_bytes,
+        )
+        raise HTTPException(status_code=400, detail=detail)
+
+    chunks: list[bytes] = []
+    total = 0
+    with zf.open(info) as member:
+        while True:
+            chunk = member.read(min(_RESTORE_UPLOAD_CHUNK, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                logger.warning(
+                    "[BACKUP] Refusing restore: %s expanded beyond member cap %d",
+                    name,
+                    max_bytes,
+                )
+                raise HTTPException(status_code=400, detail=detail)
+    return b"".join(chunks)
+
+
 def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
     """Validate a new-format DBAS artifact at the restore-ingest chokepoint.
 
@@ -3204,8 +3253,15 @@ def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
         raise HTTPException(status_code=400, detail="Not a valid ECM backup artifact")
 
     try:
-        manifest = json.loads(zf.read(ARTIFACT_MANIFEST_NAME))
-    except (json.JSONDecodeError, KeyError) as e:
+        manifest = json.loads(
+            _read_zip_member_bounded(
+                zf,
+                ARTIFACT_MANIFEST_NAME,
+                _MAX_DBAS_MANIFEST_BYTES,
+                detail="Invalid backup manifest",
+            )
+        )
+    except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
         logger.warning("[BACKUP] Refusing restore: unreadable artifact manifest: %s", e)
         raise HTTPException(status_code=400, detail="Invalid backup manifest")
 
@@ -3260,10 +3316,19 @@ class _ValidatedLegacyBackup(dict):
         staged.seek(0)
         return staged
 
-    def load_json(self, name: str):
-        duplicate = os.fdopen(os.dup(self.file(name).fileno()), "rb")
-        with duplicate, io.TextIOWrapper(duplicate, encoding="utf-8") as text_stream:
-            return json.load(text_stream)
+    def load_json(self, name: str, max_bytes: int):
+        staged = self.file(name)
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = staged.read(min(_RESTORE_UPLOAD_CHUNK, max_bytes + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("staged JSON member exceeds its limit")
+        return json.loads(b"".join(chunks))
 
     def close(self) -> None:
         for staged in self._files.values():
@@ -3288,10 +3353,14 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> _ValidatedLegacyBackup:
 
     # Parse manifest
     try:
-        with zf.open("ecm_backup.json") as manifest_member, io.TextIOWrapper(
-            manifest_member, encoding="utf-8"
-        ) as manifest_stream:
-            manifest = json.load(manifest_stream)
+        manifest = json.loads(
+            _read_zip_member_bounded(
+                zf,
+                "ecm_backup.json",
+                _MAX_LEGACY_MANIFEST_BYTES,
+                detail="Invalid backup manifest",
+            )
+        )
     except (json.JSONDecodeError, UnicodeDecodeError, KeyError) as e:
         raise HTTPException(status_code=400, detail="Invalid backup manifest: %s" % str(e))
 
@@ -3314,6 +3383,16 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> _ValidatedLegacyBackup:
             if name in {"settings.json", "journal.db"}
             or any(name.startswith(directory + "/") for directory in LEGACY_RESTORE_DIRS)
         }
+        if "settings.json" in restorable:
+            info = zf.getinfo("settings.json")
+            if info.file_size > _MAX_LEGACY_SETTINGS_BYTES:
+                logger.warning(
+                    "[BACKUP] Refusing restore: settings.json declares %d bytes "
+                    "(member cap %d)",
+                    info.file_size,
+                    _MAX_LEGACY_SETTINGS_BYTES,
+                )
+                raise ValueError("settings member exceeds its limit")
         for name in sorted(restorable):
             if not name.endswith("/"):
                 plan.stage(zf, name)
@@ -3321,7 +3400,7 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> _ValidatedLegacyBackup:
         # Validate settings using the same historical migrations and null
         # sanitation as config.load_settings().
         if "settings.json" in plan.staged_paths:
-            settings = plan.load_json("settings.json")
+            settings = plan.load_json("settings.json", _MAX_LEGACY_SETTINGS_BYTES)
             if not isinstance(settings, dict):
                 raise ValueError("settings must be an object")
             DispatcharrSettings.model_validate(prepare_settings_data(settings))
@@ -3350,6 +3429,16 @@ _LEGACY_JOURNAL_BASELINE_SCHEMA = {
     ),
 }
 
+# Standard ZIP production now drops journal_entries because it is unbounded
+# audit history, not restorable configuration. Admission accepts either the
+# original historical profile above or this producer profile; both still
+# require the two configuration tables and their load-bearing columns.
+_CURRENT_REDACTED_JOURNAL_SCHEMA = {
+    table: columns
+    for table, columns in _LEGACY_JOURNAL_BASELINE_SCHEMA.items()
+    if table != "journal_entries"
+}
+
 
 def _validate_legacy_journal_db(plan: _ValidatedLegacyBackup) -> None:
     """Validate the retained journal inode without touching the live database."""
@@ -3372,13 +3461,34 @@ def _validate_legacy_journal_db(plan: _ValidatedLegacyBackup) -> None:
         if connection.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
             raise HTTPException(status_code=400, detail="Backup contains invalid journal.db")
 
-        for table, required_columns in _LEGACY_JOURNAL_BASELINE_SCHEMA.items():
-            columns = {
-                row[1]
-                for row in connection.execute('PRAGMA table_info("%s")' % table).fetchall()
-            }
-            if not required_columns.issubset(columns):
-                raise HTTPException(status_code=400, detail="Backup contains incompatible journal.db")
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+
+        def matches(schema: dict[str, frozenset[str]]) -> bool:
+            return all(
+                required_columns.issubset(
+                    {
+                        row[1]
+                        for row in connection.execute(
+                            'PRAGMA table_info("%s")' % table
+                        ).fetchall()
+                    }
+                )
+                for table, required_columns in schema.items()
+            )
+
+        compatible = matches(_LEGACY_JOURNAL_BASELINE_SCHEMA) or (
+            "journal_entries" not in tables
+            and matches(_CURRENT_REDACTED_JOURNAL_SCHEMA)
+        )
+        if not compatible:
+            raise HTTPException(
+                status_code=400, detail="Backup contains incompatible journal.db"
+            )
     except HTTPException:
         raise
     except (OSError, sqlite3.Error, RuntimeError) as exc:
@@ -3430,18 +3540,21 @@ def _merge_settings_preserving_redacted(zip_settings_bytes: bytes) -> bytes:
     return json.dumps(validated.model_dump(mode="json"), indent=2).encode("utf-8")
 
 
-def _capture_existing_alert_method_configs() -> dict[int, dict]:
+def _capture_existing_alert_method_configs(
+    journal_path: Optional[Path] = None,
+) -> dict[int, dict]:
     """Read existing alert_methods rows directly from journal.db so we can
     re-merge non-redacted credential fields after the restored DB is written.
 
     Returns {id: parsed_config_dict}. Rows with malformed JSON or missing
     table are skipped silently — the caller treats absent ids as 'no merge'.
     """
-    if not JOURNAL_DB_FILE.exists():
+    journal_path = journal_path or JOURNAL_DB_FILE
+    if not journal_path.exists():
         return {}
     out: dict[int, dict] = {}
     try:
-        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+        conn = sqlite3.connect(str(journal_path))
     except sqlite3.Error as e:
         logger.warning("[BACKUP] Could not open journal.db for pre-restore capture: %s", e)
         return {}
@@ -3472,7 +3585,9 @@ def _capture_existing_alert_method_configs() -> dict[int, dict]:
     return out
 
 
-def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
+def _merge_alert_method_creds_after_restore(
+    prior: dict[int, dict], journal_path: Optional[Path] = None
+) -> None:
     """For each alert_methods row in the restored DB, restore non-redacted
     credential-class values from the prior snapshot when the restored value
     is the REDACTED sentinel. Match by row id.
@@ -3489,10 +3604,11 @@ def _merge_alert_method_creds_after_restore(prior: dict[int, dict]) -> None:
     Backward-compat: legacy non-redacted ZIPs carry no sentinel — every value
     survives the merge unchanged.
     """
-    if not JOURNAL_DB_FILE.exists():
+    journal_path = journal_path or JOURNAL_DB_FILE
+    if not journal_path.exists():
         return
     try:
-        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+        conn = sqlite3.connect(str(journal_path))
     except sqlite3.Error as e:
         logger.warning("[BACKUP] Could not open restored journal.db for cred merge: %s", e)
         return
@@ -3564,7 +3680,9 @@ FIRST_RUN_SETUP_NOTICE = (
 )
 
 
-def _capture_existing_auth_rows() -> dict[str, tuple[list[str], list[tuple]]]:
+def _capture_existing_auth_rows(
+    journal_path: Optional[Path] = None,
+) -> dict[str, tuple[list[str], list[tuple]]]:
     """Snapshot this instance's OWN account rows before journal.db is replaced.
 
     Returns ``{table: (column_names, rows)}`` for :data:`_AUTH_IDENTITY_TABLES`.
@@ -3582,11 +3700,12 @@ def _capture_existing_auth_rows() -> dict[str, tuple[list[str], list[tuple]]]:
     running first-run setup, and unlike the PRODUCER side (where an unrunnable
     scrub means a leak) nothing confidential turns on it.
     """
-    if not JOURNAL_DB_FILE.exists():
+    journal_path = journal_path or JOURNAL_DB_FILE
+    if not journal_path.exists():
         return {}
     out: dict[str, tuple[list[str], list[tuple]]] = {}
     try:
-        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+        conn = sqlite3.connect(str(journal_path))
     except sqlite3.Error as e:
         logger.warning("[BACKUP] Could not open journal.db to capture accounts: %s", e)
         return {}
@@ -3654,6 +3773,7 @@ def _create_missing_auth_table(cur, table: str) -> list[str]:
 
 def _reassert_auth_rows_after_restore(
     prior: dict[str, tuple[list[str], list[tuple]]],
+    journal_path: Optional[Path] = None,
 ) -> None:
     """Put this instance's own account rows back over the restored journal.db.
 
@@ -3682,10 +3802,11 @@ def _reassert_auth_rows_after_restore(
     """
     if not prior.get("users"):
         return
-    if not JOURNAL_DB_FILE.exists():
+    journal_path = journal_path or JOURNAL_DB_FILE
+    if not journal_path.exists():
         return
     try:
-        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+        conn = sqlite3.connect(str(journal_path))
     except sqlite3.Error as e:
         logger.warning(
             "[BACKUP] Could not open the restored journal.db to reinstate "
@@ -3770,7 +3891,7 @@ _REESTABLISH_ON_RESTORE: dict[str, str] = {
 _LAST_RESTORE_CONFIG_LOSSES: dict[str, int] = {}
 
 
-def _count_reestablish_rows() -> dict[str, int]:
+def _count_reestablish_rows(journal_path: Optional[Path] = None) -> dict[str, int]:
     """Row counts for :data:`_REESTABLISH_ON_RESTORE`, read off the live database.
 
     Used on BOTH sides of the file swap so the notice names only what this
@@ -3780,10 +3901,11 @@ def _count_reestablish_rows() -> dict[str, int]:
 
     Best-effort: a table that cannot be read is omitted rather than guessed at.
     """
-    if not JOURNAL_DB_FILE.exists():
+    journal_path = journal_path or JOURNAL_DB_FILE
+    if not journal_path.exists():
         return {}
     try:
-        conn = sqlite3.connect(str(JOURNAL_DB_FILE))
+        conn = sqlite3.connect(str(journal_path))
     except sqlite3.Error:
         return {}
     counts: dict[str, int] = {}
@@ -3896,15 +4018,222 @@ def _apply_restored_directory_modes(dir_rel: str, dir_path: Path, names: list[st
         )
 
 
+def _path_exists(path: Path) -> bool:
+    return os.path.lexists(path)
+
+
+def _random_absent_sibling(path: Path, label: str) -> Path:
+    candidate = Path(tempfile.mkdtemp(prefix=f".{path.name}.{label}-", dir=path.parent))
+    candidate.rmdir()
+    return candidate
+
+
+def _fsync_directory_best_effort(path: Path) -> None:
+    descriptor = None
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+        os.fsync(descriptor)
+    except OSError as exc:
+        logger.warning("[BACKUP] Could not fsync restore directory %s: %s", path, exc)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _stage_restore_file(
+    destination: Path,
+    *,
+    content: Optional[bytes] = None,
+    source: Optional[BinaryIO] = None,
+) -> Path:
+    """Fully write and fsync a file beside its destination before shutdown."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, raw_path = tempfile.mkstemp(
+        prefix=f".{destination.name}.restore-stage-", dir=destination.parent
+    )
+    staged = Path(raw_path)
+    try:
+        with os.fdopen(descriptor, "w+b") as output:
+            os.fchmod(output.fileno(), 0o600)
+            if content is not None:
+                output.write(content)
+            elif source is not None:
+                source.seek(0)
+                shutil.copyfileobj(source, output, _RESTORE_UPLOAD_CHUNK)
+            output.flush()
+            os.fsync(output.fileno())
+        _fsync_directory_best_effort(destination.parent)
+        return staged
+    except BaseException:
+        try:
+            staged.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _stage_restore_directory(
+    dir_rel: str,
+    names: list[str],
+    manifest: _ValidatedLegacyBackup,
+) -> Path:
+    """Materialize and fsync a complete tree beside the destination tree."""
+    destination = CONFIG_DIR / dir_rel
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staged = Path(
+        tempfile.mkdtemp(
+            prefix=f".{destination.name}.restore-stage-", dir=destination.parent
+        )
+    )
+    try:
+        for name in names:
+            relative = Path(name).relative_to(dir_rel)
+            target = staged / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("w+b") as output:
+                manifest.file(name).seek(0)
+                shutil.copyfileobj(
+                    manifest.file(name), output, _RESTORE_UPLOAD_CHUNK
+                )
+                output.flush()
+                os.fsync(output.fileno())
+
+        modes = _RESTORED_DIR_MODES.get(dir_rel)
+        if modes is not None:
+            dir_mode, file_mode = modes
+            for directory in [staged, *[p for p in staged.rglob("*") if p.is_dir()]]:
+                os.chmod(directory, dir_mode)
+            for file_path in (p for p in staged.rglob("*") if p.is_file()):
+                os.chmod(file_path, file_mode)
+
+        directories = [staged, *[p for p in staged.rglob("*") if p.is_dir()]]
+        for directory in reversed(directories):
+            _fsync_directory_best_effort(directory)
+        _fsync_directory_best_effort(destination.parent)
+        return staged
+    except BaseException:
+        shutil.rmtree(staged, ignore_errors=True)
+        raise
+
+
+def _remove_restore_path(path: Path) -> None:
+    if not _path_exists(path):
+        return
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
+def _rollback_restore_swaps(records: list[dict]) -> None:
+    """Compensate completed same-filesystem swaps and verify prior inodes."""
+    errors: list[str] = []
+    for record in reversed(records):
+        target = record["target"]
+        backup = record["backup"]
+        discarded = None
+        try:
+            if record["installed"] and _path_exists(target):
+                discarded = _random_absent_sibling(target, "rollback-discard")
+                os.replace(target, discarded)
+            if backup is not None and _path_exists(backup):
+                os.replace(backup, target)
+
+            if record["identity"] is None:
+                if _path_exists(target):
+                    raise RuntimeError("target should be absent")
+            else:
+                current = os.lstat(target)
+                identity = (current.st_dev, current.st_ino, stat.S_IFMT(current.st_mode))
+                if identity != record["identity"]:
+                    raise RuntimeError("prior inode was not restored")
+        except BaseException as exc:
+            errors.append(f"{target}: {exc}")
+        finally:
+            if discarded is not None:
+                try:
+                    _remove_restore_path(discarded)
+                except OSError as exc:
+                    logger.warning(
+                        "[BACKUP] Could not remove failed restore artifact %s: %s",
+                        discarded,
+                        exc,
+                    )
+            _fsync_directory_best_effort(target.parent)
+    if errors:
+        raise RuntimeError("Restore rollback could not be verified: " + "; ".join(errors))
+
+
+def _swap_staged_restore(staged_items: list[tuple[Path, Path]]) -> list[dict]:
+    """Swap adjacent staged artifacts into place, compensating on any failure."""
+    records: list[dict] = []
+    try:
+        for target, staged in staged_items:
+            prior = os.lstat(target) if _path_exists(target) else None
+            backup = (
+                _random_absent_sibling(target, "restore-backup")
+                if prior is not None
+                else None
+            )
+            record = {
+                "target": target,
+                "backup": backup,
+                "identity": (
+                    (prior.st_dev, prior.st_ino, stat.S_IFMT(prior.st_mode))
+                    if prior is not None
+                    else None
+                ),
+                "installed": False,
+            }
+            records.append(record)
+            if backup is not None:
+                os.replace(target, backup)
+            os.replace(staged, target)
+            record["installed"] = True
+            _fsync_directory_best_effort(target.parent)
+        return records
+    except BaseException:
+        _rollback_restore_swaps(records)
+        raise
+
+
+def _discard_restore_backups(records: list[dict]) -> None:
+    for record in records:
+        backup = record["backup"]
+        if backup is not None:
+            try:
+                _remove_restore_path(backup)
+            except OSError as exc:
+                # The new state is already live and init_db succeeded. Once any
+                # prior backup has been deleted, cleanup is not rollback-safe;
+                # retain and report a residue rather than risk removing live data.
+                logger.warning(
+                    "[BACKUP] Could not remove prior restore artifact %s: %s",
+                    backup,
+                    exc,
+                )
+            _fsync_directory_best_effort(record["target"].parent)
+
+
 def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
-    """Restore files from a validated backup zip."""
-    restored = []
+    """Restore with destination-local atomic swaps and verified compensation.
+
+    This is not a cross-filesystem transaction. Each file/tree is staged beside
+    its own destination so its individual ``os.replace`` is atomic; if a later
+    swap or database initialization fails, prior inodes are renamed back and
+    verified before the old database is reinitialized.
+    """
+    restored: list[str] = []
+    staged_items: list[tuple[Path, Path]] = []
+    records: list[dict] = []
+    database_closed = False
+    failure_reinitialized = False
 
     # Finish settings validation and normalization before any database shutdown
     # or live write. The resulting bytes are the only settings bytes installed.
     restored_settings = None
     if "settings.json" in manifest.staged_paths:
-        settings = manifest.load_json("settings.json")
+        settings = manifest.load_json("settings.json", _MAX_LEGACY_SETTINGS_BYTES)
         restored_settings = _merge_settings_preserving_redacted(
             json.dumps(settings).encode("utf-8")
         )
@@ -3923,70 +4252,84 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     _LAST_RESTORE_CONFIG_LOSSES.clear()
     prior_reestablish_counts = _count_reestablish_rows()
 
-    # Close database before replacing files
-    close_db()
-    logger.info("[BACKUP] Database closed for restore")
-
     try:
-        # Restore settings.json — drop REDACTED sentinels in favor of the
-        # currently-on-disk value, mirroring YAML restore semantics.
+        # Complete every potentially failing copy before closing SQLite or
+        # touching a live artifact. Every stage resides on its target filesystem.
         if restored_settings is not None:
-            CONFIG_FILE.write_bytes(restored_settings)
+            staged_items.append(
+                (CONFIG_FILE, _stage_restore_file(CONFIG_FILE, content=restored_settings))
+            )
             restored.append("settings.json")
-            logger.info("[BACKUP] Restored settings.json")
 
-        # Restore journal.db
         if "journal.db" in manifest.staged_paths:
-            with JOURNAL_DB_FILE.open("wb") as destination:
-                shutil.copyfileobj(
-                    manifest.file("journal.db"), destination, _RESTORE_UPLOAD_CHUNK
-                )
+            staged_journal = _stage_restore_file(
+                JOURNAL_DB_FILE, source=manifest.file("journal.db")
+            )
+            _merge_alert_method_creds_after_restore(
+                prior_alert_configs, staged_journal
+            )
+            _reassert_auth_rows_after_restore(prior_auth_rows, staged_journal)
+            with staged_journal.open("rb") as staged_db:
+                os.fsync(staged_db.fileno())
+            staged_items.append((JOURNAL_DB_FILE, staged_journal))
             restored.append("journal.db")
-            logger.info("[BACKUP] Restored journal.db")
-            # Merge any REDACTED alert_methods.config creds back from the
-            # pre-restore snapshot so existing rows aren't degraded.
-            _merge_alert_method_creds_after_restore(prior_alert_configs)
-            # Same for this instance's own accounts (bead …-gi4zn).
-            _reassert_auth_rows_after_restore(prior_auth_rows)
 
-        # Restore directories — clear existing before writing.
-        #
-        # The ``if dir_files:`` guard is load-bearing in BOTH directions, not a
-        # micro-optimization. A newly produced ZIP carries no ``tls/`` or
-        # ``m3u_uploads/`` member (BACKUP_DIRS), so without it every restore of a
-        # current artifact would rmtree the live TLS private key — the same data
-        # loss LEGACY_RESTORE_DIRS exists to prevent, arriving from the other
-        # side. Both halves are pinned by
-        # ``tests/routers/test_04c0u13_backup_confidentiality.py``.
         for dir_rel in LEGACY_RESTORE_DIRS:
             dir_path = CONFIG_DIR / dir_rel
-            # Find files in this directory from the zip
             prefix = dir_rel + "/"
             dir_files = [
                 name for name in manifest.staged_paths if name.startswith(prefix)
             ]
-
             if dir_files:
-                # Clear existing directory
-                if dir_path.exists():
-                    shutil.rmtree(dir_path)
-                dir_path.mkdir(parents=True, exist_ok=True)
+                staged_items.append(
+                    (dir_path, _stage_restore_directory(dir_rel, dir_files, manifest))
+                )
+                restored.extend(dir_files)
 
-                for name in dir_files:
-                    target = CONFIG_DIR / name
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with target.open("wb") as destination:
-                        shutil.copyfileobj(
-                            manifest.file(name), destination, _RESTORE_UPLOAD_CHUNK
-                        )
-                    restored.append(name)
-                _apply_restored_directory_modes(dir_rel, dir_path, dir_files)
-                logger.info("[BACKUP] Restored %d files to %s", len(dir_files), dir_rel)
-
-    finally:
-        # Always reinitialize database
-        init_db()
+        close_db()
+        database_closed = True
+        logger.info("[BACKUP] Database closed for restore")
+        records = _swap_staged_restore(staged_items)
+        try:
+            init_db()
+        except BaseException:
+            # init_db may have opened connections or partially migrated the new
+            # journal. Close those before putting the prior inode back.
+            close_db()
+            rollback_records = records
+            records = []
+            _rollback_restore_swaps(rollback_records)
+            init_db()
+            failure_reinitialized = True
+            logger.info("[BACKUP] Prior database reinitialized after restore rollback")
+            raise
+        _discard_restore_backups(records)
+        records = []
         logger.info("[BACKUP] Database reinitialized after restore")
+    except BaseException:
+        # A staging failure occurs before close_db and has no live compensation.
+        # A swap failure compensates inside _swap_staged_restore, then the prior
+        # database still needs to be made available again.
+        if records:
+            _rollback_restore_swaps(records)
+            records = []
+        if database_closed and not failure_reinitialized:
+            try:
+                init_db()
+            except BaseException as init_exc:
+                raise RuntimeError(
+                    "Restore failed and the prior database could not be reinitialized"
+                ) from init_exc
+        raise
+    finally:
+        for _, staged in staged_items:
+            try:
+                _remove_restore_path(staged)
+            except OSError as exc:
+                logger.warning("[BACKUP] Could not remove restore stage %s: %s", staged, exc)
+
+    for name in restored:
+        logger.info("[BACKUP] Restored %s", name)
 
     # Compare the same live counts across the swap. init_db() has already run, so
     # every model-declared table the artifact dropped is back and empty — a table
