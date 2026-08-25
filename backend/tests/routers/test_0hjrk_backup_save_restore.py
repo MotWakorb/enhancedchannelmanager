@@ -27,13 +27,15 @@ import zipfile
 import pytest
 from unittest.mock import patch
 
+from .test_backup import _minimal_journal_db_bytes
+
 
 def _make_backup_zip() -> bytes:
     """Build a minimal valid ECM backup ZIP (manifest + settings + sqlite db)."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("settings.json", json.dumps({"url": "http://test:9191"}))
-        zf.writestr("journal.db", b"SQLite format 3\x00" + b"\x00" * 100)
+        zf.writestr("journal.db", _minimal_journal_db_bytes())
         zf.writestr(
             "ecm_backup.json",
             json.dumps(

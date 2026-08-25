@@ -2,6 +2,7 @@
 
 import io
 import json
+import sqlite3
 import zipfile
 from unittest.mock import AsyncMock, patch
 
@@ -10,16 +11,35 @@ from starlette.datastructures import UploadFile
 
 from routers import backup as backup_mod
 
+from .test_backup import _minimal_journal_db_bytes
 
-def _legacy_zip(*, journal: bytes = b"SQLite format 3\x00") -> bytes:
+
+def _legacy_zip(*, journal: bytes | None = None) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr(
             "ecm_backup.json",
             json.dumps({"version": "1.0", "files": ["journal.db"]}),
         )
-        zf.writestr("journal.db", journal)
+        zf.writestr(
+            "journal.db",
+            journal if journal is not None else _minimal_journal_db_bytes(),
+        )
     return buffer.getvalue()
+
+
+def _compressible_journal_bytes(tmp_path) -> bytes:
+    path = tmp_path / "compressible-journal.db"
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("CREATE TABLE journal_entries (id INTEGER PRIMARY KEY)")
+        connection.execute("CREATE TABLE scheduled_tasks (id INTEGER PRIMARY KEY)")
+        connection.execute("CREATE TABLE payloads (data BLOB)")
+        connection.execute("INSERT INTO payloads VALUES (zeroblob(?))", (1024 * 1024,))
+        connection.commit()
+    finally:
+        connection.close()
+    return path.read_bytes()
 
 
 @pytest.mark.asyncio
@@ -27,7 +47,7 @@ def _legacy_zip(*, journal: bytes = b"SQLite format 3\x00") -> bytes:
 async def test_legacy_restore_streams_through_upload_cap_and_cleans_partial_file(
     tmp_path, initial
 ):
-    payload = _legacy_zip(journal=b"SQLite format 3\x00" + b"x" * 512)
+    payload = _legacy_zip()
     settings = type("Settings", (), {"is_configured": lambda self: False})()
 
     with (
@@ -70,7 +90,11 @@ def test_legacy_validator_rejects_high_ratio_member_before_any_read(tmp_path):
 def test_legacy_validator_accepts_ecm_shaped_high_ratio_member(tmp_path, member_name):
     """Only legacy SQLite/M3U data may exceed the DBAS 100x ratio cap."""
     archive = tmp_path / "legacy-high-ratio.zip"
-    content = b"SQLite format 3\x00" + b"playlist-line-title-channel-name-operator-visible-metadata\n" * (1024 * 1024 // 57)
+    content = (
+        _compressible_journal_bytes(tmp_path)
+        if member_name == "journal.db"
+        else b"playlist-line-title-channel-name-operator-visible-metadata\n" * (1024 * 1024 // 57)
+    )
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("ecm_backup.json", json.dumps({"version": "1.0"}))
         zf.writestr(member_name, content)
@@ -130,11 +154,11 @@ def test_legacy_validator_enforces_declared_bounds_before_any_read(
     assert exc.value.detail == "Backup archive rejected"
 
 
-def test_legacy_validator_reads_only_sqlite_header_from_journal(tmp_path):
+def test_legacy_validator_streams_journal_in_bounded_chunks(tmp_path):
     archive = tmp_path / "backup.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_STORED) as zf:
         zf.writestr("ecm_backup.json", json.dumps({"version": "1.0"}))
-        zf.writestr("journal.db", b"SQLite format 3\x00" + b"x" * 4096)
+        zf.writestr("journal.db", _minimal_journal_db_bytes())
 
     with zipfile.ZipFile(archive) as zf:
         original_open = zf.open
@@ -163,4 +187,4 @@ def test_legacy_validator_reads_only_sqlite_header_from_journal(tmp_path):
             manifest = backup_mod._validate_backup_zip(zf)
 
     assert manifest["version"] == "1.0"
-    assert journal_reads == [16]
+    assert journal_reads == [backup_mod._RESTORE_UPLOAD_CHUNK] * 2

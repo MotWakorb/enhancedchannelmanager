@@ -28,7 +28,7 @@ from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 import yaml
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -3249,16 +3249,17 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     # Validate settings.json if present
     if "settings.json" in zf.namelist():
         try:
-            json.loads(zf.read("settings.json"))
-        except json.JSONDecodeError:
+            settings = json.loads(zf.read("settings.json"))
+            if not isinstance(settings, dict):
+                raise ValueError("settings must be an object")
+            DispatcharrSettings.model_validate(settings)
+        except (json.JSONDecodeError, UnicodeDecodeError, ValidationError, ValueError):
             raise HTTPException(status_code=400, detail="Backup contains invalid settings.json")
 
-    # Validate journal.db if present (check SQLite magic bytes)
+    # Validate journal.db if present. Bounds have already been checked above, so
+    # it is safe to stream the member into a private disposable file for SQLite.
     if "journal.db" in zf.namelist():
-        with zf.open("journal.db") as db_member:
-            db_header = db_member.read(16)
-        if not db_header.startswith(b"SQLite format 3"):
-            raise HTTPException(status_code=400, detail="Backup contains invalid journal.db (not a SQLite database)")
+        _validate_legacy_journal_db(zf)
 
     # Check for path traversal in zip entries
     for name in zf.namelist():
@@ -3272,22 +3273,67 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> dict:
     return manifest
 
 
+_LEGACY_JOURNAL_BASELINE_TABLES = frozenset({"journal_entries", "scheduled_tasks"})
+
+
+def _validate_legacy_journal_db(zf: zipfile.ZipFile) -> None:
+    """Stream and validate a legacy journal without touching the live database."""
+    fd, tmp_name = tempfile.mkstemp(prefix="ecm-legacy-journal-", suffix=".db")
+    tmp_path = Path(tmp_name)
+    connection = None
+    try:
+        try:
+            os.fchmod(fd, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:  # pragma: no cover - platform without fchmod
+            pass
+        with os.fdopen(fd, "wb") as out, zf.open("journal.db") as db_member:
+            while chunk := db_member.read(_RESTORE_UPLOAD_CHUNK):
+                out.write(chunk)
+
+        with tmp_path.open("rb") as candidate:
+            if not candidate.read(16).startswith(b"SQLite format 3"):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Backup contains invalid journal.db (not a SQLite database)",
+                )
+
+        connection = sqlite3.connect(f"{tmp_path.resolve().as_uri()}?mode=ro", uri=True)
+        rows = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+        tables = {row[0] for row in rows}
+        if not _LEGACY_JOURNAL_BASELINE_TABLES.issubset(tables):
+            raise HTTPException(status_code=400, detail="Backup contains incompatible journal.db")
+    except HTTPException:
+        raise
+    except (OSError, sqlite3.Error, zipfile.BadZipFile, RuntimeError) as exc:
+        logger.warning("[BACKUP] Refusing invalid legacy journal.db: %s", exc)
+        raise HTTPException(status_code=400, detail="Backup contains invalid journal.db") from exc
+    finally:
+        if connection is not None:
+            connection.close()
+        try:
+            tmp_path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to remove journal validation temp file: %s", exc)
+
+
 def _merge_settings_preserving_redacted(zip_settings_bytes: bytes) -> bytes:
     """Apply restored settings.json on top of existing settings, dropping
-    REDACTED sentinels so existing credentials are preserved.
+    REDACTED sentinels and the instance-bound MCP key.
 
     Mirrors the YAML restore semantics in _restore_settings (lines below) so
     a redacted ZIP behaves the same as a redacted YAML export. Backward-compat:
-    legacy non-redacted ZIPs have no sentinels, so every value is taken as-is.
+    Legacy non-redacted ZIP values remain restorable except for mcp_api_key.
     """
     try:
         zipped = json.loads(zip_settings_bytes)
-    except (json.JSONDecodeError, TypeError):
-        # Validator has already accepted this as JSON; if it's somehow not a
-        # dict, fall back to writing as-is rather than corrupting the file.
-        return zip_settings_bytes
+    except (json.JSONDecodeError, TypeError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Backup contains invalid settings.json") from exc
     if not isinstance(zipped, dict):
-        return zip_settings_bytes
+        raise HTTPException(status_code=400, detail="Backup contains invalid settings.json")
 
     if CONFIG_FILE.exists():
         try:
@@ -3302,13 +3348,17 @@ def _merge_settings_preserving_redacted(zip_settings_bytes: bytes) -> bytes:
     merged = dict(existing)
     skipped = []
     for key, value in zipped.items():
-        if value == REDACTED:
+        if key == "mcp_api_key" or value == REDACTED:
             skipped.append(key)
             continue
         merged[key] = value
     if skipped:
-        logger.info("[BACKUP] Preserved existing values for redacted settings: %s", skipped)
-    return json.dumps(merged, indent=2).encode("utf-8")
+        logger.info("[BACKUP] Preserved existing protected settings: %s", skipped)
+    try:
+        validated = DispatcharrSettings.model_validate(merged)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="Backup contains invalid settings.json") from exc
+    return json.dumps(validated.model_dump(mode="json"), indent=2).encode("utf-8")
 
 
 def _capture_existing_alert_method_configs() -> dict[int, dict]:
@@ -3781,6 +3831,12 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     """Restore files from a validated backup zip."""
     restored = []
 
+    # Finish settings validation and normalization before any database shutdown
+    # or live write. The resulting bytes are the only settings bytes installed.
+    restored_settings = None
+    if "settings.json" in zf.namelist():
+        restored_settings = _merge_settings_preserving_redacted(zf.read("settings.json"))
+
     # Capture existing alert_methods.config BEFORE we close/replace the DB so
     # we can merge real creds back where the restored ZIP has REDACTED.
     prior_alert_configs = _capture_existing_alert_method_configs()
@@ -3802,8 +3858,8 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     try:
         # Restore settings.json — drop REDACTED sentinels in favor of the
         # currently-on-disk value, mirroring YAML restore semantics.
-        if "settings.json" in zf.namelist():
-            CONFIG_FILE.write_bytes(_merge_settings_preserving_redacted(zf.read("settings.json")))
+        if restored_settings is not None:
+            CONFIG_FILE.write_bytes(restored_settings)
             restored.append("settings.json")
             logger.info("[BACKUP] Restored settings.json")
 
