@@ -10,6 +10,8 @@ Mocking pattern follows the sibling direct-client unit tests: construct a real
 ``DispatcharrClient`` and patch ``_request``, so the endpoint, the return
 parsing, and the error handling are exercised without a live HTTP round-trip.
 """
+import asyncio
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -83,3 +85,21 @@ async def test_transport_failure_propagates_to_the_caller():
     ):
         with pytest.raises(httpx.ConnectError):
             await client.fetch_logo_image(13)
+
+
+@pytest.mark.asyncio
+async def test_timeout_bounds_the_complete_fetch_operation():
+    client = _make_client()
+
+    async def _hang(*_args, **_kwargs):
+        await asyncio.Event().wait()
+
+    with patch.object(client, "_request", AsyncMock(side_effect=_hang)) as request:
+        with pytest.raises(TimeoutError):
+            await client.fetch_logo_image(13, timeout=0.01)
+
+    request.assert_awaited_once_with(
+        "GET",
+        "/api/channels/logos/13/cache/",
+        timeout=0.01,
+    )

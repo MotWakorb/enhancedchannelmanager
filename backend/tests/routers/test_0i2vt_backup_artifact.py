@@ -237,7 +237,7 @@ def _patched_build(
     # logo. Default: every fetch comes back empty, which is the pre-fix shape.
     images = logo_images or {}
 
-    async def _fetch_logo_image(logo_id):
+    async def _fetch_logo_image(logo_id, *, timeout=None):
         outcome = images.get(logo_id)
         if isinstance(outcome, Exception):
             raise outcome
@@ -1042,10 +1042,10 @@ class TestLogoByteBudgets:
         assert logo_members == ["binary/logos/one.png"]
 
     @pytest.mark.asyncio
-    async def test_wall_clock_budget_stops_a_hung_fetch_and_counts_the_rest(
+    async def test_wall_clock_budget_bounds_the_fetch_and_counts_the_rest(
         self, tmp_path, monkeypatch
     ):
-        """One unanswered logo request cannot stall the whole backup."""
+        """The remaining aggregate budget is enforced by the owned client."""
         monkeypatch.setattr(backup_mod, "_LOGO_FETCH_BUDGET_SECONDS", 0.01)
         monkeypatch.setattr(
             backup_mod,
@@ -1053,24 +1053,24 @@ class TestLogoByteBudgets:
             lambda _spool_dir, _committed_bytes: 1024,
         )
 
-        async def _hang(_logo_id):
-            await asyncio.Event().wait()
+        observed_timeouts = []
+
+        async def _time_out(_logo_id, *, timeout):
+            observed_timeouts.append(timeout)
+            raise TimeoutError
 
         client = MagicMock()
-        client.fetch_logo_image = AsyncMock(side_effect=_hang)
+        client.fetch_logo_image = AsyncMock(side_effect=_time_out)
         source_logos = [
             {"id": 1, "name": "One", "url": "/data/logos/one.png"},
             {"id": 2, "name": "Two", "url": "/data/logos/two.png"},
         ]
 
-        result = await asyncio.wait_for(
-            backup_mod._gather_dispatcharr_logo_payloads(
-                source_logos,
-                client=client,
-                spool_dir=tmp_path,
-                taken_filenames=set(),
-            ),
-            timeout=0.5,
+        result = await backup_mod._gather_dispatcharr_logo_payloads(
+            source_logos,
+            client=client,
+            spool_dir=tmp_path,
+            taken_filenames=set(),
         )
 
         entries, metadata, mappings, misses = result
@@ -1079,51 +1079,7 @@ class TestLogoByteBudgets:
         assert mappings == {}
         assert misses == 2
         assert client.fetch_logo_image.await_count == 1
-
-    @pytest.mark.asyncio
-    async def test_wall_clock_budget_discards_a_result_after_suppressed_cancellation(
-        self, tmp_path, monkeypatch
-    ):
-        """A client that mishandles cancellation still cannot extend the gather."""
-        monkeypatch.setattr(backup_mod, "_LOGO_FETCH_BUDGET_SECONDS", 0.01)
-        monkeypatch.setattr(
-            backup_mod,
-            "_logo_byte_budget",
-            lambda _spool_dir, _committed_bytes: 1024,
-        )
-        late_fetch_finished = asyncio.Event()
-
-        async def _suppress_cancellation(_logo_id):
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                await asyncio.sleep(0.2)
-                late_fetch_finished.set()
-                return PNG_1X1
-
-        client = MagicMock()
-        client.fetch_logo_image = AsyncMock(side_effect=_suppress_cancellation)
-        started = asyncio.get_running_loop().time()
-
-        result = await asyncio.wait_for(
-            backup_mod._gather_dispatcharr_logo_payloads(
-                [{"id": 1, "name": "One", "url": "/data/logos/one.png"}],
-                client=client,
-                spool_dir=tmp_path,
-                taken_filenames=set(),
-            ),
-            timeout=0.1,
-        )
-        elapsed = asyncio.get_running_loop().time() - started
-
-        entries, metadata, mappings, misses = result
-        assert elapsed < 0.1
-        assert entries == []
-        assert metadata == []
-        assert mappings == {}
-        assert misses == 1
-        await asyncio.wait_for(late_fetch_finished.wait(), timeout=0.5)
-        assert list(tmp_path.iterdir()) == []
+        assert observed_timeouts == pytest.approx([0.01], abs=0.005)
 
     def test_a_logo_over_the_per_logo_cap_is_not_archived(self, tmp_path):
         """The per-logo cap mirrors the restore-side validator's own cap, so the

@@ -1191,7 +1191,12 @@ class DispatcharrClient:
             raise Exception(f"Logo upload failed: {response.status_code} - {error_body}")
         return response.json()
 
-    async def fetch_logo_image(self, logo_id: int) -> Optional[bytes]:
+    async def fetch_logo_image(
+        self,
+        logo_id: int,
+        *,
+        timeout: Optional[float] = None,
+    ) -> Optional[bytes]:
         """Fetch ONE logo's image BYTES from Dispatcharr's cache endpoint.
 
         Dispatcharr is the source of truth for logo images, including the ones
@@ -1209,6 +1214,8 @@ class DispatcharrClient:
 
         Args:
             logo_id: The Dispatcharr logo id.
+            timeout: Maximum total seconds for authentication, request, and any
+                401 retry. ``None`` uses the client's normal request timeout.
 
         Returns:
             The image bytes, or ``None`` when the upstream returned any error
@@ -1216,7 +1223,20 @@ class DispatcharrClient:
             A TRANSPORT failure raises, so a caller that must not fail hard
             wraps the call.
         """
-        response = await self._request("GET", f"/api/channels/logos/{logo_id}/cache/")
+        try:
+            if timeout is None:
+                response = await self._request(
+                    "GET", f"/api/channels/logos/{logo_id}/cache/"
+                )
+            else:
+                async with asyncio.timeout(timeout):
+                    response = await self._request(
+                        "GET",
+                        f"/api/channels/logos/{logo_id}/cache/",
+                        timeout=timeout,
+                    )
+        except httpx.TimeoutException as e:
+            raise TimeoutError from e
         if response.status_code >= 400:
             # Never log the url or the body: both can carry a path or a token.
             logger.warning(

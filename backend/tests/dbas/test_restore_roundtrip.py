@@ -947,7 +947,9 @@ async def _build_artifact_with_source_logos(
     client.get_dvr_rules = AsyncMock(return_value=[])
     client.get_core_settings = AsyncMock(return_value=[])
     client.get_all_logos_paginated = AsyncMock(return_value=source_logos)
-    client.fetch_logo_image = AsyncMock(side_effect=lambda logo_id: logo_images.get(logo_id))
+    client.fetch_logo_image = AsyncMock(
+        side_effect=lambda logo_id, **_kwargs: logo_images.get(logo_id)
+    )
     if epg_data_error is not None:
         client.get_epg_data = AsyncMock(side_effect=epg_data_error)
     else:
