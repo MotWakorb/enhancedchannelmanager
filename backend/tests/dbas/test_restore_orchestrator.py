@@ -42,6 +42,7 @@ from dbas.restore_orchestrator import (
     run_restore,
     run_rollback,
 )
+from dbas.destination_read import DestinationReadError, ReadObservingClient
 
 _GOOD_MANIFEST = {"schema_version": 1}
 
@@ -270,6 +271,23 @@ async def test_rollback_404_counts_as_success(tmp_path):
     assert result.complete is True
     assert result.residue == []
     assert all(e.compensated for e in ledger.entries)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rollback_opens_explicit_delete_compensation_scope(tmp_path):
+    inner = _client()
+    inner.get_m3u_accounts.side_effect = _http_error(503)
+    report = _report()
+    client = ReadObservingClient(inner, report, reject_mutations=True)
+    with pytest.raises(DestinationReadError):
+        await client.get_m3u_accounts()
+    ledger = _ledger("explicit-compensation")
+    ledger.record_created(EntityType.M3U_ACCOUNT, 901, "prov")
+
+    result = await run_rollback(ledger=ledger, client=client, ledger_dir=tmp_path)
+
+    assert result.complete is True
+    inner.delete_m3u_account.assert_awaited_once_with(901)
 
 
 # ---------------------------------------------------------------------------
