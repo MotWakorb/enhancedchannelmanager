@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- **Supported MCP Compose deployments now project an owner-only API key during startup instead of leaving the sidecar permanently not ready (bead `enhancedchannelmanager-71von`, build 0150).** A fresh dedicated projection volume previously received only the sidecar's private backend credentials; the public `api-key` appeared only after an operator generated or saved a key, and the container gate hid that gap by making the API call before checking `/health`. Startup now provisions a key when the persisted field does not yet exist and republishes an existing upgrade key unchanged, always through the existing atomic mode-`0600` projection. An explicitly empty field remains revoked and `/health` remains fail-closed. No key value is logged or added to health responses.
+- **Supported MCP Compose deployments now project an owner-only API key during startup instead of leaving the sidecar permanently not ready (bead `enhancedchannelmanager-71von`, build 0151).** A fresh dedicated projection volume previously received only the sidecar's private backend credentials; the public `api-key` appeared only after an operator generated or saved a key, and the container gate hid that gap by making the API call before checking `/health`. Startup now provisions a key when the persisted field does not yet exist and republishes an existing upgrade key unchanged, always through the existing atomic mode-`0600` projection. An explicitly empty field remains revoked and `/health` remains fail-closed. No key value is logged or added to health responses.
 
 ### Added
 
