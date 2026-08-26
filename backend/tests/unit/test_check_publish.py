@@ -558,6 +558,39 @@ class TestCommitIsOnBranch:
     def test_unknown_branch_returns_none(self, script, repo):
         assert script.commit_is_on_branch(repo.tip, "no-such-branch-xyzzy") is None
 
+    def test_missing_ref_status_remains_unknown(self, script, monkeypatch):
+        monkeypatch.setattr(
+            script,
+            "_run",
+            lambda cmd, timeout=60: subprocess.CompletedProcess(
+                cmd, 1, stdout="", stderr="missing ref"
+            ),
+        )
+        assert script.commit_is_on_branch(TEST_SHA, "missing") is None
+
+    def test_rev_parse_operational_failure_raises_check_error(self, script, monkeypatch):
+        monkeypatch.setattr(
+            script,
+            "_run",
+            lambda cmd, timeout=60: subprocess.CompletedProcess(
+                cmd, 128, stdout="", stderr="fatal: corrupt ref database"
+            ),
+        )
+        with pytest.raises(script.CheckError, match="rev-parse.*corrupt ref database"):
+            script.commit_is_on_branch(TEST_SHA, "dev")
+
+    def test_merge_base_operational_failure_raises_check_error(self, script, monkeypatch):
+        def git_result(cmd, timeout=60):
+            if "rev-parse" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=TEST_SHA, stderr="")
+            return subprocess.CompletedProcess(
+                cmd, 2, stdout="", stderr="fatal: invalid commit graph"
+            )
+
+        monkeypatch.setattr(script, "_run", git_result)
+        with pytest.raises(script.CheckError, match="merge-base.*invalid commit graph"):
+            script.commit_is_on_branch(TEST_SHA, "dev")
+
 
 # --- Whole-path verdicts ----------------------------------------------------
 
@@ -625,6 +658,27 @@ class TestMainVerdict:
         assert "reusable publish job succeeded" in output.out
         assert "ECM_VERSION matches" in output.out
         assert "GIT_COMMIT matches" in output.out
+
+    @pytest.mark.parametrize("operation", ["rev-parse", "merge-base"])
+    def test_branch_git_nonzero_is_incomplete_but_collects_evidence(
+        self, script, main_boundaries, monkeypatch, capsys, operation
+    ):
+        def git_failure(cmd, **kwargs):
+            if operation == "merge-base" and "rev-parse" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=TEST_SHA, stderr="")
+            return subprocess.CompletedProcess(
+                cmd, 128 if operation == "rev-parse" else 2, stdout="", stderr="git failed"
+            )
+
+        monkeypatch.setattr(script.subprocess, "run", git_failure)
+
+        assert script.main(["--commit", TEST_SHA]) == 1
+        output = capsys.readouterr()
+        assert "INCOMPLETE:" in output.err
+        assert operation in output.err
+        assert "git failed" in output.err
+        assert "reusable publish job succeeded" in output.out
+        assert "ECM_VERSION matches" in output.out
 
     @pytest.mark.parametrize(
         ("host_marker", "host_value"),

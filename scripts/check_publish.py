@@ -234,15 +234,42 @@ def commit_is_on_branch(sha: str, branch: str) -> bool | None:
     as "the commit is not on the branch".
     """
     for ref in (f"origin/{branch}", branch):
-        probe = _run(["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", ref], timeout=60)
-        if probe.returncode != 0:
+        probe_cmd = [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            ref,
+        ]
+        probe = _run(probe_cmd, timeout=60)
+        if probe.returncode == 1:
             continue
-        result = _run(
-            ["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", sha, ref],
-            timeout=60,
+        if probe.returncode != 0:
+            raise CheckError(
+                f"{' '.join(probe_cmd)} failed ({probe.returncode}): "
+                f"{probe.stderr.strip() or 'no stderr'}"
+            )
+
+        ancestor_cmd = [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "merge-base",
+            "--is-ancestor",
+            sha,
+            ref,
+        ]
+        result = _run(ancestor_cmd, timeout=60)
+        if result.returncode == 0:
+            return True
+        if result.returncode == 1:
+            return False
+        raise CheckError(
+            f"{' '.join(ancestor_cmd)} failed ({result.returncode}): "
+            f"{result.stderr.strip() or 'no stderr'}"
         )
-        if result.returncode in (0, 1):
-            return result.returncode == 0
     return None
 
 
