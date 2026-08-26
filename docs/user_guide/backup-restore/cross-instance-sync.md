@@ -86,7 +86,7 @@ allows runs to reach B; it does not create or enable a recurring schedule.
 ECM also creates a matching **Cross-Instance Sync: `<target>`** task
 automatically. Task creation is best-effort: if it is missing from **Scheduled
 Tasks**, restart ECM to run the startup reconciliation, then reload the page. If
-it is still missing, check the ECM log for `Failed to register sync task` and
+it is still missing, check the ECM log for `Failed to register sync` and
 fix that registration error before scheduling sync.
 
 ![Newly created enabled Disposable B target before its first run](../../images/user_guide/backup-restore/1-sync-target-row.png)
@@ -247,7 +247,7 @@ Common causes:
 - **B is unreachable**: confirm connectivity to `base_url` from the ECM container.
 - **Credentials rotated/revoked**: if B's API credentials changed after the sync schedule was set up, ECM aborts the run at the credential-freshness check. Edit the sync target, update the credentials, save, and trigger a manual sync.
 - **Automatic sync does not start**: check all three gates. The target row must show **Enabled**; in **Scheduled Tasks**, **Enable task** must be on; and at least one schedule must have **Enable this schedule** on. Also confirm that schedule has **Apply changes on every scheduled run** enabled.
-- **Per-target task is missing**: restart ECM to run startup reconciliation, reload **Scheduled Tasks**, and look again for **Cross-Instance Sync: `<target>`**. If it is still absent, check the ECM log for `Failed to register sync task` and correct the reported registration error.
+- **Per-target task is missing**: restart ECM to run startup reconciliation, reload **Scheduled Tasks**, and look again for **Cross-Instance Sync: `<target>`**. If it is still absent, check the ECM log for `Failed to register sync` and correct the reported registration error.
 - **Partial-apply loop**: the sync runs but a category keeps failing on apply (not B unreachable, but a recurring mix/rollback). Pull the most recent sync report from the task history; identify the failing category.
 
 ### The sync reports "Completed with Warnings"
