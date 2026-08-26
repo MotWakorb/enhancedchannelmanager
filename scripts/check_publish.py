@@ -25,8 +25,9 @@ unrelated merge republished it by accident.
 
 ## What it checks
 
-  1. The "Publish Verified Images" workflow run for the commit under
-     test concluded `success`.
+  1. The "Tests" push run for the commit under test concluded `success`,
+     and its reusable "Publish Verified Dev Images" workflow completed the
+     final multi-arch manifest publication job successfully.
   2. The published tag's build marker (`ECM_VERSION`, baked into the
      image by the Dockerfile from the `ECM_VERSION` build-arg) equals the
      version in `frontend/package.json` AT THAT COMMIT.
@@ -83,7 +84,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "ghcr.io/motwakorb/enhancedchannelmanager"
 DEFAULT_TAG = "dev"
 DEFAULT_BRANCH = "dev"
-WORKFLOW_NAME = "Publish Verified Images"
+WORKFLOW_NAME = "Tests"
+PUBLISH_JOB_NAME = "Publish Verified Dev Images / Publish Verified Multi-Arch Manifests"
 MARKER_ENV = "ECM_VERSION"
 COMMIT_ENV = "GIT_COMMIT"
 
@@ -280,6 +282,26 @@ def fetch_workflow_runs(slug: str, sha: str) -> list[dict]:
     return runs if isinstance(runs, list) else []
 
 
+def fetch_workflow_jobs(slug: str, run_id: int, run_attempt: int) -> list[dict]:
+    result = _run(
+        [
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github+json",
+            f"repos/{slug}/actions/runs/{run_id}/attempts/{run_attempt}/jobs?per_page=100",
+        ]
+    )
+    if result.returncode != 0:
+        raise CheckError(f"gh api call for workflow jobs failed: {result.stderr.strip()}")
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise CheckError(f"unparseable gh api response: {error}") from error
+    jobs = payload.get("jobs")
+    return jobs if isinstance(jobs, list) else []
+
+
 def select_build_run(runs: list[dict], workflow_name: str, branch: str) -> dict | None:
     """Pick the newest `workflow_name` run for `branch`, re-runs included.
 
@@ -297,6 +319,10 @@ def select_build_run(runs: list[dict], workflow_name: str, branch: str) -> dict 
     if not candidates:
         return None
     return max(candidates, key=lambda run: (run.get("run_number") or 0, run.get("run_attempt") or 0))
+
+
+def select_publish_job(jobs: list[dict]) -> dict | None:
+    return next((job for job in jobs if job.get("name") == PUBLISH_JOB_NAME), None)
 
 
 # --- Check 2: the published build marker ------------------------------------
@@ -467,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
     errors: list[str] = []
 
     # --- Check 1 ---
-    print("\n[1/2] Publish Verified Images workflow run")
+    print("\n[1/2] Tests run and reusable publish job")
     if args.skip_workflow:
         print("  SKIPPED (--skip-workflow)")
     else:
@@ -505,7 +531,35 @@ def main(argv: list[str] | None = None) -> int:
                         f"from the URL above once the cause is understood."
                     )
                 else:
-                    print("  OK: the merge commit's image build succeeded.")
+                    jobs = fetch_workflow_jobs(
+                        slug, int(run["id"]), int(run.get("run_attempt") or 1)
+                    )
+                    publish_job = select_publish_job(jobs)
+                    if publish_job is None:
+                        failures.append(
+                            f"the Tests run succeeded but carried no {PUBLISH_JOB_NAME!r} "
+                            "job. A green test rollup alone does not prove publication."
+                        )
+                        print("  publish job: not found")
+                    else:
+                        publish_status = publish_job.get("status")
+                        publish_conclusion = publish_job.get("conclusion")
+                        print(f"  publish job status    : {publish_status}")
+                        print(f"  publish job conclusion: {publish_conclusion}")
+                        print(f"  publish job url       : {publish_job.get('html_url')}")
+                        if publish_status != "completed":
+                            failures.append(
+                                f"the reusable publish job is still {publish_status!r}. "
+                                "Nothing has published yet; re-run this check when it finishes."
+                            )
+                        elif publish_conclusion != "success":
+                            failures.append(
+                                f"the reusable publish job concluded {publish_conclusion!r}, "
+                                "so the registry is serving an older build. Re-run the failed "
+                                "Tests workflow from the URL above once the cause is understood."
+                            )
+                        else:
+                            print("  OK: the exact attempt's reusable publish job succeeded.")
         except CheckError as error:
             errors.append(str(error))
             print(f"  COULD NOT CHECK: {error}")

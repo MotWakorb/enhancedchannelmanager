@@ -131,7 +131,8 @@ def repo(tmp_path, script, monkeypatch) -> FakeRepo:
 
 def _run(number, *, event="push", branch="dev", name=None, attempt=1, conclusion="success"):
     return {
-        "name": name or "Publish Verified Images",
+        "id": 33003267130,
+        "name": name or "Tests",
         "head_branch": branch,
         "event": event,
         "run_number": number,
@@ -142,13 +143,26 @@ def _run(number, *, event="push", branch="dev", name=None, attempt=1, conclusion
     }
 
 
+def _job(
+    name="Publish Verified Dev Images / Publish Verified Multi-Arch Manifests",
+    *,
+    conclusion="success",
+):
+    return {
+        "name": name,
+        "status": "completed",
+        "conclusion": conclusion,
+        "html_url": "https://example.invalid/jobs/98294803170",
+    }
+
+
 # --- Run selection ----------------------------------------------------------
 
 
 class TestSelectBuildRun:
     def test_picks_the_matching_push_run(self, script):
         runs = [_run(10)]
-        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
+        chosen = script.select_build_run(runs, "Tests", "dev")
         assert chosen is not None and chosen["run_number"] == 10
 
     def test_ignores_pull_request_runs_for_the_same_sha(self, script):
@@ -159,18 +173,18 @@ class TestSelectBuildRun:
             _run(11, event="pull_request", branch="feature", conclusion="success"),
             _run(12, event="push", conclusion="failure"),
         ]
-        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
+        chosen = script.select_build_run(runs, "Tests", "dev")
         assert chosen is not None
         assert chosen["run_number"] == 12
         assert chosen["conclusion"] == "failure"
 
     def test_ignores_other_workflows(self, script):
-        runs = [_run(13, name="Tests")]
-        assert script.select_build_run(runs, "Publish Verified Images", "dev") is None
+        runs = [_run(13, name="Build and Push Docker Image")]
+        assert script.select_build_run(runs, "Tests", "dev") is None
 
     def test_ignores_runs_on_another_branch(self, script):
         runs = [_run(14, branch="main")]
-        assert script.select_build_run(runs, "Publish Verified Images", "dev") is None
+        assert script.select_build_run(runs, "Tests", "dev") is None
 
     def test_prefers_the_latest_attempt_of_a_rerun(self, script):
         """A re-run that fixes a flake is the state of record, not the
@@ -180,11 +194,43 @@ class TestSelectBuildRun:
             _run(20, attempt=1, conclusion="failure"),
             _run(20, attempt=2, conclusion="success"),
         ]
-        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
+        chosen = script.select_build_run(runs, "Tests", "dev")
         assert chosen is not None and chosen["run_attempt"] == 2
 
     def test_returns_none_for_an_empty_list(self, script):
-        assert script.select_build_run([], "Publish Verified Images", "dev") is None
+        assert script.select_build_run([], "Tests", "dev") is None
+
+
+class TestSelectPublishJob:
+    def test_selects_the_reusable_workflow_manifest_job(self, script):
+        chosen = script.select_publish_job([_job()])
+        assert chosen is not None
+        assert chosen["conclusion"] == "success"
+
+    def test_green_tests_run_without_publish_job_is_not_proof(self, script):
+        jobs = [_job(name="Backend Tests"), _job(name="Frontend Tests")]
+        assert script.select_publish_job(jobs) is None
+
+    def test_failed_publish_job_is_returned_for_the_verdict(self, script):
+        chosen = script.select_publish_job([_job(conclusion="failure")])
+        assert chosen is not None
+        assert chosen["conclusion"] == "failure"
+
+    def test_similarly_named_job_is_not_accepted(self, script):
+        jobs = [_job(name="Publish Verified Dev Images / Publish Images (AMD64)")]
+        assert script.select_publish_job(jobs) is None
+
+    def test_fetches_jobs_from_the_selected_rerun_attempt(self, script, monkeypatch):
+        calls = []
+
+        def fake_run(cmd, *, timeout=300):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout='{"jobs": []}', stderr="")
+
+        monkeypatch.setattr(script, "_run", fake_run)
+        script.fetch_workflow_jobs("owner/repo", 1234, 3)
+
+        assert "repos/owner/repo/actions/runs/1234/attempts/3/jobs?per_page=100" in calls[0]
 
 
 # --- Image config parsing ---------------------------------------------------

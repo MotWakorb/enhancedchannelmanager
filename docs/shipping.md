@@ -210,10 +210,12 @@ Read that summary before treating a green rollup as proof the suite passed. `gh 
 A merged PR is not a published image. Merging to `dev` triggers independent
 **Tests** and **Build and Push Docker Image** verification workflows. Image
 builds and scans no longer wait on a polling job: a wedged test runner cannot
-hide image-build evidence. Completion of either workflow triggers **Publish
-Verified Images**, which publishes only when both exact-SHA push workflows are
-successful and the SHA is still the current branch head. Until then, mutable
-tags retain their last known-good image.
+hide image-build evidence. After its required test jobs succeed, the **Tests**
+workflow calls `publish-images.yml` as the reusable **Publish Verified Dev
+Images** job. That called workflow publishes only when the exact-SHA build
+evidence is successful and the SHA is still the current `dev` head. There is
+no separate **Publish Verified Images** Actions run on the dev path. Until
+publication succeeds, mutable tags retain their last known-good image.
 
 The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
 
@@ -232,7 +234,7 @@ So after `git checkout dev && git pull`, run:
 
 The script checks two things for the merge commit at `HEAD`:
 
-1. The **Publish Verified Images** workflow run for that commit concluded `success`.
+1. The exact SHA's **Tests** push run concluded `success`, and its final reusable **Publish Verified Dev Images / Publish Verified Multi-Arch Manifests** job concluded `success` on the same run attempt. An overall green Tests run without that job is not accepted as publication proof.
 2. The published tag's build marker (`ECM_VERSION`, baked into the image from the `ECM_VERSION` build-arg) equals the version in `frontend/package.json` **at that commit**.
 
 Both must hold. A green workflow with a stale marker means the push did not land on the tag. A correct marker with a failed workflow means the tag is still serving an older build.
