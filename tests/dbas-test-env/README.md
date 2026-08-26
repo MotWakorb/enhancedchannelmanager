@@ -1617,6 +1617,74 @@ docker image rm ecm-kdz6p:aed7447b
 ```
 plus the two blocks under "Tearing the whole thing down" above.
 
+---
+
+# Acceptance evidence record - 2026-08-26
+
+**PARTIAL EVIDENCE ONLY; this record does not establish A/B equivalence or
+repeat-run idempotency.** The run used Dispatcharr **0.29.0** on A and B and ECM
+commit **`8e9fb19bc68de3f138bf73a3aeb2373596703cfe`** in the retained disposable
+environment. It recorded no provider host, username, password, stream URL, or
+raw custom property.
+
+## Evidence retained
+
+- Preview across 11 categories reported **create 1,416 / update 6 / skip 9 / 0 conflicts**.
+- Apply reported **create 951 / update 6 / failed 0**.
+- B after apply was recorded as **316 channels, 316 streams, 316 channel-stream links; 316 logos and 316 channel-logo bindings; 781 channel groups; 782 account-group rows with 5 enabled; 4 M3U accounts including the `ECM Custom Streams (DBAS restore)` fallback; 1 EPG source**.
+- One representative B channel returned a client-bounded **1,880-byte MPEG-TS sample** with valid TS framing. The stream address was neither recorded nor printed.
+- A provider credential was rotated on A, propagated to B, restored on A, and propagated to B again. Verification compared outcomes without displaying or recording either value.
+- Logo evidence covers **remote-URL replication and channel-logo binding only**. All 316 logos were provider-published remote URLs, and ECM's `/config/uploads/logos/` remained empty. This run did **not** exercise copying Dispatcharr-hosted logo bytes.
+- Repeat preview reported **create 0 / update 6 / skip 1,109**; repeat apply reported **create 0 / update 322 / failed 0**.
+
+## Audit limits
+
+- No exact pre-sync B baseline from this run was retained. The earlier baseline
+  under **The sync, and what was read off B** belongs to the separate 2026-08-21
+  run and cannot prove that this run started from the same state. "Fresh
+  destination" is therefore not an auditable conclusion here.
+- The retained evidence does not include per-category reports that reconcile
+  preview **create 1,416** with apply **create 951**, or repeat-preview **update
+  6** with repeat-apply **update 322**. Preview plans and apply counters are
+  recorded as different observations; the discrepancies remain unexplained and
+  must not be interpreted as either loss or convergence.
+- The claimed 15-collection fingerprint proof was not retained with the names
+  of the collections, the normalization exclusions, the comparison command, or
+  the before/after hashes. Those 15 collections therefore cannot be enumerated
+  without invention, and the former unchanged-fingerprint/idempotency claim is
+  withdrawn.
+- No retained A-vs-B normalized comparison covers the accepted categories. The
+  destination counts and one playback sample support only the checks stated
+  above, not configuration equivalence.
+- **`v7d37` credential-bearing XC EPG URL behavior was not exercised.** This
+  fixture used the credential-free `cdn.epg.guru` source; no
+  `xmltv.php?username=...&password=...` EPG source existed in the run.
+
+## Residual defect outside acceptance scope
+
+**`enhancedchannelmanager-ydmu3` remains a separate defect and is explicitly
+out of this acceptance scope.** ECM's UI bulk channel creation dropped the
+staged stream assignments. Before continuing the acceptance run, the disposable
+A fixture was repaired through the documented Dispatcharr channel `PATCH` API,
+and only after the operator proved that each channel had one unique intended
+stream mapping. No production instance was repaired or modified. Acceptance of
+cross-instance sync does not accept, waive, or close the UI bulk-creation defect.
+
+## Screenshot status
+
+Two credential-safe, tightly scoped screenshots now exist and are referenced by
+the guide: `docs/images/user_guide/backup-restore/1-sync-target-row.png` and
+`docs/images/user_guide/backup-restore/2-sync-scheduled-task-card.png`. They show
+only a newly created, enabled target before its first run and the same target's
+enabled recurring task with an active daily schedule. They exclude
+provider-facing fields, stream URLs, raw properties, forms, and browser-native
+confirmation.
+
+Broader captures remain prohibited because the retained environment contains
+live provider material, and broader operational views can expose provider or
+stream secrets through fields, raw properties, URLs, logs, or browser capture
+artifacts.
+
 # ARCHIVE — the retired synthetic-provider measurements
 
 Everything below was measured against the **retired** Dispatcharr-P chain (a
@@ -1706,4 +1774,3 @@ What else the direct read showed, all of it measured, none of it fixed here:
 destroyed, superuser re-created, `stream_settings` cache busted), the temporary
 sync target was deleted, and ECM's notifications were cleared. The destination
 the writer receives is unspent.
-

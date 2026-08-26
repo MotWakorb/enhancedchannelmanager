@@ -52,6 +52,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Starting a new cross-instance preview now revokes the prior Apply authorization immediately (build 0149).** A failed or interrupted re-preview can no longer leave stale **Apply** available for a source-wins overwrite.
+
 - **Cross-instance sync reports now name the M3U accounts and fields each cycle converged instead of showing only an aggregate updated-item count (bead `enhancedchannelmanager-9puak`, build 0148).** Apply summaries identify account names and fields that converged or could not converge, and previews identify fields that would converge, while retaining the existing aggregate updated-item count. Reports include account names and field names only: converged field values and provider URLs remain excluded.
 
 - **A setting you change on your primary now reaches a replica that already has the account, including a rotated provider password (beads `enhancedchannelmanager-zszjd`, `enhancedchannelmanager-296hi`, build 0145).** An M3U account already present on the replica was matched "already exists, identical" and then never written to again — for *every* field, not one. Anything you changed on the primary afterwards diverged silently and permanently: the server URL, username and password, max streams, user agent, refresh interval, custom properties, account type, priority, stale-stream days, active state and the four preference toggles alike. **Auto-enable new groups (Live)** is the one that was measured — flipped on the primary, a cycle ran, and the replica stayed on the old value forever — but it was one field of twenty.
