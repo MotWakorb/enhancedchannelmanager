@@ -239,7 +239,6 @@ describe('useEditMode — a channel created into a group pending in the same bat
           errors: [{
             operationId: 'create-phase-warning',
             operationType: 'addStreamToChannel',
-            applied: true,
             error: 'Assignment landed but its journal entry failed',
           }],
           tempIdMap: { [-1]: FIRST_REAL_CHANNEL_ID },
