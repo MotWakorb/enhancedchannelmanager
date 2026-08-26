@@ -56,6 +56,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Bulk-created channels now retain their staged stream assignments when Apply All runs (bead `enhancedchannelmanager-ydmu3`, build 0150).** Stream assignments for newly created channels stay in the create request so their temporary channel IDs resolve before Dispatcharr applies them.
+
 - **Starting a new cross-instance preview now revokes the prior Apply authorization immediately (build 0149).** A failed or interrupted re-preview can no longer leave stale **Apply** available for a source-wins overwrite.
 
 - **Cross-instance sync reports now name the M3U accounts and fields each cycle converged instead of showing only an aggregate updated-item count (bead `enhancedchannelmanager-9puak`, build 0148).** Apply summaries identify account names and fields that converged or could not converge, and previews identify fields that would converge, while retaining the existing aggregate updated-item count. Reports include account names and field names only: converged field values and provider URLs remain excluded.
