@@ -1652,9 +1652,11 @@ _RESTORE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024  # 2 GiB
 # checklist's ratified defaults (A4): 100x per-entry ratio, 1 GiB cumulative
 # uncompressed, 10,000 entries.
 _ARTIFACT_MAX_ENTRIES = 10_000
+_ARTIFACT_MAX_MANIFEST_BYTES = 1 * 1024 * 1024  # 1 MiB
 _ARTIFACT_MAX_MEMBER_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB per member
 _ARTIFACT_MAX_TOTAL_UNCOMPRESSED = 1 * 1024 * 1024 * 1024  # 1 GiB cumulative
 _ARTIFACT_MAX_ENTRY_RATIO = 100  # max decompressed:compressed per entry
+_ARTIFACT_HASH_CHUNK_BYTES = 1024 * 1024
 # A small stored entry (e.g. a 12-byte manifest) has a degenerate ratio; only
 # entries whose compressed size exceeds this floor are ratio-checked, so a tiny
 # stored file is not falsely flagged. The cumulative + per-entry-size caps still
@@ -3104,6 +3106,15 @@ def guard_artifact_against_zip_bomb(
     for info in infos:
         uncompressed = info.file_size
         compressed = info.compress_size
+        if (
+            info.filename.startswith(ARTIFACT_LOGO_DIR + "/")
+            and uncompressed > MAX_LOGO_BYTES
+        ):
+            logger.warning(
+                "[BACKUP] Refusing restore: logo member %s declared size exceeds %d bytes",
+                info.filename, MAX_LOGO_BYTES,
+            )
+            raise HTTPException(status_code=400, detail="Backup archive rejected")
         if uncompressed > _ARTIFACT_MAX_MEMBER_UNCOMPRESSED:
             logger.warning(
                 "[BACKUP] Refusing restore: member %s declared size exceeds %d bytes",
@@ -3136,7 +3147,39 @@ def guard_artifact_against_zip_bomb(
                 raise HTTPException(status_code=400, detail="Backup archive rejected")
 
 
-def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> None:
+def _is_unambiguous_artifact_member_name(name: str, *, directory: bool) -> bool:
+    """Accept one canonical relative POSIX member spelling."""
+    if not name or "\x00" in name or "\\" in name or name.startswith("/"):
+        return False
+    path = name[:-1] if directory and name.endswith("/") else name
+    if not path or (directory != name.endswith("/")):
+        return False
+    return all(part not in ("", ".", "..") for part in path.split("/"))
+
+
+def _read_artifact_manifest(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> dict:
+    """Read and parse the manifest under its dedicated small-object bound."""
+    if info.is_dir() or info.file_size > _ARTIFACT_MAX_MANIFEST_BYTES:
+        logger.warning("[BACKUP] Refusing restore: artifact manifest exceeds its size limit")
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+    try:
+        with zf.open(info, "r") as source:
+            raw = source.read(_ARTIFACT_MAX_MANIFEST_BYTES + 1)
+        if len(raw) > _ARTIFACT_MAX_MANIFEST_BYTES:
+            raise ValueError("manifest exceeds bounded read")
+        manifest = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, KeyError) as exc:
+        logger.warning("[BACKUP] Refusing restore: unreadable artifact manifest: %s", exc)
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+    if not isinstance(manifest, dict):
+        logger.warning("[BACKUP] Refusing restore: artifact manifest is not an object")
+        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+    return manifest
+
+
+def _verify_artifact_member_integrity(
+    zf: zipfile.ZipFile, manifest: dict, infos: list[zipfile.ZipInfo]
+) -> None:
     """Verify each manifest-listed member's SHA-256 against the ZIP bytes.
 
     Pairs with the version gate at the same chokepoint (grooming: validate
@@ -3156,7 +3199,13 @@ def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> No
         logger.warning("[BACKUP] Refusing restore: manifest has no per-file hash list")
         raise HTTPException(status_code=400, detail="Backup integrity check failed")
 
-    names = set(zf.namelist())
+    members_by_name = {
+        info.filename: info
+        for info in infos
+        if not info.is_dir() and info.filename != ARTIFACT_MANIFEST_NAME
+    }
+    manifest_paths: set[str] = set()
+    entries_to_hash: list[tuple[str, str]] = []
     for entry in files:
         if not isinstance(entry, dict):
             logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
@@ -3166,10 +3215,34 @@ def _verify_artifact_member_integrity(zf: zipfile.ZipFile, manifest: dict) -> No
         if not isinstance(path, str) or not isinstance(expected, str):
             logger.warning("[BACKUP] Refusing restore: malformed manifest file entry %r", entry)
             raise HTTPException(status_code=400, detail="Backup integrity check failed")
-        if path not in names:
+        if (
+            path == ARTIFACT_MANIFEST_NAME
+            or not _is_unambiguous_artifact_member_name(path, directory=False)
+            or path in manifest_paths
+        ):
+            logger.warning("[BACKUP] Refusing restore: duplicate or ambiguous manifest path %r", path)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        manifest_paths.add(path)
+        if path not in members_by_name:
             logger.warning("[BACKUP] Refusing restore: manifest member %s absent from artifact", path)
             raise HTTPException(status_code=400, detail="Backup integrity check failed")
-        actual = hashlib.sha256(zf.read(path)).hexdigest()
+        entries_to_hash.append((path, expected))
+
+    member_paths = set(members_by_name)
+    if manifest_paths != member_paths:
+        logger.warning(
+            "[BACKUP] Refusing restore: manifest membership differs from archive "
+            "(unlisted=%r, missing=%r)",
+            sorted(member_paths - manifest_paths), sorted(manifest_paths - member_paths),
+        )
+        raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+    for path, expected in entries_to_hash:
+        digest = hashlib.sha256()
+        with zf.open(members_by_name[path], "r") as member:
+            while chunk := member.read(_ARTIFACT_HASH_CHUNK_BYTES):
+                digest.update(chunk)
+        actual = digest.hexdigest()
         if actual != expected:
             logger.warning(
                 "[BACKUP] Refusing restore: integrity mismatch on member %s "
@@ -3183,11 +3256,14 @@ def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
 
     Runs BEFORE any restore mutation, in this order:
 
-    1. parse the cleartext ``manifest.json`` header,
-    2. **version gate** — refuse a newer/unknown schema_version (the highest
+    1. reject duplicate or ambiguous ZIP member names from central-directory
+       metadata,
+    2. bounded-parse the cleartext ``manifest.json`` header,
+    3. **version gate** — refuse a newer/unknown schema_version (the highest
        priority: an incompatible artifact is rejected before we even trust its
        integrity claims), then
-    3. **integrity** — verify each manifest-listed member's SHA-256.
+    4. **integrity** — require one manifest row per non-directory payload and
+       verify each member's SHA-256.
 
     Returns the parsed manifest on success. Refusals raise ``HTTPException(400)``
     with a user-facing message that leaks NO schema internals; the version
@@ -3198,19 +3274,22 @@ def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
     # below. A high-ratio member must be refused before it can be decompressed.
     guard_artifact_against_zip_bomb(zf)
 
-    if ARTIFACT_MANIFEST_NAME not in zf.namelist():
+    infos = zf.infolist()
+    seen_names: set[str] = set()
+    for info in infos:
+        if info.filename in seen_names:
+            logger.warning("[BACKUP] Refusing restore: duplicate archive member %r", info.filename)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+        seen_names.add(info.filename)
+        if not _is_unambiguous_artifact_member_name(info.filename, directory=info.is_dir()):
+            logger.warning("[BACKUP] Refusing restore: ambiguous archive member %r", info.filename)
+            raise HTTPException(status_code=400, detail="Backup integrity check failed")
+
+    if ARTIFACT_MANIFEST_NAME not in seen_names:
         logger.warning("[BACKUP] Refusing restore: artifact missing %s", ARTIFACT_MANIFEST_NAME)
         raise HTTPException(status_code=400, detail="Not a valid ECM backup artifact")
 
-    try:
-        manifest = json.loads(zf.read(ARTIFACT_MANIFEST_NAME))
-    except (json.JSONDecodeError, KeyError) as e:
-        logger.warning("[BACKUP] Refusing restore: unreadable artifact manifest: %s", e)
-        raise HTTPException(status_code=400, detail="Invalid backup manifest")
-
-    if not isinstance(manifest, dict):
-        logger.warning("[BACKUP] Refusing restore: artifact manifest is not an object")
-        raise HTTPException(status_code=400, detail="Invalid backup manifest")
+    manifest = _read_artifact_manifest(zf, zf.getinfo(ARTIFACT_MANIFEST_NAME))
 
     # 2. Version gate FIRST — refuse an incompatible artifact before trusting
     #    anything else about it. Translate the internal exception into the
@@ -3221,7 +3300,7 @@ def validate_artifact_manifest(zf: zipfile.ZipFile) -> dict:
         raise HTTPException(status_code=400, detail=str(e))
 
     # 3. Integrity AFTER the version is known-supported.
-    _verify_artifact_member_integrity(zf, manifest)
+    _verify_artifact_member_integrity(zf, manifest, infos)
 
     return manifest
 

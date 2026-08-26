@@ -12,10 +12,9 @@ unpacked into structured records.
 Decode pipeline (validate-before-decode, never the reverse)
 -----------------------------------------------------------
 1. :func:`routers.backup.validate_artifact_manifest` runs FIRST (version gate +
-   per-member SHA-256). It is the caller's responsibility to call it before
-   :func:`decode_artifact_to_plan`; this module re-asserts the manifest is
-   present and parses it but does NOT re-run integrity (the caller already did,
-   on the same open ``ZipFile``). The orchestrator then re-checks the
+   per-member SHA-256) and passes its parsed manifest to
+   :func:`decode_artifact_to_plan`; decode never reads it a second time. The
+   orchestrator then re-checks the
    schema-version a SECOND time in pre-flight (defence in depth — .17 + .18).
 
 2. Per-category YAML (``categories/<section>.yaml``) is parsed and the entity
@@ -23,22 +22,19 @@ Decode pipeline (validate-before-decode, never the reverse)
    slice. Each artifact section maps to exactly one :class:`EntityType`.
 
 3. The binary subtree (``binary/logos/<rel>`` + ``binary/metadata.json``) is
-   decoded into the per-logo records the logos importer (.15) consumes:
-   ``{"name", "filename", "content_b64", "size"}``. The bytes are base64-encoded
-   here so the importer's one-at-a-time decode/upload loop (.15, D8) drives the
-   memory profile — this module never decodes a logo's IMAGE bytes, only reads
-   the stored file bytes and re-encodes them as the transport the importer
-   already expects.
+   decoded into metadata-only per-logo records. :func:`logo_content_provider`
+   reads and base64-encodes one member only when the importer reaches that logo,
+   so the plan never retains aggregate logo payloads.
 
 ZIP-SLIP / PATH-TRAVERSAL SAFETY (the untrusted-upload surface)
 ---------------------------------------------------------------
-This module NEVER extracts a member to the filesystem — it only ``zf.read()``s
-named members it itself chose (the manifest-listed categories + the enumerated
-binary subtree). Even so, every member name pulled from the artifact's own
-listing is screened by :func:`_is_safe_member` (reject absolute paths, ``..``
-segments, and backslash separators) before it is read, so a crafted archive
-entry can never widen the read surface. The logos importer (.15) independently
-re-validates each filename basename before any upload — defence in depth.
+This module NEVER extracts a member to the filesystem. It reads named metadata
+members and streams only logo members it chose from the enumerated binary
+subtree. Every member name pulled from the artifact's own listing is screened by
+:func:`_is_safe_member` (reject absolute paths, ``..`` segments, and backslash
+separators) before it is read, so a crafted archive entry can never widen the
+read surface. The logos importer (.15) independently re-validates each filename
+basename before any upload — defence in depth.
 
 Conventions (``docs/style_guide.md``): ``snake_case``; Google-style docstrings;
 lazy ``%``-formatted logging; no secrets in any log line.
@@ -50,6 +46,7 @@ import base64
 import logging
 import posixpath
 import zipfile
+from collections.abc import Awaitable, Callable
 
 import yaml
 
@@ -64,7 +61,7 @@ logger = logging.getLogger(__name__)
 _CATEGORY_DIR = "categories"
 _LOGO_DIR = "binary/logos"
 _BINARY_METADATA = "binary/metadata.json"
-_MANIFEST_NAME = "manifest.json"
+_LOGO_READ_CHUNK_BYTES = (64 * 1024) - 1  # divisible by 3 for base64 chunking
 
 # Artifact category-file (section) -> the EntityType it restores. The section
 # key is the YAML leaf the builder wrote under ``dispatcharr`` / ``database``.
@@ -371,7 +368,7 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
     consumes::
 
         {"name": <display name or basename-stem>, "filename": <basename>,
-         "content_b64": <base64 of the file bytes>, "size": <byte length>,
+         "archive_member": <validated ZIP member>, "size": <byte length>,
          "id": <source Dispatcharr logo id, when correlated>}
 
     ``id`` + display ``name`` come from the builder's source-logo correlation in
@@ -397,7 +394,6 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
         info = zf.getinfo(name)
         if info.is_dir():
             continue
-        raw = zf.read(name)
         basename = posixpath.basename(name)
         if not basename:
             continue
@@ -405,8 +401,8 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
         record = {
             "name": stem,
             "filename": basename,
-            "content_b64": base64.b64encode(raw).decode("ascii"),
-            "size": len(raw),
+            "archive_member": name,
+            "size": info.file_size,
         }
         # Metadata is keyed by the file's logos-dir-relative path (== the member
         # name minus the binary/logos/ prefix).
@@ -422,27 +418,47 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
     return records
 
 
-def _parse_manifest(zf: zipfile.ZipFile) -> dict:
-    """Parse the cleartext ``manifest.json`` header, or return ``{}`` if absent.
+def _read_logo_content_b64(zf: zipfile.ZipFile, member: str) -> str:
+    """Base64-encode one logo member without materializing its raw bytes."""
+    encoded = bytearray()
+    with zf.open(member, "r") as source:
+        while chunk := source.read(_LOGO_READ_CHUNK_BYTES):
+            encoded.extend(base64.b64encode(chunk))
+    return encoded.decode("ascii")
 
-    The caller is expected to have already run
-    :func:`routers.backup.validate_artifact_manifest` (which refuses a missing /
-    malformed / newer-version manifest). This is a best-effort re-parse so the
-    plan carries the manifest for pre-flight's second version check.
+
+def logo_content_provider(
+    zf: zipfile.ZipFile,
+) -> Callable[[dict], Awaitable[str | None]]:
+    """Return an async, bounded loader for metadata-only archive logo records.
+
+    The caller must keep ``zf`` open until orchestration finishes. Records are
+    accepted only when they still point inside the screened logo subtree and the
+    ZIP metadata remains within the importer's existing per-logo limit.
     """
-    import json
+    from dbas.importers.logos import MAX_LOGO_BYTES
 
-    if _MANIFEST_NAME not in zf.namelist():
-        return {}
-    try:
-        manifest = json.loads(zf.read(_MANIFEST_NAME))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        logger.warning("[DBAS-RESTORE] Manifest unreadable during decode: %s", exc)
-        return {}
-    return manifest if isinstance(manifest, dict) else {}
+    async def load(record: dict) -> str | None:
+        member = record.get("archive_member")
+        prefix = _LOGO_DIR + "/"
+        if (
+            not isinstance(member, str)
+            or not member.startswith(prefix)
+            or not _is_safe_member(member)
+        ):
+            return None
+        try:
+            info = zf.getinfo(member)
+        except KeyError:
+            return None
+        if info.is_dir() or info.file_size > MAX_LOGO_BYTES:
+            return None
+        return _read_logo_content_b64(zf, member)
+
+    return load
 
 
-def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
+def decode_artifact_to_plan(zf: zipfile.ZipFile, *, manifest: dict) -> ImportPlan:
     """Decode a validated DBAS artifact into an :class:`ImportPlan`.
 
     PRECONDITION: the caller has already run
@@ -458,6 +474,7 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     Args:
         zf: An OPEN, already-validated artifact ``ZipFile`` (read mode).
+        manifest: The parsed object returned by ``validate_artifact_manifest``.
 
     Returns:
         The :class:`ImportPlan` — categories default to ``selected=True`` so the
@@ -473,7 +490,6 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     guard_artifact_against_zip_bomb(zf)
 
-    manifest = _parse_manifest(zf)
     categories = _decode_categories(zf)
 
     # lc6zu — the SETTINGS category (core_settings + comskip blobs) decodes
