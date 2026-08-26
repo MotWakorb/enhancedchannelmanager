@@ -1941,9 +1941,18 @@ export function useEditMode({
         });
       };
 
-      // Separate creates (must go first) from other operations
-      const createOps = bulkOperations.filter(op => op.type === 'createChannel');
-      const otherOps = bulkOperations.filter(op => op.type !== 'createChannel');
+      // A stream assignment to a temp channel must stay in the same request as
+      // its create so the backend can resolve the temp id from that request's
+      // tempIdMap. Existing-channel assignments still use the ordinary batches.
+      const channelCreateOps = bulkOperations.filter(op => op.type === 'createChannel');
+      const createPhaseOps = bulkOperations.filter(op =>
+        op.type === 'createChannel'
+        || (op.type === 'addStreamToChannel' && typeof op.channelId === 'number' && op.channelId < 0)
+      );
+      const otherOps = bulkOperations.filter(op =>
+        op.type !== 'createChannel'
+        && !(op.type === 'addStreamToChannel' && typeof op.channelId === 'number' && op.channelId < 0)
+      );
 
       // Calculate total batches for other operations
       const numBatches = Math.ceil(otherOps.length / BATCH_SIZE);
@@ -1996,10 +2005,10 @@ export function useEditMode({
       reportProgress(0, totalSteps, `Preparing ${totalOps} operations...`);
 
       // Step 1: Execute creates first (with groups) to get real IDs
-      if (createOps.length > 0 || groupsToCreate.length > 0) {
-        reportProgress(0, totalSteps, `Creating ${createOps.length} channels and ${groupsToCreate.length} groups...`);
+      if (createPhaseOps.length > 0 || groupsToCreate.length > 0) {
+        reportProgress(0, totalSteps, `Creating ${channelCreateOps.length} channels and ${groupsToCreate.length} groups...`);
         const createResponse = await api.bulkCommit({
-          operations: createOps,
+          operations: createPhaseOps,
           groupsToCreate: groupsToCreate.length > 0 ? groupsToCreate : undefined,
           continueOnError: options?.continueOnError,
           consolidate: true,

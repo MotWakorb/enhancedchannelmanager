@@ -157,6 +157,60 @@ beforeEach(() => {
 });
 
 describe('useEditMode — a channel created into a group pending in the same batch', () => {
+  it('applies a new channel stream assignment in the create request', async () => {
+    const assigned: Array<{ channelId: number; streamId: number }> = [];
+
+    bulkCommit.mockImplementation(async (request: BulkCommitRequest) => {
+      requests.push(request);
+      const creates = request.operations.filter((op) => op.type === 'createChannel');
+      const tempIdMap = Object.fromEntries(
+        creates.map((op, index) => [op.tempId as number, FIRST_REAL_CHANNEL_ID + index]),
+      );
+      const errors: BulkCommitResponse['errors'] = [];
+      let applied = creates.length;
+
+      for (const op of request.operations) {
+        if (op.type !== 'addStreamToChannel') continue;
+        const channelId = op.channelId as number;
+        const resolvedId = tempIdMap[channelId];
+        if (resolvedId === undefined) {
+          errors.push({
+            operationId: 'missing-create-context',
+            operationType: op.type,
+            error: `New channel ${channelId} is not resolvable in this request`,
+          });
+          continue;
+        }
+        assigned.push({ channelId: resolvedId, streamId: op.streamId as number });
+        applied += 1;
+      }
+
+      return {
+        success: errors.length === 0,
+        operationsApplied: applied,
+        operationsFailed: errors.length,
+        errors,
+        tempIdMap,
+        groupIdMap: {},
+      } satisfies BulkCommitResponse;
+    });
+
+    const { view } = renderEditMode();
+    act(() => {
+      const tempId = view.result.current.stageCreateChannel('New channel', 1, 7);
+      view.result.current.stageAddStream(tempId, 55, 'Assign stream');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(result.operationsFailed).toBe(0);
+    expect(result.operationsApplied).toBe(2);
+    expect(assigned).toEqual([{ channelId: FIRST_REAL_CHANNEL_ID, streamId: 55 }]);
+  });
+
   it('sends the pending group BY NAME, never as its negative staging id', async () => {
     const { view } = renderEditMode();
 
