@@ -63,6 +63,15 @@ def _reject_mcp_privileged_task(task_id: str, caller_is_mcp: bool) -> None:
         )
 
 
+def _authorize_privileged_task_write(
+    task_id: str, is_admin: bool, caller_is_mcp: bool
+) -> None:
+    """Require a human admin for privileged task configuration or activation."""
+    if is_privileged_task_id(task_id) and not is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+
+
 # -------------------------------------------------------------------------
 # Request / Response models
 # -------------------------------------------------------------------------
@@ -569,8 +578,14 @@ async def get_task(task_id: str):
 
 
 @router.patch("/api/tasks/{task_id}", tags=["Tasks"])
-async def update_task(task_id: str, config: TaskConfigUpdate):
+async def update_task(
+    task_id: str,
+    config: TaskConfigUpdate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Update task configuration."""
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s", task_id)
     try:
         from task_registry import get_registry
@@ -713,6 +728,91 @@ def _run_parameter_schema(task_id: str) -> Optional[dict]:
     return schema
 
 
+def _schedule_parameter_schema(task_id: str) -> Optional[dict]:
+    """Return schedule-only parameters declared by the registered task class."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:  # pragma: no cover - registry lookup is best-effort
+        logger.debug("[TASKS] Could not read schedule parameters for %s: %s", task_id, e)
+        return None
+    schema = (
+        getattr(task_class, "schedule_parameter_schema", None)
+        if task_class
+        else None
+    )
+    if not schema or not schema.get("parameters"):
+        return None
+    return schema
+
+
+def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> None:
+    """Apply task-specific invariants before a schedule can be persisted."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:
+        if is_privileged_task_id(task_id):
+            logger.error(
+                "[TASKS] Cannot validate privileged task schedule for %s: %s",
+                task_id,
+                e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Cannot validate privileged task schedule for {task_id}: "
+                    "task registry is unavailable"
+                ),
+            ) from e
+        logger.debug("[TASKS] Could not validate schedule parameters for %s: %s", task_id, e)
+        return
+    if task_class is None and is_privileged_task_id(task_id):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cannot validate privileged task schedule for {task_id}: "
+                "task is not registered"
+            ),
+        )
+    validator = getattr(task_class, "validate_schedule_parameters", None) if task_class else None
+    if validator:
+        try:
+            validator(parameters)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+def _bind_sync_schedule_credential_version(
+    session, task_id: str, parameters: dict
+) -> dict:
+    """Bind confirmed sync apply to the target's current server-side version."""
+    if not task_id.startswith(PRIVILEGED_TASK_ID_PREFIXES):
+        return parameters
+
+    from export_models import SyncTarget
+    from task_registry import get_registry
+
+    task_class = get_registry().get_task_class(task_id)
+    target_id = getattr(task_class, "bound_sync_target_id", None)
+    if target_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot authorize sync schedule: task has no bound sync target",
+        )
+
+    target = session.query(SyncTarget).filter(SyncTarget.id == target_id).first()
+    if target is None or target.credential_version is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot authorize sync schedule: sync target is unavailable",
+        )
+
+    bound = dict(parameters)
+    bound["cloud_credential_version"] = int(target.credential_version)
+    return bound
+
+
 @router.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
     """Get the parameter schema for a task type.
@@ -725,7 +825,8 @@ async def get_task_parameter_schema(task_id: str):
     per-entry shape; the keys are separate because their lifetimes are.
     """
     logger.debug("[TASKS] GET /api/tasks/%s/parameter-schema", task_id)
-    schema = TASK_PARAMETER_SCHEMAS.get(task_id)
+    declared_schedule_schema = _schedule_parameter_schema(task_id)
+    schema = declared_schedule_schema or TASK_PARAMETER_SCHEMAS.get(task_id)
     run_schema = _run_parameter_schema(task_id)
     if not schema and not run_schema:
         # Return empty schema for tasks without special parameters
@@ -891,10 +992,11 @@ async def list_task_schedules(task_id: str):
 async def create_task_schedule(
     task_id: str,
     data: TaskScheduleCreate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Create a new schedule for a task."""
-    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] POST /api/tasks/%s/schedules - type=%s", task_id, data.schedule_type)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -906,6 +1008,8 @@ async def create_task_schedule(
             task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            _validate_schedule_parameters(task_id, data.parameters)
 
             # Create the schedule
             schedule = TaskSchedule(
@@ -926,6 +1030,9 @@ async def create_task_schedule(
             # Set task-specific parameters if provided (strip internal metadata keys)
             if data.parameters:
                 clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                clean_params = _bind_sync_schedule_credential_version(
+                    session, task_id, clean_params
+                )
                 schedule.set_parameters(clean_params)
 
             # Calculate next run time
@@ -973,10 +1080,11 @@ async def update_task_schedule(
     task_id: str,
     schedule_id: int,
     data: TaskScheduleUpdate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Update a task schedule."""
-    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -992,6 +1100,13 @@ async def update_task_schedule(
 
             if not schedule:
                 raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
+
+            effective_parameters = (
+                data.parameters
+                if data.parameters is not None
+                else schedule.get_parameters()
+            )
+            _validate_schedule_parameters(task_id, effective_parameters)
 
             # Update fields if provided
             if data.name is not None:
@@ -1032,6 +1147,9 @@ async def update_task_schedule(
                 schedule.day_of_month = data.day_of_month
             if data.parameters is not None:
                 clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                clean_params = _bind_sync_schedule_credential_version(
+                    session, task_id, clean_params
+                )
                 schedule.set_parameters(clean_params)
 
             # Recalculate next run time
@@ -1079,10 +1197,11 @@ async def update_task_schedule(
 async def delete_task_schedule(
     task_id: str,
     schedule_id: int,
+    is_admin: bool = ResolveIsAdminIfEnabled,
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Delete a task schedule."""
-    _reject_mcp_privileged_task(task_id, caller_is_mcp)
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] DELETE /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule
