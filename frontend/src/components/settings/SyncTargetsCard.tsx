@@ -419,6 +419,11 @@ export function SyncTargetsCard() {
 
   const handlePreview = useCallback(
     async (target: api.SyncTarget) => {
+      setPreviewedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(target.id);
+        return next;
+      });
       markBusy(target.id);
       try {
         // Per-target task id (7ipq2.3 / ADR-013 S6): each target owns

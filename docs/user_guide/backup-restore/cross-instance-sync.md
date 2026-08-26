@@ -83,7 +83,13 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 The target appears in the list and starts **Enabled**. This target-row control
 allows runs to reach B; it does not create or enable a recurring schedule.
 
-![Enabled Disposable B sync target row with status and target controls](../../images/user_guide/backup-restore/1-sync-target-row.png)
+ECM also creates a matching **Cross-Instance Sync: `<target>`** task
+automatically. Task creation is best-effort: if it is missing from **Scheduled
+Tasks**, restart ECM to run the startup reconciliation, then reload the page. If
+it is still missing, check the ECM log for `Failed to register sync task` and
+fix that registration error before scheduling sync.
+
+![Newly created enabled Disposable B target before its first run](../../images/user_guide/backup-restore/1-sync-target-row.png)
 
 ### Step 2: Run a preview
 
@@ -92,7 +98,7 @@ Before configuring a schedule, run a manual dry-run to confirm A can reach B and
 1. On the target row, click **Sync now (preview)**.
 2. ECM runs a dry-run (no changes are written to B). The results show what would be created, updated, or skipped.
 3. Review the preview. If you see unexpected conflicts, see [Troubleshooting](#troubleshooting).
-4. After a successful preview, **Apply** appears. Click it to write the changes to B.
+4. After a successful preview, **Apply** appears. **Destructive warning: Apply makes A the source of truth and overwrites matching edits on B.** Click it only when B is ready to be converged to A.
 5. Accept the browser's native confirmation only after you have read the source-wins warning. This confirmation is browser chrome and is therefore intentionally not pictured. A failed preview does not make **Apply** available.
 
 After a successful apply, the target row shows the last sync timestamp and the outcome.
@@ -107,7 +113,7 @@ After a successful apply, the target row shows the last sync timestamp and the o
 6. Under **Task Parameters**, turn on **Apply changes on every scheduled run**. ECM requires this explicit choice; it will not save a recurring preview-only schedule.
 7. Click **Add Schedule**, then save the task settings.
 
-![Disabled manual Cross-Instance Sync task card for Disposable B](../../images/user_guide/backup-restore/2-sync-scheduled-task-card.png)
+![Enabled recurring Cross-Instance Sync task for Disposable B](../../images/user_guide/backup-restore/2-sync-scheduled-task-card.png)
 
 ECM now applies the sync automatically on that schedule. Automatic execution
 requires all three gates: the target row is **Enabled**, the per-target task is
@@ -119,11 +125,11 @@ If you have several sync targets, they sync independently and can run at the sam
 ### The kill switch
 
 The **Enabled** toggle on each target row is the target kill switch. Turning it
-off blocks manual preview/apply actions and scheduled runs for that target. The
-target definition (URL and credentials) and its separate Scheduled Tasks
-configuration are preserved. Turning the target back on permits runs again; the
-scheduled task and at least one child schedule must also remain enabled for
-automatic runs to resume.
+off prevents new manual and scheduled runs for that target. It does not cancel
+an apply that is already executing. The target definition (URL and credentials)
+and its separate Scheduled Tasks configuration are preserved. Turning the
+target back on permits runs again; the scheduled task and at least one child
+schedule must also remain enabled for automatic runs to resume.
 
 ---
 
@@ -136,15 +142,15 @@ as the final proof:
 2. **Create the target on ECM-A.** Use B's base URL and API credentials, then leave the new target **Enabled**.
 3. **Preview.** Click **Sync now (preview)** and review the create, update, skip, conflict, and failure results. Stop if the plan is unexpected.
 4. **Apply.** Click the newly available **Apply**, read the native confirmation, and confirm the source-wins write.
-5. **Verify on B, not only in A's notification.** Log in to B and check the expected channel groups, channels, stream assignments, profiles, logos, M3U accounts, and EPG sources. Open representative channels and verify that a stream actually plays; an HTTP response alone is not proof of video.
+5. **Verify on B, not only in A's notification.** Log in to B and check the expected channel groups, channels, stream assignments, profiles, logos, M3U accounts, and EPG sources. Refresh B's EPG source, then confirm representative mapped channels show usable programme data; source existence alone is not enough. Open representative channels and verify that a stream actually plays; an HTTP response alone is not proof of video.
 6. **Repeat preview and apply without changing A.** The repeat preview should plan no new destination objects. Repeat-run update counters can still be non-zero, so do not require `updated 0`.
-7. **Prove idempotency from B's normalized state.** Compare the destination collections before and after the repeat apply after removing volatile timestamps and cache-buster fields. Unchanged normalized destination state is the proof that the repeat run converged without churn.
+7. **Check repeat stability on B.** Recheck the same representative groups, channels, stream assignments, profiles, logos, and programme data. Confirm the repeat did not create duplicates, remove links, or change those items unexpectedly. This proves only the B state you inspected stayed stable; proving full A/B equivalence requires a separate category-by-category A-vs-B comparison.
 8. **Configure the recurring task.** Under **Settings → Scheduled Tasks**, edit **Cross-Instance Sync: `<target>`**, enable the task, add an enabled schedule, and enable **Apply changes on every scheduled run**.
 
-**Expected repeat-run result:** B remains equivalent to A for the categories in
-scope. A repeat apply may report updates while producing no normalized state
-change; the destination comparison, not a zero-update counter, decides
-idempotency.
+**Expected repeat-run result:** the preview plans no new destination objects and
+the inspected B state remains stable. A repeat apply may report updates, so a
+zero-update counter is not required. Do not claim full A/B equivalence unless
+you compared the same fields in both instances.
 
 **The encrypted-backup seeding step this list used to start with is no longer needed.** It existed
 because sync could not carry credentials, so B had to get them from a backup or by hand. Sync
@@ -240,7 +246,8 @@ Check whether the `ECMSyncStalledTargetDrift` alert has fired. This alert trigge
 Common causes:
 - **B is unreachable**: confirm connectivity to `base_url` from the ECM container.
 - **Credentials rotated/revoked**: if B's API credentials changed after the sync schedule was set up, ECM aborts the run at the credential-freshness check. Edit the sync target, update the credentials, save, and trigger a manual sync.
-- **Target disabled**: check the **Enable** toggle on the target. A disabled target never runs.
+- **Automatic sync does not start**: check all three gates. The target row must show **Enabled**; in **Scheduled Tasks**, **Enable task** must be on; and at least one schedule must have **Enable this schedule** on. Also confirm that schedule has **Apply changes on every scheduled run** enabled.
+- **Per-target task is missing**: restart ECM to run startup reconciliation, reload **Scheduled Tasks**, and look again for **Cross-Instance Sync: `<target>`**. If it is still absent, check the ECM log for `Failed to register sync task` and correct the reported registration error.
 - **Partial-apply loop**: the sync runs but a category keeps failing on apply (not B unreachable, but a recurring mix/rollback). Pull the most recent sync report from the task history; identify the failing category.
 
 ### The sync reports "Completed with Warnings"

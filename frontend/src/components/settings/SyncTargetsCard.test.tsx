@@ -251,6 +251,28 @@ describe('SyncTargetsCard', () => {
     );
   });
 
+  it('a failed preview revokes Apply from an earlier successful preview', async () => {
+    (api.runTask as Mock)
+      .mockResolvedValueOnce({ success: true, message: 'preview ok' })
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'SYNC_DESTINATION_UNREADABLE',
+        message: 'Cross-instance sync preview could not read the destination.',
+      });
+    await renderCard([TARGET]);
+    await waitFor(() => expect(screen.getByText('Living Room B')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+    expect(await screen.findByTestId('sync-target-apply-7')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sync-target-preview-7'));
+
+    await waitFor(() => expect(api.runTask).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByTestId('sync-target-apply-7')).not.toBeInTheDocument(),
+    );
+  });
+
   it('Apply (after preview) runs with confirm_apply: true', async () => {
     (api.runTask as Mock).mockResolvedValue({ success: true, message: 'preview ok' });
     await renderCard([TARGET]);
