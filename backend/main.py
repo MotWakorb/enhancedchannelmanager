@@ -24,6 +24,7 @@ from config import (
     MCP_SERVICE_FILENAME,
     SettingsWriteTimeout,
     initialize_mcp_api_key_projection,
+    settings_file_allows_startup_writes,
     superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
@@ -1146,12 +1147,18 @@ async def startup_event():
     # lock and is best effort — see config.sweep_orphaned_settings_temporaries.
     sweep_orphaned_settings_temporaries()
 
+    # A syntactically valid non-object is not an ECM settings document. Keep it
+    # byte-for-byte for operator recovery and prevent every startup-only writer
+    # below from persisting loader defaults over it. Invalid JSON retains the
+    # established startup behavior; valid objects still receive all migrations.
+    _settings_file_allows_startup_writes = settings_file_allows_startup_writes()
+
     # A dedicated projection means the optional sidecar is configured. Make
     # its public key lifecycle complete before ECM becomes healthy: first boot
     # and pre-MCP upgrades provision one, existing installs republish theirs,
     # and an explicit revocation stays revoked (…-71von). Only the main process
     # writes; the optional HTTPS subprocess shares the resulting files.
-    if not _is_https_subprocess:
+    if not _is_https_subprocess and _settings_file_allows_startup_writes:
         initialize_mcp_api_key_projection()
 
     # Materialize the private sidecar projection before the backend becomes
@@ -1392,23 +1399,24 @@ async def startup_event():
     # Alembic data migration) is required: ECM's smart-bootstrap stamps forward
     # past data-only migrations when the schema already matches (bd-5w6jz).
     try:
-        from normalization_migration import apply_league_strip_require_delimiter_once
-        from config import save_settings
-        settings = get_settings()
-        if not settings.league_delimiter_heal_applied:
-            session = get_session()
-            try:
-                heal = apply_league_strip_require_delimiter_once(session, settings)
-            finally:
-                session.close()
-            if heal.get("applied"):
-                save_settings(settings)
-                if heal.get("updated", 0) > 0:
-                    logger.info(
-                        "[MAIN] One-time heal: enabled strong-delimiter requirement "
-                        "on %s league strip rule(s)",
-                        heal["updated"],
-                    )
+        if _settings_file_allows_startup_writes:
+            from normalization_migration import apply_league_strip_require_delimiter_once
+            from config import save_settings
+            settings = get_settings()
+            if not settings.league_delimiter_heal_applied:
+                session = get_session()
+                try:
+                    heal = apply_league_strip_require_delimiter_once(session, settings)
+                finally:
+                    session.close()
+                if heal.get("applied"):
+                    save_settings(settings)
+                    if heal.get("updated", 0) > 0:
+                        logger.info(
+                            "[MAIN] One-time heal: enabled strong-delimiter requirement "
+                            "on %s league strip rule(s)",
+                            heal["updated"],
+                        )
     except Exception as e:
         logger.warning("[MAIN] Could not apply league strip require_delimiter heal: %s", e)
 

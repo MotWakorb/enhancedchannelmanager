@@ -1079,6 +1079,19 @@ def prepare_settings_data(data: dict) -> dict:
     return _sanitize_settings_data(prepared)
 
 
+def settings_file_allows_startup_writes() -> bool:
+    """Return false only when valid JSON cannot represent ECM settings."""
+    if not CONFIG_FILE.exists():
+        return True
+    try:
+        persisted = json.loads(CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        # Keep the established unreadable/corrupt-file startup behavior. This
+        # guard is deliberately limited to syntactically valid non-objects.
+        return True
+    return isinstance(persisted, dict)
+
+
 def load_settings() -> DispatcharrSettings:
     """Load settings from file or return defaults."""
     global _cached_settings
@@ -1092,6 +1105,8 @@ def load_settings() -> DispatcharrSettings:
     if CONFIG_FILE.exists():
         try:
             data = json.loads(CONFIG_FILE.read_text())
+            if not isinstance(data, dict):
+                raise TypeError("settings document must be a JSON object")
             data = prepare_settings_data(data)
             # KNOWN RESIDUAL (bead ...-04c0u.10): this read-parse-assign takes
             # NO lock, so a load that started before a concurrent save can
