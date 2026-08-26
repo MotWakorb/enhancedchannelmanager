@@ -6836,10 +6836,10 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdmi
     blob write path as POST /restore, so it carries the same admin-field-bypass
     risk. The shipped MCP ``restore_backup`` tool now receives a clean 403 here.
 
-    Takes ``{"filename": "ecm-backup-<ts>.zip"}``, validates it through the
-    strict regex + containment guard (zip-only allowlist), then restores from
-    the on-disk archive reusing the EXACT same validate + restore code path as
-    the uploaded-ZIP POST /restore (``_validate_backup_zip`` +
+    Takes ``{"filename": "ecm-backup-<ts>.zip"}``, selects it from the trusted
+    direct-child listing of BACKUPS_DIR, then restores from the retained file
+    descriptor reusing the EXACT same validate + restore code path as the
+    uploaded-ZIP POST /restore (``_validate_backup_zip`` +
     ``_restore_from_zip``). YAML artifacts are rejected — section-import is a
     different path (POST /restore-yaml), out of scope here (bd-0hjrk.5).
 
@@ -6847,26 +6847,37 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdmi
     """
     logger.info("[BACKUP] Restore-from-saved requested, filename=%s", req.filename)
     filename = req.filename
-    # Two-layer guard, inlined (CodeQL py/path-injection, CWE-22/23/36/73/99 —
-    # the containment barrier is not tracked across a function-return boundary,
-    # so the barrier and the read_bytes sink must live in this same function).
-    # Layer 1 (defense in depth): strict zip-only regex allowlist (fullmatch so a
-    # trailing newline cannot pass the anchor).
+    # Keep the strict allowlist, then break request taint by selecting a Path
+    # originating from BACKUPS_DIR's trusted direct-child enumeration.
     if not _BACKUP_ZIP_FILENAME_RE.fullmatch(filename):
         raise HTTPException(status_code=400, detail="Invalid filename")
-    # Layer 2: canonicalize + verify containment under BACKUPS_DIR.
+
+    saved_backups = {}
     try:
-        safe_root = BACKUPS_DIR.resolve()
-        path = (BACKUPS_DIR / filename).resolve()
-        path.relative_to(safe_root)
-    except (ValueError, OSError):
-        raise HTTPException(status_code=400, detail="Invalid filename")
-    if not path.exists():
+        for entry in BACKUPS_DIR.iterdir():
+            saved_backups[entry.name] = entry
+    except OSError:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    path = saved_backups.get(filename)
+    if path is None:
         raise HTTPException(status_code=404, detail="Backup not found")
 
-    # Open + validate + restore via the SAME path the uploaded-ZIP restore uses.
+    # O_NOFOLLOW and fstat bind type validation and restore to the same opened
+    # object. O_NONBLOCK prevents a planted FIFO from blocking this request.
     try:
-        archive = path.open("rb")
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise HTTPException(status_code=404, detail="Backup not found")
+        archive = os.fdopen(descriptor, "rb")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+    # Validate + restore via the SAME path the uploaded-ZIP restore uses.
+    try:
         zf = zipfile.ZipFile(archive, "r")
     except zipfile.BadZipFile:
         archive.close()

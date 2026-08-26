@@ -22,6 +22,7 @@ Mocks at router module level per backend/CLAUDE.md
 """
 import io
 import json
+import os
 import zipfile
 
 import pytest
@@ -208,6 +209,67 @@ class TestRestoreSaved:
                 json={"filename": "ecm-backup-2099-12-31_235959.zip"},
             )
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_rejects_symlink(self, async_client, backups_dir, tmp_path):
+        """A valid-name symlink is not a saved regular-file archive."""
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        outside = tmp_path / "outside.zip"
+        outside.write_bytes(_make_backup_zip())
+        (backups_dir / fname).symlink_to(outside)
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup._restore_from_zip"
+        ) as mock_restore:
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 404
+        mock_restore.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_rejects_non_regular_entry(self, async_client, backups_dir):
+        """A direct child with a valid archive name must still be a regular file."""
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        (backups_dir / fname).mkdir()
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup._restore_from_zip"
+        ) as mock_restore:
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 404
+        mock_restore.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_does_not_follow_substituted_symlink(
+        self, async_client, backups_dir, tmp_path
+    ):
+        """A regular file replaced after enumeration cannot redirect the open."""
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        selected = backups_dir / fname
+        selected.write_bytes(_make_backup_zip())
+        outside = tmp_path / "outside.zip"
+        outside.write_bytes(_make_backup_zip())
+        real_open = os.open
+
+        def substitute_then_open(path, flags, *args, **kwargs):
+            selected.unlink()
+            selected.symlink_to(outside)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup.os.open", side_effect=substitute_then_open
+        ), patch("routers.backup._restore_from_zip") as mock_restore:
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 404
+        mock_restore.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_restore_saved_rejects_yaml_artifact(self, async_client, backups_dir):
