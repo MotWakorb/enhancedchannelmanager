@@ -211,6 +211,93 @@ describe('useEditMode — a channel created into a group pending in the same bat
     expect(assigned).toEqual([{ channelId: FIRST_REAL_CHANNEL_ID, streamId: 55 }]);
   });
 
+  it('partitions mixed stream assignments without disturbing batches or accounting', async () => {
+    const existingChannels = Array.from(
+      { length: 201 },
+      (_, index) => makeChannel(index + 1, `Existing ${index + 1}`),
+    );
+    const onError = vi.fn();
+    const { view } = renderEditMode(existingChannels, onError);
+
+    act(() => {
+      view.result.current.stageAddStream(1, 1001, 'Existing first');
+      const tempId = view.result.current.stageCreateChannel('New channel', 500, 7);
+      view.result.current.stageAddStream(tempId, 2000, 'New channel assignment');
+      for (let channelId = 2; channelId <= 201; channelId += 1) {
+        view.result.current.stageAddStream(channelId, 1000 + channelId, `Existing ${channelId}`);
+      }
+    });
+
+    bulkCommit.mockImplementation(async (request: BulkCommitRequest) => {
+      requests.push(request);
+      const call = requests.length;
+      if (call === 1) {
+        return {
+          success: false,
+          operationsApplied: 2,
+          operationsFailed: 0,
+          errors: [{
+            operationId: 'create-phase-warning',
+            operationType: 'addStreamToChannel',
+            applied: true,
+            error: 'Assignment landed but its journal entry failed',
+          }],
+          tempIdMap: { [-1]: FIRST_REAL_CHANNEL_ID },
+          groupIdMap: {},
+        } satisfies BulkCommitResponse;
+      }
+      if (call === 2) {
+        return {
+          success: false,
+          operationsApplied: 199,
+          operationsFailed: 1,
+          errors: [{
+            operationId: 'existing-assignment-failure',
+            operationType: 'addStreamToChannel',
+            error: 'Stream 1100 was rejected',
+          }],
+          tempIdMap: {},
+          groupIdMap: {},
+        } satisfies BulkCommitResponse;
+      }
+      return {
+        success: true,
+        operationsApplied: 1,
+        operationsFailed: 0,
+        errors: [],
+        tempIdMap: {},
+        groupIdMap: {},
+      } satisfies BulkCommitResponse;
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(requests).toHaveLength(3);
+    expect(requests[0].operations.map((op) => [op.type, op.channelId])).toEqual([
+      ['createChannel', undefined],
+      ['addStreamToChannel', -1],
+    ]);
+
+    const ordinaryAssignments = requests.slice(1).map((request) => request.operations);
+    expect(ordinaryAssignments.map((operations) => operations.length)).toEqual([200, 1]);
+    expect(ordinaryAssignments.flat().map((op) => op.channelId)).toEqual(
+      Array.from({ length: 201 }, (_, index) => index + 1),
+    );
+    expect(ordinaryAssignments.flat().every((op) => (op.channelId as number) > 0)).toBe(true);
+
+    expect(result.success).toBe(false);
+    expect(result.operationsApplied).toBe(202);
+    expect(result.operationsFailed).toBe(1);
+    expect(result.errors.map((error) => error.operationId)).toEqual([
+      'create-phase-warning',
+      'existing-assignment-failure',
+    ]);
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('202 succeeded, 1 failed'));
+  });
+
   it('sends the pending group BY NAME, never as its negative staging id', async () => {
     const { view } = renderEditMode();
 

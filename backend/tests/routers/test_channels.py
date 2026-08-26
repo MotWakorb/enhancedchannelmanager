@@ -1268,6 +1268,51 @@ class TestBulkCommit:
         assert data["operationsApplied"] == 0
 
     @pytest.mark.asyncio
+    async def test_create_then_add_stream_resolves_temp_id_in_same_request(
+        self, async_client
+    ):
+        """A later operation in one bulk request can target a newly created channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.create_channel.return_value = {
+            "id": 101, "name": "New channel", "channel_number": 500, "streams": [],
+        }
+        mock_client.get_channel.return_value = {
+            "id": 101, "name": "New channel", "channel_number": 500, "streams": [],
+        }
+        mock_client.update_channel.return_value = {
+            "id": 101, "name": "New channel", "streams": [77],
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {
+                        "type": "createChannel",
+                        "tempId": -1,
+                        "name": "New channel",
+                        "channelNumber": 500,
+                    },
+                    {
+                        "type": "addStreamToChannel",
+                        "channelId": -1,
+                        "streamId": 77,
+                    },
+                ],
+            })
+
+        assert response.status_code == 202
+        assert data["success"] is True
+        assert data["operationsApplied"] == 2
+        assert data["operationsFailed"] == 0
+        assert data["tempIdMap"] == {"-1": 101}
+        mock_client.get_channel.assert_awaited_once_with(101)
+        mock_client.update_channel.assert_awaited_once_with(101, {"streams": [77]})
+
+    @pytest.mark.asyncio
     async def test_validate_only(self, async_client):
         """Returns validation results synchronously without executing."""
         mock_client = AsyncMock()
