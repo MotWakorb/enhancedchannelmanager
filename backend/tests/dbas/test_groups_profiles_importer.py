@@ -399,6 +399,341 @@ async def test_create_conflict_recorded_as_failure_conflict(fn, etype, creator, 
 
 
 @pytest.mark.asyncio
+async def test_channel_group_create_race_adopts_ingested_groups_and_follow_up_is_idempotent():
+    """A destination ingest can create groups after the importer's first list.
+
+    The observed Dispatcharr 0.29.0 uniqueness response must trigger a re-list,
+    exact-name adoption, and remap population. A complete follow-up import
+    then adopts the same rows from its initial list without another create.
+    """
+    ingested_groups = [
+        {"id": 701, "name": "Northwind Local"},
+        {"id": 702, "name": "Northwind Regional"},
+    ]
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_with_ingest(name):
+        destination_groups.extend(ingested_groups)
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(side_effect=_create_races_with_ingest)
+    archive_rows = [
+        {"id": 11, "name": "Northwind Local"},
+        {"id": 12, "name": "Northwind Regional"},
+    ]
+
+    first_report = _report()
+    first_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=first_report,
+        ledger=_ledger(),
+        remap=first_remap,
+    )
+
+    first = first_report.category(EntityType.CHANNEL_GROUP)
+    assert first.failed == 0
+    assert first.created == 0
+    assert first.skipped == 2
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 701
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 702
+    client.create_channel_group.assert_awaited_once_with("Northwind Local")
+
+    follow_up_report = _report()
+    follow_up_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=follow_up_report,
+        ledger=_ledger(),
+        remap=follow_up_remap,
+    )
+
+    follow_up = follow_up_report.category(EntityType.CHANNEL_GROUP)
+    assert follow_up.failed == 0
+    assert follow_up.created == 0
+    assert follow_up.skipped == 2
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 701
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 702
+    assert client.create_channel_group.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_adopts_exact_conflicting_case_variant():
+    """Dispatcharr's unique TextField compares the submitted raw name.
+
+    A differently-cased row can coexist and cannot own the create conflict.
+    """
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_with_case_variant(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(side_effect=_create_races_with_case_variant)
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "Sports"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 2
+    client.create_channel_group.assert_awaited_once_with("Sports")
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_adopts_trimmed_case_preserving_owner():
+    """Dispatcharr trims a group name before unique validation and persistence."""
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_after_serializer_trim(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name.strip()},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(
+        side_effect=_create_races_after_serializer_trim
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "  Sports  "}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.created == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    client.create_channel_group.assert_awaited_once_with("  Sports  ")
+
+
+@pytest.mark.asyncio
+async def test_channel_group_retry_keeps_trimmed_race_owner_with_case_variant():
+    """A retry adopts the same trimmed owner selected during race recovery."""
+    client = _client(
+        groups=[
+            {"id": 100, "name": "sports"},
+            {"id": 200, "name": "Sports"},
+        ]
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "  Sports  "}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.created == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    client.create_channel_group.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_preserves_exact_case_matches_in_batch_and_follow_up():
+    """A raced exact adoption must not replace another raw name's cache entry."""
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_with_case_variants(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(side_effect=_create_races_with_case_variants)
+    archive_rows = [
+        {"id": 11, "name": "Sports"},
+        {"id": 12, "name": "sports"},
+    ]
+
+    first_report = _report()
+    first_ledger = _ledger()
+    first_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=first_report,
+        ledger=first_ledger,
+        remap=first_remap,
+    )
+
+    first = first_report.category(EntityType.CHANNEL_GROUP)
+    assert first.failed == 0
+    assert first.created == 0
+    assert first.skipped == 2
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 200
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 100
+    assert len(first_ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 2
+    client.create_channel_group.assert_awaited_once_with("Sports")
+
+    follow_up_report = _report()
+    follow_up_ledger = _ledger()
+    follow_up_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=follow_up_report,
+        ledger=follow_up_ledger,
+        remap=follow_up_remap,
+    )
+
+    follow_up = follow_up_report.category(EntityType.CHANNEL_GROUP)
+    assert follow_up.failed == 0
+    assert follow_up.created == 0
+    assert follow_up.skipped == 2
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 200
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 100
+    assert len(follow_up_ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 3
+    assert client.create_channel_group.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_remains_fatal_when_exact_owner_is_ambiguous():
+    """Multiple canonical rows cannot be attributed safely."""
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=[
+            [],
+            [
+                {"id": 100, "name": "Sports"},
+                {"id": 200, "name": " Sports "},
+            ],
+        ]
+    )
+    client.create_channel_group = AsyncMock(
+        side_effect=RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "Sports"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 1
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) is None
+    assert len(ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 2
+    client.create_channel_group.assert_awaited_once_with("Sports")
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_remains_fatal_when_relist_cannot_find_group():
+    """The uniqueness response is not a non-fatal result without a row to adopt."""
+    client = _client()
+    client.create_channel_group = AsyncMock(
+        side_effect=RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+    )
+    report = _report()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "Sports"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 1
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fn, etype, creator, existing_kw", _CATEGORIES)
 async def test_create_upstream_error_recorded_as_failure(fn, etype, creator, existing_kw):
     """A non-conflict create error is failed UPSTREAM_API_ERROR."""
