@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Supported MCP Compose deployments now project an owner-only API key during startup instead of leaving the sidecar permanently not ready (bead `enhancedchannelmanager-71von`, build 0150).** A fresh dedicated projection volume previously received only the sidecar's private backend credentials; the public `api-key` appeared only after an operator generated or saved a key, and the container gate hid that gap by making the API call before checking `/health`. Startup now provisions a key when the persisted field does not yet exist and republishes an existing upgrade key unchanged, always through the existing atomic mode-`0600` projection. An explicitly empty field remains revoked and `/health` remains fail-closed. No key value is logged or added to health responses.
+
 ### Added
 
 - **The repository now carries a software bill of materials — a committed inventory of what is inside ECM, so an advisory can be answered by reading a file instead of rebuilding and rescanning every image (bead `enhancedchannelmanager-3t0ht`, build 0147).** Each release gets `sbom/vX.Y.Z/`: two SPDX 2.3 documents, one for the ECM image and one for the MCP image, plus an index. Release directories accumulate and are kept forever, because the question an advisory actually raises is *which shipped versions contain the affected package*, and only the history can answer it. A separate `sbom/dev/` holds a single transient snapshot of what `dev` currently carries; it is superseded rather than accumulated and is not an artifact of record. The two are kept apart by path rather than by convention — the shape of the version string decides the directory, so a build-numbered version cannot land in the permanent release namespace.

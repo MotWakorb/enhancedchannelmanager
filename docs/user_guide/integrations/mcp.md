@@ -179,6 +179,14 @@ volume there: read-write for ECM, read-only for the sidecar. The sidecar
 mounts nothing else, so it cannot read `settings.json`, `auth_settings.json`,
 the audit journal, TLS private keys, or backups.
 
+On a fresh supported Compose deployment, ECM provisions the public client key
+and both private credentials before the sidecar becomes ready. On upgrade it
+republishes the persisted public key into a newly added projection volume
+without changing it. The generated public value is never logged or returned by
+health checks; use **Regenerate Key** once when configuring a client so ECM can
+display the replacement value to you. A key you explicitly revoked remains
+revoked across restarts and keeps MCP health fail-closed until you regenerate it.
+
 **Without the overlay, `MCP_SECRETS_DIR` defaults to `CONFIG_DIR`.** That is
 deliberate: it keeps a newer ECM backend working under an older Compose file
 whose sidecar still reads `/config`. The consequence is that every deployment
@@ -289,11 +297,12 @@ Install Node from [nodejs.org](https://nodejs.org/), or via a package manager:
 
 Verify after install: `node --version` should print `v18.x.x` or higher.
 
-### Step 1: Generate your MCP API key in ECM
+### Step 1: Generate a client-visible MCP API key in ECM
 
 1. Open ECM in your browser.
 2. Go to **Settings → MCP Integration**.
-3. Click **Generate Key**.
+3. Click **Generate Key** or **Regenerate Key**. A Compose deployment may have
+   provisioned an undisclosed key already so the sidecar can become ready.
 4. Copy the key immediately. It is displayed once. If you miss it, use
    **Regenerate Key** to issue a new one (the old key is invalidated).
 
@@ -610,15 +619,19 @@ The MCP container's `/health` endpoint reports `api_key_configured: false`. ECM
 projects only MCP credential material through the dedicated `ecm-mcp-secrets`
 volume; the sidecar cannot read ECM's `/config` volume. The most common causes:
 
-- **No key generated yet.** Open Settings → MCP Integration and click Generate
-  Key. The MCP `/health` endpoint surfaces a machine-readable `api_key_status`
-  (`file_not_found` / `invalid_key` / `field_empty`) plus a setup hint
-  describing the exact cause.
+- **The key was explicitly revoked.** `field_empty` is preserved across
+  restarts; open Settings → MCP Integration and click Regenerate Key when you
+  intend to re-enable MCP.
 - **The projection volume is missing.** Verify both containers mount the
   dedicated `ecm-mcp-secrets` volume as shown in `docker-compose.mcp.yml`.
 - **The two containers disagree on identity.** The projection is owner-only,
   so `PUID`/`PGID` must be identical for `ecm` and `ecm-mcp`; a mismatch shows
   up as `invalid_key` (public key) or `wrong_owner` (backend credentials).
+
+The MCP `/health` endpoint surfaces a machine-readable `api_key_status`
+(`file_not_found` / `invalid_key` / `field_empty`) plus a setup hint describing
+the exact cause. With the supported volume and matching identity, fresh install
+and upgrade startup need no manual projection step.
 
 Diagnose:
 ```bash

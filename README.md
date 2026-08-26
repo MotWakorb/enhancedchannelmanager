@@ -95,9 +95,10 @@ volumes:
 as shown, then recreate. Recreating the containers alone is not enough. The
 sidecar images from v0.18.1 onward default `MCP_SECRETS_DIR` to
 `/run/secrets/ecm-mcp`, so without that volume the sidecar finds an empty
-directory and reports `api_key_status: file_not_found` permanently. Generate or
-regenerate the key under **Settings > MCP Integration** once the volume is in
-place; that is what publishes the projection.
+directory and reports `api_key_status: file_not_found` permanently. Once the
+volume is in place, ECM publishes an existing key during startup or provisions
+one when upgrading settings that predate the field; no save or regeneration is
+needed to make the sidecar ready. An explicitly revoked key stays revoked.
 
 Or if you're building from source, use the MCP compose overlay:
 

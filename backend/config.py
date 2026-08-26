@@ -1303,6 +1303,57 @@ def _project_mcp_api_key(key: str) -> None:
             pass
 
 
+def initialize_mcp_api_key_projection() -> None:
+    """Provision or republish the public key for a dedicated MCP projection.
+
+    A distinct ``MCP_SECRETS_DIR`` is the deployment signal that the optional
+    sidecar is configured. On its first boot there is no settings file yet; on
+    an upgrade from a pre-MCP settings file the field is absent. Those two
+    states receive a new key so Compose can become ready without an unauthenticated
+    setup call. An explicitly persisted empty field is a revocation and is
+    projected unchanged, never silently reversed.
+
+    Projection failures degrade only the sidecar. ``save_settings`` may already
+    have durably stored a newly generated key before its projection raises, so
+    the next startup can safely republish that same key.
+    """
+    if MCP_SECRETS_DIR == CONFIG_DIR:
+        return
+
+    provision = not CONFIG_FILE.exists()
+    if not provision:
+        try:
+            persisted = json.loads(CONFIG_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            # Preserve load_settings' existing corrupt/unreadable-file posture:
+            # do not overwrite operator data with defaults merely to start MCP.
+            get_settings()
+            return
+        provision = "mcp_api_key" not in persisted
+
+    settings = get_settings()
+    if provision:
+        settings.mcp_api_key = secrets.token_urlsafe(32)
+        try:
+            save_settings(settings)
+        except OSError:
+            logger.error(
+                "[CONFIG] MCP API key was stored but its dedicated projection "
+                "is unavailable; the sidecar will remain not ready"
+            )
+        else:
+            logger.info("[CONFIG] MCP API key projection initialized")
+        return
+
+    try:
+        _project_mcp_api_key(settings.mcp_api_key)
+    except OSError:
+        logger.error(
+            "[CONFIG] Existing MCP API key could not be republished to the "
+            "dedicated projection; the sidecar will remain not ready"
+        )
+
+
 def superseded_mcp_service_projection() -> Path | None:
     """Return the pre-…-04c0u.8 private projection if it was left behind.
 

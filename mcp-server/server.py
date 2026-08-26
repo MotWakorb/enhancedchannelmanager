@@ -378,9 +378,9 @@ async def handle_health(request):
     # remediation matching the actual cause, not a one-size-fits-all message.
     setup_hints = {
         "file_not_found": (
-            "ECM has not projected the MCP credential yet. Verify both "
-            "containers mount the dedicated ecm-mcp-secrets volume and "
-            "generate a key in ECM Settings > MCP Integration."
+            "ECM could not publish the MCP credential. Verify both containers "
+            "mount the dedicated ecm-mcp-secrets volume with matching "
+            "PUID/PGID, then restart ECM."
         ),
         "invalid_key": (
             "The dedicated MCP credential projection is unreadable or "

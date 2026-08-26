@@ -23,6 +23,7 @@ from config import (
     MCP_SERVICE_FILE,
     MCP_SERVICE_FILENAME,
     SettingsWriteTimeout,
+    initialize_mcp_api_key_projection,
     superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
@@ -147,7 +148,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0149",
+    version="0.18.1-0150",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1144,6 +1145,14 @@ async def startup_event():
     # nothing else in the codebase removes them. Runs under the settings write
     # lock and is best effort — see config.sweep_orphaned_settings_temporaries.
     sweep_orphaned_settings_temporaries()
+
+    # A dedicated projection means the optional sidecar is configured. Make
+    # its public key lifecycle complete before ECM becomes healthy: first boot
+    # and pre-MCP upgrades provision one, existing installs republish theirs,
+    # and an explicit revocation stays revoked (…-71von). Only the main process
+    # writes; the optional HTTPS subprocess shares the resulting files.
+    if not _is_https_subprocess:
+        initialize_mcp_api_key_projection()
 
     # Materialize the private sidecar projection before the backend becomes
     # healthy. The MCP container waits on that health check, so its very first

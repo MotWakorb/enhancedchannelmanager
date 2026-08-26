@@ -145,6 +145,114 @@ def test_existing_key_is_projected_when_settings_load(tmp_path: Path) -> None:
     assert key_file.read_text() == "<Synthetic-Existing-Key-04c0u8>\n"
 
 
+def test_dedicated_projection_first_boot_provisions_a_public_key(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    config_dir = tmp_path / "config"
+    projection_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    projection_dir.mkdir()
+    config_file = config_dir / "settings.json"
+    key_file = projection_dir / "api-key"
+
+    config.clear_settings_cache()
+    with patch("config.CONFIG_DIR", config_dir), patch(
+        "config.CONFIG_FILE", config_file
+    ), patch("config.MCP_SECRETS_DIR", projection_dir), patch(
+        "config.MCP_KEY_FILE", key_file
+    ):
+        config.initialize_mcp_api_key_projection()
+        generated = config.get_settings().mcp_api_key
+    config.clear_settings_cache()
+
+    assert len(generated) >= 32
+    assert key_file.read_text() == f"{generated}\n"
+    assert key_file.stat().st_mode & 0o777 == 0o600
+    assert generated not in caplog.text
+
+
+def test_dedicated_projection_upgrade_republishes_existing_key(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    projection_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    projection_dir.mkdir()
+    config_file = config_dir / "settings.json"
+    key_file = projection_dir / "api-key"
+    config_file.write_text(
+        '{"url":"http://dispatcharr.example:9191",'
+        '"mcp_api_key":"<Synthetic-Upgrade-Key-71von>"}'
+    )
+
+    config.clear_settings_cache()
+    with patch("config.CONFIG_DIR", config_dir), patch(
+        "config.CONFIG_FILE", config_file
+    ), patch("config.MCP_SECRETS_DIR", projection_dir), patch(
+        "config.MCP_KEY_FILE", key_file
+    ):
+        config.initialize_mcp_api_key_projection()
+        loaded = config.get_settings()
+    config.clear_settings_cache()
+
+    assert loaded.mcp_api_key == "<Synthetic-Upgrade-Key-71von>"
+    assert loaded.url == "http://dispatcharr.example:9191"
+    assert key_file.read_text() == "<Synthetic-Upgrade-Key-71von>\n"
+    assert key_file.stat().st_mode & 0o777 == 0o600
+
+
+def test_dedicated_projection_upgrade_provisions_a_missing_legacy_field(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    projection_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    projection_dir.mkdir()
+    config_file = config_dir / "settings.json"
+    key_file = projection_dir / "api-key"
+    config_file.write_text('{"url":"http://dispatcharr.example:9191"}')
+
+    config.clear_settings_cache()
+    with patch("config.CONFIG_DIR", config_dir), patch(
+        "config.CONFIG_FILE", config_file
+    ), patch("config.MCP_SECRETS_DIR", projection_dir), patch(
+        "config.MCP_KEY_FILE", key_file
+    ):
+        config.initialize_mcp_api_key_projection()
+        loaded = config.get_settings()
+    config.clear_settings_cache()
+
+    assert len(loaded.mcp_api_key) >= 32
+    assert loaded.url == "http://dispatcharr.example:9191"
+    assert key_file.read_text() == f"{loaded.mcp_api_key}\n"
+
+
+def test_dedicated_projection_does_not_reverse_an_explicit_revocation(
+    tmp_path: Path,
+) -> None:
+    config_dir = tmp_path / "config"
+    projection_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    projection_dir.mkdir()
+    config_file = config_dir / "settings.json"
+    key_file = projection_dir / "api-key"
+    config_file.write_text('{"mcp_api_key":""}')
+
+    config.clear_settings_cache()
+    with patch("config.CONFIG_DIR", config_dir), patch(
+        "config.CONFIG_FILE", config_file
+    ), patch("config.MCP_SECRETS_DIR", projection_dir), patch(
+        "config.MCP_KEY_FILE", key_file
+    ):
+        config.initialize_mcp_api_key_projection()
+        loaded = config.get_settings()
+    config.clear_settings_cache()
+
+    assert loaded.mcp_api_key == ""
+    assert key_file.read_text() == "\n"
+    assert key_file.stat().st_mode & 0o777 == 0o600
+
+
 def test_projection_is_skipped_when_the_projection_directory_is_absent(
     tmp_path: Path,
 ) -> None:
