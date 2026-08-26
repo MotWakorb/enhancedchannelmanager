@@ -98,7 +98,7 @@ Bulk variant of `/add-stream`: fetches the channel once, appends every requested
 | `createChannel` | `tempId` (int, negative), `name` (str), `channelNumber` (float, opt), `groupId` (int, opt), `newGroupName` (str, opt), `logoId` (int, opt), `logoUrl` (str, opt), `tvgId` (str, opt), `tvcGuideStationId` (str, opt), `normalize` (bool, default `false`) | `tempId` is echoed back in `tempIdMap` → real id. Use `groupId` for an existing group or `newGroupName` to reference a group created in `groupsToCreate`. |
 | `updateChannel` | `channelId` (int), `data` (dict), `acknowledgedDuplicate` (obj, opt), `expectedNumber` (obj, opt) | `data` is an **unvalidated field bag** forwarded to Dispatcharr wholesale. See [The `data` field bag](#the-data-field-bag-is-unvalidated). |
 | `deleteChannel` | `channelId` (int) | |
-| `addStreamToChannel` | `channelId` (int), `streamId` (int) | |
+| `addStreamToChannel` | `channelId` (int), `streamId` (int) | `channelId` may be a negative temp id from a `createChannel` in the same request. The create must precede the assignment. If the create fails or returns no usable id, the assignment fails without querying Dispatcharr with the negative id; its error retains the submitted temp id and uses the intended create name when available. Stream existence is validated for both real and temp channel ids. |
 | `removeStreamFromChannel` | `channelId` (int), `streamId` (int) | |
 | `reorderChannelStreams` | `channelId` (int), `streamIds` (list[int]) | New stream order; first = highest priority. |
 | `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | See [Range assignment defaults](#range-assignment-defaults) for what an omitted `startingNumber`, an explicit `0`, and an empty `channelIds` each do. |

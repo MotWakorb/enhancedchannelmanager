@@ -112,7 +112,7 @@ export type ApiCallSpec =
    * {@link ConcurrentNumberAcknowledgement}.
    */
   | { type: 'bulkAssignChannelNumbers'; channelIds: number[]; startingNumber?: number; acknowledgedConcurrentChanges?: ConcurrentNumberAcknowledgement[] }
-  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement }
+  | { type: 'createChannel'; name: string; channelNumber?: number; groupId?: number; newGroupName?: string; stagedGroupId?: number; logoId?: number; logoUrl?: string; tvgId?: string; tvcGuideStationId?: string; acknowledgedDuplicate?: DuplicateNumberAcknowledgement; expectedStreamIds?: number[] }
   | { type: 'deleteChannel'; channelId: number }
   | { type: 'createGroup'; name: string; tempGroupId: number }
   | { type: 'deleteChannelGroup'; groupId: number }
@@ -478,6 +478,17 @@ export interface UseEditModeReturn {
   stageReorderStreams: (channelId: number, streamIds: number[], description: string) => void;
   stageBulkAssignNumbers: (channelIds: number[], startingNumber: number, description: string) => void;
   stageCreateChannel: (name: string, channelNumber?: number, groupId?: number, newGroupName?: string, logoId?: number, logoUrl?: string, tvgId?: string, tvcGuideStationId?: string) => number; // returns temp ID
+  stageCreateChannelWithStreams: (input: {
+    name: string;
+    streamIds: number[];
+    channelNumber?: number;
+    groupId?: number;
+    newGroupName?: string;
+    logoId?: number;
+    logoUrl?: string;
+    tvgId?: string;
+    tvcGuideStationId?: string;
+  }) => number;
   stageDeleteChannel: (channelId: number, description: string) => void;
   /**
    * Stage a new channel group. Returns the negative temp id the group is known

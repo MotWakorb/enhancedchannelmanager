@@ -2572,6 +2572,11 @@ async def _run_bulk_commit(
     if request.consolidate:
         operations = _consolidate_operations(operations)
         request = request.model_copy(update={"operations": operations})
+    temp_channel_names = {
+        op.tempId: op.name
+        for op in request.operations
+        if op.type == "createChannel"
+    }
     if request.groupsToCreate:
         logger.debug("[CHANNELS-BULK] Groups to create: %s", [g.get('name') for g in request.groupsToCreate])
 
@@ -3039,8 +3044,12 @@ async def _run_bulk_commit(
                     logger.debug("[CHANNELS-BULK] deleteChannel: channel %s already gone, skipping", op.channelId)
 
             elif op.type == "addStreamToChannel":
+                ch_name = temp_channel_names.get(op.channelId)
+                if ch_name is None:
+                    ch_name = existing_channels.get(op.channelId, {}).get(
+                        "name", f"Channel {op.channelId}"
+                    )
                 if channel_is_missing(op.channelId):
-                    ch_name = f"Channel {op.channelId}"
                     result["validationIssues"].append({
                         "type": "missing_channel",
                         "severity": "error",
@@ -3051,24 +3060,17 @@ async def _run_bulk_commit(
                         "streamId": op.streamId,
                     })
                     result["validationPassed"] = False
-                elif op.channelId >= 0:
-                    # `.get`, not `[]`: a failed catalog read leaves this empty
-                    # while the branch above deliberately does not fire.
-                    ch_name = existing_channels.get(op.channelId, {}).get(
-                        "name", f"Channel {op.channelId}"
-                    )
-                    # Check stream exists
-                    if stream_is_missing(op.streamId):
-                        result["validationIssues"].append({
-                            "type": "missing_stream",
-                            "severity": "error",
-                            "message": f"Stream {op.streamId} does not exist",
-                            "operationIndex": idx,
-                            "channelId": op.channelId,
-                            "channelName": ch_name,
-                            "streamId": op.streamId,
-                        })
-                        result["validationPassed"] = False
+                if stream_is_missing(op.streamId):
+                    result["validationIssues"].append({
+                        "type": "missing_stream",
+                        "severity": "error",
+                        "message": f"Stream {op.streamId} does not exist",
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                        "channelName": ch_name,
+                        "streamId": op.streamId,
+                    })
+                    result["validationPassed"] = False
 
             elif op.type == "removeStreamFromChannel":
                 if channel_is_missing(op.channelId):
@@ -3533,7 +3535,10 @@ async def _run_bulk_commit(
                             }
 
                 elif op.type == "addStreamToChannel":
-                    channel_id = resolve_id(op.channelId)
+                    channel_id = reject_unresolved_channel(
+                        resolve_id(op.channelId),
+                        f"addStreamToChannel for '{temp_channel_names.get(op.channelId, f'Channel {op.channelId}')}'",
+                    )
                     logger.debug("[CHANNELS-BULK] [%s/%s] addStreamToChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
@@ -4025,7 +4030,9 @@ async def _run_bulk_commit(
                 if hasattr(op, 'channelId'):
                     error_details["channelId"] = op.channelId
                     # Try to get channel name from our lookup
-                    if op.channelId in existing_channels:
+                    if op.channelId in temp_channel_names:
+                        error_details["channelName"] = temp_channel_names[op.channelId]
+                    elif op.channelId in existing_channels:
                         error_details["channelName"] = existing_channels[op.channelId].get("name", f"Channel {op.channelId}")
                     else:
                         error_details["channelName"] = f"Channel {op.channelId}"

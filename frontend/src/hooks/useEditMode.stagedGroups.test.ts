@@ -29,7 +29,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useEditMode } from './useEditMode';
-import type { Channel } from '../types';
+import type { Channel, StagedOperation } from '../types';
+import { createSnapshot } from '../utils/channelSnapshot';
 import type { BulkCommitRequest, BulkCommitResponse } from '../services/api';
 
 const bulkCommit = vi.fn();
@@ -157,39 +158,19 @@ beforeEach(() => {
 });
 
 describe('useEditMode — a channel created into a group pending in the same batch', () => {
-  it('applies a new channel stream assignment in the create request', async () => {
-    const assigned: Array<{ channelId: number; streamId: number }> = [];
-
+  it('composes a create and its temp-id assignment in the same request', async () => {
     bulkCommit.mockImplementation(async (request: BulkCommitRequest) => {
       requests.push(request);
       const creates = request.operations.filter((op) => op.type === 'createChannel');
       const tempIdMap = Object.fromEntries(
         creates.map((op, index) => [op.tempId as number, FIRST_REAL_CHANNEL_ID + index]),
       );
-      const errors: BulkCommitResponse['errors'] = [];
-      let applied = creates.length;
-
-      for (const op of request.operations) {
-        if (op.type !== 'addStreamToChannel') continue;
-        const channelId = op.channelId as number;
-        const resolvedId = tempIdMap[channelId];
-        if (resolvedId === undefined) {
-          errors.push({
-            operationId: 'missing-create-context',
-            operationType: op.type,
-            error: `New channel ${channelId} is not resolvable in this request`,
-          });
-          continue;
-        }
-        assigned.push({ channelId: resolvedId, streamId: op.streamId as number });
-        applied += 1;
-      }
 
       return {
-        success: errors.length === 0,
-        operationsApplied: applied,
-        operationsFailed: errors.length,
-        errors,
+        success: true,
+        operationsApplied: request.operations.length,
+        operationsFailed: 0,
+        errors: [],
         tempIdMap,
         groupIdMap: {},
       } satisfies BulkCommitResponse;
@@ -208,7 +189,52 @@ describe('useEditMode — a channel created into a group pending in the same bat
 
     expect(result.operationsFailed).toBe(0);
     expect(result.operationsApplied).toBe(2);
-    expect(assigned).toEqual([{ channelId: FIRST_REAL_CHANNEL_ID, streamId: 55 }]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].operations).toEqual([
+      expect.objectContaining({ type: 'createChannel', tempId: -1, name: 'New channel' }),
+      { type: 'addStreamToChannel', channelId: -1, streamId: 55 },
+    ]);
+  });
+
+  it('refuses Apply when a restored bulk create is missing an expected assignment', async () => {
+    const onError = vi.fn();
+    const { view } = renderEditMode([], onError);
+    const stagedChannel = makeChannel(-1, 'New channel');
+    const create: StagedOperation = {
+      id: 'bulk-create-1',
+      timestamp: Date.now(),
+      description: 'Create channel "New channel"',
+      apiCall: {
+        type: 'createChannel',
+        name: 'New channel',
+        expectedStreamIds: [55],
+      },
+      beforeSnapshot: [],
+      afterSnapshot: [createSnapshot(stagedChannel)],
+    };
+
+    act(() => {
+      view.result.current.restoreStagedLedger({
+        operations: [create],
+        undoGroups: [[create.id]],
+        savedAt: Date.now(),
+      });
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.operationsFailed).toBe(1);
+    expect(result.errors[0]).toEqual(expect.objectContaining({
+      channelId: -1,
+      channelName: 'New channel',
+      error: expect.stringContaining('missing 1 expected stream assignment'),
+    }));
+    expect(bulkCommit).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Nothing was applied'));
   });
 
   it('partitions mixed stream assignments without disturbing batches or accounting', async () => {

@@ -52,7 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
-- **Bulk-created channels now retain their staged stream assignments when Apply All runs (bead `enhancedchannelmanager-ydmu3`, build 0150).** Stream assignments for newly created channels stay in the create request so their temporary channel IDs resolve before Dispatcharr applies them.
+- **Apply All now fails closed if a bulk-created channel loses an expected stream assignment while it is being staged (bead `enhancedchannelmanager-ydmu3`, build 0150).** Retained logs from the affected run show one request containing 316 creates and no assignments, but the exact historical trigger remains unproven: a disposable reproduction through the current real hook staged all 632 operations. The App bulk-create path now appends each create and its assignments in one functional state update, records the expected stream ids in the session ledger, and refuses to commit an incomplete pair. As defense in depth, creates and temp-id assignments remain in the same request; the backend validates streams for temp targets, never queries a negative unresolved channel id after a failed or malformed create, and reports the intended channel name.
 
 - **Starting a new cross-instance preview now revokes the prior Apply authorization immediately (build 0149).** A failed or interrupted re-preview can no longer leave stale **Apply** available for a source-wins overwrite.
 
