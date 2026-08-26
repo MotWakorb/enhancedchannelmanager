@@ -104,7 +104,7 @@ Configuring how ECM connects to other systems, processes channels, sends notific
 
 Backing up your ECM configuration and restoring it on a new install.
 
-- **[Cross-Instance Sync](backup-restore/cross-instance-sync.md)**: One-way A→B config replication for DR standbys and multi-instance setups. Covers setup, the two load-bearing semantics (one-way, credentials not synced), and troubleshooting.
+- **[Cross-Instance Sync](backup-restore/cross-instance-sync.md)**: One-way A→B config replication for DR standbys and multi-instance setups. Covers setup, the two load-bearing semantics (one-way, provider credentials sent on every cycle), and troubleshooting.
 
 ### [Troubleshooting](troubleshooting/index.md)
 

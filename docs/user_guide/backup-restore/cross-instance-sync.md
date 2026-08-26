@@ -50,7 +50,7 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 
 | Category | Notes |
 |-|-|
-| Logos | **On by default**, but not on every cycle: a new sync target replicates logos once every 24 hours (`logo_sync_interval_hours` on the target; set it to `0` for every cycle — **the interval has no toggle on the card yet**, only the on/off switch does, so changing it means `PUT /api/sync-targets/{id}`). Everything else on this page syncs on the target's normal interval — only logos are throttled, because copying images is the one expensive part of a cycle and artwork changes rarely. A target created before ECM v0.18.1 keeps whatever you had it set to; the new default applies to targets you create from now on. Each target row on the Cross-Instance Sync card carries a **Logos off / Logos on** toggle next to its enable/disable switch; click it to turn logo replication off (or back on) for that target. The setting is stored on the target, so it survives a reload and applies to that target's later runs. A target that has never run a logo pass replicates logos on its very next cycle rather than waiting out the 24 hours, so a freshly built replica arrives with its artwork. Covers all three places a logo can live: the files in ECM's own `/config/uploads/logos/`, the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives), and the ones your provider supplies as a web address — which on an Xtream Codes lineup is usually nearly all of them. The first two travel as image files; the third travels as the address itself, so B points at the same picture A does without either instance re-hosting it. Where two of them describe the same logo, the one holding real image bytes is the one that travels. Only logos B is missing are created (matched by id, name, then filename); sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. A provider address that carries your account's username or password **is** copied now, like every other credential-bearing address, so those logos arrive and load on B. |
+| Logos | **On by default**, but not on every cycle: a new sync target replicates logos once every 24 hours (`logo_sync_interval_hours` on the target; set it to `0` for every cycle — **the interval has no toggle on the card yet**, only the on/off switch does, so changing it means `PUT /api/sync-targets/{id}`). Everything else follows the separate recurring task schedule configured under **Settings → Scheduled Tasks** — only logos are throttled, because copying images is the one expensive part of a cycle and artwork changes rarely. A target created before ECM v0.18.1 keeps whatever you had it set to; the new default applies to targets you create from now on. Each target row on the Cross-Instance Sync card carries a **Logos off / Logos on** toggle next to its enable/disable switch; click it to turn logo replication off (or back on) for that target. The setting is stored on the target, so it survives a reload and applies to that target's later runs. A target that has never run a logo pass replicates logos on its very next cycle rather than waiting out the 24 hours, so a freshly built replica arrives with its artwork. Covers all three places a logo can live: the files in ECM's own `/config/uploads/logos/`, the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives), and the ones your provider supplies as a web address — which on an Xtream Codes lineup is usually nearly all of them. The first two travel as image files; the third travels as the address itself, so B points at the same picture A does without either instance re-hosting it. Where two of them describe the same logo, the one holding real image bytes is the one that travels. Only logos B is missing are created (matched by id, name, then filename); sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. A provider address that carries your account's username or password **is** copied now, like every other credential-bearing address, so those logos arrive and load on B. |
 
 ### Never synced
 
@@ -78,46 +78,73 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | **Username / Password** | Credentials ECM-A uses to authenticate against Dispatcharr-B's API. This is not what B syncs. It is how A reaches B. |
 | **Allow insecure TLS** | Disable TLS verification for self-signed certs. Use only on isolated LANs where you control both endpoints. Every sync cycle using this option is logged. |
 
-5. Click **Save**.
+5. Click **Create target**.
 
-The target appears in the list. It is disabled by default.
+The target appears in the list and starts **Enabled**. This target-row control
+allows runs to reach B; it does not create or enable a recurring schedule.
+
+![Enabled Disposable B sync target row with status and target controls](../../images/user_guide/backup-restore/1-sync-target-row.png)
 
 ### Step 2: Run a preview
 
-Before enabling the schedule, run a manual dry-run to confirm A can reach B and the configuration looks correct.
+Before configuring a schedule, run a manual dry-run to confirm A can reach B and the configuration looks correct.
 
-1. On the target row, click **Sync now**.
+1. On the target row, click **Sync now (preview)**.
 2. ECM runs a dry-run (no changes are written to B). The results show what would be created, updated, or skipped.
 3. Review the preview. If you see unexpected conflicts, see [Troubleshooting](#troubleshooting).
-4. Click **Apply** to write the changes to B. A confirmation dialog warns you that **A's configuration overwrites B**. Confirm if you are ready.
+4. After a successful preview, **Apply** appears. Click it to write the changes to B.
+5. Accept the browser's native confirmation only after you have read the source-wins warning. This confirmation is browser chrome and is therefore intentionally not pictured. A failed preview does not make **Apply** available.
 
 After a successful apply, the target row shows the last sync timestamp and the outcome.
 
 ### Step 3: Enable a sync schedule
 
-1. On the target row, click **Edit**.
-2. Set the **Sync interval** (e.g., every 1 hour).
-3. Toggle **Enable** to on.
-4. Save.
+1. Go to **Settings → Scheduled Tasks**.
+2. Find **Cross-Instance Sync: `<target>`**, where `<target>` is the name you gave the sync target, and click **Edit**.
+3. Turn on **Enable task**.
+4. Under **Schedules**, click **Add Schedule**.
+5. Choose an interval or calendar schedule and leave **Enable this schedule** on.
+6. Under **Task Parameters**, turn on **Apply changes on every scheduled run**. ECM requires this explicit choice; it will not save a recurring preview-only schedule.
+7. Click **Add Schedule**, then save the task settings.
 
-ECM now runs sync automatically at the configured interval. You can still trigger a manual sync at any time with **Sync now**.
+![Disabled manual Cross-Instance Sync task card for Disposable B](../../images/user_guide/backup-restore/2-sync-scheduled-task-card.png)
+
+ECM now applies the sync automatically on that schedule. Automatic execution
+requires all three gates: the target row is **Enabled**, the per-target task is
+enabled, and at least one child schedule is enabled. Manual runs from the target
+row still start with **Sync now (preview)**.
 
 If you have several sync targets, they sync independently and can run at the same time. A slow or unreachable target never delays the others. ECM never runs two syncs against the *same* target at once (a second attempt while one is in progress is refused and simply runs on its next interval), and it caps how many targets sync simultaneously (3 by default; the `ECM_SYNC_MAX_CONCURRENT` environment variable adjusts it, and extra targets wait their turn rather than being skipped).
 
 ### The kill switch
 
-The **Enable** toggle on each target is the kill switch. Flipping it off immediately stops all scheduled runs for that target. The target definition (URL, credentials, interval) is preserved. Flip it back on to resume.
+The **Enabled** toggle on each target row is the target kill switch. Turning it
+off blocks manual preview/apply actions and scheduled runs for that target. The
+target definition (URL and credentials) and its separate Scheduled Tasks
+configuration are preserved. Turning the target back on permits runs again; the
+scheduled task and at least one child schedule must also remain enabled for
+automatic runs to resume.
 
 ---
 
-## DR standby setup (first-time flow)
+## End-to-end operator walkthrough
 
-If you are setting up B from scratch as a DR standby:
+Use this flow to build and verify a fresh B without treating ECM's run counters
+as the final proof:
 
-1. **Stand up a fresh Dispatcharr-B** on your standby host. It can be empty.
-2. **Add a sync target on A** pointing at B (steps above). Run a preview, then apply.
-3. **Enable the sync schedule on A.** B now tracks A.
-4. **Verify B is healthy.** Log into B, check the channels and EPG, and play a stream.
+1. **Stand up Dispatcharr-B.** Create its operator account and confirm you can log in. B may otherwise be empty.
+2. **Create the target on ECM-A.** Use B's base URL and API credentials, then leave the new target **Enabled**.
+3. **Preview.** Click **Sync now (preview)** and review the create, update, skip, conflict, and failure results. Stop if the plan is unexpected.
+4. **Apply.** Click the newly available **Apply**, read the native confirmation, and confirm the source-wins write.
+5. **Verify on B, not only in A's notification.** Log in to B and check the expected channel groups, channels, stream assignments, profiles, logos, M3U accounts, and EPG sources. Open representative channels and verify that a stream actually plays; an HTTP response alone is not proof of video.
+6. **Repeat preview and apply without changing A.** The repeat preview should plan no new destination objects. Repeat-run update counters can still be non-zero, so do not require `updated 0`.
+7. **Prove idempotency from B's normalized state.** Compare the destination collections before and after the repeat apply after removing volatile timestamps and cache-buster fields. Unchanged normalized destination state is the proof that the repeat run converged without churn.
+8. **Configure the recurring task.** Under **Settings → Scheduled Tasks**, edit **Cross-Instance Sync: `<target>`**, enable the task, add an enabled schedule, and enable **Apply changes on every scheduled run**.
+
+**Expected repeat-run result:** B remains equivalent to A for the categories in
+scope. A repeat apply may report updates while producing no normalized state
+change; the destination comparison, not a zero-update counter, decides
+idempotency.
 
 **The encrypted-backup seeding step this list used to start with is no longer needed.** It existed
 because sync could not carry credentials, so B had to get them from a backup or by hand. Sync

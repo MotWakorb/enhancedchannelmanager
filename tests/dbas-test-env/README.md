@@ -1617,6 +1617,58 @@ docker image rm ecm-kdz6p:aed7447b
 ```
 plus the two blocks under "Tearing the whole thing down" above.
 
+---
+
+# Acceptance record - 2026-08-26
+
+**ACCEPTED within the scope below** against Dispatcharr **0.29.0** on A and B
+and ECM commit **`8e9fb19bc68de3f138bf73a3aeb2373596703cfe`**. The run used the
+retained disposable environment and recorded no provider host, username,
+password, stream URL, or raw custom property.
+
+## Fresh-destination result
+
+- Preview across 11 categories: **create 1,416 / update 6 / skip 9 / 0 conflicts**.
+- Apply: **create 951 / update 6 / failed 0**.
+- B after apply: **316 channels, 316 streams, 316 channel-stream links; 316 logos and 316 channel-logo bindings; 781 channel groups; 782 account-group rows with 5 enabled; 4 M3U accounts including the `ECM Custom Streams (DBAS restore)` fallback; 1 EPG source**.
+- Playback: one representative B channel returned a client-bounded **1,880-byte MPEG-TS sample** with valid TS framing. The stream address was neither recorded nor printed.
+- Credential propagation: a provider credential was rotated on A, propagated to B, then restored on A and propagated to B again. Verification compared outcomes without displaying or recording either value.
+- ECM's `/config/uploads/logos/` directory remained empty. Logo acceptance therefore did not depend on planting a fixture in ECM's own upload directory.
+
+## Repeat-run and idempotency result
+
+- Repeat preview: **create 0 / update 6 / skip 1,109**.
+- Repeat apply: **create 0 / update 322 / failed 0**.
+- Normalized fingerprints for **15 destination collections** were unchanged before and after the repeat apply.
+
+The non-zero repeat update counts are not destination-churn evidence. The
+unchanged normalized destination fingerprints are the idempotency proof; sync
+can report updates while leaving the converged destination state unchanged.
+
+## Residual defect outside acceptance scope
+
+**`enhancedchannelmanager-ydmu3` remains a separate defect and is explicitly
+out of this acceptance scope.** ECM's UI bulk channel creation dropped the
+staged stream assignments. Before continuing the acceptance run, the disposable
+A fixture was repaired through the documented Dispatcharr channel `PATCH` API,
+and only after the operator proved that each channel had one unique intended
+stream mapping. No production instance was repaired or modified. Acceptance of
+cross-instance sync does not accept, waive, or close the UI bulk-creation defect.
+
+## Screenshot status
+
+Two credential-safe, tightly scoped screenshots now exist and are referenced by
+the guide: `docs/images/user_guide/backup-restore/1-sync-target-row.png` and
+`docs/images/user_guide/backup-restore/2-sync-scheduled-task-card.png`. They show
+only the disposable B target row and its closed scheduled-task card. They exclude
+provider-facing fields, stream URLs, raw properties, forms, and browser-native
+confirmation.
+
+Broader captures remain prohibited because the retained environment contains
+live provider material, and broader operational views can expose provider or
+stream secrets through fields, raw properties, URLs, logs, or browser capture
+artifacts.
+
 # ARCHIVE — the retired synthetic-provider measurements
 
 Everything below was measured against the **retired** Dispatcharr-P chain (a
@@ -1706,4 +1758,3 @@ What else the direct read showed, all of it measured, none of it fixed here:
 destroyed, superuser re-created, `stream_settings` cache busted), the temporary
 sync target was deleted, and ECM's notifications were cleared. The destination
 the writer receives is unspent.
-
