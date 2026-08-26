@@ -235,9 +235,9 @@ So after `git checkout dev && git pull`, run:
 The script checks two things for the merge commit at `HEAD`:
 
 1. The exact SHA's **Tests** push run concluded `success`, and its final reusable **Publish Verified Dev Images / Publish Verified Multi-Arch Manifests** job concluded `success` on the same run attempt. An overall green Tests run without that job is not accepted as publication proof.
-2. The published tag's build marker (`ECM_VERSION`, baked into the image from the `ECM_VERSION` build-arg) equals the version in `frontend/package.json` **at that commit**.
+2. Every platform config represented by the published tag carries both build markers, all platforms agree, `ECM_VERSION` equals the version in `frontend/package.json` **at that commit**, and `GIT_COMMIT` equals the full 40-character resolved commit SHA exactly. Missing, abbreviated, malformed, conflicting, or stale markers fail the check.
 
-Both must hold. A green workflow with a stale marker means the push did not land on the tag. A correct marker with a failed workflow means the tag is still serving an older build.
+Both must hold. A green workflow with stale or cross-platform markers means the push did not land consistently on the tag. Correct markers with a failed workflow mean publication provenance was not proven.
 
 **It is a post-merge check, deliberately not a CI gate.** A check that runs after the merge cannot gate the merge it follows, and adding it to the PR flow would put a permanently-failing context on every open PR. Running it *before* the merge is the one way to misread it: on a feature branch the version bump has not reached `dev` yet, so the registry cannot possibly carry it. The script detects that case and prints a `PRE-MERGE RUN` banner saying the mismatch is expected.
 
