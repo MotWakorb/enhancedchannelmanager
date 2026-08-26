@@ -6882,6 +6882,9 @@ async def restore_saved_backup(req: RestoreSavedRequest, _admin=RequireHumanAdmi
     except zipfile.BadZipFile:
         archive.close()
         raise HTTPException(status_code=400, detail="Saved file is not a valid zip archive")
+    except BaseException:
+        archive.close()
+        raise
 
     with archive, zf:
         manifest = _validate_backup_zip(zf)
