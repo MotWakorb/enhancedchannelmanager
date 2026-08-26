@@ -1071,6 +1071,14 @@ def _sanitize_settings_data(data: dict) -> dict:
     return data
 
 
+def prepare_settings_data(data: dict) -> dict:
+    """Apply the compatibility migrations used by the settings-file loader."""
+    prepared = dict(data)
+    prepared = _migrate_normalization_settings(prepared)
+    prepared = _migrate_dispatcharr_api_key(prepared)
+    return _sanitize_settings_data(prepared)
+
+
 def load_settings() -> DispatcharrSettings:
     """Load settings from file or return defaults."""
     global _cached_settings
@@ -1084,14 +1092,7 @@ def load_settings() -> DispatcharrSettings:
     if CONFIG_FILE.exists():
         try:
             data = json.loads(CONFIG_FILE.read_text())
-            # Apply migrations
-            data = _migrate_normalization_settings(data)
-            # bd-jmi1c (GH #273) — rename legacy ``api_key`` to
-            # ``dispatcharr_api_key``. Must run before _sanitize so the WARN
-            # log fires on the actual legacy value, not on a sanitized "".
-            data = _migrate_dispatcharr_api_key(data)
-            # Sanitize nulls to prevent Pydantic validation failures
-            data = _sanitize_settings_data(data)
+            data = prepare_settings_data(data)
             # KNOWN RESIDUAL (bead ...-04c0u.10): this read-parse-assign takes
             # NO lock, so a load that started before a concurrent save can
             # assign a pre-save value into the cache afterwards and leave it

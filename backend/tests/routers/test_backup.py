@@ -8,7 +8,9 @@ Mocks: get_settings(), get_engine(), close_db(), init_db(), clear_settings_cache
 import io
 import json
 import sqlite3
+import tempfile
 import zipfile
+from pathlib import Path
 
 import pytest
 import yaml
@@ -37,10 +39,40 @@ def _write_empty_journal_db(path):
     now (bead …-gi4zn, finding A-3), and a live instance always has a real
     database here, so the faithful fixture is the one that matches production.
 
-    ``_make_backup_zip`` below keeps the magic-byte stub on purpose: that is a
-    ZIP MEMBER, and ``_validate_backup_zip`` checks exactly those bytes.
+    ZIP restore fixtures use the minimal historical schema because admission
+    now verifies SQLite structure rather than trusting magic bytes.
     """
     sqlite3.connect(str(path)).close()
+
+
+def _add_legacy_baseline_tables(path):
+    """Add the tables present throughout the legacy ZIP backup era."""
+    connection = sqlite3.connect(str(path))
+    try:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS journal_entries "
+            "(id INTEGER PRIMARY KEY, timestamp TEXT, category TEXT, action_type TEXT, "
+            "entity_name TEXT, description TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS scheduled_tasks "
+            "(id INTEGER PRIMARY KEY, task_id TEXT, task_name TEXT, enabled INTEGER, schedule_type TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS auto_creation_rules "
+            "(id INTEGER PRIMARY KEY, name TEXT, enabled INTEGER, priority INTEGER, "
+            "conditions TEXT, actions TEXT)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _minimal_journal_db_bytes() -> bytes:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "journal.db"
+        _add_legacy_baseline_tables(path)
+        return path.read_bytes()
 
 
 def _make_backup_zip(
@@ -62,8 +94,7 @@ def _make_backup_zip(
             files.append("settings.json")
 
         if include_db:
-            # SQLite magic bytes
-            content = db_content or (b"SQLite format 3\x00" + b"\x00" * 100)
+            content = db_content if db_content is not None else _minimal_journal_db_bytes()
             zf.writestr("journal.db", content)
             files.append("journal.db")
 
@@ -1797,6 +1828,7 @@ def _create_journal_db_with_alert_methods(path, rows):
     and the supplied rows. Each row is a dict with at least name, method_type,
     config (dict — will be JSON-encoded for storage)."""
     import sqlite3
+    _add_legacy_baseline_tables(path)
     conn = sqlite3.connect(str(path))
     try:
         conn.execute(
@@ -2005,7 +2037,8 @@ class TestZipRestoreRedactionAware:
     """ZIP restore must preserve existing creds when the ZIP contains the
     REDACTED sentinel — both for settings.json and for alert_methods.config.
 
-    Backward compat: a legacy ZIP with raw values must still restore as-is.
+    Backward compat: legacy raw credentials still restore, except mcp_api_key,
+    which always remains bound to the destination instance.
     """
 
     @pytest.mark.asyncio
@@ -2147,15 +2180,16 @@ class TestZipRestoreRedactionAware:
         assert by_id[2][1]["webhook_url"] == existing_webhook
 
     @pytest.mark.asyncio
-    async def test_zip_restore_legacy_non_redacted_still_works(
+    async def test_zip_restore_legacy_non_redacted_preserves_only_destination_mcp_key(
         self, async_client, tmp_path
     ):
         """Backward-compat smoke: a legacy ZIP with raw credential values
-        (no ***REDACTED*** sentinels) must restore values as-is."""
+        restores them as-is except for the destination's MCP bearer key."""
         settings_file = tmp_path / "settings.json"
         settings_file.write_text(json.dumps({
             "url": "http://existing:9191",
             "password": "should-be-overwritten",
+            "mcp_api_key": "destination-mcp-key",
         }))
         db_file = tmp_path / "journal.db"
 
@@ -2164,6 +2198,7 @@ class TestZipRestoreRedactionAware:
             "username": "restored_user",
             "password": "raw-restored-pass",
             "smtp_password": "raw-restored-smtp",
+            "mcp_api_key": "hostile-legacy-mcp-key",
         })
         backup = _make_backup_zip(settings_content=legacy_settings)
 
@@ -2181,8 +2216,10 @@ class TestZipRestoreRedactionAware:
 
         assert response.status_code == 200
         restored = json.loads(settings_file.read_text())
-        # All values came from the ZIP, raw, including credentials.
+        # Legacy credentials still come from the ZIP, except the instance-bound
+        # MCP bearer key, which cannot be imported from an untrusted artifact.
         assert restored["url"] == "http://restored:9191"
         assert restored["username"] == "restored_user"
         assert restored["password"] == "raw-restored-pass"
         assert restored["smtp_password"] == "raw-restored-smtp"
+        assert restored["mcp_api_key"] == "destination-mcp-key"
