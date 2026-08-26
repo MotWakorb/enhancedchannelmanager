@@ -3,8 +3,8 @@
 Covers, per the bead's acceptance criteria:
 * CRUD happy paths (create / list / get / update / delete);
 * credentials are MASKED in every response (never plaintext, never ciphertext);
-* credential_version bumps when credentials change on update but NOT on a
-  rename / enable-toggle;
+* credential_version bumps when credentials or destination security changes on
+  update but NOT on a rename / enable-toggle;
 * base_url with a non-http scheme is rejected (config-time validation);
 * the admin gate is enforced when auth is enabled.
 
@@ -137,7 +137,7 @@ class TestListGetSyncTargets:
 
 
 # ---------------------------------------------------------------------------
-# Update — credential_version bump semantics
+# Update — scheduled-authorization version bump semantics
 # ---------------------------------------------------------------------------
 
 class TestUpdateSyncTarget:
@@ -194,6 +194,56 @@ class TestUpdateSyncTarget:
         assert resp.json()["credential_version"] == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("update", "expected_value"),
+        [
+            ({"base_url": "https://redirected.example.com"}, "https://redirected.example.com"),
+            ({"insecure": True}, True),
+        ],
+    )
+    async def test_destination_security_change_invalidates_scheduled_apply(
+        self, async_client, test_session, update, expected_value
+    ):
+        """Destination changes advance the server-side scheduled auth token."""
+        from unittest.mock import AsyncMock, patch
+
+        from tasks import dbas_sync
+        from tasks.dbas_sync import DbasSyncTask
+
+        created = await async_client.post(
+            "/api/sync-targets",
+            json={
+                "name": "authorized-destination",
+                "base_url": "https://original.example.com",
+                "credentials": {"token": "stabletoken12345"},
+            },
+        )
+        target_id = created.json()["id"]
+        authorized_version = created.json()["credential_version"]
+
+        resp = await async_client.put(f"/api/sync-targets/{target_id}", json=update)
+
+        assert resp.status_code == 200
+        field = next(iter(update))
+        assert resp.json()[field] == expected_value
+        assert resp.json()["credential_version"] == authorized_version + 1
+
+        test_session.expire_all()
+        with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+            task = DbasSyncTask()
+            task.set_run_trigger("scheduled")
+            task.update_config({
+                "sync_target_id": target_id,
+                "confirm_apply": True,
+                "cloud_credential_version": authorized_version,
+            })
+            result = await task.execute()
+
+        assert mock_run.await_count == 0
+        assert result.success is False
+        assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
+
+    @pytest.mark.asyncio
     async def test_update_fuzzy_and_insecure_flags(self, async_client):
         created = await async_client.post(
             "/api/sync-targets",
@@ -208,7 +258,7 @@ class TestUpdateSyncTarget:
         assert resp.json()["fuzzy_stream_matching"] is True
         assert resp.json()["insecure"] is True
         assert resp.json()["sync_logos"] is True
-        assert resp.json()["credential_version"] == 1  # metadata-only
+        assert resp.json()["credential_version"] == 2  # insecure invalidates authorization
 
     @pytest.mark.asyncio
     async def test_correction_leaves_the_row_settings_alone(self, async_client, test_session):
@@ -302,7 +352,7 @@ class TestUpdateSyncTarget:
         )
         assert resp.status_code == 200
         assert resp.json()["base_url"] == "https://k.example.com"
-        assert resp.json()["credential_version"] == 1  # no credentials write
+        assert resp.json()["credential_version"] == 2  # base_url invalidates authorization
 
         test_session.expire_all()
         row = test_session.query(SyncTarget).filter_by(id=tid).first()

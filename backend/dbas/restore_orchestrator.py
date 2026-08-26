@@ -179,6 +179,7 @@ import json
 import logging
 import os
 import uuid
+from contextlib import nullcontext
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -458,53 +459,56 @@ async def run_rollback(
         A :class:`RollbackResult` with ``complete`` and the compensated/residue
         split.
     """
-    dispatch = _delete_dispatch(client)
     compensated: list[LedgerEntry] = []
     residue: list[LedgerEntry] = []
 
-    for entry in ledger.compensation_order():
-        deleter = dispatch.get(entry.entity_type)
-        if deleter is None:
-            logger.error(
-                "[DBAS-ROLLBACK] No compensator registered for entity_type=%s id=%s; "
-                "rollback INCOMPLETE for this entry — manual cleanup required.",
-                entry.entity_type.value,
-                entry.destination_id,
-            )
-            residue.append(entry)
-            continue
-        try:
-            await deleter(entry.destination_id)
-        except Exception as exc:  # noqa: BLE001 - classify by status, re-bucket below
-            if _is_already_gone(exc):
-                logger.info(
-                    "[DBAS-ROLLBACK] Compensating delete of %s id=%s returned 404 "
-                    "(already gone) — counted as success.",
+    compensation = getattr(type(client), "compensation", None)
+    scope = client.compensation() if compensation is not None else nullcontext()
+    with scope:
+        dispatch = _delete_dispatch(client)
+        for entry in ledger.compensation_order():
+            deleter = dispatch.get(entry.entity_type)
+            if deleter is None:
+                logger.error(
+                    "[DBAS-ROLLBACK] No compensator registered for entity_type=%s id=%s; "
+                    "rollback INCOMPLETE for this entry — manual cleanup required.",
                     entry.entity_type.value,
                     entry.destination_id,
                 )
-                entry.compensated = True
-                compensated.append(entry)
-                persist_ledger(ledger, ledger_dir=ledger_dir)
+                residue.append(entry)
                 continue
-            logger.error(
-                "[DBAS-ROLLBACK] Compensating delete of %s id=%s FAILED (status=%s); "
-                "rollback INCOMPLETE — manual cleanup required.",
+            try:
+                await deleter(entry.destination_id)
+            except Exception as exc:  # noqa: BLE001 - classify by status, re-bucket below
+                if _is_already_gone(exc):
+                    logger.info(
+                        "[DBAS-ROLLBACK] Compensating delete of %s id=%s returned 404 "
+                        "(already gone) — counted as success.",
+                        entry.entity_type.value,
+                        entry.destination_id,
+                    )
+                    entry.compensated = True
+                    compensated.append(entry)
+                    persist_ledger(ledger, ledger_dir=ledger_dir)
+                    continue
+                logger.error(
+                    "[DBAS-ROLLBACK] Compensating delete of %s id=%s FAILED (status=%s); "
+                    "rollback INCOMPLETE — manual cleanup required.",
+                    entry.entity_type.value,
+                    entry.destination_id,
+                    _status_code_of(exc),
+                )
+                residue.append(entry)
+                continue
+
+            entry.compensated = True
+            compensated.append(entry)
+            persist_ledger(ledger, ledger_dir=ledger_dir)
+            logger.info(
+                "[DBAS-ROLLBACK] Compensated %s id=%s.",
                 entry.entity_type.value,
                 entry.destination_id,
-                _status_code_of(exc),
             )
-            residue.append(entry)
-            continue
-
-        entry.compensated = True
-        compensated.append(entry)
-        persist_ledger(ledger, ledger_dir=ledger_dir)
-        logger.info(
-            "[DBAS-ROLLBACK] Compensated %s id=%s.",
-            entry.entity_type.value,
-            entry.destination_id,
-        )
 
     complete = not residue
     logger.warning(
@@ -1869,6 +1873,7 @@ async def run_dry_run(
     *,
     plan: ImportPlan,
     client: DispatcharrClient,
+    report: RestoreReport | None = None,
     steps: list[ImporterStep] | None = None,
     ledger_dir: Path | None = None,
     max_entities_per_category: int = None,  # type: ignore[assignment]
@@ -1907,7 +1912,8 @@ async def run_dry_run(
         ``would_*`` counts, the ``logo_misses`` aggregate, and the
         ``epg_link_reattach`` / ``logo_reattach`` population splits.
     """
-    report = RestoreReport(is_dry_run=True)
+    if report is None:
+        report = RestoreReport(is_dry_run=True)
     ledger = RollbackLedger(restore_id=new_restore_id())
     from dbas.restore_contracts import IdRemapTable
 

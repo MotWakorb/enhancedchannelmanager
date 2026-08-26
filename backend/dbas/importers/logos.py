@@ -391,6 +391,10 @@ def _sanitize_failure(exc: Exception | str) -> str:
     carries any path/url marker, replace it wholesale with a generic message
     rather than risk leaking a path or token into the report.
     """
+    from dbas.destination_read import DestinationReadError
+
+    if isinstance(exc, DestinationReadError):
+        return str(exc)
     text = (str(exc) or "").strip()
     lowered = text.lower()
     if not text or any(m in lowered for m in _PATH_LEAK_MARKERS):

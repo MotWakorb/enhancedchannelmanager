@@ -313,7 +313,11 @@ async def test_execute_calls_run_sync_with_target_and_confirm_apply(_wire_db):
 
     with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync) as mock_run:
         task = DbasSyncTask()
-        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        task.update_config({
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        })
         result = await task.execute()
 
     assert mock_run.await_count == 1
@@ -322,6 +326,111 @@ async def test_execute_calls_run_sync_with_target_and_confirm_apply(_wire_db):
     assert captured["session_passed"] is True
     assert result.success is True
     assert result.details["outcome"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_applies_only_with_explicit_confirmation(_wire_db):
+    """A recurring invocation is an apply operation, not a dry-run preview."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    captured = {}
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        captured["confirm_apply"] = confirm_apply
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        })
+        result = await task.execute()
+
+    assert captured["confirm_apply"] is True
+    assert result.success is True
+    assert result.details["is_dry_run"] is False
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_refuses_missing_apply_confirmation(_wire_db):
+    """A malformed/legacy schedule must fail loudly, never fall back to preview."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({"sync_target_id": target_id})
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.success is False
+    assert result.error == "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_refuses_missing_credential_version(_wire_db):
+    """Legacy schedules must be reauthorized before destructive execution."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.success is False
+    assert result.error == "SCHEDULE_CREDENTIAL_VERSION_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_scheduled_run_resets_before_direct_manual_run(_wire_db):
+    """The same bound singleton must return to manual-preview state after apply."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import make_sync_task_class
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+    task = make_sync_task_class(target_id, "Replica")()
+    confirmations = []
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        confirmations.append(confirm_apply)
+        return _success_report() if confirm_apply else _dry_run_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task.set_run_trigger("scheduled")
+        task.update_config({"confirm_apply": True, "cloud_credential_version": 1})
+        scheduled_result = await task.execute()
+        task.set_run_trigger("manual")
+        manual_result = await task.execute()
+
+    assert scheduled_result.details["is_dry_run"] is False
+    assert manual_result.details["is_dry_run"] is True
+    assert confirmations == [True, False]
 
 
 @pytest.mark.asyncio

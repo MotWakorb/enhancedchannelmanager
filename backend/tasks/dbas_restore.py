@@ -337,6 +337,7 @@ class DbasRestoreTask(TaskScheduler):
         # Local imports keep the heavy backup router / orchestrator off this
         # module's import-time path (mirrors DbasBackupTask's deferred imports).
         from dispatcharr_client import get_client
+        from dbas.destination_read import ReadObservingClient, destination_read_reason
         from routers.backup import validate_artifact_manifest
         from dbas.restore_artifact import decode_artifact_to_plan, logo_content_provider
         from dbas.restore_orchestrator import run_dry_run, run_restore, new_restore_id
@@ -377,6 +378,19 @@ class DbasRestoreTask(TaskScheduler):
 
         is_apply = bool(self.confirm_apply)
 
+        # Every importer count is a claim about the destination. Prove it can be
+        # read before either preview or apply reaches the orchestrator, then keep
+        # observing every get_* call in case readability is lost mid-run.
+        unread_reason = await destination_read_reason(client)
+        if unread_reason is not None:
+            return self._fail(
+                started_at,
+                "Restore refused because the destination could not be read: %s"
+                % unread_reason,
+            )
+        report = RestoreReport(is_dry_run=not is_apply)
+        client = ReadObservingClient(client, report, reject_mutations=True)
+
         try:
             client = get_client()
             if is_apply:
@@ -384,7 +398,7 @@ class DbasRestoreTask(TaskScheduler):
                     plan=plan,
                     client=client,
                     steps=default_importer_steps(),
-                    report=RestoreReport(is_dry_run=False),
+                    report=report,
                     ledger=RollbackLedger(restore_id=new_restore_id()),
                     remap=plan.existing_remap or IdRemapTable(),
                     confirm_apply=True,
@@ -405,6 +419,7 @@ class DbasRestoreTask(TaskScheduler):
                 report = await run_dry_run(
                     plan=plan,
                     client=client,
+                    report=report,
                     channel_reattach_mode=self.channel_reattach_mode,
                     logo_content_provider=logo_content_provider(zf),
                 )
@@ -488,6 +503,8 @@ class DbasRestoreTask(TaskScheduler):
         """A dry-run always 'succeeds' (it produced a plan); an apply succeeds
         only on a clean SUCCESS outcome (never on a rolled-back/incomplete state)."""
         from dbas.restore_contracts import RestoreOutcome
+        if report.destination_unreadable is not None:
+            return False
 
         if not is_apply or report.is_dry_run:
             return True
@@ -814,6 +831,11 @@ class DbasRestoreTask(TaskScheduler):
 
     @staticmethod
     def _summary_message(report, is_apply: bool) -> str:
+        if report.destination_unreadable is not None:
+            return (
+                "Restore failed because the destination could not be read safely: %s"
+                % report.destination_unreadable
+            )
         if report.is_dry_run or not is_apply:
             total_create = sum(c.would_create for c in report.categories)
             total_update = sum(c.would_update for c in report.categories)

@@ -42,7 +42,7 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -51,7 +51,7 @@ import database
 import observability
 from dbas.restore_contracts import RestoreOutcome, RestoreReport
 from export_models import SyncTarget
-from models import ScheduledTask, TaskSchedule
+from models import ScheduledTask, TaskExecution, TaskSchedule
 from task_registry import get_registry
 from tasks import dbas_sync
 
@@ -722,16 +722,10 @@ def test_migration_leaves_parent_off_when_child_was_disabled(_wire_db, _clean_re
 
 
 @pytest.mark.asyncio
-async def test_migrated_schedule_fires_on_first_due_tick(
+async def test_migrated_schedule_fails_visibly_until_reauthorized(
     _wire_db, _clean_registry, _fresh_semaphore
 ):
-    """END-TO-END through the scheduler, not just registration state: seed the
-    legacy working schedule with a DUE next_run_at, run the real startup
-    sequence (register_sync_target_tasks -> sync_from_database), then let the
-    engine's due-task scan run. The migrated schedule must actually FIRE.
-
-    This is the regression the review demanded: asserting on row/registry state
-    alone passed while the run silently never happened (parent gate off)."""
+    """Migration cannot invent a server-bound destructive authorization."""
     from task_engine import TaskEngine
 
     session = _wire_db()
@@ -748,28 +742,24 @@ async def test_migrated_schedule_fires_on_first_due_tick(
     registry = get_registry()
     registry.sync_from_database()
 
-    fired = asyncio.Event()
-    seen = {}
-
-    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
-        seen["target_id"] = sync_target.id
-        seen["confirm_apply"] = confirm_apply
-        fired.set()
-        return _success_report()
-
     engine = TaskEngine()
-    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
         await engine._check_and_run_due_tasks()
-        await asyncio.wait_for(fired.wait(), timeout=5)
-        # Let the spawned run finish before the patch is torn down.
+        execution = None
         for _ in range(200):
-            if not engine._active_tasks:
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == dbas_sync.sync_task_id_for(target_id),
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
                 break
             await asyncio.sleep(0.01)
 
-    assert seen["target_id"] == target_id
-    # The migrated schedule's own parameters still drive the run.
-    assert seen["confirm_apply"] is True
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.error == "SCHEDULE_CREDENTIAL_VERSION_MISSING"
 
 
 # ---------------------------------------------------------------------------
@@ -1015,7 +1005,10 @@ def _seed_per_target_schedule(session, task_id, *, enabled=True, next_run_at=Non
     session.add(TaskSchedule(
         task_id=task_id, name="hourly", enabled=enabled,
         schedule_type="interval", interval_seconds=3600,
-        parameters=json.dumps(parameters or {"confirm_apply": True}),
+        parameters=json.dumps(parameters or {
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        }),
         next_run_at=next_run_at,
     ))
     session.commit()
@@ -1042,6 +1035,369 @@ async def _tick_and_wait(engine, fired, *, timeout=5) -> bool:
                 break
             await asyncio.sleep(0.01)
     return True
+
+
+async def _wait_for_execution_count(session_factory, task_id, error, count):
+    for _ in range(200):
+        session = session_factory()
+        actual = session.query(TaskExecution).filter(
+            TaskExecution.task_id == task_id,
+            TaskExecution.error == error,
+        ).count()
+        session.close()
+        if actual == count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(
+        f"expected {count} {error} executions for {task_id}, found {actual}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_due_schedule_without_apply_confirmation_fails_instead_of_previewing(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """The real scheduler seam must carry trigger context into DbasSyncTask."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    target_id = target.id
+    session.close()
+    task_id = dbas_sync.sync_task_id_for(target_id)
+    _startup(registry)
+
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    session.add(TaskSchedule(
+        task_id=task_id,
+        name="legacy preview schedule",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=None,
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),
+    ))
+    session.commit()
+    session.close()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        execution = None
+        for _ in range(200):
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
+                break
+            await asyncio.sleep(0.01)
+
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.error == "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_parent_apply_confirmation_cannot_authorize_empty_legacy_schedule(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """Only the current schedule row may authorize a destructive apply."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    instance = registry.get_task_instance(task_id)
+    instance.update_config({"confirm_apply": True})
+
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    session.add(TaskSchedule(
+        task_id=task_id,
+        name="empty legacy schedule",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=None,
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),
+    ))
+    session.commit()
+    session.close()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        execution = None
+        for _ in range(200):
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
+                break
+            await asyncio.sleep(0.01)
+
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.error == "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_parent_apply_confirmation_cannot_authorize_parameterless_manual_run(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """A generic manual Run Now must preview despite inherited singleton config."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    instance = registry.get_task_instance(task_id)
+    instance.update_config({"confirm_apply": True})
+
+    confirmations = []
+
+    async def _fake_run_sync(_target, *, confirm_apply=False, **_kwargs):
+        confirmations.append(confirm_apply)
+        report = RestoreReport(is_dry_run=not confirm_apply)
+        if confirm_apply:
+            report.outcome = RestoreOutcome.SUCCESS
+        return report
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        result = await engine.run_task(task_id)
+
+    assert result.success is True
+    assert result.details["is_dry_run"] is True
+    assert confirmations == [False]
+
+
+@pytest.mark.asyncio
+async def test_schedule_apply_confirmation_cannot_authorize_manual_run_now(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """Run Now may select a schedule, but it must not replay apply authority."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    schedule = TaskSchedule(
+        task_id=task_id,
+        name="authorized scheduled apply",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=json.dumps({
+            "confirm_apply": True,
+            "cloud_credential_version": target.credential_version,
+        }),
+    )
+    session.add(schedule)
+    session.commit()
+    schedule_id = schedule.id
+    session.close()
+    _startup(registry)
+
+    confirmations = []
+
+    async def _fake_run_sync(_target, *, confirm_apply=False, **_kwargs):
+        confirmations.append(confirm_apply)
+        return RestoreReport(is_dry_run=not confirm_apply)
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        result = await engine.run_task(task_id, schedule_id=schedule_id)
+
+    assert result.details["is_dry_run"] is True
+    assert confirmations == [False]
+
+
+@pytest.mark.asyncio
+async def test_explicit_manual_apply_confirmation_still_authorizes_current_run(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """The dedicated interactive Apply path remains an explicit one-shot apply."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    confirmations = []
+
+    async def _fake_run_sync(_target, *, confirm_apply=False, **_kwargs):
+        confirmations.append(confirm_apply)
+        return _success_report()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        result = await engine.run_task(
+            task_id, parameters={"confirm_apply": True}
+        )
+
+    assert result.success is True
+    assert result.details["is_dry_run"] is False
+    assert confirmations == [True]
+
+
+@pytest.mark.asyncio
+async def test_partially_applied_invalid_schedule_parameters_abort_before_sync(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """A later conversion error must invalidate an earlier confirm_apply mutation."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    session.add(TaskSchedule(
+        task_id=task_id,
+        name="invalid credential version",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=json.dumps({
+            "confirm_apply": True,
+            "cloud_credential_version": "invalid",
+        }),
+        next_run_at=datetime.utcnow() - timedelta(minutes=5),
+    ))
+    session.commit()
+    session.close()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        execution = None
+        for _ in range(200):
+            session = _wire_db()
+            execution = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).first()
+            session.close()
+            if execution is not None:
+                break
+            await asyncio.sleep(0.01)
+
+    assert mock_run.await_count == 0
+    assert execution is not None
+    assert execution.success is False
+    assert "invalid literal" in execution.error
+
+
+@pytest.mark.asyncio
+async def test_co_due_sync_schedules_keep_independent_confirmation_lifecycles(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """A confirmed row cannot authorize or successfully advance a legacy row."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    session.close()
+    _startup(registry)
+
+    due_at = datetime.utcnow() - timedelta(minutes=5)
+    session = _wire_db()
+    session.query(ScheduledTask).filter(
+        ScheduledTask.task_id == task_id
+    ).update({"enabled": True})
+    confirmed = TaskSchedule(
+        task_id=task_id,
+        name="confirmed",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=json.dumps({
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        }),
+        next_run_at=due_at,
+    )
+    legacy = TaskSchedule(
+        task_id=task_id,
+        name="legacy unconfirmed",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=None,
+        next_run_at=due_at,
+    )
+    session.add_all([confirmed, legacy])
+    session.commit()
+    confirmed_id = confirmed.id
+    legacy_id = legacy.id
+    session.close()
+
+    applied = []
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        applied.append(confirm_apply)
+        return _success_report()
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        await engine._check_and_run_due_tasks()
+        for _ in range(300):
+            session = _wire_db()
+            executions = session.query(TaskExecution).filter(
+                TaskExecution.task_id == task_id,
+                TaskExecution.status != "running",
+            ).order_by(TaskExecution.id).all()
+            session.close()
+            if len(executions) == 2:
+                break
+            await asyncio.sleep(0.01)
+
+    assert applied == [True]
+    assert len(executions) == 2
+    assert sum(execution.success is True for execution in executions) == 1
+    assert [execution.error for execution in executions].count(
+        "SCHEDULE_APPLY_NOT_CONFIRMED"
+    ) == 1
+
+    session = _wire_db()
+    confirmed_row = session.query(TaskSchedule).get(confirmed_id)
+    legacy_row = session.query(TaskSchedule).get(legacy_id)
+    assert confirmed_row.last_run_at is not None
+    assert legacy_row.last_run_at is not None
+    session.close()
 
 
 @pytest.mark.asyncio
@@ -1143,13 +1499,10 @@ async def test_disabled_parent_stays_disabled_across_restart(
 
 
 @pytest.mark.asyncio
-async def test_migrated_schedule_still_fires_on_the_second_startup(
+async def test_migrated_schedule_stays_enabled_but_unauthorized_after_restart(
     _wire_db, _clean_registry, _fresh_semaphore
 ):
-    """The upgrade path end to end: legacy migration on startup #1 (fires), then
-    a plain restart on startup #2 with NO legacy rows left. The second boot is
-    where the freshly materialized default-disabled instance used to overwrite
-    the parent the migration had just enabled."""
+    """Restart preserves the parent gate without authorizing a legacy apply."""
     from task_engine import TaskEngine
 
     registry = _clean_registry
@@ -1163,20 +1516,15 @@ async def test_migrated_schedule_still_fires_on_the_second_startup(
     session.close()
     task_id = dbas_sync.sync_task_id_for(target_id)
 
-    fired = asyncio.Event()
-    seen = {}
-
-    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
-        seen["target_id"] = sync_target.id
-        seen["confirm_apply"] = confirm_apply
-        fired.set()
-        return _success_report()
-
-    # --- startup #1: migration + first due run ----------------------------
+    # --- startup #1: migration + refused due run --------------------------
     _startup(registry)
     engine = TaskEngine()
-    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
-        assert await _tick_and_wait(engine, fired), "migrated schedule never fired"
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        await _wait_for_execution_count(
+            _wire_db, task_id, "SCHEDULE_CREDENTIAL_VERSION_MISSING", 1
+        )
+    assert mock_run.await_count == 0
 
     session = _wire_db()
     assert session.query(TaskSchedule).filter(
@@ -1193,15 +1541,13 @@ async def test_migrated_schedule_still_fires_on_the_second_startup(
     _simulate_process_restart(registry)
     _startup(registry)
 
-    fired.clear()
-    seen.clear()
     engine = TaskEngine()
-    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
-        assert await _tick_and_wait(engine, fired), (
-            "migrated schedule stopped firing after a restart"
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        await engine._check_and_run_due_tasks()
+        await _wait_for_execution_count(
+            _wire_db, task_id, "SCHEDULE_CREDENTIAL_VERSION_MISSING", 2
         )
-    assert seen["target_id"] == target_id
-    assert seen["confirm_apply"] is True
+    assert mock_run.await_count == 0
 
     session = _wire_db()
     assert _parent_enabled(session, task_id) is True, (

@@ -115,9 +115,9 @@ class SyncTarget(Base):
     it is excluded from the public OpenAPI surface by virtue of having no
     router. Do not add endpoints here until v0.18.1 (bead 0i2vt.4).
 
-    Mirrors CloudStorageTarget's credential-freshness contract:
-    ``credential_version`` bumps on every credentials write (same-txn, via the
-    listeners below) and ``token_revoked_at`` hard-stops a stale scheduled op.
+    ``credential_version`` is the server-side scheduled-authorization version.
+    It advances in the same transaction whenever credentials or destination
+    identity/security changes, and ``token_revoked_at`` hard-stops a stale op.
     """
     __tablename__ = "sync_targets"
 
@@ -289,7 +289,10 @@ def _sync_target_init_credential_version(mapper, connection, target):
 
 @event.listens_for(SyncTarget, "before_update")
 def _sync_target_bump_credential_version(mapper, connection, target):
-    """Same-txn credential_version bump on a credentials write (see CloudStorageTarget)."""
-    hist = sa_inspect(target).attrs.credentials.history
-    if hist.has_changes():
+    """Invalidate scheduled authorization on execution-sensitive changes."""
+    state = sa_inspect(target)
+    if any(
+        state.attrs[field].history.has_changes()
+        for field in ("credentials", "base_url", "insecure")
+    ):
         target.credential_version = (target.credential_version or 0) + 1
