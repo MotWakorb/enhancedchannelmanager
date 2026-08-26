@@ -6,8 +6,8 @@ A SyncTarget is a remote Dispatcharr-B instance ECM can push config to
 
 * credentials are Fernet-encrypted at rest via ``cloud_storage.crypto`` and are
   NEVER returned decrypted — every response masks them (last-4 only);
-* ``credential_version`` bumps same-txn on a credentials write via the ORM
-  before_update listener on the model (``export_models.py``) — a rename or
+* ``credential_version`` bumps same-txn when credentials, ``base_url``, or
+  ``insecure`` changes via the ORM listener (``export_models.py``); a rename or
   enable-toggle does NOT bump it;
 * every route is admin-gated (``auth.RequireAdminIfEnabled``), reads and writes
   alike, and that gate ADMITS the static MCP service principal — see
@@ -530,8 +530,8 @@ async def update_sync_target(
     """Update a sync target. Admin only.
 
     Credentials are re-encrypted only if provided. The credential_version bumps
-    (same-txn, via the ORM listener) ONLY when ``credentials`` is actually
-    written — a rename or enable-toggle does not.
+    (same-txn, via the ORM listener) when credentials, base_url, or insecure
+    changes; a rename or enable-toggle does not.
 
     bead 9kwzp.10 item 3, and the sharpest member of the group: this is the
     route that can repoint a ``base_url``, replace the credentials and clear

@@ -118,6 +118,10 @@ LEGACY_SYNC_TASK_ID = "dbas_sync"
 SYNC_TASK_ID_PREFIX = "dbas_sync_"
 
 
+class _ScheduleApplyNotConfirmedError(ValueError):
+    error_code = "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
 def sync_task_id_for(target_id: int) -> str:
     """The registered task id for one SyncTarget (``dbas_sync_<id>``)."""
     return "%s%d" % (SYNC_TASK_ID_PREFIX, target_id)
@@ -271,8 +275,9 @@ class DbasSyncTask(TaskScheduler):
       under this task id would run it outside its own lock and misattribute
       the run history). On the unbound base class it selects the target and
       is required.
-    - ``confirm_apply``: bool — ``False`` (default) is a counts-only DRY-RUN
-      preview (zero writes to B); ``True`` APPLIES source-wins (A overwrites B).
+    - ``confirm_apply``: bool — manual invocations default to a counts-only
+      DRY-RUN preview (zero writes to B). Schedules must persist an explicit
+      ``True`` and APPLY source-wins (A overwrites B).
     - ``cloud_credential_version``: Optional[int] — the target's
       ``credential_version`` captured when the schedule was configured. Re-checked
       FRESH against the DB at fire time; a mismatch aborts the run.
@@ -287,8 +292,8 @@ class DbasSyncTask(TaskScheduler):
     bound_sync_target_id: Optional[int] = None
     task_description = (
         "One-way push of this instance's config (and channels) to a remote "
-        "Dispatcharr-B SyncTarget. Dry-run preview by default; apply is opt-in. "
-        "Scheduled (operator opts into an interval) or manual."
+        "Dispatcharr-B SyncTarget. Manual runs preview by default; enabled "
+        "schedules explicitly apply changes to keep the replica converged."
     )
     default_enabled = False
     # Per-invocation state, not durable settings: this task runs off
@@ -297,6 +302,30 @@ class DbasSyncTask(TaskScheduler):
     # The fail-safe direction on restart is disarmed, so the registry must
     # neither persist nor rehydrate this surface (gjb01).
     persist_config = False
+    schedule_parameter_schema = {
+        "description": "Recurring cross-instance sync parameters",
+        "parameters": [
+            {
+                "name": "confirm_apply",
+                "type": "boolean",
+                "label": "Apply changes on every scheduled run",
+                "description": (
+                    "Required. Each scheduled run writes source changes to the "
+                    "managed replica; manual Sync now remains a preview."
+                ),
+                "default": False,
+                "required": True,
+            }
+        ],
+    }
+
+    @classmethod
+    def validate_schedule_parameters(cls, parameters: Optional[dict]) -> None:
+        if not parameters or parameters.get("confirm_apply") is not True:
+            raise _ScheduleApplyNotConfirmedError(
+                "Cross-instance sync schedules require confirm_apply=true so "
+                "they cannot silently run as previews"
+            )
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         if schedule_config is None:
@@ -323,6 +352,19 @@ class DbasSyncTask(TaskScheduler):
             "cloud_credential_version": self.cloud_credential_version,
         }
 
+    def prepare_invocation(self, triggered_by: str) -> None:
+        """Disarm inherited singleton state before this run's explicit overlay."""
+        self.confirm_apply = False
+        self.cloud_credential_version = None
+
+    def prepare_invocation_parameters(
+        self, triggered_by: str, schedule_id: Optional[int], parameters: Optional[dict]
+    ) -> Optional[dict]:
+        """Never treat stored schedule parameters as manual apply authority."""
+        if triggered_by == "manual" and schedule_id is not None:
+            return None
+        return parameters
+
     def update_config(self, config: dict) -> None:
         if "sync_target_id" in config:
             val = config["sync_target_id"]
@@ -346,7 +388,7 @@ class DbasSyncTask(TaskScheduler):
                 # Explicit null on the unbound base clears the selection.
                 self.sync_target_id = None
         if "confirm_apply" in config:
-            self.confirm_apply = bool(config["confirm_apply"])
+            self.confirm_apply = config["confirm_apply"] is True
         if "cloud_credential_version" in config:
             val = config["cloud_credential_version"]
             self.cloud_credential_version = int(val) if val is not None else None
@@ -357,6 +399,24 @@ class DbasSyncTask(TaskScheduler):
         # excluded a same-target overlap before we get here.
         async with _get_sync_semaphore():
             try:
+                if self._run_trigger == "scheduled" and not self.confirm_apply:
+                    return self._fail(
+                        datetime.now(timezone.utc),
+                        "Scheduled sync refused: confirm_apply=true is required. "
+                        "Edit this schedule and explicitly enable apply.",
+                        error="SCHEDULE_APPLY_NOT_CONFIRMED",
+                    )
+                if (
+                    self._run_trigger == "scheduled"
+                    and self.cloud_credential_version is None
+                ):
+                    return self._fail(
+                        datetime.now(timezone.utc),
+                        "Scheduled sync refused: no server-captured credential "
+                        "version is present. Edit and save this schedule to "
+                        "reauthorize apply.",
+                        error="SCHEDULE_CREDENTIAL_VERSION_MISSING",
+                    )
                 if self._bound_target_conflict is not None:
                     return self._fail(
                         datetime.now(timezone.utc),

@@ -82,6 +82,13 @@ class StreamProbeTask(TaskScheduler):
                    self.task_id, self._channel_groups, self._auto_sync_groups,
                    self._timeout_override, self._max_concurrent_override)
 
+    def restore_invocation_config(self, config: dict) -> None:
+        """Restore the exact baseline, preserving ``None`` as probe-all."""
+        self._channel_groups = config["channel_groups"]
+        self._auto_sync_groups = config["auto_sync_groups"]
+        self._timeout_override = config["timeout"]
+        self._max_concurrent_override = config["max_concurrent"]
+
     def set_prober(self, prober):
         """Set the StreamProber instance to delegate to.
 

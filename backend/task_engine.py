@@ -9,6 +9,7 @@ Background service that manages and executes scheduled tasks:
 - Provides error handling and retry logic
 """
 import asyncio
+import copy
 import contextlib
 import logging
 from datetime import datetime
@@ -901,23 +902,27 @@ class TaskEngine:
         Returns:
             TaskResult or None if task not found
         """
-        # Get parameters from the first triggered schedule (if any)
-        # Multiple schedules could trigger at the same time; use the first one's parameters
-        schedule_parameters = None
-        schedule_id = None
-        if triggered_schedules:
-            first_schedule = triggered_schedules[0]
-            schedule_parameters = first_schedule.get_parameters()
-            schedule_id = first_schedule.id
+        results = []
+        for schedule in triggered_schedules:
+            schedule_parameters = schedule.get_parameters()
             if schedule_parameters:
-                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id,
-                            _param_keys(schedule_parameters))
-
-        # Execute the task with parameters
-        result = await self._execute_task(task_id, triggered_by, parameters=schedule_parameters, schedule_id=schedule_id)
+                logger.info(
+                    "[%s] Using parameters from schedule %s: %s",
+                    task_id,
+                    schedule.id,
+                    _param_keys(schedule_parameters),
+                )
+            result = await self._execute_task(
+                task_id,
+                triggered_by,
+                parameters=schedule_parameters,
+                schedule_id=schedule.id,
+            )
+            if result:
+                results.append((schedule.id, result))
 
         # Update next_run_at for triggered schedules
-        if result:
+        if results:
             try:
                 from database import get_session
                 from models import TaskSchedule, ScheduledTask
@@ -925,11 +930,11 @@ class TaskEngine:
 
                 session = get_session()
                 try:
-                    for schedule in triggered_schedules:
+                    for schedule_id, schedule_result in results:
                         # Update last_run_at and recalculate next run time
-                        db_schedule = session.query(TaskSchedule).get(schedule.id)
+                        db_schedule = session.query(TaskSchedule).get(schedule_id)
                         if db_schedule:
-                            db_schedule.last_run_at = result.completed_at
+                            db_schedule.last_run_at = schedule_result.completed_at
                             if db_schedule.enabled:
                                 db_schedule.next_run_at = calculate_next_run(
                                     schedule_type=db_schedule.schedule_type,
@@ -938,9 +943,9 @@ class TaskEngine:
                                     timezone=db_schedule.timezone,
                                     days_of_week=db_schedule.get_days_of_week_list(),
                                     day_of_month=db_schedule.day_of_month,
-                                    last_run=result.completed_at,
+                                    last_run=schedule_result.completed_at,
                                 )
-                            logger.debug("[%s] Updated schedule %s last_run_at=%s, next_run_at=%s", task_id, db_schedule.id, result.completed_at, db_schedule.next_run_at)
+                            logger.debug("[%s] Updated schedule %s last_run_at=%s, next_run_at=%s", task_id, db_schedule.id, schedule_result.completed_at, db_schedule.next_run_at)
 
                     # Update parent task's next_run_at (earliest of all enabled schedules)
                     all_schedules = session.query(TaskSchedule).filter(
@@ -964,7 +969,7 @@ class TaskEngine:
             except Exception as e:
                 logger.exception("[%s] Failed to update schedule next_run_at: %s", task_id, e)
 
-        return result
+        return results[-1][1] if results else None
 
     async def _execute_task(
         self,
@@ -1033,16 +1038,33 @@ class TaskEngine:
             if triggered_by == "scheduled"
             else None
         )
+        invocation_config = None
 
         try:
+            # Registry instances are long-lived singletons. Treat run parameters
+            # as an overlay on their hydrated persisted/default configuration,
+            # then restore that baseline in ``finally`` before another schedule
+            # or manual run can observe it.
+            invocation_config = copy.deepcopy(instance.get_config())
+
+            prepare_invocation = getattr(instance, "prepare_invocation", None)
+            if prepare_invocation:
+                prepare_invocation(triggered_by)
+
+            prepare_parameters = getattr(instance, "prepare_invocation_parameters", None)
+            if prepare_parameters:
+                parameters = prepare_parameters(triggered_by, schedule_id, parameters)
+
+            if triggered_by == "scheduled":
+                validator = getattr(instance, "validate_schedule_parameters", None)
+                if validator:
+                    validator(parameters)
+
             # Apply schedule parameters to the task instance
             if parameters and hasattr(instance, 'update_config'):
-                try:
-                    instance.update_config(parameters)
-                    logger.info("[%s] Applied schedule parameters: %s", task_id,
-                                _param_keys(parameters))
-                except Exception as e:
-                    logger.warning("[%s] Failed to apply parameters: %s", task_id, e)
+                instance.update_config(parameters)
+                logger.info("[%s] Applied schedule parameters: %s", task_id,
+                            _param_keys(parameters))
 
             logger.info("[%s] Starting task execution (triggered_by=%s)", task_id, triggered_by)
 
@@ -1100,6 +1122,7 @@ class TaskEngine:
                 user_initiated=(triggered_by == "manual"),
             )
 
+            instance.set_run_trigger(triggered_by)
             result = await instance.run()
 
             # Update execution record
@@ -1341,6 +1364,7 @@ class TaskEngine:
 
         except Exception as e:
             logger.exception("[%s] Task execution failed: %s", task_id, e)
+            failure_error = getattr(e, "error_code", str(e))
 
             # Determine alert category for granular filtering
             alert_category = "probe_failures" if task_id == "stream_probe" else None
@@ -1380,7 +1404,7 @@ class TaskEngine:
                         execution.completed_at = datetime.utcnow()
                         execution.status = "failed"
                         execution.success = False
-                        execution.error = str(e)
+                        execution.error = failure_error
                         session.commit()
                     session.close()
                 except Exception as db_err:
@@ -1389,16 +1413,23 @@ class TaskEngine:
             return TaskResult(
                 success=False,
                 message=f"Task execution failed: {str(e)}",
-                error=str(e),
+                error=failure_error,
                 started_at=datetime.utcnow(),
                 completed_at=datetime.utcnow(),
             )
 
         finally:
-            if _scheduler_source_token is not None:
-                journal.reset_mutation_source(_scheduler_source_token)
-            async with self._lock:
-                self._active_tasks.discard(task_id)
+            try:
+                if invocation_config is not None:
+                    instance.restore_invocation_config(invocation_config)
+            except Exception as e:
+                logger.exception("[%s] Failed to restore invocation config: %s", task_id, e)
+            finally:
+                instance.set_run_trigger("manual")
+                if _scheduler_source_token is not None:
+                    journal.reset_mutation_source(_scheduler_source_token)
+                async with self._lock:
+                    self._active_tasks.discard(task_id)
 
     async def run_task(self, task_id: str, schedule_id: Optional[int] = None, parameters: Optional[dict] = None) -> Optional[TaskResult]:
         """

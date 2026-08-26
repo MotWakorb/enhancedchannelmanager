@@ -513,6 +513,7 @@ class TestScheduleOverlayNotPersisted:
                 super().__init__(schedule_config)
                 self.channel_groups = None
                 self.timeout = 60
+                self.executed_config = None
 
             def get_config(self) -> dict:
                 return {"channel_groups": self.channel_groups, "timeout": self.timeout}
@@ -524,6 +525,7 @@ class TestScheduleOverlayNotPersisted:
                     self.timeout = config["timeout"]
 
             async def execute(self) -> TaskResult:
+                self.executed_config = self.get_config().copy()
                 now = datetime.utcnow()
                 return TaskResult(
                     success=True, message="ok",
@@ -556,10 +558,15 @@ class TestScheduleOverlayNotPersisted:
                 parameters={"channel_groups": ["sports"], "timeout": 17},
             )
             assert result is not None and result.success is True
-            # The overlay DID reach the live instance for the run.
+            # The overlay reached this invocation, then the singleton returned
+            # to the operator's persisted/default baseline.
             live = registry.get_task_instance(_ProbeShapedTask.task_id)
-            assert live.channel_groups == ["sports"]
-            assert live.timeout == 17
+            assert live.executed_config == {
+                "channel_groups": ["sports"],
+                "timeout": 17,
+            }
+            assert live.channel_groups is None
+            assert live.timeout == 30
 
             # ...but the stored snapshot is still the operator's save.
             row = (
@@ -573,8 +580,7 @@ class TestScheduleOverlayNotPersisted:
             assert stored == {"timeout": 30}
 
             # Final-delta BLOCK 1: an enabled-only PATCH through the real
-            # update path, with the run's overlay still live on the
-            # singleton, must not capture the overlay either.
+            # update path must not capture the completed run's overlay either.
             registry.update_task_config(_ProbeShapedTask.task_id, enabled=False)
             test_session.expire_all()
             row = (

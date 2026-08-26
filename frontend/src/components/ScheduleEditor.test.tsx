@@ -195,6 +195,47 @@ describe('ScheduleEditor', () => {
       const batchInput = screen.getByDisplayValue('30');
       expect(batchInput).toBeInTheDocument();
     });
+
+    it('requires explicit apply confirmation for a recurring sync schedule', async () => {
+      const user = userEvent.setup();
+      const syncSchema: TaskParameterSchema[] = [{
+        name: 'confirm_apply',
+        type: 'boolean',
+        label: 'Apply changes on every scheduled run',
+        description: 'Required. Scheduled runs write source changes to the managed replica.',
+        default: false,
+        required: true,
+      }];
+
+      render(
+        <ScheduleEditor
+          {...defaultProps}
+          taskId="dbas_sync_7"
+          parameterSchema={syncSchema}
+        />
+      );
+
+      const apply = screen.getByRole('checkbox', {
+        name: /apply changes on every scheduled run/i,
+      });
+      const save = screen.getByRole('button', { name: /add schedule/i });
+      expect(apply).not.toBeChecked();
+      expect(apply).toBeRequired();
+      const helpId = apply.getAttribute('aria-describedby');
+      expect(helpId).toBeTruthy();
+      expect(document.getElementById(helpId!)).toHaveTextContent(
+        /scheduled runs write source changes to the managed replica/i,
+      );
+      expect(save).toBeDisabled();
+
+      await user.click(apply);
+      expect(save).toBeEnabled();
+      await user.click(save);
+
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalledWith(
+        expect.objectContaining({ parameters: { confirm_apply: true } }),
+      ));
+    });
   });
 
   describe('interactions', () => {
