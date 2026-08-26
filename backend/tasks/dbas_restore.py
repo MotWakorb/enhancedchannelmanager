@@ -377,6 +377,7 @@ class DbasRestoreTask(TaskScheduler):
         assert zf is not None
 
         is_apply = bool(self.confirm_apply)
+        client = get_client()
 
         # Every importer count is a claim about the destination. Prove it can be
         # read before either preview or apply reaches the orchestrator, then keep
@@ -392,7 +393,6 @@ class DbasRestoreTask(TaskScheduler):
         client = ReadObservingClient(client, report, reject_mutations=True)
 
         try:
-            client = get_client()
             if is_apply:
                 report = await run_restore(
                     plan=plan,
