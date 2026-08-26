@@ -2918,6 +2918,7 @@ export interface TaskParameterSchema {
   label: string;
   description: string;
   default?: unknown;
+  required?: boolean;
   min?: number;
   max?: number;
   source?: string;  // e.g., 'channel_groups', 'm3u_accounts', 'epg_sources'

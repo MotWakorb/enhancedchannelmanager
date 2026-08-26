@@ -22,6 +22,7 @@ from config import (
     normalize_mcp_allowed_host,
 )
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from mcp.server.transport_security import TransportSecuritySettings
 
 # MCP OAuth offering RETIRED (bd-9axgc). The OAuth Resource-Server verify path
@@ -50,6 +51,11 @@ logger = logging.getLogger(__name__)
 
 # Create MCP server using the high-level FastMCP API.
 #
+# MCP 1.29.0 leaves Settings.lifespan as an unresolved forward reference even
+# after its module has finished importing. Rebuild that dependency model before
+# FastMCP constructs it so pydantic-settings can inspect the field correctly.
+FastMCPSettings.model_rebuild()
+
 _MCP_SDK_ALLOWED_HOSTS = [
     variant
     for host in MCP_ALLOWED_HOSTS
