@@ -1193,6 +1193,48 @@ async def test_parent_apply_confirmation_cannot_authorize_parameterless_manual_r
 
 
 @pytest.mark.asyncio
+async def test_schedule_apply_confirmation_cannot_authorize_manual_run_now(
+    _wire_db, _clean_registry, _fresh_semaphore
+):
+    """Run Now may select a schedule, but it must not replay apply authority."""
+    from task_engine import TaskEngine
+
+    registry = _clean_registry
+    session = _wire_db()
+    target = _make_target(session, name="replica-1")
+    task_id = dbas_sync.sync_task_id_for(target.id)
+    schedule = TaskSchedule(
+        task_id=task_id,
+        name="authorized scheduled apply",
+        enabled=True,
+        schedule_type="interval",
+        interval_seconds=3600,
+        parameters=json.dumps({
+            "confirm_apply": True,
+            "cloud_credential_version": target.credential_version,
+        }),
+    )
+    session.add(schedule)
+    session.commit()
+    schedule_id = schedule.id
+    session.close()
+    _startup(registry)
+
+    confirmations = []
+
+    async def _fake_run_sync(_target, *, confirm_apply=False, **_kwargs):
+        confirmations.append(confirm_apply)
+        return RestoreReport(is_dry_run=not confirm_apply)
+
+    engine = TaskEngine()
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        result = await engine.run_task(task_id, schedule_id=schedule_id)
+
+    assert result.details["is_dry_run"] is True
+    assert confirmations == [False]
+
+
+@pytest.mark.asyncio
 async def test_explicit_manual_apply_confirmation_still_authorizes_current_run(
     _wire_db, _clean_registry, _fresh_semaphore
 ):

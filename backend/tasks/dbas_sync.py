@@ -357,6 +357,14 @@ class DbasSyncTask(TaskScheduler):
         self.confirm_apply = False
         self.cloud_credential_version = None
 
+    def prepare_invocation_parameters(
+        self, triggered_by: str, schedule_id: Optional[int], parameters: Optional[dict]
+    ) -> Optional[dict]:
+        """Never treat stored schedule parameters as manual apply authority."""
+        if triggered_by == "manual" and schedule_id is not None:
+            return None
+        return parameters
+
     def update_config(self, config: dict) -> None:
         if "sync_target_id" in config:
             val = config["sync_target_id"]

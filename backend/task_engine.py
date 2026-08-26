@@ -1051,6 +1051,10 @@ class TaskEngine:
             if prepare_invocation:
                 prepare_invocation(triggered_by)
 
+            prepare_parameters = getattr(instance, "prepare_invocation_parameters", None)
+            if prepare_parameters:
+                parameters = prepare_parameters(triggered_by, schedule_id, parameters)
+
             if triggered_by == "scheduled":
                 validator = getattr(instance, "validate_schedule_parameters", None)
                 if validator:
