@@ -36,13 +36,12 @@ Both must hold. A green workflow with a stale marker means the push
 silently did not land on the tag; a correct marker with a failed workflow
 means the tag is carrying an older successful build.
 
-The image is read through the registry's config blob
-(`docker buildx imagetools inspect`), which does not download layers.
-Pass `--pull` for the heavier form used by the restore drill's image
-gate: remove the local tag, pull it fresh, and read the marker out of the
-pulled image. See `docs/shipping.md` section 6, "Confirm the image
-published" ("prove the image before you trust it"), for that idiom and
-for where this script sits in the flow.
+The image is always read through every represented platform's registry
+config (`docker buildx imagetools inspect`), which does not download layers.
+Pass `--pull` to add the restore drill's host-level proof after that mandatory
+manifest proof: remove the local tag, pull it fresh, and require the local
+image markers to match the manifest. A pull can never rescue failed manifest
+inspection. See `docs/shipping.md` section 6, "Confirm the image published".
 
 ## Refs it needs
 
@@ -96,10 +95,6 @@ class CheckError(RuntimeError):
     """A check could not be completed (as opposed to completing and failing)."""
 
 
-class RegistryReadError(CheckError):
-    """The lightweight registry read failed and may fall back to a full pull."""
-
-
 # --- Process helpers --------------------------------------------------------
 
 
@@ -112,6 +107,8 @@ def _run(cmd: list[str], *, timeout: int = 300) -> subprocess.CompletedProcess[s
         raise CheckError(
             f"command timed out after {timeout}s: {' '.join(cmd)}"
         ) from error
+    except OSError as error:
+        raise CheckError(f"could not launch {cmd[0]!r}: {error}") from error
 
 
 def _git(*args: str) -> str:
@@ -426,7 +423,7 @@ def read_marker_via_imagetools(ref: str) -> dict[str, str]:
         ["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Image}}"]
     )
     if result.returncode != 0:
-        raise RegistryReadError(
+        raise CheckError(
             f"docker buildx imagetools inspect {ref} failed: {result.stderr.strip()}"
         )
     return parse_imagetools_config(result.stdout)
@@ -456,17 +453,17 @@ def read_published_marker(ref: str, *, use_pull: bool) -> dict[str, str]:
             "docker is not installed, so the published image cannot be read. "
             "Pass --skip-image to check only the workflow run."
         )
+    manifest = read_marker_via_imagetools(ref)
     if use_pull:
-        return read_marker_via_pull(ref)
-    try:
-        return read_marker_via_imagetools(ref)
-    except RegistryReadError as error:
-        print(
-            f"  note: registry config read unavailable ({error}); "
-            "falling back to a full pull.",
-            file=sys.stderr,
-        )
-        return read_marker_via_pull(ref)
+        host = read_marker_via_pull(ref)
+        for marker in (MARKER_ENV, COMMIT_ENV):
+            if host.get(marker) != manifest.get(marker):
+                raise CheckError(
+                    f"fresh-pull host {marker} mismatch: manifest carries "
+                    f"{manifest.get(marker)!r}, host image carries {host.get(marker)!r}"
+                )
+        print("  OK: fresh-pull host markers match the mandatory manifest proof.")
+    return manifest
 
 
 # --- Reporting --------------------------------------------------------------
@@ -498,8 +495,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--pull",
         action="store_true",
-        help="Read the marker by removing and re-pulling the tag (the restore "
-        "drill's image gate) instead of reading the registry config blob.",
+        help="After mandatory manifest inspection, remove and re-pull the tag "
+        "and require the host image markers to match.",
     )
     parser.add_argument(
         "--skip-workflow", action="store_true", help="Skip the workflow-run check."
@@ -518,14 +515,24 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     ref = f"{args.image}:{args.tag}"
-    on_branch = commit_is_on_branch(sha, args.branch)
+    failures: list[str] = []
+    errors: list[str] = []
+    orientation_error: str | None = None
+    try:
+        on_branch = commit_is_on_branch(sha, args.branch)
+    except CheckError as error:
+        on_branch = None
+        orientation_error = f"branch orientation could not be determined: {error}"
+        errors.append(orientation_error)
 
     print(_banner("Post-merge publish check"))
     print(f"  commit under test : {sha[:12]}  {subject}")
     print(f"  expected version  : {expected}   (frontend/package.json at that commit)")
     print(f"  published tag     : {ref}")
 
-    if on_branch is False:
+    if orientation_error is not None:
+        print(f"\n  COULD NOT CHECK branch orientation: {orientation_error}")
+    elif on_branch is False:
         print(
             f"\n  PRE-MERGE RUN. {sha[:12]} is not an ancestor of "
             f"'{args.branch}'. This check verifies what the registry carries "
@@ -543,9 +550,6 @@ def main(argv: list[str] | None = None) -> int:
             f"still run. Run `git fetch --no-tags origin {args.branch}` if you "
             f"want that context in the verdict."
         )
-
-    failures: list[str] = []
-    errors: list[str] = []
 
     # --- Check 1 ---
     print("\n[1/2] Tests run and reusable publish job")
@@ -691,6 +695,10 @@ def main(argv: list[str] | None = None) -> int:
                 "merge to republish by accident.",
                 file=sys.stderr,
             )
+        if errors:
+            print("\nINCOMPLETE: one or more checks could not run.", file=sys.stderr)
+            for error in errors:
+                print(f"  - {error}", file=sys.stderr)
         return 1
 
     if errors:

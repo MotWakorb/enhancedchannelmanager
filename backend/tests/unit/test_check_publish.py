@@ -381,6 +381,76 @@ class TestProcessTimeout:
         with pytest.raises(script.CheckError, match="timed out"):
             script._run(["slow-command"], timeout=17)
 
+    def test_launch_failure_is_reported_as_check_error(self, script, monkeypatch):
+        def fail_to_launch(*args, **kwargs):
+            raise FileNotFoundError("missing executable")
+
+        monkeypatch.setattr(script.subprocess, "run", fail_to_launch)
+        with pytest.raises(script.CheckError, match="could not launch"):
+            script._run(["missing-command"])
+
+
+class TestPublishedMarkerRead:
+    def test_pull_adds_host_proof_after_mandatory_manifest_proof(self, script, monkeypatch):
+        events = []
+        marker = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            script,
+            "read_marker_via_imagetools",
+            lambda ref: events.append("manifest") or marker,
+        )
+        monkeypatch.setattr(
+            script,
+            "read_marker_via_pull",
+            lambda ref: events.append("pull") or marker.copy(),
+        )
+
+        assert script.read_published_marker("example/image:dev", use_pull=True) == marker
+        assert events == ["manifest", "pull"]
+
+    def test_manifest_failure_cannot_be_rescued_by_pull(self, script, monkeypatch):
+        pulled = False
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+        def fail_manifest(ref):
+            raise script.CheckError("manifest unavailable")
+
+        def pull(ref):
+            nonlocal pulled
+            pulled = True
+            return {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+
+        monkeypatch.setattr(script, "read_marker_via_imagetools", fail_manifest)
+        monkeypatch.setattr(script, "read_marker_via_pull", pull)
+
+        with pytest.raises(script.CheckError, match="manifest unavailable"):
+            script.read_published_marker("example/image:dev", use_pull=True)
+        assert pulled is False
+
+    @pytest.mark.parametrize("marker", ["ECM_VERSION", "GIT_COMMIT"])
+    def test_pull_rejects_host_marker_mismatch(self, script, monkeypatch, marker):
+        manifest = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        host = manifest | {marker: "different"}
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(script, "read_marker_via_imagetools", lambda ref: manifest)
+        monkeypatch.setattr(script, "read_marker_via_pull", lambda ref: host)
+
+        with pytest.raises(script.CheckError, match=marker):
+            script.read_published_marker("example/image:dev", use_pull=True)
+
+    def test_pull_operational_error_is_not_hidden(self, script, monkeypatch):
+        marker = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(script, "read_marker_via_imagetools", lambda ref: marker)
+
+        def fail_pull(ref):
+            raise script.CheckError("docker pull failed")
+
+        monkeypatch.setattr(script, "read_marker_via_pull", fail_pull)
+        with pytest.raises(script.CheckError, match="docker pull failed"):
+            script.read_published_marker("example/image:dev", use_pull=True)
+
 
 # --- Repo-side facts --------------------------------------------------------
 
@@ -497,11 +567,16 @@ def main_boundaries(script, monkeypatch):
     marker = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
     runs = [_run(1921)]
     jobs = [_job()]
+    real_marker_reader = script.read_published_marker
 
     monkeypatch.setattr(script, "resolve_commit", lambda ref: TEST_SHA)
     monkeypatch.setattr(script, "commit_subject", lambda sha: "merge subject")
     monkeypatch.setattr(script, "expected_version_at", lambda sha: TEST_VERSION)
-    monkeypatch.setattr(script, "commit_is_on_branch", lambda sha, branch: True)
+    monkeypatch.setattr(
+        script.subprocess,
+        "run",
+        lambda cmd, **kwargs: subprocess.CompletedProcess(cmd, 0, stdout="", stderr=""),
+    )
     monkeypatch.setattr(script, "repo_slug", lambda: "owner/repo")
     monkeypatch.setattr(script, "fetch_workflow_runs", lambda slug, sha: runs)
     monkeypatch.setattr(
@@ -514,7 +589,12 @@ def main_boundaries(script, monkeypatch):
         "read_published_marker",
         lambda ref, use_pull: marker,
     )
-    return {"marker": marker, "runs": runs, "jobs": jobs}
+    return {
+        "marker": marker,
+        "runs": runs,
+        "jobs": jobs,
+        "real_marker_reader": real_marker_reader,
+    }
 
 
 class TestMainVerdict:
@@ -526,6 +606,74 @@ class TestMainVerdict:
         assert "PASS:" in output.out
         assert TEST_VERSION in output.out
         assert TEST_SHA[:12] in output.out
+
+    @pytest.mark.parametrize("failure", ["timeout", "launch"], ids=["timeout", "launch"])
+    def test_branch_orientation_operational_failure_is_incomplete_but_collects_evidence(
+        self, script, main_boundaries, monkeypatch, capsys, failure
+    ):
+        def fail(*args, **kwargs):
+            if failure == "timeout":
+                raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+            raise FileNotFoundError("git unavailable")
+
+        monkeypatch.setattr(script.subprocess, "run", fail)
+
+        assert script.main(["--commit", TEST_SHA]) == 1
+        output = capsys.readouterr()
+        assert "INCOMPLETE:" in output.err
+        assert "COULD NOT CHECK branch orientation" in output.out
+        assert "reusable publish job succeeded" in output.out
+        assert "ECM_VERSION matches" in output.out
+        assert "GIT_COMMIT matches" in output.out
+
+    @pytest.mark.parametrize(
+        ("host_marker", "host_value"),
+        [("ECM_VERSION", "wrong-version"), ("GIT_COMMIT", "b" * 40)],
+    )
+    def test_pull_host_marker_mismatch_returns_incomplete_verdict(
+        self,
+        script,
+        main_boundaries,
+        monkeypatch,
+        capsys,
+        host_marker,
+        host_value,
+    ):
+        manifest = main_boundaries["marker"]
+        host = manifest | {host_marker: host_value}
+        monkeypatch.setattr(
+            script, "read_published_marker", main_boundaries["real_marker_reader"]
+        )
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(script, "read_marker_via_imagetools", lambda ref: manifest)
+        monkeypatch.setattr(script, "read_marker_via_pull", lambda ref: host)
+
+        assert script.main(["--commit", TEST_SHA, "--pull"]) == 1
+        output = capsys.readouterr()
+        assert "INCOMPLETE:" in output.err
+        assert host_marker in output.err
+
+    def test_pull_operational_error_returns_incomplete_verdict(
+        self, script, main_boundaries, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(
+            script, "read_published_marker", main_boundaries["real_marker_reader"]
+        )
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            script,
+            "read_marker_via_imagetools",
+            lambda ref: main_boundaries["marker"],
+        )
+
+        def fail_pull(ref):
+            raise script.CheckError("docker pull failed")
+
+        monkeypatch.setattr(script, "read_marker_via_pull", fail_pull)
+        assert script.main(["--commit", TEST_SHA, "--pull"]) == 1
+        output = capsys.readouterr()
+        assert "INCOMPLETE:" in output.err
+        assert "docker pull failed" in output.err
 
     @pytest.mark.parametrize(
         "built_from",

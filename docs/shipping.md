@@ -252,10 +252,10 @@ Useful flags:
 | Flag | Effect |
 | --- | --- |
 | `--commit <sha>` | Verify a specific commit instead of `HEAD`. |
-| `--pull` | Read the marker by dropping and re-pulling the tag, the heavier check, instead of reading the registry config blob. |
+| `--pull` | After mandatory inspection of every represented manifest platform, drop and re-pull the tag and require the host image's `ECM_VERSION` and full `GIT_COMMIT` to match that manifest proof. A successful pull cannot rescue failed manifest inspection. |
 | `--skip-workflow` / `--skip-image` | Run only one of the two checks. |
 
-The same "prove the image before you trust it" discipline applies to any other manual image check you run: drop the local tag, pull it fresh, and read the version markers baked into the image before trusting it, the same way `--pull` above does.
+The default check always proves every platform represented by the manifest; it does not require a hardcoded architecture set, so a valid single-platform image remains supported. The additive `--pull` check then proves that a fresh host pull resolves to the same markers. The same "prove the image before you trust it" discipline applies to any other manual image check.
 
 ### 7. File Beads for Remaining Work
 
