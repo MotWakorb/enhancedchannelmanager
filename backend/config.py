@@ -1329,6 +1329,10 @@ def initialize_mcp_api_key_projection() -> None:
             # do not overwrite operator data with defaults merely to start MCP.
             get_settings()
             return
+        if not isinstance(persisted, dict):
+            # Non-object JSON cannot be a settings document. Leave it untouched
+            # and do not let MCP startup turn loader defaults into persisted data.
+            return
         provision = "mcp_api_key" not in persisted
 
     settings = get_settings()
