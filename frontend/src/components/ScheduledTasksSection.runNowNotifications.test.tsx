@@ -58,6 +58,15 @@ function makeMonitorTask(): TaskStatus {
   } as unknown as TaskStatus;
 }
 
+function makeSyncTask(): TaskStatus {
+  return {
+    ...makeMonitorTask(),
+    task_id: 'dbas_sync_7',
+    task_name: 'Cross-Instance Sync: Living Room B',
+    config: { confirm_apply: true },
+  } as TaskStatus;
+}
+
 function runResult(overrides: Partial<Awaited<ReturnType<typeof api.runTask>>>) {
   return {
     success: true,
@@ -105,5 +114,21 @@ describe('ScheduledTasksSection — Run Now completed-with-warnings', () => {
     await waitFor(() => expect(notify.success).toHaveBeenCalledTimes(1));
     expect(notify.warning).not.toHaveBeenCalled();
     expect(notify.error).not.toHaveBeenCalled();
+  });
+
+  it('does not inherit parent apply config into a generic sync Run Now', async () => {
+    (api.getTasks as ReturnType<typeof vi.fn>).mockResolvedValue({ tasks: [makeSyncTask()] });
+    (api.runTask as ReturnType<typeof vi.fn>).mockResolvedValue(
+      runResult({ success: true, message: 'Preview complete' })
+    );
+
+    render(<ScheduledTasksSection />);
+    fireEvent.click(await screen.findByRole('button', { name: /run now/i }));
+
+    await waitFor(() => expect(api.runTask).toHaveBeenCalledWith(
+      'dbas_sync_7',
+      undefined,
+      undefined,
+    ));
   });
 });

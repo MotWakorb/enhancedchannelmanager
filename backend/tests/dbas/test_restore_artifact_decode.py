@@ -5,8 +5,8 @@ validated new-format DBAS artifact ZIP into the orchestrator's
 :class:`~dbas.preflight.ImportPlan`:
 
   * per-category YAML (``categories/<section>.yaml``) -> PlanCategory entities,
-  * the binary logo subtree (``binary/logos/<rel>``) -> .15 logo records
-    (``name`` / ``filename`` / ``content_b64`` / ``size``),
+  * the binary logo subtree (``binary/logos/<rel>``) -> metadata-only .15 logo
+    records (``name`` / ``filename`` / ``archive_member`` / ``size``),
   * the cleartext manifest carried through for pre-flight's version gate,
   * zip-slip / path-traversal member-name safety.
 """
@@ -21,7 +21,7 @@ import yaml
 
 from dbas.restore_artifact import (
     _is_safe_member,
-    decode_artifact_to_plan,
+    decode_artifact_to_plan as _decode_artifact_to_plan,
 )
 from dbas.restore_contracts import EntityType
 
@@ -99,6 +99,10 @@ def _build_artifact(
 
 def _open(zip_bytes: bytes) -> zipfile.ZipFile:
     return zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
+
+
+def decode_artifact_to_plan(zf: zipfile.ZipFile):
+    return _decode_artifact_to_plan(zf, manifest={"schema_version": 1})
 
 
 class TestCategoryDecode:
@@ -235,18 +239,34 @@ class TestSettingsAgentsDecode:
 
 
 class TestLogoDecode:
-    def test_decodes_logo_records(self):
-        art = _build_artifact(logos={"espn.png": _PNG_BYTES})
+    def test_decodes_logo_records_without_materializing_payloads(self):
+        art = _build_artifact(
+            logos={
+                "espn.png": _PNG_BYTES,
+                "cnn.png": _PNG_BYTES,
+                "bbc.png": _PNG_BYTES,
+            }
+        )
         with _open(art) as zf:
+            read_members = []
+            original_read = zf.read
+
+            def tracked_read(member, *args, **kwargs):
+                name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+                read_members.append(name)
+                return original_read(member, *args, **kwargs)
+
+            zf.read = tracked_read
             plan = decode_artifact_to_plan(zf)
         logos = plan.category(EntityType.LOGO).entities
-        assert len(logos) == 1
+        assert len(logos) == 3
         rec = logos[0]
         assert rec["filename"] == "espn.png"
         assert rec["name"] == "espn"
         assert rec["size"] == len(_PNG_BYTES)
-        # content_b64 round-trips to the original bytes (the .15 importer decodes it).
-        assert base64.b64decode(rec["content_b64"]) == _PNG_BYTES
+        assert rec["archive_member"] == "binary/logos/espn.png"
+        assert all("content_b64" not in logo for logo in logos)
+        assert not any(name.startswith("binary/logos/") for name in read_members)
 
     def test_nested_logo_basename(self):
         art = _build_artifact(logos={"sub/dir/cnn.png": _PNG_BYTES})

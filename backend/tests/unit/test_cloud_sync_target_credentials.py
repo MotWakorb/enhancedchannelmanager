@@ -186,7 +186,6 @@ class TestSyncTargetCredentialVersion:
         test_session.commit()
 
         target.enabled = False
-        target.base_url = "https://dispatcharr-c.example"
         test_session.commit()
         test_session.refresh(target)
         assert target.credential_version == 1

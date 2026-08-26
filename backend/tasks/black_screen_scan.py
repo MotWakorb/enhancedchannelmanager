@@ -68,6 +68,13 @@ class BlackScreenScanTask(TaskScheduler):
                     self.task_id, self._sample_duration_override, self._max_concurrent_override,
                     self._channel_groups, self._auto_sync_groups)
 
+    def restore_invocation_config(self, config: dict) -> None:
+        """Restore the exact baseline, preserving ``None`` as scan-all."""
+        self._sample_duration_override = config["sample_duration"]
+        self._max_concurrent_override = config["max_concurrent"]
+        self._channel_groups = config["channel_groups"]
+        self._auto_sync_groups = config["auto_sync_groups"]
+
     def set_prober(self, prober):
         """Set the StreamProber instance to use for black screen detection."""
         self._prober = prober

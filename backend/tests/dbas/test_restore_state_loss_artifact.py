@@ -86,13 +86,14 @@ def test_decoder_merges_the_logo_inventory_with_the_binary_subtree():
         "binary/logos/espn.png": "notarealpng",
     })
     with zf:
-        plan = decode_artifact_to_plan(zf)
+        plan = decode_artifact_to_plan(zf, manifest={"schema_version": 1})
 
     logos = plan.category(EntityType.LOGO).entities
     by_id = {entity.get("id"): entity for entity in logos}
     assert set(by_id) == {21, 22}
-    # 21 kept its bytes AND gained the archived URL.
-    assert by_id[21]["content_b64"]
+    # 21 kept a lazy reference to its bytes AND gained the archived URL.
+    assert by_id[21]["archive_member"] == "binary/logos/espn.png"
+    assert "content_b64" not in by_id[21]
     assert by_id[21]["url"] == "https://cdn/espn.png"
     # 22 has no bytes anywhere — the URL is the only way back.
     assert "content_b64" not in by_id[22]
@@ -117,7 +118,7 @@ def test_decoder_produces_an_ecm_settings_category():
         ),
     })
     with zf:
-        plan = decode_artifact_to_plan(zf)
+        plan = decode_artifact_to_plan(zf, manifest={"schema_version": 1})
 
     cat = plan.category(EntityType.ECM_SETTINGS)
     assert cat is not None
@@ -132,7 +133,7 @@ def test_ecm_settings_category_is_empty_when_the_member_is_absent():
 
     zf = _artifact({"manifest.json": '{"schema_version": 1}'})
     with zf:
-        plan = decode_artifact_to_plan(zf)
+        plan = decode_artifact_to_plan(zf, manifest={"schema_version": 1})
 
     cat = plan.category(EntityType.ECM_SETTINGS)
     assert cat is not None and cat.entities == []

@@ -70,6 +70,13 @@ def _write_artifact(tmp_path: Path, *, schema_version=1, newer=False) -> Path:
     return art
 
 
+def _write_raw_manifest_artifact(tmp_path: Path, manifest: bytes) -> Path:
+    art = tmp_path / "raw-manifest.zip"
+    with zipfile.ZipFile(art, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("manifest.json", manifest)
+    return art
+
+
 def _make_task(artifact_path: Path, *, confirm_apply=False) -> DbasRestoreTask:
     task = DbasRestoreTask(ScheduleConfig(schedule_type=ScheduleType.MANUAL))
     task.update_config(
@@ -128,6 +135,51 @@ class TestDryRunDefault:
         assert apply.await_args.kwargs["confirm_apply"] is True
         assert result.details["is_dry_run"] is False
 
+    async def test_logo_payload_is_loaded_lazily_while_archive_is_open(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        loaded = []
+        captured = []
+
+        async def dry_run(*, plan, logo_content_provider, **_kwargs):
+            record = plan.category(EntityType.LOGO).entities[0]
+            assert "content_b64" not in record
+            loaded.append(base64.b64decode(await logo_content_provider(record)))
+            captured.append((logo_content_provider, record))
+            return _dry_run_report()
+
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(side_effect=dry_run),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is True
+        assert loaded == [_PNG_BYTES]
+        with pytest.raises(ValueError, match="already closed"):
+            await captured[0][0](captured[0][1])
+
+    async def test_archive_closes_when_orchestration_raises(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        task = _make_task(art, confirm_apply=False)
+        captured = []
+
+        async def failing_dry_run(*, plan, logo_content_provider, **_kwargs):
+            captured.append(
+                (logo_content_provider, plan.category(EntityType.LOGO).entities[0])
+            )
+            raise RuntimeError("boom")
+
+        with patch(
+            "dbas.restore_orchestrator.run_dry_run",
+            AsyncMock(side_effect=failing_dry_run),
+        ), patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await task.execute()
+
+        assert result.success is False
+        with pytest.raises(ValueError, match="already closed"):
+            await captured[0][0](captured[0][1])
+
     async def test_apply_states_the_archive_restores_full_ladder_policy(self, tmp_path):
         """The archive restore STATES ``allow_fuzzy_stream_match=True``.
 
@@ -178,6 +230,62 @@ class TestValidateBeforeMutate:
         dry.assert_not_awaited()
         apply.assert_not_awaited()
         assert result.success is False
+
+    async def test_duplicate_logo_member_is_refused_before_orchestrator(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        with zipfile.ZipFile(art, "a") as zf:
+            zf.writestr("binary/logos/espn.png", _PNG_BYTES)
+        dry = AsyncMock(return_value=_dry_run_report())
+        apply = AsyncMock(return_value=_apply_report())
+
+        with patch("dbas.restore_orchestrator.run_dry_run", dry), \
+             patch("dbas.restore_orchestrator.run_restore", apply), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await _make_task(art, confirm_apply=True).execute()
+
+        assert result.success is False
+        dry.assert_not_awaited()
+        apply.assert_not_awaited()
+
+    async def test_valid_manifest_is_read_once_and_reused_for_decode(self, tmp_path):
+        art = _write_artifact(tmp_path)
+        reads = []
+        original_open = zipfile.ZipFile.open
+
+        def tracked_open(zf, member, *args, **kwargs):
+            name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+            reads.append(name)
+            return original_open(zf, member, *args, **kwargs)
+
+        with patch.object(zipfile.ZipFile, "open", tracked_open), \
+             patch("dbas.restore_orchestrator.run_dry_run", AsyncMock(return_value=_dry_run_report())), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await _make_task(art).execute()
+
+        assert result.success is True
+        assert reads.count("manifest.json") == 1
+
+    @pytest.mark.parametrize(
+        "manifest",
+        [
+            b"{not-json",
+            b"{" + (b" " * (1024 * 1024)),
+        ],
+        ids=["malformed", "oversized"],
+    )
+    async def test_invalid_manifest_is_refused_before_orchestrator(self, tmp_path, manifest):
+        art = _write_raw_manifest_artifact(tmp_path, manifest)
+        dry = AsyncMock(return_value=_dry_run_report())
+        apply = AsyncMock(return_value=_apply_report())
+
+        with patch("dbas.restore_orchestrator.run_dry_run", dry), \
+             patch("dbas.restore_orchestrator.run_restore", apply), \
+             patch("dispatcharr_client.get_client", return_value=AsyncMock()):
+            result = await _make_task(art, confirm_apply=True).execute()
+
+        assert result.success is False
+        dry.assert_not_awaited()
+        apply.assert_not_awaited()
 
     async def test_missing_artifact_fails_cleanly(self, tmp_path):
         task = _make_task(tmp_path / "does-not-exist.zip")

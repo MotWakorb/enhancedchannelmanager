@@ -391,6 +391,10 @@ def _sanitize_failure(exc: Exception | str) -> str:
     carries any path/url marker, replace it wholesale with a generic message
     rather than risk leaking a path or token into the report.
     """
+    from dbas.destination_read import DestinationReadError
+
+    if isinstance(exc, DestinationReadError):
+        return str(exc)
     text = (str(exc) or "").strip()
     lowered = text.lower()
     if not text or any(m in lowered for m in _PATH_LEAK_MARKERS):
@@ -769,8 +773,9 @@ async def import_logos(
             declared-size cap) run BEFORE hydration so a logo that is already
             rejectable is never read. A provider failure (``None`` / raise) is
             a per-logo ``VALIDATION_ERROR`` with a path-free message, never a
-            crash. ``None`` (the default, the archive-restore path) leaves
-            behaviour byte-for-byte unchanged.
+            crash. Archive restore supplies this loader from its still-open,
+            already-validated ZIP; legacy in-memory records still work with the
+            default ``None`` because they carry ``content_b64`` directly.
 
     Returns:
         A :class:`LogoImportResult` with safe aggregate counters.
