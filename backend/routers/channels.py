@@ -700,9 +700,22 @@ class BulkCreateChannelOp(BaseModel):
     tvgId: Optional[str] = None
     tvcGuideStationId: Optional[str] = None  # Gracenote ID from M3U tvc-guide-stationid
     normalize: Optional[bool] = False  # Apply normalization rules to channel name
+    expectedStreamIds: Optional[list[PositiveInt]] = Field(default=None, min_length=1)
     #: See :class:`AcknowledgedDuplicate`. A created channel can land on an
     #: occupied number just as an edited one can.
     acknowledgedDuplicate: Optional[AcknowledgedDuplicate] = None
+
+    @field_validator("expectedStreamIds")
+    @classmethod
+    def _reject_duplicate_expected_streams(
+        cls, value: Optional[list[int]]
+    ) -> Optional[list[int]]:
+        if value is not None and len(set(value)) != len(value):
+            raise PydanticCustomError(
+                "duplicate_stream_ids",
+                "expectedStreamIds must not contain duplicates",
+            )
+        return value
 
 
 class BulkDeleteChannelOp(BaseModel):
@@ -2572,6 +2585,43 @@ async def _run_bulk_commit(
     if request.consolidate:
         operations = _consolidate_operations(operations)
         request = request.model_copy(update={"operations": operations})
+
+    expected_stream_issues: list[dict] = []
+    expected_streams_by_temp_id = {
+        op.tempId: set(op.expectedStreamIds)
+        for op in request.operations
+        if op.type == "createChannel" and op.expectedStreamIds is not None
+    }
+    final_streams_by_temp_id = {
+        temp_id: set() for temp_id in expected_streams_by_temp_id
+    }
+    for op in request.operations:
+        channel_id = getattr(op, "channelId", None)
+        if channel_id not in final_streams_by_temp_id:
+            continue
+        if op.type == "addStreamToChannel":
+            final_streams_by_temp_id[channel_id].add(op.streamId)
+        elif op.type == "removeStreamFromChannel":
+            final_streams_by_temp_id[channel_id].discard(op.streamId)
+        elif op.type == "reorderChannelStreams":
+            final_streams_by_temp_id[channel_id] = set(op.streamIds)
+
+    for op in request.operations:
+        if op.type != "createChannel" or op.expectedStreamIds is None:
+            continue
+        missing = expected_streams_by_temp_id[op.tempId] - final_streams_by_temp_id[op.tempId]
+        for stream_id in sorted(missing):
+            expected_stream_issues.append({
+                "type": "invalid_operation",
+                "severity": "error",
+                "message": (
+                    f"Bulk-created channel '{op.name}' would be missing expected "
+                    f"stream {stream_id}; nothing was applied"
+                ),
+                "channelId": op.tempId,
+                "channelName": op.name,
+                "streamId": stream_id,
+            })
     temp_channel_names = {
         op.tempId: op.name
         for op in request.operations
@@ -2622,6 +2672,9 @@ async def _run_bulk_commit(
         # only honest answer is to say precisely what is where.
         "numberingRecovery": [],
     }
+    if expected_stream_issues:
+        result["validationIssues"].extend(expected_stream_issues)
+        result["validationPassed"] = False
 
     # Counters the summary row reports. Kept as locals rather than derived from
     # the id maps at write time (bead enhancedchannelmanager-r9py9):
@@ -3263,7 +3316,7 @@ async def _run_bulk_commit(
         # knowingly continuing would leave a channel that cannot play, which is
         # the exact failure this path is meant to prevent. Other validation
         # issues retain the endpoint's normal continue-on-error semantics.
-        missing_stream_blocks_create = any(
+        missing_stream_blocks_create = bool(expected_stream_issues) or any(
             issue.get("type") == "missing_stream"
             and isinstance(issue.get("channelId"), int)
             and issue["channelId"] < 0

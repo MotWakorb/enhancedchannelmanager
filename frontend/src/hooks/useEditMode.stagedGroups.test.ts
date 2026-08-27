@@ -312,6 +312,55 @@ describe('useEditMode — a channel created into a group pending in the same bat
     expect(onError).toHaveBeenCalledWith(expect.stringContaining('Nothing was applied'));
   });
 
+  it('refuses Apply when a later removal makes one of multiple expected streams absent', async () => {
+    const onError = vi.fn();
+    const { view } = renderEditMode([], onError);
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Incomplete after removal',
+        streamIds: [55, 56],
+      });
+      view.result.current.stageRemoveStream(tempId, 56, 'Remove expected stream');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.operationsFailed).toBe(1);
+    expect(result.errors[0]).toEqual(expect.objectContaining({
+      channelId: -1,
+      channelName: 'Incomplete after removal',
+      error: expect.stringContaining('missing 1 expected stream assignment'),
+    }));
+    expect(bulkCommit).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Nothing was applied'));
+  });
+
+  it('refuses Apply when a reorder omits an expected stream', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Incomplete after reorder',
+        streamIds: [55, 56],
+      });
+      view.result.current.stageReorderStreams(tempId, [55], 'Drop expected stream from order');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit();
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errors[0]?.error).toContain('missing 1 expected stream assignment');
+    expect(bulkCommit).not.toHaveBeenCalled();
+  });
+
   it('partitions mixed stream assignments without disturbing batches or accounting', async () => {
     const existingChannels = Array.from(
       { length: 201 },

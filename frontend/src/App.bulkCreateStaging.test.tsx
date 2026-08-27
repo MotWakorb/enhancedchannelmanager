@@ -223,6 +223,9 @@ describe('App bulk-create staging', () => {
     expect(request.operations).toHaveLength(count * 2);
     expect(request.operations.filter((operation) => operation.type === 'createChannel')).toHaveLength(count);
     expect(request.operations.filter((operation) => operation.type === 'addStreamToChannel')).toHaveLength(count);
+    expect(request.operations.flatMap((operation) =>
+      operation.type === 'createChannel' ? [operation.expectedStreamIds] : []
+    )).toEqual(streams.map((stream) => [stream.id]));
     const createTempIds = request.operations.flatMap((operation) =>
       operation.type === 'createChannel' ? [operation.tempId!] : []);
     const assignmentTempIds = request.operations.flatMap((operation) =>

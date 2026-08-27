@@ -737,6 +737,7 @@ def test_the_number_scoped_create_fields_are_pinned_against_the_model():
         "tvgId",
         "tvcGuideStationId",
         "normalize",
+        "expectedStreamIds",
     } | set(_NUMBER_SCOPED_CREATE_FIELDS)
 
 

@@ -1610,6 +1610,7 @@ export function useEditMode({
             logoUrl: apiCall.logoUrl,
             tvgId: apiCall.tvgId,
             tvcGuideStationId: apiCall.tvcGuideStationId,
+            expectedStreamIds: apiCall.expectedStreamIds,
             // See the updateChannel arm: a created channel can land on an
             // occupied number just as an edited one can.
             acknowledgedDuplicate: apiCall.acknowledgedDuplicate,
@@ -1746,10 +1747,20 @@ export function useEditMode({
 
     const assignmentsByTempId = new Map<number, Set<number>>();
     for (const operation of state.stagedOperations) {
-      if (operation.apiCall.type !== 'addStreamToChannel' || operation.apiCall.channelId >= 0) continue;
-      const assigned = assignmentsByTempId.get(operation.apiCall.channelId) ?? new Set<number>();
-      assigned.add(operation.apiCall.streamId);
-      assignmentsByTempId.set(operation.apiCall.channelId, assigned);
+      if (operation.apiCall.type !== 'createChannel' || operation.apiCall.expectedStreamIds === undefined) continue;
+      assignmentsByTempId.set(operation.afterSnapshot[0]?.id, new Set<number>());
+    }
+    for (const operation of state.stagedOperations) {
+      const { apiCall } = operation;
+      if (!('channelId' in apiCall) || !assignmentsByTempId.has(apiCall.channelId)) continue;
+      const assigned = assignmentsByTempId.get(apiCall.channelId)!;
+      if (apiCall.type === 'addStreamToChannel') {
+        assigned.add(apiCall.streamId);
+      } else if (apiCall.type === 'removeStreamFromChannel') {
+        assigned.delete(apiCall.streamId);
+      } else if (apiCall.type === 'reorderChannelStreams') {
+        assignmentsByTempId.set(apiCall.channelId, new Set(apiCall.streamIds));
+      }
     }
     const incompleteBulkCreates = state.stagedOperations.flatMap((operation) => {
       if (operation.apiCall.type !== 'createChannel' || operation.apiCall.expectedStreamIds === undefined) return [];
