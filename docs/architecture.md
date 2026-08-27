@@ -209,6 +209,31 @@ Startup → TaskEngine (checks every 60s, max 3 concurrent)
 | Real-time | useStatusWebSocket hook | WebSocket /ws endpoint |
 | Config | localStorage (filters, prefs) | /config/settings.json |
 
+### MCP public-key authority and recovery
+
+The owner-only `api-key` sidecar is the single authority for the public MCP
+client key. `settings.json:mcp_api_key` is a compatibility mirror for older
+clients and migration only: generic settings saves ignore the caller's value
+and copy the independently validated sidecar authority back into the mirror.
+An explicit empty `api-key` is the durable revocation tombstone.
+
+Dedicated rotate and revoke operations use `.api-key.recovery` as a transient
+write-ahead redo record. `prepared` means the authority replacement was not
+disclosed as complete and is startup-inert. `recovery-active` means the new
+key, including an empty revocation, must be reapplied before a successor
+transition can stage. A successor cannot replace that record until the
+predecessor authority's parent-directory fsync succeeds, so recovery always
+moves forward and never stores a credential pre-image that could resurrect a
+revoked key.
+
+Ordinary startup distinguishes an absent artifact from one that is present but
+untrusted. Invalid content, mode, owner, link count, file type, or a malformed
+recovery record is preserved and cached as degraded state; ECM exposes no key
+from that artifact but keeps health and JWT authentication available. Path and
+metadata fingerprints invalidate that cache automatically after an operator or
+peer repairs/replaces the artifact. Explicit saves, rotations, and revocations
+remain fail-closed until the storage is trusted.
+
 ---
 
 ## Channel Pipeline Internals

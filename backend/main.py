@@ -147,7 +147,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0158",
+    version="0.18.1-0159",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1146,9 +1146,9 @@ async def startup_event():
     sweep_orphaned_settings_temporaries()
 
     # Reconcile public MCP credential authority before readiness. This is the
-    # first-install generation and legacy-migration point. An unavailable
-    # projection mount fails startup instead of claiming a key the sidecar
-    # cannot read.
+    # first-install generation and legacy-migration point. A present-but-
+    # untrusted artifact degrades to no public key without blocking startup;
+    # explicit credential transitions remain fail-closed until it is repaired.
     get_settings()
 
     # Materialize the private sidecar projection before the backend becomes

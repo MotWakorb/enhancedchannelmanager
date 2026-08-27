@@ -220,7 +220,7 @@ def test_projection_failure_does_not_discard_valid_settings(tmp_path: Path) -> N
     key_file = tmp_path / "mcp" / "api-key"
     key_file.parent.mkdir()
     with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file), patch(
-        "config._publish_mcp_api_key_locked", side_effect=PermissionError("denied")
+        "config._replace_mcp_authority_locked", side_effect=PermissionError("denied")
     ), pytest.raises(PermissionError, match="denied"):
         config.get_settings()
     config.clear_settings_cache()

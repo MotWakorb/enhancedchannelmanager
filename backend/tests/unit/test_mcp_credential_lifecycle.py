@@ -62,6 +62,11 @@ def _recovery_document(path: Path) -> dict:
     return json.loads(path.read_text())
 
 
+def _write_recovery(path: Path, key: str, state: str = "recovery-active") -> None:
+    path.write_text(json.dumps({"key": key, "state": state}) + "\n")
+    path.chmod(0o600)
+
+
 def test_stale_unrelated_save_cannot_restore_rotated_or_revoked_key(lifecycle):
     settings_file, authority_file = lifecycle
     _write_authority(authority_file, "initial-key")
@@ -157,12 +162,14 @@ def test_startup_paused_after_settings_read_cannot_republish_peer_transition(
     assert settings_read.wait(timeout=10)
 
     transition_done = threading.Event()
+    transition_result = []
 
     def peer_transition():
         if transition == "rotate":
-            config.rotate_mcp_api_key()
+            transition_result.append(config.rotate_mcp_api_key())
         else:
             config.revoke_mcp_api_key()
+            transition_result.append("")
         transition_done.set()
 
     peer = threading.Thread(target=peer_transition)
@@ -176,7 +183,7 @@ def test_startup_paused_after_settings_read_cannot_republish_peer_transition(
     stale_startup_model = loaded[0]
     stale_startup_model.user_timezone = "America/Chicago"
     config.save_settings(stale_startup_model)
-    expected = "" if transition == "revoke" else _authority(authority_file)
+    expected = transition_result[0]
 
     assert _authority(authority_file) == expected
     assert _stored_mirror(settings_file) == expected
@@ -320,6 +327,363 @@ def test_invalid_or_non_object_settings_are_byte_preserved_without_generation(
     assert loaded.mcp_api_key == ""
     assert settings_file.read_bytes() == raw
     assert not authority_file.exists()
+
+
+@pytest.mark.parametrize("artifact", ["multiline", "mode", "hardlink", "symlink"])
+def test_untrusted_authority_degrades_without_repair_or_initialization(
+    lifecycle, monkeypatch, artifact
+):
+    settings_file, authority_file = lifecycle
+    target = authority_file.with_name("attacker-key")
+    if artifact == "multiline":
+        authority_file.write_text("first-secret\nsecond-secret\n")
+        authority_file.chmod(0o600)
+    elif artifact == "mode":
+        _write_authority(authority_file, "exposed-secret")
+        authority_file.chmod(0o644)
+    elif artifact == "hardlink":
+        _write_authority(authority_file, "linked-secret")
+        os.link(authority_file, authority_file.with_name("second-link"))
+    else:
+        _write_authority(target, "attacker-secret")
+        authority_file.symlink_to(target)
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-mirror"}))
+    before_mode = stat.S_IMODE(authority_file.lstat().st_mode)
+    before_target = os.readlink(authority_file) if authority_file.is_symlink() else None
+    monkeypatch.setattr(
+        config.secrets,
+        "token_urlsafe",
+        lambda _size: (_ for _ in ()).throw(AssertionError("must not generate")),
+    )
+
+    first = config.load_settings()
+    second = config.load_settings()
+
+    assert first.mcp_api_key == second.mcp_api_key == ""
+    assert stat.S_IMODE(authority_file.lstat().st_mode) == before_mode
+    if before_target is not None:
+        assert authority_file.is_symlink()
+        assert os.readlink(authority_file) == before_target
+        assert _authority(target) == "attacker-secret"
+    assert _stored_mirror(settings_file) == "stale-mirror"
+
+
+def test_untrusted_authority_cache_recovers_when_metadata_is_repaired(lifecycle):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "repaired-key")
+    authority_file.chmod(0o644)
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-mirror"}))
+
+    assert config.load_settings().mcp_api_key == ""
+    authority_file.chmod(0o600)
+
+    assert config.load_settings().mcp_api_key == "repaired-key"
+    assert _stored_mirror(settings_file) == "repaired-key"
+
+
+def test_wrong_owner_authority_degrades_without_touching_artifact(
+    lifecycle, monkeypatch
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "wrong-owner-secret")
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-mirror"}))
+    monkeypatch.setattr(config.os, "geteuid", lambda: os.getuid() + 1)
+
+    assert config.load_settings().mcp_api_key == ""
+    assert _authority(authority_file) == "wrong-owner-secret"
+    assert stat.S_IMODE(authority_file.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"{not-json\n",
+        b"[]\n",
+        b'{"key":"redo","state":"recovery-active"}\nextra\n',
+    ],
+)
+@pytest.mark.parametrize("authority_present", [True, False])
+def test_malformed_recovery_degrades_and_is_preserved(
+    lifecycle, monkeypatch, raw, authority_present
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    if authority_present:
+        _write_authority(authority_file, "independent-key")
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-mirror"}))
+    recovery_file.write_bytes(raw)
+    recovery_file.chmod(0o600)
+    monkeypatch.setattr(
+        config.secrets,
+        "token_urlsafe",
+        lambda _size: (_ for _ in ()).throw(AssertionError("must not generate")),
+    )
+
+    expected = "independent-key" if authority_present else ""
+    assert config.load_settings().mcp_api_key == expected
+    assert config.load_settings().mcp_api_key == expected
+    assert recovery_file.read_bytes() == raw
+    if not authority_present:
+        assert not authority_file.exists()
+
+
+@pytest.mark.parametrize("artifact", ["mode", "owner", "hardlink", "symlink"])
+@pytest.mark.parametrize("authority_present", [True, False])
+def test_untrusted_recovery_metadata_degrades_and_is_preserved(
+    lifecycle, monkeypatch, artifact, authority_present
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    target = recovery_file.with_name("recovery-target")
+    if authority_present:
+        _write_authority(authority_file, "independent-key")
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-mirror"}))
+    if artifact == "symlink":
+        _write_recovery(target, "attacker-redo")
+        recovery_file.symlink_to(target)
+    else:
+        _write_recovery(recovery_file, "attacker-redo")
+        if artifact == "mode":
+            recovery_file.chmod(0o644)
+        elif artifact == "hardlink":
+            os.link(recovery_file, recovery_file.with_name("recovery-link"))
+        else:
+            real_validate = config._validate_mcp_file_metadata
+
+            def reject_recovery_owner(metadata, filename):
+                if filename == config.MCP_KEY_RECOVERY_FILENAME:
+                    raise PermissionError("recovery record has the wrong owner")
+                return real_validate(metadata, filename)
+
+            monkeypatch.setattr(
+                config, "_validate_mcp_file_metadata", reject_recovery_owner
+            )
+
+    expected = "independent-key" if authority_present else ""
+    assert config.load_settings().mcp_api_key == expected
+    assert config.load_settings().mcp_api_key == expected
+    if artifact == "symlink":
+        assert recovery_file.is_symlink()
+        assert _recovery_document(target)["key"] == "attacker-redo"
+    else:
+        assert recovery_file.exists()
+    if not authority_present:
+        assert not authority_file.exists()
+
+
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+def test_untrusted_recovery_fails_explicit_transitions_closed(
+    lifecycle, transition
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    recovery_file.write_text("{malformed\n")
+    recovery_file.chmod(0o600)
+    operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
+
+    with pytest.raises(config.MCPApiKeyStorageError):
+        operation()
+
+    assert _authority(authority_file) == "known-good"
+    assert recovery_file.read_text() == "{malformed\n"
+
+
+@pytest.mark.parametrize("artifact", ["authority", "recovery"])
+def test_untrusted_lifecycle_artifact_fails_generic_save_closed(
+    lifecycle, artifact
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    original_settings = settings_file.read_bytes()
+    if artifact == "authority":
+        authority_file.chmod(0o644)
+    else:
+        recovery_file.write_text("{malformed\n")
+        recovery_file.chmod(0o600)
+
+    with pytest.raises(config.MCPApiKeyStorageError):
+        config.save_settings(config.DispatcharrSettings(user_timezone="Etc/UTC"))
+
+    assert settings_file.read_bytes() == original_settings
+    assert _authority(authority_file) == "known-good"
+    if artifact == "recovery":
+        assert recovery_file.read_text() == "{malformed\n"
+
+
+def test_degraded_recovery_cache_converges_after_record_repair(lifecycle):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "independent-key")
+    settings_file.write_text(json.dumps({"mcp_api_key": "independent-key"}))
+    recovery_file.write_text("{malformed\n")
+    recovery_file.chmod(0o600)
+
+    assert config.load_settings().mcp_api_key == "independent-key"
+    _write_recovery(recovery_file, "recovered-key")
+
+    assert config.load_settings().mcp_api_key == "recovered-key"
+    assert _authority(authority_file) == "recovered-key"
+
+
+def test_invalid_settings_with_valid_authority_uses_stable_degraded_cache(
+    lifecycle, monkeypatch
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "authority-key")
+    settings_file.write_text("{invalid\n")
+    real_acquire = config._acquire_settings_flock
+    acquisitions = 0
+
+    def count_acquire(descriptor):
+        nonlocal acquisitions
+        acquisitions += 1
+        return real_acquire(descriptor)
+
+    monkeypatch.setattr(config, "_acquire_settings_flock", count_acquire)
+
+    assert config.load_settings().mcp_api_key == "authority-key"
+    assert config.load_settings().mcp_api_key == "authority-key"
+    assert acquisitions == 1
+
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale", "user_timezone": "Etc/UTC"}))
+    converged = config.load_settings()
+    assert converged.mcp_api_key == "authority-key"
+    assert converged.user_timezone == "Etc/UTC"
+    assert acquisitions == 2
+
+
+def test_cached_absent_authority_discovers_peer_creation_without_cache_clear(
+    lifecycle
+):
+    settings_file, authority_file = lifecycle
+    settings_file.write_text("{invalid\n")
+
+    assert config.load_settings().mcp_api_key == ""
+    _write_authority(authority_file, "peer-created-key")
+
+    assert config.load_settings().mcp_api_key == "peer-created-key"
+
+
+def test_ordinary_load_sweeps_authority_and_recovery_temporaries_without_following(
+    lifecycle
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    authority_target = authority_file.with_name("authority-target")
+    recovery_target = authority_file.with_name("recovery-target")
+    authority_target.write_text("keep-authority-target")
+    recovery_target.write_text("keep-recovery-target")
+    authority_temp = authority_file.with_name(".api-key.0123456789abcdef.tmp")
+    recovery_temp = authority_file.with_name(
+        "..api-key.recovery.0123456789abcdef.tmp"
+    )
+    authority_temp.symlink_to(authority_target)
+    recovery_temp.symlink_to(recovery_target)
+
+    assert config.load_settings().mcp_api_key == "known-good"
+
+    assert not os.path.lexists(authority_temp)
+    assert not os.path.lexists(recovery_temp)
+    assert authority_target.read_text() == "keep-authority-target"
+    assert recovery_target.read_text() == "keep-recovery-target"
+
+
+@pytest.mark.parametrize(
+    ("legacy_document", "expected"),
+    [(None, "fresh-key"), ({"mcp_api_key": "legacy-key"}, "legacy-key")],
+)
+def test_initialization_without_predecessor_bypasses_wal_and_survives_fsync_refusal(
+    lifecycle, monkeypatch, legacy_document, expected
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    if legacy_document is not None:
+        settings_file.write_text(json.dumps(legacy_document))
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "fresh-key")
+    monkeypatch.setattr(config, "_fsync_mcp_parent_directory", lambda: False)
+
+    assert config.load_settings().mcp_api_key == expected
+    assert _authority(authority_file) == expected
+    assert _stored_mirror(settings_file) == expected
+    assert not recovery_file.exists()
+
+    authority_file.unlink()
+    config.clear_settings_cache()
+    monkeypatch.setattr(config, "_fsync_mcp_parent_directory", lambda: True)
+
+    assert config.load_settings().mcp_api_key == expected
+    assert _authority(authority_file) == expected
+
+
+@pytest.mark.parametrize("predecessor", ["rotation", "revocation"])
+def test_new_transition_cannot_replace_active_redo_until_predecessor_is_durable(
+    lifecycle, monkeypatch, predecessor
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    predecessor_key = "K1" if predecessor == "rotation" else ""
+    _write_authority(authority_file, "K0")
+    settings_file.write_text(json.dumps({"mcp_api_key": "K0"}))
+    _write_recovery(recovery_file, predecessor_key)
+    original_recovery = recovery_file.read_bytes()
+    monkeypatch.setattr(config, "_fsync_mcp_parent_directory", lambda: False)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "K2")
+
+    with pytest.raises(config.MCPApiKeyStorageError, match="predecessor"):
+        config.rotate_mcp_api_key()
+
+    assert recovery_file.read_bytes() == original_recovery
+    assert _authority(authority_file) == predecessor_key
+
+    _write_authority(authority_file, "K0")
+    monkeypatch.setattr(config, "_fsync_mcp_parent_directory", lambda: True)
+    config.clear_settings_cache()
+    assert config.load_settings().mcp_api_key == predecessor_key
+    assert _authority(authority_file) == predecessor_key
+
+
+@pytest.mark.parametrize("predecessor", ["rotation", "revocation"])
+@pytest.mark.parametrize("crash_wal", ["active-predecessor", "prepared-successor"])
+def test_failed_successor_staging_crash_matrix_cannot_restore_k0(
+    lifecycle, monkeypatch, predecessor, crash_wal
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    predecessor_key = "K1" if predecessor == "rotation" else ""
+    _write_authority(authority_file, "K0")
+    settings_file.write_text(json.dumps({"mcp_api_key": "K0"}))
+    _write_recovery(recovery_file, predecessor_key)
+    real_fsync_parent = config._fsync_mcp_parent_directory
+    calls = 0
+
+    def fail_successor_stage():
+        nonlocal calls
+        calls += 1
+        return calls == 1
+
+    monkeypatch.setattr(config, "_fsync_mcp_parent_directory", fail_successor_stage)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "K2")
+
+    with pytest.raises(OSError, match="not crash-durable"):
+        config.rotate_mcp_api_key()
+
+    assert _authority(authority_file) == predecessor_key
+    if crash_wal == "active-predecessor":
+        _write_authority(authority_file, "K0")
+        _write_recovery(recovery_file, predecessor_key)
+    else:
+        _write_authority(authority_file, predecessor_key)
+        _write_recovery(recovery_file, "K2", state="prepared")
+    monkeypatch.setattr(config, "_fsync_mcp_parent_directory", real_fsync_parent)
+    config.clear_settings_cache()
+
+    assert config.load_settings().mcp_api_key == predecessor_key
+    assert _authority(authority_file) == predecessor_key
 
 
 @pytest.mark.parametrize("transition", ["rotate", "revoke"])
@@ -488,7 +852,7 @@ def test_recovery_record_fsync_refusal_fails_before_authority_changes(
 
 
 @pytest.mark.parametrize("transition", ["rotate", "revoke"])
-def test_failed_recovery_stage_cannot_activate_after_unlink_rollback(
+def test_failed_recovery_stage_leaves_prepared_record_startup_inert(
     lifecycle, monkeypatch, transition
 ):
     settings_file, authority_file = lifecycle
@@ -497,31 +861,21 @@ def test_failed_recovery_stage_cannot_activate_after_unlink_rollback(
     settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
     cached = config.get_settings()
     real_fsync = os.fsync
-    real_unlink = Path.unlink
-    removed_recovery = None
 
     def refuse_directory_fsync(descriptor):
         if stat.S_ISDIR(os.fstat(descriptor).st_mode):
             raise OSError(errno.EIO, "synthetic directory fsync refusal")
         return real_fsync(descriptor)
 
-    def capture_recovery_unlink(path, *args, **kwargs):
-        nonlocal removed_recovery
-        if path == recovery_file and path.exists():
-            removed_recovery = path.read_bytes()
-        return real_unlink(path, *args, **kwargs)
-
     monkeypatch.setattr(config.os, "fsync", refuse_directory_fsync)
-    monkeypatch.setattr(Path, "unlink", capture_recovery_unlink)
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
 
     with pytest.raises(OSError, match="not crash-durable"):
         operation()
 
-    assert removed_recovery is not None
     expected = "rotated-key" if transition == "rotate" else ""
-    assert json.loads(removed_recovery) == {
+    assert _recovery_document(recovery_file) == {
         "key": expected,
         "state": "prepared",
     }
@@ -529,11 +883,7 @@ def test_failed_recovery_stage_cannot_activate_after_unlink_rollback(
     assert _stored_mirror(settings_file) == "known-good"
     assert cached.mcp_api_key == "known-good"
 
-    # The unlink was not directory-fsynced, so a crash may restore its entry.
-    recovery_file.write_bytes(removed_recovery)
-    recovery_file.chmod(0o600)
     monkeypatch.setattr(config.os, "fsync", real_fsync)
-    monkeypatch.setattr(Path, "unlink", real_unlink)
     config.clear_settings_cache()
 
     assert config.get_settings().mcp_api_key == "known-good"
@@ -794,7 +1144,7 @@ def test_security_validation_finishes_before_authority_replace(
 
 
 @pytest.mark.parametrize("mode", [0o644, 0o400])
-def test_backend_rejects_authority_without_exact_owner_only_mode(
+def test_backend_degrades_authority_without_exact_owner_only_mode(
     lifecycle, mode
 ):
     settings_file, authority_file = lifecycle
@@ -802,53 +1152,51 @@ def test_backend_rejects_authority_without_exact_owner_only_mode(
     authority_file.chmod(mode)
     settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
 
-    with pytest.raises(PermissionError, match="owner and mode"):
-        config.get_settings()
+    assert config.get_settings().mcp_api_key == ""
 
     assert stat.S_IMODE(authority_file.stat().st_mode) == mode
 
 
-def test_backend_rejects_wrong_owner_without_repairing_it(lifecycle, monkeypatch):
+def test_backend_degrades_wrong_owner_without_repairing_it(lifecycle, monkeypatch):
     settings_file, authority_file = lifecycle
     _write_authority(authority_file, "wrong-owner-key")
     settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
     expected_owner = os.geteuid() + 1
     monkeypatch.setattr(config.os, "geteuid", lambda: expected_owner)
 
-    with pytest.raises(PermissionError, match="owner and mode"):
-        config.get_settings()
+    assert config.get_settings().mcp_api_key == ""
 
     assert _authority(authority_file) == "wrong-owner-key"
 
 
-def test_backend_rejects_symlink_authority(lifecycle):
+def test_backend_degrades_symlink_authority(lifecycle):
     settings_file, authority_file = lifecycle
     target = authority_file.with_name("attacker-key")
     _write_authority(target, "attacker-key")
     authority_file.symlink_to(target)
     settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
 
-    with pytest.raises(OSError):
-        config.get_settings()
+    assert config.get_settings().mcp_api_key == ""
+    assert authority_file.is_symlink()
+    assert _authority(target) == "attacker-key"
 
 
-def test_backend_rejects_hardlinked_authority(lifecycle):
+def test_backend_degrades_hardlinked_authority(lifecycle):
     settings_file, authority_file = lifecycle
     _write_authority(authority_file, "linked-key")
     os.link(authority_file, authority_file.with_name("second-link"))
     settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
 
-    with pytest.raises(PermissionError, match="link count"):
-        config.get_settings()
+    assert config.get_settings().mcp_api_key == ""
 
 
-def test_backend_rejects_non_regular_authority(lifecycle):
+def test_backend_degrades_non_regular_authority(lifecycle):
     settings_file, authority_file = lifecycle
     authority_file.mkdir()
     settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
 
-    with pytest.raises(OSError, match="regular file"):
-        config.get_settings()
+    assert config.get_settings().mcp_api_key == ""
+    assert authority_file.is_dir()
 
 
 def test_backend_reads_authority_from_one_descriptor(lifecycle, monkeypatch):
@@ -878,13 +1226,14 @@ def test_security_metadata_change_invalidates_cached_authority(
 
     if mutation == "chmod":
         authority_file.chmod(0o644)
-        expected = "owner and mode"
     else:
         os.link(authority_file, authority_file.with_name("second-link"))
-        expected = "link count"
 
-    with pytest.raises(PermissionError, match=expected):
-        config.get_settings()
+    assert config.get_settings().mcp_api_key == ""
+    if mutation == "chmod":
+        assert stat.S_IMODE(authority_file.stat().st_mode) == 0o644
+    else:
+        assert authority_file.stat().st_nlink == 2
 
 
 def test_projection_is_private_complete_and_sweeps_stale_temporaries(

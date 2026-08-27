@@ -27,6 +27,7 @@ from auth.settings import get_auth_settings
 from config import (
     ADMIN_ONLY_READ_REDACTED_FIELDS,
     MCPApiKeyDurabilityIndeterminate,
+    MCPApiKeyStorageError,
     get_settings,
     normalize_public_base_url,
     revoke_mcp_api_key as revoke_public_mcp_api_key,
@@ -1249,7 +1250,10 @@ async def update_settings(
         # ordinary settings save.
         event_sync_team_aliases=current_settings.event_sync_team_aliases,
     )
-    save_settings(new_settings)
+    try:
+        save_settings(new_settings)
+    except (MCPApiKeyStorageError, OSError, ValueError, UnicodeError) as error:
+        _raise_mcp_api_key_storage_503("settings save", error)
     clear_settings_cache()
     reset_client()
 
@@ -2432,9 +2436,10 @@ def _rotate_private_projection_or_503() -> None:
     that silently did not rotate would leave the operator believing a
     superseded credential was dead — so this stays fail-loud, but as a
     diagnosable 503 naming the projection and the repair rather than an
-    anonymous 500 with a stack trace. The public key in ``settings.json`` has
-    already been written at this point, exactly as before; only the response
-    shape changes.
+    anonymous 500 with a stack trace. This fallible private step deliberately
+    runs before the public authority transition: reversing them could disclose
+    a new public key and then report failure while the private sidecar identity
+    remained stale.
 
     Neither the log line nor the 503 body interpolates the resolved directory.
     It is derived from the ``MCP_SECRETS_DIR`` environment read, which makes it
@@ -2465,6 +2470,29 @@ def _rotate_private_projection_or_503() -> None:
                 "container's PUID/PGID) and retry."
             ),
         ) from exc
+
+
+def _raise_mcp_api_key_storage_503(operation: str, error: Exception) -> None:
+    logger.error(
+        "[SETTINGS] MCP API key %s refused because authority storage is "
+        "unavailable or untrusted (%s)",
+        operation,
+        type(error).__name__,
+    )
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "code": "mcp_api_key_storage_unavailable",
+            "message": (
+                "MCP credential storage is unavailable or untrusted. Repair api-key "
+                "and .api-key.recovery under MCP_SECRETS_DIR as owner-only regular "
+                "files (mode 0600, correct PUID/PGID, no links), then retry. Preserve "
+                "malformed recovery content; do not guess, rewrite, or delete it."
+            ),
+            "operation": operation,
+            "retry_after_storage_repair": True,
+        },
+    ) from error
 
 
 @router.post("/mcp-api-key")
@@ -2518,6 +2546,8 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
                 "mcp_api_key": error.active_key,
             },
         ) from error
+    except (MCPApiKeyStorageError, OSError, ValueError, UnicodeError) as error:
+        _raise_mcp_api_key_storage_503("rotation", error)
     logger.info("[SETTINGS] MCP API key generated")
     return {"mcp_api_key": key}
 
@@ -2561,6 +2591,8 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
                 "retry_after_storage_repair": True,
             },
         ) from error
+    except (MCPApiKeyStorageError, OSError, ValueError, UnicodeError) as error:
+        _raise_mcp_api_key_storage_503("revocation", error)
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}
 

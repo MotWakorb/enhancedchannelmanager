@@ -9,6 +9,7 @@ Mocks: get_settings(), save_settings(), get_client(), get_prober(), get_tracker(
        httpx, smtplib, aiohttp.
 """
 import asyncio
+import stat
 
 import httpx
 import pytest
@@ -240,6 +241,27 @@ class TestUpdateSettings:
 
         assert response.status_code == 200
         assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_untrusted_mcp_storage_returns_operator_actionable_503(
+        self, async_client
+    ):
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings",
+            side_effect=config.MCPApiKeyStorageError("authority is untrusted"),
+        ):
+            response = await async_client.post(
+                "/api/settings",
+                json={"url": "http://dispatcharr:8000", "username": "admin"},
+            )
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "mcp_api_key_storage_unavailable"
+        assert detail["operation"] == "settings save"
+        assert detail["retry_after_storage_repair"] is True
 
     @pytest.mark.asyncio
     async def test_persists_date_format(self, async_client):
@@ -1929,6 +1951,30 @@ class TestMCPApiKeyGenerate:
         }
         assert active_key not in caplog.text
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            PermissionError("authority mode is untrusted"),
+            config.MCPApiKeyStorageError("recovery is untrusted"),
+        ],
+    )
+    async def test_storage_failures_return_operator_actionable_503(
+        self, async_client, failure
+    ):
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.rotate_public_mcp_api_key", side_effect=failure
+        ):
+            response = await async_client.post("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "mcp_api_key_storage_unavailable"
+        assert detail["operation"] == "rotation"
+        assert "api-key" in detail["message"]
+        assert ".api-key.recovery" in detail["message"]
+        assert "retry" in detail["message"].lower()
+
 
 class TestMCPApiKeyRevoke:
     """Tests for DELETE /api/settings/mcp-api-key."""
@@ -1979,6 +2025,23 @@ class TestMCPApiKeyRevoke:
             "retry_after_storage_repair": True,
         }
 
+    @pytest.mark.asyncio
+    async def test_storage_failure_returns_operator_actionable_503(
+        self, async_client
+    ):
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.revoke_public_mcp_api_key",
+            side_effect=config.MCPApiKeyStorageError("authority is untrusted"),
+        ):
+            response = await async_client.delete("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "mcp_api_key_storage_unavailable"
+        assert detail["operation"] == "revocation"
+        assert "api-key" in detail["message"]
+        assert ".api-key.recovery" in detail["message"]
+
 
 class TestMCPApiKeyConfiguredInResponse:
     """Tests that mcp_api_key_configured appears in GET /api/settings."""
@@ -2014,9 +2077,7 @@ class TestMCPApiKeyAuthMiddleware:
     @pytest.mark.asyncio
     async def test_api_key_authenticates(self, async_client):
         """Valid MCP API key in Authorization header passes auth middleware."""
-        from config import DispatcharrSettings
-
-        settings = DispatcharrSettings(
+        settings = config.DispatcharrSettings(
             url="http://test", username="u", password="p",
             mcp_api_key="test-mcp-key-123",
         )
@@ -2037,9 +2098,7 @@ class TestMCPApiKeyAuthMiddleware:
     @pytest.mark.asyncio
     async def test_invalid_api_key_rejected(self, async_client):
         """Invalid API key is rejected with 401."""
-        from config import DispatcharrSettings
-
-        settings = DispatcharrSettings(
+        settings = config.DispatcharrSettings(
             url="http://test", username="u", password="p",
             mcp_api_key="real-key",
         )
@@ -2059,9 +2118,7 @@ class TestMCPApiKeyAuthMiddleware:
     @pytest.mark.asyncio
     async def test_empty_mcp_key_does_not_match(self, async_client):
         """When mcp_api_key is empty, Bearer tokens don't match it."""
-        from config import DispatcharrSettings
-
-        settings = DispatcharrSettings(
+        settings = config.DispatcharrSettings(
             url="http://test", username="u", password="p",
             mcp_api_key="",  # Not configured
         )
@@ -2077,6 +2134,39 @@ class TestMCPApiKeyAuthMiddleware:
             )
 
         assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_untrusted_authority_keeps_health_and_jwt_paths_available(
+        self, async_client, monkeypatch, tmp_path
+    ):
+        settings_file = tmp_path / "settings.json"
+        authority_file = tmp_path / "mcp" / "api-key"
+        authority_file.parent.mkdir()
+        authority_file.write_text("untrusted-secret\n")
+        authority_file.chmod(0o644)
+        settings_file.write_text('{"mcp_api_key":"stale-mirror"}')
+        monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(config, "CONFIG_FILE", settings_file)
+        monkeypatch.setattr(config, "MCP_SECRETS_DIR", authority_file.parent)
+        monkeypatch.setattr(config, "MCP_KEY_FILE", authority_file)
+        config.clear_settings_cache()
+
+        with patch("main.get_settings", side_effect=config.get_settings), patch(
+            "main.get_auth_settings"
+        ) as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            health = await async_client.get("/api/health")
+            jwt_rejection = await async_client.get(
+                "/api/settings",
+                headers={"Authorization": "Bearer invalid-jwt"},
+            )
+
+        assert health.status_code == 200
+        assert jwt_rejection.status_code == 401
+        assert authority_file.read_text() == "untrusted-secret\n"
+        assert stat.S_IMODE(authority_file.stat().st_mode) == 0o644
+        config.clear_settings_cache()
 
 
 class TestMCPStatusSanitization:
@@ -2868,10 +2958,8 @@ class TestSettingsMcpKeyGate:
         returns the MCP service principal, and ``_resolve_settings_admin``
         must classify it as non-admin for this endpoint.
         """
-        from config import DispatcharrSettings
-
         current = _mock_settings(url="http://dispatcharr:8000")
-        runtime_settings = DispatcharrSettings(
+        runtime_settings = config.DispatcharrSettings(
             url="http://dispatcharr:8000", username="u", password="p",
             mcp_api_key="mcp-secret-key",
         )
@@ -2902,10 +2990,8 @@ class TestSettingsMcpKeyGate:
         re-arm the runaway-creation crash, so it must be classified non-admin
         for this field (same posture as the connection/secret fields).
         """
-        from config import DispatcharrSettings
-
         current = _mock_settings(max_auto_created_channels_per_run=500)
-        runtime_settings = DispatcharrSettings(
+        runtime_settings = config.DispatcharrSettings(
             url="http://dispatcharr:8000", username="u", password="p",
             mcp_api_key="mcp-secret-key",
         )
