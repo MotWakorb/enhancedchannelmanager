@@ -124,7 +124,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0161"
+APP_VERSION = "0.18.1-0162"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -6132,8 +6132,19 @@ async def restore_from_yaml(
             if result.get("warnings"):
                 warnings.extend(result["warnings"])
             logger.info("[BACKUP] Restored section: %s", section_key)
-        except MCPApiKeyStorageError:
-            raise
+        except MCPApiKeyStorageError as error:
+            sections_failed.append(section_key)
+            errors.append(
+                "%s: MCP credential storage is unavailable or untrusted; "
+                "preserve lifecycle artifacts, repair storage metadata, and retry "
+                "only this section" % section_key
+            )
+            logger.error(
+                "[BACKUP] Failed to restore section %s because MCP credential "
+                "storage is unavailable or untrusted (%s)",
+                section_key,
+                type(error).__name__,
+            )
         except Exception as e:
             sections_failed.append(section_key)
             # CodeQL py/stack-trace-exposure (#1412): do NOT include str(e) in

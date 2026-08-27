@@ -169,7 +169,7 @@ def test_save_fails_when_the_projection_directory_is_absent(
     key_file = tmp_path / "absent" / "api-key"
 
     with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file), pytest.raises(
-        FileNotFoundError
+        config.MCPApiKeyStorageError
     ):
         save_settings(DispatcharrSettings(mcp_api_key=_KEY))
 

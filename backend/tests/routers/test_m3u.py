@@ -276,7 +276,7 @@ class TestDeleteM3UAccount:
         assert saved["settings"].linked_m3u_accounts == [[1, 3], [4, 5]]
 
     @pytest.mark.asyncio
-    async def test_linked_account_storage_failure_reaches_app_handler(
+    async def test_linked_account_storage_failure_returns_partial_delete_result(
         self, async_client
     ):
         from config import DispatcharrSettings
@@ -287,22 +287,35 @@ class TestDeleteM3UAccount:
             {"id": 2, "name": "IPTV-2", "channel_groups": []}
         ]
         mock_settings = DispatcharrSettings(linked_m3u_accounts=[[1, 2, 3]])
+        secret = "mcp-secret-that-must-not-escape"
+        resolved_path = "/resolved/private/ecm-mcp/api-key"
 
         with patch("routers.m3u.get_client", return_value=mock_client), patch(
-            "routers.m3u.journal"
-        ), patch(
+            "routers.m3u.journal.log_entry"
+        ) as log_entry, patch(
             "routers.m3u.get_settings", return_value=mock_settings
         ), patch(
             "routers.m3u.save_settings",
-            side_effect=MCPApiKeyStorageError("untrusted authority"),
+            side_effect=MCPApiKeyStorageError(
+                f"untrusted authority {resolved_path} {secret}"
+            ),
         ):
             response = await async_client.delete("/api/m3u/accounts/2")
 
-        assert response.status_code == 503
-        assert response.json()["detail"]["code"] == (
-            "mcp_api_key_storage_unavailable"
-        )
-        assert response.json()["detail"]["operation"] == "settings save"
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "deleted_with_cleanup_warning"
+        assert body["account_deleted"] is True
+        assert body["linked_settings_cleanup"] == "failed"
+        assert "must not be retried" in body["message"].lower()
+        assert secret not in response.text
+        assert resolved_path not in response.text
+        mock_client.delete_m3u_account.assert_awaited_once_with(2)
+        assert mock_settings.linked_m3u_accounts == [[1, 2, 3]]
+        log_entry.assert_called_once()
+        journal_after = log_entry.call_args.kwargs["after_value"]
+        assert journal_after["account_deleted"] is True
+        assert journal_after["linked_settings_cleanup"] == "failed"
 
     @pytest.mark.asyncio
     async def test_missing_account_returns_404_not_500(self, async_client):

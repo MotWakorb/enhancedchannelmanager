@@ -1739,7 +1739,9 @@ class TestRestoreYaml:
         assert test_session.query(TagGroup).count() == 1
 
     @pytest.mark.asyncio
-    async def test_settings_storage_failure_reaches_app_handler(self, async_client):
+    async def test_settings_storage_failure_is_section_local_and_restore_continues(
+        self, async_client, test_session
+    ):
         content = _make_yaml_export()
         mock_settings = MagicMock()
         mock_settings.model_dump.return_value = {
@@ -1757,15 +1759,23 @@ class TestRestoreYaml:
         ):
             response = await async_client.post(
                 "/api/backup/restore-yaml",
-                data={"sections": json.dumps(["settings"])},
+                data={
+                    "sections": json.dumps(
+                        ["tag_groups", "settings", "scheduled_tasks"]
+                    )
+                },
                 files={"file": ("export.yaml", content, "text/yaml")},
             )
 
-        assert response.status_code == 503
-        assert response.json()["detail"]["code"] == (
-            "mcp_api_key_storage_unavailable"
-        )
-        assert response.json()["detail"]["operation"] == "settings save"
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["sections_restored"] == ["tag_groups", "scheduled_tasks"]
+        assert body["sections_failed"] == ["settings"]
+        assert test_session.query(TagGroup).count() == 1
+        assert test_session.query(ScheduledTask).count() == 1
+        assert any("settings" in error.lower() for error in body["errors"])
+        assert all("untrusted authority" not in error for error in body["errors"])
 
     @pytest.mark.asyncio
     async def test_channel_groups_restore_upserts_by_name(self):

@@ -1253,7 +1253,7 @@ async def update_settings(
     )
     try:
         save_settings(new_settings)
-    except (MCPApiKeyStorageError, OSError, ValueError, UnicodeError) as error:
+    except MCPApiKeyStorageError as error:
         _raise_mcp_api_key_storage_503("settings save", error)
     clear_settings_cache()
     reset_client()
@@ -2537,7 +2537,7 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
                 "mcp_api_key": error.active_key,
             },
         ) from error
-    except (MCPApiKeyStorageError, OSError, ValueError, UnicodeError) as error:
+    except MCPApiKeyStorageError as error:
         _raise_mcp_api_key_storage_503("rotation", error)
     logger.info("[SETTINGS] MCP API key generated")
     return {"mcp_api_key": key}
@@ -2582,7 +2582,7 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
                 "retry_after_storage_repair": True,
             },
         ) from error
-    except (MCPApiKeyStorageError, OSError, ValueError, UnicodeError) as error:
+    except MCPApiKeyStorageError as error:
         _raise_mcp_api_key_storage_503("revocation", error)
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}

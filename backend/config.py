@@ -1171,7 +1171,12 @@ def _validate_mcp_file_metadata(metadata: os.stat_result, filename: str) -> None
 
 
 def _open_validated_mcp_file(path: Path, filename: str) -> tuple[int, os.stat_result]:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     descriptor = os.open(path, flags)
     try:
         metadata = os.fstat(descriptor)
@@ -1433,6 +1438,10 @@ def _read_mcp_recovery_locked() -> tuple[str, dict | None, Exception | None]:
         not isinstance(document, dict)
         or set(document) != {"key", "state"}
         or not isinstance(document["key"], str)
+        or not (
+            document["key"] == ""
+            or document["key"].splitlines() == [document["key"]]
+        )
         or not isinstance(document["state"], str)
         or document["state"] not in {
             _MCP_RECOVERY_PREPARED,
@@ -1481,31 +1490,50 @@ def _publish_mcp_api_key_locked(key: str) -> tuple[tuple[int, ...], bool]:
     """Atomically replace authority with a durable crash-repair record."""
     parent = MCP_KEY_FILE.parent
     if not parent.is_dir():
-        raise FileNotFoundError(errno.ENOENT, "MCP credential directory is unavailable")
-    _sweep_orphaned_mcp_temporaries_locked()
-    recovery_state, recovery_document, recovery_error = _read_mcp_recovery_locked()
-    _resolve_mcp_predecessor_locked(
-        recovery_state, recovery_document, recovery_error
-    )
-    authority_state, _current_key, _current_signature, authority_error = (
-        _read_mcp_api_key_locked()
-    )
-    if authority_state == _MCP_FILE_UNTRUSTED:
-        _raise_untrusted_mcp_storage(MCP_KEY_FILENAME, authority_error)
-    if (
-        recovery_state == _MCP_FILE_VALID
-        and recovery_document is not None
-        and recovery_document["state"] == _MCP_RECOVERY_PREPARED
-        and authority_state == _MCP_FILE_ABSENT
-    ):
-        raise MCPApiKeyStorageError(
-            "MCP authority is absent while an inert prepared recovery record exists"
+        raise MCPApiKeyStorageError("MCP credential directory is unavailable")
+    try:
+        _sweep_orphaned_mcp_temporaries_locked()
+        recovery_state, recovery_document, recovery_error = _read_mcp_recovery_locked()
+        _resolve_mcp_predecessor_locked(
+            recovery_state, recovery_document, recovery_error
         )
-    temporary, signature = _prepare_private_mcp_file_locked(MCP_KEY_FILE, key)
+        authority_state, _current_key, _current_signature, authority_error = (
+            _read_mcp_api_key_locked()
+        )
+        if authority_state == _MCP_FILE_UNTRUSTED:
+            _raise_untrusted_mcp_storage(MCP_KEY_FILENAME, authority_error)
+        if (
+            recovery_state == _MCP_FILE_VALID
+            and recovery_document is not None
+            and recovery_document["state"] == _MCP_RECOVERY_PREPARED
+            and authority_state == _MCP_FILE_ABSENT
+        ):
+            raise MCPApiKeyStorageError(
+                "MCP authority is absent while an inert prepared recovery record exists"
+            )
+        temporary, signature = _prepare_private_mcp_file_locked(MCP_KEY_FILE, key)
+    except MCPApiKeyStorageError:
+        raise
+    except (OSError, ValueError, UnicodeError) as error:
+        raise MCPApiKeyStorageError(
+            "MCP credential transition preflight failed"
+        ) from error
     durability_indeterminate = False
     try:
-        _stage_mcp_recovery_locked(key)
-        os.replace(temporary, MCP_KEY_FILE)
+        try:
+            _stage_mcp_recovery_locked(key)
+        except MCPApiKeyStorageError:
+            raise
+        except (OSError, ValueError, UnicodeError) as error:
+            raise MCPApiKeyStorageError(
+                "MCP credential recovery staging failed"
+            ) from error
+        try:
+            os.replace(temporary, MCP_KEY_FILE)
+        except (OSError, ValueError, UnicodeError) as error:
+            raise MCPApiKeyStorageError(
+                "MCP credential authority replacement was refused"
+            ) from error
         if _fsync_mcp_parent_directory():
             _remove_mcp_recovery_locked()
         else:
@@ -1659,7 +1687,14 @@ def load_settings() -> DispatcharrSettings:
 
     ensure_config_dir()
     with _settings_write_lock, _durable_settings_write_lock():
-        _sweep_orphaned_mcp_temporaries_locked()
+        try:
+            _sweep_orphaned_mcp_temporaries_locked()
+        except OSError as error:
+            logger.warning(
+                "[CONFIG] Ordinary MCP credential temporary sweep was refused "
+                "(%s); preserving the refused temporary and continuing validation",
+                type(error).__name__,
+            )
         authority_state, key, signature, authority_error = _read_mcp_api_key_locked()
         recovery_state, recovery_document, recovery_error = _read_mcp_recovery_locked()
 
@@ -1749,16 +1784,23 @@ def save_settings(
     target_file.parent.mkdir(parents=True, exist_ok=True)
     try:
         with _settings_write_lock, _durable_settings_write_lock(target_file):
-            _sweep_orphaned_mcp_temporaries_locked()
-            recovery_state, recovery_document, recovery_error = (
-                _read_mcp_recovery_locked()
-            )
-            _resolve_mcp_predecessor_locked(
-                recovery_state, recovery_document, recovery_error
-            )
-            authority_state, key, signature, authority_error = (
-                _read_mcp_api_key_locked()
-            )
+            try:
+                _sweep_orphaned_mcp_temporaries_locked()
+                recovery_state, recovery_document, recovery_error = (
+                    _read_mcp_recovery_locked()
+                )
+                _resolve_mcp_predecessor_locked(
+                    recovery_state, recovery_document, recovery_error
+                )
+                authority_state, key, signature, authority_error = (
+                    _read_mcp_api_key_locked()
+                )
+            except MCPApiKeyStorageError:
+                raise
+            except (OSError, ValueError, UnicodeError) as error:
+                raise MCPApiKeyStorageError(
+                    "MCP credential authority preflight failed"
+                ) from error
             if authority_state == _MCP_FILE_UNTRUSTED:
                 _raise_untrusted_mcp_storage(MCP_KEY_FILENAME, authority_error)
             if authority_state == _MCP_FILE_ABSENT:
@@ -1767,11 +1809,16 @@ def save_settings(
                         "MCP authority is absent while a recovery record exists"
                     )
                 state, raw, current = _read_settings_model_locked()
-                initialized, key, signature = _initialize_authority_locked(
-                    state, raw, current
-                )
+                try:
+                    initialized, key, signature = _initialize_authority_locked(
+                        state, raw, current
+                    )
+                except (OSError, ValueError, UnicodeError) as error:
+                    raise MCPApiKeyStorageError(
+                        "MCP credential authority initialization failed"
+                    ) from error
                 if not initialized:
-                    raise RuntimeError(
+                    raise MCPApiKeyStorageError(
                         "MCP credential authority is absent and settings are not valid"
                     )
             stored = settings.model_copy(deep=True)

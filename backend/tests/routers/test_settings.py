@@ -264,6 +264,39 @@ class TestUpdateSettings:
         assert detail["retry_after_storage_repair"] is True
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status"),
+        [
+            (config.SettingsWriteTimeout("busy"), 503),
+            (OSError("target settings path sentinel"), 500),
+        ],
+    )
+    async def test_non_mcp_save_failures_keep_their_public_contract(
+        self, async_client, failure, expected_status
+    ):
+        from main import app
+
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings", side_effect=failure
+        ):
+            transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/api/settings",
+                    json={"url": "http://dispatcharr:8000", "username": "admin"},
+                )
+
+        assert response.status_code == expected_status
+        assert "mcp_api_key_storage_unavailable" not in response.text
+        assert "target settings path sentinel" not in response.text
+        if isinstance(failure, config.SettingsWriteTimeout):
+            assert response.headers["Retry-After"] == "5"
+
+    @pytest.mark.asyncio
     async def test_persists_date_format(self, async_client):
         """POST threads date_format into the saved settings (bd-8j47e)."""
         current = _mock_settings()
@@ -1955,7 +1988,7 @@ class TestMCPApiKeyGenerate:
     @pytest.mark.parametrize(
         "failure",
         [
-            PermissionError("authority mode is untrusted"),
+            config.MCPApiKeyStorageError("authority mode is untrusted"),
             config.MCPApiKeyStorageError("recovery is untrusted"),
         ],
     )

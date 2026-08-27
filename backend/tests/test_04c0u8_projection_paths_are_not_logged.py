@@ -229,7 +229,7 @@ def test_settings_save_failure_logs_only_the_exception_type(
     monkeypatch.setattr(config, "_sweep_orphaned_mcp_temporaries_locked", fail_sweep)
 
     with caplog.at_level(logging.ERROR, logger="config"):
-        with pytest.raises(OSError):
+        with pytest.raises(config.MCPApiKeyStorageError):
             config.save_settings(
                 config.DispatcharrSettings(),
                 settings_file=tmp_path / "settings.json",
@@ -239,4 +239,4 @@ def test_settings_save_failure_logs_only_the_exception_type(
     assert records
     assert all(str(secret_path) not in record.getMessage() for record in records)
     assert all(record.exc_info is None for record in records)
-    assert any("OSError" in record.getMessage() for record in records)
+    assert any("MCPApiKeyStorageError" in record.getMessage() for record in records)

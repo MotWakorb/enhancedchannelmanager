@@ -824,6 +824,7 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     logger.warning("[M3U] Failed to delete channel group %s: %s", group_id, group_err)
 
         # Clean up linked_m3u_accounts in settings
+        linked_settings_cleanup_failed = False
         try:
             settings = get_settings()
             if settings.linked_m3u_accounts:
@@ -834,11 +835,19 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     if len(filtered) >= 2:
                         cleaned.append(filtered)
                 if cleaned != settings.linked_m3u_accounts:
-                    settings.linked_m3u_accounts = cleaned
-                    save_settings(settings)
+                    updated_settings = settings.model_copy(
+                        update={"linked_m3u_accounts": cleaned}, deep=True
+                    )
+                    save_settings(updated_settings)
                     logger.info("[M3U] Cleaned up linked_m3u_accounts after deleting account %s", account_id)
-        except MCPApiKeyStorageError:
-            raise
+        except MCPApiKeyStorageError as settings_err:
+            linked_settings_cleanup_failed = True
+            logger.error(
+                "[M3U] Account %s was deleted, but linked-settings cleanup was "
+                "refused (%s); the DELETE must not be retried",
+                account_id,
+                type(settings_err).__name__,
+            )
         except Exception as settings_err:
             logger.warning("[M3U] Failed to clean up linked_m3u_accounts: %s", settings_err)
 
@@ -850,7 +859,8 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
             entity_name=account_name,
             description=f"Deleted M3U account '{account_name}'" +
                        (f" and {len(deleted_groups)} orphaned channel groups" if deleted_groups else "") +
-                       (f" (kept {len(skipped_groups)} shared groups)" if skipped_groups else ""),
+                       (f" (kept {len(skipped_groups)} shared groups)" if skipped_groups else "") +
+                       ("; linked-settings cleanup failed and the DELETE must not be retried" if linked_settings_cleanup_failed else ""),
             before_value={
                 "name": account_name,
                 "channel_groups": channel_group_ids,
@@ -859,15 +869,36 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                 "deleted_groups": deleted_groups,
                 "skipped_groups": skipped_groups,
                 "failed_groups": failed_groups,
-            } if channel_group_ids else None,
+                "account_deleted": True,
+                "linked_settings_cleanup": (
+                    "failed" if linked_settings_cleanup_failed else "completed"
+                ),
+            } if channel_group_ids or linked_settings_cleanup_failed else None,
         )
 
-        return {
-            "status": "deleted",
+        result = {
+            "status": (
+                "deleted_with_cleanup_warning"
+                if linked_settings_cleanup_failed
+                else "deleted"
+            ),
             "deleted_groups": deleted_groups,
             "skipped_groups": skipped_groups,
             "failed_groups": failed_groups,
         }
+        if linked_settings_cleanup_failed:
+            result.update(
+                {
+                    "account_deleted": True,
+                    "linked_settings_cleanup": "failed",
+                    "message": (
+                        "The M3U account was deleted, but linked-settings cleanup "
+                        "failed. This DELETE must not be retried. Repair MCP "
+                        "credential storage, then update linked accounts separately."
+                    ),
+                }
+            )
+        return result
     except (HTTPException, MCPApiKeyStorageError):
         raise
     except Exception as e:

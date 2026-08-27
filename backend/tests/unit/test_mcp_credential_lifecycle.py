@@ -22,6 +22,7 @@ import config
 from dbas.importers import ecm_settings as ecm_settings_importer
 from dbas.restore_contracts import RestoreReport
 from routers import backup as backup_router
+from routers import settings as settings_router
 
 
 @pytest.fixture
@@ -240,9 +241,10 @@ def test_authority_replace_failure_does_not_mutate_mirror_or_cache(
 
     monkeypatch.setattr(config.os, "replace", fail_authority_replace)
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
-    with pytest.raises(PermissionError, match="synthetic projection refusal"):
+    with pytest.raises(config.MCPApiKeyStorageError) as raised:
         operation()
 
+    assert isinstance(raised.value.__cause__, PermissionError)
     assert _authority(authority_file) == "known-good"
     assert _stored_mirror(settings_file) == "known-good"
     assert cached.mcp_api_key == "known-good"
@@ -593,6 +595,183 @@ def test_ordinary_load_sweeps_authority_and_recovery_temporaries_without_followi
     assert recovery_target.read_text() == "keep-recovery-target"
 
 
+def test_ordinary_load_preserves_orphan_when_unlink_is_refused(
+    lifecycle, monkeypatch, caplog
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    orphan = authority_file.with_name(".api-key.sentinel-resolved-path.tmp")
+    orphan.write_text("refused-temporary\n")
+    orphan.chmod(0o600)
+    real_unlink = Path.unlink
+
+    def refuse_orphan(path, *args, **kwargs):
+        if path == orphan:
+            raise PermissionError("sentinel-resolved-path")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", refuse_orphan)
+
+    assert config.load_settings().mcp_api_key == "known-good"
+    assert orphan.read_text() == "refused-temporary\n"
+    assert "MCP credential temporary" in caplog.text
+    assert "PermissionError" in caplog.text
+    assert "sentinel-resolved-path" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "separator",
+    ["\n", "\r", "\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"],
+)
+def test_recovery_key_with_splitlines_separator_is_untrusted_and_preserved(
+    lifecycle, separator
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "current-authority")
+    settings_file.write_text(json.dumps({"mcp_api_key": "current-authority"}))
+    _write_recovery(recovery_file, f"attacker{separator}redo")
+    original = recovery_file.read_bytes()
+
+    assert config.load_settings().mcp_api_key == "current-authority"
+    assert _authority(authority_file) == "current-authority"
+    assert recovery_file.read_bytes() == original
+
+
+def test_empty_active_recovery_remains_a_valid_revocation(lifecycle):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "previous-key")
+    settings_file.write_text(json.dumps({"mcp_api_key": "previous-key"}))
+    _write_recovery(recovery_file, "")
+
+    assert config.load_settings().mcp_api_key == ""
+    assert authority_file.read_text() == "\n"
+
+
+@pytest.mark.parametrize("fifo_artifact", ["authority", "recovery"])
+def test_fifo_lifecycle_artifact_degrades_without_blocking(tmp_path, fifo_artifact):
+    settings_file = tmp_path / "settings.json"
+    secrets_dir = tmp_path / "mcp"
+    secrets_dir.mkdir()
+    authority_file = secrets_dir / config.MCP_KEY_FILENAME
+    recovery_file = secrets_dir / config.MCP_KEY_RECOVERY_FILENAME
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-mirror"}))
+    if fifo_artifact == "authority":
+        os.mkfifo(authority_file, 0o600)
+        expected = ""
+    else:
+        _write_authority(authority_file, "current-authority")
+        os.mkfifo(recovery_file, 0o600)
+        expected = "current-authority"
+    environment = os.environ.copy()
+    environment["CONFIG_DIR"] = str(tmp_path)
+    environment["MCP_SECRETS_DIR"] = str(secrets_dir)
+    environment["PYTHONPATH"] = str(Path(config.__file__).parent)
+
+    completed = subprocess.run(
+        [sys.executable, "-c", "import config; print(config.load_settings().mcp_api_key)"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == expected
+
+
+@pytest.mark.parametrize(
+    ("preflight", "failure"),
+    [
+        ("sweep", PermissionError("raw orphan sweep refusal")),
+        ("recovery", OSError(errno.EIO, "raw recovery read refusal")),
+        ("predecessor", ValueError("raw predecessor validation refusal")),
+        ("authority", UnicodeError("raw authority decode refusal")),
+    ],
+)
+def test_generic_save_normalizes_only_mcp_preflight_failures(
+    lifecycle, monkeypatch, preflight, failure
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    target = {
+        "sweep": "_sweep_orphaned_mcp_temporaries_locked",
+        "recovery": "_read_mcp_recovery_locked",
+        "predecessor": "_resolve_mcp_predecessor_locked",
+        "authority": "_read_mcp_api_key_locked",
+    }[preflight]
+    monkeypatch.setattr(
+        config,
+        target,
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+    )
+
+    with pytest.raises(config.MCPApiKeyStorageError) as raised:
+        config.save_settings(config.DispatcharrSettings(user_timezone="Etc/UTC"))
+
+    assert raised.value.__cause__ is failure
+
+
+def test_generic_save_types_absent_authority_with_invalid_settings(lifecycle):
+    settings_file, authority_file = lifecycle
+    settings_file.write_text("{invalid\n")
+
+    with pytest.raises(config.MCPApiKeyStorageError):
+        config.save_settings(config.DispatcharrSettings(user_timezone="Etc/UTC"))
+
+    assert not authority_file.exists()
+    assert settings_file.read_text() == "{invalid\n"
+
+
+@pytest.mark.parametrize(
+    "failure_kind", ["lock-timeout", "target-parent", "target-write"]
+)
+def test_generic_save_does_not_reclassify_non_mcp_failures(
+    lifecycle, monkeypatch, failure_kind
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    target_file = settings_file
+    if failure_kind == "lock-timeout":
+        failure = config.SettingsWriteTimeout("busy")
+        monkeypatch.setattr(
+            config,
+            "_acquire_settings_flock",
+            lambda _fd: (_ for _ in ()).throw(failure),
+        )
+    elif failure_kind == "target-parent":
+        target_file = settings_file.parent / "target" / "settings.json"
+        failure = PermissionError("target settings directory refusal")
+        real_mkdir = Path.mkdir
+
+        def refuse_target_parent(path, *args, **kwargs):
+            if path == target_file.parent:
+                raise failure
+            return real_mkdir(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "mkdir", refuse_target_parent)
+    else:
+        failure = OSError(errno.EIO, "target settings write refusal")
+        monkeypatch.setattr(
+            config,
+            "_write_settings_locked",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(failure),
+        )
+
+    with pytest.raises(type(failure)) as raised:
+        config.save_settings(
+            config.DispatcharrSettings(user_timezone="Etc/UTC"),
+            settings_file=target_file,
+        )
+
+    assert raised.value is failure
+
+
 @pytest.mark.parametrize(
     ("legacy_document", "expected"),
     [(None, "fresh-key"), ({"mcp_api_key": "legacy-key"}, "legacy-key")],
@@ -669,9 +848,10 @@ def test_failed_successor_staging_crash_matrix_cannot_restore_k0(
     monkeypatch.setattr(config, "_fsync_mcp_parent_directory", fail_successor_stage)
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "K2")
 
-    with pytest.raises(OSError, match="not crash-durable"):
+    with pytest.raises(config.MCPApiKeyStorageError) as raised:
         config.rotate_mcp_api_key()
 
+    assert isinstance(raised.value.__cause__, OSError)
     assert _authority(authority_file) == predecessor_key
     if crash_wal == "active-predecessor":
         _write_authority(authority_file, "K0")
@@ -717,11 +897,61 @@ def test_missing_projection_parent_fails_transition_without_claiming_success(
     settings_file.write_text(json.dumps({"mcp_api_key": "legacy-key"}))
 
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(config.MCPApiKeyStorageError):
         operation()
 
     assert json.loads(settings_file.read_text())["mcp_api_key"] == "legacy-key"
     assert not authority_file.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+@pytest.mark.parametrize("fault", ["missing-parent", "strict-sweep"])
+async def test_precommit_transition_fault_has_operation_specific_route_error(
+    lifecycle, monkeypatch, transition, fault
+):
+    settings_file, authority_file = lifecycle
+    original = b""
+    cached = None
+    if fault == "missing-parent":
+        authority_file.parent.rmdir()
+        settings_file.write_text(json.dumps({"mcp_api_key": "legacy-key"}))
+    else:
+        _write_authority(authority_file, "known-good")
+        settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+        cached = config.get_settings()
+        original = authority_file.read_bytes()
+        monkeypatch.setattr(
+            config,
+            "_sweep_orphaned_mcp_temporaries_locked",
+            lambda: (_ for _ in ()).throw(PermissionError("strict sweep refused")),
+        )
+    monkeypatch.setattr(settings_router, "_rotate_private_projection_or_503", lambda: None)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+    route = (
+        settings_router.generate_mcp_api_key
+        if transition == "rotate"
+        else settings_router.revoke_mcp_api_key
+    )
+
+    with pytest.raises(settings_router.HTTPException) as raised:
+        await route(_admin=None)
+
+    assert raised.value.status_code == 503
+    assert raised.value.detail["code"] == "mcp_api_key_storage_unavailable"
+    assert raised.value.detail["operation"] == (
+        "rotation" if transition == "rotate" else "revocation"
+    )
+    assert "strict sweep refused" not in str(raised.value.detail)
+    if authority_file.exists():
+        assert authority_file.read_bytes() == original
+    else:
+        assert original == b""
+    assert json.loads(settings_file.read_text())["mcp_api_key"] == (
+        "known-good" if fault == "strict-sweep" else "legacy-key"
+    )
+    if cached is not None:
+        assert cached.mcp_api_key == "known-good"
 
 
 def test_authority_commit_survives_mirror_failure_and_startup_repairs_it(
@@ -829,9 +1059,10 @@ def test_recovery_record_fsync_refusal_fails_before_authority_changes(
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
 
-    with pytest.raises(OSError, match="not crash-durable"):
+    with pytest.raises(config.MCPApiKeyStorageError) as raised:
         operation()
 
+    assert isinstance(raised.value.__cause__, OSError)
     assert _authority(authority_file) == "known-good"
     assert _stored_mirror(settings_file) == "known-good"
     assert cached.mcp_api_key == "known-good"
@@ -871,9 +1102,10 @@ def test_failed_recovery_stage_leaves_prepared_record_startup_inert(
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
 
-    with pytest.raises(OSError, match="not crash-durable"):
+    with pytest.raises(config.MCPApiKeyStorageError) as raised:
         operation()
 
+    assert isinstance(raised.value.__cause__, OSError)
     expected = "rotated-key" if transition == "rotate" else ""
     assert _recovery_document(recovery_file) == {
         "key": expected,
@@ -925,9 +1157,10 @@ def test_authority_replace_failure_cannot_activate_when_recovery_unlink_fails(
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
 
-    with pytest.raises(PermissionError, match="synthetic authority replace refusal"):
+    with pytest.raises(config.MCPApiKeyStorageError) as raised:
         operation()
 
+    assert isinstance(raised.value.__cause__, PermissionError)
     assert recovery_file.exists()
     expected = "rotated-key" if transition == "rotate" else ""
     assert _recovery_document(recovery_file) == {

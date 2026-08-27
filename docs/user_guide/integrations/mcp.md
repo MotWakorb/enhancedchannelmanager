@@ -642,10 +642,11 @@ Under `MCP_SECRETS_DIR`, verify each name that exists is a regular file rather
 than a symlink, has one hard link, is owned by the container's `PUID`:`PGID`,
 and uses mode `0600`. Repair the mount, ownership, or mode, then retry the same
 operation; ECM automatically revalidates changed paths. If the recovery JSON
-itself is malformed, first preserve a byte-for-byte copy and do not guess,
-rewrite, or delete it: it may be the only redo evidence for a
-completed rotation or revocation. Restore it only from known-good evidence or
-contact support with the preserved artifact before retrying.
+itself is malformed, preserve it byte-for-byte and do not guess, rewrite,
+replace, or delete it: there is no proof that another copy is fresher, and it
+may be the only redo evidence for a completed rotation or revocation. Repair
+only the mount or file metadata, then contact support with the preserved
+artifact before retrying.
 
 A `mcp_api_key_durability_indeterminate` response is different: the response
 states whether the new key or revocation is active now, but the filesystem
