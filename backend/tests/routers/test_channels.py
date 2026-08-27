@@ -1240,6 +1240,14 @@ async def _commit_and_wait(async_client, body, *, max_polls=50):
     raise AssertionError(f"bulk-commit job {job_id} did not terminate in {max_polls} polls")
 
 
+def _contains_negative_int(value):
+    if isinstance(value, dict):
+        return any(_contains_negative_int(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_negative_int(item) for item in value)
+    return isinstance(value, int) and not isinstance(value, bool) and value < 0
+
+
 class TestBulkCommit:
     """Tests for POST /api/channels/bulk-commit (202+poll, bd-ggxks)."""
 
@@ -1266,6 +1274,333 @@ class TestBulkCommit:
         assert response.status_code == 202
         assert data["success"] is True
         assert data["operationsApplied"] == 0
+
+    @pytest.mark.asyncio
+    async def test_create_then_add_stream_resolves_temp_id_in_same_request(
+        self, async_client
+    ):
+        """A later operation in one bulk request can target a newly created channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = [{"id": 77, "name": "Fixture"}]
+        mock_client.create_channel.return_value = {
+            "id": 101, "name": "New channel", "channel_number": 500, "streams": [],
+        }
+        mock_client.get_channel.return_value = {
+            "id": 101, "name": "New channel", "channel_number": 500, "streams": [],
+        }
+        mock_client.update_channel.return_value = {
+            "id": 101, "name": "New channel", "streams": [77],
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {
+                        "type": "createChannel",
+                        "tempId": -1,
+                        "name": "New channel",
+                        "channelNumber": 500,
+                    },
+                    {
+                        "type": "addStreamToChannel",
+                        "channelId": -1,
+                        "streamId": 77,
+                    },
+                ],
+            })
+
+        assert response.status_code == 202
+        assert data["success"] is True
+        assert data["operationsApplied"] == 2
+        assert data["operationsFailed"] == 0
+        assert data["tempIdMap"] == {"-1": 101}
+        mock_client.get_channel.assert_awaited_once_with(101)
+        mock_client.update_channel.assert_awaited_once_with(101, {"streams": [77]})
+
+    @pytest.mark.asyncio
+    async def test_create_then_add_stream_validates_stream_by_id(self, async_client):
+        """Temp-channel assignments use the same explicit stream lookup as real ids."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = [{"id": 77, "name": "Fixture"}]
+        mock_client.create_channel.return_value = {
+            "id": 101, "name": "New channel", "streams": [],
+        }
+        mock_client.get_channel.return_value = {
+            "id": 101, "name": "New channel", "streams": [],
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New channel"},
+                    {"type": "addStreamToChannel", "channelId": -1, "streamId": 77},
+                ],
+                "continueOnError": True,
+            })
+
+        assert data["operationsApplied"] == 2
+        assert data["operationsFailed"] == 0
+        mock_client.get_streams_by_ids.assert_awaited_once()
+        assert set(mock_client.get_streams_by_ids.await_args.args[0]) == {77}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("create_result", [Exception("create failed"), {}])
+    async def test_failed_create_never_fetches_negative_channel(
+        self, async_client, create_result
+    ):
+        """A dependent assignment keeps the temp id and intended channel name."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = [{"id": 77, "name": "Fixture"}]
+        if isinstance(create_result, Exception):
+            mock_client.create_channel.side_effect = create_result
+        else:
+            mock_client.create_channel.return_value = create_result
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New channel"},
+                    {"type": "addStreamToChannel", "channelId": -1, "streamId": 77},
+                ],
+                "continueOnError": True,
+            })
+
+        dependent = next(
+            error for error in data["errors"]
+            if error.get("operationType") == "addStreamToChannel"
+        )
+        assert dependent["channelId"] == -1
+        assert dependent["channelName"] == "New channel"
+        assert "temp channel id" in dependent["error"]
+        mock_client.get_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("create_result", ["raises", "malformed"])
+    @pytest.mark.parametrize("dependent_operation", [
+        {"type": "updateChannel", "channelId": -1, "data": {"name": "Changed"}},
+        {"type": "deleteChannel", "channelId": -1},
+        {"type": "addStreamToChannel", "channelId": -1, "streamId": 77},
+        {"type": "removeStreamFromChannel", "channelId": -1, "streamId": 77},
+        {"type": "reorderChannelStreams", "channelId": -1, "streamIds": []},
+        {"type": "bulkAssignChannelNumbers", "channelIds": [-1], "startingNumber": 10},
+        {"type": "setProfileMembership", "channelId": -1, "profileId": 5, "enabled": True},
+    ], ids=lambda op: op["type"])
+    async def test_failed_create_never_sends_negative_channel_id_upstream(
+        self, async_client, create_result, dependent_operation
+    ):
+        """Every Dispatcharr-facing channel operation rejects an unresolved temp id."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = [{"id": 77, "name": "Fixture"}]
+        mock_client.get_channel_profiles.return_value = [{"id": 5, "name": "Default"}]
+        if create_result == "raises":
+            mock_client.create_channel.side_effect = RuntimeError("create failed")
+        else:
+            mock_client.create_channel.return_value = {}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New channel"},
+                    dependent_operation,
+                ],
+                "continueOnError": True,
+                "consolidate": False,
+            })
+
+        assert data["operationsApplied"] + data["operationsFailed"] == 2
+        assert data["operationsApplied"] == (1 if create_result == "malformed" else 0)
+        assert data["operationsFailed"] == (1 if create_result == "malformed" else 2)
+        dependent = next(
+            error for error in data["errors"]
+            if error.get("operationType") == dependent_operation["type"]
+        )
+        if "channelId" in dependent_operation:
+            assert dependent["channelId"] == -1
+        else:
+            assert "Channel -1" in dependent["error"]
+        assert "temp channel id" in dependent["error"]
+
+        upstream_calls = [
+            call for call in mock_client.mock_calls
+            if call[0] != "create_channel"
+        ]
+        assert not any(
+            _contains_negative_int((call.args, call.kwargs))
+            for call in upstream_calls
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("dependent_operation", "upstream_method"), [
+        ({"type": "updateChannel", "channelId": -1, "data": {"name": "Changed"}}, "update_channel"),
+        ({"type": "deleteChannel", "channelId": -1}, "delete_channel"),
+        ({"type": "addStreamToChannel", "channelId": -1, "streamId": 77}, "get_channel"),
+        ({"type": "removeStreamFromChannel", "channelId": -1, "streamId": 77}, "get_channel"),
+        ({"type": "reorderChannelStreams", "channelId": -1, "streamIds": []}, "get_channel"),
+        ({"type": "bulkAssignChannelNumbers", "channelIds": [-1], "startingNumber": 10}, "assign_channel_numbers"),
+        ({"type": "setProfileMembership", "channelId": -1, "profileId": 5, "enabled": True}, "update_profile_channel"),
+    ], ids=lambda value: value["type"] if isinstance(value, dict) else value)
+    async def test_successful_create_resolves_temp_id_for_every_channel_operation(
+        self, async_client, dependent_operation, upstream_method
+    ):
+        """Hardening unresolved ids does not reject a temp id that did resolve."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = [{"id": 77, "name": "Fixture"}]
+        mock_client.get_channel_profiles.return_value = [{"id": 5, "name": "Default"}]
+        mock_client.create_channel.return_value = {
+            "id": 101, "name": "New channel", "streams": [],
+        }
+        mock_client.get_channel.return_value = {
+            "id": 101,
+            "name": "New channel",
+            "streams": ([77] if dependent_operation["type"] ==
+                        "removeStreamFromChannel" else []),
+        }
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New channel"},
+                    dependent_operation,
+                ],
+                "continueOnError": True,
+                "consolidate": False,
+            })
+
+        assert data["operationsApplied"] == 2
+        assert data["operationsFailed"] == 0
+        assert getattr(mock_client, upstream_method).await_count > 0
+        assert not any(
+            _contains_negative_int((call.args, call.kwargs))
+            for call in mock_client.mock_calls
+            if call[0] != "create_channel"
+        )
+
+    @pytest.mark.asyncio
+    async def test_known_missing_stream_fails_before_channel_update(self, async_client):
+        """A successful stream lookup is authoritative during execution too."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [{"id": 10, "name": "Existing", "streams": []}],
+            "count": 1,
+            "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = []
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "addStreamToChannel", "channelId": 10, "streamId": 404},
+                ],
+                "continueOnError": True,
+            })
+
+        assert data["operationsApplied"] == 0
+        assert data["operationsFailed"] == 1
+        failed = next(
+            error for error in data["errors"]
+            if error.get("operationType") == "addStreamToChannel"
+        )
+        assert "Stream 404 does not exist" in failed["error"]
+        mock_client.get_channel.assert_not_awaited()
+        mock_client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_stream_blocks_its_temp_channel_create(self, async_client):
+        """Continue-on-error must not knowingly create a streamless channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = []
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New"},
+                    {"type": "addStreamToChannel", "channelId": -1, "streamId": 404},
+                ],
+                "continueOnError": True,
+            })
+
+        assert data["success"] is False
+        assert data["operationsApplied"] == 0
+        assert data["operationsFailed"] == 0
+        assert any(
+            issue["type"] == "missing_stream" and issue["channelId"] == -1
+            for issue in data["validationIssues"]
+        )
+        mock_client.create_channel.assert_not_awaited()
+        mock_client.get_channel.assert_not_awaited()
+        mock_client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_validate_only_reports_missing_stream_for_temp_channel(self, async_client):
+        """Missing-stream validation does not depend on the channel id being positive."""
+        mock_client = AsyncMock()
+        mock_client.get_streams_by_ids.return_value = []
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New channel"},
+                    {"type": "addStreamToChannel", "channelId": -1, "streamId": 77},
+                ],
+                "validateOnly": True,
+            })
+
+        assert response.status_code == 200
+        issue = next(
+            issue for issue in response.json()["validationIssues"]
+            if issue["type"] == "missing_stream"
+        )
+        assert issue["channelId"] == -1
+        assert issue["channelName"] == "New channel"
+        assert issue["streamId"] == 77
+
+    @pytest.mark.asyncio
+    async def test_failed_stream_lookup_does_not_report_missing_stream(self, async_client):
+        """An unavailable stream catalog is not evidence that a stream is absent."""
+        mock_client = AsyncMock()
+        mock_client.get_streams_by_ids.side_effect = RuntimeError("catalog unavailable")
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response = await async_client.post("/api/channels/bulk-commit", json={
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New channel"},
+                    {"type": "addStreamToChannel", "channelId": -1, "streamId": 77},
+                ],
+                "validateOnly": True,
+            })
+
+        assert response.status_code == 200
+        assert not any(
+            issue["type"] == "missing_stream"
+            for issue in response.json()["validationIssues"]
+        )
 
     @pytest.mark.asyncio
     async def test_validate_only(self, async_client):
@@ -1379,10 +1714,14 @@ class TestBulkCommit:
             })
 
         assert response.status_code == 202
-        # The lossy op is rejected: reported as an error, not applied.
+        # The lossy plan is rejected before any operation starts.
         assert data["operationsApplied"] == 0
-        assert data["operationsFailed"] == 1
-        assert len(data["errors"]) == 1
+        assert data["operationsFailed"] == 0
+        assert data["validationPassed"] is False
+        assert any(
+            "not a permutation" in issue["message"]
+            for issue in data["validationIssues"]
+        )
         # Critically: update_channel was NEVER called with the lossy set
         # (no silent detach of stream 5001).
         for call in mock_client.update_channel.await_args_list:
