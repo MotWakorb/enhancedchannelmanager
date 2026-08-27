@@ -920,6 +920,7 @@ class DispatcharrSettings(BaseModel):
 
 # In-memory cache of settings
 _cached_settings: DispatcharrSettings | None = None
+_cached_settings_signature: tuple[int, int, int] | None = None
 
 # One-shot flag so the legacy ``api_key`` deprecation WARN only fires once
 # per process startup, not on every settings reload (bd-jmi1c). Cleared by
@@ -1092,63 +1093,81 @@ def settings_file_allows_startup_writes() -> bool:
     return isinstance(persisted, dict)
 
 
+def _settings_file_signature() -> tuple[int, int, int] | None:
+    """Return a cross-process cache key for the durable settings file."""
+    try:
+        stat = CONFIG_FILE.stat()
+    except OSError:
+        return None
+    return (stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+
 def load_settings() -> DispatcharrSettings:
     """Load settings from file or return defaults."""
-    global _cached_settings
+    global _cached_settings, _cached_settings_signature
 
-    if _cached_settings is not None:
+    signature = _settings_file_signature()
+    if (
+        _cached_settings is not None
+        and signature == _cached_settings_signature
+    ):
         return _cached_settings
 
-    logger.info("[CONFIG] Loading settings from %s", CONFIG_FILE)
-    logger.info("[CONFIG] Config file exists: %s", CONFIG_FILE.exists())
-
-    if CONFIG_FILE.exists():
-        try:
-            data = json.loads(CONFIG_FILE.read_text())
-            if not isinstance(data, dict):
-                raise TypeError("settings document must be a JSON object")
-            data = prepare_settings_data(data)
-            # KNOWN RESIDUAL (bead ...-04c0u.10): this read-parse-assign takes
-            # NO lock, so a load that started before a concurrent save can
-            # assign a pre-save value into the cache afterwards and leave it
-            # there. ``save_settings`` closes save-vs-save; this is
-            # load-vs-save, and ECM's own callers manufacture the window by
-            # calling ``clear_settings_cache()`` right after ``save_settings()``
-            # (routers/settings.py:1249+). ``auth/settings.py`` closes it by
-            # loading inside its lock AND revalidating an
-            # ``(st_ino, st_size, st_mtime_ns)`` signature; that pattern is what
-            # to copy here. Tracked as a follow-up bead, not fixed on this one.
-            #
-            # MERGE NOTE for bead ...-04c0u.8 (PR #889): that branch adds a
-            # SECOND ``_project_mcp_api_key`` call site immediately after this
-            # assignment. It is on this unlocked reader path, so a reader that
-            # started before a rotation can project the PRE-rotation key into
-            # MCP_KEY_FILE after the rotation already projected the new one,
-            # leaving the sidecar authenticating with a superseded credential
-            # ON DISK. Whoever merges second should not simply wrap it in the
-            # write lock: projecting from a possibly-stale read is questionable
-            # regardless of the lock. Either gate it on the signature recheck
-            # above, or drop the load-path projection and let the save path and
-            # startup own projection.
-            _cached_settings = DispatcharrSettings(**data)
-            try:
-                _project_mcp_api_key(_cached_settings.mcp_api_key)
-            except OSError:
-                # A broken optional sidecar projection must not make ECM
-                # discard otherwise-valid settings and boot with defaults.
-                # Rotation/save remains fail-closed because save_settings does
-                # not suppress this error.
-                logger.exception("[CONFIG] Failed to project MCP API key")
-            logger.info("[CONFIG] Loaded settings successfully, configured: %s", _cached_settings.is_configured())
+    with _settings_write_lock:
+        signature = _settings_file_signature()
+        if (
+            _cached_settings is not None
+            and signature == _cached_settings_signature
+        ):
             return _cached_settings
-        except json.JSONDecodeError as e:
-            logger.error("[CONFIG] Settings file is not valid JSON: %s", e)
-        except Exception as e:
-            logger.exception("[CONFIG] Failed to load settings from %s: %s", CONFIG_FILE, e)
 
-    logger.info("[CONFIG] Using default settings (no config file found or failed to parse)")
-    _cached_settings = DispatcharrSettings()
-    return _cached_settings
+        # The durable lock makes the read/cache/projection sequence linearize
+        # before or after every writer, including writers in the HTTPS process.
+        with _durable_settings_write_lock():
+            signature = _settings_file_signature()
+            if (
+                _cached_settings is not None
+                and signature == _cached_settings_signature
+            ):
+                return _cached_settings
+
+            logger.info("[CONFIG] Loading settings from %s", CONFIG_FILE)
+            logger.info("[CONFIG] Config file exists: %s", CONFIG_FILE.exists())
+
+            if CONFIG_FILE.exists():
+                try:
+                    data = json.loads(CONFIG_FILE.read_text())
+                    if not isinstance(data, dict):
+                        raise TypeError("settings document must be a JSON object")
+                    data = prepare_settings_data(data)
+                    _cached_settings = DispatcharrSettings(**data)
+                    _cached_settings_signature = signature
+                    try:
+                        _project_mcp_api_key(_cached_settings.mcp_api_key)
+                    except OSError:
+                        # A broken optional sidecar projection must not make ECM
+                        # discard otherwise-valid settings and boot with defaults.
+                        # Rotation/save remains fail-closed because save_settings
+                        # does not suppress this error.
+                        logger.exception("[CONFIG] Failed to project MCP API key")
+                    logger.info(
+                        "[CONFIG] Loaded settings successfully, configured: %s",
+                        _cached_settings.is_configured(),
+                    )
+                    return _cached_settings
+                except json.JSONDecodeError as e:
+                    logger.error("[CONFIG] Settings file is not valid JSON: %s", e)
+                except Exception as e:
+                    logger.exception(
+                        "[CONFIG] Failed to load settings from %s: %s", CONFIG_FILE, e
+                    )
+
+            logger.info(
+                "[CONFIG] Using default settings (no config file found or failed to parse)"
+            )
+            _cached_settings = DispatcharrSettings()
+            _cached_settings_signature = signature
+            return _cached_settings
 
 
 def save_settings(settings: DispatcharrSettings) -> None:
@@ -1169,7 +1188,7 @@ def save_settings(settings: DispatcharrSettings) -> None:
     the bounded retry budget. Nothing is written in that case, and callers on
     the event loop get a bounded failure instead of an unbounded stall.
     """
-    global _cached_settings
+    global _cached_settings, _cached_settings_signature
 
     ensure_config_dir()
 
@@ -1256,6 +1275,7 @@ def save_settings(settings: DispatcharrSettings) -> None:
             # tests/test_04c0u8_mcp_key_projection.py::
             # test_a_failed_projection_never_leaves_the_cache_behind_the_saved_file.
             _cached_settings = settings
+            _cached_settings_signature = _settings_file_signature()
             _project_mcp_api_key(settings.mcp_api_key)
             logger.info("[CONFIG] Settings saved successfully to %s", CONFIG_FILE)
 
@@ -1414,16 +1434,19 @@ def clear_settings_cache() -> None:
     times in one process would see each WARN fire once and then be silent —
     making it impossible to assert on the warnings per test.
     """
-    global _cached_settings, _legacy_api_key_warned, _legacy_api_key_conflict_warned, _dedup_threshold_floor_warned
+    global _cached_settings, _cached_settings_signature
+    global _legacy_api_key_warned, _legacy_api_key_conflict_warned, _dedup_threshold_floor_warned
     global _public_base_url_unset_warned, _public_base_url_invalid_warned
     global _session_cookie_transport_warned
-    _cached_settings = None
-    _legacy_api_key_warned = False
-    _legacy_api_key_conflict_warned = False
-    _dedup_threshold_floor_warned = False
-    _public_base_url_unset_warned = False
-    _public_base_url_invalid_warned = False
-    _session_cookie_transport_warned = False
+    with _settings_write_lock:
+        _cached_settings = None
+        _cached_settings_signature = None
+        _legacy_api_key_warned = False
+        _legacy_api_key_conflict_warned = False
+        _dedup_threshold_floor_warned = False
+        _public_base_url_unset_warned = False
+        _public_base_url_invalid_warned = False
+        _session_cookie_transport_warned = False
     logger.info("[CONFIG] Settings cache cleared")
 
 

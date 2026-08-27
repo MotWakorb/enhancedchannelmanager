@@ -362,6 +362,105 @@ class TestSerializedDurableWrite:
 
         assert _cached_value() == _stored_key(isolated_settings)
 
+    def test_stale_load_cannot_restore_a_superseded_projection(
+        self, monkeypatch, isolated_settings
+    ):
+        """A load begun before rotation must linearize before or after the save."""
+        projected_key = isolated_settings.parent / "api-key"
+        monkeypatch.setattr(config, "MCP_KEY_FILE", projected_key)
+        config.save_settings(_settings("before-rotation"))
+        config.clear_settings_cache()
+
+        stale_read = threading.Event()
+        release_reader = threading.Event()
+        writer_waiting = threading.Event()
+        writer_finished = threading.Event()
+        progress = threading.Event()
+        real_loads = json.loads
+
+        class ObservableRLock:
+            def __init__(self):
+                self._lock = threading.RLock()
+
+            def __enter__(self):
+                if not self._lock.acquire(blocking=False):
+                    writer_waiting.set()
+                    progress.set()
+                    self._lock.acquire()
+                return self
+
+            def __exit__(self, *_args):
+                self._lock.release()
+
+        def pause_stale_reader(document, *args, **kwargs):
+            parsed = real_loads(document, *args, **kwargs)
+            if threading.current_thread().name == "stale-reader":
+                stale_read.set()
+                assert release_reader.wait(timeout=10)
+            return parsed
+
+        monkeypatch.setattr(config, "_settings_write_lock", ObservableRLock())
+        monkeypatch.setattr(config.json, "loads", pause_stale_reader)
+
+        loaded = []
+
+        def reader():
+            loaded.append(config.load_settings().mcp_api_key)
+
+        def writer():
+            config.save_settings(_settings("after-rotation"))
+            writer_finished.set()
+            progress.set()
+
+        reader_thread = threading.Thread(target=reader, name="stale-reader")
+        writer_thread = threading.Thread(target=writer, name="rotating-writer")
+        reader_thread.start()
+        assert stale_read.wait(timeout=10)
+        writer_thread.start()
+
+        # With serialized loads the writer is waiting on the reader. Without
+        # it the writer has completed, reproducing the reviewed stale publish.
+        assert progress.wait(timeout=10)
+        assert writer_waiting.is_set() or writer_finished.is_set()
+        release_reader.set()
+        reader_thread.join(timeout=30)
+        writer_thread.join(timeout=30)
+
+        assert not reader_thread.is_alive() and not writer_thread.is_alive()
+        assert loaded == ["before-rotation"]
+        assert _stored_key(isolated_settings) == "after-rotation"
+        assert _cached_value() == "after-rotation"
+        assert projected_key.read_text() == "after-rotation\n"
+
+    def test_peer_process_rotation_invalidates_the_local_cache(
+        self, monkeypatch, isolated_settings
+    ):
+        """A second ECM process rotating the key invalidates this process's cache."""
+        projected_key = isolated_settings.parent / "api-key"
+        monkeypatch.setattr(config, "MCP_KEY_FILE", projected_key)
+        config.save_settings(_settings("before-peer-rotation"))
+
+        writer_source = """
+from config import DispatcharrSettings, save_settings
+save_settings(DispatcharrSettings(mcp_api_key='after-peer-rotation'))
+"""
+        environment = os.environ.copy()
+        environment["CONFIG_DIR"] = str(isolated_settings.parent)
+        environment["MCP_SECRETS_DIR"] = str(isolated_settings.parent)
+        environment["PYTHONPATH"] = str(BACKEND_ROOT)
+        completed = subprocess.run(
+            [sys.executable, "-c", writer_source],
+            cwd=str(isolated_settings.parent),
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert completed.returncode == 0, completed.stderr
+
+        assert config.get_settings().mcp_api_key == "after-peer-rotation"
+        assert projected_key.read_text() == "after-peer-rotation\n"
+
     def test_a_peer_process_holding_the_lock_defers_the_write(self, isolated_settings):
         """Cross-process exclusion, proven against a real second process.
 
