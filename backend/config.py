@@ -121,6 +121,17 @@ class SettingsWriteTimeout(TimeoutError):
     """
 
 
+class MCPApiKeyDurabilityIndeterminate(RuntimeError):
+    """Authority changed, but its crash-recovery state could not be persisted."""
+
+    def __init__(self, active_key: str):
+        super().__init__(
+            "MCP API key authority changed, but crash durability is indeterminate"
+        )
+        self.active_key = active_key
+        self.is_revocation = active_key == ""
+
+
 def _acquire_settings_flock(lock_fd: int) -> None:
     """Take the exclusive flock, or raise ``SettingsWriteTimeout``."""
     for _attempt in range(_SETTINGS_LOCK_ATTEMPTS):
@@ -1283,16 +1294,18 @@ def _write_mcp_recovery_document_locked(
                 logger.error("[CONFIG] Failed to close MCP recovery record handle")
 
 
-def _mark_mcp_recovery_active_locked(key: str) -> None:
+def _mark_mcp_recovery_active_locked(key: str) -> bool:
     recovery = MCP_KEY_FILE.with_name(MCP_KEY_RECOVERY_FILENAME)
     try:
         _write_mcp_recovery_document_locked(recovery, key, _MCP_RECOVERY_ACTIVE)
+        return True
     except OSError as error:
         logger.error(
             "[CONFIG] MCP authority is active but its recovery record could not "
             "be made durable (%s); the transition may roll back after a host crash",
             error,
         )
+        return False
 
 
 def _remove_mcp_recovery_locked() -> None:
@@ -1382,13 +1395,14 @@ def _recover_mcp_authority_locked() -> None:
     _replace_mcp_authority_locked(key)
 
 
-def _publish_mcp_api_key_locked(key: str) -> tuple[int, ...]:
+def _publish_mcp_api_key_locked(key: str) -> tuple[tuple[int, ...], bool]:
     """Atomically replace authority with a durable crash-repair record."""
     parent = MCP_KEY_FILE.parent
     if not parent.is_dir():
         raise FileNotFoundError(errno.ENOENT, "MCP credential directory is unavailable")
     _sweep_orphaned_mcp_temporaries_locked()
     temporary, signature = _prepare_private_mcp_file_locked(MCP_KEY_FILE, key)
+    durability_indeterminate = False
     try:
         _stage_mcp_recovery_locked(key)
         try:
@@ -1399,7 +1413,7 @@ def _publish_mcp_api_key_locked(key: str) -> tuple[int, ...]:
         if _fsync_mcp_parent_directory():
             _remove_mcp_recovery_locked()
         else:
-            _mark_mcp_recovery_active_locked(key)
+            durability_indeterminate = not _mark_mcp_recovery_active_locked(key)
     finally:
         try:
             temporary.unlink()
@@ -1407,7 +1421,7 @@ def _publish_mcp_api_key_locked(key: str) -> tuple[int, ...]:
             pass
         except OSError:
             logger.error("[CONFIG] Failed to remove MCP credential temporary")
-    return signature
+    return signature, durability_indeterminate
 
 
 def _read_settings_model_locked() -> tuple[str, dict | None, DispatcharrSettings | None]:
@@ -1476,14 +1490,15 @@ def _initialize_authority_locked(
     settings_state: str,
     raw_settings: dict | None,
     settings: DispatcharrSettings | None,
-) -> tuple[bool, str, tuple[int, int, int, int] | None]:
+) -> tuple[bool, str, tuple[int, ...] | None]:
     if settings_state == "invalid":
         return False, "", None
     if settings_state == "valid" and raw_settings is not None and "mcp_api_key" in raw_settings:
         key = settings.mcp_api_key if settings is not None else ""
     else:
         key = secrets.token_urlsafe(32)
-    return True, key, _publish_mcp_api_key_locked(key)
+    signature, _durability_indeterminate = _publish_mcp_api_key_locked(key)
+    return True, key, signature
 
 
 def _repair_settings_mirror_locked(
@@ -1603,7 +1618,7 @@ def _transition_mcp_api_key(key: str) -> str:
 
     ensure_config_dir()
     with _settings_write_lock, _durable_settings_write_lock():
-        signature = _publish_mcp_api_key_locked(key)
+        signature, durability_indeterminate = _publish_mcp_api_key_locked(key)
         try:
             state, raw, settings = _read_settings_model_locked()
             mirrored, _mcp_settings_mirror_dirty = _repair_settings_mirror_locked(
@@ -1620,6 +1635,8 @@ def _transition_mcp_api_key(key: str) -> str:
         mirrored.mcp_api_key = key
         _cached_settings = mirrored
         _cached_mcp_authority_signature = signature
+    if durability_indeterminate:
+        raise MCPApiKeyDurabilityIndeterminate(key)
     return key
 
 

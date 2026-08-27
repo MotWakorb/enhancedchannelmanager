@@ -26,6 +26,7 @@ from auth.mcp_service import rotate_mcp_service_credentials
 from auth.settings import get_auth_settings
 from config import (
     ADMIN_ONLY_READ_REDACTED_FIELDS,
+    MCPApiKeyDurabilityIndeterminate,
     get_settings,
     normalize_public_base_url,
     revoke_mcp_api_key as revoke_public_mcp_api_key,
@@ -2495,7 +2496,28 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     configure its own sidecar.
     """
     _rotate_private_projection_or_503()
-    key = rotate_public_mcp_api_key()
+    try:
+        key = rotate_public_mcp_api_key()
+    except MCPApiKeyDurabilityIndeterminate as error:
+        logger.error(
+            "[SETTINGS] MCP API key rotation is active but crash durability "
+            "is indeterminate"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "mcp_api_key_durability_indeterminate",
+                "message": (
+                    "The new MCP API key is active now, but crash durability is "
+                    "indeterminate. Repair storage and retry rotation."
+                ),
+                "operation": "rotation",
+                "authority_active": True,
+                "crash_durability": "indeterminate",
+                "retry_after_storage_repair": True,
+                "mcp_api_key": error.active_key,
+            },
+        ) from error
     logger.info("[SETTINGS] MCP API key generated")
     return {"mcp_api_key": key}
 
@@ -2517,7 +2539,28 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     deployment reachable.
     """
     _rotate_private_projection_or_503()
-    revoke_public_mcp_api_key()
+    try:
+        revoke_public_mcp_api_key()
+    except MCPApiKeyDurabilityIndeterminate as error:
+        logger.error(
+            "[SETTINGS] MCP API key revocation is active but crash durability "
+            "is indeterminate"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "mcp_api_key_durability_indeterminate",
+                "message": (
+                    "MCP API key revocation is active now, but a host crash may "
+                    "restore the previous key. Repair storage and retry revocation."
+                ),
+                "operation": "revocation",
+                "authority_active": True,
+                "revoked": True,
+                "crash_durability": "indeterminate",
+                "retry_after_storage_repair": True,
+            },
+        ) from error
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}
 

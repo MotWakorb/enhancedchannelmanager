@@ -92,6 +92,29 @@ describe('extractDetail fallback (bd-p3jpl)', () => {
       return true;
     });
   });
+
+  it('retains structured detail but logs only its safe message', async () => {
+    const activeKey = ['active', 'rotation', 'value'].join('-');
+    const detail = {
+      code: 'mcp_api_key_durability_indeterminate',
+      message: 'The key is active but crash durability is indeterminate.',
+      operation: 'rotation',
+      mcp_api_key: activeKey,
+    };
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      mockResponse(503, { detail }, 'Service Unavailable'),
+    );
+
+    await expect(fetchJson('/test')).rejects.toSatisfy((err: unknown) => {
+      expect(err).toBeInstanceOf(HttpError);
+      expect((err as HttpError).message).toBe(detail.message);
+      expect((err as HttpError).detail).toEqual(detail);
+      return true;
+    });
+
+    expect(consoleError.mock.calls.flat().join(' ')).not.toContain(activeKey);
+  });
 });
 
 describe('tryRefreshToken cross-tab lock (bd-x67qe)', () => {

@@ -608,6 +608,7 @@ def test_recovery_activation_failure_does_not_hide_replaced_authority(
     _write_authority(authority_file, "known-good")
     settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
     real_fsync = os.fsync
+    real_write_recovery = config._write_mcp_recovery_document_locked
     directory_fsync_calls = 0
     write_attempted = False
 
@@ -646,13 +647,13 @@ def test_recovery_activation_failure_does_not_hide_replaced_authority(
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
 
-    result = operation()
     expected = "rotated-key" if transition == "rotate" else ""
+    with pytest.raises(config.MCPApiKeyDurabilityIndeterminate) as raised:
+        operation()
 
-    if transition == "rotate":
-        assert result == expected
-    else:
-        assert result is None
+    assert raised.value.active_key == expected
+    assert raised.value.is_revocation is (transition == "revoke")
+    assert expected not in str(raised.value) or not expected
     if failure_point == "write":
         assert write_attempted
     assert _authority(authority_file) == expected
@@ -663,6 +664,25 @@ def test_recovery_activation_failure_does_not_hide_replaced_authority(
     assert _stored_mirror(settings_file) == expected
     assert config.get_settings().mcp_api_key == expected
     assert "recovery record could not be made durable" in caplog.text
+
+    # Model the compound failure surviving a host crash: the authority rename
+    # rolls back and the WAL state write rolls back to its durable prepared form.
+    _write_authority(authority_file, "known-good")
+    recovery_file.write_text(
+        json.dumps({"key": expected, "state": "prepared"}) + "\n"
+    )
+    recovery_file.chmod(0o600)
+    monkeypatch.setattr(config.os, "fsync", real_fsync)
+    monkeypatch.setattr(
+        config,
+        "_write_mcp_recovery_document_locked",
+        real_write_recovery,
+    )
+    config.clear_settings_cache()
+
+    assert config.get_settings().mcp_api_key == "known-good"
+    assert _authority(authority_file) == "known-good"
+    assert _stored_mirror(settings_file) == "known-good"
 
 
 @pytest.mark.parametrize("transition", ["rotate", "revoke"])

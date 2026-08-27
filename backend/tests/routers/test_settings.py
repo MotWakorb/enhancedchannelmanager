@@ -14,6 +14,7 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import config
 from tests.conftest import closing_create_task_mock
 from tests.conftest import patch_ssrf_dns as _patch_ssrf_dns
 
@@ -1902,6 +1903,32 @@ class TestMCPApiKeyGenerate:
         assert data["mcp_api_key"] != "old-key-value"
         rotate_mock.assert_called_once_with()
 
+    @pytest.mark.asyncio
+    async def test_durability_indeterminate_discloses_active_key_without_logging_it(
+        self, async_client, caplog
+    ):
+        active_key = "generated-mcp-key-with-indeterminate-durability"
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.rotate_public_mcp_api_key",
+            side_effect=config.MCPApiKeyDurabilityIndeterminate(active_key),
+        ):
+            response = await async_client.post("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == {
+            "code": "mcp_api_key_durability_indeterminate",
+            "message": (
+                "The new MCP API key is active now, but crash durability is "
+                "indeterminate. Repair storage and retry rotation."
+            ),
+            "operation": "rotation",
+            "authority_active": True,
+            "crash_durability": "indeterminate",
+            "retry_after_storage_repair": True,
+            "mcp_api_key": active_key,
+        }
+        assert active_key not in caplog.text
+
 
 class TestMCPApiKeyRevoke:
     """Tests for DELETE /api/settings/mcp-api-key."""
@@ -1927,6 +1954,30 @@ class TestMCPApiKeyRevoke:
 
         assert response.status_code == 200
         revoke_mock.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_durability_indeterminate_reports_active_revocation(
+        self, async_client
+    ):
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.revoke_public_mcp_api_key",
+            side_effect=config.MCPApiKeyDurabilityIndeterminate(""),
+        ):
+            response = await async_client.delete("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == {
+            "code": "mcp_api_key_durability_indeterminate",
+            "message": (
+                "MCP API key revocation is active now, but a host crash may restore "
+                "the previous key. Repair storage and retry revocation."
+            ),
+            "operation": "revocation",
+            "authority_active": True,
+            "revoked": True,
+            "crash_durability": "indeterminate",
+            "retry_after_storage_repair": True,
+        }
 
 
 class TestMCPApiKeyConfiguredInResponse:
