@@ -62,6 +62,25 @@ def test_policy_enforces_fixed_mcp_openssl_package_floor(tmp_path):
         dockerfile.write_text(contents, encoding="utf-8")
 
 
+def test_policy_rejects_comment_only_mcp_openssl_package_floors(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+
+    comments = []
+    for package in ("libcrypto3", "libssl3"):
+        required = f"'{package}>={gate.MCP_OPENSSL_MINIMUM}'"
+        assert required in contents
+        contents = contents.replace(required, package, 1)
+        comments.append(f"# Retain reviewed floor {required}")
+    dockerfile.write_text("\n".join(comments) + "\n" + contents, encoding="utf-8")
+
+    failures = gate.check_repository(tmp_path)
+
+    assert sum("OpenSSL package floor" in failure for failure in failures) == 2, failures
+
+
 def test_policy_rejects_a_different_digest_pinned_mcp_base(tmp_path):
     gate = _load_gate()
     _copy_policy_files(gate, tmp_path)

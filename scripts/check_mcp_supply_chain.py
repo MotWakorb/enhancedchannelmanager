@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -35,6 +36,39 @@ _USES = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)", re.MULTILINE)
 _FROM = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 
 
+def _has_apk_add_argument(dockerfile: str, required: str) -> bool:
+    instruction_lines: list[str] = []
+    for raw_line in dockerfile.splitlines():
+        line = raw_line.strip()
+        if line.startswith("#"):
+            continue
+        if not instruction_lines and not line:
+            continue
+
+        instruction_lines.append(line.removesuffix("\\").rstrip())
+        if line.endswith("\\"):
+            continue
+
+        instruction = " ".join(instruction_lines)
+        instruction_lines = []
+        if not instruction.startswith("RUN "):
+            continue
+
+        lexer = shlex.shlex(instruction[4:], posix=True, punctuation_chars=";&|")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        tokens = list(lexer)
+        command: list[str] = []
+        for token in tokens + [";"]:
+            if token not in {"&&", ";", "||", "|", "&"}:
+                command.append(token)
+                continue
+            if command[:2] == ["apk", "add"] and required in command[2:]:
+                return True
+            command = []
+    return False
+
+
 def check_repository(root: Path) -> list[str]:
     failures: list[str] = []
     build = (root / POLICY_FILES[0]).read_text(encoding="utf-8")
@@ -50,11 +84,11 @@ def check_repository(root: Path) -> list[str]:
             f"expected {MCP_BASE_IMAGE}, found {mcp_base_images}"
         )
     for package in ("libcrypto3", "libssl3"):
-        required = f"'{package}>={MCP_OPENSSL_MINIMUM}'"
-        if required not in mcp_dockerfile:
+        required = f"{package}>={MCP_OPENSSL_MINIMUM}"
+        if not _has_apk_add_argument(mcp_dockerfile, required):
             failures.append(
                 "MCP image must enforce the reviewed OpenSSL package floor: "
-                f"missing {required}"
+                f"missing '{required}' from executable apk add arguments"
             )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:
