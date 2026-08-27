@@ -15,7 +15,13 @@ from pydantic import BaseModel
 
 from auth import RequireAdminIfEnabled
 from cache import get_cache
-from config import CONFIG_DIR, get_settings, save_settings, validate_url_scheme
+from config import (
+    CONFIG_DIR,
+    MCPApiKeyStorageError,
+    get_settings,
+    save_settings,
+    validate_url_scheme,
+)
 from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
 from alert_methods import send_alert
@@ -831,6 +837,8 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     settings.linked_m3u_accounts = cleaned
                     save_settings(settings)
                     logger.info("[M3U] Cleaned up linked_m3u_accounts after deleting account %s", account_id)
+        except MCPApiKeyStorageError:
+            raise
         except Exception as settings_err:
             logger.warning("[M3U] Failed to clean up linked_m3u_accounts: %s", settings_err)
 
@@ -860,7 +868,7 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
             "skipped_groups": skipped_groups,
             "failed_groups": failed_groups,
         }
-    except HTTPException:
+    except (HTTPException, MCPApiKeyStorageError):
         raise
     except Exception as e:
         # A missing account id surfaces as an upstream 404 — return 404, not 500

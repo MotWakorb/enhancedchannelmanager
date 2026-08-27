@@ -22,7 +22,9 @@ from config import (
     CONFIG_FILE,
     MCP_SERVICE_FILE,
     MCP_SERVICE_FILENAME,
+    MCPApiKeyStorageError,
     SettingsWriteTimeout,
+    mcp_api_key_storage_error_detail,
     superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
@@ -147,7 +149,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0160",
+    version="0.18.1-0161",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1110,6 +1112,23 @@ async def settings_write_timeout_handler(request: Request, exc: SettingsWriteTim
         status_code=503,
         content={"detail": "Settings are being saved by another writer. Please retry."},
         headers={"Retry-After": "5"},
+    )
+
+
+@app.exception_handler(MCPApiKeyStorageError)
+async def mcp_api_key_storage_error_handler(
+    request: Request, exc: MCPApiKeyStorageError
+):
+    """Fail closed with the stable sanitized contract for public settings writers."""
+    logger.error(
+        "[MAIN] MCP API key settings save refused on %s because authority "
+        "storage is unavailable or untrusted (%s)",
+        request.url.path,
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": mcp_api_key_storage_error_detail("settings save")},
     )
 
 

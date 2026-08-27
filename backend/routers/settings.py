@@ -29,6 +29,7 @@ from config import (
     MCPApiKeyDurabilityIndeterminate,
     MCPApiKeyStorageError,
     get_settings,
+    mcp_api_key_storage_error_detail,
     normalize_public_base_url,
     revoke_mcp_api_key as revoke_public_mcp_api_key,
     rotate_mcp_api_key as rotate_public_mcp_api_key,
@@ -2481,17 +2482,7 @@ def _raise_mcp_api_key_storage_503(operation: str, error: Exception) -> None:
     )
     raise HTTPException(
         status_code=503,
-        detail={
-            "code": "mcp_api_key_storage_unavailable",
-            "message": (
-                "MCP credential storage is unavailable or untrusted. Repair api-key "
-                "and .api-key.recovery under MCP_SECRETS_DIR as owner-only regular "
-                "files (mode 0600, correct PUID/PGID, no links), then retry. Preserve "
-                "malformed recovery content; do not guess, rewrite, or delete it."
-            ),
-            "operation": operation,
-            "retry_after_storage_repair": True,
-        },
+        detail=mcp_api_key_storage_error_detail(operation),
     ) from error
 
 

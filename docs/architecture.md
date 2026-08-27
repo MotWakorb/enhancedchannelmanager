@@ -211,11 +211,11 @@ Startup → TaskEngine (checks every 60s, max 3 concurrent)
 
 ### MCP public-key authority and recovery
 
-The owner-only `api-key` sidecar is the single authority for the public MCP
-client key. `settings.json:mcp_api_key` is a compatibility mirror for older
-clients and migration only: generic settings saves ignore the caller's value
-and copy the independently validated sidecar authority back into the mirror.
-An explicit empty `api-key` is the durable revocation tombstone.
+The owner-only `/run/secrets/ecm-mcp/api-key` projection is the single authority
+for the public MCP client key. `settings.json:mcp_api_key` is a compatibility
+mirror for older clients and migration only: generic settings saves ignore the
+caller's value and copy the independently validated authority back into the
+mirror. An explicit empty `api-key` is the durable revocation tombstone.
 
 Dedicated rotate and revoke operations use `.api-key.recovery` as a transient
 write-ahead redo record. `prepared` means the authority replacement was not
@@ -224,7 +224,9 @@ key, including an empty revocation, must be reapplied before a successor
 transition can stage. A successor cannot replace that record until the
 predecessor authority's parent-directory fsync succeeds, so recovery always
 moves forward and never stores a credential pre-image that could resurrect a
-revoked key.
+revoked key. This is an internal recovery artifact, not an operator control;
+manual edits or deletion can remove the only redo evidence for a completed
+transition.
 
 Ordinary startup distinguishes an absent artifact from one that is present but
 untrusted. Invalid content, mode, owner, link count, file type, or a malformed
@@ -587,27 +589,27 @@ graph LR
 
 **Auth model (three distinct credentials):**
 
-- **Inbound (MCP client → MCP server):** the public `mcp_api_key`, projected on its own at `/run/secrets/ecm-mcp/api-key` and accepted only as `Authorization: Bearer`; query credentials are rejected. The sidecar has no `/config` mount, so it cannot read `settings.json`, `auth_settings.json`, the journal, TLS keys, or backups (`enhancedchannelmanager-04c0u.8`). The key is re-read on every request, so rotation and revocation take effect without restart. Compose publishes MCP on host loopback by default. The explicit remote overlay requires HTTPS as reported by an operator-configured trusted proxy. Exact Host and browser Origin allowlists protect every route, and the MCP SDK independently repeats both checks at its transport boundary. Uvicorn's raw-target access log is disabled; a bounded MCP access log records only method, decoded path (never query), and status.
+- **Inbound (MCP client → MCP server):** the public client key, named `mcp_api_key` in API and UI terminology, has its sole live authority at `/run/secrets/ecm-mcp/api-key` and is accepted only as `Authorization: Bearer`; query credentials are rejected. The sidecar has no `/config` mount, so it cannot read `settings.json`, `auth_settings.json`, the journal, TLS keys, or backups (`enhancedchannelmanager-04c0u.8`). The key is re-read on every request, so rotation and revocation take effect without restart. Compose publishes MCP on host loopback by default. The explicit remote overlay requires HTTPS as reported by an operator-configured trusted proxy. Exact Host and browser Origin allowlists protect every route, and the MCP SDK independently repeats both checks at its transport boundary. Uvicorn's raw-target access log is disabled; a bounded MCP access log records only method, decoded path (never query), and status.
 - **Outbound (MCP server → ECM backend):** a *different*, never-disclosed `backend_key` from the owner-only `mcp-service.json` projection, plus a request-bound single-use claim signed with a third credential, `confirmation_key` (`enhancedchannelmanager-04c0u.7`). The public `mcp_api_key` is never accepted by the backend's sidecar principal. `ECMClient` recreates the httpx client on key change.
 
-**Sidecar credential projection.** ECM writes both projection files under `MCP_SECRETS_DIR` (`/run/secrets/ecm-mcp` under the MCP overlay, `CONFIG_DIR` otherwise) with mode `0600` and the backend's own uid. The sidecar runs under the same `PUID`/`PGID`, which is the only reason it can read them; `get_mcp_backend_credentials_status()` fails readiness on any other owner or mode. The three credentials are independently generated; none is derived from another.
+**Sidecar credential projection.** ECM writes `api-key` and `mcp-service.json` under `MCP_SECRETS_DIR` (`/run/secrets/ecm-mcp` in the current Compose deployment) with mode `0600` and the backend's own uid. The sidecar runs under the same `PUID`/`PGID`, which is the only reason it can read them; `get_mcp_backend_credentials_status()` fails readiness on any other owner or mode. The three credentials are independently generated; none is derived from another.
 
-**`settings.json` credential schema (bd-jmi1c, GH #273).** Three distinct credentials live in `/config/settings.json`; the lexical similarity of two of the field names was the root cause of GH #273 (operators copying the MCP key into the Dispatcharr token slot):
+**Dispatcharr settings and MCP compatibility mirror (bd-jmi1c, GH #273).** `/config/settings.json` holds the Dispatcharr connection fields and a compatibility mirror of the public MCP key. It is not the source of live MCP authentication. The lexical similarity of the legacy Dispatcharr alias and the MCP mirror was the root cause of GH #273 (operators copying the MCP key into the Dispatcharr token slot):
 
-| Field | Credential | Used by |
+| Field | Role | Used by |
 |-|-|-|
 | `dispatcharr_api_key` (canonical, v0.17.1+) | Dispatcharr REST API token | `backend/dispatcharr_client.py` → X-API-Key header on outbound calls to Dispatcharr |
 | `api_key` (deprecated alias) | Same Dispatcharr REST API token, mirrored from `dispatcharr_api_key` on save for one release of back-compat | External scripts that read `settings.json` directly. **Removed in v0.19.0 per `enhancedchannelmanager-ewm4h`** |
-| `mcp_api_key` | MCP server API key | MCP container (inbound auth) + MCP→ECM backend calls |
+| `mcp_api_key` | Compatibility mirror of the public MCP client key | Older clients and legacy migration only; never the sidecar's live authority or an MCP→ECM backend credential |
 
-The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the field-name collision; `load_settings()` migrates legacy → canonical on first read with a one-time-per-process WARN, and `save_settings()` mirrors canonical → legacy on write so external readers stay current until the legacy field is removed. Both `mcp_api_key` and the Dispatcharr key are credential-class. Every export path (`routers/backup.py` ZIP export, `routers/channel_pipeline.py` debug bundle, YAML export) MUST redact them via the shared `_SETTINGS_CREDENTIAL_FIELDS` tuple in `backup.py`. See the README setup section for the operator-facing migration walkthrough.
+The rename in v0.17.1 (`api_key` → `dispatcharr_api_key`) eliminates the Dispatcharr field-name collision; `load_settings()` migrates legacy → canonical on first read with a one-time-per-process WARN, and `save_settings()` mirrors canonical → legacy on write so external readers stay current until the legacy field is removed. Separately, generic settings saves discard submitted or manually edited `mcp_api_key` values and repair the mirror from the independently validated `api-key` authority. The sidecar's private backend and confirmation credentials live only in `mcp-service.json`. The MCP mirror and Dispatcharr key remain credential-class data: every export path (`routers/backup.py` ZIP export, `routers/channel_pipeline.py` debug bundle, YAML export) MUST redact them via the shared `_SETTINGS_CREDENTIAL_FIELDS` tuple in `backup.py`. See the README setup section for the operator-facing migration walkthrough.
 
 **Compound tools:** most tools wrap a single ECM endpoint, but some orchestrate multiple calls. Examples:
 
 - `set_logo_from_epg(channel_ids)` (per channel): read channel → read EPG entry → create-or-find logo → PATCH channel.
 - `build_channel_lineup(channels, group_id, provider_id, market)`: bulk-create channels via `/bulk-commit`, fetch the created channels, fuzzy-match streams per channel using shared `_score_match` / `_generate_variants` helpers from `tools/streams.py`, then assign matched streams.
 
-**Deployment:** `ECM_URL=http://ecm:6100` (internal Docker network); shares the `/config/` volume with the ECM backend for the API key file. The key is generated in ECM's UI under *Settings → MCP Integration*.
+**Deployment:** `ECM_URL=http://ecm:6100` uses the internal Docker network. ECM mounts the dedicated `ecm-mcp-secrets` volume read-write at `/run/secrets/ecm-mcp`; the sidecar mounts that volume read-only and does not mount `/config`. Operators generate, rotate, and revoke the public key only under *Settings → MCP Integration* and copy generated or regenerated values directly from the UI into clients.
 
 ## User Attribution Pipeline
 

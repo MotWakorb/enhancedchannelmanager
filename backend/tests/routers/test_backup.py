@@ -1739,6 +1739,35 @@ class TestRestoreYaml:
         assert test_session.query(TagGroup).count() == 1
 
     @pytest.mark.asyncio
+    async def test_settings_storage_failure_reaches_app_handler(self, async_client):
+        content = _make_yaml_export()
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {
+            "url": "",
+            "username": "",
+            "password": "existing_pass",
+            "smtp_password": "existing_smtp",
+        }
+
+        with patch(
+            "routers.backup.get_settings", return_value=mock_settings
+        ), patch(
+            "routers.backup.save_settings",
+            side_effect=config_mod.MCPApiKeyStorageError("untrusted authority"),
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={"sections": json.dumps(["settings"])},
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == (
+            "mcp_api_key_storage_unavailable"
+        )
+        assert response.json()["detail"]["operation"] == "settings save"
+
+    @pytest.mark.asyncio
     async def test_channel_groups_restore_upserts_by_name(self):
         """Channel groups restore must NOT delete existing groups — channels and
         streams reference them by ID, so deleting would orphan those FKs. Only

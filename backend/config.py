@@ -136,6 +136,24 @@ class MCPApiKeyStorageError(RuntimeError):
     """An explicit MCP credential write cannot trust its authority storage."""
 
 
+MCP_API_KEY_STORAGE_UNAVAILABLE_MESSAGE = (
+    "MCP credential storage is unavailable or untrusted. Repair api-key and "
+    ".api-key.recovery under MCP_SECRETS_DIR as owner-only regular files "
+    "(mode 0600, correct PUID/PGID, no links), then retry. Preserve malformed "
+    "recovery content; do not guess, rewrite, or delete it."
+)
+
+
+def mcp_api_key_storage_error_detail(operation: str) -> dict[str, object]:
+    """Return the stable public payload for a failed credential write."""
+    return {
+        "code": "mcp_api_key_storage_unavailable",
+        "message": MCP_API_KEY_STORAGE_UNAVAILABLE_MESSAGE,
+        "operation": operation,
+        "retry_after_storage_repair": True,
+    }
+
+
 def _acquire_settings_flock(lock_fd: int) -> None:
     """Take the exclusive flock, or raise ``SettingsWriteTimeout``."""
     for _attempt in range(_SETTINGS_LOCK_ATTEMPTS):

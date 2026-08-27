@@ -9,6 +9,7 @@ import httpx
 import pytest
 from unittest.mock import AsyncMock, patch
 
+from config import MCPApiKeyStorageError
 from tests.conftest import closing_create_task_mock
 
 
@@ -273,6 +274,35 @@ class TestDeleteM3UAccount:
         assert response.status_code == 200
         # Account 2 removed from link group [1, 2, 3] → [1, 3]; [4, 5] untouched
         assert saved["settings"].linked_m3u_accounts == [[1, 3], [4, 5]]
+
+    @pytest.mark.asyncio
+    async def test_linked_account_storage_failure_reaches_app_handler(
+        self, async_client
+    ):
+        from config import DispatcharrSettings
+
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.return_value = {"id": 2, "name": "IPTV-2"}
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 2, "name": "IPTV-2", "channel_groups": []}
+        ]
+        mock_settings = DispatcharrSettings(linked_m3u_accounts=[[1, 2, 3]])
+
+        with patch("routers.m3u.get_client", return_value=mock_client), patch(
+            "routers.m3u.journal"
+        ), patch(
+            "routers.m3u.get_settings", return_value=mock_settings
+        ), patch(
+            "routers.m3u.save_settings",
+            side_effect=MCPApiKeyStorageError("untrusted authority"),
+        ):
+            response = await async_client.delete("/api/m3u/accounts/2")
+
+        assert response.status_code == 503
+        assert response.json()["detail"]["code"] == (
+            "mcp_api_key_storage_unavailable"
+        )
+        assert response.json()["detail"]["operation"] == "settings save"
 
     @pytest.mark.asyncio
     async def test_missing_account_returns_404_not_500(self, async_client):
