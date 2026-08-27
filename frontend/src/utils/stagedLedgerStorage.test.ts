@@ -207,6 +207,25 @@ describe('a restored ledger is bound to the identity that created it', () => {
 // ================================================ AGE BOUND AND FORMAT GUARDS
 
 describe('a persisted ledger expires', () => {
+  it('rejects and destroys a realistic v2 create ledger with unknown stream intent', () => {
+    const legacyCreate = createChannelOp(-1, {
+      type: 'createChannel',
+      name: 'Legacy bulk channel',
+      channelNumber: 500,
+    });
+    window.sessionStorage.setItem(STAGED_LEDGER_STORAGE_KEY, JSON.stringify({
+      version: 2,
+      operatorKey: OPERATOR_A,
+      savedAt: NOW,
+      operations: [legacyCreate],
+      undoGroups: [[legacyCreate.id]],
+    }));
+
+    expect(STAGED_LEDGER_FORMAT_VERSION).toBe(3);
+    expect(readStagedLedger(OPERATOR_A, NOW)).toBeNull();
+    expect(window.sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).toBeNull();
+  });
+
   it('accepts a ledger inside the age bound', () => {
     saveStagedLedger({
       operatorKey: OPERATOR_A,

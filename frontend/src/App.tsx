@@ -481,6 +481,7 @@ function App() {
     stageReorderStreams,
     stageBulkAssignNumbers,
     stageCreateChannel,
+    stageCreateChannelWithStreams,
     stageDeleteChannel,
     stageDeleteChannelGroup,
     stageRenameChannelGroup,
@@ -2624,21 +2625,16 @@ function App() {
           // normalize flag travels with the staged operation: a backend-side
           // pass would normalize an already-normalized name a second time
           // (bead enhancedchannelmanager-e9e5o).
-          const tempChannelId = stageCreateChannel(
-            channelName,
+          stageCreateChannelWithStreams({
+            name: channelName,
+            streamIds: groupedStreams.map((stream) => stream.id),
             channelNumber,
-            targetGroupId ?? undefined,
-            targetNewGroupName,
-            undefined, // logoId - will be resolved during commit
+            groupId: targetGroupId ?? undefined,
+            newGroupName: targetNewGroupName,
             logoUrl,
             tvgId,
-            tvcGuideStationId
-          );
-
-          // Assign all streams in this group to the new channel
-          for (const stream of groupedStreams) {
-            stageAddStream(tempChannelId, stream.id, `Assign stream to "${channelName}"`);
-          }
+            tvcGuideStationId,
+          });
         }
 
         // End the batch
@@ -2688,7 +2684,7 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
+    [isEditMode, stageCreateChannelWithStreams, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)

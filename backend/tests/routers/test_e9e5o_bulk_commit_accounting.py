@@ -353,6 +353,10 @@ class TestBulkCommitAccountingMatrix:
             "count": 1,
             "next": None,
         }
+        mock_client.get_streams_by_ids.return_value = [
+            {"id": 5, "name": "Stream 5"},
+            {"id": 6, "name": "Stream 6"},
+        ]
         mock_client.get_channel.return_value = {"id": 7, "name": "Existing", "streams": [5]}
         mock_client.create_channel.return_value = {"id": 99, "name": "New"}
         mock_client.create_channel_group.return_value = {"id": 42, "name": "Fresh Group"}
@@ -360,8 +364,8 @@ class TestBulkCommitAccountingMatrix:
         ops = [
             {"type": "createChannel", "tempId": -1, "name": "New"},
             {"type": "updateChannel", "channelId": 7, "data": {"name": "Renamed"}},
-            {"type": "addStreamToChannel", "channelId": 7, "streamId": 5},
-            {"type": "removeStreamFromChannel", "channelId": 7, "streamId": 5},
+            {"type": "addStreamToChannel", "channelId": 7, "streamId": 6},
+            {"type": "removeStreamFromChannel", "channelId": 7, "streamId": 6},
             {"type": "reorderChannelStreams", "channelId": 7, "streamIds": [5]},
             {"type": "bulkAssignChannelNumbers", "channelIds": [7], "startingNumber": 3},
             {"type": "createGroup", "name": "Fresh Group"},

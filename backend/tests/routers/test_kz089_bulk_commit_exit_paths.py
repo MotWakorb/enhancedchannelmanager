@@ -417,7 +417,7 @@ class TestNewOperationsResolveTheirResources:
 
         with patch("routers.channels.get_client", return_value=client), \
              patch("routers.channels.journal", _journal_double()):
-            data = await _commit_and_wait(async_client, {
+            response = await async_client.post("/api/channels/bulk-commit", json={
                 "operations": [
                     {"type": "setProfileMembership", "profileId": 3, "channelId": -7,
                      "enabled": True},
@@ -425,5 +425,5 @@ class TestNewOperationsResolveTheirResources:
             })
 
         client.update_profile_channel.assert_not_called()
-        assert data["operationsFailed"] == 1
-        assert "Channel -7 does not exist" in data["errors"][0]["error"]
+        assert response.status_code == 422
+        assert "exactly one earlier createChannel" in response.text

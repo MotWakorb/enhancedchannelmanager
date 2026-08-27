@@ -424,7 +424,7 @@ Why: the channel list spans 27k+ streams. Per-change network calls would be unus
 
 ### Edit Mode exit guard: what it covers
 
-Because the staged ledger is in memory, anything that leaves the route or tears down the tree destroys it. The exit guard is the dialog that offers **Apply**, **Discard** or **Keep Editing** before that happens. What follows is its **observable behaviour**, which is the stable part; the mechanism behind it is under active change and is deliberately not described here.
+The active staged ledger lives in React state and is mirrored to `sessionStorage` so an interrupted session can be offered for explicit restore. Leaving Channel Manager still requires an operator decision: the exit guard offers **Apply**, **Discard** or **Keep Editing** before navigation tears down the active tree. What follows is its **observable behaviour**, which is the stable part; the mechanism behind it is under active change and is deliberately not described here.
 
 | Way out | Guarded? | Behaviour with staged changes |
 |-|-|-|
@@ -444,7 +444,7 @@ Before extending the guard, read the current implementation rather than this tab
 
 ### The staged ledger: one persisted unit, three derived views
 
-`stagedOperations` is **the** staged state. It is the list of operations Apply will send, and it is the only thing serialised when the ledger has to survive a dead session (`frontend/src/utils/stagedLedgerStorage.ts`).
+`stagedOperations` is **the** staged mutation state and the list Apply will send. Persistence serialises that list plus the undo grouping described below; every other staged view is reconstructed (`frontend/src/utils/stagedLedgerStorage.ts`).
 
 `stagedGroups` and `stagedSideEffects` are **derived from it**, recomputed rather than maintained alongside it. That is a correctness property, not a tidiness one: the two were previously updated in parallel with the operation list, and an Undo that took an operation back could leave its group or side effect behind. Deriving them makes that class of drift unrepresentable.
 
@@ -459,7 +459,7 @@ Survival rules, all of them deliberate:
 | Operator binding | Stamped with `auth_provider#user.id`. A ledger belonging to a different operator is **destroyed, not withheld**, in the first-render lazy initializer before the persistence effect can run |
 | Age bound | 12 hours, covering an interrupted session while making "restored days later", where every id has had time to move, impossible |
 | Restore | **Offered, never automatic**, because part of a ledger may fail staleness checks and a silent restore drops the operator into Edit Mode holding a quietly smaller ledger with Apply as the next action |
-| Format version | A persisted record from an older shape is discarded rather than migrated |
+| Format version | A persisted record from an older shape is discarded rather than migrated. Version 3 adds bulk-create `expectedStreamIds`; version 2 is rejected because a create-only record cannot reveal whether stream intent was lost |
 
 The baseline snapshot is deliberately **not** persisted. A restored session re-captures it from the current lineup, so concurrency checks compare against today's server state rather than a stale one.
 

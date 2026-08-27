@@ -29,7 +29,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useEditMode } from './useEditMode';
-import type { Channel } from '../types';
+import type { Channel, StagedOperation } from '../types';
+import { createSnapshot } from '../utils/channelSnapshot';
 import type { BulkCommitRequest, BulkCommitResponse } from '../services/api';
 
 const bulkCommit = vi.fn();
@@ -150,46 +151,101 @@ function updateChannelOps() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.sessionStorage.clear();
   requests = [];
   knownGroups = {};
   bulkCommit.mockImplementation(async (req: BulkCommitRequest) => fakeBulkCommit(req));
   getChannels.mockResolvedValue({ results: [], next: null, count: 0 });
 });
 
-describe('useEditMode — a channel created into a group pending in the same batch', () => {
-  it('applies a new channel stream assignment in the create request', async () => {
-    const assigned: Array<{ channelId: number; streamId: number }> = [];
+describe('useEditMode — stageCreateChannelWithStreams developer contract', () => {
+  it('is one non-batch undo step and redo restores the complete create', () => {
+    const { view } = renderEditMode();
 
+    act(() => {
+      view.result.current.stageCreateChannelWithStreams({
+        name: 'Atomic',
+        streamIds: [55, 56],
+      });
+    });
+
+    expect(view.result.current.stagedOperationCount).toBe(1);
+    expect(view.result.current.summary.totalOperations).toBe(3);
+    expect(view.result.current.displayChannels.find((channel) => channel.id === -1)?.streams)
+      .toEqual([55, 56]);
+
+    act(() => view.result.current.localUndo());
+    expect(view.result.current.summary.totalOperations).toBe(0);
+    expect(view.result.current.displayChannels.some((channel) => channel.id < 0)).toBe(false);
+
+    act(() => view.result.current.localRedo());
+    expect(view.result.current.stagedOperationCount).toBe(1);
+    expect(view.result.current.summary.totalOperations).toBe(3);
+    expect(view.result.current.displayChannels.find((channel) => channel.id === -1)?.streams)
+      .toEqual([55, 56]);
+  });
+
+  it('normalizes duplicate stream ids to one assignment and one metadata entry', () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateChannelWithStreams({
+        name: 'Deduplicated',
+        streamIds: [55, 55, 56, 55],
+      });
+    });
+
+    const raw = window.sessionStorage.getItem('ecm.channelManager.stagedLedger');
+    const operations = JSON.parse(raw!).operations as StagedOperation[];
+    expect(operations).toHaveLength(3);
+    expect(operations[0].apiCall).toEqual(expect.objectContaining({
+      expectedStreamIds: [55, 56],
+    }));
+    expect(operations.slice(1).map((operation) => operation.apiCall)).toEqual([
+      { type: 'addStreamToChannel', channelId: -1, streamId: 55 },
+      { type: 'addStreamToChannel', channelId: -1, streamId: 56 },
+    ]);
+  });
+
+  it('rejects an empty stream list without staging or consuming a temp id', () => {
+    const { view } = renderEditMode();
+
+    expect(() => {
+      act(() => {
+        view.result.current.stageCreateChannelWithStreams({
+          name: 'Empty',
+          streamIds: [],
+        });
+      });
+    }).toThrow('at least one stream');
+    expect(view.result.current.summary.totalOperations).toBe(0);
+    expect(window.sessionStorage.getItem('ecm.channelManager.stagedLedger')).toBeNull();
+
+    let tempId = 0;
+    act(() => {
+      tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Valid',
+        streamIds: [55],
+      });
+    });
+    expect(tempId).toBe(-1);
+  });
+});
+
+describe('useEditMode — a channel created into a group pending in the same batch', () => {
+  it('composes a create and its temp-id assignment in the same request', async () => {
     bulkCommit.mockImplementation(async (request: BulkCommitRequest) => {
       requests.push(request);
       const creates = request.operations.filter((op) => op.type === 'createChannel');
       const tempIdMap = Object.fromEntries(
         creates.map((op, index) => [op.tempId as number, FIRST_REAL_CHANNEL_ID + index]),
       );
-      const errors: BulkCommitResponse['errors'] = [];
-      let applied = creates.length;
-
-      for (const op of request.operations) {
-        if (op.type !== 'addStreamToChannel') continue;
-        const channelId = op.channelId as number;
-        const resolvedId = tempIdMap[channelId];
-        if (resolvedId === undefined) {
-          errors.push({
-            operationId: 'missing-create-context',
-            operationType: op.type,
-            error: `New channel ${channelId} is not resolvable in this request`,
-          });
-          continue;
-        }
-        assigned.push({ channelId: resolvedId, streamId: op.streamId as number });
-        applied += 1;
-      }
 
       return {
-        success: errors.length === 0,
-        operationsApplied: applied,
-        operationsFailed: errors.length,
-        errors,
+        success: true,
+        operationsApplied: request.operations.length,
+        operationsFailed: 0,
+        errors: [],
         tempIdMap,
         groupIdMap: {},
       } satisfies BulkCommitResponse;
@@ -208,7 +264,170 @@ describe('useEditMode — a channel created into a group pending in the same bat
 
     expect(result.operationsFailed).toBe(0);
     expect(result.operationsApplied).toBe(2);
-    expect(assigned).toEqual([{ channelId: FIRST_REAL_CHANNEL_ID, streamId: 55 }]);
+    expect(requests).toHaveLength(1);
+    expect(requests[0].operations).toEqual([
+      expect.objectContaining({ type: 'createChannel', tempId: -1, name: 'New channel' }),
+      { type: 'addStreamToChannel', channelId: -1, streamId: 55 },
+    ]);
+  });
+
+  it('refuses Apply when a restored bulk create is missing an expected assignment', async () => {
+    const onError = vi.fn();
+    const { view } = renderEditMode([], onError);
+    const stagedChannel = makeChannel(-1, 'New channel');
+    const create: StagedOperation = {
+      id: 'bulk-create-1',
+      timestamp: Date.now(),
+      description: 'Create channel "New channel"',
+      apiCall: {
+        type: 'createChannel',
+        name: 'New channel',
+        expectedStreamIds: [55],
+      },
+      beforeSnapshot: [],
+      afterSnapshot: [createSnapshot(stagedChannel)],
+    };
+
+    act(() => {
+      view.result.current.restoreStagedLedger({
+        operations: [create],
+        undoGroups: [[create.id]],
+        savedAt: Date.now(),
+      });
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.operationsFailed).toBe(1);
+    expect(result.errors[0]).toEqual(expect.objectContaining({
+      channelId: -1,
+      channelName: 'New channel',
+      error: expect.stringContaining('missing 1 expected stream assignment'),
+    }));
+    expect(bulkCommit).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Nothing was applied'));
+  });
+
+  it('refuses Apply when a later removal makes one of multiple expected streams absent', async () => {
+    const onError = vi.fn();
+    const { view } = renderEditMode([], onError);
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Incomplete after removal',
+        streamIds: [55, 56],
+      });
+      view.result.current.stageRemoveStream(tempId, 56, 'Remove expected stream');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.operationsFailed).toBe(1);
+    expect(result.errors[0]).toEqual(expect.objectContaining({
+      channelId: -1,
+      channelName: 'Incomplete after removal',
+      error: expect.stringContaining('missing 1 expected stream assignment'),
+    }));
+    expect(bulkCommit).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(expect.stringContaining('Nothing was applied'));
+  });
+
+  it('refuses Apply when a reorder omits an expected stream', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Incomplete after reorder',
+        streamIds: [55, 56],
+      });
+      view.result.current.stageReorderStreams(tempId, [55], 'Drop expected stream from order');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit();
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errors[0]?.error).toContain('not a permutation');
+    expect(bulkCommit).not.toHaveBeenCalled();
+  });
+
+  it('keeps every temp-channel stream operation in the create request', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'One create phase',
+        streamIds: [55],
+      });
+      view.result.current.stageRemoveStream(tempId, 99, 'Remove unrelated stream');
+    });
+
+    await act(async () => {
+      await view.result.current.commit();
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].operations.map((operation) => operation.type)).toEqual([
+      'createChannel',
+      'addStreamToChannel',
+      'removeStreamFromChannel',
+    ]);
+  });
+
+  it('keeps temp-channel adds before a later reorder in the create request', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Ordered streams',
+        streamIds: [55, 56],
+      });
+      view.result.current.stageReorderStreams(tempId, [56, 55], 'Reverse streams');
+    });
+
+    await act(async () => {
+      await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].operations).toEqual([
+      expect.objectContaining({ type: 'createChannel', tempId: -1 }),
+      { type: 'addStreamToChannel', channelId: -1, streamId: 55 },
+      { type: 'addStreamToChannel', channelId: -1, streamId: 56 },
+      { type: 'reorderChannelStreams', channelId: -1, streamIds: [56, 55] },
+    ]);
+  });
+
+  it('refuses a temp-channel reorder that is not a permutation at its position', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Forward reorder',
+        streamIds: [55],
+      });
+      view.result.current.stageReorderStreams(tempId, [56, 55], 'Uses a future stream');
+      view.result.current.stageAddStream(tempId, 56, 'Future add');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errors.some((error) => error.error.includes('not a permutation'))).toBe(true);
+    expect(bulkCommit).not.toHaveBeenCalled();
   });
 
   it('partitions mixed stream assignments without disturbing batches or accounting', async () => {

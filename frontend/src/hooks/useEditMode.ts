@@ -751,96 +751,103 @@ export function useEditMode({
     setPendingRestore(null);
   }, []);
 
-  // Stage an operation
+  type OperationToStage = {
+    apiCall: ApiCallSpec;
+    description: string;
+    tempChannelId?: number;
+  };
+
+  // Stage related operations in one functional update so no render can observe
+  // a bulk-created channel without the stream assignments staged beside it.
+  const stageOperations = useCallback((
+    operationsToStage: OperationToStage[],
+    undoDescription?: string,
+  ) => {
+    const prepared = operationsToStage.map((entry) => ({
+      ...entry,
+      operationId: generateId(),
+      undoId: generateId(),
+      timestamp: Date.now(),
+    }));
+    setState((prev) => {
+      if (!prev.isActive || prepared.length === 0) return prev;
+
+      let workingCopy = prev.workingCopy;
+      let nextTempId = prev.nextTempId;
+      const modifiedChannelIds = new Set(prev.modifiedChannelIds);
+      const staged: StagedOperation[] = [];
+
+      for (const entry of prepared) {
+        const { apiCall } = entry;
+        const affectedChannelIds = affectedChannelIdsOf(apiCall);
+        const tempChannelId = apiCall.type === 'createChannel'
+          ? (entry.tempChannelId ?? nextTempId)
+          : undefined;
+        const operation: StagedOperation = {
+          id: entry.operationId,
+          timestamp: entry.timestamp,
+          description: entry.description,
+          apiCall,
+          beforeSnapshot: workingCopy
+            .filter((channel) => affectedChannelIds.includes(channel.id))
+            .map(createSnapshot),
+          afterSnapshot: [],
+        };
+
+        workingCopy = applyOperationToWorkingCopy(workingCopy, operation);
+        if (apiCall.type === 'createChannel') {
+          workingCopy = [...workingCopy, buildStagedChannel(apiCall, tempChannelId!)];
+          nextTempId -= 1;
+          modifiedChannelIds.add(tempChannelId!);
+        }
+        affectedChannelIds.forEach((id) => modifiedChannelIds.add(id));
+        operation.afterSnapshot = workingCopy
+          .filter((channel) => affectedChannelIds.includes(channel.id) || channel.id === tempChannelId)
+          .map(createSnapshot);
+        staged.push(operation);
+      }
+
+      return {
+        ...prev,
+        workingCopy,
+        stagedOperations: [...prev.stagedOperations, ...staged],
+        localUndoStack: prev.currentBatch !== null
+          ? prev.localUndoStack
+          : undoDescription === undefined
+            ? [
+                ...prev.localUndoStack,
+                ...staged.map((operation, index): UndoEntry => ({
+                  id: prepared[index].undoId,
+                  timestamp: operation.timestamp,
+                  description: operation.description,
+                  operations: [operation],
+                })),
+              ]
+            : [
+                ...prev.localUndoStack,
+                {
+                  id: prepared[0].undoId,
+                  timestamp: staged[0].timestamp,
+                  description: undoDescription,
+                  operations: staged,
+                },
+              ],
+        localRedoStack: [],
+        modifiedChannelIds,
+        nextTempId,
+        currentBatch: prev.currentBatch === null ? null : {
+          ...prev.currentBatch,
+          operations: [...prev.currentBatch.operations, ...staged],
+        },
+      };
+    });
+  }, [applyOperationToWorkingCopy]);
+
   const stageOperation = useCallback(
     (apiCall: ApiCallSpec, description: string) => {
-      const affectedChannelIds = affectedChannelIdsOf(apiCall);
-      setState((prev) => {
-        if (!prev.isActive) {
-          return prev;
-        }
-
-        // Get before snapshot from current working copy
-        const beforeSnapshot = prev.workingCopy
-          .filter((ch) => affectedChannelIds.includes(ch.id))
-          .map(createSnapshot);
-
-        // Create the operation
-        const operation: StagedOperation = {
-          id: generateId(),
-          timestamp: Date.now(),
-          description,
-          apiCall,
-          beforeSnapshot,
-          afterSnapshot: [], // Will be computed after applying
-        };
-
-        // Apply to working copy
-        let newWorkingCopy = applyOperationToWorkingCopy(prev.workingCopy, operation);
-
-        // Nothing registers a staged group here any more: a group staged on
-        // its own (Channels pane -> "Create new channel group") and one
-        // implied by a createChannel are both DERIVED from this operation
-        // list by `deriveStagedGroups` (bead …-kz089, fix round 3). Both
-        // still have to appear as a staged group, or the group is invisible
-        // to the group filter, to "Create in...", and to the commit's group
-        // creation phase (bead enhancedchannelmanager-vtapf) — the derivation
-        // is what keeps that true through Undo and Redo as well.
-
-        // Handle create channel specially
-        if (apiCall.type === 'createChannel') {
-          newWorkingCopy = [...newWorkingCopy, buildStagedChannel(apiCall, prev.nextTempId)];
-        }
-
-        // Compute after snapshot
-        const afterSnapshot = newWorkingCopy
-          .filter((ch) => affectedChannelIds.includes(ch.id) || ch.id === prev.nextTempId)
-          .map(createSnapshot);
-
-        operation.afterSnapshot = afterSnapshot;
-
-        // Update modified channel IDs
-        const newModifiedIds = new Set(prev.modifiedChannelIds);
-        affectedChannelIds.forEach((id) => newModifiedIds.add(id));
-        if (apiCall.type === 'createChannel') {
-          newModifiedIds.add(prev.nextTempId);
-        }
-
-        // Handle batching vs immediate undo entry
-        let newUndoStack = prev.localUndoStack;
-        let newCurrentBatch = prev.currentBatch;
-
-        if (prev.currentBatch !== null) {
-          // We're in a batch - add operation to the current batch, don't create undo entry yet
-          newCurrentBatch = {
-            ...prev.currentBatch,
-            operations: [...prev.currentBatch.operations, operation],
-          };
-        } else {
-          // Not in a batch - create single-operation undo entry immediately
-          const undoEntry: UndoEntry = {
-            id: generateId(),
-            timestamp: Date.now(),
-            description,
-            operations: [operation],
-          };
-          newUndoStack = [...prev.localUndoStack, undoEntry];
-        }
-
-        const newState = {
-          ...prev,
-          workingCopy: newWorkingCopy,
-          stagedOperations: [...prev.stagedOperations, operation],
-          localUndoStack: newUndoStack,
-          localRedoStack: [], // Clear redo on new operation
-          modifiedChannelIds: newModifiedIds,
-          nextTempId: apiCall.type === 'createChannel' ? prev.nextTempId - 1 : prev.nextTempId,
-          currentBatch: newCurrentBatch,
-        };
-        return newState;
-      });
+      stageOperations([{ apiCall, description }]);
     },
-    [applyOperationToWorkingCopy]
+    [stageOperations],
   );
 
   // Staging functions for each operation type
@@ -898,14 +905,59 @@ export function useEditMode({
       const tempId = nextTempIdRef.current;
       nextTempIdRef.current -= 1; // Decrement immediately for next call
       const stagedGroupId = newGroupName ? ensureStagedGroupId(newGroupName) : undefined;
-      stageOperation(
-        { type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId },
-        `Create channel "${name}"`,
-      );
+      stageOperations([{
+        apiCall: { type: 'createChannel', name, channelNumber, groupId, newGroupName, stagedGroupId, logoId, logoUrl, tvgId, tvcGuideStationId },
+        description: `Create channel "${name}"`,
+        tempChannelId: tempId,
+      }]);
       return tempId;
     },
-    [stageOperation, ensureStagedGroupId]
+    [stageOperations, ensureStagedGroupId]
   );
+
+  const stageCreateChannelWithStreams = useCallback(({
+    name,
+    streamIds,
+    channelNumber,
+    groupId,
+    newGroupName,
+    logoId,
+    logoUrl,
+    tvgId,
+    tvcGuideStationId,
+  }: Parameters<UseEditModeReturn['stageCreateChannelWithStreams']>[0]): number => {
+    const uniqueStreamIds = [...new Set(streamIds)];
+    if (uniqueStreamIds.length === 0) {
+      throw new Error('A bulk-created channel requires at least one stream');
+    }
+    const tempChannelId = nextTempIdRef.current;
+    nextTempIdRef.current -= 1;
+    const stagedGroupId = newGroupName ? ensureStagedGroupId(newGroupName) : undefined;
+    stageOperations([
+      {
+        apiCall: {
+          type: 'createChannel',
+          name,
+          channelNumber,
+          groupId,
+          newGroupName,
+          stagedGroupId,
+          logoId,
+          logoUrl,
+          tvgId,
+          tvcGuideStationId,
+          expectedStreamIds: uniqueStreamIds,
+        },
+        description: `Create channel "${name}"`,
+        tempChannelId,
+      },
+      ...uniqueStreamIds.map((streamId) => ({
+        apiCall: { type: 'addStreamToChannel' as const, channelId: tempChannelId, streamId },
+        description: `Assign stream to "${name}"`,
+      })),
+    ], `Create channel "${name}" with streams`);
+    return tempChannelId;
+  }, [ensureStagedGroupId, stageOperations]);
 
   const stageDeleteChannel = useCallback(
     (channelId: number, description: string) => {
@@ -1558,6 +1610,7 @@ export function useEditMode({
             logoUrl: apiCall.logoUrl,
             tvgId: apiCall.tvgId,
             tvcGuideStationId: apiCall.tvcGuideStationId,
+            expectedStreamIds: apiCall.expectedStreamIds,
             // See the updateChannel arm: a created channel can land on an
             // occupied number just as an edited one can.
             acknowledgedDuplicate: apiCall.acknowledgedDuplicate,
@@ -1692,6 +1745,67 @@ export function useEditMode({
       updatedChannels: [],
     };
 
+    const assignmentsByTempId = new Map<number, number[]>();
+    const expectedCreates = new Map<number, StagedOperation>();
+    const invalidReorders: { operation: StagedOperation; tempId: number }[] = [];
+    for (const operation of state.stagedOperations) {
+      const { apiCall } = operation;
+      if (apiCall.type === 'createChannel') {
+        const tempId = operation.afterSnapshot[0]?.id;
+        assignmentsByTempId.set(tempId, []);
+        if (apiCall.expectedStreamIds !== undefined) expectedCreates.set(tempId, operation);
+        continue;
+      }
+      if (!('channelId' in apiCall) || !assignmentsByTempId.has(apiCall.channelId)) continue;
+      const assigned = assignmentsByTempId.get(apiCall.channelId)!;
+      if (apiCall.type === 'addStreamToChannel') {
+        if (!assigned.includes(apiCall.streamId)) assigned.push(apiCall.streamId);
+      } else if (apiCall.type === 'removeStreamFromChannel') {
+        const index = assigned.indexOf(apiCall.streamId);
+        if (index !== -1) assigned.splice(index, 1);
+      } else if (apiCall.type === 'reorderChannelStreams') {
+        const isPermutation =
+          apiCall.streamIds.length === assigned.length
+          && new Set(apiCall.streamIds).size === apiCall.streamIds.length
+          && apiCall.streamIds.every((streamId) => assigned.includes(streamId));
+        if (isPermutation) {
+          assignmentsByTempId.set(apiCall.channelId, [...apiCall.streamIds]);
+        } else {
+          invalidReorders.push({ operation, tempId: apiCall.channelId });
+        }
+      }
+    }
+    const incompleteBulkCreates = Array.from(expectedCreates, ([tempId, operation]) => {
+      const expectedStreamIds = operation.apiCall.type === 'createChannel'
+        ? operation.apiCall.expectedStreamIds ?? []
+        : [];
+      const assigned = assignmentsByTempId.get(tempId) ?? [];
+      const missing = expectedStreamIds.filter((streamId) => !assigned.includes(streamId));
+      return { operation, tempId, missing };
+    }).filter(({ missing }) => missing.length > 0);
+    if (incompleteBulkCreates.length > 0 || invalidReorders.length > 0) {
+      result.success = false;
+      result.operationsFailed = incompleteBulkCreates.length + invalidReorders.length;
+      result.errors = [
+        ...incompleteBulkCreates.map(({ operation, tempId, missing }) => ({
+        operationId: operation.id,
+        operationType: 'createChannel',
+        channelId: tempId,
+        channelName: operation.apiCall.type === 'createChannel' ? operation.apiCall.name : undefined,
+        error: `Bulk-created channel is missing ${missing.length} expected stream assignment${missing.length === 1 ? '' : 's'}; nothing was applied`,
+        })),
+        ...invalidReorders.map(({ operation, tempId }) => ({
+          operationId: operation.id,
+          operationType: 'reorderChannelStreams',
+          channelId: tempId,
+          error: 'Temp-channel stream order is not a permutation at this operation position; nothing was applied',
+        })),
+      ];
+      result.updatedChannels = channels;
+      onError?.('Nothing was applied: a bulk-created channel has an invalid stream plan. Your changes are still pending.');
+      return result;
+    }
+
     /**
      * Refuse the whole Apply when the PROPOSED FINAL STATE is illegal, before
      * anything is mutated (bead enhancedchannelmanager-ic884.2).
@@ -1807,12 +1921,13 @@ export function useEditMode({
      * Correlation id for every bulk-commit request this Apply All makes
      * (bead enhancedchannelmanager-r9py9).
      *
-     * The commit below is not one request: creates go first in their own call,
-     * then the remaining operations in batches of 200. Each call used to mint
-     * its own journal batch, so one Edit Mode session scattered across several
-     * unrelated batches and the operator guide's "one Bulk Commit row plus the
-     * individual rows" could not be true. Sent as `X-ECM-Batch-Id`; the backend
-     * stamps it on the summary AND on the per-channel rows.
+     * The commit below is not one request: creates and their temp-channel
+     * assignments go first in one call, then the remaining operations in
+     * batches of 200. Each call used to mint its own journal batch, so one Edit
+     * Mode session scattered across several unrelated batches and the operator
+     * guide's "one Bulk Commit row plus the individual rows" could not be true.
+     * Sent as `X-ECM-Batch-Id`; the backend stamps it on the summary AND on the
+     * per-channel rows.
      *
      * Capped to the 50 characters the backend stores.
      */
@@ -1941,17 +2056,24 @@ export function useEditMode({
         });
       };
 
-      // A stream assignment to a temp channel must stay in the same request as
-      // its create so the backend can resolve the temp id from that request's
-      // tempIdMap. Existing-channel assignments still use the ordinary batches.
+      // Every stream operation on a temp channel stays with its create. Besides
+      // resolving the temp id, this lets the backend validate the create's
+      // expected final stream set against the complete consolidated plan before
+      // creating anything. Existing-channel stream operations stay batched.
       const channelCreateOps = bulkOperations.filter(op => op.type === 'createChannel');
+      const isTempChannelStreamOp = (op: api.BulkOperation) =>
+        (op.type === 'addStreamToChannel'
+          || op.type === 'removeStreamFromChannel'
+          || op.type === 'reorderChannelStreams')
+        && typeof op.channelId === 'number'
+        && op.channelId < 0;
       const createPhaseOps = bulkOperations.filter(op =>
         op.type === 'createChannel'
-        || (op.type === 'addStreamToChannel' && typeof op.channelId === 'number' && op.channelId < 0)
+        || isTempChannelStreamOp(op)
       );
       const otherOps = bulkOperations.filter(op =>
         op.type !== 'createChannel'
-        && !(op.type === 'addStreamToChannel' && typeof op.channelId === 'number' && op.channelId < 0)
+        && !isTempChannelStreamOp(op)
       );
 
       // Calculate total batches for other operations
@@ -2409,6 +2531,7 @@ export function useEditMode({
     stageReorderStreams,
     stageBulkAssignNumbers,
     stageCreateChannel,
+    stageCreateChannelWithStreams,
     stageDeleteChannel,
     stageCreateGroup,
     stageDeleteChannelGroup,

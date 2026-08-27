@@ -6,6 +6,9 @@ WORKDIR /app
 # manifest was published. The digest makes the input reviewable; this upgrade
 # step closes fixed OS advisories until the next intentional digest refresh.
 RUN apk upgrade --no-cache \
+    && apk add --no-cache \
+        'libcrypto3>=3.5.8-r0' \
+        'libssl3>=3.5.8-r0' \
     && addgroup -g 1000 appgroup \
     && adduser -D -u 1000 -G appgroup appuser
 

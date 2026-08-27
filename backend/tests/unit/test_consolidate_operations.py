@@ -44,26 +44,26 @@ def test_updates_different_channels_kept_separate():
     assert len(updates) == 2
 
 
-# -- 2. Add + remove same stream cancels out --
+# -- 2. Stream operations preserve submitted order --
 
-def test_add_then_remove_same_stream_cancels():
+def test_add_then_remove_same_stream_are_both_preserved():
     ops = [
         BulkAddStreamOp(channelId=1, streamId=10),
         BulkRemoveStreamOp(channelId=1, streamId=10),
     ]
     result = _consolidate_operations(ops)
     stream_ops = [o for o in result if o.type in ("addStreamToChannel", "removeStreamFromChannel")]
-    assert len(stream_ops) == 0
+    assert stream_ops == ops
 
 
-def test_remove_then_add_same_stream_cancels():
+def test_remove_then_add_same_stream_are_both_preserved():
     ops = [
         BulkRemoveStreamOp(channelId=1, streamId=10),
         BulkAddStreamOp(channelId=1, streamId=10),
     ]
     result = _consolidate_operations(ops)
     stream_ops = [o for o in result if o.type in ("addStreamToChannel", "removeStreamFromChannel")]
-    assert len(stream_ops) == 0
+    assert stream_ops == ops
 
 
 def test_add_without_remove_preserved():
@@ -85,17 +85,16 @@ def test_remove_without_add_preserved():
     assert len(removes) == 1
 
 
-# -- 3. Multiple reorderChannelStreams for same channel -> only final kept --
+# -- 3. Reorders remain at their submitted stream-operation position --
 
-def test_multiple_reorders_same_channel_keeps_last():
+def test_multiple_reorders_same_channel_are_both_preserved():
     ops = [
         BulkReorderStreamsOp(channelId=1, streamIds=[10, 20]),
         BulkReorderStreamsOp(channelId=1, streamIds=[20, 10, 30]),
     ]
     result = _consolidate_operations(ops)
     reorders = [o for o in result if o.type == "reorderChannelStreams"]
-    assert len(reorders) == 1
-    assert reorders[0].streamIds == [20, 10, 30]
+    assert reorders == ops
 
 
 def test_reorders_different_channels_kept_separate():
@@ -106,6 +105,24 @@ def test_reorders_different_channels_kept_separate():
     result = _consolidate_operations(ops)
     reorders = [o for o in result if o.type == "reorderChannelStreams"]
     assert len(reorders) == 2
+
+
+def test_adds_and_reorder_keep_their_submitted_relative_order():
+    ops = [
+        BulkCreateChannelOp(tempId=-1, name="New"),
+        BulkAddStreamOp(channelId=-1, streamId=55),
+        BulkAddStreamOp(channelId=-1, streamId=56),
+        BulkReorderStreamsOp(channelId=-1, streamIds=[56, 55]),
+    ]
+
+    result = _consolidate_operations(ops)
+
+    assert [op.type for op in result] == [
+        "createChannel",
+        "addStreamToChannel",
+        "addStreamToChannel",
+        "reorderChannelStreams",
+    ]
 
 
 # -- 4. Operations on channels that will be deleted are removed --
@@ -123,24 +140,22 @@ def test_update_on_deleted_channel_removed():
     assert len(deletes) == 1
 
 
-def test_add_stream_on_deleted_channel_removed():
+def test_add_stream_before_deleted_channel_is_preserved_in_order():
     ops = [
         BulkAddStreamOp(channelId=5, streamId=10),
         BulkDeleteChannelOp(channelId=5),
     ]
     result = _consolidate_operations(ops)
-    adds = [o for o in result if o.type == "addStreamToChannel"]
-    assert len(adds) == 0
+    assert [o.type for o in result] == ["addStreamToChannel", "deleteChannel"]
 
 
-def test_reorder_on_deleted_channel_removed():
+def test_reorder_before_deleted_channel_is_preserved_in_order():
     ops = [
         BulkReorderStreamsOp(channelId=5, streamIds=[10, 20]),
         BulkDeleteChannelOp(channelId=5),
     ]
     result = _consolidate_operations(ops)
-    reorders = [o for o in result if o.type == "reorderChannelStreams"]
-    assert len(reorders) == 0
+    assert [o.type for o in result] == ["reorderChannelStreams", "deleteChannel"]
 
 
 def test_assign_numbers_skips_deleted_channels():
@@ -737,6 +752,7 @@ def test_the_number_scoped_create_fields_are_pinned_against_the_model():
         "tvgId",
         "tvcGuideStationId",
         "normalize",
+        "expectedStreamIds",
     } | set(_NUMBER_SCOPED_CREATE_FIELDS)
 
 
