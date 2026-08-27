@@ -58,6 +58,10 @@ def _stored_mirror(path: Path) -> str:
     return json.loads(path.read_text())["mcp_api_key"]
 
 
+def _recovery_document(path: Path) -> dict:
+    return json.loads(path.read_text())
+
+
 def test_stale_unrelated_save_cannot_restore_rotated_or_revoked_key(lifecycle):
     settings_file, authority_file = lifecycle
     _write_authority(authority_file, "initial-key")
@@ -410,6 +414,11 @@ def test_directory_fsync_refusal_is_recovered_after_crash(
     else:
         assert result is None
     assert _authority(authority_file) == expected
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    assert _recovery_document(recovery_file) == {
+        "key": expected,
+        "state": "recovery-active",
+    }
 
     # Model a host crash restoring the pre-rename directory entry. The durable
     # transition record must repair it before any settings load publishes K(n-1).
@@ -427,17 +436,32 @@ def test_recovery_record_fsync_refusal_fails_before_authority_changes(
     lifecycle, monkeypatch, transition
 ):
     settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
     _write_authority(authority_file, "known-good")
     settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
     cached = config.get_settings()
     real_fsync = os.fsync
+    real_open = os.open
+    real_unlink = Path.unlink
 
     def refuse_directory_fsync(descriptor):
         if stat.S_ISDIR(os.fstat(descriptor).st_mode):
             raise OSError(errno.EIO, "synthetic recovery fsync refusal")
         return real_fsync(descriptor)
 
+    def refuse_recovery_mutation(path, flags, *args, **kwargs):
+        if Path(path) == recovery_file and flags & os.O_WRONLY:
+            raise OSError(errno.EIO, "synthetic recovery mutation refusal")
+        return real_open(path, flags, *args, **kwargs)
+
+    def refuse_recovery_unlink(path, *args, **kwargs):
+        if path == recovery_file:
+            raise OSError(errno.EIO, "synthetic recovery unlink refusal")
+        return real_unlink(path, *args, **kwargs)
+
     monkeypatch.setattr(config.os, "fsync", refuse_directory_fsync)
+    monkeypatch.setattr(config.os, "open", refuse_recovery_mutation)
+    monkeypatch.setattr(Path, "unlink", refuse_recovery_unlink)
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
 
@@ -447,7 +471,20 @@ def test_recovery_record_fsync_refusal_fails_before_authority_changes(
     assert _authority(authority_file) == "known-good"
     assert _stored_mirror(settings_file) == "known-good"
     assert cached.mcp_api_key == "known-good"
-    assert not authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME).exists()
+    expected = "rotated-key" if transition == "rotate" else ""
+    assert _recovery_document(recovery_file) == {
+        "key": expected,
+        "state": "prepared",
+    }
+
+    monkeypatch.setattr(config.os, "fsync", real_fsync)
+    monkeypatch.setattr(config.os, "open", real_open)
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    config.clear_settings_cache()
+
+    assert config.get_settings().mcp_api_key == "known-good"
+    assert _authority(authority_file) == "known-good"
+    assert _stored_mirror(settings_file) == "known-good"
 
 
 @pytest.mark.parametrize("transition", ["rotate", "revoke"])
@@ -483,6 +520,11 @@ def test_failed_recovery_stage_cannot_activate_after_unlink_rollback(
         operation()
 
     assert removed_recovery is not None
+    expected = "rotated-key" if transition == "rotate" else ""
+    assert json.loads(removed_recovery) == {
+        "key": expected,
+        "state": "prepared",
+    }
     assert _authority(authority_file) == "known-good"
     assert _stored_mirror(settings_file) == "known-good"
     assert cached.mcp_api_key == "known-good"
@@ -509,6 +551,7 @@ def test_authority_replace_failure_cannot_activate_when_recovery_unlink_fails(
     settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
     cached = config.get_settings()
     real_replace = os.replace
+    real_open = os.open
     real_unlink = Path.unlink
 
     def fail_authority_replace(source, destination):
@@ -521,7 +564,13 @@ def test_authority_replace_failure_cannot_activate_when_recovery_unlink_fails(
             raise OSError(errno.EIO, "synthetic recovery unlink refusal")
         return real_unlink(path, *args, **kwargs)
 
+    def fail_recovery_mutation(path, flags, *args, **kwargs):
+        if Path(path) == recovery_file and flags & os.O_WRONLY:
+            raise OSError(errno.EIO, "synthetic recovery mutation refusal")
+        return real_open(path, flags, *args, **kwargs)
+
     monkeypatch.setattr(config.os, "replace", fail_authority_replace)
+    monkeypatch.setattr(config.os, "open", fail_recovery_mutation)
     monkeypatch.setattr(Path, "unlink", fail_recovery_unlink)
     monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
     operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
@@ -530,17 +579,90 @@ def test_authority_replace_failure_cannot_activate_when_recovery_unlink_fails(
         operation()
 
     assert recovery_file.exists()
+    expected = "rotated-key" if transition == "rotate" else ""
+    assert _recovery_document(recovery_file) == {
+        "key": expected,
+        "state": "prepared",
+    }
     assert _authority(authority_file) == "known-good"
     assert _stored_mirror(settings_file) == "known-good"
     assert cached.mcp_api_key == "known-good"
 
     monkeypatch.setattr(config.os, "replace", real_replace)
+    monkeypatch.setattr(config.os, "open", real_open)
     monkeypatch.setattr(Path, "unlink", real_unlink)
     config.clear_settings_cache()
 
     assert config.get_settings().mcp_api_key == "known-good"
     assert _authority(authority_file) == "known-good"
     assert _stored_mirror(settings_file) == "known-good"
+
+
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+@pytest.mark.parametrize("failure_point", ["write", "fsync"])
+def test_recovery_activation_failure_does_not_hide_replaced_authority(
+    lifecycle, monkeypatch, caplog, transition, failure_point
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    real_fsync = os.fsync
+    directory_fsync_calls = 0
+    write_attempted = False
+
+    def refuse_authority_directory_or_recovery_fsync(descriptor):
+        nonlocal directory_fsync_calls
+        metadata = os.fstat(descriptor)
+        if stat.S_ISDIR(metadata.st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls == 2:
+                raise OSError(errno.EIO, "synthetic authority directory fsync refusal")
+        elif (
+            failure_point == "fsync"
+            and recovery_file.exists()
+            and metadata.st_ino == recovery_file.stat().st_ino
+        ):
+            raise OSError(errno.EIO, "synthetic recovery state fsync refusal")
+        return real_fsync(descriptor)
+
+    def refuse_recovery_state_write(*_args, **_kwargs):
+        nonlocal write_attempted
+        write_attempted = True
+        raise OSError(errno.EIO, "synthetic recovery state write refusal")
+
+    monkeypatch.setattr(
+        config.os,
+        "fsync",
+        refuse_authority_directory_or_recovery_fsync,
+    )
+    if failure_point == "write":
+        monkeypatch.setattr(
+            config,
+            "_write_mcp_recovery_document_locked",
+            refuse_recovery_state_write,
+            raising=False,
+        )
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+    operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
+
+    result = operation()
+    expected = "rotated-key" if transition == "rotate" else ""
+
+    if transition == "rotate":
+        assert result == expected
+    else:
+        assert result is None
+    if failure_point == "write":
+        assert write_attempted
+    assert _authority(authority_file) == expected
+    assert _recovery_document(recovery_file) == {
+        "key": expected,
+        "state": "prepared" if failure_point == "write" else "recovery-active",
+    }
+    assert _stored_mirror(settings_file) == expected
+    assert config.get_settings().mcp_api_key == expected
+    assert "recovery record could not be made durable" in caplog.text
 
 
 @pytest.mark.parametrize("transition", ["rotate", "revoke"])

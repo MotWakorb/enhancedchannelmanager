@@ -59,12 +59,11 @@ MCP_SECRETS_DIR = Path(os.environ.get("MCP_SECRETS_DIR") or CONFIG_DIR)
 # ``backend/tests/test_04c0u8_projection_paths_are_not_logged.py``, and
 # ``mcp-server/config.py`` for the sidecar's copy of the same rule.
 MCP_KEY_FILENAME = "api-key"
-# A transient owner-only record of the pending authority. It is made durable
-# before ``api-key`` is replaced and removed only after that rename is durable;
-# if a filesystem refuses the second directory fsync, startup reapplies this
-# exact disclosed transition before reading authority or publishing settings.
+# A transient owner-only WAL record. It is staged as inert before ``api-key``
+# is replaced and made recovery-active only after that replacement succeeds.
 MCP_KEY_RECOVERY_FILENAME = ".api-key.recovery"
-_MCP_RECOVERY_CANCELLED = {"cancelled": True}
+_MCP_RECOVERY_PREPARED = "prepared"
+_MCP_RECOVERY_ACTIVE = "recovery-active"
 MCP_SERVICE_FILENAME = "mcp-service.json"
 # Public client credential the operator hands to MCP clients.
 MCP_KEY_FILE = MCP_SECRETS_DIR / MCP_KEY_FILENAME
@@ -1179,7 +1178,7 @@ def _fsync_mcp_parent_directory() -> bool:
     except OSError as error:
         logger.warning(
             "[CONFIG] Could not fsync the MCP credential directory after replacing %s "
-            "(%s); durable recovery remains armed",
+            "(%s); the directory update may not survive a host crash",
             MCP_KEY_FILENAME,
             error,
         )
@@ -1237,12 +1236,19 @@ def _prepare_private_mcp_file_locked(path: Path, value: str) -> tuple[Path, tupl
             os.close(descriptor)
 
 
-def _mcp_recovery_document(key: str) -> str:
-    return json.dumps({"key": key}, separators=(",", ":"), sort_keys=True)
+def _mcp_recovery_document(key: str, state: str) -> str:
+    return json.dumps(
+        {"key": key, "state": state},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
-def _cancel_mcp_recovery_locked(recovery: Path) -> bool:
-    """Make an existing recovery record non-activating without a directory write."""
+def _write_mcp_recovery_document_locked(
+    recovery: Path,
+    key: str,
+    state: str,
+) -> None:
     descriptor = None
     try:
         descriptor = os.open(
@@ -1254,14 +1260,7 @@ def _cancel_mcp_recovery_locked(recovery: Path) -> bool:
         with os.fdopen(descriptor, "w", closefd=True) as handle:
             descriptor = None
             handle.seek(0)
-            handle.write(
-                json.dumps(
-                    _MCP_RECOVERY_CANCELLED,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                )
-                + "\n"
-            )
+            handle.write(f"{_mcp_recovery_document(key, state)}\n")
             handle.truncate()
             handle.flush()
             os.fsync(handle.fileno())
@@ -1274,17 +1273,8 @@ def _cancel_mcp_recovery_locked(recovery: Path) -> bool:
             ):
                 raise OSError(
                     errno.EIO,
-                    "MCP credential recovery identity changed during cancellation",
+                    "MCP credential recovery identity changed during state update",
                 )
-        return True
-    except FileNotFoundError:
-        return True
-    except OSError as error:
-        logger.error(
-            "[CONFIG] Failed to cancel MCP credential recovery record (%s)",
-            error,
-        )
-        return False
     finally:
         if descriptor is not None:
             try:
@@ -1293,26 +1283,37 @@ def _cancel_mcp_recovery_locked(recovery: Path) -> bool:
                 logger.error("[CONFIG] Failed to close MCP recovery record handle")
 
 
-def _remove_mcp_recovery_locked() -> bool:
+def _mark_mcp_recovery_active_locked(key: str) -> None:
     recovery = MCP_KEY_FILE.with_name(MCP_KEY_RECOVERY_FILENAME)
-    cancelled = _cancel_mcp_recovery_locked(recovery)
+    try:
+        _write_mcp_recovery_document_locked(recovery, key, _MCP_RECOVERY_ACTIVE)
+    except OSError as error:
+        logger.error(
+            "[CONFIG] MCP authority is active but its recovery record could not "
+            "be made durable (%s); the transition may roll back after a host crash",
+            error,
+        )
+
+
+def _remove_mcp_recovery_locked() -> None:
+    recovery = MCP_KEY_FILE.with_name(MCP_KEY_RECOVERY_FILENAME)
     try:
         recovery.unlink()
     except FileNotFoundError:
-        return True
+        return
     except OSError as error:
         logger.error(
             "[CONFIG] Failed to remove MCP credential recovery record (%s)",
             error,
         )
-        return cancelled
-    return _fsync_mcp_parent_directory() or cancelled
+        return
+    _fsync_mcp_parent_directory()
 
 
 def _stage_mcp_recovery_locked(key: str) -> None:
     recovery = MCP_KEY_FILE.with_name(MCP_KEY_RECOVERY_FILENAME)
     temporary, _signature = _prepare_private_mcp_file_locked(
-        recovery, _mcp_recovery_document(key)
+        recovery, _mcp_recovery_document(key, _MCP_RECOVERY_PREPARED)
     )
     try:
         try:
@@ -1363,15 +1364,20 @@ def _recover_mcp_authority_locked() -> None:
         document = json.loads(raw)
     except json.JSONDecodeError as error:
         raise ValueError("MCP credential recovery record is not valid JSON") from error
-    if document == _MCP_RECOVERY_CANCELLED:
-        _remove_mcp_recovery_locked()
-        return
     if (
         not isinstance(document, dict)
-        or set(document) != {"key"}
+        or set(document) != {"key", "state"}
         or not isinstance(document["key"], str)
+        or not isinstance(document["state"], str)
+        or document["state"] not in {
+            _MCP_RECOVERY_PREPARED,
+            _MCP_RECOVERY_ACTIVE,
+        }
     ):
         raise ValueError("MCP credential recovery record has an invalid shape")
+    if document["state"] == _MCP_RECOVERY_PREPARED:
+        _remove_mcp_recovery_locked()
+        return
     key = document["key"]
     _replace_mcp_authority_locked(key)
 
@@ -1392,6 +1398,8 @@ def _publish_mcp_api_key_locked(key: str) -> tuple[int, ...]:
             raise
         if _fsync_mcp_parent_directory():
             _remove_mcp_recovery_locked()
+        else:
+            _mark_mcp_recovery_active_locked(key)
     finally:
         try:
             temporary.unlink()
