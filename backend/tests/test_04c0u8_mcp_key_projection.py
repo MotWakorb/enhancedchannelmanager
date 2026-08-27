@@ -78,7 +78,9 @@ def test_save_projects_only_mcp_key_with_private_mode(tmp_path: Path) -> None:
         password="<Synthetic-Password-04c0u8>",
     )
 
-    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file):
+    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file), patch(
+        "config.secrets.token_urlsafe", return_value=_KEY
+    ):
         save_settings(settings)
 
     projected = key_file.read_text()
@@ -109,7 +111,9 @@ def test_projection_is_owner_only_and_never_group_or_world_readable(
     key_file = tmp_path / "mcp" / "api-key"
     key_file.parent.mkdir()
 
-    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file):
+    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file), patch(
+        "config.secrets.token_urlsafe", return_value=_KEY
+    ):
         save_settings(DispatcharrSettings(mcp_api_key=_KEY))
 
     mode = key_file.stat().st_mode & 0o777
@@ -121,9 +125,12 @@ def test_rotation_atomically_replaces_projected_key(tmp_path: Path) -> None:
     config_file = tmp_path / "settings.json"
     key_file = tmp_path / "mcp" / "api-key"
     key_file.parent.mkdir()
-    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file):
-        save_settings(DispatcharrSettings(mcp_api_key="<Synthetic-Old-Key-04c0u8>"))
-        save_settings(DispatcharrSettings(mcp_api_key="<Synthetic-New-Key-04c0u8>"))
+    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file), patch(
+        "config.secrets.token_urlsafe",
+        side_effect=["<Synthetic-Old-Key-04c0u8>", "<Synthetic-New-Key-04c0u8>"],
+    ):
+        config.rotate_mcp_api_key()
+        config.rotate_mcp_api_key()
 
     assert key_file.read_text() == "<Synthetic-New-Key-04c0u8>\n"
     assert key_file.stat().st_mode & 0o777 == 0o600
@@ -145,7 +152,7 @@ def test_existing_key_is_projected_when_settings_load(tmp_path: Path) -> None:
     assert key_file.read_text() == "<Synthetic-Existing-Key-04c0u8>\n"
 
 
-def test_projection_is_skipped_when_the_projection_directory_is_absent(
+def test_save_fails_when_the_projection_directory_is_absent(
     tmp_path: Path,
 ) -> None:
     """An absent MCP_SECRETS_DIR must not be conjured into existence.
@@ -161,10 +168,13 @@ def test_projection_is_skipped_when_the_projection_directory_is_absent(
     config_file = tmp_path / "settings.json"
     key_file = tmp_path / "absent" / "api-key"
 
-    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file):
+    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file), pytest.raises(
+        FileNotFoundError
+    ):
         save_settings(DispatcharrSettings(mcp_api_key=_KEY))
 
     assert not key_file.parent.exists()
+    assert not config_file.exists()
 
 
 def test_the_default_projection_directory_is_config_dir() -> None:
@@ -207,13 +217,16 @@ def test_projection_failure_does_not_discard_valid_settings(tmp_path: Path) -> N
         '"mcp_api_key":"<Synthetic-Existing-Key-04c0u8>"}'
     )
     config.clear_settings_cache()
-    with patch("config.CONFIG_FILE", config_file), patch(
-        "config._project_mcp_api_key", side_effect=PermissionError("denied")
-    ):
-        loaded = config.get_settings()
+    key_file = tmp_path / "mcp" / "api-key"
+    key_file.parent.mkdir()
+    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file), patch(
+        "config._publish_mcp_api_key_locked", side_effect=PermissionError("denied")
+    ), pytest.raises(PermissionError, match="denied"):
+        config.get_settings()
     config.clear_settings_cache()
 
-    assert loaded.url == "http://dispatcharr.example:9191"
+    assert json.loads(config_file.read_text())["url"] == "http://dispatcharr.example:9191"
+    assert not key_file.exists()
 
 
 def test_public_and_private_projections_are_distinct_files() -> None:
@@ -257,21 +270,20 @@ def test_a_failed_projection_never_leaves_the_cache_behind_the_saved_file(
     config_file = tmp_path / "settings.json"
     config.clear_settings_cache()
 
-    with patch("config.CONFIG_FILE", config_file):
-        save_settings(DispatcharrSettings(mcp_api_key="<Synthetic-Old-Key-04c0u8>"))
-
+    key_file = tmp_path / "api-key"
+    key_file.write_text("<Synthetic-Old-Key-04c0u8>\n")
+    key_file.chmod(0o600)
+    config_file.write_text('{"mcp_api_key":"<Synthetic-Old-Key-04c0u8>"}')
+    with patch("config.CONFIG_FILE", config_file), patch("config.MCP_KEY_FILE", key_file):
+        old = config.get_settings()
         with patch(
-            "config._project_mcp_api_key", side_effect=PermissionError("denied")
-        ):
-            with pytest.raises(PermissionError):
-                save_settings(
-                    DispatcharrSettings(mcp_api_key="<Synthetic-New-Key-04c0u8>")
-                )
+            "config._publish_mcp_api_key_locked", side_effect=PermissionError("denied")
+        ), pytest.raises(PermissionError):
+            config.rotate_mcp_api_key()
 
-        # Disk took the new key…
-        assert "<Synthetic-New-Key-04c0u8>" in config_file.read_text()
-        # …so the in-process cache must not still be handing out the old one.
-        assert config.get_settings().mcp_api_key == "<Synthetic-New-Key-04c0u8>"
+        assert key_file.read_text() == "<Synthetic-Old-Key-04c0u8>\n"
+        assert "<Synthetic-Old-Key-04c0u8>" in config_file.read_text()
+        assert old.mcp_api_key == "<Synthetic-Old-Key-04c0u8>"
 
     config.clear_settings_cache()
 

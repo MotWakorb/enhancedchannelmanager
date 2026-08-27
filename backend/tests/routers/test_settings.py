@@ -1874,33 +1874,33 @@ class TestMCPApiKeyGenerate:
     @pytest.mark.asyncio
     async def test_generates_key(self, async_client):
         """Generates a new MCP API key."""
-        mock = _mock_settings()
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings") as save_mock, \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch(
+                 "routers.settings.rotate_public_mcp_api_key",
+                 return_value="generated-mcp-key-with-sufficient-length",
+             ) as rotate_mock:
             response = await async_client.post("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
         data = response.json()
         assert "mcp_api_key" in data
         assert len(data["mcp_api_key"]) > 20  # token_urlsafe(32) produces 43 chars
-        save_mock.assert_called_once()
+        rotate_mock.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_replaces_existing_key(self, async_client):
         """Generating a new key replaces the old one."""
-        mock = _mock_settings(mcp_api_key="old-key-value")
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings") as save_mock, \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch(
+                 "routers.settings.rotate_public_mcp_api_key",
+                 return_value="replacement-mcp-key-with-sufficient-length",
+             ) as rotate_mock:
             response = await async_client.post("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
         data = response.json()
         assert data["mcp_api_key"] != "old-key-value"
-        save_mock.assert_called_once()
+        rotate_mock.assert_called_once_with()
 
 
 class TestMCPApiKeyRevoke:
@@ -1909,31 +1909,24 @@ class TestMCPApiKeyRevoke:
     @pytest.mark.asyncio
     async def test_revokes_key(self, async_client):
         """Revokes the MCP API key."""
-        mock = _mock_settings(mcp_api_key="existing-key")
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings") as save_mock, \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch("routers.settings.revoke_public_mcp_api_key") as revoke_mock:
             response = await async_client.delete("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "revoked"
-        save_mock.assert_called_once()
-        # Verify the key was cleared on the mock
-        assert mock.mcp_api_key == ""
+        revoke_mock.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_revoke_when_no_key(self, async_client):
         """Revoking when no key exists still succeeds."""
-        mock = _mock_settings(mcp_api_key="")
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings"), \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch("routers.settings.revoke_public_mcp_api_key") as revoke_mock:
             response = await async_client.delete("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
+        revoke_mock.assert_called_once_with()
 
 
 class TestMCPApiKeyConfiguredInResponse:

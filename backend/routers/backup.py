@@ -123,7 +123,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0152"
+APP_VERSION = "0.18.1-0153"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -4302,12 +4302,14 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     failure_reinitialized = False
 
     # Finish settings validation and normalization before any database shutdown
-    # or live write. The resulting bytes are the only settings bytes installed.
+    # or live write. Credential authority is reloaded later, at commit time.
     restored_settings = None
     if "settings.json" in manifest.staged_paths:
         settings = manifest.load_json("settings.json", _MAX_LEGACY_SETTINGS_BYTES)
-        restored_settings = _merge_settings_preserving_redacted(
-            json.dumps(settings).encode("utf-8")
+        restored_settings = DispatcharrSettings.model_validate_json(
+            _merge_settings_preserving_redacted(
+                json.dumps(settings).encode("utf-8")
+            )
         )
 
     # Capture existing alert_methods.config BEFORE we close/replace the DB so
@@ -4327,12 +4329,6 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
     try:
         # Complete every potentially failing copy before closing SQLite or
         # touching a live artifact. Every stage resides on its target filesystem.
-        if restored_settings is not None:
-            staged_items.append(
-                (CONFIG_FILE, _stage_restore_file(CONFIG_FILE, content=restored_settings))
-            )
-            restored.append("settings.json")
-
         if "journal.db" in manifest.staged_paths:
             staged_journal = _stage_restore_file(
                 JOURNAL_DB_FILE, source=manifest.file("journal.db")
@@ -4364,6 +4360,12 @@ def _restore_from_zip(zf: zipfile.ZipFile, manifest: dict) -> list[str]:
         records = _swap_staged_restore(staged_items)
         try:
             init_db()
+            if restored_settings is not None:
+                # The generic saver reloads credential authority under the
+                # lifecycle lock. Archived and pre-restore snapshots therefore
+                # cannot overwrite a rotation that committed during staging.
+                save_settings(restored_settings, settings_file=CONFIG_FILE)
+                restored.append("settings.json")
         except BaseException:
             # init_db may have opened connections or partially migrated the new
             # journal. Close those before putting the prior inode back.
@@ -6184,6 +6186,9 @@ def _restore_settings(settings_data: dict) -> dict:
     merged = current.model_dump()
 
     for key, value in settings_data.items():
+        if key == "mcp_api_key":
+            warnings.append("Skipped instance-bound field: mcp_api_key (kept existing value)")
+            continue
         if value == REDACTED:
             warnings.append("Skipped redacted field: %s (kept existing value)" % key)
             continue

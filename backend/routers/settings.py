@@ -6,7 +6,6 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 import asyncio
 import logging
 import re
-import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,6 +28,8 @@ from config import (
     ADMIN_ONLY_READ_REDACTED_FIELDS,
     get_settings,
     normalize_public_base_url,
+    revoke_mcp_api_key as revoke_public_mcp_api_key,
+    rotate_mcp_api_key as rotate_public_mcp_api_key,
     save_settings,
     clear_settings_cache,
     set_log_level,
@@ -2493,13 +2494,10 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     handler anonymously, so a headless auth-disabled deployment can still
     configure its own sidecar.
     """
-    settings = get_settings()
-    settings.mcp_api_key = secrets.token_urlsafe(32)
-    save_settings(settings)
     _rotate_private_projection_or_503()
-    clear_settings_cache()
+    key = rotate_public_mcp_api_key()
     logger.info("[SETTINGS] MCP API key generated")
-    return {"mcp_api_key": settings.mcp_api_key}
+    return {"mcp_api_key": key}
 
 
 @router.delete("/mcp-api-key")
@@ -2518,11 +2516,8 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     the generate half above for the identity carve-out that keeps a headless
     deployment reachable.
     """
-    settings = get_settings()
-    settings.mcp_api_key = ""
-    save_settings(settings)
     _rotate_private_projection_or_503()
-    clear_settings_cache()
+    revoke_public_mcp_api_key()
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}
 

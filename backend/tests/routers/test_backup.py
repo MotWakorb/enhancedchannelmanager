@@ -16,6 +16,7 @@ import pytest
 import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import config as config_mod
 from models import (
     ChannelPipelineRule,
     DummyEPGProfile,
@@ -2058,6 +2059,9 @@ class TestZipRestoreRedactionAware:
             "mcp_api_key": "EXISTING-MCP-9999",
         }
         settings_file.write_text(json.dumps(existing))
+        authority_file = tmp_path / "api-key"
+        authority_file.write_text("EXISTING-MCP-9999\n")
+        authority_file.chmod(0o600)
         db_file = tmp_path / "journal.db"
 
         # Build a ZIP whose settings.json carries the redacted sentinels and a
@@ -2077,6 +2081,7 @@ class TestZipRestoreRedactionAware:
         with patch("routers.backup.CONFIG_DIR", tmp_path), \
              patch("routers.backup.CONFIG_FILE", settings_file), \
              patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch.object(config_mod, "MCP_KEY_FILE", authority_file), \
              patch("routers.backup.close_db"), \
              patch("routers.backup.init_db"), \
              patch("routers.backup.clear_settings_cache"), \
@@ -2191,6 +2196,9 @@ class TestZipRestoreRedactionAware:
             "password": "should-be-overwritten",
             "mcp_api_key": "destination-mcp-key",
         }))
+        authority_file = tmp_path / "api-key"
+        authority_file.write_text("destination-mcp-key\n")
+        authority_file.chmod(0o600)
         db_file = tmp_path / "journal.db"
 
         legacy_settings = json.dumps({
@@ -2205,6 +2213,7 @@ class TestZipRestoreRedactionAware:
         with patch("routers.backup.CONFIG_DIR", tmp_path), \
              patch("routers.backup.CONFIG_FILE", settings_file), \
              patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch.object(config_mod, "MCP_KEY_FILE", authority_file), \
              patch("routers.backup.close_db"), \
              patch("routers.backup.init_db"), \
              patch("routers.backup.clear_settings_cache"), \
