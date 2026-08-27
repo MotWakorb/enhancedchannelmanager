@@ -28,6 +28,7 @@ MCP_BASE_IMAGE = "python:3.12-alpine@sha256:" + "".join(
         "ade7dc31",
     )
 )
+MCP_OPENSSL_MINIMUM = "3.5.8-r0"
 
 _FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 _USES = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)", re.MULTILINE)
@@ -48,6 +49,13 @@ def check_repository(root: Path) -> list[str]:
             "MCP image must use the reviewed Alpine base digest: "
             f"expected {MCP_BASE_IMAGE}, found {mcp_base_images}"
         )
+    for package in ("libcrypto3", "libssl3"):
+        required = f"'{package}>={MCP_OPENSSL_MINIMUM}'"
+        if required not in mcp_dockerfile:
+            failures.append(
+                "MCP image must enforce the reviewed OpenSSL package floor: "
+                f"missing {required}"
+            )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:
         failures.append("MCP dependency audit is absent from the publication workflow")
