@@ -59,6 +59,11 @@ MCP_SECRETS_DIR = Path(os.environ.get("MCP_SECRETS_DIR") or CONFIG_DIR)
 # ``backend/tests/test_04c0u8_projection_paths_are_not_logged.py``, and
 # ``mcp-server/config.py`` for the sidecar's copy of the same rule.
 MCP_KEY_FILENAME = "api-key"
+# A transient owner-only copy of the pending authority. It is made durable
+# before ``api-key`` is replaced and removed only after that rename is durable;
+# if a filesystem refuses the second directory fsync, startup reapplies this
+# exact disclosed transition before reading authority or publishing settings.
+MCP_KEY_RECOVERY_FILENAME = ".api-key.recovery"
 MCP_SERVICE_FILENAME = "mcp-service.json"
 # Public client credential the operator hands to MCP clients.
 MCP_KEY_FILE = MCP_SECRETS_DIR / MCP_KEY_FILENAME
@@ -923,7 +928,8 @@ class DispatcharrSettings(BaseModel):
 
 # In-memory cache of settings
 _cached_settings: DispatcharrSettings | None = None
-_cached_mcp_authority_signature: tuple[int, int, int, int] | None = None
+_cached_mcp_authority_signature: tuple[int, ...] | None = None
+_mcp_settings_mirror_dirty = False
 
 # One-shot flag so the legacy ``api_key`` deprecation WARN only fires once
 # per process startup, not on every settings reload (bd-jmi1c). Cleared by
@@ -1083,40 +1089,106 @@ def prepare_settings_data(data: dict) -> dict:
     return _sanitize_settings_data(prepared)
 
 
-def _authority_signature(metadata: os.stat_result) -> tuple[int, int, int, int]:
-    return (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+def _authority_signature(metadata: os.stat_result) -> tuple[int, ...]:
+    """Identity, content, and trust metadata for one validated descriptor."""
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+        metadata.st_mode,
+        metadata.st_uid,
+        metadata.st_gid,
+        metadata.st_nlink,
+    )
 
 
-def _read_mcp_api_key_locked() -> tuple[bool, str, tuple[int, int, int, int] | None]:
-    """Read the sidecar authentication artifact while holding both locks."""
-    try:
-        metadata = MCP_KEY_FILE.stat()
-    except FileNotFoundError:
-        return False, "", None
+def _validate_mcp_file_metadata(metadata: os.stat_result, filename: str) -> None:
     if not stat.S_ISREG(metadata.st_mode):
-        raise OSError(errno.EINVAL, f"{MCP_KEY_FILENAME} is not a regular file")
-    raw = MCP_KEY_FILE.read_text()
+        raise OSError(errno.EINVAL, f"{filename} is not a regular file")
+    if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_uid != os.geteuid():
+        raise PermissionError(f"{filename} does not have the required owner and mode")
+    if metadata.st_nlink != 1:
+        raise PermissionError(f"{filename} has an unsafe link count")
+
+
+def _open_validated_mcp_file(path: Path, filename: str) -> tuple[int, os.stat_result]:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        _validate_mcp_file_metadata(metadata, filename)
+        return descriptor, metadata
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _inspect_mcp_api_key_locked() -> tuple[int, ...]:
+    descriptor, metadata = _open_validated_mcp_file(MCP_KEY_FILE, MCP_KEY_FILENAME)
+    try:
+        return _authority_signature(metadata)
+    finally:
+        try:
+            os.close(descriptor)
+        except OSError:
+            logger.error("[CONFIG] Failed to close MCP credential handle")
+
+
+def _read_private_mcp_file_locked(path: Path, filename: str) -> tuple[str, tuple[int, ...]]:
+    descriptor, before = _open_validated_mcp_file(path, filename)
+    try:
+        with os.fdopen(descriptor, "r", closefd=True) as handle:
+            descriptor = -1
+            raw = handle.read()
+            after = os.fstat(handle.fileno())
+        if _authority_signature(before) != _authority_signature(after):
+            raise OSError(errno.EIO, f"{filename} changed while it was being read")
+    finally:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                logger.error("[CONFIG] Failed to close MCP credential handle")
     lines = raw.splitlines()
     if len(lines) > 1:
-        raise ValueError(f"{MCP_KEY_FILENAME} contains multiple lines")
-    return True, lines[0] if lines else "", _authority_signature(metadata)
+        raise ValueError(f"{filename} contains multiple lines")
+    return lines[0] if lines else "", _authority_signature(after)
 
 
-def _fsync_mcp_parent_directory() -> None:
+def _read_mcp_api_key_locked() -> tuple[bool, str, tuple[int, ...] | None]:
+    """Read and validate authority through one non-following descriptor."""
+    try:
+        key, signature = _read_private_mcp_file_locked(MCP_KEY_FILE, MCP_KEY_FILENAME)
+    except FileNotFoundError:
+        return False, "", None
+    return True, key, signature
+
+
+def _fsync_mcp_parent_directory() -> bool:
     directory_fd = None
     try:
-        directory_fd = os.open(MCP_KEY_FILE.parent, os.O_RDONLY | os.O_DIRECTORY)
+        directory_fd = os.open(
+            MCP_KEY_FILE.parent,
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0),
+        )
         os.fsync(directory_fd)
+        return True
     except OSError as error:
         logger.warning(
             "[CONFIG] Could not fsync the MCP credential directory after replacing %s "
-            "(%s); the credential is active but the rename may not survive a host crash",
+            "(%s); durable recovery remains armed",
             MCP_KEY_FILENAME,
             error,
         )
+        return False
     finally:
         if directory_fd is not None:
-            os.close(directory_fd)
+            try:
+                os.close(directory_fd)
+            except OSError:
+                logger.error("[CONFIG] Failed to close MCP credential directory handle")
 
 
 def _sweep_orphaned_mcp_temporaries_locked() -> int:
@@ -1130,37 +1202,127 @@ def _sweep_orphaned_mcp_temporaries_locked() -> int:
     return removed
 
 
-def _publish_mcp_api_key_locked(key: str) -> tuple[int, int, int, int]:
-    """Atomically replace credential authority while holding both locks."""
-    parent = MCP_KEY_FILE.parent
-    if not parent.is_dir():
-        raise FileNotFoundError(errno.ENOENT, "MCP credential directory is unavailable")
-    _sweep_orphaned_mcp_temporaries_locked()
-    temporary = MCP_KEY_FILE.with_name(
-        f".{MCP_KEY_FILE.name}.{secrets.token_hex(8)}.tmp"
-    )
+def _prepare_private_mcp_file_locked(path: Path, value: str) -> tuple[Path, tuple[int, ...]]:
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     descriptor = os.open(
         temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
     try:
-        with os.fdopen(descriptor, "w") as handle:
-            handle.write(f"{key}\n")
+        with os.fdopen(descriptor, "w", closefd=True) as handle:
+            descriptor = -1
+            handle.write(f"{value}\n")
             handle.flush()
             os.fchmod(handle.fileno(), 0o600)
             os.fsync(handle.fileno())
-        os.replace(temporary, MCP_KEY_FILE)
-        _fsync_mcp_parent_directory()
+            metadata = os.fstat(handle.fileno())
+            _validate_mcp_file_metadata(metadata, path.name)
+            path_metadata = os.stat(temporary, follow_symlinks=False)
+            if (path_metadata.st_dev, path_metadata.st_ino) != (
+                metadata.st_dev,
+                metadata.st_ino,
+            ):
+                raise OSError(errno.EIO, f"{path.name} temporary identity changed")
+        return temporary, _authority_signature(metadata)
+    except Exception:
+        try:
+            temporary.unlink()
+        except OSError:
+            logger.error("[CONFIG] Failed to remove rejected MCP credential temporary")
+        raise
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _remove_mcp_recovery_locked() -> None:
+    recovery = MCP_KEY_FILE.with_name(MCP_KEY_RECOVERY_FILENAME)
+    try:
+        recovery.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.error("[CONFIG] Failed to remove MCP credential recovery record")
+        return
+    _fsync_mcp_parent_directory()
+
+
+def _stage_mcp_recovery_locked(key: str) -> None:
+    recovery = MCP_KEY_FILE.with_name(MCP_KEY_RECOVERY_FILENAME)
+    temporary, _signature = _prepare_private_mcp_file_locked(recovery, key)
+    try:
+        try:
+            os.replace(temporary, recovery)
+            if not _fsync_mcp_parent_directory():
+                raise OSError(errno.EIO, "MCP recovery record is not crash-durable")
+        except Exception:
+            _remove_mcp_recovery_locked()
+            raise
     finally:
         try:
             temporary.unlink()
         except FileNotFoundError:
             pass
-    metadata = MCP_KEY_FILE.stat()
-    if stat.S_IMODE(metadata.st_mode) != 0o600 or metadata.st_uid != os.geteuid():
-        raise PermissionError(f"{MCP_KEY_FILENAME} does not have the required owner and mode")
-    return _authority_signature(metadata)
+        except OSError:
+            logger.error("[CONFIG] Failed to remove MCP recovery temporary")
+
+
+def _replace_mcp_authority_locked(key: str) -> tuple[int, ...]:
+    """Replace authority after all content and metadata checks have passed."""
+    temporary, signature = _prepare_private_mcp_file_locked(MCP_KEY_FILE, key)
+    committed = False
+    try:
+        os.replace(temporary, MCP_KEY_FILE)
+        committed = True
+        durable = _fsync_mcp_parent_directory()
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.error("[CONFIG] Failed to remove MCP credential temporary")
+    if committed and durable:
+        _remove_mcp_recovery_locked()
+    return signature
+
+
+def _recover_mcp_authority_locked() -> None:
+    recovery = MCP_KEY_FILE.with_name(MCP_KEY_RECOVERY_FILENAME)
+    try:
+        key, _signature = _read_private_mcp_file_locked(
+            recovery, MCP_KEY_RECOVERY_FILENAME
+        )
+    except FileNotFoundError:
+        return
+    _replace_mcp_authority_locked(key)
+
+
+def _publish_mcp_api_key_locked(key: str) -> tuple[int, ...]:
+    """Atomically replace authority with a durable crash-repair record."""
+    parent = MCP_KEY_FILE.parent
+    if not parent.is_dir():
+        raise FileNotFoundError(errno.ENOENT, "MCP credential directory is unavailable")
+    _sweep_orphaned_mcp_temporaries_locked()
+    temporary, signature = _prepare_private_mcp_file_locked(MCP_KEY_FILE, key)
+    try:
+        _stage_mcp_recovery_locked(key)
+        try:
+            os.replace(temporary, MCP_KEY_FILE)
+        except Exception:
+            _remove_mcp_recovery_locked()
+            raise
+        if _fsync_mcp_parent_directory():
+            _remove_mcp_recovery_locked()
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.error("[CONFIG] Failed to remove MCP credential temporary")
+    return signature
 
 
 def _read_settings_model_locked() -> tuple[str, dict | None, DispatcharrSettings | None]:
@@ -1244,15 +1406,17 @@ def _repair_settings_mirror_locked(
     raw_settings: dict | None,
     settings: DispatcharrSettings | None,
     key: str,
-) -> DispatcharrSettings:
+) -> tuple[DispatcharrSettings, bool]:
     mirrored = (settings or DispatcharrSettings()).model_copy(deep=True)
     mirrored.mcp_api_key = key
     if settings_state == "invalid":
-        return mirrored
+        return mirrored, True
+    dirty = False
     if settings_state == "absent":
         try:
             mirrored = _write_settings_locked(mirrored)
         except Exception as error:
+            dirty = True
             logger.error(
                 "[CONFIG] MCP credential authority is active but its settings mirror "
                 "could not be repaired (%s)",
@@ -1264,29 +1428,32 @@ def _repair_settings_mirror_locked(
             repaired_document["mcp_api_key"] = key
             _write_settings_document_locked(repaired_document)
         except Exception as error:
+            dirty = True
             logger.error(
                 "[CONFIG] MCP credential authority is active but its settings mirror "
                 "could not be repaired (%s)",
                 type(error).__name__,
             )
-    return mirrored
+    return mirrored, dirty
 
 
 def load_settings() -> DispatcharrSettings:
     """Load settings and reconcile the compatibility mirror from authority."""
     global _cached_settings, _cached_mcp_authority_signature
+    global _mcp_settings_mirror_dirty
 
-    if _cached_settings is not None:
+    if _cached_settings is not None and not _mcp_settings_mirror_dirty:
         if _cached_mcp_authority_signature is None:
             return _cached_settings
         try:
-            if _authority_signature(MCP_KEY_FILE.stat()) == _cached_mcp_authority_signature:
+            if _inspect_mcp_api_key_locked() == _cached_mcp_authority_signature:
                 return _cached_settings
         except OSError:
             pass
 
     ensure_config_dir()
     with _settings_write_lock, _durable_settings_write_lock():
+        _recover_mcp_authority_locked()
         authority_exists, key, signature = _read_mcp_api_key_locked()
         settings_state, raw_settings, settings = _read_settings_model_locked()
         if not authority_exists:
@@ -1294,11 +1461,12 @@ def load_settings() -> DispatcharrSettings:
                 settings_state, raw_settings, settings
             )
         if authority_exists:
-            settings = _repair_settings_mirror_locked(
+            settings, _mcp_settings_mirror_dirty = _repair_settings_mirror_locked(
                 settings_state, raw_settings, settings, key
             )
         elif settings is None:
             settings = DispatcharrSettings()
+            _mcp_settings_mirror_dirty = False
         settings.mcp_api_key = key if authority_exists else ""
         _cached_settings = settings
         _cached_mcp_authority_signature = signature
@@ -1316,6 +1484,7 @@ def save_settings(
     functions are the only post-initialization authority writers.
     """
     global _cached_settings, _cached_mcp_authority_signature
+    global _mcp_settings_mirror_dirty
 
     target_file = settings_file or CONFIG_FILE
     target_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1336,6 +1505,7 @@ def save_settings(
             stored = _write_settings_locked(stored, target_file)
             _cached_settings = stored
             _cached_mcp_authority_signature = signature
+            _mcp_settings_mirror_dirty = False
             logger.info("[CONFIG] Settings saved successfully to %s", target_file)
     except Exception as error:
         logger.exception("[CONFIG] Failed to save settings to %s: %s", target_file, error)
@@ -1344,12 +1514,15 @@ def save_settings(
 
 def _transition_mcp_api_key(key: str) -> str:
     global _cached_settings, _cached_mcp_authority_signature
+    global _mcp_settings_mirror_dirty
 
     ensure_config_dir()
     with _settings_write_lock, _durable_settings_write_lock():
         signature = _publish_mcp_api_key_locked(key)
         state, raw, settings = _read_settings_model_locked()
-        mirrored = _repair_settings_mirror_locked(state, raw, settings, key)
+        mirrored, _mcp_settings_mirror_dirty = _repair_settings_mirror_locked(
+            state, raw, settings, key
+        )
         mirrored.mcp_api_key = key
         _cached_settings = mirrored
         _cached_mcp_authority_signature = signature
@@ -1408,11 +1581,13 @@ def clear_settings_cache() -> None:
     making it impossible to assert on the warnings per test.
     """
     global _cached_settings, _cached_mcp_authority_signature
+    global _mcp_settings_mirror_dirty
     global _legacy_api_key_warned, _legacy_api_key_conflict_warned, _dedup_threshold_floor_warned
     global _public_base_url_unset_warned, _public_base_url_invalid_warned
     global _session_cookie_transport_warned
     _cached_settings = None
     _cached_mcp_authority_signature = None
+    _mcp_settings_mirror_dirty = False
     _legacy_api_key_warned = False
     _legacy_api_key_conflict_warned = False
     _dedup_threshold_floor_warned = False

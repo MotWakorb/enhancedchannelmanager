@@ -162,8 +162,8 @@ def test_save_fails_when_the_projection_directory_is_absent(
     guard this exercises is unreachable on a default deployment — see
     ``test_the_default_projection_directory_is_config_dir``. It fires when the
     configured directory genuinely is not there, e.g. ``MCP_SECRETS_DIR``
-    pointing at a mount that failed to attach. Saving settings must still
-    succeed and must not scatter a credential file into a fabricated path.
+    pointing at a mount that failed to attach. The save must fail before either
+    authority or settings changes and must not fabricate the missing path.
     """
     config_file = tmp_path / "settings.json"
     key_file = tmp_path / "absent" / "api-key"
@@ -249,14 +249,14 @@ def test_a_failed_projection_never_leaves_the_cache_behind_the_saved_file(
 ) -> None:
     """Finding 5 — the ordering invariant, stated as a property.
 
-    ``save_settings`` writes ``settings.json`` and then projects the MCP key.
-    Whatever the projection does, these two must hold together afterwards:
+    ``save_settings`` first resolves and, when necessary, initializes the MCP
+    authority, then writes ``settings.json`` as its compatibility mirror.
+    Whatever authority publication does, these two must hold afterwards:
 
       * the process must not serve a key the settings file no longer contains
         (the cache is never behind disk), and
-      * a projection failure must still reach the caller (rotation is
-        fail-closed — the claim ``get_settings``'s docstring makes about
-        ``save_settings`` not suppressing the error).
+      * an authority-publication failure must still reach the caller before the
+        authority, mirror, or cache changes (rotation is fail-closed).
 
     The old ordering broke the first while keeping the second: the new key was
     durably on disk, ``_cached_settings`` still held the old one, and the

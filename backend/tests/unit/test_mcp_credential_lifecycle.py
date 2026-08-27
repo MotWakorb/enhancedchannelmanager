@@ -7,6 +7,7 @@ authority.
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import stat
@@ -35,6 +36,8 @@ def lifecycle(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "_cached_settings", None)
     if hasattr(config, "_cached_mcp_authority_signature"):
         monkeypatch.setattr(config, "_cached_mcp_authority_signature", None)
+    if hasattr(config, "_mcp_settings_mirror_dirty"):
+        monkeypatch.setattr(config, "_mcp_settings_mirror_dirty", False)
     yield settings_file, authority_file
     config.clear_settings_cache()
 
@@ -374,9 +377,250 @@ def test_authority_commit_survives_mirror_failure_and_startup_repairs_it(
 
     assert _authority(authority_file) == rotated
     assert _stored_mirror(settings_file) == "before"
-    config.clear_settings_cache()
-    assert config.load_settings().mcp_api_key == rotated
+    assert config.get_settings().mcp_api_key == rotated
     assert _stored_mirror(settings_file) == rotated
+
+
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+def test_directory_fsync_refusal_is_recovered_after_crash(
+    lifecycle, monkeypatch, transition
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    real_fsync = os.fsync
+    directory_fsync_calls = 0
+
+    def refuse_authority_commit_fsync(descriptor):
+        nonlocal directory_fsync_calls
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_calls += 1
+            if directory_fsync_calls == 2:
+                raise OSError(errno.EIO, "synthetic directory fsync refusal")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(config.os, "fsync", refuse_authority_commit_fsync)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+    operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
+    result = operation()
+    expected = "rotated-key" if transition == "rotate" else ""
+
+    if transition == "rotate":
+        assert result == expected
+    else:
+        assert result is None
+    assert _authority(authority_file) == expected
+
+    # Model a host crash restoring the pre-rename directory entry. The durable
+    # transition record must repair it before any settings load publishes K(n-1).
+    _write_authority(authority_file, "known-good")
+    config.clear_settings_cache()
+    monkeypatch.setattr(config.os, "fsync", real_fsync)
+
+    assert config.get_settings().mcp_api_key == expected
+    assert _authority(authority_file) == expected
+    assert _stored_mirror(settings_file) == expected
+
+
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+def test_recovery_record_fsync_refusal_fails_before_authority_changes(
+    lifecycle, monkeypatch, transition
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    cached = config.get_settings()
+    real_fsync = os.fsync
+
+    def refuse_directory_fsync(descriptor):
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "synthetic recovery fsync refusal")
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(config.os, "fsync", refuse_directory_fsync)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+    operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
+
+    with pytest.raises(OSError, match="not crash-durable"):
+        operation()
+
+    assert _authority(authority_file) == "known-good"
+    assert _stored_mirror(settings_file) == "known-good"
+    assert cached.mcp_api_key == "known-good"
+    assert not authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME).exists()
+
+
+def test_directory_close_failure_after_commit_does_not_hide_rotated_key(
+    lifecycle, monkeypatch
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    real_close = os.close
+    directory_closes = 0
+
+    def fail_post_commit_directory_close(descriptor):
+        nonlocal directory_closes
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_closes += 1
+            if directory_closes == 2:
+                real_close(descriptor)
+                raise OSError(errno.EIO, "synthetic directory close failure")
+        return real_close(descriptor)
+
+    monkeypatch.setattr(config.os, "close", fail_post_commit_directory_close)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+
+    assert config.rotate_mcp_api_key() == "rotated-key"
+    assert _authority(authority_file) == "rotated-key"
+    assert _stored_mirror(settings_file) == "rotated-key"
+    assert config.get_settings().mcp_api_key == "rotated-key"
+
+
+def test_temporary_cleanup_failure_after_commit_does_not_hide_rotated_key(
+    lifecycle, monkeypatch
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    real_unlink = Path.unlink
+
+    def fail_missing_authority_temporary(path, *args, **kwargs):
+        if path.parent == authority_file.parent and path.name.startswith(".api-key."):
+            if path.name != config.MCP_KEY_RECOVERY_FILENAME and not path.exists():
+                raise OSError(errno.EIO, "synthetic post-commit cleanup failure")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_missing_authority_temporary)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+
+    assert config.rotate_mcp_api_key() == "rotated-key"
+    assert _authority(authority_file) == "rotated-key"
+    assert _stored_mirror(settings_file) == "rotated-key"
+    assert config.get_settings().mcp_api_key == "rotated-key"
+
+
+def test_security_validation_finishes_before_authority_replace(
+    lifecycle, monkeypatch
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    real_replace = os.replace
+    real_validate = config._validate_mcp_file_metadata
+    authority_replaced = False
+
+    def track_replace(source, destination):
+        nonlocal authority_replaced
+        result = real_replace(source, destination)
+        if Path(destination) == authority_file:
+            authority_replaced = True
+        return result
+
+    def reject_post_commit_validation(metadata, filename):
+        assert not authority_replaced, "security validation ran after linearization"
+        return real_validate(metadata, filename)
+
+    monkeypatch.setattr(config.os, "replace", track_replace)
+    monkeypatch.setattr(config, "_validate_mcp_file_metadata", reject_post_commit_validation)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+
+    assert config.rotate_mcp_api_key() == "rotated-key"
+    assert _authority(authority_file) == "rotated-key"
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o400])
+def test_backend_rejects_authority_without_exact_owner_only_mode(
+    lifecycle, mode
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "exposed-key")
+    authority_file.chmod(mode)
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
+
+    with pytest.raises(PermissionError, match="owner and mode"):
+        config.get_settings()
+
+    assert stat.S_IMODE(authority_file.stat().st_mode) == mode
+
+
+def test_backend_rejects_wrong_owner_without_repairing_it(lifecycle, monkeypatch):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "wrong-owner-key")
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
+    expected_owner = os.geteuid() + 1
+    monkeypatch.setattr(config.os, "geteuid", lambda: expected_owner)
+
+    with pytest.raises(PermissionError, match="owner and mode"):
+        config.get_settings()
+
+    assert _authority(authority_file) == "wrong-owner-key"
+
+
+def test_backend_rejects_symlink_authority(lifecycle):
+    settings_file, authority_file = lifecycle
+    target = authority_file.with_name("attacker-key")
+    _write_authority(target, "attacker-key")
+    authority_file.symlink_to(target)
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
+
+    with pytest.raises(OSError):
+        config.get_settings()
+
+
+def test_backend_rejects_hardlinked_authority(lifecycle):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "linked-key")
+    os.link(authority_file, authority_file.with_name("second-link"))
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
+
+    with pytest.raises(PermissionError, match="link count"):
+        config.get_settings()
+
+
+def test_backend_rejects_non_regular_authority(lifecycle):
+    settings_file, authority_file = lifecycle
+    authority_file.mkdir()
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
+
+    with pytest.raises(OSError, match="regular file"):
+        config.get_settings()
+
+
+def test_backend_reads_authority_from_one_descriptor(lifecycle, monkeypatch):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "descriptor-key")
+    settings_file.write_text(json.dumps({"mcp_api_key": "stale-key"}))
+    real_read_text = Path.read_text
+
+    def reject_split_path_read(path, *args, **kwargs):
+        if path == authority_file:
+            raise AssertionError("authority must not be re-opened after validation")
+        return real_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", reject_split_path_read)
+
+    assert config.get_settings().mcp_api_key == "descriptor-key"
+
+
+@pytest.mark.parametrize("mutation", ["chmod", "hardlink"])
+def test_security_metadata_change_invalidates_cached_authority(
+    lifecycle, mutation
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "cached-key")
+    settings_file.write_text(json.dumps({"mcp_api_key": "cached-key"}))
+    assert config.get_settings().mcp_api_key == "cached-key"
+
+    if mutation == "chmod":
+        authority_file.chmod(0o644)
+        expected = "owner and mode"
+    else:
+        os.link(authority_file, authority_file.with_name("second-link"))
+        expected = "link count"
+
+    with pytest.raises(PermissionError, match=expected):
+        config.get_settings()
 
 
 def test_projection_is_private_complete_and_sweeps_stale_temporaries(
