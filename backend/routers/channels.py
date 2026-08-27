@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request, UploadFile, File, Response
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, PositiveInt, field_validator
+from pydantic import BaseModel, Field, PositiveInt, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from auth import RequireAdminIfEnabled
@@ -690,7 +690,7 @@ class BulkAssignNumbersOp(BaseModel):
 
 class BulkCreateChannelOp(BaseModel):
     type: Literal["createChannel"] = "createChannel"
-    tempId: int  # Negative temp ID from frontend
+    tempId: int = Field(lt=0)  # Negative temp ID from frontend
     name: str
     channelNumber: Optional[ChannelNumber] = None
     groupId: Optional[int] = None
@@ -826,6 +826,42 @@ class BulkCommitRequest(BaseModel):
     continueOnError: Optional[bool] = False
     # If true, consolidate redundant operations before executing
     consolidate: Optional[bool] = False
+
+    @model_validator(mode="after")
+    def _validate_temp_channel_dependencies(self):
+        _validate_bulk_channel_dependencies(self.operations)
+        return self
+
+
+def _negative_channel_references(op: BulkOperation) -> list[int]:
+    """Return every negative channel reference carried by one operation."""
+    if op.type == "bulkAssignChannelNumbers":
+        return [channel_id for channel_id in op.channelIds if channel_id < 0]
+    channel_id = getattr(op, "channelId", None)
+    return [channel_id] if isinstance(channel_id, int) and channel_id < 0 else []
+
+
+def _validate_bulk_channel_dependencies(operations: Sequence[BulkOperation]) -> None:
+    """Require each temp-channel reference to name one earlier unique create."""
+    created_temp_ids: set[int] = set()
+    for index, op in enumerate(operations):
+        if op.type == "createChannel":
+            if op.tempId in created_temp_ids:
+                raise PydanticCustomError(
+                    "duplicate_temp_id",
+                    "createChannel.tempId values must be unique request-wide; "
+                    f"{op.tempId} is repeated at operation {index}",
+                )
+            created_temp_ids.add(op.tempId)
+            continue
+
+        for channel_id in _negative_channel_references(op):
+            if channel_id not in created_temp_ids:
+                raise PydanticCustomError(
+                    "temp_channel_dependency",
+                    f"Operation {index} ({op.type}) references temporary channel "
+                    f"{channel_id}, but exactly one earlier createChannel must create it",
+                )
 
 
 class ValidationIssue(BaseModel):
@@ -1979,9 +2015,8 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     Optimizations:
     - Multiple updateChannel for same channel -> single update with merged data
     - Multiple bulkAssignChannelNumbers -> single call with final positions
-    - Add then remove same stream -> both cancelled
-    - Multiple reorderChannelStreams for same channel -> only final order kept
-    - Operations targeting channels to be deleted are removed
+    - Stream add/remove/reorder operations pass through in submitted order
+    - Non-stream operations targeting channels to be deleted are removed
     - Create + delete of same temp channel cancel out
 
     LAST WRITE WINS, AND "LAST" IS BY SUBMITTED POSITION RATHER THAN BY KIND.
@@ -2057,8 +2092,6 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
     # exist YET as a no-op: a range assignment sent before the create it names
     # places nothing, and consolidation must not turn it into a placement.
     channel_number_owner: dict[int, str] = {}
-    channel_final_stream_order: dict[int, list[int]] = {}  # channelId -> final stream IDs
-    stream_ops: dict[str, dict] = {}  # "channelId:streamId" -> {added: op, removed: op}
     ordered_ops: list[BulkOperation] = []  # create/delete ops in order
 
     for op in operations:
@@ -2086,21 +2119,22 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
                     channel_update_number_source[op.channelId] = op
                     channel_number_owner[op.channelId] = "updateChannel"
 
-        elif op.type == "reorderChannelStreams":
-            if op.channelId not in channels_to_delete:
-                channel_final_stream_order[op.channelId] = op.streamIds
-
-        elif op.type == "addStreamToChannel":
-            if op.channelId not in channels_to_delete:
-                key = f"{op.channelId}:{op.streamId}"
-                entry = stream_ops.setdefault(key, {"added": None, "removed": None})
-                entry["added"] = op
-
-        elif op.type == "removeStreamFromChannel":
-            if op.channelId not in channels_to_delete:
-                key = f"{op.channelId}:{op.streamId}"
-                entry = stream_ops.setdefault(key, {"added": None, "removed": None})
-                entry["removed"] = op
+        elif op.type in (
+            "addStreamToChannel",
+            "removeStreamFromChannel",
+            "reorderChannelStreams",
+        ):
+            # These operations are sequence-dependent. Without an authoritative
+            # starting snapshot, folding add/remove pairs or hoisting a reorder
+            # changes the state observed at that operation's execution point.
+            # A temp create+delete cancellation removes its whole dependent
+            # sub-plan; all surviving stream operations pass through untouched.
+            if not (
+                op.channelId < 0
+                and op.channelId in channels_to_create
+                and op.channelId in channels_to_delete
+            ):
+                ordered_ops.append(op)
 
         elif op.type == "createChannel":
             # Create + delete of the same temp channel cancel out.
@@ -2212,19 +2246,6 @@ def _consolidate_operations(operations: list[BulkOperation]) -> list[BulkOperati
             ids = [e[0] for e in entries[i:j + 1]]
             consolidated.append(BulkAssignNumbersOp(channelIds=ids, startingNumber=start_num))
             i = j + 1
-
-    # Consolidated reorder ops
-    for cid, stream_ids in channel_final_stream_order.items():
-        consolidated.append(BulkReorderStreamsOp(channelId=cid, streamIds=stream_ids))
-
-    # Stream add/remove (cancelled pairs excluded)
-    for entry in stream_ops.values():
-        if entry["added"] and entry["removed"]:
-            continue  # Cancel out
-        if entry["added"]:
-            consolidated.append(entry["added"])
-        if entry["removed"]:
-            consolidated.append(entry["removed"])
 
     elapsed = (time.time() - start) * 1000
     logger.info(
@@ -2517,6 +2538,10 @@ async def _run_bulk_commit(
     bulk-commit requests one Apply All fans out into land under a single batch
     (bead enhancedchannelmanager-r9py9); otherwise a fresh id is minted here.
     """
+    # BulkCommitRequest normally enforces this at the HTTP boundary. Repeat it
+    # here because this work function is also called directly and because the
+    # effective plan must be revalidated after consolidation.
+    _validate_bulk_channel_dependencies(request.operations)
     client = get_client()
     batch_id = batch_id or str(uuid.uuid4())[:8]
 
@@ -2584,44 +2609,8 @@ async def _run_bulk_commit(
     operations = request.operations
     if request.consolidate:
         operations = _consolidate_operations(operations)
+        _validate_bulk_channel_dependencies(operations)
         request = request.model_copy(update={"operations": operations})
-
-    expected_stream_issues: list[dict] = []
-    expected_streams_by_temp_id = {
-        op.tempId: set(op.expectedStreamIds)
-        for op in request.operations
-        if op.type == "createChannel" and op.expectedStreamIds is not None
-    }
-    final_streams_by_temp_id = {
-        temp_id: set() for temp_id in expected_streams_by_temp_id
-    }
-    for op in request.operations:
-        channel_id = getattr(op, "channelId", None)
-        if channel_id not in final_streams_by_temp_id:
-            continue
-        if op.type == "addStreamToChannel":
-            final_streams_by_temp_id[channel_id].add(op.streamId)
-        elif op.type == "removeStreamFromChannel":
-            final_streams_by_temp_id[channel_id].discard(op.streamId)
-        elif op.type == "reorderChannelStreams":
-            final_streams_by_temp_id[channel_id] = set(op.streamIds)
-
-    for op in request.operations:
-        if op.type != "createChannel" or op.expectedStreamIds is None:
-            continue
-        missing = expected_streams_by_temp_id[op.tempId] - final_streams_by_temp_id[op.tempId]
-        for stream_id in sorted(missing):
-            expected_stream_issues.append({
-                "type": "invalid_operation",
-                "severity": "error",
-                "message": (
-                    f"Bulk-created channel '{op.name}' would be missing expected "
-                    f"stream {stream_id}; nothing was applied"
-                ),
-                "channelId": op.tempId,
-                "channelName": op.name,
-                "streamId": stream_id,
-            })
     temp_channel_names = {
         op.tempId: op.name
         for op in request.operations
@@ -2672,10 +2661,6 @@ async def _run_bulk_commit(
         # only honest answer is to say precisely what is where.
         "numberingRecovery": [],
     }
-    if expected_stream_issues:
-        result["validationIssues"].extend(expected_stream_issues)
-        result["validationPassed"] = False
-
     # Counters the summary row reports. Kept as locals rather than derived from
     # the id maps at write time (bead enhancedchannelmanager-r9py9):
     # ``len(tempIdMap)`` misses a createChannel whose temp id was not negative,
@@ -3059,6 +3044,77 @@ async def _run_bulk_commit(
             except Exception as e:
                 logger.warning("[CHANNELS-BULK] Failed to read hidden groups for validation: %s", e)
 
+        # Simulate stream operations in their actual execution sequence. Temp
+        # channels start empty at their create; existing channels start from the
+        # authoritative catalog snapshot loaded above. Reorders are checked
+        # against the state at their submitted position, not against the final
+        # set, and expectedStreamIds is a required subset of the final state.
+        stream_plan_issues: list[dict] = []
+        streams_by_channel = {
+            channel_id: list(channel.get("streams", []))
+            for channel_id, channel in existing_channels.items()
+        }
+        expected_streams_by_temp_id: dict[int, tuple[str, set[int]]] = {}
+        for idx, op in enumerate(request.operations):
+            if op.type == "createChannel":
+                streams_by_channel[op.tempId] = []
+                if op.expectedStreamIds is not None:
+                    expected_streams_by_temp_id[op.tempId] = (
+                        op.name,
+                        set(op.expectedStreamIds),
+                    )
+                continue
+            if op.type not in (
+                "addStreamToChannel",
+                "removeStreamFromChannel",
+                "reorderChannelStreams",
+            ):
+                continue
+            current_streams = streams_by_channel.get(op.channelId)
+            if current_streams is None:
+                continue
+            if op.type == "addStreamToChannel":
+                if op.streamId not in current_streams:
+                    current_streams.append(op.streamId)
+            elif op.type == "removeStreamFromChannel":
+                if op.streamId in current_streams:
+                    current_streams.remove(op.streamId)
+            else:
+                permutation_error = validate_stream_permutation(
+                    current_streams, op.streamIds
+                )
+                if permutation_error is not None:
+                    stream_plan_issues.append({
+                        "type": "invalid_operation",
+                        "severity": "error",
+                        "message": (
+                            f"Cannot reorder streams for channel {op.channelId}: "
+                            f"{permutation_error}; nothing was applied"
+                        ),
+                        "operationIndex": idx,
+                        "channelId": op.channelId,
+                    })
+                else:
+                    streams_by_channel[op.channelId] = list(op.streamIds)
+
+        for temp_id, (channel_name, expected_streams) in expected_streams_by_temp_id.items():
+            final_streams = set(streams_by_channel[temp_id])
+            for stream_id in sorted(expected_streams - final_streams):
+                stream_plan_issues.append({
+                    "type": "invalid_operation",
+                    "severity": "error",
+                    "message": (
+                        f"Bulk-created channel '{channel_name}' would be missing expected "
+                        f"stream {stream_id}; nothing was applied"
+                    ),
+                    "channelId": temp_id,
+                    "channelName": channel_name,
+                    "streamId": stream_id,
+                })
+        if stream_plan_issues:
+            result["validationIssues"].extend(stream_plan_issues)
+            result["validationPassed"] = False
+
         def channel_is_missing(channel_id: int) -> bool:
             """Is this channel KNOWN to be absent from Dispatcharr?
 
@@ -3316,15 +3372,15 @@ async def _run_bulk_commit(
         # knowingly continuing would leave a channel that cannot play, which is
         # the exact failure this path is meant to prevent. Other validation
         # issues retain the endpoint's normal continue-on-error semantics.
-        missing_stream_blocks_create = bool(expected_stream_issues) or any(
+        stream_plan_blocks_request = bool(stream_plan_issues) or any(
             issue.get("type") == "missing_stream"
             and isinstance(issue.get("channelId"), int)
             and issue["channelId"] < 0
             for issue in result["validationIssues"]
         )
-        if missing_stream_blocks_create:
+        if stream_plan_blocks_request:
             logger.warning(
-                "[CHANNELS-BULK] Missing stream blocks a temp-channel create; "
+                "[CHANNELS-BULK] Invalid temp-channel stream plan; "
                 "aborting before execution"
             )
             result["success"] = False

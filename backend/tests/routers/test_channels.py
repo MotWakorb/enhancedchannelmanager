@@ -1393,7 +1393,7 @@ class TestBulkCommit:
         {"type": "deleteChannel", "channelId": -1},
         {"type": "addStreamToChannel", "channelId": -1, "streamId": 77},
         {"type": "removeStreamFromChannel", "channelId": -1, "streamId": 77},
-        {"type": "reorderChannelStreams", "channelId": -1, "streamIds": [77]},
+        {"type": "reorderChannelStreams", "channelId": -1, "streamIds": []},
         {"type": "bulkAssignChannelNumbers", "channelIds": [-1], "startingNumber": 10},
         {"type": "setProfileMembership", "channelId": -1, "profileId": 5, "enabled": True},
     ], ids=lambda op: op["type"])
@@ -1451,7 +1451,7 @@ class TestBulkCommit:
         ({"type": "deleteChannel", "channelId": -1}, "delete_channel"),
         ({"type": "addStreamToChannel", "channelId": -1, "streamId": 77}, "get_channel"),
         ({"type": "removeStreamFromChannel", "channelId": -1, "streamId": 77}, "get_channel"),
-        ({"type": "reorderChannelStreams", "channelId": -1, "streamIds": [77]}, "get_channel"),
+        ({"type": "reorderChannelStreams", "channelId": -1, "streamIds": []}, "get_channel"),
         ({"type": "bulkAssignChannelNumbers", "channelIds": [-1], "startingNumber": 10}, "assign_channel_numbers"),
         ({"type": "setProfileMembership", "channelId": -1, "profileId": 5, "enabled": True}, "update_profile_channel"),
     ], ids=lambda value: value["type"] if isinstance(value, dict) else value)
@@ -1471,9 +1471,8 @@ class TestBulkCommit:
         mock_client.get_channel.return_value = {
             "id": 101,
             "name": "New channel",
-            "streams": ([77] if dependent_operation["type"] in (
-                "removeStreamFromChannel", "reorderChannelStreams"
-            ) else []),
+            "streams": ([77] if dependent_operation["type"] ==
+                        "removeStreamFromChannel" else []),
         }
 
         with patch("routers.channels.get_client", return_value=mock_client), \
@@ -1715,10 +1714,14 @@ class TestBulkCommit:
             })
 
         assert response.status_code == 202
-        # The lossy op is rejected: reported as an error, not applied.
+        # The lossy plan is rejected before any operation starts.
         assert data["operationsApplied"] == 0
-        assert data["operationsFailed"] == 1
-        assert len(data["errors"]) == 1
+        assert data["operationsFailed"] == 0
+        assert data["validationPassed"] is False
+        assert any(
+            "not a permutation" in issue["message"]
+            for issue in data["validationIssues"]
+        )
         # Critically: update_channel was NEVER called with the lossy set
         # (no silent detach of stream 5001).
         for call in mock_client.update_channel.await_args_list:

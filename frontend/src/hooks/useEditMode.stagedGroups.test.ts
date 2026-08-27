@@ -357,7 +357,7 @@ describe('useEditMode — a channel created into a group pending in the same bat
     });
 
     expect(result.success).toBe(false);
-    expect(result.errors[0]?.error).toContain('missing 1 expected stream assignment');
+    expect(result.errors[0]?.error).toContain('not a permutation');
     expect(bulkCommit).not.toHaveBeenCalled();
   });
 
@@ -382,6 +382,52 @@ describe('useEditMode — a channel created into a group pending in the same bat
       'addStreamToChannel',
       'removeStreamFromChannel',
     ]);
+  });
+
+  it('keeps temp-channel adds before a later reorder in the create request', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Ordered streams',
+        streamIds: [55, 56],
+      });
+      view.result.current.stageReorderStreams(tempId, [56, 55], 'Reverse streams');
+    });
+
+    await act(async () => {
+      await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].operations).toEqual([
+      expect.objectContaining({ type: 'createChannel', tempId: -1 }),
+      { type: 'addStreamToChannel', channelId: -1, streamId: 55 },
+      { type: 'addStreamToChannel', channelId: -1, streamId: 56 },
+      { type: 'reorderChannelStreams', channelId: -1, streamIds: [56, 55] },
+    ]);
+  });
+
+  it('refuses a temp-channel reorder that is not a permutation at its position', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Forward reorder',
+        streamIds: [55],
+      });
+      view.result.current.stageReorderStreams(tempId, [56, 55], 'Uses a future stream');
+      view.result.current.stageAddStream(tempId, 56, 'Future add');
+    });
+
+    let result!: Awaited<ReturnType<typeof view.result.current.commit>>;
+    await act(async () => {
+      result = await view.result.current.commit(undefined, { continueOnError: true });
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.errors.some((error) => error.error.includes('not a permutation'))).toBe(true);
+    expect(bulkCommit).not.toHaveBeenCalled();
   });
 
   it('partitions mixed stream assignments without disturbing batches or accounting', async () => {

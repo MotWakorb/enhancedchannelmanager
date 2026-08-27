@@ -5,7 +5,7 @@
   "name": "ecm-0.18.1-0152",
   "documentNamespace": "https://github.com/motwakorb/enhancedchannelmanager/sbom/v0.18.1-0152/ecm",
   "creationInfo": {
-    "created": "2026-08-27T03:47:05Z",
+    "created": "2026-08-27T04:29:52Z",
     "creators": [
       "Tool: scripts/generate_sbom.py"
     ],

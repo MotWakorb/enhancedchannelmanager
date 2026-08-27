@@ -1745,42 +1745,64 @@ export function useEditMode({
       updatedChannels: [],
     };
 
-    const assignmentsByTempId = new Map<number, Set<number>>();
-    for (const operation of state.stagedOperations) {
-      if (operation.apiCall.type !== 'createChannel' || operation.apiCall.expectedStreamIds === undefined) continue;
-      assignmentsByTempId.set(operation.afterSnapshot[0]?.id, new Set<number>());
-    }
+    const assignmentsByTempId = new Map<number, number[]>();
+    const expectedCreates = new Map<number, StagedOperation>();
+    const invalidReorders: { operation: StagedOperation; tempId: number }[] = [];
     for (const operation of state.stagedOperations) {
       const { apiCall } = operation;
+      if (apiCall.type === 'createChannel') {
+        const tempId = operation.afterSnapshot[0]?.id;
+        assignmentsByTempId.set(tempId, []);
+        if (apiCall.expectedStreamIds !== undefined) expectedCreates.set(tempId, operation);
+        continue;
+      }
       if (!('channelId' in apiCall) || !assignmentsByTempId.has(apiCall.channelId)) continue;
       const assigned = assignmentsByTempId.get(apiCall.channelId)!;
       if (apiCall.type === 'addStreamToChannel') {
-        assigned.add(apiCall.streamId);
+        if (!assigned.includes(apiCall.streamId)) assigned.push(apiCall.streamId);
       } else if (apiCall.type === 'removeStreamFromChannel') {
-        assigned.delete(apiCall.streamId);
+        const index = assigned.indexOf(apiCall.streamId);
+        if (index !== -1) assigned.splice(index, 1);
       } else if (apiCall.type === 'reorderChannelStreams') {
-        assignmentsByTempId.set(apiCall.channelId, new Set(apiCall.streamIds));
+        const isPermutation =
+          apiCall.streamIds.length === assigned.length
+          && new Set(apiCall.streamIds).size === apiCall.streamIds.length
+          && apiCall.streamIds.every((streamId) => assigned.includes(streamId));
+        if (isPermutation) {
+          assignmentsByTempId.set(apiCall.channelId, [...apiCall.streamIds]);
+        } else {
+          invalidReorders.push({ operation, tempId: apiCall.channelId });
+        }
       }
     }
-    const incompleteBulkCreates = state.stagedOperations.flatMap((operation) => {
-      if (operation.apiCall.type !== 'createChannel' || operation.apiCall.expectedStreamIds === undefined) return [];
-      const tempId = operation.afterSnapshot[0]?.id;
-      const assigned = assignmentsByTempId.get(tempId) ?? new Set<number>();
-      const missing = operation.apiCall.expectedStreamIds.filter((streamId) => !assigned.has(streamId));
-      return missing.length === 0 ? [] : [{ operation, tempId, missing }];
-    });
-    if (incompleteBulkCreates.length > 0) {
+    const incompleteBulkCreates = Array.from(expectedCreates, ([tempId, operation]) => {
+      const expectedStreamIds = operation.apiCall.type === 'createChannel'
+        ? operation.apiCall.expectedStreamIds ?? []
+        : [];
+      const assigned = assignmentsByTempId.get(tempId) ?? [];
+      const missing = expectedStreamIds.filter((streamId) => !assigned.includes(streamId));
+      return { operation, tempId, missing };
+    }).filter(({ missing }) => missing.length > 0);
+    if (incompleteBulkCreates.length > 0 || invalidReorders.length > 0) {
       result.success = false;
-      result.operationsFailed = incompleteBulkCreates.length;
-      result.errors = incompleteBulkCreates.map(({ operation, tempId, missing }) => ({
+      result.operationsFailed = incompleteBulkCreates.length + invalidReorders.length;
+      result.errors = [
+        ...incompleteBulkCreates.map(({ operation, tempId, missing }) => ({
         operationId: operation.id,
         operationType: 'createChannel',
         channelId: tempId,
         channelName: operation.apiCall.type === 'createChannel' ? operation.apiCall.name : undefined,
         error: `Bulk-created channel is missing ${missing.length} expected stream assignment${missing.length === 1 ? '' : 's'}; nothing was applied`,
-      }));
+        })),
+        ...invalidReorders.map(({ operation, tempId }) => ({
+          operationId: operation.id,
+          operationType: 'reorderChannelStreams',
+          channelId: tempId,
+          error: 'Temp-channel stream order is not a permutation at this operation position; nothing was applied',
+        })),
+      ];
       result.updatedChannels = channels;
-      onError?.('Nothing was applied: a bulk-created channel was missing expected stream assignments. Your changes are still pending.');
+      onError?.('Nothing was applied: a bulk-created channel has an invalid stream plan. Your changes are still pending.');
       return result;
     }
 
