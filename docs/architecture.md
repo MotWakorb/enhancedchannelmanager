@@ -459,7 +459,7 @@ Survival rules, all of them deliberate:
 | Operator binding | Stamped with `auth_provider#user.id`. A ledger belonging to a different operator is **destroyed, not withheld**, in the first-render lazy initializer before the persistence effect can run |
 | Age bound | 12 hours, covering an interrupted session while making "restored days later", where every id has had time to move, impossible |
 | Restore | **Offered, never automatic**, because part of a ledger may fail staleness checks and a silent restore drops the operator into Edit Mode holding a quietly smaller ledger with Apply as the next action |
-| Format version | A persisted record from an older shape is discarded rather than migrated |
+| Format version | A persisted record from an older shape is discarded rather than migrated. Version 3 adds bulk-create `expectedStreamIds`; version 2 is rejected because a create-only record cannot reveal whether stream intent was lost |
 
 The baseline snapshot is deliberately **not** persisted. A restored session re-captures it from the current lineup, so concurrency checks compare against today's server state rather than a stale one.
 

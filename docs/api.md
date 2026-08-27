@@ -96,16 +96,16 @@ Bulk variant of `/add-stream`: fetches the channel once, appends every requested
 | `type` | Fields | Notes |
 |-|-|-|
 | `createChannel` | `tempId` (int, negative), `name` (str), `channelNumber` (float, opt), `groupId` (int, opt), `newGroupName` (str, opt), `logoId` (int, opt), `logoUrl` (str, opt), `tvgId` (str, opt), `tvcGuideStationId` (str, opt), `normalize` (bool, default `false`) | `tempId` is echoed back in `tempIdMap` → real id. Use `groupId` for an existing group or `newGroupName` to reference a group created in `groupsToCreate`. |
-| `updateChannel` | `channelId` (int), `data` (dict), `acknowledgedDuplicate` (obj, opt), `expectedNumber` (obj, opt) | `data` is an **unvalidated field bag** forwarded to Dispatcharr wholesale. See [The `data` field bag](#the-data-field-bag-is-unvalidated). |
-| `deleteChannel` | `channelId` (int) | |
+| `updateChannel` | `channelId` (int), `data` (dict), `acknowledgedDuplicate` (obj, opt), `expectedNumber` (obj, opt) | `data` is an **unvalidated field bag** forwarded to Dispatcharr wholesale. See [The `data` field bag](#the-data-field-bag-is-unvalidated). An unresolved negative `channelId` fails before any upstream call. |
+| `deleteChannel` | `channelId` (int) | An unresolved negative `channelId` fails before any upstream call. |
 | `addStreamToChannel` | `channelId` (int), `streamId` (int) | `channelId` may be a negative temp id from a `createChannel` in the same request. The create must precede the assignment. If the create fails or returns no usable id, the assignment fails without querying Dispatcharr with the negative id; its error retains the submitted temp id and uses the intended create name when available. Stream existence is validated for both real and temp channel ids. |
-| `removeStreamFromChannel` | `channelId` (int), `streamId` (int) | |
-| `reorderChannelStreams` | `channelId` (int), `streamIds` (list[int]) | New stream order; first = highest priority. |
-| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | See [Range assignment defaults](#range-assignment-defaults) for what an omitted `startingNumber`, an explicit `0`, and an empty `channelIds` each do. |
+| `removeStreamFromChannel` | `channelId` (int), `streamId` (int) | An unresolved negative `channelId` fails before any upstream call. |
+| `reorderChannelStreams` | `channelId` (int), `streamIds` (list[int]) | New stream order; first = highest priority. An unresolved negative `channelId` fails before any upstream call. |
+| `bulkAssignChannelNumbers` | `channelIds` (list[int]), `startingNumber` (float, opt) | See [Range assignment defaults](#range-assignment-defaults) for what an omitted `startingNumber`, an explicit `0`, and an empty `channelIds` each do. Every negative id must resolve from a preceding create or the operation fails before the upstream range call. |
 | `createGroup` | `name` (str) | Group name → real id appears in `groupIdMap`. |
 | `deleteChannelGroup` | `groupId` (int) | |
 | `renameChannelGroup` | `groupId` (int), `newName` (str) | |
-| `setProfileMembership` | `profileId` (int, `> 0`), `channelId` (int), `enabled` (bool) | All three required, no defaults. `channelId` may be a **negative temp id** from a `createChannel` earlier in the same batch; one that never resolves becomes a per-operation error, not a `422`. A `profileId` that names no profile is an `invalid_operation` validation issue at **error** severity. |
+| `setProfileMembership` | `profileId` (int, `> 0`), `channelId` (int), `enabled` (bool) | All three required, no defaults. `channelId` may be a **negative temp id** from a `createChannel` earlier in the same batch; one that never resolves becomes a per-operation error before the upstream profile call, not a `422`. A `profileId` that names no profile is an `invalid_operation` validation issue at **error** severity. |
 | `restoreChannelGroup` | `groupId` (int, `> 0`) | Un-hides a group ECM is hiding. A group that is **not** hidden is a **warning**, not an error: the executor treats it as a no-op and says so rather than failing. |
 | `clearStreamStats` | `streamIds` (list[int], `min_length=1`, all `> 0`, no duplicates) | Duplicates are refused at schema level with the custom error `type` `duplicate_stream_ids`. Stream ids that no longer exist are **warnings** only, deliberately, so orphaned probe stats stay clearable. |
 

@@ -3487,7 +3487,10 @@ async def _run_bulk_commit(
             ledger.begin()
             try:
                 if op.type == "updateChannel":
-                    channel_id = resolve_id(op.channelId)
+                    channel_id = reject_unresolved_channel(
+                        resolve_id(op.channelId),
+                        "updateChannel",
+                    )
                     logger.debug("[CHANNELS-BULK] [%s/%s] updateChannel: channel_id=%s, data=%s", idx+1, len(request.operations), channel_id, op.data)
                     if "channel_group_id" in op.data:
                         reject_unresolved_group(
@@ -3539,6 +3542,8 @@ async def _run_bulk_commit(
                         resolve_id(op.channelId),
                         f"addStreamToChannel for '{temp_channel_names.get(op.channelId, f'Channel {op.channelId}')}'",
                     )
+                    if stream_is_missing(op.streamId):
+                        raise ValueError(f"Stream {op.streamId} does not exist")
                     logger.debug("[CHANNELS-BULK] [%s/%s] addStreamToChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
@@ -3568,7 +3573,10 @@ async def _run_bulk_commit(
                         logger.debug("[CHANNELS-BULK] Stream %s already in channel %s, skipping", op.streamId, channel_id)
 
                 elif op.type == "removeStreamFromChannel":
-                    channel_id = resolve_id(op.channelId)
+                    channel_id = reject_unresolved_channel(
+                        resolve_id(op.channelId),
+                        "removeStreamFromChannel",
+                    )
                     logger.debug("[CHANNELS-BULK] [%s/%s] removeStreamFromChannel: channel_id=%s, stream_id=%s", idx+1, len(request.operations), channel_id, op.streamId)
                     channel = await client.get_channel(channel_id)
                     current_streams = channel.get("streams", [])
@@ -3594,7 +3602,10 @@ async def _run_bulk_commit(
                         logger.debug("[CHANNELS-BULK] Stream %s not in channel %s, skipping", op.streamId, channel_id)
 
                 elif op.type == "reorderChannelStreams":
-                    channel_id = resolve_id(op.channelId)
+                    channel_id = reject_unresolved_channel(
+                        resolve_id(op.channelId),
+                        "reorderChannelStreams",
+                    )
                     logger.debug("[CHANNELS-BULK] [%s/%s] reorderChannelStreams: channel_id=%s, streams=%s", idx+1, len(request.operations), channel_id, op.streamIds)
                     # Guard against silent stream detachment (bd-1wq7z.25):
                     # Dispatcharr's ``streams`` field uses replace-semantics, so
@@ -3623,7 +3634,13 @@ async def _run_bulk_commit(
                     ))
 
                 elif op.type == "bulkAssignChannelNumbers":
-                    resolved_ids = [resolve_id(cid) for cid in op.channelIds]
+                    resolved_ids = [
+                        reject_unresolved_channel(
+                            resolve_id(cid),
+                            "bulkAssignChannelNumbers",
+                        )
+                        for cid in op.channelIds
+                    ]
                     logger.debug("[CHANNELS-BULK] [%s/%s] bulkAssignChannelNumbers: %s channels starting at %s", idx+1, len(request.operations), len(resolved_ids), op.startingNumber)
                     # One row per channel, matching POST /assign-numbers, which
                     # is the in-repo precedent for "renumbering is N per-channel
@@ -3823,7 +3840,10 @@ async def _run_bulk_commit(
                     logger.debug("[CHANNELS-BULK] Created channel '%s' (temp: %s -> real: %s)", channel_name, op.tempId, created_id)
 
                 elif op.type == "deleteChannel":
-                    channel_id = resolve_id(op.channelId)
+                    channel_id = reject_unresolved_channel(
+                        resolve_id(op.channelId),
+                        "deleteChannel",
+                    )
                     logger.debug("[CHANNELS-BULK] [%s/%s] deleteChannel: channel_id=%s", idx+1, len(request.operations), channel_id)
                     deleted_before = existing_channels.get(channel_id)
                     really_deleted = True

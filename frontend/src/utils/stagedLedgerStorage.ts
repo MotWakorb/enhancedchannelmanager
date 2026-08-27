@@ -59,13 +59,18 @@ export const STAGED_LEDGER_STORAGE_KEY = 'ecm.channelManager.stagedLedger';
 
 /** Bumped whenever the persisted shape changes; a mismatch is discarded.
  *
+ *  3: bulk-created channels persist `expectedStreamIds`, which is the intent
+ *  the pre-commit completeness check enforces. A version-2 create has no way
+ *  to say whether it was a manual empty channel or a bulk create whose stream
+ *  assignments were lost, so it is discarded rather than guessed at.
+ *
  *  2: a duplicate-number confirmation became `acknowledgedDuplicate`, an
  *  object carrying the occupants alongside the number, replacing the bare
  *  `acknowledgedDuplicateNumber` (bead enhancedchannelmanager-vdxbx, fix
  *  round 2). A version-1 record has no occupants to check the restore
  *  against, so it is discarded rather than restored with consent that
  *  cannot be verified. */
-export const STAGED_LEDGER_FORMAT_VERSION = 2;
+export const STAGED_LEDGER_FORMAT_VERSION = 3;
 
 /**
  * How long a persisted ledger stays offerable.

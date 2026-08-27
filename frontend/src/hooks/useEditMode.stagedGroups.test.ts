@@ -151,10 +151,85 @@ function updateChannelOps() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.sessionStorage.clear();
   requests = [];
   knownGroups = {};
   bulkCommit.mockImplementation(async (req: BulkCommitRequest) => fakeBulkCommit(req));
   getChannels.mockResolvedValue({ results: [], next: null, count: 0 });
+});
+
+describe('useEditMode — stageCreateChannelWithStreams developer contract', () => {
+  it('is one non-batch undo step and redo restores the complete create', () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateChannelWithStreams({
+        name: 'Atomic',
+        streamIds: [55, 56],
+      });
+    });
+
+    expect(view.result.current.stagedOperationCount).toBe(1);
+    expect(view.result.current.summary.totalOperations).toBe(3);
+    expect(view.result.current.displayChannels.find((channel) => channel.id === -1)?.streams)
+      .toEqual([55, 56]);
+
+    act(() => view.result.current.localUndo());
+    expect(view.result.current.summary.totalOperations).toBe(0);
+    expect(view.result.current.displayChannels.some((channel) => channel.id < 0)).toBe(false);
+
+    act(() => view.result.current.localRedo());
+    expect(view.result.current.stagedOperationCount).toBe(1);
+    expect(view.result.current.summary.totalOperations).toBe(3);
+    expect(view.result.current.displayChannels.find((channel) => channel.id === -1)?.streams)
+      .toEqual([55, 56]);
+  });
+
+  it('normalizes duplicate stream ids to one assignment and one metadata entry', () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      view.result.current.stageCreateChannelWithStreams({
+        name: 'Deduplicated',
+        streamIds: [55, 55, 56, 55],
+      });
+    });
+
+    const raw = window.sessionStorage.getItem('ecm.channelManager.stagedLedger');
+    const operations = JSON.parse(raw!).operations as StagedOperation[];
+    expect(operations).toHaveLength(3);
+    expect(operations[0].apiCall).toEqual(expect.objectContaining({
+      expectedStreamIds: [55, 56],
+    }));
+    expect(operations.slice(1).map((operation) => operation.apiCall)).toEqual([
+      { type: 'addStreamToChannel', channelId: -1, streamId: 55 },
+      { type: 'addStreamToChannel', channelId: -1, streamId: 56 },
+    ]);
+  });
+
+  it('rejects an empty stream list without staging or consuming a temp id', () => {
+    const { view } = renderEditMode();
+
+    expect(() => {
+      act(() => {
+        view.result.current.stageCreateChannelWithStreams({
+          name: 'Empty',
+          streamIds: [],
+        });
+      });
+    }).toThrow('at least one stream');
+    expect(view.result.current.summary.totalOperations).toBe(0);
+    expect(window.sessionStorage.getItem('ecm.channelManager.stagedLedger')).toBeNull();
+
+    let tempId = 0;
+    act(() => {
+      tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'Valid',
+        streamIds: [55],
+      });
+    });
+    expect(tempId).toBe(-1);
+  });
 });
 
 describe('useEditMode — a channel created into a group pending in the same batch', () => {

@@ -10,6 +10,7 @@ const testState = vi.hoisted(() => ({
   channelManagerProps: null as ChannelManagerTabProps | null,
   exitDialogProps: null as Record<string, unknown> | null,
   bulkCommit: vi.fn(),
+  resolvedAssignmentPairs: [] as Array<{ channelId: number; streamId: number }>,
 }));
 
 vi.mock('./hooks/useAuth', () => ({
@@ -111,16 +112,38 @@ describe('App bulk-create staging', () => {
     testState.channelManagerProps = null;
     testState.exitDialogProps = null;
     testState.bulkCommit.mockReset();
+    testState.resolvedAssignmentPairs = [];
     vi.stubGlobal('alert', vi.fn());
     window.history.replaceState({}, '', '#channel-manager');
     testState.bulkCommit.mockImplementation(async (request: BulkCommitRequest) => {
       const creates = request.operations.filter((operation) => operation.type === 'createChannel');
+      const tempIds = creates.map((operation) => {
+        if (typeof operation.tempId !== 'number') throw new Error('create missing numeric temp id');
+        return operation.tempId;
+      });
+      if (new Set(tempIds).size !== tempIds.length) {
+        throw new Error('duplicate create temp id');
+      }
+      const tempIdMap: Record<number, number> = {};
+      creates.forEach((operation, index) => {
+        if (typeof operation.tempId !== 'number') throw new Error('create missing numeric temp id');
+        tempIdMap[operation.tempId] = 50_000 + index;
+      });
+      testState.resolvedAssignmentPairs = request.operations.flatMap((operation) => {
+        if (operation.type !== 'addStreamToChannel') return [];
+        if (typeof operation.channelId !== 'number' || typeof operation.streamId !== 'number') {
+          throw new Error('assignment missing numeric ids');
+        }
+        const channelId = tempIdMap[operation.channelId];
+        if (channelId === undefined) throw new Error(`unresolved assignment ${operation.channelId}`);
+        return [{ channelId, streamId: operation.streamId }];
+      });
       return {
         success: true,
         operationsApplied: request.operations.length,
         operationsFailed: 0,
         errors: [],
-        tempIdMap: Object.fromEntries(creates.map((operation, index) => [operation.tempId!, 50_000 + index])),
+        tempIdMap,
         groupIdMap: {},
       } satisfies BulkCommitResponse;
     });
@@ -200,6 +223,13 @@ describe('App bulk-create staging', () => {
     expect(request.operations).toHaveLength(count * 2);
     expect(request.operations.filter((operation) => operation.type === 'createChannel')).toHaveLength(count);
     expect(request.operations.filter((operation) => operation.type === 'addStreamToChannel')).toHaveLength(count);
+    const createTempIds = request.operations.flatMap((operation) =>
+      operation.type === 'createChannel' ? [operation.tempId!] : []);
+    const assignmentTempIds = request.operations.flatMap((operation) =>
+      operation.type === 'addStreamToChannel' ? [operation.channelId!] : []);
+    expect(new Set(createTempIds).size).toBe(count);
+    expect(new Set(assignmentTempIds).size).toBe(count);
+    expect(new Set(assignmentTempIds)).toEqual(new Set(createTempIds));
     expect(request.operations.slice(0, 4).map((operation) => operation.type)).toEqual([
       'createChannel',
       'addStreamToChannel',
@@ -207,6 +237,10 @@ describe('App bulk-create staging', () => {
       'addStreamToChannel',
     ]);
     expect(request.continueOnError).toBe(true);
+    expect(testState.resolvedAssignmentPairs).toEqual(streams.map((stream, index) => ({
+      channelId: 50_000 + index,
+      streamId: stream.id,
+    })));
     await waitFor(() => expect(testState.exitDialogProps?.isOpen).toBe(false));
     expect(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)).toBeNull();
   });

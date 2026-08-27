@@ -101,6 +101,40 @@ afterEach(() => {
 // ================================================= the ledger reaches the store
 
 describe('staged work is persisted as it is staged', () => {
+  it('round-trips v3 bulk-create intent and assignments through a dead session', () => {
+    const view = setup();
+    act(() => view.result.current.enterEditMode());
+    act(() => {
+      view.result.current.stageCreateChannelWithStreams({
+        name: 'Gamma',
+        streamIds: [21, 22],
+        channelNumber: 3,
+      });
+    });
+
+    const stored = storedLedger()!;
+    expect(stored.version).toBe(3);
+    expect(stored.operations[0].apiCall).toEqual(expect.objectContaining({
+      type: 'createChannel',
+      expectedStreamIds: [21, 22],
+    }));
+    act(() => view.unmount());
+
+    const returning = setup();
+    const pending = returning.result.current.pendingRestore!;
+    expect(pending.operations).toHaveLength(3);
+    expect(pending.operations[0].apiCall).toEqual(expect.objectContaining({
+      expectedStreamIds: [21, 22],
+    }));
+
+    act(() => returning.result.current.restoreStagedLedger(pending));
+    expect(returning.result.current.summary.newChannels).toBe(1);
+    expect(returning.result.current.summary.streamsAdded).toBe(2);
+    expect(storedLedger()!.operations[0].apiCall).toEqual(expect.objectContaining({
+      expectedStreamIds: [21, 22],
+    }));
+  });
+
   it('writes the operation queue to sessionStorage under the operator key', () => {
     const view = setup();
     act(() => view.result.current.enterEditMode());

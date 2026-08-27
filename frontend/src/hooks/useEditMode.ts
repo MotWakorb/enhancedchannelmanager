@@ -759,7 +759,10 @@ export function useEditMode({
 
   // Stage related operations in one functional update so no render can observe
   // a bulk-created channel without the stream assignments staged beside it.
-  const stageOperations = useCallback((operationsToStage: OperationToStage[]) => {
+  const stageOperations = useCallback((
+    operationsToStage: OperationToStage[],
+    undoDescription?: string,
+  ) => {
     const prepared = operationsToStage.map((entry) => ({
       ...entry,
       operationId: generateId(),
@@ -810,15 +813,25 @@ export function useEditMode({
         stagedOperations: [...prev.stagedOperations, ...staged],
         localUndoStack: prev.currentBatch !== null
           ? prev.localUndoStack
-          : [
-              ...prev.localUndoStack,
-              ...staged.map((operation, index): UndoEntry => ({
-                id: prepared[index].undoId,
-                timestamp: operation.timestamp,
-                description: operation.description,
-                operations: [operation],
-              })),
-            ],
+          : undoDescription === undefined
+            ? [
+                ...prev.localUndoStack,
+                ...staged.map((operation, index): UndoEntry => ({
+                  id: prepared[index].undoId,
+                  timestamp: operation.timestamp,
+                  description: operation.description,
+                  operations: [operation],
+                })),
+              ]
+            : [
+                ...prev.localUndoStack,
+                {
+                  id: prepared[0].undoId,
+                  timestamp: staged[0].timestamp,
+                  description: undoDescription,
+                  operations: staged,
+                },
+              ],
         localRedoStack: [],
         modifiedChannelIds,
         nextTempId,
@@ -913,6 +926,10 @@ export function useEditMode({
     tvgId,
     tvcGuideStationId,
   }: Parameters<UseEditModeReturn['stageCreateChannelWithStreams']>[0]): number => {
+    const uniqueStreamIds = [...new Set(streamIds)];
+    if (uniqueStreamIds.length === 0) {
+      throw new Error('A bulk-created channel requires at least one stream');
+    }
     const tempChannelId = nextTempIdRef.current;
     nextTempIdRef.current -= 1;
     const stagedGroupId = newGroupName ? ensureStagedGroupId(newGroupName) : undefined;
@@ -929,16 +946,16 @@ export function useEditMode({
           logoUrl,
           tvgId,
           tvcGuideStationId,
-          expectedStreamIds: [...streamIds],
+          expectedStreamIds: uniqueStreamIds,
         },
         description: `Create channel "${name}"`,
         tempChannelId,
       },
-      ...streamIds.map((streamId) => ({
+      ...uniqueStreamIds.map((streamId) => ({
         apiCall: { type: 'addStreamToChannel' as const, channelId: tempChannelId, streamId },
         description: `Assign stream to "${name}"`,
       })),
-    ]);
+    ], `Create channel "${name}" with streams`);
     return tempChannelId;
   }, [ensureStagedGroupId, stageOperations]);
 
