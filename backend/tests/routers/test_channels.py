@@ -1497,43 +1497,62 @@ class TestBulkCommit:
         )
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("channel_kind", ["real", "temp"])
-    async def test_known_missing_stream_fails_before_channel_update(
-        self, async_client, channel_kind
-    ):
+    async def test_known_missing_stream_fails_before_channel_update(self, async_client):
         """A successful stream lookup is authoritative during execution too."""
         mock_client = AsyncMock()
         mock_client.get_channels.return_value = {
-            "results": ([{"id": 10, "name": "Existing", "streams": []}]
-                        if channel_kind == "real" else []),
-            "count": 1 if channel_kind == "real" else 0,
+            "results": [{"id": 10, "name": "Existing", "streams": []}],
+            "count": 1,
             "next": None,
         }
         mock_client.get_streams_by_ids.return_value = []
-        operations = []
-        channel_id = 10
-        if channel_kind == "temp":
-            channel_id = -1
-            operations.append({"type": "createChannel", "tempId": -1, "name": "New"})
-            mock_client.create_channel.return_value = {"id": 101, "name": "New", "streams": []}
-        operations.append({
-            "type": "addStreamToChannel", "channelId": channel_id, "streamId": 404,
-        })
 
         with patch("routers.channels.get_client", return_value=mock_client), \
              patch("routers.channels.journal"):
             _, data = await _commit_and_wait(async_client, {
-                "operations": operations,
+                "operations": [
+                    {"type": "addStreamToChannel", "channelId": 10, "streamId": 404},
+                ],
                 "continueOnError": True,
             })
 
-        assert data["operationsApplied"] == (1 if channel_kind == "temp" else 0)
+        assert data["operationsApplied"] == 0
         assert data["operationsFailed"] == 1
         failed = next(
             error for error in data["errors"]
             if error.get("operationType") == "addStreamToChannel"
         )
         assert "Stream 404 does not exist" in failed["error"]
+        mock_client.get_channel.assert_not_awaited()
+        mock_client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_missing_stream_blocks_its_temp_channel_create(self, async_client):
+        """Continue-on-error must not knowingly create a streamless channel."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {
+            "results": [], "count": 0, "next": None,
+        }
+        mock_client.get_streams_by_ids.return_value = []
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            _, data = await _commit_and_wait(async_client, {
+                "operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "New"},
+                    {"type": "addStreamToChannel", "channelId": -1, "streamId": 404},
+                ],
+                "continueOnError": True,
+            })
+
+        assert data["success"] is False
+        assert data["operationsApplied"] == 0
+        assert data["operationsFailed"] == 0
+        assert any(
+            issue["type"] == "missing_stream" and issue["channelId"] == -1
+            for issue in data["validationIssues"]
+        )
+        mock_client.create_channel.assert_not_awaited()
         mock_client.get_channel.assert_not_awaited()
         mock_client.update_channel.assert_not_awaited()
 

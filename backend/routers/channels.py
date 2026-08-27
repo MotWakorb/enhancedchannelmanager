@@ -3259,6 +3259,24 @@ async def _run_bulk_commit(
             result["success"] = result["validationPassed"]
             return result
 
+        # A create and its temp-channel stream assignments are one invariant:
+        # knowingly continuing would leave a channel that cannot play, which is
+        # the exact failure this path is meant to prevent. Other validation
+        # issues retain the endpoint's normal continue-on-error semantics.
+        missing_stream_blocks_create = any(
+            issue.get("type") == "missing_stream"
+            and isinstance(issue.get("channelId"), int)
+            and issue["channelId"] < 0
+            for issue in result["validationIssues"]
+        )
+        if missing_stream_blocks_create:
+            logger.warning(
+                "[CHANNELS-BULK] Missing stream blocks a temp-channel create; "
+                "aborting before execution"
+            )
+            result["success"] = False
+            return result
+
         # If validation failed and continueOnError is false, return without executing
         if not result["validationPassed"] and not request.continueOnError:
             logger.warning("[CHANNELS-BULK] Validation failed with %s issues, aborting (continueOnError=false)", len(result['validationIssues']))
