@@ -361,6 +361,29 @@ describe('useEditMode — a channel created into a group pending in the same bat
     expect(bulkCommit).not.toHaveBeenCalled();
   });
 
+  it('keeps every temp-channel stream operation in the create request', async () => {
+    const { view } = renderEditMode();
+
+    act(() => {
+      const tempId = view.result.current.stageCreateChannelWithStreams({
+        name: 'One create phase',
+        streamIds: [55],
+      });
+      view.result.current.stageRemoveStream(tempId, 99, 'Remove unrelated stream');
+    });
+
+    await act(async () => {
+      await view.result.current.commit();
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0].operations.map((operation) => operation.type)).toEqual([
+      'createChannel',
+      'addStreamToChannel',
+      'removeStreamFromChannel',
+    ]);
+  });
+
   it('partitions mixed stream assignments without disturbing batches or accounting', async () => {
     const existingChannels = Array.from(
       { length: 201 },

@@ -2034,17 +2034,24 @@ export function useEditMode({
         });
       };
 
-      // A stream assignment to a temp channel must stay in the same request as
-      // its create so the backend can resolve the temp id from that request's
-      // tempIdMap. Existing-channel assignments still use the ordinary batches.
+      // Every stream operation on a temp channel stays with its create. Besides
+      // resolving the temp id, this lets the backend validate the create's
+      // expected final stream set against the complete consolidated plan before
+      // creating anything. Existing-channel stream operations stay batched.
       const channelCreateOps = bulkOperations.filter(op => op.type === 'createChannel');
+      const isTempChannelStreamOp = (op: api.BulkOperation) =>
+        (op.type === 'addStreamToChannel'
+          || op.type === 'removeStreamFromChannel'
+          || op.type === 'reorderChannelStreams')
+        && typeof op.channelId === 'number'
+        && op.channelId < 0;
       const createPhaseOps = bulkOperations.filter(op =>
         op.type === 'createChannel'
-        || (op.type === 'addStreamToChannel' && typeof op.channelId === 'number' && op.channelId < 0)
+        || isTempChannelStreamOp(op)
       );
       const otherOps = bulkOperations.filter(op =>
         op.type !== 'createChannel'
-        && !(op.type === 'addStreamToChannel' && typeof op.channelId === 'number' && op.channelId < 0)
+        && !isTempChannelStreamOp(op)
       );
 
       // Calculate total batches for other operations
