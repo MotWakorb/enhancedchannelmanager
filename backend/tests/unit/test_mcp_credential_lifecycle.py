@@ -450,6 +450,127 @@ def test_recovery_record_fsync_refusal_fails_before_authority_changes(
     assert not authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME).exists()
 
 
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+def test_failed_recovery_stage_cannot_activate_after_unlink_rollback(
+    lifecycle, monkeypatch, transition
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    cached = config.get_settings()
+    real_fsync = os.fsync
+    real_unlink = Path.unlink
+    removed_recovery = None
+
+    def refuse_directory_fsync(descriptor):
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError(errno.EIO, "synthetic directory fsync refusal")
+        return real_fsync(descriptor)
+
+    def capture_recovery_unlink(path, *args, **kwargs):
+        nonlocal removed_recovery
+        if path == recovery_file and path.exists():
+            removed_recovery = path.read_bytes()
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(config.os, "fsync", refuse_directory_fsync)
+    monkeypatch.setattr(Path, "unlink", capture_recovery_unlink)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+    operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
+
+    with pytest.raises(OSError, match="not crash-durable"):
+        operation()
+
+    assert removed_recovery is not None
+    assert _authority(authority_file) == "known-good"
+    assert _stored_mirror(settings_file) == "known-good"
+    assert cached.mcp_api_key == "known-good"
+
+    # The unlink was not directory-fsynced, so a crash may restore its entry.
+    recovery_file.write_bytes(removed_recovery)
+    recovery_file.chmod(0o600)
+    monkeypatch.setattr(config.os, "fsync", real_fsync)
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    config.clear_settings_cache()
+
+    assert config.get_settings().mcp_api_key == "known-good"
+    assert _authority(authority_file) == "known-good"
+    assert _stored_mirror(settings_file) == "known-good"
+
+
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+def test_authority_replace_failure_cannot_activate_when_recovery_unlink_fails(
+    lifecycle, monkeypatch, transition
+):
+    settings_file, authority_file = lifecycle
+    recovery_file = authority_file.with_name(config.MCP_KEY_RECOVERY_FILENAME)
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    cached = config.get_settings()
+    real_replace = os.replace
+    real_unlink = Path.unlink
+
+    def fail_authority_replace(source, destination):
+        if Path(destination) == authority_file:
+            raise PermissionError("synthetic authority replace refusal")
+        return real_replace(source, destination)
+
+    def fail_recovery_unlink(path, *args, **kwargs):
+        if path == recovery_file:
+            raise OSError(errno.EIO, "synthetic recovery unlink refusal")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(config.os, "replace", fail_authority_replace)
+    monkeypatch.setattr(Path, "unlink", fail_recovery_unlink)
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+    operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
+
+    with pytest.raises(PermissionError, match="synthetic authority replace refusal"):
+        operation()
+
+    assert recovery_file.exists()
+    assert _authority(authority_file) == "known-good"
+    assert _stored_mirror(settings_file) == "known-good"
+    assert cached.mcp_api_key == "known-good"
+
+    monkeypatch.setattr(config.os, "replace", real_replace)
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    config.clear_settings_cache()
+
+    assert config.get_settings().mcp_api_key == "known-good"
+    assert _authority(authority_file) == "known-good"
+    assert _stored_mirror(settings_file) == "known-good"
+
+
+@pytest.mark.parametrize("transition", ["rotate", "revoke"])
+def test_committed_authority_is_not_reported_failed_by_mirror_reconciliation(
+    lifecycle, monkeypatch, transition
+):
+    settings_file, authority_file = lifecycle
+    _write_authority(authority_file, "known-good")
+    settings_file.write_text(json.dumps({"mcp_api_key": "known-good"}))
+    monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "rotated-key")
+    real_read_settings = config._read_settings_model_locked
+    monkeypatch.setattr(
+        config,
+        "_read_settings_model_locked",
+        lambda: (_ for _ in ()).throw(RuntimeError("synthetic mirror read failure")),
+    )
+    operation = config.rotate_mcp_api_key if transition == "rotate" else config.revoke_mcp_api_key
+
+    result = operation()
+    expected = "rotated-key" if transition == "rotate" else ""
+
+    if transition == "rotate":
+        assert result == expected
+    else:
+        assert result is None
+    assert _authority(authority_file) == expected
+    monkeypatch.setattr(config, "_read_settings_model_locked", real_read_settings)
+    assert config.get_settings().mcp_api_key == expected
+
+
 def test_directory_close_failure_after_commit_does_not_hide_rotated_key(
     lifecycle, monkeypatch
 ):
@@ -518,7 +639,8 @@ def test_security_validation_finishes_before_authority_replace(
         return result
 
     def reject_post_commit_validation(metadata, filename):
-        assert not authority_replaced, "security validation ran after linearization"
+        if filename == config.MCP_KEY_FILENAME:
+            assert not authority_replaced, "security validation ran after linearization"
         return real_validate(metadata, filename)
 
     monkeypatch.setattr(config.os, "replace", track_replace)
