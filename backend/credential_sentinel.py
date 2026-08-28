@@ -46,6 +46,59 @@ import re
 # restore of one of those must still recognize it.
 REDACTION_SENTINEL = "***REDACTED***"
 
+# Shared producer-side credential vocabulary. Keeping these names in this leaf
+# lets logging and backup code harvest the same values without importing a
+# FastAPI router into the logging path.
+ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = frozenset(
+    {
+        "discord_webhook_url",
+        "telegram_bot_token",
+        "telegram_chat_id",
+    }
+)
+SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            "password",
+            "dispatcharr_api_key",
+            "api_key",
+            "smtp_password",
+            "smtp_user",
+            "telegram_bot_token",
+            "mcp_api_key",
+            "emby_api_key",
+            "jellyfin_api_key",
+            "plex_token",
+            *sorted(ADMIN_ONLY_READ_REDACTED_FIELDS),
+        )
+    )
+)
+ALERT_METHOD_CREDENTIAL_KEYS: tuple[str, ...] = (
+    "password",
+    "bot_token",
+    "webhook_url",
+    "api_key",
+)
+CREDENTIAL_SECRET_KEYS: frozenset[str] = frozenset(
+    {key.lower() for key in SETTINGS_CREDENTIAL_FIELDS}
+    | {key.lower() for key in ALERT_METHOD_CREDENTIAL_KEYS}
+    | {
+        "password",
+        "passwd",
+        "secret",
+        "secret_key",
+        "access_key",
+        "access_token",
+        "refresh_token",
+        "client_secret",
+        "private_key",
+        "auth_token",
+        "bearer_token",
+        "passphrase",
+    }
+)
+PROVIDER_IDENTITY_KEYS: frozenset[str] = frozenset({"username"})
+
 # The ``[0]`` list positions ``strip_redaction_sentinels`` writes into a
 # dotted path, read back by :func:`value_at_path`. Pre-compiled on a literal
 # pattern (``docs/style_guide.md`` — no bare ``re.*`` on a built pattern).
@@ -127,6 +180,43 @@ def credential_is_present(value: object) -> bool:
         True when the value is non-empty and is not the redaction placeholder.
     """
     return bool(value) and not is_redaction_sentinel(value)
+
+
+def collect_credential_values(
+    obj: object,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Harvest raw secret and provider-identity values from a nested payload.
+
+    Args:
+        obj: An unredacted dict, list, or scalar payload.
+
+    Returns:
+        Secret values and provider-identity values, excluding empty strings and
+        the redaction sentinel.
+    """
+    secrets: set[str] = set()
+    identities: set[str] = set()
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                key_lower = key.lower() if isinstance(key, str) else None
+                if (
+                    isinstance(value, str)
+                    and value
+                    and value != REDACTION_SENTINEL
+                ):
+                    if key_lower in CREDENTIAL_SECRET_KEYS:
+                        secrets.add(value)
+                    elif key_lower in PROVIDER_IDENTITY_KEYS:
+                        identities.add(value)
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(obj)
+    return frozenset(secrets), frozenset(identities - secrets)
 
 
 def strip_redaction_sentinels(payload: dict) -> tuple[dict, list[str]]:

@@ -4190,6 +4190,7 @@ def _remove_debug_bundle_job(job_id: str) -> None:
         try:
             os.unlink(job.artifact_path)
         except FileNotFoundError:
+            # Another cleanup path may already have removed this artifact.
             pass
         job.artifact_path = None
 
@@ -4264,6 +4265,7 @@ def _persist_debug_bundle(payload: bytes) -> str:
         try:
             os.unlink(path)
         except FileNotFoundError:
+            # The failed write may not have left an artifact to remove.
             pass
         raise
     finally:
@@ -4297,6 +4299,7 @@ def _log_line_timestamp(line: str) -> str | None:
             datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
             return timestamp
     except (json.JSONDecodeError, TypeError, ValueError):
+        # Non-JSON lines may still use the legacy text timestamp parsed below.
         pass
 
     prefix = line.split(" - ", 1)[0]

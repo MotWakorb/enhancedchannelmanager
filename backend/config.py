@@ -22,7 +22,10 @@ from confidence_constants import CONFIDENCE_FLOOR
 # any cycle. It makes ``is_configured`` immune to the backup pipeline's own
 # ``***REDACTED***`` placeholder — a truthiness check reports a placeholder as a
 # configured credential (bead …-6pilh).
-from credential_sentinel import credential_is_present
+from credential_sentinel import (
+    ADMIN_ONLY_READ_REDACTED_FIELDS,
+    credential_is_present,
+)
 from pathlib import Path
 
 # Set up logging
@@ -357,18 +360,9 @@ DEFAULT_BACKEND_LOG_FILE_BACKUP_COUNT = 4
 #     of the three fields were readable straight out of a standard backup by
 #     the caller the settings endpoint had just refused.
 #
-# ``config`` is the leaf both consumers already import and is where the model
-# these names partition is defined, so deriving from here cannot cycle and
-# cannot drift. Adding a field here closes it on BOTH surfaces at once; that
-# one-edit property is the whole point, so do not re-inline a literal copy in
-# either router. ``routers.settings`` re-exports it under its historical
-# private name and carries the read-gate rationale;
-# ``routers.backup._SETTINGS_CREDENTIAL_FIELDS`` folds it in.
-ADMIN_ONLY_READ_REDACTED_FIELDS: frozenset[str] = frozenset({
-    "discord_webhook_url",
-    "telegram_bot_token",
-    "telegram_chat_id",
-})
+# The partition is defined in ``credential_sentinel``, the leaf shared by the
+# settings read gate, backup redaction, and persistent-log credential harvester.
+# ``config`` re-exports it because these names partition this module's model.
 
 
 def normalize_public_base_url(raw_url: str) -> tuple[str, str | None]:
