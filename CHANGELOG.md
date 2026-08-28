@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Malformed trusted-media-network settings no longer echo their raw values into attribution debug logs (bead `enhancedchannelmanager-dz5`, build 0165).** The skip diagnostic remains available using fixed text only.
+
 - **Supported MCP Compose deployments now reconcile the owner-only API-key authority before readiness instead of leaving the sidecar permanently not ready (bead `enhancedchannelmanager-71von`, build 0164).** Fresh installs and upgrades use the canonical credential lifecycle to provision or republish `api-key` without requiring an operator API call, while explicit revocation remains revoked and `/health` remains fail-closed. The container gate now proves both fresh startup and recreation from persisted settings. Startup also leaves syntactically valid non-object `settings.json` content byte-for-byte intact: authority validation and orphan reconciliation still run, but startup-only settings writers are suppressed so recovery evidence is not replaced by defaults.
 
 ### Added
