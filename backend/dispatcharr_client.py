@@ -811,10 +811,11 @@ class DispatcharrClient:
             logger.debug("[DISPATCHARR]   M3U Account: id=%s, name=%s, server_url=%s", account.get('id'), account.get('name'), account.get('server_url'))
         return accounts
 
-    async def get_all_m3u_group_settings(self) -> dict:
+    async def get_all_m3u_group_settings(self, accounts: Optional[list] = None) -> dict:
         """Get group settings for all M3U accounts, returns dict mapping channel_group_id to settings.
 
         The channel_groups data is embedded in the accounts response, so we extract it from there.
+        Callers that already fetched the account list may pass it to avoid a duplicate request.
 
         GLOBAL-PER-CHANNEL-GROUP contract (GH #720 Part B, decision "global per
         group"): when multiple accounts carry settings for the SAME global
@@ -826,7 +827,8 @@ class DispatcharrClient:
         when two account rows for the group hold DIFFERENT non-empty
         ``channel_profile_ids`` selections, so the profile reconcile can warn.
         """
-        accounts = await self.get_m3u_accounts()
+        if accounts is None:
+            accounts = await self.get_m3u_accounts()
         logger.info("[DISPATCHARR] get_all_m3u_group_settings: Processing %s M3U accounts", len(accounts))
 
         # Gather ALL account rows per global group id first, then pick a

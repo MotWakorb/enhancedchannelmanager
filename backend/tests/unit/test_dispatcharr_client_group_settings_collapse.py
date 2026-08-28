@@ -37,6 +37,18 @@ def _account(aid, *, auto_sync, selection):
 
 
 @pytest.mark.asyncio
+async def test_prefetched_accounts_skip_the_internal_account_fetch():
+    accounts = [_account(3, auto_sync=True, selection=[7])]
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(side_effect=AssertionError("must reuse accounts"))
+
+    settings = await client.get_all_m3u_group_settings(accounts)
+
+    assert settings[500]["m3u_account_id"] == 3
+    client.get_m3u_accounts.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("order", [("a", "b"), ("b", "a")])
 async def test_collapse_is_deterministic_auto_sync_then_lowest_account(order):
     """Two accounts share group 500. The auto_channel_sync-ON row wins

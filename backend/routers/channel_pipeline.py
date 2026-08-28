@@ -4644,12 +4644,11 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     try:
         m3u_accounts = await client.get_m3u_accounts() or []
         m3u_accounts_fetched = True
-    except Exception as m3u_lookup_err:
+    except Exception:
         logger.warning(
-            "[AUTO-CREATE] Debug bundle: could not fetch M3U accounts (%s); the "
+            "[AUTO-CREATE] Debug bundle: could not fetch M3U accounts; the "
             "value-based credential rule is DEGRADED for this bundle and only "
-            "the URL-shape fallback applies",
-            m3u_lookup_err,
+            "the URL-shape fallback applies"
         )
     epg_sources: list = []
     try:
@@ -4676,6 +4675,62 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
 
     def scrub_member(value: str) -> str:
         return scrub_credential_values(value, known_secrets, known_identities)
+
+    # -- 0b. Profile-reconcile inputs --------------------------------
+    # Keep the non-collapsed account rows alongside the deterministic winners:
+    # either view alone hides cross-account selection conflicts. The account
+    # rows come from the credential harvest above; the collapse helper receives
+    # that same list so it does not refetch the accounts.
+    per_account_group_settings = []
+    if not m3u_accounts_fetched:
+        # Do not serialize unavailable source data as authoritative empty views.
+        # Keep the message fixed because the failed response may echo a credential
+        # value that the step-0 harvest could not learn and therefore cannot scrub.
+        m3u_group_settings_data = {
+            "source_available": False,
+            "error": "M3U account source unavailable",
+        }
+    else:
+        for account in m3u_accounts:
+            for setting in account.get("channel_groups", []):
+                per_account_group_settings.append({
+                    **setting,
+                    "m3u_account_id": account.get("id"),
+                    "m3u_account_name": account.get("name", ""),
+                })
+        m3u_group_settings_data = {
+            "source_available": True,
+            "per_account": per_account_group_settings,
+            "collapsed": {},
+        }
+        try:
+            m3u_group_settings_data["collapsed"] = (
+                await client.get_all_m3u_group_settings(m3u_accounts) or {}
+            )
+        except Exception as e:  # noqa: BLE001 — diagnostics must fail soft
+            logger.warning(
+                "[AUTO-CREATE] Debug bundle: could not derive collapsed M3U "
+                "group settings: %s",
+                e,
+            )
+            m3u_group_settings_data["error"] = f"{type(e).__name__}: {e}"
+    m3u_group_settings_str = json.dumps(
+        m3u_group_settings_data, indent=2, default=str
+    )
+
+    channel_profiles_data = {"profiles": []}
+    try:
+        profiles = await client.get_channel_profiles() or []
+        channel_profiles_data["profiles"] = [
+            {"id": profile.get("id"), "name": profile.get("name", "")}
+            for profile in profiles
+        ]
+    except Exception as e:  # noqa: BLE001 — diagnostics must fail soft
+        logger.warning(
+            "[AUTO-CREATE] Debug bundle: could not fetch channel profiles: %s", e
+        )
+        channel_profiles_data["error"] = f"{type(e).__name__}: {e}"
+    channel_profiles_str = json.dumps(channel_profiles_data, indent=2, default=str)
 
     # -- 1. Fetch channels and groups from Dispatcharr ----------------
     all_channels, channels_report = await _fetch_all_channels(client)
@@ -5025,6 +5080,8 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         "normalization_group_count": norm_group_count,
         "normalization_rule_count": norm_rule_count,
         "event_sync_rule_count": event_sync_rule_count,
+        "m3u_group_setting_count": len(per_account_group_settings),
+        "channel_profile_count": len(channel_profiles_data["profiles"]),
         "data_completeness": {
             "complete": data_complete,
             "channels": channels_report,
@@ -5074,6 +5131,8 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         _add_tar_entry(tf, "task_schedules.json", task_schedules_str, scrub_member)
         _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str, scrub_member)
         _add_tar_entry(tf, "event_sync_matching.json", event_sync_matching_str, scrub_member)
+        _add_tar_entry(tf, "m3u_group_settings.json", m3u_group_settings_str, scrub_member)
+        _add_tar_entry(tf, "channel_profiles.json", channel_profiles_str, scrub_member)
         _add_tar_entry(tf, "logs.txt", logs_text, scrub_member)
         _add_tar_entry(tf, "manifest.json", manifest_str, scrub_member)
     payload = buf.getvalue()
