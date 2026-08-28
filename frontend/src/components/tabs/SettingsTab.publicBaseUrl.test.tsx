@@ -16,6 +16,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
+const notificationMocks = vi.hoisted(() => ({
+  notify: vi.fn().mockReturnValue('toast-id'),
+}));
+
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
@@ -50,7 +54,7 @@ vi.mock('../../contexts/NotificationContext', () => ({
     error: vi.fn(),
     warning: vi.fn(),
     info: vi.fn(),
-    notify: vi.fn().mockReturnValue('toast-id'),
+    notify: notificationMocks.notify,
     dismiss: vi.fn(),
   }),
 }));
@@ -289,5 +293,26 @@ describe('SettingsTab public base URL (bead qsqfv)', () => {
 
     const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
     expect(payload.public_base_url).toBe('https://ecm.example.com');
+  });
+
+  it('shows the restart action when the backend reports a pending log policy', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings());
+    vi.mocked(api.saveSettings).mockResolvedValue({
+      status: 'ok',
+      configured: true,
+      server_changed: false,
+      restart_required: true,
+    });
+
+    renderEmailPage();
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+    await saveSettingsPage();
+
+    expect(notificationMocks.notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Restart Required',
+        message: 'Persistent logging settings changed. Restart services to apply.',
+      }),
+    );
   });
 });

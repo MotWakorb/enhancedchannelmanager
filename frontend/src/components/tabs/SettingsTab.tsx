@@ -1672,6 +1672,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // Probe settings (auto_reorder, refresh_m3us, timeout, etc.) are pushed
       // live to the prober on save — no restart needed.
       const pollOrTimezoneChanged = statsPollInterval !== originalPollInterval || userTimezone !== originalTimezone;
+      const restartRequired = pollOrTimezoneChanged || result.restart_required;
 
       // Update originals for probe settings that are now applied live
       setOriginalAutoReorder(autoReorderAfterProbe);
@@ -1681,13 +1682,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       logger.info(`[RESTART-CHECK] Poll interval: ${statsPollInterval} vs original ${originalPollInterval}`);
       logger.info(`[RESTART-CHECK] Timezone: "${userTimezone}" vs original "${originalTimezone}"`);
       logger.info(`[RESTART-CHECK] pollOrTimezoneChanged=${pollOrTimezoneChanged}`);
+      logger.info(`[RESTART-CHECK] backendRestartRequired=${result.restart_required}`);
 
-      if (pollOrTimezoneChanged) {
+      if (restartRequired) {
         logger.info('[RESTART-CHECK] Setting needsRestart=true');
         setNeedsRestart(true);
 
         // Show toast notification with restart action
-        const message = 'Stats or timezone settings changed. Restart services to apply.';
+        const message = result.restart_required
+          ? 'Persistent logging settings changed. Restart services to apply.'
+          : 'Stats or timezone settings changed. Restart services to apply.';
 
         // Dismiss any previous restart toast before showing new one
         if (restartToastIdRef.current) {

@@ -332,6 +332,12 @@ DEFAULT_MCP_BULK_DELETE_HARD_CAP = 500
 DEFAULT_MCP_CLEAR_AUTO_CREATED_GROUP_SOFT_CAP = 10
 DEFAULT_MCP_BULK_MERGE_SOFT_CAP = 20
 DEFAULT_MCP_BULK_MERGE_HARD_CAP = 200
+BACKEND_LOG_FILE_MIN_BYTES = 1 * 1024 * 1024
+BACKEND_LOG_FILE_MAX_BYTES = 100 * 1024 * 1024
+DEFAULT_BACKEND_LOG_FILE_MAX_BYTES = 10 * 1024 * 1024
+BACKEND_LOG_FILE_MIN_BACKUPS = 1
+BACKEND_LOG_FILE_MAX_BACKUPS = 9
+DEFAULT_BACKEND_LOG_FILE_BACKUP_COUNT = 4
 
 # CANONICAL: the :class:`DispatcharrSettings` fields whose VALUES are withheld
 # from a non-admin caller on READ (bead …-9ej7f). Outbound notification
@@ -582,6 +588,10 @@ class DispatcharrSettings(BaseModel):
     user_timezone: str = ""
     # Backend log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
     backend_log_level: str = "INFO"
+    # Restart-scoped persistent JSON rotation policy. The 10 MiB active file
+    # plus four backups nominally retains 50 MiB across process/container restarts.
+    backend_log_file_max_bytes: int = DEFAULT_BACKEND_LOG_FILE_MAX_BYTES
+    backend_log_file_backup_count: int = DEFAULT_BACKEND_LOG_FILE_BACKUP_COUNT
     # Frontend log level: DEBUG, INFO, WARN, ERROR
     frontend_log_level: str = "INFO"
     # VLC open behavior: "protocol_only", "m3u_fallback", or "m3u_only"
@@ -928,6 +938,37 @@ class DispatcharrSettings(BaseModel):
         if v < 0:
             return 0
         return v
+
+    @field_validator("backend_log_file_max_bytes", mode="before")
+    @classmethod
+    def normalize_backend_log_file_max_bytes(cls, value) -> int:
+        """Recover manual/persisted input without invalidating all settings."""
+        try:
+            if isinstance(value, bool) or (
+                isinstance(value, float) and not value.is_integer()
+            ):
+                raise ValueError
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return DEFAULT_BACKEND_LOG_FILE_MAX_BYTES
+        return max(BACKEND_LOG_FILE_MIN_BYTES, min(BACKEND_LOG_FILE_MAX_BYTES, parsed))
+
+    @field_validator("backend_log_file_backup_count", mode="before")
+    @classmethod
+    def normalize_backend_log_file_backup_count(cls, value) -> int:
+        """Recover manual/persisted input without invalidating all settings."""
+        try:
+            if isinstance(value, bool) or (
+                isinstance(value, float) and not value.is_integer()
+            ):
+                raise ValueError
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError):
+            return DEFAULT_BACKEND_LOG_FILE_BACKUP_COUNT
+        return max(
+            BACKEND_LOG_FILE_MIN_BACKUPS,
+            min(BACKEND_LOG_FILE_MAX_BACKUPS, parsed),
+        )
 
     def is_configured(self) -> bool:
         if not self.url:

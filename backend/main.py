@@ -55,7 +55,12 @@ logging.basicConfig(
 logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 # Sanitize all log arguments to prevent log injection (CWE-117)
-from log_utils import install_safe_logging, install_ring_buffer  # noqa: E402
+from log_utils import (  # noqa: E402
+    install_persistent_json_logging,
+    install_ring_buffer,
+    install_safe_logging,
+    register_sensitive_values_from_object,
+)
 install_safe_logging()
 install_ring_buffer()
 
@@ -150,7 +155,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0166",
+    version="0.18.1-0167",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1154,10 +1159,6 @@ async def startup_event():
     from tls.https_server import is_https_subprocess
     _is_https_subprocess = is_https_subprocess()
 
-    logger.info("=" * 60)
-    logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
-    logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
-
     # Remove any .settings.json.*.tmp a SIGKILLed/OOM-killed save left behind.
     # Each orphan is a complete 0600 credential snapshot, so after a rotation
     # that replaced a compromised key the orphan preserves that key forever;
@@ -1173,7 +1174,21 @@ async def startup_event():
     # first-install generation and legacy-migration point. A present-but-
     # untrusted artifact degrades to no public key without blocking startup;
     # explicit credential transitions remain fail-closed until it is repaired.
-    get_settings()
+    startup_settings = get_settings()
+
+    register_sensitive_values_from_object(startup_settings.model_dump())
+
+    # Install persistence as soon as its settings are available, before the
+    # database, credential-integrity, migration, and service diagnostics run.
+    install_persistent_json_logging(
+        CONFIG_DIR,
+        max_bytes=startup_settings.backend_log_file_max_bytes,
+        backup_count=startup_settings.backend_log_file_backup_count,
+    )
+
+    logger.info("=" * 60)
+    logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
+    logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
 
     # Materialize the private sidecar projection before the backend becomes
     # healthy. The MCP container waits on that health check, so its very first

@@ -258,6 +258,9 @@ class DispatcharrClient:
 
     def __init__(self, settings: DispatcharrSettings):
         self.settings = settings
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(settings.model_dump())
         self.base_url = self.settings.url.rstrip("/")
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -313,6 +316,9 @@ class DispatcharrClient:
             data = response.json()
             self.access_token = data["access"]
             self.refresh_token = data.get("refresh")
+            from log_utils import register_sensitive_values
+
+            register_sensitive_values(self.access_token, self.refresh_token)
             logger.info("[DISPATCHARR] Successfully authenticated to Dispatcharr - username: %s", self.settings.username)
         except httpx.HTTPStatusError as e:
             logger.error("[DISPATCHARR] Authentication failed - status: %s", e.response.status_code)
@@ -336,6 +342,9 @@ class DispatcharrClient:
         if response.status_code == 200:
             data = response.json()
             self.access_token = data["access"]
+            from log_utils import register_sensitive_values
+
+            register_sensitive_values(self.access_token)
             logger.debug("[DISPATCHARR] Access token refreshed successfully")
         else:
             # Refresh token expired, do full login
@@ -806,6 +815,9 @@ class DispatcharrClient:
         response = await self._request("GET", "/api/m3u/accounts/")
         response.raise_for_status()
         accounts = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(accounts)
         logger.debug("[DISPATCHARR] Dispatcharr returned %s M3U accounts", len(accounts))
         for account in accounts:
             logger.debug("[DISPATCHARR]   M3U Account: id=%s, name=%s, server_url=%s", account.get('id'), account.get('name'), account.get('server_url'))
@@ -940,29 +952,48 @@ class DispatcharrClient:
         """Get a single M3U account by ID."""
         response = await self._request("GET", f"/api/m3u/accounts/{account_id}/")
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(account)
+        return account
 
     async def create_m3u_account(self, data: dict) -> dict:
         """Create a new M3U account."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request("POST", "/api/m3u/accounts/", json=data)
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        register_sensitive_values_from_object(account)
+        return account
 
     async def update_m3u_account(self, account_id: int, data: dict) -> dict:
         """Update an M3U account (full update)."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request(
             "PUT", f"/api/m3u/accounts/{account_id}/", json=data
         )
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        register_sensitive_values_from_object(account)
+        return account
 
     async def patch_m3u_account(self, account_id: int, data: dict) -> dict:
         """Partially update an M3U account (e.g., toggle is_active)."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request(
             "PATCH", f"/api/m3u/accounts/{account_id}/", json=data
         )
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        register_sensitive_values_from_object(account)
+        return account
 
     async def delete_m3u_account(self, account_id: int) -> None:
         """Delete an M3U account."""
@@ -1336,25 +1367,43 @@ class DispatcharrClient:
         """Get all EPG sources."""
         response = await self._request("GET", "/api/epg/sources/")
         response.raise_for_status()
-        return response.json()
+        sources = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(sources)
+        return sources
 
     async def get_epg_source(self, source_id: int) -> dict:
         """Get a single EPG source by ID."""
         response = await self._request("GET", f"/api/epg/sources/{source_id}/")
         response.raise_for_status()
-        return response.json()
+        source = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(source)
+        return source
 
     async def create_epg_source(self, data: dict) -> dict:
         """Create a new EPG source."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request("POST", "/api/epg/sources/", json=data)
         response.raise_for_status()
-        return response.json()
+        source = response.json()
+        register_sensitive_values_from_object(source)
+        return source
 
     async def update_epg_source(self, source_id: int, data: dict) -> dict:
         """Update an EPG source."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request("PATCH", f"/api/epg/sources/{source_id}/", json=data)
         response.raise_for_status()
-        return response.json()
+        source = response.json()
+        register_sensitive_values_from_object(source)
+        return source
 
     async def delete_epg_source(self, source_id: int) -> None:
         """Delete an EPG source."""

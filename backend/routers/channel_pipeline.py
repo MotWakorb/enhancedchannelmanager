@@ -7,7 +7,9 @@ import asyncio
 import io
 import json
 import logging
+import os
 import tarfile
+import tempfile
 import time
 import uuid
 from datetime import date, datetime
@@ -16,12 +18,14 @@ from typing import List, Optional
 import httpx
 
 import journal
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
 from auth import RequireAdminIfEnabled, ResolveIsMcpServicePrincipalIfEnabled
+from auth.dependencies import require_authenticated_human_admin
 from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
@@ -4083,11 +4087,11 @@ async def get_auto_creation_template_variables():
 #   POST /debug-bundle              → 202 + {job_id, status: "running"};
 #                                     dispatches a supervised background task.
 #   GET  /debug-bundle/{job_id}     → JSON status while running/failed;
-#                                     StreamingResponse(application/gzip) when
-#                                     ready (job evicted on read).
+#                                     FileResponse(application/gzip) when ready
+#                                     (job and temp artifact evicted on read).
 #
-# Job state lives in-memory because the artifact itself is RAM-only and
-# operator-triggered. A 30-min TTL prunes abandoned jobs on every new POST.
+# Job state lives in-memory; completed artifacts use private temporary files.
+# An independent 30-min timer removes abandoned jobs and artifacts.
 #
 # Inside the worker, page fetches and stream-detail batches run via
 # asyncio.gather with a bounded semaphore so a 15K-channel catalog finishes
@@ -4096,6 +4100,10 @@ async def get_auto_creation_template_variables():
 _DEBUG_BUNDLE_PAGE_SIZE = 100
 _DEBUG_BUNDLE_FETCH_CONCURRENCY = 8
 _DEBUG_BUNDLE_JOB_TTL_SECONDS = 1800  # 30 minutes
+_DEBUG_BUNDLE_MAX_RETAINED_JOBS = 4
+# The accepted design sizes the default rotating set at 50 MiB. Keep bundle
+# ingestion at that bound even if an operator configures a larger on-disk set.
+_DEBUG_BUNDLE_LOG_BYTES_LIMIT = 50 * 1024 * 1024
 
 # Resilience for the upstream fan-out (bd-59x51). A debug bundle is generated
 # precisely when something is already wrong — often when Dispatcharr itself is
@@ -4146,18 +4154,63 @@ async def _with_retry(coro_factory, *, what: str):
 class _DebugBundleJob:
     """In-memory state for one debug-bundle build (bd-cns7j)."""
 
-    __slots__ = ("status", "created_at", "completed_at", "error", "filename", "data")
+    __slots__ = (
+        "status",
+        "created_at",
+        "completed_at",
+        "error",
+        "filename",
+        "owner_key",
+        "artifact_path",
+        "expiry_handle",
+    )
 
-    def __init__(self) -> None:
+    def __init__(self, owner_key: str = "test") -> None:
         self.status: str = "running"  # running | completed | failed
         self.created_at: float = time.time()
         self.completed_at: float | None = None
         self.error: str | None = None
         self.filename: str | None = None
-        self.data: bytes | None = None
+        self.owner_key = owner_key
+        self.artifact_path: str | None = None
+        self.expiry_handle: asyncio.TimerHandle | None = None
 
 
 _DEBUG_BUNDLE_JOBS: dict[str, _DebugBundleJob] = {}
+
+
+def _remove_debug_bundle_job(job_id: str) -> None:
+    job = _DEBUG_BUNDLE_JOBS.pop(job_id, None)
+    if job is None:
+        return
+    if job.expiry_handle is not None:
+        job.expiry_handle.cancel()
+        job.expiry_handle = None
+    if job.artifact_path is not None:
+        try:
+            os.unlink(job.artifact_path)
+        except FileNotFoundError:
+            pass
+        job.artifact_path = None
+
+
+def _clear_debug_bundle_jobs_for_tests() -> None:
+    for job_id in list(_DEBUG_BUNDLE_JOBS):
+        _remove_debug_bundle_job(job_id)
+
+
+def _expire_debug_bundle_job(job_id: str, expected_job: _DebugBundleJob) -> None:
+    if _DEBUG_BUNDLE_JOBS.get(job_id) is expected_job:
+        _remove_debug_bundle_job(job_id)
+
+
+def _schedule_debug_bundle_expiry(job_id: str, job: _DebugBundleJob) -> None:
+    job.expiry_handle = asyncio.get_running_loop().call_later(
+        _DEBUG_BUNDLE_JOB_TTL_SECONDS,
+        _expire_debug_bundle_job,
+        job_id,
+        job,
+    )
 
 
 def _prune_old_debug_bundle_jobs() -> None:
@@ -4165,9 +4218,50 @@ def _prune_old_debug_bundle_jobs() -> None:
     cutoff = time.time() - _DEBUG_BUNDLE_JOB_TTL_SECONDS
     stale = [jid for jid, job in _DEBUG_BUNDLE_JOBS.items() if job.created_at < cutoff]
     for jid in stale:
-        _DEBUG_BUNDLE_JOBS.pop(jid, None)
+        _remove_debug_bundle_job(jid)
     if stale:
         logger.debug("[AUTO-CREATE] Pruned %s expired debug-bundle jobs", len(stale))
+
+
+def _bound_debug_bundle_job_retention() -> None:
+    terminal = sorted(
+        (
+            (job.created_at, job_id)
+            for job_id, job in _DEBUG_BUNDLE_JOBS.items()
+            if job.status != "running"
+        )
+    )
+    excess = len(_DEBUG_BUNDLE_JOBS) - _DEBUG_BUNDLE_MAX_RETAINED_JOBS + 1
+    for _, job_id in terminal[:max(0, excess)]:
+        _remove_debug_bundle_job(job_id)
+
+
+def _debug_bundle_principal_key(admin) -> str:
+    return f"user:{admin.id}"
+
+
+def _persist_debug_bundle(payload: bytes) -> str:
+    descriptor, path = tempfile.mkstemp(
+        prefix="ecm-debug-bundle-", suffix=".tar.gz"
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("debug bundle artifact write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+        return path
+    except Exception:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+        raise
+    finally:
+        os.close(descriptor)
 
 
 def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str, scrub):
@@ -4186,6 +4280,74 @@ def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str, scrub):
     info.size = len(encoded)
     info.mtime = time.time()
     tf.addfile(info, io.BytesIO(encoded))
+
+
+def _log_line_timestamp(line: str) -> str | None:
+    """Return a validated JSON or legacy ring timestamp from one log line."""
+    try:
+        payload = json.loads(line)
+        timestamp = payload.get("ts") if isinstance(payload, dict) else None
+        if isinstance(timestamp, str):
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            return timestamp
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+
+    prefix = line.split(" - ", 1)[0]
+    try:
+        datetime.strptime(prefix, "%Y-%m-%d %H:%M:%S,%f")
+    except ValueError:
+        return None
+    return prefix
+
+
+def _log_member_metadata(
+    *,
+    member: str,
+    source: str,
+    source_files: list[str],
+    text: str,
+    max_bytes: int,
+    backup_count: int,
+    truncated: bool,
+    saturated: bool,
+    overwrite_count: int | None = None,
+    fallback_reason: str | None = None,
+    possible_overlap: bool | None = None,
+) -> dict:
+    """Describe the exact scrubbed text that will be added to the archive."""
+    lines = text.splitlines()
+    timestamps: list[str] = []
+    parse_failures = 0
+    for line in lines:
+        timestamp = _log_line_timestamp(line)
+        if timestamp is None:
+            parse_failures += 1
+        else:
+            timestamps.append(timestamp)
+    metadata = {
+        "member": member,
+        "source": source,
+        "source_files": source_files,
+        "first_timestamp": timestamps[0] if timestamps else None,
+        "last_timestamp": timestamps[-1] if timestamps else None,
+        "line_count": len(lines),
+        "byte_count": len(text.encode("utf-8")),
+        "truncated": truncated,
+        "saturated": saturated,
+        "timestamp_parse_failures": parse_failures,
+        "rotation_settings": {
+            "max_bytes": max_bytes,
+            "backup_count": backup_count,
+        },
+    }
+    if overwrite_count is not None:
+        metadata["overwrite_count"] = overwrite_count
+    if fallback_reason is not None:
+        metadata["fallback_reason"] = fallback_reason
+    if possible_overlap is not None:
+        metadata["possible_overlap"] = possible_overlap
+    return metadata
 
 
 async def _fetch_all_channels(client) -> tuple[list[dict], dict]:
@@ -4619,10 +4781,15 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     client = get_client()
 
     from csv_handler import generate_csv
-    from log_utils import get_recent_logs
+    from log_utils import (
+        get_persistent_log_policy,
+        get_ring_buffer_snapshot,
+        snapshot_persistent_logs,
+    )
     from models import ChannelPipelineRule
     from obfuscate import obfuscate_text, obfuscate_url, scrub_credential_values
     from routers.backup import APP_VERSION, _collect_credential_values
+    from config import CONFIG_DIR as LOG_CONFIG_DIR
     from config import get_settings as get_config_settings
 
     # -- 0. Harvest the credential VALUES this instance holds ---------
@@ -5051,10 +5218,116 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     event_sync_matching_str = json.dumps(event_sync_matching, indent=2, default=str)
     event_sync_rule_count = len(event_sync_matching.get("rules", []))
 
-    # -- 8. logs.txt — recent logs, obfuscated -----------------------
-    log_lines = get_recent_logs()
-    obfuscated_lines = [scrub_log_line(line) for line in log_lines]
-    logs_text = "\n".join(obfuscated_lines)
+    # -- 8. logs — persistent rotating set, ring fallback ------------
+    applied_log_policy = get_persistent_log_policy()
+    applied_log_max_bytes = (
+        applied_log_policy.max_bytes
+        if applied_log_policy is not None
+        else settings_obj.backend_log_file_max_bytes
+    )
+    applied_log_backup_count = (
+        applied_log_policy.backup_count
+        if applied_log_policy is not None
+        else settings_obj.backend_log_file_backup_count
+    )
+    persistent_snapshot = await asyncio.to_thread(
+        snapshot_persistent_logs,
+        LOG_CONFIG_DIR,
+        backup_count=applied_log_backup_count,
+        max_total_bytes=_DEBUG_BUNDLE_LOG_BYTES_LIMIT,
+    )
+    ring_snapshot = get_ring_buffer_snapshot()
+
+    def collect_log_members() -> tuple[list[tuple[str, str]], list[dict]]:
+        persistent_text = "\n".join(
+            source.data.decode("utf-8", errors="replace").rstrip("\n")
+            for source in persistent_snapshot.files
+            if source.data
+        )
+        ring_text = "\n".join(ring_snapshot.lines)
+
+        def finalized_log_text(text: str) -> str:
+            # Apply producer-level obfuscation and the final literal-value sweep
+            # before measuring metadata. _add_tar_entry repeats it idempotently.
+            scrubbed_lines = (
+                scrub_log_line(line.rstrip("\r\n")) for line in io.StringIO(text)
+            )
+            return scrub_member("\n".join(scrubbed_lines))
+
+        contents: list[tuple[str, str]] = []
+        members: list[dict] = []
+        rotation_settings = {
+            "max_bytes": applied_log_max_bytes,
+            "backup_count": applied_log_backup_count,
+        }
+        if persistent_text:
+            logs_text = finalized_log_text(persistent_text)
+            source_files = [source.name for source in persistent_snapshot.files]
+            degraded_reason = persistent_snapshot.reason
+            if degraded_reason is None and persistent_snapshot.handler_degraded:
+                degraded_reason = "persistent_handler_degraded"
+            degraded = persistent_snapshot.incomplete or persistent_snapshot.handler_degraded
+            contents.append(("logs.txt", logs_text))
+            members.append(
+                _log_member_metadata(
+                    member="logs.txt",
+                    source="rotating_files",
+                    source_files=source_files,
+                    text=logs_text,
+                    **rotation_settings,
+                    truncated=(
+                        persistent_snapshot.incomplete
+                        or persistent_snapshot.rotation_saturated
+                        or persistent_snapshot.byte_limit_reached
+                    ),
+                    saturated=persistent_snapshot.rotation_saturated,
+                    fallback_reason=degraded_reason if degraded else None,
+                    possible_overlap=True if degraded else None,
+                )
+            )
+            if degraded:
+                finalized_ring_text = finalized_log_text(ring_text)
+                contents.append(("logs-ring-fallback.txt", finalized_ring_text))
+                members.append(
+                    _log_member_metadata(
+                        member="logs-ring-fallback.txt",
+                        source="ring_buffer",
+                        source_files=[],
+                        text=finalized_ring_text,
+                        **rotation_settings,
+                        truncated=ring_snapshot.overwrite_count > 0,
+                        saturated=ring_snapshot.saturated,
+                        overwrite_count=ring_snapshot.overwrite_count,
+                        fallback_reason=degraded_reason or "persistent_snapshot_degraded",
+                        possible_overlap=True,
+                    )
+                )
+        else:
+            logs_text = finalized_log_text(ring_text)
+            if persistent_snapshot.reason is not None:
+                fallback_reason = persistent_snapshot.reason
+            elif persistent_snapshot.handler_degraded:
+                fallback_reason = "persistent_logging_unavailable"
+            else:
+                fallback_reason = "no_persisted_log_files"
+            contents.append(("logs.txt", logs_text))
+            members.append(
+                _log_member_metadata(
+                    member="logs.txt",
+                    source="ring_buffer",
+                    source_files=[],
+                    text=logs_text,
+                    **rotation_settings,
+                    truncated=ring_snapshot.overwrite_count > 0,
+                    saturated=ring_snapshot.saturated,
+                    overwrite_count=ring_snapshot.overwrite_count,
+                    fallback_reason=fallback_reason,
+                    possible_overlap=False,
+                )
+            )
+        return contents, members
+
+    log_member_contents, log_members = await asyncio.to_thread(collect_log_members)
 
     # -- 9. manifest.json --------------------------------------------
     total_streams = len(all_stream_ids)
@@ -5082,6 +5355,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         "event_sync_rule_count": event_sync_rule_count,
         "m3u_group_setting_count": len(per_account_group_settings),
         "channel_profile_count": len(channel_profiles_data["profiles"]),
+        "log_members": log_members,
         "data_completeness": {
             "complete": data_complete,
             "channels": channels_report,
@@ -5121,21 +5395,25 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     # remember: a member added later inherits the scrub whether or not its
     # author thought about credentials, which is exactly the assumption that
     # failed in bead …-d0hoc.
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        _add_tar_entry(tf, "channels.json", channels_json_str, scrub_member)
-        _add_tar_entry(tf, "channels.csv", csv_content, scrub_member)
-        _add_tar_entry(tf, "rules.yaml", yaml_content, scrub_member)
-        _add_tar_entry(tf, "normalization_rules.yaml", norm_yaml_content, scrub_member)
-        _add_tar_entry(tf, "settings.json", settings_json_str, scrub_member)
-        _add_tar_entry(tf, "task_schedules.json", task_schedules_str, scrub_member)
-        _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str, scrub_member)
-        _add_tar_entry(tf, "event_sync_matching.json", event_sync_matching_str, scrub_member)
-        _add_tar_entry(tf, "m3u_group_settings.json", m3u_group_settings_str, scrub_member)
-        _add_tar_entry(tf, "channel_profiles.json", channel_profiles_str, scrub_member)
-        _add_tar_entry(tf, "logs.txt", logs_text, scrub_member)
-        _add_tar_entry(tf, "manifest.json", manifest_str, scrub_member)
-    payload = buf.getvalue()
+    def pack_bundle() -> bytes:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            _add_tar_entry(tf, "channels.json", channels_json_str, scrub_member)
+            _add_tar_entry(tf, "channels.csv", csv_content, scrub_member)
+            _add_tar_entry(tf, "rules.yaml", yaml_content, scrub_member)
+            _add_tar_entry(tf, "normalization_rules.yaml", norm_yaml_content, scrub_member)
+            _add_tar_entry(tf, "settings.json", settings_json_str, scrub_member)
+            _add_tar_entry(tf, "task_schedules.json", task_schedules_str, scrub_member)
+            _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str, scrub_member)
+            _add_tar_entry(tf, "event_sync_matching.json", event_sync_matching_str, scrub_member)
+            _add_tar_entry(tf, "m3u_group_settings.json", m3u_group_settings_str, scrub_member)
+            _add_tar_entry(tf, "channel_profiles.json", channel_profiles_str, scrub_member)
+            for log_member_name, log_member_text in log_member_contents:
+                _add_tar_entry(tf, log_member_name, log_member_text, scrub_member)
+            _add_tar_entry(tf, "manifest.json", manifest_str, scrub_member)
+        return buf.getvalue()
+
+    payload = await asyncio.to_thread(pack_bundle)
 
     elapsed_ms = (time.time() - start) * 1000
     filename = f"ecm-debug-bundle-{datetime.utcnow():%Y%m%d-%H%M%S}.tar.gz"
@@ -5159,13 +5437,19 @@ async def _run_debug_bundle_job(job_id: str) -> None:
         return
     try:
         filename, payload = await _build_debug_bundle()
+        artifact_path = await asyncio.to_thread(_persist_debug_bundle, payload)
+        payload_size = len(payload)
+        del payload
+        if _DEBUG_BUNDLE_JOBS.get(job_id) is not job:
+            os.unlink(artifact_path)
+            return
         job.filename = filename
-        job.data = payload
+        job.artifact_path = artifact_path
         job.status = "completed"
         job.completed_at = time.time()
         logger.info(
             "[AUTO-CREATE] Debug bundle job %s completed (%s bytes)",
-            job_id, len(payload),
+            job_id, payload_size,
         )
     except asyncio.CancelledError:
         job.status = "failed"
@@ -5181,7 +5465,9 @@ async def _run_debug_bundle_job(job_id: str) -> None:
 
 
 @router.post("/debug-bundle", status_code=202)
-async def start_debug_bundle():
+async def start_debug_bundle(
+    admin=Depends(require_authenticated_human_admin),
+):
     """Enqueue debug-bundle generation; return job id for polling (bd-cns7j).
 
     Generation walks the full catalog from Dispatcharr and was previously
@@ -5191,8 +5477,27 @@ async def start_debug_bundle():
     available.
     """
     _prune_old_debug_bundle_jobs()
+    owner_key = _debug_bundle_principal_key(admin)
+    for existing_job_id, existing_job in _DEBUG_BUNDLE_JOBS.items():
+        if existing_job.status == "running":
+            if existing_job.owner_key != owner_key:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A debug bundle generation is already in progress",
+                )
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "job_id": existing_job_id,
+                    "status": "running",
+                    "message": "Debug bundle generation already in progress",
+                },
+            )
+    _bound_debug_bundle_job_retention()
     job_id = uuid.uuid4().hex
-    _DEBUG_BUNDLE_JOBS[job_id] = _DebugBundleJob()
+    job = _DebugBundleJob(owner_key)
+    _DEBUG_BUNDLE_JOBS[job_id] = job
+    _schedule_debug_bundle_expiry(job_id, job)
 
     task = asyncio.create_task(
         _run_debug_bundle_job(job_id),
@@ -5213,7 +5518,10 @@ async def start_debug_bundle():
 
 
 @router.get("/debug-bundle/{job_id}")
-async def get_debug_bundle(job_id: str):
+async def get_debug_bundle(
+    job_id: str,
+    admin=Depends(require_authenticated_human_admin),
+):
     """Poll/download a debug-bundle job (bd-cns7j).
 
     - ``running``  → 200 with ``{job_id, status: "running"}``
@@ -5222,21 +5530,21 @@ async def get_debug_bundle(job_id: str):
     - missing job  → 404
     """
     job = _DEBUG_BUNDLE_JOBS.get(job_id)
-    if job is None:
+    if job is None or job.owner_key != _debug_bundle_principal_key(admin):
         raise HTTPException(status_code=404, detail="Debug bundle job not found")
     if job.status == "running":
         return {"job_id": job_id, "status": "running"}
     if job.status == "failed":
         return {"job_id": job_id, "status": "failed", "error": job.error or "unknown error"}
     # completed
-    payload = job.data or b""
     filename = job.filename or "ecm-debug-bundle.tar.gz"
-    # Single-shot download — drop the job so RAM is freed on read.
-    _DEBUG_BUNDLE_JOBS.pop(job_id, None)
-    return StreamingResponse(
-        io.BytesIO(payload),
+    if job.artifact_path is None:
+        raise HTTPException(status_code=500, detail="Debug bundle artifact unavailable")
+    return FileResponse(
+        job.artifact_path,
         media_type="application/gzip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        filename=filename,
+        background=BackgroundTask(_remove_debug_bundle_job, job_id),
     )
 
 

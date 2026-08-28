@@ -1184,6 +1184,8 @@ export interface SettingsResponse {
   stats_poll_interval: number;  // Seconds between stats polling (default 10)
   user_timezone: string;  // IANA timezone name (e.g. "America/Los_Angeles")
   backend_log_level: string;  // Backend log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  backend_log_file_max_bytes?: number;  // Restart-scoped persistent log file size; absent on older backends
+  backend_log_file_backup_count?: number;  // Restart-scoped rotated backup count; absent on older backends
   frontend_log_level: string;  // Frontend log level (DEBUG, INFO, WARN, ERROR)
   vlc_open_behavior: string;  // VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
@@ -1354,6 +1356,8 @@ export async function saveSettings(settings: {
   stats_poll_interval?: number;  // Optional - seconds between stats polling, defaults to 10
   user_timezone?: string;  // Optional - IANA timezone name (e.g. "America/Los_Angeles")
   backend_log_level?: string;  // Optional - Backend log level, defaults to INFO
+  backend_log_file_max_bytes?: number;  // Optional - admin-only, applied after restart
+  backend_log_file_backup_count?: number;  // Optional - admin-only, applied after restart
   frontend_log_level?: string;  // Optional - Frontend log level, defaults to INFO
   vlc_open_behavior?: string;  // Optional - VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
@@ -1427,7 +1431,12 @@ export async function saveSettings(settings: {
   jellyfin_api_key?: string;
   // bd-mlcla: trusted media/proxy networks (ranking hint only, never gates).
   trusted_media_networks?: string[];
-}): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
+}): Promise<{
+  status: string;
+  configured: boolean;
+  server_changed: boolean;
+  restart_required?: boolean;
+}> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
     body: JSON.stringify(settings),

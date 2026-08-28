@@ -2309,15 +2309,15 @@ class TestDebugBundle:
     """Tests for POST /api/auto-creation/debug-bundle and GET /{job_id} (bd-cns7j 202+poll)."""
 
     @pytest.fixture(autouse=True)
-    def _clear_jobs(self):
+    def _clear_jobs(self, debug_bundle_admin):
         # Each test starts with an empty job dict so state never leaks across
         # tests (the dict is module-level by design so the in-memory job
         # lookup survives between requests within a single process).
         from routers import channel_pipeline as router_module
 
-        router_module._DEBUG_BUNDLE_JOBS.clear()
+        router_module._clear_debug_bundle_jobs_for_tests()
         yield
-        router_module._DEBUG_BUNDLE_JOBS.clear()
+        router_module._clear_debug_bundle_jobs_for_tests()
 
     @pytest.mark.asyncio
     async def test_post_returns_202_and_job_id(self, async_client):
@@ -2345,6 +2345,79 @@ class TestDebugBundle:
 
             # Release the build and let it complete.
             gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_post_reuses_the_running_job(self, async_client):
+        import asyncio as _asyncio
+
+        gate = _asyncio.Event()
+
+        async def slow_build():
+            await gate.wait()
+            return ("ecm-debug-bundle.tar.gz", b"fake-tar-gz")
+
+        try:
+            with patch(
+                "routers.channel_pipeline._build_debug_bundle",
+                side_effect=slow_build,
+            ) as build:
+                first = await async_client.post("/api/auto-creation/debug-bundle")
+                second = await async_client.post("/api/auto-creation/debug-bundle")
+
+            assert first.status_code == 202
+            assert second.status_code == 202
+            assert second.json()["job_id"] == first.json()["job_id"]
+            assert build.call_count == 1
+        finally:
+            gate.set()
+            for _ in range(20):
+                await _asyncio.sleep(0)
+
+    @pytest.mark.asyncio
+    async def test_other_admin_cannot_reuse_or_download_initiators_job(
+        self, async_client, debug_bundle_admin
+    ):
+        import asyncio as _asyncio
+
+        from auth.dependencies import require_authenticated_human_admin
+        from main import app
+        from models import User
+
+        gate = _asyncio.Event()
+
+        async def slow_build():
+            await gate.wait()
+            return ("ecm-debug-bundle.tar.gz", b"fake")
+
+        second_admin = User(
+            id=5151,
+            username="other-admin",
+            is_admin=True,
+            is_active=True,
+            auth_provider="local",
+        )
+        try:
+            with patch("routers.channel_pipeline._build_debug_bundle", side_effect=slow_build):
+                first = await async_client.post("/api/auto-creation/debug-bundle")
+                job_id = first.json()["job_id"]
+                app.dependency_overrides[require_authenticated_human_admin] = (
+                    lambda: second_admin
+                )
+
+                second = await async_client.post("/api/auto-creation/debug-bundle")
+                download = await async_client.get(
+                    f"/api/auto-creation/debug-bundle/{job_id}"
+                )
+
+            assert second.status_code == 409
+            assert download.status_code == 404
+        finally:
+            gate.set()
+            app.dependency_overrides[require_authenticated_human_admin] = (
+                lambda: debug_bundle_admin
+            )
             for _ in range(20):
                 await _asyncio.sleep(0)
 
@@ -2387,11 +2460,18 @@ class TestDebugBundle:
             enqueue = await async_client.post("/api/auto-creation/debug-bundle")
             job_id = enqueue.json()["job_id"]
 
-            # Drain the background task so the job reaches "completed".
-            for _ in range(50):
-                await _asyncio.sleep(0)
+            for _ in range(100):
+                response = await async_client.get(
+                    f"/api/auto-creation/debug-bundle/{job_id}"
+                )
+                if response.headers.get("content-type", "").startswith(
+                    "application/gzip"
+                ):
+                    break
+                await _asyncio.sleep(0.01)
+            else:
+                pytest.fail("debug bundle did not complete within 1 second")
 
-            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
             assert response.status_code == 200
             assert response.headers["content-type"].startswith("application/gzip")
             disposition = response.headers["content-disposition"]
@@ -2475,6 +2555,109 @@ class TestDebugBundle:
         assert "fresh" in router_module._DEBUG_BUNDLE_JOBS
 
     @pytest.mark.asyncio
+    async def test_terminal_job_expires_without_a_later_post(self, async_client, monkeypatch):
+        import asyncio as _asyncio
+        from routers import channel_pipeline as router_module
+
+        monkeypatch.setattr(router_module, "_DEBUG_BUNDLE_JOB_TTL_SECONDS", 0.02)
+
+        async def fast_build():
+            return ("ecm-debug-bundle.tar.gz", b"fake")
+
+        with patch("routers.channel_pipeline._build_debug_bundle", side_effect=fast_build):
+            response = await async_client.post("/api/auto-creation/debug-bundle")
+            job_id = response.json()["job_id"]
+            await _asyncio.sleep(0.08)
+
+        assert job_id not in router_module._DEBUG_BUNDLE_JOBS
+
+    @pytest.mark.asyncio
+    async def test_expiry_removes_completed_private_artifact(
+        self, async_client, monkeypatch
+    ):
+        import asyncio as _asyncio
+        import os as _os
+        from routers import channel_pipeline as router_module
+
+        monkeypatch.setattr(router_module, "_DEBUG_BUNDLE_JOB_TTL_SECONDS", 0.15)
+
+        async def fast_build():
+            return ("ecm-debug-bundle.tar.gz", b"private-artifact")
+
+        with patch("routers.channel_pipeline._build_debug_bundle", side_effect=fast_build):
+            response = await async_client.post("/api/auto-creation/debug-bundle")
+            job_id = response.json()["job_id"]
+            for _ in range(100):
+                job = router_module._DEBUG_BUNDLE_JOBS.get(job_id)
+                if job is not None and job.artifact_path is not None:
+                    artifact_path = job.artifact_path
+                    break
+                await _asyncio.sleep(0.005)
+            else:
+                pytest.fail("completed artifact was not persisted")
+            assert _os.path.isfile(artifact_path)
+            await _asyncio.sleep(0.2)
+
+        assert job_id not in router_module._DEBUG_BUNDLE_JOBS
+        assert not _os.path.exists(artifact_path)
+
+    @pytest.mark.asyncio
+    async def test_terminal_job_retention_has_a_hard_count_bound(
+        self, async_client
+    ):
+        import asyncio as _asyncio
+        from routers import channel_pipeline as router_module
+
+        async def fast_build():
+            return ("ecm-debug-bundle.tar.gz", b"bounded")
+
+        with patch("routers.channel_pipeline._build_debug_bundle", side_effect=fast_build):
+            for _ in range(router_module._DEBUG_BUNDLE_MAX_RETAINED_JOBS + 2):
+                response = await async_client.post(
+                    "/api/auto-creation/debug-bundle"
+                )
+                job_id = response.json()["job_id"]
+                for _ in range(100):
+                    if router_module._DEBUG_BUNDLE_JOBS[job_id].status == "completed":
+                        break
+                    await _asyncio.sleep(0.005)
+                else:
+                    pytest.fail("debug bundle did not complete")
+
+        assert len(router_module._DEBUG_BUNDLE_JOBS) == (
+            router_module._DEBUG_BUNDLE_MAX_RETAINED_JOBS
+        )
+
+    @pytest.mark.asyncio
+    async def test_anonymous_start_and_download_are_denied_when_general_auth_is_off(
+        self, async_client
+    ):
+        from auth.dependencies import require_authenticated_human_admin
+        from main import app
+
+        app.dependency_overrides.pop(require_authenticated_human_admin, None)
+        try:
+            start = await async_client.post("/api/auto-creation/debug-bundle")
+            download = await async_client.get(
+                "/api/auto-creation/debug-bundle/not-a-job"
+            )
+        finally:
+            # The class fixture restores this after the test as well, but put it
+            # back now so teardown/background work stays under the same identity.
+            app.dependency_overrides[require_authenticated_human_admin] = (
+                lambda: __import__("models").User(
+                    id=5150,
+                    username="debug-bundle-admin",
+                    is_admin=True,
+                    is_active=True,
+                    auth_provider="local",
+                )
+            )
+
+        assert start.status_code == 401
+        assert download.status_code == 401
+
+    @pytest.mark.asyncio
     async def test_bundle_includes_normalization_rules_yaml(self, async_client, test_session):
         """bd-cns7j follow-up: normalization_rules.yaml is in the tarball with
         the user's group + rule definitions so 'normalization isn't stripping
@@ -2533,10 +2716,16 @@ class TestDebugBundle:
             enqueue = await async_client.post("/api/auto-creation/debug-bundle")
             assert enqueue.status_code == 202
             job_id = enqueue.json()["job_id"]
-            for _ in range(80):
-                await _asyncio.sleep(0)
-
-            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            for _ in range(100):
+                response = await async_client.get(
+                    f"/api/auto-creation/debug-bundle/{job_id}"
+                )
+                if response.headers["content-type"].startswith("application/gzip"):
+                    break
+                assert response.json()["status"] == "running"
+                await _asyncio.sleep(0.05)
+            else:
+                pytest.fail("debug bundle did not complete within 5 seconds")
             assert response.status_code == 200
             assert response.headers["content-type"].startswith("application/gzip")
 
@@ -2625,10 +2814,16 @@ class TestDebugBundle:
             enqueue = await async_client.post("/api/auto-creation/debug-bundle")
             assert enqueue.status_code == 202
             job_id = enqueue.json()["job_id"]
-            for _ in range(80):
-                await _asyncio.sleep(0)
-
-            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            for _ in range(100):
+                response = await async_client.get(
+                    f"/api/auto-creation/debug-bundle/{job_id}"
+                )
+                if response.headers["content-type"].startswith("application/gzip"):
+                    break
+                assert response.json()["status"] == "running"
+                await _asyncio.sleep(0.05)
+            else:
+                pytest.fail("debug bundle did not complete within 5 seconds")
             assert response.status_code == 200
             assert response.headers["content-type"].startswith("application/gzip")
             archive_bytes = response.content
@@ -2667,6 +2862,10 @@ class TestDebugBundleEventSyncMatching:
     (via the shared preview fetch/resolve path) and serializes the full
     per-stream matching evidence a user can send to PROVE OUT matching.
     """
+
+    @pytest.fixture(autouse=True)
+    def _authorize_bundle(self, debug_bundle_admin):
+        del debug_bundle_admin
 
     def _es_mock_client(self):
         from tests.event_sync_fixtures import (

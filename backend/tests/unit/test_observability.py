@@ -16,6 +16,7 @@ import json
 import logging
 import re
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -229,6 +230,22 @@ class TestInstallJsonLogging:
 
         assert stringio_handler in root.handlers
         assert custom_handler in root.handlers
+
+    def test_real_persistent_json_handler_is_preserved(self, tmp_path: Path):
+        """Reinstalling console JSON logging must not detach file persistence."""
+        import log_utils
+
+        handler = log_utils.install_persistent_json_logging(
+            tmp_path, max_bytes=1024, backup_count=2
+        )
+        assert handler is not None
+
+        observability.install_json_logging()
+
+        assert handler in logging.getLogger().handlers
+        assert getattr(handler, "_ecm_persistent_json_handler", False)
+        handler.close()
+        logging.getLogger().removeHandler(handler)
 
 
 class TestMetrics:

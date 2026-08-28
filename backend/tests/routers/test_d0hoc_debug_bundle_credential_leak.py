@@ -220,8 +220,10 @@ async def build_bundle(test_engine, extra_log_lines=None, extra_streams=None,
                        collapsed_group_settings=None, channel_profiles=None,
                        m3u_accounts_error=None,
                        collapsed_group_settings_error=None,
-                       channel_profiles_error=None, return_client=False,
-                       recent_logs_provider=None):
+                        channel_profiles_error=None, return_client=False,
+                        recent_logs_provider=None, persistent_log_snapshot=None,
+                        ring_log_snapshot=None, persistent_log_policy=None,
+                        persistent_snapshot_observer=None):
     """Drive the REAL :func:`_build_debug_bundle` and return its bytes.
 
     ``only_shapes`` narrows the stream set to the named recorded shapes, so a
@@ -278,18 +280,52 @@ async def build_bundle(test_engine, extra_log_lines=None, extra_streams=None,
     if not disable_value_rule:
         settings_payload["username"] = "ecm-operator"
         settings_payload["password"] = "ecm-operator-password"
-    settings_obj = SimpleNamespace(model_dump=lambda: dict(settings_payload))
+    settings_obj = SimpleNamespace(
+        model_dump=lambda: dict(settings_payload),
+        backend_log_file_max_bytes=10 * 1024 * 1024,
+        backend_log_file_backup_count=4,
+    )
 
     log_lines = [
         "[M3U] refresh starting for Synthetic XC Provider",
         *(extra_log_lines or []),
     ]
     logs_provider = recent_logs_provider or (lambda: log_lines)
+    if ring_log_snapshot is None:
+        from log_utils import RingBufferSnapshot
+
+        def ring_snapshot_provider():
+            return RingBufferSnapshot(
+                lines=tuple(logs_provider()),
+                capacity=10000,
+                saturated=False,
+                overwrite_count=0,
+            )
+    else:
+        ring_snapshot_provider = lambda: ring_log_snapshot
+    if persistent_log_snapshot is None:
+        from log_utils import PersistentLogSnapshot
+
+        persistent_log_snapshot = PersistentLogSnapshot(
+            files=(),
+            incomplete=False,
+            reason=None,
+            handler_degraded=True,
+            rotation_saturated=False,
+        )
+
+    def persistent_snapshot_provider(*args, **kwargs):
+        if persistent_snapshot_observer is not None:
+            persistent_snapshot_observer(args, kwargs)
+        return persistent_log_snapshot
 
     with patch("routers.channel_pipeline.get_client", return_value=client), \
          patch("routers.channel_pipeline.get_session", TestSessionLocal), \
          patch("config.get_settings", return_value=settings_obj), \
-         patch("log_utils.get_recent_logs", side_effect=logs_provider):
+         patch("log_utils.get_recent_logs", side_effect=logs_provider), \
+         patch("log_utils.get_ring_buffer_snapshot", side_effect=ring_snapshot_provider), \
+         patch("log_utils.get_persistent_log_policy", return_value=persistent_log_policy), \
+         patch("log_utils.snapshot_persistent_logs", side_effect=persistent_snapshot_provider):
         from routers.channel_pipeline import _build_debug_bundle
 
         _filename, payload = await _build_debug_bundle()

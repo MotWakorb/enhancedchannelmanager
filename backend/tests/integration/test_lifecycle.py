@@ -7,7 +7,15 @@ Tests: Verify startup_event initializes services, DB init runs,
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
+import main
 from main import app
+
+
+@pytest.fixture(autouse=True)
+def isolate_persistent_logging():
+    """Lifecycle tests assert wiring without leaving live file descriptors."""
+    with patch("main.install_persistent_json_logging"):
+        yield
 
 
 class TestStartupInitialization:
@@ -16,9 +24,11 @@ class TestStartupInitialization:
     @pytest.mark.asyncio
     async def test_startup_calls_init_db(self):
         """startup_event should call init_db() to initialize the database."""
+        startup_order = []
         with patch("main.init_db") as mock_init, \
              patch("main.get_settings") as mock_settings, \
              patch("main.set_log_level"), \
+             patch("main.install_persistent_json_logging") as mock_file_logging, \
              patch("tls.https_server.is_https_subprocess", return_value=False), \
              patch("main.get_client"), \
              patch("main.BandwidthTracker"), \
@@ -37,11 +47,21 @@ class TestStartupInitialization:
             settings.url = "http://test"
             mock_settings.return_value = settings
             mock_prober_cls.return_value = MagicMock(start=AsyncMock())
+            mock_file_logging.side_effect = lambda *args, **kwargs: startup_order.append(
+                "persistent_logging"
+            )
+            mock_init.side_effect = lambda: startup_order.append("database")
 
             from main import startup_event
             await startup_event()
 
             mock_init.assert_called_once()
+            assert startup_order.index("persistent_logging") < startup_order.index("database")
+            mock_file_logging.assert_called_once_with(
+                main.CONFIG_DIR,
+                max_bytes=mock_settings.return_value.backend_log_file_max_bytes,
+                backup_count=mock_settings.return_value.backend_log_file_backup_count,
+            )
 
     @pytest.mark.asyncio
     async def test_startup_loads_settings(self):
