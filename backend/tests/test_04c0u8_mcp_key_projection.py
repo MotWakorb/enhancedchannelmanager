@@ -216,6 +216,7 @@ async def test_complete_startup_preserves_non_object_settings(
                 patch("tls.https_server.is_https_subprocess", return_value=False)
             )
             stack.enter_context(patch("main.sweep_orphaned_settings_temporaries"))
+            stack.enter_context(patch("main.install_persistent_json_logging"))
             stack.enter_context(
                 patch("main.load_mcp_service_credentials", return_value=MagicMock())
             )

@@ -10,6 +10,7 @@ Mocks: get_settings(), save_settings(), get_client(), get_prober(), get_tracker(
 """
 import asyncio
 import stat
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -60,6 +61,8 @@ def _mock_settings(**overrides):
         "stats_poll_interval": 30,
         "user_timezone": "UTC",
         "backend_log_level": "INFO",
+        "backend_log_file_max_bytes": 10 * 1024 * 1024,
+        "backend_log_file_backup_count": 4,
         "frontend_log_level": "INFO",
         "vlc_open_behavior": "stream",
         "stream_probe_batch_size": 50,
@@ -218,6 +221,22 @@ class TestGetSettings:
         assert response.status_code == 200
         assert response.json()["allow_multi_provider_auto_sync"] is False
 
+    @pytest.mark.asyncio
+    async def test_exposes_rotating_backend_log_settings(self, async_client):
+        mock = _mock_settings(
+            backend_log_file_max_bytes=25 * 1024 * 1024,
+            backend_log_file_backup_count=7,
+        )
+
+        with patch("routers.settings.get_settings", return_value=mock), patch(
+            "routers.settings._has_discord_alert_method", return_value=False
+        ):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["backend_log_file_max_bytes"] == 25 * 1024 * 1024
+        assert response.json()["backend_log_file_backup_count"] == 7
+
 
 class TestUpdateSettings:
     """Tests for POST /api/settings."""
@@ -241,6 +260,115 @@ class TestUpdateSettings:
 
         assert response.status_code == 200
         assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_rotation_fields_preserve_omitted_values_and_do_not_require_restart(
+        self, async_client
+    ):
+        current = _mock_settings(
+            backend_log_file_max_bytes=25 * 1024 * 1024,
+            backend_log_file_backup_count=7,
+        )
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings"
+        ) as mock_save, patch("routers.settings.clear_settings_cache"), patch(
+            "routers.settings.reset_client"
+        ), patch("routers.settings.get_prober", return_value=None), patch(
+            "routers.settings.get_cache", return_value=MagicMock()
+        ):
+            response = await async_client.post(
+                "/api/settings",
+                json={"url": current.url, "username": current.username},
+            )
+
+        assert response.status_code == 200
+        saved = mock_save.call_args.args[0]
+        assert saved.backend_log_file_max_bytes == 25 * 1024 * 1024
+        assert saved.backend_log_file_backup_count == 7
+        assert response.json()["restart_required"] is False
+
+    @pytest.mark.asyncio
+    async def test_rotation_change_is_persisted_and_reports_restart_required(
+        self, async_client
+    ):
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings"
+        ) as mock_save, patch("routers.settings.clear_settings_cache"), patch(
+            "routers.settings.reset_client"
+        ), patch("routers.settings.get_prober", return_value=None), patch(
+            "routers.settings.get_cache", return_value=MagicMock()
+        ):
+            response = await async_client.post(
+                "/api/settings",
+                json={
+                    "url": current.url,
+                    "username": current.username,
+                    "backend_log_file_max_bytes": 20 * 1024 * 1024,
+                    "backend_log_file_backup_count": 6,
+                },
+            )
+
+        assert response.status_code == 200
+        saved = mock_save.call_args.args[0]
+        assert saved.backend_log_file_max_bytes == 20 * 1024 * 1024
+        assert saved.backend_log_file_backup_count == 6
+        assert response.json()["restart_required"] is True
+
+    @pytest.mark.asyncio
+    async def test_pending_rotation_restart_stays_visible_on_later_save(
+        self, async_client
+    ):
+        current = _mock_settings(
+            backend_log_file_max_bytes=20 * 1024 * 1024,
+            backend_log_file_backup_count=6,
+        )
+        applied_policy = SimpleNamespace(
+            max_bytes=10 * 1024 * 1024,
+            backup_count=4,
+        )
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.get_persistent_log_policy",
+            return_value=applied_policy,
+        ), patch("routers.settings.save_settings"), patch(
+            "routers.settings.clear_settings_cache"
+        ), patch("routers.settings.reset_client"), patch(
+            "routers.settings.get_prober", return_value=None
+        ), patch("routers.settings.get_cache", return_value=MagicMock()):
+            response = await async_client.post(
+                "/api/settings",
+                json={"url": current.url, "username": current.username},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["restart_required"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("backend_log_file_max_bytes", (1024 * 1024) - 1),
+            ("backend_log_file_max_bytes", (100 * 1024 * 1024) + 1),
+            ("backend_log_file_backup_count", 0),
+            ("backend_log_file_backup_count", 10),
+        ],
+    )
+    async def test_rotation_api_bounds_reject_invalid_values(
+        self, async_client, field, value
+    ):
+        response = await async_client.post(
+            "/api/settings",
+            json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                field: value,
+            },
+        )
+
+        assert response.status_code == 422
 
     @pytest.mark.asyncio
     async def test_untrusted_mcp_storage_returns_operator_actionable_503(
@@ -2763,6 +2891,8 @@ def _full_payload(mock):
         # unless a test deliberately flips them.
         "max_auto_created_channels_per_run": mock.max_auto_created_channels_per_run,
         "max_auto_creation_log_entries": mock.max_auto_creation_log_entries,
+        "backend_log_file_max_bytes": mock.backend_log_file_max_bytes,
+        "backend_log_file_backup_count": mock.backend_log_file_backup_count,
         # bd-dgs64 (GH #591): echo the stored value so the admin-field gate
         # sees NO change unless a test deliberately flips it.
         "allow_multi_provider_auto_sync": mock.allow_multi_provider_auto_sync,
@@ -2905,6 +3035,21 @@ class TestSettingsAdminFieldGate:
              s1 as mock_save, s2, s3, s4, s5:
             payload = _full_payload(current)
             payload["max_auto_creation_log_entries"] = 2000
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_changing_rotating_log_policy_is_rejected(
+        self, non_admin_client
+    ):
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["backend_log_file_backup_count"] = 8
             response = await non_admin_client.post("/api/settings", json=payload)
 
         assert response.status_code == 403

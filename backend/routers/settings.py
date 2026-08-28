@@ -9,7 +9,7 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse, urlunparse
 
@@ -26,6 +26,10 @@ from auth.mcp_service import rotate_mcp_service_credentials
 from auth.settings import get_auth_settings
 from config import (
     ADMIN_ONLY_READ_REDACTED_FIELDS,
+    BACKEND_LOG_FILE_MAX_BACKUPS,
+    BACKEND_LOG_FILE_MAX_BYTES,
+    BACKEND_LOG_FILE_MIN_BACKUPS,
+    BACKEND_LOG_FILE_MIN_BYTES,
     MCPApiKeyDurabilityIndeterminate,
     MCPApiKeyStorageError,
     get_settings,
@@ -53,6 +57,7 @@ from jellyfin_client import JellyfinClient, JellyfinClientError
 from plex_client import PlexClient, PlexClientError
 from cache import get_cache
 from database import get_session
+from log_utils import get_persistent_log_policy
 from stream_prober import StreamProber, get_prober, set_prober
 from bandwidth_tracker import BandwidthTracker, get_tracker, set_tracker
 from services.notification_service import create_notification_internal, update_notification_internal, delete_notifications_by_source_internal
@@ -141,6 +146,8 @@ _ADMIN_ONLY_SETTINGS_FIELDS: dict[str, str] = {
     # from more than one M3U provider — an install-wide duplicate-channel
     # risk, so it's an admin action, not a per-user preference.
     "allow_multi_provider_auto_sync": "allow_multi_provider_auto_sync",
+    "backend_log_file_max_bytes": "backend_log_file_max_bytes",
+    "backend_log_file_backup_count": "backend_log_file_backup_count",
 }
 # Credential fields use preserve-on-omit (None/empty => keep stored value), so
 # a plain attribute compare can't see a "change". They are admin-only by
@@ -430,6 +437,16 @@ class SettingsRequest(BaseModel):
     stats_poll_interval: int = 10
     user_timezone: str = ""
     backend_log_level: str = "INFO"
+    backend_log_file_max_bytes: Optional[int] = Field(
+        default=None,
+        ge=BACKEND_LOG_FILE_MIN_BYTES,
+        le=BACKEND_LOG_FILE_MAX_BYTES,
+    )
+    backend_log_file_backup_count: Optional[int] = Field(
+        default=None,
+        ge=BACKEND_LOG_FILE_MIN_BACKUPS,
+        le=BACKEND_LOG_FILE_MAX_BACKUPS,
+    )
     frontend_log_level: str = "INFO"
     vlc_open_behavior: str = "m3u_fallback"
     # Stream probe settings (scheduled probing is controlled by Task Engine)
@@ -568,6 +585,8 @@ class SettingsResponse(BaseModel):
     stats_poll_interval: int
     user_timezone: str
     backend_log_level: str
+    backend_log_file_max_bytes: int
+    backend_log_file_backup_count: int
     frontend_log_level: str
     vlc_open_behavior: str
     # Stream probe settings (scheduled probing is controlled by Task Engine)
@@ -831,6 +850,8 @@ async def get_current_settings(
         stats_poll_interval=settings.stats_poll_interval,
         user_timezone=settings.user_timezone,
         backend_log_level=settings.backend_log_level,
+        backend_log_file_max_bytes=settings.backend_log_file_max_bytes,
+        backend_log_file_backup_count=settings.backend_log_file_backup_count,
         frontend_log_level=settings.frontend_log_level,
         vlc_open_behavior=settings.vlc_open_behavior,
         stream_probe_timeout=settings.stream_probe_timeout,
@@ -1049,6 +1070,16 @@ async def update_settings(
         if request.trusted_media_networks is not None
         else current_settings.trusted_media_networks
     )
+    backend_log_file_max_bytes = (
+        request.backend_log_file_max_bytes
+        if request.backend_log_file_max_bytes is not None
+        else current_settings.backend_log_file_max_bytes
+    )
+    backend_log_file_backup_count = (
+        request.backend_log_file_backup_count
+        if request.backend_log_file_backup_count is not None
+        else current_settings.backend_log_file_backup_count
+    )
 
     # MCP API key is never accepted on this endpoint (it has dedicated
     # generate/revoke endpoints) — always preserve the stored value so a
@@ -1129,6 +1160,8 @@ async def update_settings(
         stats_poll_interval=request.stats_poll_interval,
         user_timezone=request.user_timezone,
         backend_log_level=request.backend_log_level,
+        backend_log_file_max_bytes=backend_log_file_max_bytes,
+        backend_log_file_backup_count=backend_log_file_backup_count,
         frontend_log_level=request.frontend_log_level,
         vlc_open_behavior=request.vlc_open_behavior,
         stream_probe_timeout=request.stream_probe_timeout,
@@ -1337,6 +1370,21 @@ async def update_settings(
         logger.info("[SETTINGS] Applying new backend log level: %s", new_settings.backend_log_level)
         set_log_level(new_settings.backend_log_level)
 
+    applied_log_policy = get_persistent_log_policy()
+    if applied_log_policy is None:
+        restart_required = (
+            new_settings.backend_log_file_max_bytes
+            != current_settings.backend_log_file_max_bytes
+            or new_settings.backend_log_file_backup_count
+            != current_settings.backend_log_file_backup_count
+        )
+    else:
+        restart_required = (
+            new_settings.backend_log_file_max_bytes != applied_log_policy.max_bytes
+            or new_settings.backend_log_file_backup_count
+            != applied_log_policy.backup_count
+        )
+
     # bd-dgs64 (GH #591): audit trail for the multi-provider auto-sync guard
     # opt-out. This is an install-wide duplicate-channel-risk toggle (see
     # _ADMIN_ONLY_SETTINGS_FIELDS above), so a value change is worth both a
@@ -1456,7 +1504,12 @@ async def update_settings(
             logger.info("[SETTINGS] Updated prober settings: %s", ", ".join(changed))
 
     logger.info("[SETTINGS] Settings saved successfully - configured: %s, auth_changed: %s, server_changed: %s", new_settings.is_configured(), auth_changed, server_changed)
-    return {"status": "saved", "configured": new_settings.is_configured(), "server_changed": server_changed}
+    return {
+        "status": "saved",
+        "configured": new_settings.is_configured(),
+        "server_changed": server_changed,
+        "restart_required": restart_required,
+    }
 
 
 @router.post("/test")

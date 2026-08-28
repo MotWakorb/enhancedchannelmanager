@@ -296,6 +296,29 @@ async def get_current_active_admin(
     return current_user
 
 
+async def require_authenticated_human_admin(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> User:
+    """Require a persisted human admin regardless of the general auth mode.
+
+    Diagnostic artifacts can contain operational data that must never become
+    public merely because ``require_auth`` is disabled. The MCP principal is
+    intentionally admin-equivalent for automation, but it is not a stable
+    operator identity and cannot own or download a debug artifact.
+    """
+    user = await get_current_user(request, session)
+    if not user.is_admin:
+        raise PermissionError("Admin access required")
+    if is_mcp_service_principal(user):
+        raise PermissionError(
+            "Debug artifacts must be created and downloaded by a human admin"
+        )
+    if not isinstance(user.id, int) or user.id <= 0:
+        raise PermissionError("Debug artifacts require a stable human identity")
+    return user
+
+
 def require_auth_if_enabled():
     """
     Factory function to create a dependency that checks auth if enabled.

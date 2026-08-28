@@ -29,6 +29,7 @@ from auth import dependencies as deps
 from auth.dependencies import (
     get_current_user,
     get_current_active_admin,
+    require_authenticated_human_admin,
     require_auth_if_enabled,
     require_admin_if_enabled,
 )
@@ -157,6 +158,85 @@ async def test_mcp_key_passes_get_current_active_admin(mcp_key_configured):
     principal = await get_current_user(req, session=_ExplodingSession())
     admin = await get_current_active_admin(principal)
     assert admin.is_admin is True
+
+
+@pytest.mark.asyncio
+async def test_debug_artifact_human_admin_gate_rejects_mcp_principal(
+    mcp_key_configured,
+):
+    req = _FakeRequest(bearer=MCP_KEY)
+
+    with pytest.raises(HTTPException) as exc:
+        await require_authenticated_human_admin(req, session=_ExplodingSession())
+
+    assert exc.value.status_code == 403
+    assert "human" in exc.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_debug_artifact_human_admin_gate_rejects_anonymous_even_when_auth_disabled(
+    monkeypatch, test_session
+):
+    monkeypatch.setattr(
+        deps,
+        "get_auth_settings",
+        lambda: AuthSettings(setup_complete=True, require_auth=False),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await require_authenticated_human_admin(
+            _FakeRequest(), session=test_session
+        )
+
+    assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_debug_artifact_human_admin_gate_returns_stable_human_identity(
+    mcp_key_configured, test_session
+):
+    user = User(
+        username="bundle-admin",
+        email="bundle-admin@example.com",
+        auth_provider="local",
+        is_admin=True,
+        is_active=True,
+    )
+    test_session.add(user)
+    test_session.commit()
+    test_session.refresh(user)
+    token = create_access_token(user_id=user.id, username=user.username)
+
+    resolved = await require_authenticated_human_admin(
+        _FakeRequest(bearer=token), session=test_session
+    )
+
+    assert resolved.id == user.id
+    assert resolved.username == "bundle-admin"
+
+
+@pytest.mark.asyncio
+async def test_debug_artifact_human_admin_gate_rejects_non_admin(
+    mcp_key_configured, test_session
+):
+    user = User(
+        username="bundle-viewer",
+        email="bundle-viewer@example.com",
+        auth_provider="local",
+        is_admin=False,
+        is_active=True,
+    )
+    test_session.add(user)
+    test_session.commit()
+    test_session.refresh(user)
+    token = create_access_token(user_id=user.id, username=user.username)
+
+    with pytest.raises(HTTPException) as exc:
+        await require_authenticated_human_admin(
+            _FakeRequest(bearer=token), session=test_session
+        )
+
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio

@@ -297,6 +297,27 @@ def admin_client(async_client, test_session):
 
 
 @pytest.fixture
+def debug_bundle_admin():
+    """Authorize debug-bundle endpoint tests with a stable human principal."""
+    from auth.dependencies import require_authenticated_human_admin
+    from main import app
+    from models import User
+
+    admin = User(
+        id=5150,
+        username="debug-bundle-admin",
+        is_admin=True,
+        is_active=True,
+        auth_provider="local",
+    )
+    app.dependency_overrides[require_authenticated_human_admin] = lambda: admin
+    try:
+        yield admin
+    finally:
+        app.dependency_overrides.pop(require_authenticated_human_admin, None)
+
+
+@pytest.fixture
 def sample_journal_entry(test_session):
     """Create a sample journal entry for testing."""
     from datetime import datetime

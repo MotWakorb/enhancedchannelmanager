@@ -60,7 +60,7 @@ credential *values*. It does hand over everything else.
 
 ### What is still refused
 
-Two classes of surface require a real, human, authenticated admin even when
+Three classes of surface require a real, human, authenticated admin even when
 `require_auth` is false.
 
 **Identity primitives** (jy006). Each one leaves the caller holding a
@@ -85,6 +85,12 @@ had to learn and read an in-band port scan off the reply:
 | Backup upload targets | `POST /api/cloud-targets/test`, `POST /api/cloud-targets/{id}/test` |
 | DNS provider | `POST /api/tls/test-dns-provider` |
 
+**Diagnostic artifacts.** `POST /api/channel-pipeline/debug-bundle` and `GET
+/api/channel-pipeline/debug-bundle/{job_id}` always require an authenticated
+human admin. They do not admit the MCP service principal, and they have no
+first-run/no-identity carve-out. A job is bound to the user id that started it;
+another admin cannot poll or download it.
+
 The line is not "how destructive is it." `POST /api/settings` and `POST
 /api/backup/restore` are both open and both do real damage.
 
@@ -100,17 +106,20 @@ DNS-provider credentials and enumerate your zones for anyone on the network,
 while `GET /api/tls/settings`, which merely shows those credentials *masked*,
 was refused.
 
-The mechanism is `enforce_when_auth_disabled=True` on
+The identity and connection-test mechanism is `enforce_when_auth_disabled=True` on
 `auth.dependencies.require_admin_if_enabled`, carried by
 `RequireHumanAdminForServiceCredential`, `RequireHumanAdminForTLSMaterial` and
 `RequireHumanAdminForOutboundTest`. `restore-initial` implements the same rule
 in its handler (`routers.backup._guard_initial_restore`) because it must also
 survive a damaged `setup_complete`. All of them share one ownership predicate,
 `auth.dependencies.instance_has_operator_identity`.
+Debug bundles instead use `require_authenticated_human_admin`, which always
+chains `get_current_user` and therefore never enters an auth-disabled
+short-circuit.
 
 ### The carve-out: instances with no operator identity
 
-All of them still serve an anonymous caller on an instance that holds **no**
+The identity primitives and connection tests still serve an anonymous caller on an instance that holds **no**
 operator identity: no user row, and `setup_complete` false. That is a genuine
 first run, or a deliberately headless deployment that runs with authentication
 off and never creates a user. Without the carve-out these routes would be
