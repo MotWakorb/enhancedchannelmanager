@@ -1,5 +1,6 @@
 """Tests for safe, persistent, and debug-bundle logging utilities."""
 
+import builtins
 import errno
 import fcntl
 import json
@@ -17,7 +18,6 @@ import pytest
 
 import log_utils
 import observability
-from log_utils import _sanitize_value, _safe_record_factory, install_safe_logging
 
 
 def _multiprocess_log_writer(
@@ -73,31 +73,31 @@ def isolated_file_logging():
 
 class TestSanitizeValue:
     def test_strips_newlines(self):
-        assert _sanitize_value("line1\nline2") == "line1\\nline2"
+        assert log_utils._sanitize_value("line1\nline2") == "line1\\nline2"
 
     def test_strips_carriage_returns(self):
-        assert _sanitize_value("line1\rline2") == "line1\\rline2"
+        assert log_utils._sanitize_value("line1\rline2") == "line1\\rline2"
 
     def test_strips_crlf(self):
-        assert _sanitize_value("line1\r\nline2") == "line1\\r\\nline2"
+        assert log_utils._sanitize_value("line1\r\nline2") == "line1\\r\\nline2"
 
     def test_passes_non_strings(self):
-        assert _sanitize_value(42) == 42
-        assert _sanitize_value(3.14) == 3.14
-        assert _sanitize_value(None) is None
+        assert log_utils._sanitize_value(42) == 42
+        assert log_utils._sanitize_value(3.14) == 3.14
+        assert log_utils._sanitize_value(None) is None
 
     def test_clean_string_unchanged(self):
-        assert _sanitize_value("normal text") == "normal text"
+        assert log_utils._sanitize_value("normal text") == "normal text"
 
     def test_multiple_newlines(self):
-        assert _sanitize_value("a\nb\nc") == "a\\nb\\nc"
+        assert log_utils._sanitize_value("a\nb\nc") == "a\\nb\\nc"
 
 
 class TestSafeRecordFactory:
     """Test the factory function directly."""
 
     def _make_record(self, msg, args):
-        return _safe_record_factory(
+        return log_utils._safe_record_factory(
             "test", logging.INFO, __file__, 0, msg, args, None,
         )
 
@@ -135,11 +135,11 @@ class TestInstallSafeLogging:
         logging.setLogRecordFactory(self._original)
 
     def test_installs_factory(self):
-        install_safe_logging()
-        assert logging.getLogRecordFactory() is _safe_record_factory
+        log_utils.install_safe_logging()
+        assert logging.getLogRecordFactory() is log_utils._safe_record_factory
 
     def test_logger_uses_factory(self):
-        install_safe_logging()
+        log_utils.install_safe_logging()
         test_logger = logging.getLogger("test.install")
         # makeRecord is what the logging module calls internally
         record = test_logger.makeRecord(
@@ -531,6 +531,31 @@ class TestInterProcessRotatingJsonHandler:
             assert unsafe not in persisted
         assert b"***REDACTED***" in persisted
         handler.close()
+
+    def test_object_registration_does_not_import_the_backup_router(
+        self, isolated_file_logging, monkeypatch
+    ):
+        real_import = builtins.__import__
+
+        def import_without_backup(
+            name, globals=None, locals=None, fromlist=(), level=0
+        ):
+            if name == "routers.backup":
+                raise AssertionError("logging credential registration imported a router")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", import_without_backup)
+
+        log_utils.register_sensitive_values_from_object(
+            {
+                "password": "provider-secret-value",
+                "username": "provider-identity-value",
+            }
+        )
+
+        registered = log_utils.get_registered_sensitive_value_forms()
+        assert "provider-secret-value" in registered
+        assert "provider-identity-value" in registered
 
     def test_unknown_credential_shapes_use_the_shared_pattern_scrubber(
         self, tmp_path, isolated_file_logging

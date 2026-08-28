@@ -44,7 +44,6 @@ from auth.dependencies import (
     is_mcp_service_principal,
 )
 from config import (
-    ADMIN_ONLY_READ_REDACTED_FIELDS,
     CONFIG_DIR,
     CONFIG_FILE,
     DispatcharrSettings,
@@ -54,7 +53,15 @@ from config import (
     save_settings,
     clear_settings_cache,
 )
-from credential_sentinel import REDACTION_SENTINEL, strip_redaction_sentinels
+from credential_sentinel import (
+    ALERT_METHOD_CREDENTIAL_KEYS,
+    CREDENTIAL_SECRET_KEYS,
+    PROVIDER_IDENTITY_KEYS,
+    REDACTION_SENTINEL,
+    SETTINGS_CREDENTIAL_FIELDS,
+    collect_credential_values,
+    strip_redaction_sentinels,
+)
 from dbas import artifact_crypto
 from dbas.archive_keys import (
     ARCHIVE_EPG_TVG_ID_KEY,
@@ -154,9 +161,9 @@ REDACTED = REDACTION_SENTINEL
 # routers/channel_pipeline.py imports this tuple, so a single edit there
 # propagates everywhere.
 #
-# READ-PARITY WITH GET /api/settings (bead …-9kwzp.9). The trailing entries are
-# DERIVED from ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``, not restated, and
-# that is the fix rather than an implementation detail. Bead 9ej7f made GET
+# READ-PARITY WITH GET /api/settings (bead …-9kwzp.9). The trailing entries share
+# ``credential_sentinel.ADMIN_ONLY_READ_REDACTED_FIELDS`` with ``config`` rather
+# than restating it. Bead 9ej7f made GET
 # /api/settings withhold that partition from every caller
 # ``routers.settings._resolve_settings_admin`` classifies as non-admin —
 # including the MCP service principal. But GET /api/backup/create, /export and
@@ -192,19 +199,7 @@ REDACTED = REDACTION_SENTINEL
 # test_no_credential_shaped_settings_field_is_left_unredacted``, which reads the
 # live settings model, so the NEXT vendor field fails a required check rather
 # than a drill.
-_SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(dict.fromkeys((
-    "password",
-    "dispatcharr_api_key",
-    "api_key",
-    "smtp_password",
-    "smtp_user",
-    "telegram_bot_token",
-    "mcp_api_key",
-    "emby_api_key",
-    "jellyfin_api_key",
-    "plex_token",
-    *sorted(ADMIN_ONLY_READ_REDACTED_FIELDS),
-)))
+_SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = SETTINGS_CREDENTIAL_FIELDS
 
 # Credential-class keys that may live inside alert_methods.config JSON. Matches
 # the masking set in AlertMethod.to_dict (models.py) so backup redaction stays
@@ -222,7 +217,7 @@ _SETTINGS_CREDENTIAL_FIELDS: tuple[str, ...] = tuple(dict.fromkeys((
 # as written; if you ever make one of those handlers build its own dict again,
 # this comment goes false again and this tuple is the thing that silently
 # drifts.
-_ALERT_METHOD_CREDENTIAL_KEYS = ("password", "bot_token", "webhook_url", "api_key")
+_ALERT_METHOD_CREDENTIAL_KEYS = ALERT_METHOD_CREDENTIAL_KEYS
 
 # The IDENTITY half of the same alert-method config blobs (bead …-gi4zn). An
 # SMTP alert method stores ``username`` beside its ``password`` and a Telegram
@@ -567,31 +562,7 @@ class BackupScrubError(RuntimeError):
 #
 # This union folds in the settings + alert-method denylists so there is exactly
 # one list to maintain. Matched case-insensitively against dict keys.
-_REDACT_KEYS = frozenset(
-    {k.lower() for k in _SETTINGS_CREDENTIAL_FIELDS}
-    | {k.lower() for k in _ALERT_METHOD_CREDENTIAL_KEYS}
-    | {
-        # Dispatcharr / cloud-target credential-class keys that can ride along
-        # in gathered sections. Keep additive — never remove without confirming
-        # the field is not credential-bearing.
-        "password",
-        "passwd",
-        "secret",
-        "secret_key",
-        "access_key",
-        "access_token",
-        "refresh_token",
-        "client_secret",
-        "private_key",
-        "auth_token",
-        "bearer_token",
-        # No current writer puts a passphrase into alert_methods.config or
-        # task_schedules.parameters — DbasBackupTask.get_config deliberately
-        # omits it — so this closes the class against the NEXT writer rather
-        # than a measured exposure (bead …-04c0u.13 review).
-        "passphrase",
-    }
-)
+_REDACT_KEYS = CREDENTIAL_SECRET_KEYS
 
 # Stream-record keys that are credential-class for an EMBEDDED channel stream and
 # must NEVER be carried in the channels producer (7i8rf). A Dispatcharr/IPTV
@@ -630,7 +601,7 @@ _STREAM_CREDENTIAL_FIELDS = frozenset({"url", "custom_url", "stream_hash"})
 # :data:`_IDENTITY_EXEMPT_CATEGORIES`. Every other consumer of the deep redactor
 # gets identity redaction by DEFAULT (fail-closed); a caller must name its
 # exemption to opt out.
-_PROVIDER_IDENTITY_KEYS = frozenset({"username"})
+_PROVIDER_IDENTITY_KEYS = PROVIDER_IDENTITY_KEYS
 
 # The ONLY categories exempt from :data:`_PROVIDER_IDENTITY_KEYS`.
 #
@@ -785,25 +756,7 @@ def _collect_credential_values(obj) -> tuple[frozenset[str], frozenset[str]]:
         blank and sentinel values are excluded: an empty secret would match every
         empty path segment, and the sentinel is already the replacement.
     """
-    secrets: set[str] = set()
-    identities: set[str] = set()
-
-    def walk(node) -> None:
-        if isinstance(node, dict):
-            for key, value in node.items():
-                klower = key.lower() if isinstance(key, str) else None
-                if isinstance(value, str) and value and value != REDACTED:
-                    if klower in _REDACT_KEYS:
-                        secrets.add(value)
-                    elif klower in _PROVIDER_IDENTITY_KEYS:
-                        identities.add(value)
-                walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(obj)
-    return frozenset(secrets), frozenset(identities - secrets)
+    return collect_credential_values(obj)
 
 
 def _url_carries_credentials(

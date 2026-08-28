@@ -2421,7 +2421,7 @@ class TestDebugBundle:
 
     @pytest.mark.asyncio
     async def test_other_admin_cannot_reuse_or_download_initiators_job(
-        self, async_client, debug_bundle_admin
+        self, async_client
     ):
         import asyncio as _asyncio
 
@@ -2442,6 +2442,9 @@ class TestDebugBundle:
             is_active=True,
             auth_provider="local",
         )
+        original_admin_override = app.dependency_overrides[
+            require_authenticated_human_admin
+        ]
         try:
             with patch("routers.channel_pipeline._build_debug_bundle", side_effect=slow_build):
                 first = await async_client.post("/api/auto-creation/debug-bundle")
@@ -2460,7 +2463,7 @@ class TestDebugBundle:
         finally:
             gate.set()
             app.dependency_overrides[require_authenticated_human_admin] = (
-                lambda: debug_bundle_admin
+                original_admin_override
             )
             for _ in range(20):
                 await _asyncio.sleep(0)
@@ -2628,6 +2631,7 @@ class TestDebugBundle:
         from routers import channel_pipeline as router_module
 
         monkeypatch.setattr(router_module, "_DEBUG_BUNDLE_JOB_TTL_SECONDS", 0.15)
+        artifact_path: str | None = None
 
         async def fast_build():
             return ("ecm-debug-bundle.tar.gz", b"private-artifact")
@@ -2643,10 +2647,12 @@ class TestDebugBundle:
                 await _asyncio.sleep(0.005)
             else:
                 pytest.fail("completed artifact was not persisted")
+            assert artifact_path is not None
             assert _os.path.isfile(artifact_path)
             await _asyncio.sleep(0.2)
 
         assert job_id not in router_module._DEBUG_BUNDLE_JOBS
+        assert artifact_path is not None
         assert not _os.path.exists(artifact_path)
 
     @pytest.mark.asyncio
@@ -2683,7 +2689,9 @@ class TestDebugBundle:
         from auth.dependencies import require_authenticated_human_admin
         from main import app
 
-        app.dependency_overrides.pop(require_authenticated_human_admin, None)
+        original_admin_override = app.dependency_overrides.pop(
+            require_authenticated_human_admin
+        )
         try:
             start = await async_client.post("/api/auto-creation/debug-bundle")
             download = await async_client.get(
@@ -2693,13 +2701,7 @@ class TestDebugBundle:
             # The class fixture restores this after the test as well, but put it
             # back now so teardown/background work stays under the same identity.
             app.dependency_overrides[require_authenticated_human_admin] = (
-                lambda: __import__("models").User(
-                    id=5150,
-                    username="debug-bundle-admin",
-                    is_admin=True,
-                    is_active=True,
-                    auth_provider="local",
-                )
+                original_admin_override
             )
 
         assert start.status_code == 401
@@ -2913,7 +2915,7 @@ class TestDebugBundleEventSyncMatching:
 
     @pytest.fixture(autouse=True)
     def _authorize_bundle(self, debug_bundle_admin):
-        del debug_bundle_admin
+        assert debug_bundle_admin.is_admin is True
 
     def _es_mock_client(self):
         from tests.event_sync_fixtures import (

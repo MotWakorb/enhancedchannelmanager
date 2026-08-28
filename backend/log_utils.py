@@ -21,6 +21,8 @@ import threading
 from pathlib import Path
 from urllib.parse import quote, quote_plus
 
+from credential_sentinel import collect_credential_values
+
 _ORIGINAL_FACTORY = logging.getLogRecordFactory()
 
 
@@ -178,9 +180,7 @@ def register_sensitive_values(*values: str) -> None:
 
 def register_sensitive_values_from_object(value) -> None:
     """Harvest values with the backup artifact's canonical credential rules."""
-    from routers.backup import _collect_credential_values
-
-    secrets, identities = _collect_credential_values(value)
+    secrets, identities = collect_credential_values(value)
     register_sensitive_values(*(secrets | identities))
 
 
@@ -243,6 +243,7 @@ def _open_secure_log_directory(path: Path, *, create: bool) -> int:
         try:
             os.mkdir(path, mode=0o700)
         except FileExistsError:
+            # Another process may have created the shared directory first.
             pass
     descriptor = os.open(
         path,
@@ -352,6 +353,7 @@ def _direct_stderr_diagnostic() -> None:
     try:
         os.write(2, _PERSISTENT_LOG_DIAGNOSTIC)
     except OSError:
+        # Logging this failure would recurse through the handler that failed.
         pass
 
 
@@ -438,6 +440,7 @@ class InterProcessRotatingJsonHandler(logging.Handler):
         try:
             os.close(self._stream_fd)
         except OSError:
+            # Cleanup must not turn a logging failure into an app failure.
             pass
         self._stream_fd = None
 
@@ -447,12 +450,14 @@ class InterProcessRotatingJsonHandler(logging.Handler):
             try:
                 os.close(self._lock_fd)
             except OSError:
+                # Descriptor cleanup is best-effort after logging has degraded.
                 pass
             self._lock_fd = None
         if self._directory_fd is not None:
             try:
                 os.close(self._directory_fd)
             except OSError:
+                # Descriptor cleanup is best-effort after logging has degraded.
                 pass
             self._directory_fd = None
 
@@ -488,6 +493,7 @@ class InterProcessRotatingJsonHandler(logging.Handler):
         try:
             os.unlink(_PERSISTENT_LOG_SATURATION_FILENAME, dir_fd=self._directory_fd)
         except FileNotFoundError:
+            # A fresh log epoch has no prior saturation marker.
             pass
 
         marker_fd = os.open(
@@ -588,6 +594,7 @@ class InterProcessRotatingJsonHandler(logging.Handler):
             discarded = True
             os.unlink(oldest, dir_fd=self._directory_fd)
         except FileNotFoundError:
+            # The oldest slot is absent until enough rollovers have occurred.
             pass
 
         if discarded:
@@ -609,6 +616,7 @@ class InterProcessRotatingJsonHandler(logging.Handler):
                     dst_dir_fd=self._directory_fd,
                 )
             except FileNotFoundError:
+                # Sparse backup generations are valid after prior pruning.
                 pass
         try:
             os.replace(
@@ -618,6 +626,7 @@ class InterProcessRotatingJsonHandler(logging.Handler):
                 dst_dir_fd=self._directory_fd,
             )
         except FileNotFoundError:
+            # The active file is absent before the first successful write.
             pass
         self._open_stream_locked()
 
