@@ -17,6 +17,7 @@ import {
   type NotificationDisplayEntry,
 } from './notificationGrouping';
 import { PENDING_MERGES_EVENT } from './tabs/ChannelManagerTab';
+import { PROFILE_CONFLICT_REVIEW_EVENT } from './ProfileConflictReviewModal';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -391,10 +392,21 @@ export function NotificationCenter({
     if (onNotificationClick) {
       onNotificationClick(notification);
     }
+    if (notification.source === 'profile_reconcile') {
+      const detail: { review_id?: number; fingerprint?: string } = {};
+      if (typeof notification.metadata?.review_id === 'number') {
+        detail.review_id = notification.metadata.review_id;
+      }
+      if (typeof notification.metadata?.fingerprint === 'string') {
+        detail.fingerprint = notification.metadata.fingerprint;
+      }
+      window.dispatchEvent(new CustomEvent(PROFILE_CONFLICT_REVIEW_EVENT, { detail }));
+    }
     if (notification.action_url) {
       // Handle navigation if needed
       window.location.href = notification.action_url;
     }
+    if (notification.source === 'profile_reconcile') setIsOpen(false);
   };
 
   const formatTime = (dateStr: string) => {
@@ -652,6 +664,18 @@ export function NotificationCenter({
                       >
                         <span className="material-icons">edit_calendar</span>
                         {notification.action_label || 'Edit Schedule'}
+                      </button>
+                    )}
+                    {notification.source === 'profile_reconcile' && (
+                      <button
+                        className="notification-action-btn-inline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleNotificationClick(notification);
+                        }}
+                      >
+                        <span className="material-icons" aria-hidden="true">rule</span>
+                        Review choice
                       </button>
                     )}
                     {renderProbeProgress(notification)}

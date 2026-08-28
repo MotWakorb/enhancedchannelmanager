@@ -93,6 +93,7 @@ import type {
   DummyEPGChannelAssignment,
   StaleStreamIdsResponse,
 } from '../types';
+export type { AcceptProfileConflictOutcome } from '../types/profileConflict';
 import type {
   AcceptEventSyncReviewOutcome,
   EventSyncExclusionCreateRequest,
@@ -101,6 +102,10 @@ import type {
   EventSyncReviewsListResponse,
   RejectEventSyncReviewOutcome,
 } from '../types/eventSync';
+import type {
+  AcceptProfileConflictOutcome,
+  ProfileConflictReviewsResponse,
+} from '../types/profileConflict';
 import { logger } from '../utils/logger';
 import { voidBackupBannerSnoozeIfScheduled } from '../utils/backupBannerSnooze';
 import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
@@ -998,6 +1003,7 @@ export function profileApplyIncomplete(
       o.status === 'degraded' ||
       o.status === 'error' ||
       o.status === 'stale_selection' ||
+      o.status === 'conflict' ||
       o.conflict === true ||
       (o.failed_profile_ids?.length ?? 0) > 0
   );
@@ -1018,8 +1024,8 @@ export function profileApplyWarningMessage(
   if (items.some((o) => o.status === 'stale_selection')) {
     return 'Saved, but the selected channel profile(s) no longer exist — open Auto-Sync settings and choose current profiles.';
   }
-  if (items.some((o) => o.conflict === true)) {
-    return 'Saved, but this group had conflicting profile selections across accounts — reopen Auto-Sync settings and re-save to normalize them.';
+  if (items.some((o) => o.status === 'conflict' || o.conflict === true)) {
+    return 'Saved, but this group has conflicting profile selections. Channel-profile membership is frozen pending review; choose the intended selection in the conflict prompt.';
   }
   if (items.some((o) => o.status === 'degraded')) {
     return 'Saved, but channel profiles could not be fully enforced (the profile list was unreachable). It will retry automatically on the next sync.';
@@ -5320,6 +5326,29 @@ export async function rejectEventSyncReview(
 ): Promise<RejectEventSyncReviewOutcome> {
   return fetchJson(`${API_BASE}/event-sync-reviews/${reviewId}/reject`, {
     method: 'POST',
+  });
+}
+
+// -------------------------------------------------------------------------
+// Effective-group profile conflict review queue.
+// -------------------------------------------------------------------------
+
+/** List unresolved conflicts that require an explicit operator profile choice. */
+export async function getProfileConflictReviews(): Promise<ProfileConflictReviewsResponse> {
+  return fetchJson(`${API_BASE}/profile-conflict-reviews`);
+}
+
+/** Persist a choice before harmonizing every source account row. */
+export async function acceptProfileConflictReview(
+  reviewId: number,
+  choiceKey: string,
+  signal?: AbortSignal,
+): Promise<AcceptProfileConflictOutcome> {
+  return fetchJson(`${API_BASE}/profile-conflict-reviews/${reviewId}/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ choice_key: choiceKey }),
+    signal,
   });
 }
 

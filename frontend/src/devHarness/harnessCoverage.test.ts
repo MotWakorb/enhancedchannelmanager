@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { DIALOG_CATALOG, catalogFiles } from './dialogCatalog'
+import { STUB_ROUTES } from './apiStub'
 
 const SRC = path.resolve(__dirname, '..')
 
@@ -85,5 +86,20 @@ describe('modal harness coverage', () => {
   it('keeps ids URL-safe, because ?dialog=<id> addresses them', () => {
     const bad = DIALOG_CATALOG.filter((e) => !/^[a-z0-9-]+$/.test(e.id))
     expect(bad.map((e) => e.id)).toEqual([])
+  })
+
+  it('stubs a truthful partial profile-conflict accept outcome', () => {
+    const route = STUB_ROUTES.find(
+      (candidate) => candidate.method === 'POST'
+        && candidate.match.test('/api/profile-conflict-reviews/901/accept'),
+    )
+
+    expect(route?.body).toEqual({
+      status: 'accepted',
+      applied: false,
+      updated_account_ids: [1],
+      failed_account_ids: [2],
+      retry_error: 'account 2: harness partial failure',
+    })
   })
 })

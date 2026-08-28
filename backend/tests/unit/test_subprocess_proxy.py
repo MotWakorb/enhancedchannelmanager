@@ -56,6 +56,7 @@ def test_allowlist_matches_only_profile_mutating_and_task_routes():
     assert _should_forward("POST", "/api/tasks/channel_pipeline/run")
     # Finding 2: a task CANCEL must hit the same (main) engine as its run.
     assert _should_forward("POST", "/api/tasks/m3u_change_monitor/cancel")
+    assert _should_forward("POST", "/api/profile-conflict-reviews/42/accept")
     # Not allowlisted:
     assert not _should_forward("GET", "/api/m3u/accounts/5/group-settings")
     assert not _should_forward("PATCH", "/api/m3u/accounts")
@@ -63,6 +64,7 @@ def test_allowlist_matches_only_profile_mutating_and_task_routes():
     assert not _should_forward("POST", "/api/m3u/refresh")          # bulk refresh (no poll) stays local
     assert not _should_forward("GET", "/api/tasks/m3u_change_monitor/run")
     assert not _should_forward("POST", "/api/tasks/x/run/extra")    # anchored — no sub-path
+    assert not _should_forward("GET", "/api/profile-conflict-reviews/42/accept")
 
 
 @pytest.mark.asyncio

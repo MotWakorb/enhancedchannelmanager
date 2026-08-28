@@ -514,6 +514,10 @@ _STANDARD_ARTIFACT_EXCLUDED: dict[str, str] = {
     "pending_merges": "The merge review queue — transient, regenerates on the next run.",
     "pending_merge_journal": "Merge review action history, keyed by actor_token_id.",
     "event_sync_reviews": "The event-sync review queue — transient, regenerates.",
+    "profile_conflict_reviews": (
+        "The channel-profile conflict review queue — transient workflow state; "
+        "conflicts are detected again from live M3U group settings."
+    ),
     "event_sync_exclusions": (
         "Operator never-attach decisions. Dropped rather than kept because the "
         "evidence column is an unbounded blob and the rows are keyed by "

@@ -36,6 +36,9 @@ it outright.
     - creating, changing, deleting or **testing** outbound destinations
       (cloud-storage targets, sync targets, alert methods), and changing M3U or
       EPG source credentials;
+    - listing and resolving profile-selection conflicts. These routes expose
+      and execute an operator intent decision, so MCP service tokens cannot call
+      either route;
     - running the Channel Pipeline in one shot (`POST /api/channel-pipeline/run`).
       MCP reaches pipeline execution only through the mutation-free
       prepare/commit pair described below.

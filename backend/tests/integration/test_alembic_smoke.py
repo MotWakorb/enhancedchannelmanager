@@ -4373,12 +4373,12 @@ class TestFastPathDestructiveRevisions:
         until a later revision ADDED a column, at which point 0040 stopped
         covering the model shape and the premise silently evaporated.
 
-        So the drift forward is now explicit: every nullable column head's
-        models declare that 0040 does not have is added here, which is exactly
-        the long-running-install shape ``create_all()`` produces and exactly
-        what ``_schema_matches_head`` inspects. Kept generic for the same
-        reason the revision literals below are head-agnostic — pinning the
-        specific columns made every later migration break this test.
+        So the drift forward is now explicit: every table and nullable column
+        head's models declare that 0040 does not have is added here, which is
+        exactly the long-running-install shape ``create_all()`` produces and
+        exactly what ``_schema_matches_head`` inspects. Kept generic for the
+        same reason the revision literals below are head-agnostic — pinning
+        specific artifacts made every later migration break this test.
         """
         from alembic import command
         from sqlalchemy import text as sa_text
@@ -4396,6 +4396,8 @@ class TestFastPathDestructiveRevisions:
             with engine.begin() as conn:
                 for table in Base.metadata.sorted_tables:
                     if table.name not in live_tables:
+                        table.create(conn)
+                        live_tables.add(table.name)
                         continue
                     present = {
                         col["name"]

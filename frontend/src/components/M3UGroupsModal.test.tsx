@@ -506,7 +506,7 @@ describe('M3UGroupsModal — full-row save payload + Save & Refresh (bead igqcy)
 
     await waitFor(() =>
       expect(mockNotifications.warning).toHaveBeenCalledWith(
-        expect.stringContaining('conflicting profile selections'),
+        expect.stringContaining('membership is frozen pending review'),
         'M3U Groups'
       )
     );

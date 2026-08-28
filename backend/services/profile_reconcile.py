@@ -422,7 +422,7 @@ def _result(status: str, group_id: int, *, effective_gid=None, scoped=0,
     """Build a uniform reconcile result dict so every caller can rely on the
     same keys (status, counts, failed_profile_ids, conflict, error).
 
-    ``status`` vocabulary: ``no_selection`` | ``no_channels`` |
+    ``status`` vocabulary: ``no_selection`` | ``no_channels`` | ``conflict`` |
     ``stale_selection`` | ``reconciled`` | ``partial_failure`` | ``degraded``
     (enables applied but exclusivity could NOT be enforced — universe fetch
     failed) | ``error`` (setup/exception before any per-group apply)."""
@@ -503,6 +503,23 @@ async def reconcile_group_profiles(
             effective_gid = resolve_effective_master_group_id(all_settings, group_id)
             if effective_gid == lock_key:
                 try:
+                    setting = all_settings.get(group_id)
+                    if isinstance(setting, dict) and setting.get(
+                        "_ecm_channel_profile_conflict"
+                    ):
+                        try:
+                            from services.profile_conflict_review import (
+                                ensure_profile_conflict_review,
+                            )
+                            await ensure_profile_conflict_review(
+                                client, all_settings, effective_gid
+                            )
+                        except Exception as e:  # noqa: BLE001 - freeze still wins
+                            logger.warning(
+                                "[PROFILE-RECONCILE] effective=%s: could not "
+                                "reconcile conflict review queue: %s",
+                                effective_gid, e,
+                            )
                     return await _reconcile_group_locked(
                         client, all_settings, group_id, effective_gid,
                         live_rule_ids, cancel_check,
@@ -542,6 +559,16 @@ async def _reconcile_group_locked(
     setting = all_settings.get(group_id)
     selection = _selection_from_setting(setting)
     conflict = bool(isinstance(setting, dict) and setting.get("_ecm_channel_profile_conflict"))
+    if conflict:
+        logger.warning(
+            "[PROFILE-RECONCILE] group=%s effective=%s: profile selections "
+            "conflict; membership is frozen pending operator review",
+            group_id, effective_gid,
+        )
+        return _result(
+            "conflict", group_id, effective_gid=effective_gid, conflict=True,
+            error="channel-profile membership is frozen pending review",
+        )
     if selection is None:
         # Decision 1a: absent/unset selection is a read-only no-op.
         return _result("no_selection", group_id, conflict=conflict)
@@ -831,14 +858,16 @@ def dedupe_gids_by_effective_group(all_settings: dict, gids) -> list[int]:
     reconcile the SAME channels — order-dependent last-writer-wins. Keep one gid
     per effective id, preferring the TARGET group's own selection (the group
     whose channels physically live there outranks a source redirecting into
-    it). Order-independent: the target wins regardless of iteration order.
+    it). When no target row carries a selection, the lowest source group id is
+    the deterministic representative. Representatives only remove duplicate
+    work; conflicted effective groups are refused before any membership write.
     """
     effective_to_gid: dict[int, int] = {}
-    for gid in gids:
+    for gid in sorted(set(gids)):
         eff = resolve_effective_master_group_id(all_settings, gid)
         if eff not in effective_to_gid or gid == eff:
             effective_to_gid[eff] = gid
-    return list(effective_to_gid.values())
+    return [effective_to_gid[eff] for eff in sorted(effective_to_gid)]
 
 
 def resolve_save_reconcile_targets(all_settings: dict, edited_gids) -> list[int]:
@@ -888,6 +917,8 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
     """
     winning: dict[int, list[int]] = {}
     for gid, setting in all_settings.items():
+        if isinstance(setting, dict) and setting.get("_ecm_channel_profile_conflict"):
+            continue
         sel = _selection_from_setting(setting)
         if sel:
             winning[gid] = sorted(set(sel))
@@ -1011,9 +1042,16 @@ async def _run_selected_group_sweep(
             return {
                 "groups_reconciled": 0, "groups_partial_failure": 0,
                 "groups_degraded": 0, "groups_errored": 1,
+                "groups_conflicted": 0,
                 "accounts_normalized": 0, "accounts_normalize_failed": 0,
                 "groups_with_selection": 0, "channels_scoped": 0,
             }
+
+    try:
+        from services.profile_conflict_review import reconcile_profile_conflict_reviews
+        await reconcile_profile_conflict_reviews(client, all_settings)
+    except Exception as e:  # noqa: BLE001 - review queue must not abort membership sweep
+        logger.warning("[PROFILE-RECONCILE] conflict review queue pass failed: %s", e)
 
     # Blocker 3b: normalize divergent sibling rows FIRST (durable convergence),
     # so the membership reconcile below sees converged per-account selections.
@@ -1039,6 +1077,7 @@ async def _run_selected_group_sweep(
     groups_partial_failure = 0
     groups_degraded = 0
     groups_errored = 0
+    groups_conflicted = 0
     channels_scoped = 0
     for gid in reconcile_gids:
         if cancel_check is not None and cancel_check():
@@ -1064,6 +1103,8 @@ async def _run_selected_group_sweep(
                 channels_scoped += result.get("channels_scoped", 0)
             elif status == "error":
                 groups_errored += 1
+            elif status == "conflict":
+                groups_conflicted += 1
         except Exception as e:  # noqa: BLE001 - isolate per-group failures
             # Should-Fix 3: a per-group EXCEPTION (e.g. get_channels raising)
             # must count as an error so the monitor's warning aggregation sees
@@ -1077,9 +1118,9 @@ async def _run_selected_group_sweep(
         logger.info(
             "[PROFILE-RECONCILE] swept %d group(s) with a selection (%d after "
             "effective-group dedupe), reconciled %d, partial_failure %d, "
-            "degraded %d, errored %d, scoped %d channel(s)",
+            "degraded %d, conflicted %d, errored %d, scoped %d channel(s)",
             len(target_gids), len(reconcile_gids), groups_reconciled,
-            groups_partial_failure, groups_degraded, groups_errored,
+            groups_partial_failure, groups_degraded, groups_conflicted, groups_errored,
             channels_scoped,
         )
     return {
@@ -1087,6 +1128,7 @@ async def _run_selected_group_sweep(
         "groups_partial_failure": groups_partial_failure,
         "groups_degraded": groups_degraded,
         "groups_errored": groups_errored,
+        "groups_conflicted": groups_conflicted,
         # Account-domain normalize counters kept SEPARATE from the group-domain
         # counters above so the caller never conflates the two (Finding: counter
         # semantics).

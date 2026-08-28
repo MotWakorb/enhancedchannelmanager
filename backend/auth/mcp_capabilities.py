@@ -282,6 +282,9 @@ MCP_HUMAN_ONLY_ROUTES: frozenset[tuple[str, str]] = frozenset({
     ("POST", "/api/tls/https/stop"),
     ("POST", "/api/tls/https/restart"),
     ("DELETE", "/api/tls/certificate"),
+    # Human review of contradictory upstream channel-profile settings.
+    ("GET", "/api/profile-conflict-reviews"),
+    ("POST", "/api/profile-conflict-reviews/{review_id}/accept"),
 })
 
 MCP_ALLOWED_ROUTES: frozenset[tuple[str, str]] = (

@@ -900,10 +900,6 @@ class DispatcharrClient:
                 s for s in (_row_selection(r) for r in rows) if s is not None
             }
             winner_selection = _row_selection(winner)
-            # Conflict when either two rows carry DIFFERENT non-empty selections,
-            # OR some row carries a selection but the chosen winner does not
-            # (a selection-vs-no-selection disagreement that would otherwise
-            # silently ignore the operator's choice — Should-Fix 3).
             conflict = len(distinct_selections) > 1 or (
                 bool(distinct_selections) and winner_selection is None
             )
@@ -919,7 +915,84 @@ class DispatcharrClient:
             # Dispatcharr group-settings PATCH (NIT 9). Today's save paths build
             # explicit payloads and never round-trip it; a future consumer that
             # forwards a collapsed row wholesale must drop this key first.
-            all_settings[channel_group_id] = {**winner, "_ecm_channel_profile_conflict": conflict}
+            all_settings[channel_group_id] = {
+                **winner,
+                "_ecm_channel_profile_conflict": conflict,
+                "_ecm_profile_source_rows": [
+                    {**row, "source_group_id": channel_group_id}
+                    for row in rows
+                ],
+            }
+
+        # A raw group conflict is only half the safety boundary. Distinct source
+        # groups can redirect into the same effective target and carry different
+        # selections. Bucket the already-collapsed raw groups by that effective
+        # target, then stamp every participant so no representative can write.
+        from services.event_sync_preflight import resolve_effective_master_group_id
+
+        by_effective: dict[int, list[int]] = {}
+        for gid in all_settings:
+            effective_gid = resolve_effective_master_group_id(all_settings, gid)
+            by_effective.setdefault(effective_gid, []).append(gid)
+
+        for effective_gid, source_gids in by_effective.items():
+            choices: dict[tuple[int, ...], list[dict]] = {}
+            raw_conflict = any(
+                all_settings[gid].get("_ecm_channel_profile_conflict")
+                for gid in source_gids
+            )
+            target = all_settings.get(effective_gid)
+            target_selection = _row_selection(target) if target is not None else None
+            target_raw_conflict = bool(
+                isinstance(target, dict) and target.get("_ecm_channel_profile_conflict")
+            )
+            for gid in source_gids:
+                source_rows = all_settings[gid].get("_ecm_profile_source_rows", [])
+                for row in source_rows:
+                    selection = _row_selection(row)
+                    profile_ids = tuple(selection or ())
+                    choices.setdefault(profile_ids, []).append({
+                        "source_group_id": gid,
+                        "m3u_account_id": row.get("m3u_account_id"),
+                        "m3u_account_name": row.get("m3u_account_name", ""),
+                    })
+
+            # A target group's own explicit selection is already the established
+            # winner used by reconcile. Redirected source groups cannot turn it
+            # into an operator question. A conflict within the target's own
+            # account rows still needs review.
+            effective_conflict = target_raw_conflict or (
+                target_selection is None and (raw_conflict or len(choices) > 1)
+            )
+            if not effective_conflict:
+                continue
+            shape = {
+                "effective_group_id": effective_gid,
+                "source_group_ids": sorted(source_gids),
+                "choices": [
+                    {
+                        "profile_ids": list(profile_ids),
+                        "sources": sorted(
+                            sources,
+                            key=lambda source: (
+                                source.get("source_group_id") or 0,
+                                source.get("m3u_account_id") or 0,
+                            ),
+                        ),
+                    }
+                    for profile_ids, sources in sorted(choices.items())
+                ],
+            }
+            for gid in source_gids:
+                all_settings[gid]["_ecm_channel_profile_conflict"] = True
+                all_settings[gid]["_ecm_profile_conflict_shape"] = shape
+            logger.warning(
+                "[DISPATCHARR] effective group %s has CONFLICTING "
+                "channel_profile_ids across source groups %s (selections=%s)",
+                effective_gid,
+                sorted(source_gids),
+                sorted(choices),
+            )
 
         logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)
         logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))

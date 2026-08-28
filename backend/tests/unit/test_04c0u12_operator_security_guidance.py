@@ -181,6 +181,10 @@ _DOCUMENTED_HUMAN_ONLY: dict[str, tuple[tuple[str, str], ...]] = {
     "running the Channel Pipeline in one shot": (
         ("POST", "/api/channel-pipeline/run"),
     ),
+    "listing and resolving profile-selection conflicts": (
+        ("GET", "/api/profile-conflict-reviews"),
+        ("POST", "/api/profile-conflict-reviews/{review_id}/accept"),
+    ),
 }
 
 _DOCUMENTED_ROUTES = [

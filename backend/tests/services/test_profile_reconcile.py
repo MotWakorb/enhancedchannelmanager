@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -27,6 +28,7 @@ from services.profile_reconcile import (
     PIPELINE_OWNERSHIP_RULE_ID_KEY,
     dedupe_gids_by_effective_group,
     groups_with_selection,
+    normalize_group_selections,
     reconcile_all_selected_groups,
     reconcile_group_profiles,
     resolve_save_reconcile_targets,
@@ -1026,8 +1028,34 @@ async def test_conflict_flag_surfaced_in_result():
 
     result = await reconcile_group_profiles(client, settings, 100, live_rule_ids=set())
 
-    assert result["status"] == "reconciled"
+    assert result["status"] == "conflict"
     assert result["conflict"] is True
+    assert client.get_channels_gids == []
+    assert client.bulk_calls == []
+
+
+@pytest.mark.asyncio
+async def test_normalization_skips_every_row_in_a_conflicted_effective_group():
+    settings = {
+        100: _setting(channel_profile_ids=[1], group_override=500, conflict=True),
+        200: _setting(channel_profile_ids=[2], group_override=500, conflict=True),
+    }
+    client = FakeClient({}, [])
+    client.get_m3u_accounts = AsyncMock(return_value=[{
+        "id": 9,
+        "channel_groups": [{
+            "channel_group": 100,
+            "enabled": True,
+            "auto_channel_sync": True,
+            "custom_properties": {"channel_profile_ids": [2], "keep": "yes"},
+        }],
+    }])
+    client.update_m3u_group_settings = AsyncMock()
+
+    result = await normalize_group_selections(client, settings)
+
+    assert result == {"normalized_accounts": 0, "failed_accounts": 0}
+    client.update_m3u_group_settings.assert_not_awaited()
 
 
 # --------------------------------------------------------------------------
@@ -1169,6 +1197,15 @@ def test_dedupe_gids_by_effective_group_is_order_independent():
     assert dedupe_gids_by_effective_group(settings, [100, 200]) == [200]
     # Reverse order still resolves to the target.
     assert dedupe_gids_by_effective_group(settings, [200, 100]) == [200]
+
+
+def test_dedupe_uses_lowest_source_id_when_no_target_has_a_selection():
+    settings = {
+        823: _setting(channel_profile_ids=[6, 7], group_override=665),
+        2866: _setting(channel_profile_ids=[14], group_override=665),
+    }
+    assert dedupe_gids_by_effective_group(settings, [2866, 823]) == [823]
+    assert dedupe_gids_by_effective_group(settings, [823, 2866]) == [823]
 
 
 @pytest.mark.asyncio

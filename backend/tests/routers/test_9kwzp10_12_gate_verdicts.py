@@ -615,11 +615,12 @@ async def test_denial_names_its_own_surface(async_client, case):
     # ...and must be a body no OTHER shipped gate would have produced. A
     # substring hunt would false-positive (several bodies legitimately mention
     # outbound hosts or credentials), so compare against the actual bodies
-    # instead: whichever gate this route carries, the seven are pairwise
+    # instead: whichever gate this route carries, the eight are pairwise
     # distinct and only one of them may match.
     from tests.test_admin_gate_inventory import _mcp_denial_detail
     from auth import (
         RequireHumanAdminForNotificationCredential,
+        RequireHumanAdminForOperatorDecision,
         RequireHumanAdminForOutboundPolicy,
         RequireHumanAdminForOutboundTest,
         RequireHumanAdminForServiceCredential,
@@ -637,6 +638,7 @@ async def test_denial_names_its_own_surface(async_client, case):
             RequireHumanAdminForTLSMaterial,
             RequireHumanAdminForOutboundPolicy,
             RequireHumanAdminForNotificationCredential,
+            RequireHumanAdminForOperatorDecision,
             RequireHumanAdminForStatisticsReset,
         )
     ]

@@ -62,6 +62,8 @@ def test_every_allowed_capability_matches_an_actual_registered_fastapi_route():
         ("DELETE", "/api/m3u/accounts/{account_id}"),
         ("POST", "/api/backup/restore-saved"),
         ("POST", "/api/backup/restore-dbas-saved"),
+        ("GET", "/api/profile-conflict-reviews"),
+        ("POST", "/api/profile-conflict-reviews/{review_id}/accept"),
     ],
 )
 def test_credential_identity_and_outbound_mutations_are_human_only(method, path):

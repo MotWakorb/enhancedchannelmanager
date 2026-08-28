@@ -1785,6 +1785,54 @@ describe('API Service', () => {
     });
   });
 
+  describe('profile conflict review API', () => {
+    it('lists the actionable review queue', async () => {
+      server.use(
+        http.get('/api/profile-conflict-reviews', () => HttpResponse.json({
+          reviews: [], total: 0,
+        })),
+      );
+
+      await expect(api.getProfileConflictReviews()).resolves.toEqual({
+        reviews: [], total: 0,
+      });
+    });
+
+    it('posts only the opaque choice key when accepting a review', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/profile-conflict-reviews/9/accept', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({
+            status: 'accepted', applied: true, updated_account_ids: [1, 2],
+            failed_account_ids: [], retry_error: null,
+          });
+        }),
+      );
+
+      await api.acceptProfileConflictReview(9, 'choice-sports');
+      expect(requestBody).toEqual({ choice_key: 'choice-sports' });
+    });
+
+    it('forwards an AbortSignal to profile conflict acceptance', async () => {
+      server.use(
+        http.post('/api/profile-conflict-reviews/9/accept', () => HttpResponse.json({
+          status: 'accepted', applied: true, updated_account_ids: [],
+          failed_account_ids: [], retry_error: null,
+        })),
+      );
+      const controller = new AbortController();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      await api.acceptProfileConflictReview(9, 'choice-sports', controller.signal);
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/profile-conflict-reviews/9/accept',
+        expect.objectContaining({ signal: controller.signal }),
+      );
+    });
+  });
+
   // GH #720 Part B (#9) — profile-apply summary interpretation. These pure
   // functions drive the incomplete-apply warning on EVERY save path (primary,
   // linked cascade, Sync Groups union), so they are unit-tested directly.
@@ -1807,7 +1855,7 @@ describe('API Service', () => {
       ['error-with-detail', [{ status: 'error', error: 'account 22 not updated — Re-save' }], 'account 22 not updated'],
       ['error-no-detail', [{ status: 'error' }], 'hit an error'],
       ['stale_selection', [{ status: 'stale_selection' }], 'no longer exist'],
-      ['conflict', [{ status: 'reconciled', conflict: true }], 'conflicting profile selections'],
+      ['conflict', [{ status: 'conflict', conflict: true }], 'membership is frozen pending review'],
       ['failed_profile_ids', [{ status: 'reconciled', failed_profile_ids: [2] }], 'applying some channel profiles failed'],
     ])('%s is incomplete with status-specific guidance', (_label, summary, needle) => {
       expect(api.profileApplyIncomplete(summary as never)).toBe(true);

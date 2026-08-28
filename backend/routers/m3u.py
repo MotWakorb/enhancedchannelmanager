@@ -246,6 +246,7 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
             recon.get("groups_partial_failure", 0)
             + recon.get("groups_degraded", 0)
             + recon.get("groups_errored", 0)
+            + recon.get("groups_conflicted", 0)
             + recon.get("accounts_normalize_failed", 0)
         )
         if incomplete:
@@ -254,6 +255,7 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
                 f"({recon.get('groups_partial_failure', 0)} partial_failure, "
                 f"{recon.get('groups_degraded', 0)} degraded, "
                 f"{recon.get('groups_errored', 0)} errored, "
+                f"{recon.get('groups_conflicted', 0)} pending review, "
                 f"{recon.get('accounts_normalize_failed', 0)} account(s) not normalized) "
                 f"— it will retry on the next scheduled sync"
             )

@@ -77,6 +77,13 @@ export const DIALOG_CATALOG = [
   { id: 'normalize-names', file: 'src/components/NormalizeNamesModal.tsx', label: 'Normalize names', status: 'stubbed', via: 'direct' },
   { id: 'numbering-conflict', file: 'src/components/NumberingConflictDialog.tsx', label: 'Edit Mode numbering conflict reconcile', status: 'stubbed', via: 'direct' },
   { id: 'preview-stream', file: 'src/components/PreviewStreamModal.tsx', label: 'Preview stream', status: 'stubbed', via: 'direct' },
+  {
+    id: 'profile-conflict-review',
+    file: 'src/components/ProfileConflictReviewModal.tsx',
+    label: 'Profile conflict review',
+    status: 'stubbed',
+    via: 'direct',
+  },
   { id: 'print-guide', file: 'src/components/PrintGuideModal.tsx', label: 'Print guide', status: 'stubbed', via: 'direct' },
   { id: 'security-first-run', file: 'src/components/SecurityFirstRunModal.tsx', label: 'Security first run', status: 'stubbed', via: 'direct' },
   { id: 'selection-action-bar', file: 'src/components/SelectionActionBar.tsx', label: 'Selection action bar (portal, role=dialog)', status: 'stubbed', via: 'direct' },
