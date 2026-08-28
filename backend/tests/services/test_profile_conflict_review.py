@@ -228,9 +228,9 @@ async def test_exact_accepted_fingerprint_auto_converges_if_it_recurs(test_sessi
 async def test_reconcile_conflict_retries_accepted_review_under_existing_lock(
     test_session,
 ):
-    from services import profile_reconcile
+    from services import m3u_group_state, profile_reconcile
 
-    profile_reconcile._group_locks.clear()
+    m3u_group_state._group_locks.clear()
     shape = _shape()
     rows = [
         {"id": 10, "source_group_id": 823, "m3u_account_id": 1,

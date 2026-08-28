@@ -67,13 +67,15 @@ not fight this.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import re
-from contextlib import AsyncExitStack, asynccontextmanager
 
 from services.event_sync_preflight import resolve_effective_master_group_id
+from services.m3u_group_state import (
+    acquire_effective_group_locks,
+    coerce_profile_id,
+    effective_group_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +97,6 @@ logger = logging.getLogger(__name__)
 # SCOPE at this tier and DEFERRED to bead nq3ed. The design assumption here is a
 # single operator making one change at a time.
 #
-# Lock creation is a single synchronous dict get/set (no await between), so it
-# needs no guard lock.
-_group_locks: dict[int, asyncio.Lock] = {}
 # Bound on lock re-acquisition when a concurrent override retarget keeps moving
 # the effective group under us (Should-Fix 2) — avoids a pathological flip-flop.
 _LOCK_REACQUIRE_MAX = 3
@@ -110,36 +109,6 @@ _LOCK_REACQUIRE_MAX = 3
 # trailing-pass loop was unbounded + false-success and has been removed.)
 _sweep_in_progress = False
 
-
-def _get_group_lock(effective_gid: int) -> asyncio.Lock:
-    lock = _group_locks.get(effective_gid)
-    if lock is None:
-        lock = asyncio.Lock()
-        _group_locks[effective_gid] = lock
-    return lock
-
-
-def effective_group_lock(effective_gid: int) -> asyncio.Lock:
-    """Public accessor for the per-effective-group lock registry (Finding 4).
-
-    The Channel Pipeline's assign_channel_profile write acquires the SAME lock
-    the reconcile uses so a pipeline membership write and a group reconcile do
-    not touch the same effective group's channels concurrently WITHIN THIS
-    PROCESS. Cross-process serialization is out of scope (see bead nq3ed). Same
-    registry, same key resolution (``resolve_effective_master_group_id``)."""
-    return _get_group_lock(effective_gid)
-
-
-@asynccontextmanager
-async def acquire_effective_group_locks(effective_gids):
-    """Acquire the per-effective-group locks for a SET of groups in a
-    deadlock-free (sorted) order — the enforced-global cascade / normalize hold
-    several at once while every reconcile holds exactly one, so a global sort
-    order prevents any cycle."""
-    async with AsyncExitStack() as stack:
-        for gid in sorted(set(effective_gids)):
-            await stack.enter_async_context(_get_group_lock(gid))
-        yield
 
 # Provenance marker (decision 2b). Written into a channel's Dispatcharr
 # ``custom_properties`` by the pipeline ``assign_channel_profile`` action; read
@@ -164,34 +133,6 @@ _MAX_CHANNEL_PAGES = 1000
 # "resolve it yourself from the DB". Explicit None means "resolution failed /
 # unknown — treat every marker conservatively as still-owned".
 _UNSET = object()
-
-
-def coerce_profile_id(value):
-    """Coerce a single profile id to ``int``, or return ``None`` if it is not a
-    valid integer id. NEVER raises.
-
-    Canonical type is INTEGER (Blocker 1). For legacy back-compat we also accept
-    a NUMERIC STRING (``"12"`` -> ``12``) — early builds of the Auto-Sync modal
-    stored the selection as strings. ``bool`` is rejected (int subclass, not a
-    profile id).
-
-    Finding 1: parse strings with a STRICT ASCII integer regex
-    (``-?[0-9]+``) rather than ``str.isdigit()``/``lstrip``. ``str.isdigit()``
-    accepts unicode digits (``"➂"``, ``"²"``, Arabic-Indic ``"٣"``), and
-    ``lstrip("-")`` lets ``"--5"`` through — both then reach ``int()``, which
-    either RAISES (``"--5"``, ``"➂"``) or silently mis-accepts (``int("٣") == 3``).
-    ``[0-9]`` is ASCII-only and the fullmatch rejects empty/sign-only strings, so
-    ``int()`` is always safe.
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        s = value.strip()
-        if re.fullmatch(r"-?[0-9]+", s):
-            return int(s)
-    return None
 
 
 def _selection_from_setting(setting: dict | None) -> list[int] | None:
@@ -486,7 +427,7 @@ async def reconcile_group_profiles(
     # overwrite newer desired state.
     for _attempt in range(_LOCK_REACQUIRE_MAX):
         lock_key = resolve_effective_master_group_id(all_settings, group_id)
-        async with _get_group_lock(lock_key):
+        async with effective_group_lock(lock_key):
             if settings_provider is not None:
                 try:
                     all_settings = await settings_provider()

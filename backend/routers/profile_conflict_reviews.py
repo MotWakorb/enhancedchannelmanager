@@ -183,6 +183,8 @@ async def accept_profile_conflict(
                 current = await client.get_all_m3u_group_settings()
                 await reconcile_profile_conflict_reviews(client, current)
             except Exception:
+                # The 409 remains authoritative; the scheduled sweep retries
+                # this best-effort queue refresh.
                 pass
         raise HTTPException(
             status_code=409,

@@ -10,6 +10,11 @@ import time
 import journal
 from database import get_session
 from models import Notification, ProfileConflictReview
+from services.m3u_group_state import (
+    acquire_effective_group_locks,
+    coerce_profile_id,
+    merge_group_settings_row,
+)
 from services.notification_service import create_notification_internal
 
 logger = logging.getLogger(__name__)
@@ -473,9 +478,6 @@ async def harmonize_review_sources(
     client, evidence: dict, selected_profile_ids: list[int], current_rows: dict
 ) -> dict:
     """PATCH divergent participating rows using current full rows; no membership write."""
-    from routers.m3u import merge_group_settings_row
-    from services.profile_reconcile import coerce_profile_id
-
     selected = sorted(set(int(pid) for pid in selected_profile_ids))
     source_pairs = {
         (source.get("m3u_account_id"), source["source_group_id"])
@@ -530,8 +532,6 @@ async def harmonize_review_sources(
 async def _retry_harmonize_review_sources(
     client, effective_group_id: int, evidence: dict, selected_profile_ids: list[int]
 ) -> dict:
-    from services.profile_reconcile import acquire_effective_group_locks
-
     async with acquire_effective_group_locks([effective_group_id]):
         return await _retry_harmonize_review_sources_under_lock(
             client, effective_group_id, evidence, selected_profile_ids
@@ -555,8 +555,6 @@ async def accept_profile_conflict_review(
     db, client, review_id: int, selected_choice_key: str, actor: str
 ) -> dict:
     """Validate the live question under its lock, persist, then harmonize rows."""
-    from services.profile_reconcile import acquire_effective_group_locks
-
     row = db.query(ProfileConflictReview).filter(ProfileConflictReview.id == review_id).first()
     if row is None:
         raise ReviewNotFound()

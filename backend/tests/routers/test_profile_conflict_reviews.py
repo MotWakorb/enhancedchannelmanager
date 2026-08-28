@@ -486,9 +486,11 @@ async def test_waiting_accept_refetches_review_after_group_lock(test_engine, tes
         ))
         await asyncio.sleep(0)
         release.set()
-        await first
+        first_outcome = await first
+        assert first_outcome["status"] == "accepted"
         with pytest.raises(InvalidChoice):
-            await second
+            second_outcome = await second
+            pytest.fail(f"second decision unexpectedly succeeded: {second_outcome}")
     finally:
         first_db.close()
         second_db.close()

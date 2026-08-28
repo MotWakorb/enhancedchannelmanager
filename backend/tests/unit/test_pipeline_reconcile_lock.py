@@ -9,6 +9,7 @@ import asyncio
 
 import pytest
 
+import services.m3u_group_state as group_state
 import services.profile_reconcile as pr
 from channel_pipeline_executor import ActionExecutor, ExecutionContext
 from channel_pipeline_evaluator import StreamContext
@@ -16,10 +17,10 @@ from channel_pipeline_evaluator import StreamContext
 
 @pytest.fixture(autouse=True)
 def _reset_locks():
-    pr._group_locks.clear()
+    group_state._group_locks.clear()
     pr._sweep_in_progress = False
     yield
-    pr._group_locks.clear()
+    group_state._group_locks.clear()
     pr._sweep_in_progress = False
 
 

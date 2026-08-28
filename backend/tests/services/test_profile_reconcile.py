@@ -50,11 +50,12 @@ _RULE_ID = 7
 def _reset_group_locks():
     """Each test gets fresh per-effective-group locks (created in this test's
     event loop) so a module-level lock from a prior loop is never reused."""
+    import services.m3u_group_state as group_state
     import services.profile_reconcile as pr
-    pr._group_locks.clear()
+    group_state._group_locks.clear()
     pr._sweep_in_progress = False
     yield
-    pr._group_locks.clear()
+    group_state._group_locks.clear()
     pr._sweep_in_progress = False
 
 
@@ -494,13 +495,13 @@ async def test_reconcile_acquires_effective_group_lock(monkeypatch):
     group (200, via override) is acquired."""
     import services.profile_reconcile as pr
     acquired = []
-    real_get = pr._get_group_lock
+    real_get = pr.effective_group_lock
 
     def _spy(eff):
         acquired.append(eff)
         return real_get(eff)
 
-    monkeypatch.setattr(pr, "_get_group_lock", _spy)
+    monkeypatch.setattr(pr, "effective_group_lock", _spy)
     client = FakeClient({200: [_channel(10, group=200)], 100: []}, profiles=[1, 2])
     settings = {
         100: _setting(channel_profile_ids=[1], group_override=200),
