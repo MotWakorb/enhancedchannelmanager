@@ -102,6 +102,10 @@ def _record(row: ProfileConflictReview) -> ProfileConflictReviewRecord:
         accepted = json.loads(row.accepted_profile_ids) if row.accepted_profile_ids else None
     except (TypeError, ValueError):
         accepted = None
+    if not isinstance(accepted, list) or not all(
+        isinstance(profile_id, int) for profile_id in accepted
+    ):
+        accepted = None
     return ProfileConflictReviewRecord(
         id=row.id,
         fingerprint=row.fingerprint,

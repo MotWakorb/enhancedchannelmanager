@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -241,6 +241,49 @@ describe('ProfileConflictReviewModal', () => {
     expect(screen.queryByText('NBA')).not.toBeInTheDocument();
   });
 
+  it('does not let background polling suppress an in-flight notification target', async () => {
+    const setIntervalSpy = vi.spyOn(window, 'setInterval');
+    const empty = { reviews: [], total: 0 };
+    const targeted = {
+      reviews: [{
+        ...review,
+        id: 10,
+        fingerprint: 'fingerprint-b',
+        effective_group_id: 777,
+        evidence: { ...review.evidence, target: { effective_group_id: 777, name: 'NFL' } },
+      }],
+      total: 1,
+    };
+    let resolveIntent!: (value: typeof targeted) => void;
+    let resolvePoll!: (value: typeof empty) => void;
+    const intentLoad = new Promise<typeof targeted>((resolve) => { resolveIntent = resolve; });
+    const pollLoad = new Promise<typeof empty>((resolve) => { resolvePoll = resolve; });
+    vi.mocked(api.getProfileConflictReviews)
+      .mockResolvedValueOnce(empty)
+      .mockReturnValueOnce(intentLoad)
+      .mockReturnValueOnce(pollLoad);
+    render(<ProfileConflictReviewModal />);
+    await waitFor(() => expect(api.getProfileConflictReviews).toHaveBeenCalledTimes(1));
+    const poll = setIntervalSpy.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
+    expect(poll).toBeTypeOf('function');
+
+    window.dispatchEvent(new CustomEvent(PROFILE_CONFLICT_REVIEW_EVENT, {
+      detail: { review_id: 10, fingerprint: 'fingerprint-b' },
+    }));
+    await waitFor(() => expect(api.getProfileConflictReviews).toHaveBeenCalledTimes(2));
+    act(() => (poll as () => void)());
+    await act(async () => {
+      resolvePoll(empty);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveIntent(targeted);
+      await intentLoad;
+    });
+
+    expect(await screen.findByText('NFL')).toBeInTheDocument();
+  });
+
   it('offers recovery when a notification points at a stale review id', async () => {
     const user = userEvent.setup();
     render(<ProfileConflictReviewModal />);
@@ -266,6 +309,18 @@ describe('ProfileConflictReviewModal', () => {
     expect(await screen.findByText(/could not load profile conflicts/i)).toBeInTheDocument();
     vi.mocked(api.getProfileConflictReviews).mockResolvedValue({ reviews: [review], total: 1 });
     await user.click(screen.getByRole('button', { name: 'Retry loading' }));
+    expect(await screen.findByText('NBA')).toBeInTheDocument();
+  });
+
+  it('shows retry recovery when the initial queue load fails', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getProfileConflictReviews).mockRejectedValueOnce(new Error('offline'));
+    render(<ProfileConflictReviewModal />);
+
+    expect(await screen.findByText(/could not load profile conflicts/i)).toBeInTheDocument();
+    vi.mocked(api.getProfileConflictReviews).mockResolvedValue({ reviews: [review], total: 1 });
+    await user.click(screen.getByRole('button', { name: 'Retry loading' }));
+
     expect(await screen.findByText('NBA')).toBeInTheDocument();
   });
 

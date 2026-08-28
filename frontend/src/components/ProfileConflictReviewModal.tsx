@@ -76,8 +76,14 @@ export function ProfileConflictReviewModal() {
   const savedChoice = current?.status === 'accepted' ? current.accepted_choice_key ?? '' : '';
   const { titleId, containerRef } = useOwnedDialog(Boolean(current || recovery));
 
-  const loadReviews = useCallback(async (intent?: OpenReviewIntent) => {
+  const loadReviews = useCallback(async (
+    intent?: OpenReviewIntent,
+    recoverInitialFailure = false,
+  ) => {
+    if (!intent && openIntentRef.current) return;
+    if (intent) openIntentRef.current = intent;
     const requestId = ++latestLoadRef.current;
+    let completedIntent = false;
     try {
       const response = await getProfileConflictReviews();
       if (requestId !== latestLoadRef.current) return;
@@ -99,13 +105,24 @@ export function ProfileConflictReviewModal() {
         setForcedFingerprint(null);
         setRecovery('not-found');
       }
+      completedIntent = true;
     } catch {
-      if (requestId === latestLoadRef.current && intent) setRecovery('load-error');
+      if (requestId === latestLoadRef.current && (intent || recoverInitialFailure)) {
+        setRecovery('load-error');
+      }
+    } finally {
+      if (
+        completedIntent
+        && requestId === latestLoadRef.current
+        && openIntentRef.current === intent
+      ) {
+        openIntentRef.current = null;
+      }
     }
   }, []);
 
   useEffect(() => {
-    void loadReviews();
+    void loadReviews(undefined, true);
     const timer = window.setInterval(() => void loadReviews(), 30_000);
     const reopen = (event: Event) => {
       const intent = reviewIntent(event);

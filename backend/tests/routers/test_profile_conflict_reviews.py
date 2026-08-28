@@ -12,13 +12,14 @@ from sqlalchemy.orm import sessionmaker
 from auth import RequireHumanAdminForOperatorDecision
 from auth.mcp_service import MCPServiceCredentials
 from config import DispatcharrSettings
-from models import JournalEntry, ProfileConflictReview, User
+from models import JournalEntry, Notification, ProfileConflictReview, User
 from services.profile_conflict_review import (
     canonical_conflict_evidence,
     conflict_fingerprint,
     InvalidChoice,
     now_epoch_ms,
     accept_profile_conflict_review,
+    reconcile_profile_conflict_reviews,
 )
 
 
@@ -146,6 +147,20 @@ async def test_list_normalizes_malformed_stored_evidence(async_client, test_sess
         "choices": [],
     }
     assert record["accepted_profile_ids"] is None
+
+
+@pytest.mark.asyncio
+async def test_list_normalizes_wrong_shape_accepted_profile_ids(
+    async_client, test_session,
+):
+    row, _ = _review(test_session)
+    row.accepted_profile_ids = "{}"
+    test_session.commit()
+
+    response = await async_client.get("/api/profile-conflict-reviews")
+
+    assert response.status_code == 200
+    assert response.json()["reviews"][0]["accepted_profile_ids"] is None
 
 
 def _request_with_token(token: str | None = None) -> Request:
@@ -301,6 +316,50 @@ async def test_accept_partial_account_failure_is_durable_and_retryable(async_cli
     assert queued.status_code == 200
     assert queued.json()["reviews"][0]["id"] == row.id
     assert queued.json()["reviews"][0]["status"] == "accepted"
+
+
+@pytest.mark.asyncio
+async def test_retry_retires_partial_accept_when_participating_source_disappears(
+    async_client, test_session,
+):
+    row, evidence = _review(test_session)
+    selected = evidence["choices"][0]
+    row.status = "accepted"
+    row.accepted_choice_key = selected["choice_key"]
+    row.accepted_profile_ids = json.dumps(selected["profile_ids"])
+    row.actor_token_id = "42"
+    row.accept_journaled_at = 123
+    row.resolved_at = 123
+    test_session.add(Notification(
+        type="warning", title="Retry pending", message="Retry pending",
+        source="profile_reconcile", source_id="conflict:665",
+    ))
+    test_session.commit()
+    settings = _settings()
+    settings.pop(2866)
+    for setting in settings.values():
+        setting.pop("_ecm_profile_conflict_shape", None)
+    client = _client(settings)
+
+    with patch(
+        "services.profile_conflict_review.get_session", return_value=test_session
+    ):
+        result = await reconcile_profile_conflict_reviews(client, settings)
+
+    test_session.expire_all()
+    persisted = test_session.get(ProfileConflictReview, row.id)
+    assert result["retired"] == 1
+    assert persisted.status == "superseded"
+    assert persisted.applied_at is None
+    assert persisted.accepted_choice_key == selected["choice_key"]
+    assert json.loads(persisted.accepted_profile_ids) == selected["profile_ids"]
+    assert persisted.actor_token_id == "42"
+    assert persisted.accept_journaled_at == 123
+    assert "source" in persisted.retry_error.lower()
+    assert test_session.query(Notification).filter_by(source_id="conflict:665").count() == 0
+    queue = await async_client.get("/api/profile-conflict-reviews")
+    assert queue.status_code == 200
+    assert queue.json()["total"] == 0
 
 
 @pytest.mark.asyncio

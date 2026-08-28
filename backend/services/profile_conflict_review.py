@@ -34,6 +34,10 @@ class StaleReview(ProfileConflictReviewError):
     pass
 
 
+class ParticipatingSourceMissing(StaleReview):
+    pass
+
+
 class InvalidChoice(ProfileConflictReviewError):
     pass
 
@@ -372,9 +376,8 @@ async def ensure_profile_conflict_review(
         ).order_by(ProfileConflictReview.id.desc()).first()
         if row is not None and row.status == REVIEW_STATUS_ACCEPTED:
             accepted_ids = json.loads(row.accepted_profile_ids or "[]")
-            outcome = await harmonize_review_sources(
-                client, json.loads(row.evidence), accepted_ids,
-                _current_source_rows(all_settings),
+            outcome = await _retry_harmonize_review_sources(
+                client, row.effective_group_id, json.loads(row.evidence), accepted_ids
             )
             row.last_seen_at = now_ms
             _record_harmonization(
@@ -387,8 +390,8 @@ async def ensure_profile_conflict_review(
             original = json.loads(retry_row.evidence)
             accepted_ids = json.loads(retry_row.accepted_profile_ids or "[]")
             if _retry_compatible(original, evidence, accepted_ids):
-                outcome = await harmonize_review_sources(
-                    client, original, accepted_ids, _current_source_rows(all_settings)
+                outcome = await _retry_harmonize_review_sources(
+                    client, retry_row.effective_group_id, original, accepted_ids
                 )
                 retry_row.last_seen_at = now_ms
                 _record_harmonization(
@@ -431,6 +434,7 @@ async def ensure_profile_conflict_review(
                 row.retry_error = None
                 row.applied_at = None
                 row.notified_at = None
+                row.accept_journaled_at = None
         elif row.status == REVIEW_STATUS_PENDING:
             row.last_seen_at = now_ms
             row.evidence = json.dumps(evidence, sort_keys=True)
@@ -501,6 +505,21 @@ async def harmonize_review_sources(
     }
 
 
+async def _retry_harmonize_review_sources(
+    client, effective_group_id: int, evidence: dict, selected_profile_ids: list[int]
+) -> dict:
+    from services.profile_reconcile import acquire_effective_group_locks
+
+    async with acquire_effective_group_locks([effective_group_id]):
+        all_settings = await client.get_all_m3u_group_settings()
+        return await harmonize_review_sources(
+            client,
+            evidence,
+            selected_profile_ids,
+            _current_source_rows(all_settings),
+        )
+
+
 async def accept_profile_conflict_review(
     db, client, review_id: int, selected_choice_key: str, actor: str
 ) -> dict:
@@ -544,7 +563,7 @@ async def accept_profile_conflict_review(
             if source.get("m3u_account_id") is not None
         }
         if not original_pairs.issubset(current_rows):
-            raise StaleReview()
+            raise ParticipatingSourceMissing()
 
         if row.status == REVIEW_STATUS_ACCEPTED:
             if selected_choice_key != row.accepted_choice_key:
@@ -660,6 +679,27 @@ async def reconcile_profile_conflict_reviews(client, all_settings: dict) -> dict
                 row.actor_token_id or "unknown",
             )
             retried += 1
+        except ParticipatingSourceMissing:
+            retry_db.rollback()
+            row = retry_db.query(ProfileConflictReview).filter(
+                ProfileConflictReview.id == review_id,
+                ProfileConflictReview.status == REVIEW_STATUS_ACCEPTED,
+                ProfileConflictReview.applied_at.is_(None),
+            ).first()
+            if row is not None:
+                row.status = REVIEW_STATUS_SUPERSEDED
+                row.resolved_at = now_epoch_ms()
+                row.retry_error = (
+                    "Participating source provenance disappeared before convergence"
+                )
+                notification = retry_db.query(Notification).filter(
+                    Notification.source == NOTIFICATION_SOURCE,
+                    Notification.source_id == f"conflict:{row.effective_group_id}",
+                ).first()
+                if notification is not None:
+                    retry_db.delete(notification)
+                retry_db.commit()
+                retired += 1
         except (ReviewNotFound, StaleReview, InvalidChoice):
             retry_db.rollback()
         finally:

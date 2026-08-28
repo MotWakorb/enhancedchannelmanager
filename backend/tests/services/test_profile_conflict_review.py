@@ -12,6 +12,7 @@ from services.profile_conflict_review import (
     REVIEW_STATUS_ACCEPTED,
     REVIEW_STATUS_PENDING,
     REVIEW_STATUS_SUPERSEDED,
+    accept_profile_conflict_review,
     canonical_conflict_evidence,
     choice_key,
     conflict_fingerprint,
@@ -95,7 +96,7 @@ async def test_queue_dedupes_same_shape_and_supersedes_changed_shape(test_sessio
 
 
 @pytest.mark.asyncio
-async def test_exact_accepted_fingerprint_auto_converges_if_it_recurs(test_session):
+async def test_reopened_superseded_lifecycle_journals_its_new_acceptance(test_session):
     client = AsyncMock()
     client.get_channel_groups.return_value = [
         {"id": 665, "name": "NBA"}, {"id": 823, "name": "A"},
@@ -119,6 +120,89 @@ async def test_exact_accepted_fingerprint_auto_converges_if_it_recurs(test_sessi
             "_ecm_profile_source_rows": rows,
         }
     }
+    client.get_all_m3u_group_settings.return_value = settings
+
+    with patch("services.profile_conflict_review.get_session", return_value=test_session), \
+         patch("services.profile_conflict_review.create_notification_internal", new=AsyncMock(return_value={"id": 1})):
+        row = await ensure_profile_conflict_review(client, settings, 665)
+        row = test_session.get(ProfileConflictReview, row.id)
+        row.status = REVIEW_STATUS_SUPERSEDED
+        row.resolved_at = 2
+        row.accepted_choice_key = "old-choice"
+        row.accepted_profile_ids = "[99]"
+        row.actor_token_id = "old-actor"
+        row.accept_journaled_at = 2
+        test_session.commit()
+        test_session.expire_all()
+        assert test_session.get(
+            ProfileConflictReview, row.id
+        ).accept_journaled_at == 2
+        reopened = await ensure_profile_conflict_review(client, settings, 665)
+
+    assert reopened.status == REVIEW_STATUS_PENDING
+    assert reopened.accept_journaled_at is None
+    with patch(
+        "services.profile_conflict_review.journal.log_entry", return_value=object()
+    ) as log:
+        await accept_profile_conflict_review(
+            test_session,
+            client,
+            reopened.id,
+            json.loads(reopened.evidence)["choices"][0]["choice_key"],
+            "new-actor",
+        )
+
+    assert [call.kwargs["action_type"] for call in log.call_args_list] == [
+        "profile_conflict_accept"
+    ]
+    assert test_session.get(
+        ProfileConflictReview, reopened.id
+    ).accept_journaled_at is not None
+
+
+@pytest.mark.asyncio
+async def test_exact_accepted_fingerprint_auto_converges_if_it_recurs(test_session):
+    client = AsyncMock()
+    client.get_channel_groups.return_value = [
+        {"id": 665, "name": "NBA"}, {"id": 823, "name": "A"},
+        {"id": 825, "name": "B"}, {"id": 2866, "name": "C"},
+    ]
+    client.get_channel_profiles.return_value = [
+        {"id": 6, "name": "Sports"}, {"id": 7, "name": "Family"},
+        {"id": 14, "name": "Strong only"},
+    ]
+    rows = [
+        {"id": 10, "source_group_id": 823, "m3u_account_id": 1,
+         "channel_group": 823, "custom_properties": {"channel_profile_ids": [6, 7]}},
+        {"id": 11, "source_group_id": 825, "m3u_account_id": 1,
+         "channel_group": 825, "custom_properties": {"channel_profile_ids": [6, 7]}},
+        {"id": 20, "source_group_id": 2866, "m3u_account_id": 2,
+         "channel_group": 2866,
+         "custom_properties": {"channel_profile_ids": [14], "keep": "stale"}},
+    ]
+    settings = {
+        823: {
+            "_ecm_profile_conflict_shape": _shape(),
+            "_ecm_profile_source_rows": rows,
+        }
+    }
+    fresh_settings = json.loads(json.dumps(settings))
+    fresh_settings["823"]["_ecm_profile_source_rows"][2][
+        "custom_properties"
+    ]["keep"] = "fresh"
+
+    from services.profile_reconcile import effective_group_lock
+
+    async def get_fresh_settings():
+        assert effective_group_lock(665).locked()
+        return fresh_settings
+
+    async def update_under_lock(_account_id, _payload):
+        assert effective_group_lock(665).locked()
+        return {"ok": True}
+
+    client.get_all_m3u_group_settings.side_effect = get_fresh_settings
+    client.update_m3u_group_settings.side_effect = update_under_lock
     with patch("services.profile_conflict_review.get_session", return_value=test_session), \
          patch("services.profile_conflict_review.create_notification_internal", new=AsyncMock(return_value={"id": 1})), \
          patch("services.profile_conflict_review.journal.log_entry", return_value=object()):
@@ -133,7 +217,10 @@ async def test_exact_accepted_fingerprint_auto_converges_if_it_recurs(test_sessi
         recurred = await ensure_profile_conflict_review(client, settings, 665)
 
     assert recurred.id == row.id
+    client.get_all_m3u_group_settings.assert_awaited_once()
     assert client.update_m3u_group_settings.await_count == 1
+    payload = client.update_m3u_group_settings.await_args.args[1]
+    assert payload["group_settings"][0]["custom_properties"]["keep"] == "fresh"
     assert recurred.applied_at is not None
 
 

@@ -570,6 +570,10 @@ class Notification(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
+        try:
+            metadata = json.loads(self.extra_data) if self.extra_data else None
+        except (TypeError, ValueError):
+            metadata = None
         return {
             "id": self.id,
             "type": self.type,
@@ -580,7 +584,7 @@ class Notification(Base):
             "source_id": self.source_id,
             "action_label": self.action_label,
             "action_url": self.action_url,
-            "metadata": json.loads(self.extra_data) if self.extra_data else None,
+            "metadata": metadata,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "read_at": self.read_at.isoformat() + "Z" if self.read_at else None,
             "expires_at": self.expires_at.isoformat() + "Z" if self.expires_at else None,
