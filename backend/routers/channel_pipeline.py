@@ -4214,9 +4214,15 @@ def _schedule_debug_bundle_expiry(job_id: str, job: _DebugBundleJob) -> None:
 
 
 def _prune_old_debug_bundle_jobs() -> None:
-    """Drop jobs older than the TTL so the dict can't grow unbounded."""
-    cutoff = time.time() - _DEBUG_BUNDLE_JOB_TTL_SECONDS
-    stale = [jid for jid, job in _DEBUG_BUNDLE_JOBS.items() if job.created_at < cutoff]
+    """Drop terminal jobs whose completion-based TTL has elapsed."""
+    now = time.time()
+    stale = [
+        jid
+        for jid, job in _DEBUG_BUNDLE_JOBS.items()
+        if job.status != "running"
+        and job.completed_at is not None
+        and now - job.completed_at >= _DEBUG_BUNDLE_JOB_TTL_SECONDS
+    ]
     for jid in stale:
         _remove_debug_bundle_job(jid)
     if stale:
@@ -4783,6 +4789,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     from csv_handler import generate_csv
     from log_utils import (
         get_persistent_log_policy,
+        get_registered_sensitive_value_forms,
         get_ring_buffer_snapshot,
         snapshot_persistent_logs,
     )
@@ -4833,6 +4840,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         "epg_sources": epg_sources,
         "settings": settings_dict,
     })
+    registered_sensitive_forms = get_registered_sensitive_value_forms()
 
     def scrub_url(value: str) -> str:
         return obfuscate_url(value, known_secrets, known_identities)
@@ -5252,7 +5260,10 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
             scrubbed_lines = (
                 scrub_log_line(line.rstrip("\r\n")) for line in io.StringIO(text)
             )
-            return scrub_member("\n".join(scrubbed_lines))
+            scrubbed = scrub_member("\n".join(scrubbed_lines))
+            for form in registered_sensitive_forms:
+                scrubbed = scrubbed.replace(form, "***REDACTED***")
+            return scrubbed
 
         contents: list[tuple[str, str]] = []
         members: list[dict] = []
@@ -5462,6 +5473,9 @@ async def _run_debug_bundle_job(job_id: str) -> None:
         job.error = f"{type(e).__name__}: {e}"
         job.completed_at = time.time()
         logger.exception("[AUTO-CREATE] Debug bundle job %s failed: %s", job_id, e)
+    finally:
+        if job.completed_at is not None and _DEBUG_BUNDLE_JOBS.get(job_id) is job:
+            _schedule_debug_bundle_expiry(job_id, job)
 
 
 @router.post("/debug-bundle", status_code=202)
@@ -5497,7 +5511,6 @@ async def start_debug_bundle(
     job_id = uuid.uuid4().hex
     job = _DebugBundleJob(owner_key)
     _DEBUG_BUNDLE_JOBS[job_id] = job
-    _schedule_debug_bundle_expiry(job_id, job)
 
     task = asyncio.create_task(
         _run_debug_bundle_job(job_id),

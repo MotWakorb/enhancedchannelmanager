@@ -2376,6 +2376,50 @@ class TestDebugBundle:
                 await _asyncio.sleep(0)
 
     @pytest.mark.asyncio
+    async def test_running_job_stays_admitted_past_ttl(self, async_client, monkeypatch):
+        import asyncio as _asyncio
+        from routers import channel_pipeline as router_module
+
+        monkeypatch.setattr(router_module, "_DEBUG_BUNDLE_JOB_TTL_SECONDS", 0.02)
+        release = _asyncio.Event()
+        started = _asyncio.Event()
+        active_builders = 0
+        max_active_builders = 0
+
+        async def stalled_build():
+            nonlocal active_builders, max_active_builders
+            active_builders += 1
+            max_active_builders = max(max_active_builders, active_builders)
+            started.set()
+            try:
+                await release.wait()
+                return ("ecm-debug-bundle.tar.gz", b"fake-tar-gz")
+            finally:
+                active_builders -= 1
+
+        try:
+            with patch(
+                "routers.channel_pipeline._build_debug_bundle",
+                side_effect=stalled_build,
+            ) as build:
+                first = await async_client.post("/api/auto-creation/debug-bundle")
+                await _asyncio.wait_for(started.wait(), timeout=1)
+                await _asyncio.sleep(0.08)
+                second = await async_client.post("/api/auto-creation/debug-bundle")
+                await _asyncio.sleep(0)
+
+                assert second.status_code == 202
+                assert second.json()["job_id"] == first.json()["job_id"]
+                assert build.call_count == 1
+                assert max_active_builders == 1
+        finally:
+            release.set()
+            for _ in range(100):
+                if active_builders == 0:
+                    break
+                await _asyncio.sleep(0.005)
+
+    @pytest.mark.asyncio
     async def test_other_admin_cannot_reuse_or_download_initiators_job(
         self, async_client, debug_bundle_admin
     ):
@@ -2539,13 +2583,17 @@ class TestDebugBundle:
             for _ in range(20):
                 await _asyncio.sleep(0)
 
-    def test_prune_drops_expired_jobs(self):
-        """_prune_old_debug_bundle_jobs evicts jobs older than the TTL."""
+    def test_prune_drops_expired_terminal_jobs(self):
+        """Terminal debug-bundle jobs expire relative to completion time."""
         from routers import channel_pipeline as router_module
 
+        now = router_module.time.time()
         old = router_module._DebugBundleJob()
-        old.created_at = router_module.time.time() - (router_module._DEBUG_BUNDLE_JOB_TTL_SECONDS + 60)
+        old.status = "completed"
+        old.completed_at = now - (router_module._DEBUG_BUNDLE_JOB_TTL_SECONDS + 60)
         fresh = router_module._DebugBundleJob()
+        fresh.status = "failed"
+        fresh.completed_at = now
         router_module._DEBUG_BUNDLE_JOBS["old"] = old
         router_module._DEBUG_BUNDLE_JOBS["fresh"] = fresh
 

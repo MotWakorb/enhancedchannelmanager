@@ -240,6 +240,27 @@ async def test_empty_but_available_persistent_set_uses_ring_as_no_files_fallback
 
 
 @pytest.mark.asyncio
+async def test_ring_fallback_scrubs_retired_registered_credential(test_engine):
+    retired_credential = "retired-ring-credential-9f2d"
+    log_utils.register_sensitive_values(retired_credential)
+    payload = await build_bundle(
+        test_engine,
+        disable_value_rule=True,
+        persistent_log_snapshot=_snapshot(handler_degraded=True),
+        ring_log_snapshot=_ring([
+            "2026-08-28 10:00:00,000 - ring - ERROR - "
+            f"retired credential={retired_credential}"
+        ]),
+    )
+
+    members = extract_members(payload)
+    manifest = json.loads(members["manifest.json"])
+    assert manifest["credential_scrub"]["value_rule_active"] is False
+    assert retired_credential.encode() not in members["logs.txt"]
+    assert b"***REDACTED***" in members["logs.txt"]
+
+
+@pytest.mark.asyncio
 async def test_partial_persisted_snapshot_includes_undeduplicated_ring_fallback(
     test_engine,
 ):

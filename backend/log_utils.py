@@ -184,13 +184,17 @@ def register_sensitive_values_from_object(value) -> None:
     register_sensitive_values(*(secrets | identities))
 
 
+def get_registered_sensitive_value_forms() -> tuple[str, ...]:
+    """Return an immutable snapshot of process-lifetime sensitive spellings."""
+    with _sensitive_values_lock:
+        return tuple(sorted(_sensitive_value_forms, key=len, reverse=True))
+
+
 def _redact_persistent_string(value: str) -> str:
     from cloud_storage.upload_security import redact_secrets
 
     redacted = redact_secrets(value)
-    with _sensitive_values_lock:
-        forms = tuple(sorted(_sensitive_value_forms, key=len, reverse=True))
-    for form in forms:
+    for form in get_registered_sensitive_value_forms():
         redacted = redacted.replace(form, "***REDACTED***")
     return redacted
 
