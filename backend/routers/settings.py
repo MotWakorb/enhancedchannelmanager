@@ -6,7 +6,6 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 import asyncio
 import logging
 import re
-import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -27,8 +26,13 @@ from auth.mcp_service import rotate_mcp_service_credentials
 from auth.settings import get_auth_settings
 from config import (
     ADMIN_ONLY_READ_REDACTED_FIELDS,
+    MCPApiKeyDurabilityIndeterminate,
+    MCPApiKeyStorageError,
     get_settings,
+    mcp_api_key_storage_error_detail,
     normalize_public_base_url,
+    revoke_mcp_api_key as revoke_public_mcp_api_key,
+    rotate_mcp_api_key as rotate_public_mcp_api_key,
     save_settings,
     clear_settings_cache,
     set_log_level,
@@ -1247,7 +1251,10 @@ async def update_settings(
         # ordinary settings save.
         event_sync_team_aliases=current_settings.event_sync_team_aliases,
     )
-    save_settings(new_settings)
+    try:
+        save_settings(new_settings)
+    except MCPApiKeyStorageError as error:
+        _raise_mcp_api_key_storage_503("settings save", error)
     clear_settings_cache()
     reset_client()
 
@@ -2430,9 +2437,10 @@ def _rotate_private_projection_or_503() -> None:
     that silently did not rotate would leave the operator believing a
     superseded credential was dead — so this stays fail-loud, but as a
     diagnosable 503 naming the projection and the repair rather than an
-    anonymous 500 with a stack trace. The public key in ``settings.json`` has
-    already been written at this point, exactly as before; only the response
-    shape changes.
+    anonymous 500 with a stack trace. This fallible private step deliberately
+    runs before the public authority transition: reversing them could disclose
+    a new public key and then report failure while the private sidecar identity
+    remained stale.
 
     Neither the log line nor the 503 body interpolates the resolved directory.
     It is derived from the ``MCP_SECRETS_DIR`` environment read, which makes it
@@ -2465,6 +2473,19 @@ def _rotate_private_projection_or_503() -> None:
         ) from exc
 
 
+def _raise_mcp_api_key_storage_503(operation: str, error: Exception) -> None:
+    logger.error(
+        "[SETTINGS] MCP API key %s refused because authority storage is "
+        "unavailable or untrusted (%s)",
+        operation,
+        type(error).__name__,
+    )
+    raise HTTPException(
+        status_code=503,
+        detail=mcp_api_key_storage_error_detail(operation),
+    ) from error
+
+
 @router.post("/mcp-api-key")
 async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     """Generate a new MCP API key (replaces any existing key).
@@ -2493,13 +2514,33 @@ async def generate_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     handler anonymously, so a headless auth-disabled deployment can still
     configure its own sidecar.
     """
-    settings = get_settings()
-    settings.mcp_api_key = secrets.token_urlsafe(32)
-    save_settings(settings)
     _rotate_private_projection_or_503()
-    clear_settings_cache()
+    try:
+        key = rotate_public_mcp_api_key()
+    except MCPApiKeyDurabilityIndeterminate as error:
+        logger.error(
+            "[SETTINGS] MCP API key rotation is active but crash durability "
+            "is indeterminate"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "mcp_api_key_durability_indeterminate",
+                "message": (
+                    "The new MCP API key is active now, but crash durability is "
+                    "indeterminate. Repair storage and retry rotation."
+                ),
+                "operation": "rotation",
+                "authority_active": True,
+                "crash_durability": "indeterminate",
+                "retry_after_storage_repair": True,
+                "mcp_api_key": error.active_key,
+            },
+        ) from error
+    except MCPApiKeyStorageError as error:
+        _raise_mcp_api_key_storage_503("rotation", error)
     logger.info("[SETTINGS] MCP API key generated")
-    return {"mcp_api_key": settings.mcp_api_key}
+    return {"mcp_api_key": key}
 
 
 @router.delete("/mcp-api-key")
@@ -2518,11 +2559,31 @@ async def revoke_mcp_api_key(_admin=RequireHumanAdminForServiceCredential):
     the generate half above for the identity carve-out that keeps a headless
     deployment reachable.
     """
-    settings = get_settings()
-    settings.mcp_api_key = ""
-    save_settings(settings)
     _rotate_private_projection_or_503()
-    clear_settings_cache()
+    try:
+        revoke_public_mcp_api_key()
+    except MCPApiKeyDurabilityIndeterminate as error:
+        logger.error(
+            "[SETTINGS] MCP API key revocation is active but crash durability "
+            "is indeterminate"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "mcp_api_key_durability_indeterminate",
+                "message": (
+                    "MCP API key revocation is active now, but a host crash may "
+                    "restore the previous key. Repair storage and retry revocation."
+                ),
+                "operation": "revocation",
+                "authority_active": True,
+                "revoked": True,
+                "crash_durability": "indeterminate",
+                "retry_after_storage_repair": True,
+            },
+        ) from error
+    except MCPApiKeyStorageError as error:
+        _raise_mcp_api_key_storage_503("revocation", error)
     logger.info("[SETTINGS] MCP API key revoked")
     return {"status": "revoked"}
 

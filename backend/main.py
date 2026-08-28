@@ -22,7 +22,9 @@ from config import (
     CONFIG_FILE,
     MCP_SERVICE_FILE,
     MCP_SERVICE_FILENAME,
+    MCPApiKeyStorageError,
     SettingsWriteTimeout,
+    mcp_api_key_storage_error_detail,
     superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
@@ -147,7 +149,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0152",
+    version="0.18.1-0163",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1113,6 +1115,23 @@ async def settings_write_timeout_handler(request: Request, exc: SettingsWriteTim
     )
 
 
+@app.exception_handler(MCPApiKeyStorageError)
+async def mcp_api_key_storage_error_handler(
+    request: Request, exc: MCPApiKeyStorageError
+):
+    """Fail closed with the stable sanitized contract for public settings writers."""
+    logger.error(
+        "[MAIN] MCP API key settings save refused on %s because authority "
+        "storage is unavailable or untrusted (%s)",
+        request.url.path,
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": mcp_api_key_storage_error_detail("settings save")},
+    )
+
+
 @app.exception_handler(HTTPException)
 async def sanitized_http_exception_handler(request: Request, exc: HTTPException):
     """Scrub internal details from 500 responses to prevent information leakage."""
@@ -1144,6 +1163,12 @@ async def startup_event():
     # nothing else in the codebase removes them. Runs under the settings write
     # lock and is best effort — see config.sweep_orphaned_settings_temporaries.
     sweep_orphaned_settings_temporaries()
+
+    # Reconcile public MCP credential authority before readiness. This is the
+    # first-install generation and legacy-migration point. A present-but-
+    # untrusted artifact degrades to no public key without blocking startup;
+    # explicit credential transitions remain fail-closed until it is repaired.
+    get_settings()
 
     # Materialize the private sidecar projection before the backend becomes
     # healthy. The MCP container waits on that health check, so its very first

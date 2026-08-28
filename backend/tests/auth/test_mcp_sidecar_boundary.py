@@ -19,7 +19,7 @@ from auth.mcp_service import (
     rotate_mcp_service_credentials,
     verify_mcp_service_claim,
 )
-from config import DispatcharrSettings, save_settings
+from config import rotate_mcp_api_key
 from database import get_session
 
 
@@ -45,10 +45,15 @@ def test_internal_credentials_are_distinct_private_and_not_in_settings(tmp_path:
 def test_external_key_rotation_projects_settings_atomically(tmp_path: Path):
     target = tmp_path / "settings.json"
     target.write_text('{"mcp_api_key":"<OLD_MCP_CLIENT_KEY>"}')
-    settings = DispatcharrSettings(mcp_api_key="<NEW_MCP_CLIENT_KEY>")
-    with patch("config.CONFIG_FILE", target), patch("config.ensure_config_dir"):
-        save_settings(settings)
+    authority = tmp_path / "api-key"
+    authority.write_text("<OLD_MCP_CLIENT_KEY>\n")
+    authority.chmod(0o600)
+    with patch("config.CONFIG_FILE", target), patch("config.MCP_KEY_FILE", authority), patch(
+        "config.secrets.token_urlsafe", return_value="<NEW_MCP_CLIENT_KEY>"
+    ):
+        rotate_mcp_api_key()
     assert json.loads(target.read_text())["mcp_api_key"] == "<NEW_MCP_CLIENT_KEY>"
+    assert authority.read_text() == "<NEW_MCP_CLIENT_KEY>\n"
     assert target.stat().st_mode & 0o777 == 0o600
     assert not list(tmp_path.glob(".*.tmp"))
 

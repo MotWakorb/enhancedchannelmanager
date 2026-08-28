@@ -10,6 +10,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MCPSettingsSection } from './MCPSettingsSection';
+import { HttpError } from '../../services/httpClient';
+
+const notificationMocks = vi.hoisted(() => ({
+  success: vi.fn(),
+  error: vi.fn(),
+  warning: vi.fn(),
+  info: vi.fn(),
+}));
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -19,12 +27,7 @@ vi.mock('../../services/api', () => ({
 }));
 
 vi.mock('../../contexts/NotificationContext', () => ({
-  useNotifications: () => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
-    info: vi.fn(),
-  }),
+  useNotifications: () => notificationMocks,
 }));
 
 import * as api from '../../services/api';
@@ -192,5 +195,64 @@ describe('MCPSettingsSection — key lifecycle confirmations (04c0u.12)', () => 
 
     await waitFor(() => expect(api.generateMCPApiKey).toHaveBeenCalled());
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('displays an indeterminate rotation key and warns instead of reporting failure', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(settingsUnconfigured);
+    vi.mocked(api.getMCPStatus).mockResolvedValue({ reachable: true, api_key_configured: false });
+    const detail = {
+      code: 'mcp_api_key_durability_indeterminate',
+      message: 'The new MCP API key is active now, but crash durability is indeterminate.',
+      operation: 'rotation',
+      authority_active: true,
+      crash_durability: 'indeterminate',
+      retry_after_storage_repair: true,
+      mcp_api_key: rotatedValue,
+    };
+    vi.mocked(api.generateMCPApiKey).mockRejectedValue(
+      new HttpError(detail.message, 503, detail),
+    );
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^generate API key$/i }));
+
+    expect(await screen.findByText(rotatedValue)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /copy API key/i })).toBeInTheDocument();
+    expect(notificationMocks.warning).toHaveBeenCalledWith(
+      detail.message,
+      'MCP Key Durability',
+    );
+    expect(notificationMocks.error).not.toHaveBeenCalled();
+  });
+
+  it('shows the revocation durability warning and refreshes MCP status', async () => {
+    const detail = {
+      code: 'mcp_api_key_durability_indeterminate',
+      message: 'MCP API key revocation is active now, but a host crash may restore the previous key.',
+      operation: 'revocation',
+      authority_active: true,
+      revoked: true,
+      crash_durability: 'indeterminate',
+      retry_after_storage_repair: true,
+    };
+    vi.mocked(api.revokeMCPApiKey).mockRejectedValue(
+      new HttpError(detail.message, 503, detail),
+    );
+
+    render(<MCPSettingsSection isAdmin={true} />);
+    fireEvent.click(await screen.findByRole('button', { name: /revoke key/i }));
+    await screen.findByRole('dialog', { name: /revoke MCP API key/i });
+    fireEvent.change(screen.getByLabelText(/type REVOKE MCP KEY to confirm/i), {
+      target: { value: 'REVOKE MCP KEY' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^revoke MCP API key$/i }));
+
+    await waitFor(() => expect(api.getMCPStatus).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(/No API key configured/i)).toBeInTheDocument();
+    expect(notificationMocks.warning).toHaveBeenCalledWith(
+      detail.message,
+      'MCP Key Durability',
+    );
+    expect(notificationMocks.error).not.toHaveBeenCalled();
   });
 });

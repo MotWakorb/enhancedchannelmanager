@@ -16,6 +16,7 @@ import pytest
 import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import config as config_mod
 from models import (
     ChannelPipelineRule,
     DummyEPGProfile,
@@ -1738,6 +1739,134 @@ class TestRestoreYaml:
         assert test_session.query(TagGroup).count() == 1
 
     @pytest.mark.asyncio
+    async def test_settings_storage_failure_is_section_local_and_restore_continues(
+        self, async_client, test_session
+    ):
+        content = _make_yaml_export()
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {
+            "url": "",
+            "username": "",
+            "password": "existing_pass",
+            "smtp_password": "existing_smtp",
+        }
+
+        with patch(
+            "routers.backup.get_settings", return_value=mock_settings
+        ), patch(
+            "routers.backup.save_settings",
+            side_effect=config_mod.MCPApiKeyStorageError("untrusted authority"),
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={
+                    "sections": json.dumps(
+                        ["tag_groups", "settings", "scheduled_tasks"]
+                    )
+                },
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["sections_restored"] == ["tag_groups", "scheduled_tasks"]
+        assert body["sections_failed"] == ["settings"]
+        assert test_session.query(TagGroup).count() == 1
+        assert test_session.query(ScheduledTask).count() == 1
+        assert any("settings" in error.lower() for error in body["errors"])
+        assert all("untrusted authority" not in error for error in body["errors"])
+
+    @pytest.mark.parametrize(
+        "settings_failure",
+        [
+            config_mod.MCPApiKeyStorageError("untrusted authority"),
+            OSError("settings write failed"),
+        ],
+        ids=["mcp-storage", "generic-write"],
+    )
+    @pytest.mark.asyncio
+    async def test_settings_failure_blocks_dispatcharr_restore_but_local_restore_continues(
+        self, async_client, test_session, settings_failure
+    ):
+        content = _make_yaml_export()
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {
+            "url": "http://old:9191",
+            "username": "old_user",
+            "password": "existing_pass",
+            "smtp_password": "existing_smtp",
+        }
+        restore_m3u_accounts = AsyncMock(return_value={"warnings": []})
+
+        with patch(
+            "routers.backup.get_settings", return_value=mock_settings
+        ), patch(
+            "routers.backup.save_settings",
+            side_effect=settings_failure,
+        ), patch.dict(
+            "routers.backup._DISPATCHARR_RESTORERS",
+            {"m3u_accounts": restore_m3u_accounts},
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={
+                    "sections": json.dumps(
+                        ["m3u_accounts", "settings", "scheduled_tasks"]
+                    )
+                },
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["sections_restored"] == ["scheduled_tasks"]
+        assert body["sections_failed"] == ["settings", "m3u_accounts"]
+        assert any(
+            "m3u_accounts: settings restore failed" in error
+            for error in body["errors"]
+        )
+        assert test_session.query(ScheduledTask).count() == 1
+        restore_m3u_accounts.assert_not_awaited()
+
+    @pytest.mark.parametrize("settings_mode", ["missing", "empty"])
+    @pytest.mark.asyncio
+    async def test_invalid_selected_settings_block_dispatcharr_restore(
+        self, async_client, test_session, settings_mode
+    ):
+        export_data = yaml.safe_load(_make_yaml_export())
+        if settings_mode == "missing":
+            export_data.pop("settings", None)
+        else:
+            export_data["settings"] = {}
+        content = yaml.dump(export_data, default_flow_style=False).encode()
+        restore_m3u_accounts = AsyncMock(return_value={"warnings": []})
+
+        with patch("routers.backup.get_settings") as get_settings, patch.dict(
+            "routers.backup._DISPATCHARR_RESTORERS",
+            {"m3u_accounts": restore_m3u_accounts},
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={
+                    "sections": json.dumps(
+                        ["m3u_accounts", "settings", "scheduled_tasks"]
+                    )
+                },
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["sections_restored"] == ["scheduled_tasks"]
+        assert body["sections_failed"] == ["settings", "m3u_accounts"]
+        assert test_session.query(ScheduledTask).count() == 1
+        get_settings.assert_not_called()
+        restore_m3u_accounts.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_channel_groups_restore_upserts_by_name(self):
         """Channel groups restore must NOT delete existing groups — channels and
         streams reference them by ID, so deleting would orphan those FKs. Only
@@ -2058,6 +2187,9 @@ class TestZipRestoreRedactionAware:
             "mcp_api_key": "EXISTING-MCP-9999",
         }
         settings_file.write_text(json.dumps(existing))
+        authority_file = tmp_path / "api-key"
+        authority_file.write_text("EXISTING-MCP-9999\n")
+        authority_file.chmod(0o600)
         db_file = tmp_path / "journal.db"
 
         # Build a ZIP whose settings.json carries the redacted sentinels and a
@@ -2077,6 +2209,7 @@ class TestZipRestoreRedactionAware:
         with patch("routers.backup.CONFIG_DIR", tmp_path), \
              patch("routers.backup.CONFIG_FILE", settings_file), \
              patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch.object(config_mod, "MCP_KEY_FILE", authority_file), \
              patch("routers.backup.close_db"), \
              patch("routers.backup.init_db"), \
              patch("routers.backup.clear_settings_cache"), \
@@ -2191,6 +2324,9 @@ class TestZipRestoreRedactionAware:
             "password": "should-be-overwritten",
             "mcp_api_key": "destination-mcp-key",
         }))
+        authority_file = tmp_path / "api-key"
+        authority_file.write_text("destination-mcp-key\n")
+        authority_file.chmod(0o600)
         db_file = tmp_path / "journal.db"
 
         legacy_settings = json.dumps({
@@ -2205,6 +2341,7 @@ class TestZipRestoreRedactionAware:
         with patch("routers.backup.CONFIG_DIR", tmp_path), \
              patch("routers.backup.CONFIG_FILE", settings_file), \
              patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch.object(config_mod, "MCP_KEY_FILE", authority_file), \
              patch("routers.backup.close_db"), \
              patch("routers.backup.init_db"), \
              patch("routers.backup.clear_settings_cache"), \

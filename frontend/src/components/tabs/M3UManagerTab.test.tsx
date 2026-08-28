@@ -116,6 +116,39 @@ describe('M3UManagerTab', () => {
     });
   });
 
+  describe('account deletion', () => {
+    it('reloads account state and warns when deletion succeeded but linked-settings cleanup failed', async () => {
+      const account = makeAccount({ id: 2, name: 'Partially Cleaned Provider' });
+      vi.mocked(api.getM3UAccounts)
+        .mockResolvedValueOnce([account])
+        .mockResolvedValueOnce([]);
+      vi.mocked(api.getServerGroups).mockResolvedValue([]);
+      vi.mocked(api.deleteM3UAccount).mockResolvedValue({
+        status: 'deleted_with_cleanup_warning',
+        account_deleted: true,
+        linked_settings_cleanup: 'failed',
+        message: 'The account was deleted, but linked-settings cleanup failed. This DELETE must not be retried.',
+        deleted_groups: [],
+        skipped_groups: [],
+        failed_groups: [],
+      });
+      vi.stubGlobal('confirm', vi.fn(() => true));
+      const onAccountsChange = vi.fn();
+
+      renderWithProviders(<M3UManagerTab onAccountsChange={onAccountsChange} />);
+      await screen.findByText('Partially Cleaned Provider');
+      fireEvent.click(screen.getByRole('button', { name: 'Delete account' }));
+
+      await waitFor(() => {
+        expect(api.getM3UAccounts).toHaveBeenCalledTimes(2);
+        expect(screen.queryByText('Partially Cleaned Provider')).not.toBeInTheDocument();
+      });
+      expect(onAccountsChange).toHaveBeenCalledTimes(1);
+      expect(await screen.findByText(/linked-settings cleanup failed/i)).toBeVisible();
+      expect(screen.getByText(/must not be retried/i)).toBeVisible();
+    });
+  });
+
   // Bead enhancedchannelmanager-7dxx0. The pane opened on an unlabelled
   // table — route title, description, then straight into the accounts list.
   // The heading is rendered by PageHeader, so asserting it sits inside

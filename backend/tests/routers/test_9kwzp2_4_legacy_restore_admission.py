@@ -428,8 +428,9 @@ def test_restore_replace_failure_rolls_back_every_live_artifact(
             plan.close()
 
     assert failed
-    close_db.assert_called_once()
-    init_db.assert_called_once()
+    expected_db_cycles = 2 if failed_target == "settings.json" else 1
+    assert close_db.call_count == expected_db_cycles
+    assert init_db.call_count == expected_db_cycles
     _assert_prior_live_state(live, settings, journal, old, prior_journal)
 
 

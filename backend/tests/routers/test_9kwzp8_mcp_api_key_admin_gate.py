@@ -104,16 +104,18 @@ def _admin_user():
 
 
 def _router_mocks():
-    """Patch the router's persistence calls at their import site.
+    """Patch the router's lifecycle calls at their import site.
 
-    A refused request must reach none of them: ``save_settings`` is the write
-    that mints or erases the credential, so asserting it was never called is
-    the proof the gate answered before the handler ran.
+    A refused request must reach neither dedicated transition. That proves the
+    gate answered before credential authority could change.
     """
     return (
         patch("routers.settings.get_settings", return_value=_stored_settings()),
-        patch("routers.settings.save_settings"),
-        patch("routers.settings.clear_settings_cache"),
+        patch(
+            "routers.settings.rotate_public_mcp_api_key",
+            return_value="<minted-mcp-key-9kwzp8>",
+        ),
+        patch("routers.settings.revoke_public_mcp_api_key"),
     )
 
 
@@ -123,17 +125,18 @@ def _router_mocks():
 @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
 @pytest.mark.asyncio
 async def test_non_admin_refused_on_mcp_api_key(async_client, method):
-    get_mock, save_mock, cache_mock = _router_mocks()
+    get_mock, rotate_mock, revoke_mock = _router_mocks()
     with patch("auth.dependencies.get_auth_settings") as auth_mock, \
          patch("auth.dependencies.get_current_user",
                new=AsyncMock(return_value=_non_admin_user())), \
-         get_mock, save_mock as save_settings, cache_mock:
+         get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
         auth_mock.return_value.require_auth = True
         auth_mock.return_value.setup_complete = True
         response = await async_client.request(method, MCP_API_KEY_PATH)
 
     assert response.status_code == 403, response.json()
-    save_settings.assert_not_called()
+    rotate_key.assert_not_called()
+    revoke_key.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -148,10 +151,10 @@ async def test_mcp_principal_refused_on_mcp_api_key(async_client, method):
     ``is_admin=True`` — so this case is the one that distinguishes a real fix
     from one that only looks like a fix in review.
     """
-    get_mock, save_mock, cache_mock = _router_mocks()
+    get_mock, rotate_mock, revoke_mock = _router_mocks()
     with patch("auth.dependencies.get_settings", return_value=_mcp_runtime_settings()), \
          patch("auth.dependencies.get_auth_settings") as auth_mock, \
-         get_mock, save_mock as save_settings, cache_mock:
+         get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
         auth_mock.return_value.require_auth = True
         auth_mock.return_value.setup_complete = True
         response = await async_client.request(
@@ -163,7 +166,8 @@ async def test_mcp_principal_refused_on_mcp_api_key(async_client, method):
     assert "MCP service principal" in detail
     assert "MCP API key" in detail
     assert "connection test" not in detail
-    save_settings.assert_not_called()
+    rotate_key.assert_not_called()
+    revoke_key.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -171,11 +175,11 @@ async def test_mcp_principal_refused_on_mcp_api_key(async_client, method):
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
 async def test_admin_reaches_mcp_api_key_generate_handler(async_client):
-    get_mock, save_mock, cache_mock = _router_mocks()
+    get_mock, rotate_mock, revoke_mock = _router_mocks()
     with patch("auth.dependencies.get_auth_settings") as auth_mock, \
          patch("auth.dependencies.get_current_user",
                new=AsyncMock(return_value=_admin_user())), \
-         get_mock, save_mock as save_settings, cache_mock:
+         get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
         auth_mock.return_value.require_auth = True
         auth_mock.return_value.setup_complete = True
         response = await async_client.post(MCP_API_KEY_PATH)
@@ -183,24 +187,25 @@ async def test_admin_reaches_mcp_api_key_generate_handler(async_client):
     assert response.status_code == 200, response.json()
     minted = response.json()["mcp_api_key"]
     assert minted and minted != STORED_KEY_PLACEHOLDER
-    save_settings.assert_called_once()
+    rotate_key.assert_called_once_with()
+    revoke_key.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_admin_reaches_mcp_api_key_revoke_handler(async_client):
-    get_mock, save_mock, cache_mock = _router_mocks()
+    get_mock, rotate_mock, revoke_mock = _router_mocks()
     with patch("auth.dependencies.get_auth_settings") as auth_mock, \
          patch("auth.dependencies.get_current_user",
                new=AsyncMock(return_value=_admin_user())), \
-         get_mock, save_mock as save_settings, cache_mock:
+         get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
         auth_mock.return_value.require_auth = True
         auth_mock.return_value.setup_complete = True
         response = await async_client.delete(MCP_API_KEY_PATH)
 
     assert response.status_code == 200, response.json()
     assert response.json()["status"] == "revoked"
-    save_settings.assert_called_once()
-    assert save_settings.call_args.args[0].mcp_api_key == ""
+    rotate_key.assert_not_called()
+    revoke_key.assert_called_once_with()
 
 
 class TestSetupModeStillAllowed:
@@ -238,12 +243,17 @@ class TestSetupModeStillAllowed:
     async def test_anonymous_caller_reaches_handler_in_setup_mode(
         self, async_client, method, require_auth, setup_complete
     ):
-        get_mock, save_mock, cache_mock = _router_mocks()
+        get_mock, rotate_mock, revoke_mock = _router_mocks()
         with patch("auth.dependencies.get_auth_settings") as auth_mock, \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             auth_mock.return_value.require_auth = require_auth
             auth_mock.return_value.setup_complete = setup_complete
             response = await async_client.request(method, MCP_API_KEY_PATH)
 
         assert response.status_code == 200, response.json()
-        save_settings.assert_called_once()
+        if method == "POST":
+            rotate_key.assert_called_once_with()
+            revoke_key.assert_not_called()
+        else:
+            rotate_key.assert_not_called()
+            revoke_key.assert_called_once_with()

@@ -77,17 +77,19 @@ def _settings(**overrides) -> DispatcharrSettings:
 def stub_settings():
     """Install a settings object for the whole process, then restore.
 
-    Writes ``config._cached_settings`` rather than patching a ``get_settings``
-    name: ``auth.routes`` (the emailer) and ``config.get_public_base_url`` (the
-    origin resolver) must see the SAME settings, and the cache is the one place
-    both of them read through. ``clear_settings_cache()`` also re-arms the
-    one-shot WARN flags, which several tests below assert on.
+    Writes the coherent ``config`` cache state rather than patching a
+    ``get_settings`` name: ``auth.routes`` (the emailer) and
+    ``config.get_public_base_url`` (the origin resolver) must see the SAME
+    settings, and the cache is the one place both of them read through.
+    ``clear_settings_cache()`` also re-arms the one-shot WARN flags, which
+    several tests below assert on.
     """
     installed = []
 
     def _install(settings: DispatcharrSettings) -> DispatcharrSettings:
         config.clear_settings_cache()
         config._cached_settings = settings
+        config._cached_mcp_files_signature = config._mcp_files_cache_signature()
         installed.append(settings)
         return settings
 
@@ -309,14 +311,17 @@ class TestUnsetWarningCadence:
         # clear_settings_cache() runs on every settings save, so an operator who
         # saves settings while it is still unset is told again.
         caplog.clear()
-        config.clear_settings_cache()
-        config._cached_settings = _settings(public_base_url="")
+        stub_settings(_settings(public_base_url=""))
         with caplog.at_level("WARNING"):
             assert config.get_public_base_url() == ""
         assert [r for r in caplog.records if "public_base_url is not set" in r.message]
 
     def test_configured_value_is_returned_and_does_not_warn(self, stub_settings, caplog):
-        stub_settings(_settings(public_base_url=f"{CONFIGURED_ORIGIN}/"))
+        installed = stub_settings(
+            _settings(public_base_url=f"{CONFIGURED_ORIGIN}/")
+        )
+
+        assert config.get_settings() is installed
 
         with caplog.at_level("WARNING"):
             resolved = config.get_public_base_url()

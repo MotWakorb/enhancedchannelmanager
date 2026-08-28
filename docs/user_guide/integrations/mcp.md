@@ -165,13 +165,21 @@ do not assemble or publish the manifest manually.
 ## Where the MCP credentials live
 
 ECM publishes MCP credential material into one dedicated directory, set by the
-`MCP_SECRETS_DIR` environment variable on the **ecm** service. It holds exactly
-two files, both written by ECM with mode `0600` and owned by `PUID`:`PGID`:
+`MCP_SECRETS_DIR` environment variable on the **ecm** service. It normally holds
+two persistent files, both written by ECM with mode `0600` and owned by
+`PUID`:`PGID`, plus a transient recovery record during public-key transitions:
 
 | File | Contents |
 |-|-|
 | `api-key` | The public client key you paste into Claude Desktop or Claude Code. |
 | `mcp-service.json` | The sidecar's private backend principal key and its separate destructive-confirmation signing key. Never disclosed. |
+| `.api-key.recovery` | Owner-only redo record for an interrupted rotation or revocation. `prepared` is startup-inert; `recovery-active` reapplies the already-active new value. Do not edit or delete it while resolving a storage error. |
+
+`api-key` is the single authority for the public key. The `mcp_api_key` field in
+`settings.json` is only a compatibility mirror used by older clients and legacy
+migration. Generic settings saves ignore a submitted mirror value and copy the
+validated `api-key` value back instead. An empty `api-key` is intentional: it is
+the durable revocation state, not a missing credential.
 
 The MCP Compose overlay and the published-image recipe in the README both set
 `MCP_SECRETS_DIR=/run/secrets/ecm-mcp` and mount a dedicated `ecm-mcp-secrets`
@@ -387,7 +395,8 @@ working end-to-end.
 
 ### Key rotation
 
-The Bearer header uses `mcp_api_key` from `settings.json`.
+The Bearer header uses the key from the authoritative `api-key` sidecar. The
+same value is mirrored into `settings.json:mcp_api_key` for compatibility.
 
 To rotate the static key:
 
@@ -625,10 +634,33 @@ Diagnose:
 curl -s http://YOUR_ECM_HOST:6101/health | python3 -m json.tool
 ```
 
+### `503` while rotating or revoking the MCP key
+
+Do not retry continuously. A `mcp_api_key_storage_unavailable` response means
+ECM preserved an `api-key` or `.api-key.recovery` artifact it could not trust.
+Under `MCP_SECRETS_DIR`, verify each name that exists is a regular file rather
+than a symlink, has one hard link, is owned by the container's `PUID`:`PGID`,
+and uses mode `0600`. Repair the mount, ownership, or mode, then retry the same
+operation; ECM automatically revalidates changed paths. If the recovery JSON
+itself is malformed, preserve it byte-for-byte and do not guess, rewrite,
+replace, or delete it: there is no proof that another copy is fresher, and it
+may be the only redo evidence for a completed rotation or revocation. Repair
+only the mount or file metadata, then contact support with the preserved
+artifact before retrying.
+
+A `mcp_api_key_durability_indeterminate` response is different: the response
+states whether the new key or revocation is active now, but the filesystem
+refused the durability proof. Keep the returned rotation key, stop further key
+changes, and verify that the `MCP_SECRETS_DIR` filesystem is writable and
+supports atomic rename plus file and parent-directory `fsync` (avoid network or
+FUSE storage that rejects them). Repair or move the storage, restart ECM once
+to let `.api-key.recovery` reapply the active value, confirm MCP authentication,
+and retry rotation or revocation. Do not delete the recovery record as cleanup.
+
 ### `401 Invalid API key` on tool calls
 
 The Bearer value supplied by your local environment does not match
-`mcp_api_key` in `settings.json`.
+the authoritative `api-key` sidecar.
 Regenerate the key in ECM (or copy the current value), update your config, and
 restart Claude.
 

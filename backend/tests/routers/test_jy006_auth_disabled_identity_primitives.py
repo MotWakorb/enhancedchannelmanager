@@ -198,12 +198,10 @@ def _mcp_runtime_settings() -> DispatcharrSettings:
 # ---------------------------------------------------------------------------
 
 def _settings_router_mocks():
-    """Patch the mcp-api-key handler's persistence, at its import site.
+    """Patch the mcp-api-key handler's lifecycle transitions at its import site.
 
-    ``save_settings`` is the write that mints or erases the credential, so
-    asserting it was never called is the proof the gate answered BEFORE the
-    handler ran — a 403 alone cannot tell a refusal apart from a handler that
-    wrote and then failed.
+    Asserting both transitions were untouched proves the gate answered before
+    the handler could mint or erase authority.
     """
     stored = DispatcharrSettings(
         url="http://dispatcharr:8000",
@@ -213,8 +211,11 @@ def _settings_router_mocks():
     )
     return (
         patch("routers.settings.get_settings", return_value=stored),
-        patch("routers.settings.save_settings"),
-        patch("routers.settings.clear_settings_cache"),
+        patch(
+            "routers.settings.rotate_public_mcp_api_key",
+            return_value="<minted-mcp-key-jy006>",
+        ),
+        patch("routers.settings.revoke_public_mcp_api_key"),
     )
 
 
@@ -231,13 +232,14 @@ class TestMcpApiKeyUnderDisabledAuth:
         This is the exact call that used to mint an anonymous caller a
         persistent admin-equivalent bearer credential on somebody's LAN.
         """
-        get_mock, save_mock, cache_mock = _settings_router_mocks()
+        get_mock, rotate_mock, revoke_mock = _settings_router_mocks()
         with patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_OWNED), \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             response = await async_client.request(method, MCP_API_KEY_PATH)
 
         assert response.status_code == 401, response.json()
-        save_settings.assert_not_called()
+        rotate_key.assert_not_called()
+        revoke_key.assert_not_called()
 
     @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
     @pytest.mark.asyncio
@@ -251,13 +253,14 @@ class TestMcpApiKeyUnderDisabledAuth:
         takeover was reproduced.
         """
         _seed_operator(test_session)
-        get_mock, save_mock, cache_mock = _settings_router_mocks()
+        get_mock, rotate_mock, revoke_mock = _settings_router_mocks()
         with patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_UNOWNED), \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             response = await async_client.request(method, MCP_API_KEY_PATH)
 
         assert response.status_code == 401, response.json()
-        save_settings.assert_not_called()
+        rotate_key.assert_not_called()
+        revoke_key.assert_not_called()
 
     @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
     @pytest.mark.asyncio
@@ -267,16 +270,17 @@ class TestMcpApiKeyUnderDisabledAuth:
         """Auth off is not a promotion: an ordinary signed-in user is still not
         an admin."""
         _seed_operator(test_session)
-        get_mock, save_mock, cache_mock = _settings_router_mocks()
+        get_mock, rotate_mock, revoke_mock = _settings_router_mocks()
         with patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_OWNED), \
              patch("auth.dependencies.get_current_user",
                    new=AsyncMock(return_value=_non_admin())), \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             response = await async_client.request(method, MCP_API_KEY_PATH)
 
         assert response.status_code == 403, response.json()
         assert response.json()["detail"] == "Admin access required"
-        save_settings.assert_not_called()
+        rotate_key.assert_not_called()
+        revoke_key.assert_not_called()
 
     @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
     @pytest.mark.asyncio
@@ -291,10 +295,10 @@ class TestMcpApiKeyUnderDisabledAuth:
         tests. The 403 body must still name this surface.
         """
         _seed_operator(test_session)
-        get_mock, save_mock, cache_mock = _settings_router_mocks()
+        get_mock, rotate_mock, revoke_mock = _settings_router_mocks()
         with patch("auth.dependencies.get_settings", return_value=_mcp_runtime_settings()), \
              patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_OWNED), \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             response = await async_client.request(
                 method, MCP_API_KEY_PATH,
                 headers={"Authorization": f"Bearer {MCP_KEY}"},
@@ -304,7 +308,8 @@ class TestMcpApiKeyUnderDisabledAuth:
         detail = response.json()["detail"]
         assert "MCP service principal" in detail
         assert "MCP API key" in detail
-        save_settings.assert_not_called()
+        rotate_key.assert_not_called()
+        revoke_key.assert_not_called()
 
     @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
     @pytest.mark.asyncio
@@ -319,15 +324,20 @@ class TestMcpApiKeyUnderDisabledAuth:
         be told apart from a hard lockout.
         """
         _seed_operator(test_session)
-        get_mock, save_mock, cache_mock = _settings_router_mocks()
+        get_mock, rotate_mock, revoke_mock = _settings_router_mocks()
         with patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_OWNED), \
              patch("auth.dependencies.get_current_user",
                    new=AsyncMock(return_value=_admin())), \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             response = await async_client.request(method, MCP_API_KEY_PATH)
 
         assert response.status_code == 200, response.json()
-        save_settings.assert_called_once()
+        if method == "POST":
+            rotate_key.assert_called_once_with()
+            revoke_key.assert_not_called()
+        else:
+            rotate_key.assert_not_called()
+            revoke_key.assert_called_once_with()
 
     @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
     @pytest.mark.asyncio
@@ -336,13 +346,18 @@ class TestMcpApiKeyUnderDisabledAuth:
     ):
         """The carve-out: a headless auth-disabled instance configures its own
         sidecar."""
-        get_mock, save_mock, cache_mock = _settings_router_mocks()
+        get_mock, rotate_mock, revoke_mock = _settings_router_mocks()
         with patch("auth.dependencies.get_auth_settings", return_value=AUTH_OFF_UNOWNED), \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             response = await async_client.request(method, MCP_API_KEY_PATH)
 
         assert response.status_code == 200, response.json()
-        save_settings.assert_called_once()
+        if method == "POST":
+            rotate_key.assert_called_once_with()
+            revoke_key.assert_not_called()
+        else:
+            rotate_key.assert_not_called()
+            revoke_key.assert_called_once_with()
 
     @pytest.mark.parametrize("method", LIFECYCLE_METHODS)
     @pytest.mark.asyncio
@@ -350,15 +365,20 @@ class TestMcpApiKeyUnderDisabledAuth:
         self, async_client, test_session, method
     ):
         """Regression tripwire: the auth-ENABLED path is untouched by this bead."""
-        get_mock, save_mock, cache_mock = _settings_router_mocks()
+        get_mock, rotate_mock, revoke_mock = _settings_router_mocks()
         with patch("auth.dependencies.get_auth_settings", return_value=AUTH_ON), \
              patch("auth.dependencies.get_current_user",
                    new=AsyncMock(return_value=_admin())), \
-             get_mock, save_mock as save_settings, cache_mock:
+             get_mock, rotate_mock as rotate_key, revoke_mock as revoke_key:
             response = await async_client.request(method, MCP_API_KEY_PATH)
 
         assert response.status_code == 200, response.json()
-        save_settings.assert_called_once()
+        if method == "POST":
+            rotate_key.assert_called_once_with()
+            revoke_key.assert_not_called()
+        else:
+            rotate_key.assert_not_called()
+            revoke_key.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------

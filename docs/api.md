@@ -1747,7 +1747,7 @@ These endpoints operate on the pre-v0.18.0 format (ECM settings + `journal.db` o
 | `GET /api/backup/export-sections` | List available YAML export sections. |
 | `GET /api/backup/export` | Export selected sections as a YAML file. Optional `?sections=` query parameter selects sections; omit for all. Redaction now runs through the same gather as the DBAS artifact, so this export is covered by the same three rules. |
 | `POST /api/backup/validate` | Validate a YAML export file and return section item counts. |
-| `POST /api/backup/restore-yaml` | Restore from a YAML export (selective-section restore). Strips the `***REDACTED***` sentinel rather than writing it into a destination credential column, and reports the affected fields for re-entry. |
+| `POST /api/backup/restore-yaml` | Restore from a YAML export (selective-section restore). Strips the `***REDACTED***` sentinel rather than writing it into a destination credential column, and reports the affected fields for re-entry. If settings and Dispatcharr-backed sections are selected together, settings is restored first; a settings failure leaves local sections independent but reports every Dispatcharr-backed section failed without attempting it against the previous server. |
 | `POST /api/backup/save` | Save a legacy ZIP backup to `/config/backups/`. |
 | `POST /api/backup/restore-saved` | Restore from a saved legacy ZIP backup by filename. Returns `notices` (see [Restore notices](#restore-notices)). |
 

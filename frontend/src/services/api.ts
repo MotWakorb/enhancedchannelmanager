@@ -853,7 +853,17 @@ export async function patchM3UAccount(id: number, data: Partial<M3UAccount>): Pr
   });
 }
 
-export async function deleteM3UAccount(id: number): Promise<{ status: string }> {
+export interface DeleteM3UAccountResult {
+  status: string;
+  deleted_groups: number[];
+  skipped_groups: number[];
+  failed_groups: Array<{ id: number; error: string }>;
+  account_deleted?: boolean;
+  linked_settings_cleanup?: 'failed';
+  message?: string;
+}
+
+export async function deleteM3UAccount(id: number): Promise<DeleteM3UAccountResult> {
   return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
     method: 'DELETE',
   });
