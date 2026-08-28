@@ -509,9 +509,9 @@ async def reconcile_group_profiles(
                     ):
                         try:
                             from services.profile_conflict_review import (
-                                ensure_profile_conflict_review,
+                                ensure_profile_conflict_review_under_lock,
                             )
-                            await ensure_profile_conflict_review(
+                            await ensure_profile_conflict_review_under_lock(
                                 client, all_settings, effective_gid
                             )
                         except Exception as e:  # noqa: BLE001 - freeze still wins

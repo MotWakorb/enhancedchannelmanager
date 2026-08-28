@@ -358,9 +358,31 @@ def _record_harmonization(
 async def ensure_profile_conflict_review(
     client, all_settings: dict, effective_gid: int
 ) -> ProfileConflictReview | None:
+    return await _ensure_profile_conflict_review(
+        client, all_settings, effective_gid, effective_group_lock_held=False
+    )
+
+
+async def ensure_profile_conflict_review_under_lock(
+    client, all_settings: dict, effective_gid: int
+) -> ProfileConflictReview | None:
+    """Ensure a review while the caller holds this effective group's lock."""
+    return await _ensure_profile_conflict_review(
+        client, all_settings, effective_gid, effective_group_lock_held=True
+    )
+
+
+async def _ensure_profile_conflict_review(
+    client, all_settings: dict, effective_gid: int, *, effective_group_lock_held: bool
+) -> ProfileConflictReview | None:
     shape = _shape_for_effective(all_settings, effective_gid)
     if shape is None:
         return None
+    retry_harmonize = (
+        _retry_harmonize_review_sources_under_lock
+        if effective_group_lock_held
+        else _retry_harmonize_review_sources
+    )
     evidence = await _build_evidence(client, shape)
     fingerprint = conflict_fingerprint(evidence)
     now_ms = now_epoch_ms()
@@ -376,7 +398,7 @@ async def ensure_profile_conflict_review(
         ).order_by(ProfileConflictReview.id.desc()).first()
         if row is not None and row.status == REVIEW_STATUS_ACCEPTED:
             accepted_ids = json.loads(row.accepted_profile_ids or "[]")
-            outcome = await _retry_harmonize_review_sources(
+            outcome = await retry_harmonize(
                 client, row.effective_group_id, json.loads(row.evidence), accepted_ids
             )
             row.last_seen_at = now_ms
@@ -390,7 +412,7 @@ async def ensure_profile_conflict_review(
             original = json.loads(retry_row.evidence)
             accepted_ids = json.loads(retry_row.accepted_profile_ids or "[]")
             if _retry_compatible(original, evidence, accepted_ids):
-                outcome = await _retry_harmonize_review_sources(
+                outcome = await retry_harmonize(
                     client, retry_row.effective_group_id, original, accepted_ids
                 )
                 retry_row.last_seen_at = now_ms
@@ -511,13 +533,22 @@ async def _retry_harmonize_review_sources(
     from services.profile_reconcile import acquire_effective_group_locks
 
     async with acquire_effective_group_locks([effective_group_id]):
-        all_settings = await client.get_all_m3u_group_settings()
-        return await harmonize_review_sources(
-            client,
-            evidence,
-            selected_profile_ids,
-            _current_source_rows(all_settings),
+        return await _retry_harmonize_review_sources_under_lock(
+            client, effective_group_id, evidence, selected_profile_ids
         )
+
+
+async def _retry_harmonize_review_sources_under_lock(
+    client, effective_group_id: int, evidence: dict, selected_profile_ids: list[int]
+) -> dict:
+    """Refresh and retry while the caller holds the effective-group lock."""
+    all_settings = await client.get_all_m3u_group_settings()
+    return await harmonize_review_sources(
+        client,
+        evidence,
+        selected_profile_ids,
+        _current_source_rows(all_settings),
+    )
 
 
 async def accept_profile_conflict_review(

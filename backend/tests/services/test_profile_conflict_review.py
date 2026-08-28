@@ -225,6 +225,91 @@ async def test_exact_accepted_fingerprint_auto_converges_if_it_recurs(test_sessi
 
 
 @pytest.mark.asyncio
+async def test_reconcile_conflict_retries_accepted_review_under_existing_lock(
+    test_session,
+):
+    from services import profile_reconcile
+
+    profile_reconcile._group_locks.clear()
+    shape = _shape()
+    rows = [
+        {"id": 10, "source_group_id": 823, "m3u_account_id": 1,
+         "channel_group": 823,
+         "custom_properties": {"channel_profile_ids": [6, 7]}},
+        {"id": 11, "source_group_id": 825, "m3u_account_id": 1,
+         "channel_group": 825,
+         "custom_properties": {"channel_profile_ids": [6, 7]}},
+        {"id": 20, "source_group_id": 2866, "m3u_account_id": 2,
+         "channel_group": 2866,
+         "custom_properties": {"channel_profile_ids": [14], "keep": "stale"}},
+    ]
+    settings = {
+        665: {
+            "auto_channel_sync": True,
+            "custom_properties": {"channel_profile_ids": [6, 7]},
+            "_ecm_channel_profile_conflict": True,
+            "_ecm_profile_conflict_shape": shape,
+            "_ecm_profile_source_rows": rows,
+        },
+    }
+    evidence = canonical_conflict_evidence(
+        shape, {665: "NBA", 823: "A", 825: "B", 2866: "C"},
+        {6: "Sports", 7: "Family", 14: "Strong only"},
+    )
+    selected = evidence["choices"][0]
+    row = ProfileConflictReview(
+        fingerprint=conflict_fingerprint(evidence), fingerprint_version=1,
+        effective_group_id=665, status=REVIEW_STATUS_ACCEPTED,
+        accepted_choice_key=selected["choice_key"],
+        accepted_profile_ids=json.dumps(selected["profile_ids"]),
+        actor_token_id="7", evidence=json.dumps(evidence),
+        created_at=1, last_seen_at=1, resolved_at=1,
+    )
+    test_session.add(row)
+    test_session.commit()
+
+    fresh_settings = json.loads(json.dumps(settings))
+    fresh_settings["665"]["_ecm_profile_source_rows"][2][
+        "custom_properties"
+    ]["keep"] = "fresh"
+    client = AsyncMock()
+    client.get_channel_groups.return_value = [
+        {"id": 665, "name": "NBA"}, {"id": 823, "name": "A"},
+        {"id": 825, "name": "B"}, {"id": 2866, "name": "C"},
+    ]
+    client.get_channel_profiles.return_value = [
+        {"id": 6, "name": "Sports"}, {"id": 7, "name": "Family"},
+        {"id": 14, "name": "Strong only"},
+    ]
+
+    async def get_fresh_settings_under_lock():
+        assert profile_reconcile.effective_group_lock(665).locked()
+        return fresh_settings
+
+    async def update_under_lock(_account_id, _payload):
+        assert profile_reconcile.effective_group_lock(665).locked()
+        return {"ok": True}
+
+    client.get_all_m3u_group_settings.side_effect = get_fresh_settings_under_lock
+    client.update_m3u_group_settings.side_effect = update_under_lock
+    with patch("services.profile_conflict_review.get_session", return_value=test_session), \
+         patch("services.profile_conflict_review.journal.log_entry", return_value=object()):
+        result = await asyncio.wait_for(
+            profile_reconcile.reconcile_group_profiles(
+                client, settings, 665, live_rule_ids=set()
+            ),
+            timeout=1,
+        )
+
+    assert result["status"] == "conflict"
+    client.get_all_m3u_group_settings.assert_awaited_once()
+    client.update_m3u_group_settings.assert_awaited_once()
+    payload = client.update_m3u_group_settings.await_args.args[1]
+    assert payload["group_settings"][0]["custom_properties"]["keep"] == "fresh"
+    assert test_session.get(ProfileConflictReview, row.id).applied_at is not None
+
+
+@pytest.mark.asyncio
 async def test_notification_is_not_recreated_after_operator_deletes_it(test_session):
     client = AsyncMock()
     client.get_channel_groups.return_value = [{"id": 665, "name": "NBA"}]
