@@ -154,12 +154,33 @@ def build_streams(only_shapes=None) -> list[dict]:
 class FakeDispatcharrClient:
     """The upstream surface :func:`_build_debug_bundle` actually touches."""
 
-    def __init__(self, channels, streams, groups, m3u_accounts, epg_sources=None):
+    def __init__(
+        self,
+        channels,
+        streams,
+        groups,
+        m3u_accounts,
+        epg_sources=None,
+        collapsed_group_settings=None,
+        channel_profiles=None,
+        m3u_accounts_error=None,
+        collapsed_group_settings_error=None,
+        channel_profiles_error=None,
+    ):
         self._channels = channels
         self._streams = {s["id"]: s for s in streams}
         self._groups = groups
         self._m3u_accounts = m3u_accounts
         self._epg_sources = epg_sources or []
+        self._collapsed_group_settings = collapsed_group_settings or {}
+        self._channel_profiles = channel_profiles or []
+        self._m3u_accounts_error = m3u_accounts_error
+        self._collapsed_group_settings_error = collapsed_group_settings_error
+        self._channel_profiles_error = channel_profiles_error
+        self.m3u_accounts_calls = 0
+        self.collapsed_group_settings_calls = 0
+        self.channel_profiles_calls = 0
+        self.collapsed_accounts_arg = None
 
     async def get_channels(self, page=1, page_size=100):
         return {"count": len(self._channels), "results": self._channels, "next": None}
@@ -171,15 +192,36 @@ class FakeDispatcharrClient:
         return [self._streams[i] for i in ids if i in self._streams]
 
     async def get_m3u_accounts(self):
+        self.m3u_accounts_calls += 1
+        if self._m3u_accounts_error is not None:
+            raise self._m3u_accounts_error
         return self._m3u_accounts
 
     async def get_epg_sources(self):
         return self._epg_sources
 
+    async def get_all_m3u_group_settings(self, accounts=None):
+        self.collapsed_group_settings_calls += 1
+        self.collapsed_accounts_arg = accounts
+        if self._collapsed_group_settings_error is not None:
+            raise self._collapsed_group_settings_error
+        return self._collapsed_group_settings
+
+    async def get_channel_profiles(self):
+        self.channel_profiles_calls += 1
+        if self._channel_profiles_error is not None:
+            raise self._channel_profiles_error
+        return self._channel_profiles
+
 
 async def build_bundle(test_engine, extra_log_lines=None, extra_streams=None,
                        extra_channel_fields=None, only_shapes=None,
-                       m3u_accounts=None, disable_value_rule=False):
+                       m3u_accounts=None, disable_value_rule=False,
+                       collapsed_group_settings=None, channel_profiles=None,
+                       m3u_accounts_error=None,
+                       collapsed_group_settings_error=None,
+                       channel_profiles_error=None, return_client=False,
+                       recent_logs_provider=None):
     """Drive the REAL :func:`_build_debug_bundle` and return its bytes.
 
     ``only_shapes`` narrows the stream set to the named recorded shapes, so a
@@ -217,7 +259,17 @@ async def build_bundle(test_engine, extra_log_lines=None, extra_streams=None,
             "password": XC_PASS,
         }]
 
-    client = FakeDispatcharrClient(channels, streams, groups, m3u_accounts)
+    client = FakeDispatcharrClient(
+        channels,
+        streams,
+        groups,
+        m3u_accounts,
+        collapsed_group_settings=collapsed_group_settings,
+        channel_profiles=channel_profiles,
+        m3u_accounts_error=m3u_accounts_error,
+        collapsed_group_settings_error=collapsed_group_settings_error,
+        channel_profiles_error=channel_profiles_error,
+    )
     TestSessionLocal = sessionmaker(
         autocommit=False, autoflush=False, bind=test_engine, expire_on_commit=False
     )
@@ -232,14 +284,17 @@ async def build_bundle(test_engine, extra_log_lines=None, extra_streams=None,
         "[M3U] refresh starting for Synthetic XC Provider",
         *(extra_log_lines or []),
     ]
+    logs_provider = recent_logs_provider or (lambda: log_lines)
 
     with patch("routers.channel_pipeline.get_client", return_value=client), \
          patch("routers.channel_pipeline.get_session", TestSessionLocal), \
          patch("config.get_settings", return_value=settings_obj), \
-         patch("log_utils.get_recent_logs", return_value=log_lines):
+         patch("log_utils.get_recent_logs", side_effect=logs_provider):
         from routers.channel_pipeline import _build_debug_bundle
 
         _filename, payload = await _build_debug_bundle()
+    if return_client:
+        return payload, client
     return payload
 
 
@@ -382,6 +437,206 @@ class TestMembersNoProducerScrubs:
         )
         assert scan_members(members, XC_PASS) == {}
         assert scan_members(members, XC_USER) == {}
+
+    @pytest.mark.asyncio
+    async def test_new_diagnostic_members_are_scrubbed_at_tar_entry(self, test_engine):
+        """Both new read-only members may carry arbitrary upstream text, so the
+        final archive-member scrub remains load-bearing for each one."""
+        accounts = [{
+            "id": 1,
+            "name": "Synthetic XC Provider",
+            "account_type": "XC",
+            "server_url": "http://provider.example.net:8080",
+            "username": XC_USER,
+            "password": XC_PASS,
+            "channel_groups": [{
+                "channel_group": 10,
+                "auto_channel_sync": True,
+                "custom_properties": {
+                    "channel_profile_ids": [7],
+                    "diagnostic_note": f"provider password is {XC_PASS}",
+                },
+            }],
+        }]
+        collapsed = {
+            10: {
+                **accounts[0]["channel_groups"][0],
+                "m3u_account_id": 1,
+                "m3u_account_name": "Synthetic XC Provider",
+                "_ecm_channel_profile_conflict": False,
+            }
+        }
+
+        payload = await build_bundle(
+            test_engine,
+            m3u_accounts=accounts,
+            collapsed_group_settings=collapsed,
+            channel_profiles=[{"id": 7, "name": f"Profile {XC_PASS}"}],
+        )
+        members = extract_members(payload)
+
+        for name in ("m3u_group_settings.json", "channel_profiles.json"):
+            assert name in members
+            assert XC_PASS.encode() not in members[name]
+            assert b"***REDACTED***" in members[name]
+
+
+class TestProfileDiagnosticMembers:
+    @pytest.mark.asyncio
+    async def test_account_source_failure_is_explicit_and_does_not_fake_empty_views(
+        self, test_engine, caplog
+    ):
+        planted = "hrukwAccountFetchCredentialMustNotReachArtifact"
+
+        payload, client = await build_bundle(
+            test_engine,
+            only_shapes=["bare_3seg"],
+            m3u_accounts_error=RuntimeError(f"account endpoint rejected {planted}"),
+            channel_profiles=[{"id": 7, "name": "Default"}],
+            recent_logs_provider=lambda: [
+                record.getMessage() for record in caplog.records
+            ],
+            return_client=True,
+        )
+        members = extract_members(payload)
+        assert "channels.json" in members
+        assert "manifest.json" in members
+
+        group_settings = json.loads(members["m3u_group_settings.json"])
+        manifest = json.loads(members["manifest.json"])
+        assert group_settings == {
+            "source_available": False,
+            "error": "M3U account source unavailable",
+        }
+        assert "per_account" not in group_settings
+        assert "collapsed" not in group_settings
+        account_warnings = [
+            record for record in caplog.records
+            if "could not fetch M3U accounts" in record.getMessage()
+        ]
+        assert len(account_warnings) == 1
+        assert account_warnings[0].args == ()
+        assert all(planted not in record.getMessage() for record in caplog.records)
+        assert all(planted not in repr(record.args) for record in caplog.records)
+        assert b"could not fetch M3U accounts" in members["logs.txt"]
+        assert scan_members(members, planted) == {}
+        assert client.m3u_accounts_calls == 1
+        assert client.collapsed_group_settings_calls == 0
+        assert manifest["m3u_group_setting_count"] == 0
+        assert manifest["credential_scrub"]["m3u_accounts_fetched"] is False
+
+    @pytest.mark.asyncio
+    async def test_bundle_contains_both_group_views_profiles_and_manifest_counts(
+        self, test_engine
+    ):
+        accounts = [
+            {
+                "id": 9,
+                "name": "Provider Nine",
+                "channel_groups": [{
+                    "channel_group": 500,
+                    "auto_channel_sync": False,
+                    "custom_properties": {"channel_profile_ids": [14]},
+                }],
+            },
+            {
+                "id": 3,
+                "name": "Provider Three",
+                "channel_groups": [{
+                    "channel_group": 500,
+                    "auto_channel_sync": True,
+                    "custom_properties": {"channel_profile_ids": [7]},
+                }],
+            },
+        ]
+        collapsed = {
+            500: {
+                **accounts[1]["channel_groups"][0],
+                "m3u_account_id": 3,
+                "m3u_account_name": "Provider Three",
+                "_ecm_channel_profile_conflict": True,
+            }
+        }
+        profiles = [
+            {"id": 7, "name": "Default", "channels": [1, 2]},
+            {"id": 14, "name": "Sports", "channels": [3]},
+        ]
+
+        payload, client = await build_bundle(
+            test_engine,
+            m3u_accounts=accounts,
+            collapsed_group_settings=collapsed,
+            channel_profiles=profiles,
+            return_client=True,
+        )
+        members = extract_members(payload)
+        group_settings = json.loads(members["m3u_group_settings.json"])
+        channel_profiles = json.loads(members["channel_profiles.json"])
+        manifest = json.loads(members["manifest.json"])
+
+        assert len(group_settings["per_account"]) == 2
+        assert {row["m3u_account_id"] for row in group_settings["per_account"]} == {3, 9}
+        assert group_settings["collapsed"]["500"]["_ecm_channel_profile_conflict"] is True
+        assert channel_profiles == {
+            "profiles": [{"id": 7, "name": "Default"}, {"id": 14, "name": "Sports"}]
+        }
+        assert manifest["m3u_group_setting_count"] == 2
+        assert manifest["channel_profile_count"] == 2
+        assert client.m3u_accounts_calls == 1
+        assert client.collapsed_group_settings_calls == 1
+        assert client.collapsed_accounts_arg is accounts
+        assert client.channel_profiles_calls == 1
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failed_fetch", ["collapsed", "profiles"])
+    async def test_each_new_fetch_fails_soft_and_leaves_a_usable_bundle(
+        self, test_engine, failed_fetch
+    ):
+        accounts = [{
+            "id": 1,
+            "name": "Provider",
+            "channel_groups": [{
+                "channel_group": 500,
+                "auto_channel_sync": True,
+                "custom_properties": {"channel_profile_ids": [7]},
+            }],
+        }]
+        kwargs = {
+            "collapsed_group_settings": {
+                500: {
+                    **accounts[0]["channel_groups"][0],
+                    "m3u_account_id": 1,
+                    "_ecm_channel_profile_conflict": False,
+                }
+            },
+            "channel_profiles": [{"id": 7, "name": "Default"}],
+        }
+        error_key = (
+            "collapsed_group_settings_error"
+            if failed_fetch == "collapsed"
+            else "channel_profiles_error"
+        )
+        kwargs[error_key] = RuntimeError(f"{failed_fetch} unavailable")
+
+        payload = await build_bundle(test_engine, m3u_accounts=accounts, **kwargs)
+        members = extract_members(payload)
+        assert "channels.json" in members
+        assert "manifest.json" in members
+
+        group_settings = json.loads(members["m3u_group_settings.json"])
+        profiles = json.loads(members["channel_profiles.json"])
+        manifest = json.loads(members["manifest.json"])
+        if failed_fetch == "collapsed":
+            assert len(group_settings["per_account"]) == 1
+            assert group_settings["collapsed"] == {}
+            assert "collapsed unavailable" in group_settings["error"]
+            assert profiles["profiles"] == [{"id": 7, "name": "Default"}]
+        else:
+            assert profiles["profiles"] == []
+            assert "profiles unavailable" in profiles["error"]
+            assert group_settings["collapsed"]["500"]["_ecm_channel_profile_conflict"] is False
+        assert manifest["m3u_group_setting_count"] == 1
+        assert manifest["channel_profile_count"] == (0 if failed_fetch == "profiles" else 1)
 
 
 class TestShapeFallbackForUnknownCredentials:
