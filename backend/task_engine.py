@@ -327,7 +327,17 @@ def _trip_run_on_refresh_circuit_breaker() -> None:
     write. Best-effort: a settings failure is logged but never aborts startup.
     """
     try:
-        from config import get_settings, save_settings
+        from config import (
+            get_settings,
+            save_settings,
+            settings_file_allows_startup_writes,
+        )
+        if not settings_file_allows_startup_writes():
+            logger.warning(
+                "[TASK-ENGINE] Run-on-refresh circuit breaker was not persisted "
+                "because settings.json is valid JSON but not an object"
+            )
+            return
         settings = get_settings()
         if getattr(settings, "auto_creation_run_on_refresh_disabled", False):
             return

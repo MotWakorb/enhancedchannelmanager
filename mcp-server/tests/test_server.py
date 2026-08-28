@@ -160,7 +160,8 @@ class TestHealthEndpoint:
         assert "setup_hint" in data
         hint = data["setup_hint"]
         assert "ecm-mcp-secrets" in hint
-        assert "MCP Integration" in hint
+        assert "matching PUID/PGID" in hint
+        assert "restart ECM" in hint
         assert "settings.json" not in hint.lower()
 
     def test_health_reports_unreadable_projection(self, client):

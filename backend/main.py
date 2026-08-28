@@ -25,6 +25,7 @@ from config import (
     MCPApiKeyStorageError,
     SettingsWriteTimeout,
     mcp_api_key_storage_error_detail,
+    settings_file_allows_startup_writes,
     superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
@@ -149,7 +150,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0163",
+    version="0.18.1-0164",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1164,6 +1165,10 @@ async def startup_event():
     # lock and is best effort — see config.sweep_orphaned_settings_temporaries.
     sweep_orphaned_settings_temporaries()
 
+    # Valid non-object JSON is not an ECM settings document. Preserve it for
+    # operator recovery by suppressing startup-only settings writers below.
+    _settings_file_allows_startup_writes = settings_file_allows_startup_writes()
+
     # Reconcile public MCP credential authority before readiness. This is the
     # first-install generation and legacy-migration point. A present-but-
     # untrusted artifact degrades to no public key without blocking startup;
@@ -1410,21 +1415,22 @@ async def startup_event():
     try:
         from normalization_migration import apply_league_strip_require_delimiter_once
         from config import save_settings
-        settings = get_settings()
-        if not settings.league_delimiter_heal_applied:
-            session = get_session()
-            try:
-                heal = apply_league_strip_require_delimiter_once(session, settings)
-            finally:
-                session.close()
-            if heal.get("applied"):
-                save_settings(settings)
-                if heal.get("updated", 0) > 0:
-                    logger.info(
-                        "[MAIN] One-time heal: enabled strong-delimiter requirement "
-                        "on %s league strip rule(s)",
-                        heal["updated"],
-                    )
+        if _settings_file_allows_startup_writes:
+            settings = get_settings()
+            if not settings.league_delimiter_heal_applied:
+                session = get_session()
+                try:
+                    heal = apply_league_strip_require_delimiter_once(session, settings)
+                finally:
+                    session.close()
+                if heal.get("applied"):
+                    save_settings(settings)
+                    if heal.get("updated", 0) > 0:
+                        logger.info(
+                            "[MAIN] One-time heal: enabled strong-delimiter requirement "
+                            "on %s league strip rule(s)",
+                            heal["updated"],
+                        )
     except Exception as e:
         logger.warning("[MAIN] Could not apply league strip require_delimiter heal: %s", e)
 

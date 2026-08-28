@@ -1123,6 +1123,17 @@ def prepare_settings_data(data: dict) -> dict:
     return _sanitize_settings_data(prepared)
 
 
+def settings_file_allows_startup_writes() -> bool:
+    """Return false only when valid JSON cannot represent ECM settings."""
+    if not CONFIG_FILE.exists():
+        return True
+    try:
+        persisted = json.loads(CONFIG_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return True
+    return isinstance(persisted, dict)
+
+
 def _authority_signature(metadata: os.stat_result) -> tuple[int, ...]:
     """Identity, content, and trust metadata for one validated descriptor."""
     return (

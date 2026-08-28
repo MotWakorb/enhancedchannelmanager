@@ -12,8 +12,10 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import ExitStack
+from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -150,6 +152,111 @@ def test_existing_key_is_projected_when_settings_load(tmp_path: Path) -> None:
     config.clear_settings_cache()
 
     assert key_file.read_text() == "<Synthetic-Existing-Key-04c0u8>\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "persisted_bytes",
+    [b"null", b"[]", b'\"scalar\"', b"42", b"true"],
+)
+async def test_complete_startup_preserves_non_object_settings(
+    tmp_path: Path, persisted_bytes: bytes, test_engine
+) -> None:
+    """Startup writers preserve valid non-object JSON while authority stays live."""
+    import main
+    import task_engine
+    from models import ChannelPipelineExecution
+    from sqlalchemy.orm import sessionmaker
+
+    config_dir = tmp_path / "config"
+    projection_dir = tmp_path / "mcp"
+    config_dir.mkdir()
+    projection_dir.mkdir()
+    config_file = config_dir / "settings.json"
+    key_file = projection_dir / "api-key"
+    config_file.write_bytes(persisted_bytes)
+    key_file.write_text(f"{_KEY}\n")
+    key_file.chmod(0o600)
+
+    session_factory = sessionmaker(bind=test_engine, expire_on_commit=False)
+    with session_factory() as session:
+        orphan = ChannelPipelineExecution(
+            mode="execute",
+            triggered_by="m3u_refresh",
+            started_at=datetime.utcnow(),
+            status="running",
+        )
+        session.add(orphan)
+        session.commit()
+        orphan_id = orphan.id
+
+    engine = task_engine.TaskEngine()
+
+    def apply_one_time_heal(_session, settings):
+        settings.league_delimiter_heal_applied = True
+        return {"applied": True, "updated": 0}
+
+    def close_background_coroutine(coroutine):
+        coroutine.close()
+        return MagicMock()
+
+    config.clear_settings_cache()
+    try:
+        with ExitStack() as stack:
+            for target, value in (
+                ("config.CONFIG_DIR", config_dir),
+                ("config.CONFIG_FILE", config_file),
+                ("config.MCP_SECRETS_DIR", projection_dir),
+                ("config.MCP_KEY_FILE", key_file),
+                ("main.CONFIG_DIR", config_dir),
+                ("main.CONFIG_FILE", config_file),
+            ):
+                stack.enter_context(patch(target, value))
+            stack.enter_context(
+                patch("tls.https_server.is_https_subprocess", return_value=False)
+            )
+            stack.enter_context(patch("main.sweep_orphaned_settings_temporaries"))
+            stack.enter_context(
+                patch("main.load_mcp_service_credentials", return_value=MagicMock())
+            )
+            stack.enter_context(
+                patch("main.superseded_mcp_service_projection", return_value=None)
+            )
+            stack.enter_context(patch("main.exit_diagnostics.install_loop_handler"))
+            stack.enter_context(patch("main.init_db"))
+            stack.enter_context(patch("main.get_session", return_value=MagicMock()))
+            stack.enter_context(
+                patch(
+                    "normalization_migration.apply_league_strip_require_delimiter_once",
+                    side_effect=apply_one_time_heal,
+                )
+            )
+            stack.enter_context(patch("main.get_prober", return_value=None))
+            stack.enter_context(patch("task_engine.get_engine", return_value=engine))
+            stack.enter_context(
+                patch("task_engine.get_session", side_effect=session_factory)
+            )
+            stack.enter_context(patch("task_engine.get_registry", return_value=MagicMock()))
+            stack.enter_context(patch("tasks.dbas_sync.register_sync_target_tasks"))
+            stack.enter_context(
+                patch("main.asyncio.create_task", side_effect=close_background_coroutine)
+            )
+            stack.enter_context(patch("services.version_check.start_version_check_loop"))
+            stack.enter_context(
+                patch("tls.settings.get_tls_settings", return_value=MagicMock(enabled=False))
+            )
+            stack.enter_context(
+                patch("tls.https_server.start_https_if_configured", new_callable=AsyncMock)
+            )
+
+            await main.startup_event()
+    finally:
+        config.clear_settings_cache()
+
+    assert config_file.read_bytes() == persisted_bytes
+    assert key_file.read_text() == f"{_KEY}\n"
+    with session_factory() as session:
+        assert session.get(ChannelPipelineExecution, orphan_id).status == "abandoned"
 
 
 def test_save_fails_when_the_projection_directory_is_absent(

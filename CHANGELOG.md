@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Supported MCP Compose deployments now reconcile the owner-only API-key authority before readiness instead of leaving the sidecar permanently not ready (bead `enhancedchannelmanager-71von`, build 0164).** Fresh installs and upgrades use the canonical credential lifecycle to provision or republish `api-key` without requiring an operator API call, while explicit revocation remains revoked and `/health` remains fail-closed. The container gate now proves both fresh startup and recreation from persisted settings. Startup also leaves syntactically valid non-object `settings.json` content byte-for-byte intact: authority validation and orphan reconciliation still run, but startup-only settings writers are suppressed so recovery evidence is not replaced by defaults.
+
 ### Added
 
 - **The repository now carries a software bill of materials — a committed inventory of what is inside ECM, so an advisory can be answered by reading a file instead of rebuilding and rescanning every image (bead `enhancedchannelmanager-3t0ht`, build 0147).** Each release gets `sbom/vX.Y.Z/`: two SPDX 2.3 documents, one for the ECM image and one for the MCP image, plus an index. Release directories accumulate and are kept forever, because the question an advisory actually raises is *which shipped versions contain the affected package*, and only the history can answer it. A separate `sbom/dev/` holds a single transient snapshot of what `dev` currently carries; it is superseded rather than accumulated and is not an artifact of record. The two are kept apart by path rather than by convention — the shape of the version string decides the directory, so a build-numbered version cannot land in the permanent release namespace.

@@ -195,29 +195,10 @@ if [ "$ready" != true ]; then
 fi
 echo "-- ECM reached /api/health/ready on brand-new volumes"
 
-# ── ECM, not this script, publishes the credentials ───────────────────────
-# A first-run instance has no operator identity yet, so this is the same
-# anonymous call the setup flow makes. ECM's real save_settings() +
-# rotate_mcp_service_credentials() write the projection at PUID.
-generate_key() {
-  curl -fsS -X POST "http://127.0.0.1:${ECM_PORT}/api/settings/mcp-api-key" \
-    -H 'Content-Type: application/json' \
-    | python3 -c 'import json,sys; print(json.load(sys.stdin)["mcp_api_key"])'
-}
-
-old_key="$(generate_key)"
-[ -n "$old_key" ] || fail "ECM did not return a generated MCP key"
-echo "-- ECM generated and projected an MCP key"
-
-# ── The projection is what ECM wrote, under the terms it claims ───────────
-observed_owner="$(docker exec "$ecm_container" stat -c '%u:%g' "${projection_dir}/api-key")"
-assert_equal "$observed_owner" "${PUID}:${PGID}" \
-  "the projected public key is not owned by the configured PUID/PGID"
-observed_owner="$(docker exec "$ecm_container" stat -c '%u:%g' "${projection_dir}/mcp-service.json")"
-assert_equal "$observed_owner" "${PUID}:${PGID}" \
-  "the projected private credentials are not owned by the configured PUID/PGID"
-
-# ── Sidecar readiness through the projection ECM wrote ────────────────────
+# ── Fresh-install readiness through the projection ECM wrote ──────────────
+# No API call or operator action may be needed between Compose startup and
+# sidecar readiness. The old gate generated a key first, masking the supported
+# fresh-deployment failure this assertion exists to catch (…-71von).
 [ -n "$sidecar_container" ] || fail "the ecm-mcp container was not created"
 sidecar_ready=false
 for _ in $(seq 1 90); do
@@ -241,6 +222,27 @@ if [ "$sidecar_ready" != true ]; then
   fail "the MCP sidecar never reported api_key_status=ok (last: ${status:-unknown})"
 fi
 echo "-- the sidecar read the projection ECM wrote (api_key_status=ok)"
+
+# ── The startup projection has the identity and modes it claims ───────────
+observed_owner="$(docker exec "$ecm_container" stat -c '%u:%g' "${projection_dir}/api-key")"
+assert_equal "$observed_owner" "${PUID}:${PGID}" \
+  "the projected public key is not owned by the configured PUID/PGID"
+observed_owner="$(docker exec "$ecm_container" stat -c '%u:%g' "${projection_dir}/mcp-service.json")"
+assert_equal "$observed_owner" "${PUID}:${PGID}" \
+  "the projected private credentials are not owned by the configured PUID/PGID"
+
+# A first-run instance has no operator identity yet, so this is the same
+# anonymous call the setup flow makes. Keep exercising live rotation after the
+# startup lifecycle has independently reached ready.
+generate_key() {
+  curl -fsS -X POST "http://127.0.0.1:${ECM_PORT}/api/settings/mcp-api-key" \
+    -H 'Content-Type: application/json' \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["mcp_api_key"])'
+}
+
+old_key="$(generate_key)"
+[ -n "$old_key" ] || fail "ECM did not return a generated MCP key"
+echo "-- ECM rotated the startup-provisioned MCP key"
 
 # ── Identity ──────────────────────────────────────────────────────────────
 observed_uid="$(docker exec "$sidecar_container" id -u)"
@@ -295,7 +297,11 @@ echo "-- sidecar confinement, projection modes and blast radius verified"
 
 # Owner-only means owner-only: another uid in the same container cannot read
 # the projected credentials even though the mount is visible to it.
-if docker exec --user 1234:1234 "$sidecar_container" \
+other_uid=1234
+if [ "$other_uid" = "$PUID" ]; then
+  other_uid=1235
+fi
+if docker exec --user "${other_uid}:${other_uid}" "$sidecar_container" \
   cat "$projection_dir/api-key" >/dev/null 2>&1; then
   fail "the projected MCP key was readable by a non-owner uid"
 fi
@@ -322,6 +328,39 @@ if verify_authenticated_tools "$old_key" >/dev/null 2>&1; then
   fail "the superseded MCP key remained valid after rotation"
 fi
 verify_authenticated_tools "$new_key"
+
+# ── Upgrade/recreate republishes the persisted key ─────────────────────────
+# Simulate adopting the dedicated volume on an existing install: settings.json
+# retains the operator's key while the projection volume starts empty. Recreate
+# only ECM, as an image upgrade would, and require startup to rebuild both files
+# without rotating or disclosing the public key.
+docker exec --user 0:0 "$ecm_container" \
+  rm -f "${projection_dir}/api-key" "${projection_dir}/mcp-service.json"
+compose up -d --no-build --force-recreate ecm
+ecm_container="$(compose ps -q ecm)"
+[ -n "$ecm_container" ] || fail "the recreated ECM container was not created"
+
+upgrade_ready=false
+for _ in $(seq 1 120); do
+  if curl -fsS "http://127.0.0.1:${ECM_PORT}/api/health" >/dev/null 2>&1; then
+    status="$(docker exec "$sidecar_container" python -c "
+import json, urllib.request
+with urllib.request.urlopen('http://localhost:${MCP_PORT}/health') as response:
+    print(json.load(response)['api_key_status'])
+" 2>/dev/null || true)"
+    if [ "$status" = "ok" ]; then
+      upgrade_ready=true
+      break
+    fi
+  fi
+  sleep 1
+done
+if [ "$upgrade_ready" != true ]; then
+  docker logs "$ecm_container" >&2 || true
+  fail "the recreated deployment did not republish its MCP key (last: ${status:-unknown})"
+fi
+verify_authenticated_tools "$new_key"
+echo "-- recreate republished the persisted MCP key without operator action"
 
 # ── Degraded projection: ECM stays up AND stays usable ────────────────────
 # Everything above exercises only the HEALTHY projection, which is how a route
