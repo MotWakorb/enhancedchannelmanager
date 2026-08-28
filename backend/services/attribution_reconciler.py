@@ -506,10 +506,7 @@ def _parse_networks(cidrs: list[str]) -> list[ipaddress._BaseNetwork]:
         try:
             networks.append(ipaddress.ip_network(token, strict=False))
         except ValueError:
-            logger.debug(
-                "[ATTR-RECONCILE] Skipping unparsable trusted-network entry %r",
-                token,
-            )
+            logger.debug("[ATTR-RECONCILE] Skipping unparsable trusted-network entry")
     return networks
 
 
