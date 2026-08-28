@@ -516,9 +516,15 @@ export function M3UManagerTab({
     }
 
     try {
-      await api.deleteM3UAccount(account.id);
+      const result = await api.deleteM3UAccount(account.id);
       await loadData();
       onAccountsChange?.();  // Notify parent to reload providers
+      if (result.linked_settings_cleanup === 'failed') {
+        notifications.warning(
+          result.message ?? 'The account was deleted, but linked-settings cleanup failed. This DELETE must not be retried.',
+          'M3U account deleted with cleanup warning',
+        );
+      }
     } catch (err) {
       logger.error('M3UManagerTab: failed to delete M3U account', err);
       notifications.error('Failed to delete M3U account', 'M3U Manager');

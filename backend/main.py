@@ -22,8 +22,9 @@ from config import (
     CONFIG_FILE,
     MCP_SERVICE_FILE,
     MCP_SERVICE_FILENAME,
+    MCPApiKeyStorageError,
     SettingsWriteTimeout,
-    initialize_mcp_api_key_projection,
+    mcp_api_key_storage_error_detail,
     settings_file_allows_startup_writes,
     superseded_mcp_service_projection,
     get_log_level_from_env,
@@ -149,7 +150,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.1-0154",
+    version="0.18.1-0164",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1115,6 +1116,23 @@ async def settings_write_timeout_handler(request: Request, exc: SettingsWriteTim
     )
 
 
+@app.exception_handler(MCPApiKeyStorageError)
+async def mcp_api_key_storage_error_handler(
+    request: Request, exc: MCPApiKeyStorageError
+):
+    """Fail closed with the stable sanitized contract for public settings writers."""
+    logger.error(
+        "[MAIN] MCP API key settings save refused on %s because authority "
+        "storage is unavailable or untrusted (%s)",
+        request.url.path,
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": mcp_api_key_storage_error_detail("settings save")},
+    )
+
+
 @app.exception_handler(HTTPException)
 async def sanitized_http_exception_handler(request: Request, exc: HTTPException):
     """Scrub internal details from 500 responses to prevent information leakage."""
@@ -1147,19 +1165,15 @@ async def startup_event():
     # lock and is best effort — see config.sweep_orphaned_settings_temporaries.
     sweep_orphaned_settings_temporaries()
 
-    # A syntactically valid non-object is not an ECM settings document. Keep it
-    # byte-for-byte for operator recovery and prevent every startup-only writer
-    # below from persisting loader defaults over it. Invalid JSON retains the
-    # established startup behavior; valid objects still receive all migrations.
+    # Valid non-object JSON is not an ECM settings document. Preserve it for
+    # operator recovery by suppressing startup-only settings writers below.
     _settings_file_allows_startup_writes = settings_file_allows_startup_writes()
 
-    # A dedicated projection means the optional sidecar is configured. Make
-    # its public key lifecycle complete before ECM becomes healthy: first boot
-    # and pre-MCP upgrades provision one, existing installs republish theirs,
-    # and an explicit revocation stays revoked (…-71von). Only the main process
-    # writes; the optional HTTPS subprocess shares the resulting files.
-    if not _is_https_subprocess and _settings_file_allows_startup_writes:
-        initialize_mcp_api_key_projection()
+    # Reconcile public MCP credential authority before readiness. This is the
+    # first-install generation and legacy-migration point. A present-but-
+    # untrusted artifact degrades to no public key without blocking startup;
+    # explicit credential transitions remain fail-closed until it is repaired.
+    get_settings()
 
     # Materialize the private sidecar projection before the backend becomes
     # healthy. The MCP container waits on that health check, so its very first
@@ -1399,9 +1413,9 @@ async def startup_event():
     # Alembic data migration) is required: ECM's smart-bootstrap stamps forward
     # past data-only migrations when the schema already matches (bd-5w6jz).
     try:
+        from normalization_migration import apply_league_strip_require_delimiter_once
+        from config import save_settings
         if _settings_file_allows_startup_writes:
-            from normalization_migration import apply_league_strip_require_delimiter_once
-            from config import save_settings
             settings = get_settings()
             if not settings.league_delimiter_heal_applied:
                 session = get_session()

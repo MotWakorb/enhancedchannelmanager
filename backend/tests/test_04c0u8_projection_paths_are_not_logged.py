@@ -20,13 +20,13 @@ environment read. What the operator can act on — the constant filename and the
 name of the variable they configured — is logged instead.
 
 **What this does NOT claim.** ``logger.exception`` emits a traceback, and an
-``OSError``'s own text ends with the filename it failed on. The traceback is a
-structured diagnostic rather than a composed message, CodeQL does not model
-exception-attribute propagation, and it is emitted at most once per unhealthy
-episode by design (see ``TestDegradedModeDoesNotLogPerRequest``), so it is out
-of scope here: the behavioural assertions below read ``record.getMessage()``,
-which excludes ``exc_info``. Interpolated exception *objects* are in scope, and
-the production code renders them without their filename for that reason.
+``OSError``'s own text ends with the filename it failed on. The latched
+projection-health traceback is a structured diagnostic rather than a composed
+message, CodeQL does not model exception-attribute propagation, and it is
+emitted at most once per unhealthy episode by design (see
+``TestDegradedModeDoesNotLogPerRequest``), so it is out of scope here. Explicit
+settings-save failures are not latched, so the behavioural assertion below
+requires that sink to omit both the exception object and traceback.
 """
 
 import ast
@@ -215,3 +215,28 @@ class TestDegradedProjectionLogsNameTheVariableNotThePath:
         assert str(projection_dir) not in raised.value.detail
         assert "MCP_SECRETS_DIR" in raised.value.detail
         assert "not rotated" in raised.value.detail
+
+
+def test_settings_save_failure_logs_only_the_exception_type(
+    tmp_path, caplog, monkeypatch
+):
+    """An MCP filesystem exception must not disclose its derived path."""
+    secret_path = tmp_path / "sentinel-secrets-04c0u8-save" / "api-key"
+
+    def fail_sweep():
+        raise OSError(f"failed to inspect {secret_path}")
+
+    monkeypatch.setattr(config, "_sweep_orphaned_mcp_temporaries_locked", fail_sweep)
+
+    with caplog.at_level(logging.ERROR, logger="config"):
+        with pytest.raises(config.MCPApiKeyStorageError):
+            config.save_settings(
+                config.DispatcharrSettings(),
+                settings_file=tmp_path / "settings.json",
+            )
+
+    records = [record for record in caplog.records if record.name == "config"]
+    assert records
+    assert all(str(secret_path) not in record.getMessage() for record in records)
+    assert all(record.exc_info is None for record in records)
+    assert any("MCPApiKeyStorageError" in record.getMessage() for record in records)

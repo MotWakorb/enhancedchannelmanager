@@ -56,17 +56,21 @@ def isolated_settings(monkeypatch, tmp_path):
     settings_file = tmp_path / "settings.json"
     monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
     monkeypatch.setattr(config, "CONFIG_FILE", settings_file)
+    monkeypatch.setattr(config, "MCP_KEY_FILE", tmp_path / "api-key")
     monkeypatch.setattr(config, "_cached_settings", None)
+    monkeypatch.setattr(config, "_cached_mcp_authority_signature", None)
+    (tmp_path / "api-key").write_text("\n")
+    (tmp_path / "api-key").chmod(0o600)
     return settings_file
 
 
 def _settings(key: str) -> config.DispatcharrSettings:
-    return config.DispatcharrSettings(mcp_api_key=key)
+    return config.DispatcharrSettings(user_timezone=key)
 
 
 def _stored_key(settings_file: Path) -> str:
     """The MCP key as it is written on disk."""
-    return json.loads(settings_file.read_text())["mcp_api_key"]
+    return json.loads(settings_file.read_text())["user_timezone"]
 
 
 def _cached_value() -> str:
@@ -75,7 +79,7 @@ def _cached_value() -> str:
     Named to keep the assertion lines free of a ``<keyword> == "literal"``
     shape, which the generic secret ratchet reads as a hardcoded credential.
     """
-    return config._cached_settings.mcp_api_key
+    return config._cached_settings.user_timezone
 
 
 class TestAlreadyGuaranteed:
@@ -136,7 +140,7 @@ class TestAlreadyGuaranteed:
         assert errors == []
         assert all(not thread.is_alive() for thread in threads)
         document = json.loads(isolated_settings.read_text())
-        assert document["mcp_api_key"] in {f"writer-{index}" for index in range(8)}
+        assert document["user_timezone"] in {f"writer-{index}" for index in range(8)}
         assert document["url"] == ""
         assert list(isolated_settings.parent.glob(".settings.json.*.tmp")) == []
 
@@ -153,7 +157,7 @@ class TestAlreadyGuaranteed:
         writer_source = """
 import sys
 from config import DispatcharrSettings, save_settings
-save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
+save_settings(DispatcharrSettings(user_timezone=sys.argv[1]))
 """
         environment = os.environ.copy()
         environment["CONFIG_DIR"] = str(tmp_path)
@@ -177,7 +181,7 @@ save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
         assert [code for code, _ in outcomes] == [0] * 6, outcomes
         settings_file = tmp_path / "settings.json"
         document = json.loads(settings_file.read_text())
-        assert document["mcp_api_key"] in {f"process-{index}" for index in range(6)}
+        assert document["user_timezone"] in {f"process-{index}" for index in range(6)}
         assert document["url"] == ""
         assert stat.S_IMODE(settings_file.stat().st_mode) == 0o600
         assert list(tmp_path.glob(".settings.json.*.tmp")) == []
@@ -190,8 +194,8 @@ save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
         Re-pointed at ``mcp_config.MCP_KEY_FILE`` on the ...-04c0u.8 merge, as
         the pre-merge version of this docstring instructed. The sidecar no
         longer parses settings.json at all; it reads the ``api-key``
-        projection that ``save_settings`` writes through
-        ``_project_mcp_api_key``. The property under test is unchanged — a
+        authority artifact that the dedicated lifecycle transition writes. The
+        property under test is unchanged — a
         rotation is visible to the sidecar on its next read, with no restart —
         only the file it reads. Both ends are pinned into this test's private
         directory so the assertion cannot be satisfied by whatever the shared
@@ -208,10 +212,12 @@ save_settings(DispatcharrSettings(mcp_api_key=sys.argv[1]))
         monkeypatch.setattr(config, "MCP_KEY_FILE", projected_key)
         monkeypatch.setattr(mcp_config, "MCP_KEY_FILE", projected_key)
 
-        config.save_settings(_settings("before-rotation"))
+        monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "before-rotation")
+        config.rotate_mcp_api_key()
         assert mcp_config.get_mcp_api_key_status() == ("before-rotation", "ok")
 
-        config.save_settings(_settings("after-rotation"))
+        monkeypatch.setattr(config.secrets, "token_urlsafe", lambda _size: "after-rotation")
+        config.rotate_mcp_api_key()
         assert mcp_config.get_mcp_api_key_status() == ("after-rotation", "ok")
 
 
@@ -277,17 +283,7 @@ class TestSerializedDurableWrite:
         monkeypatch.setattr(config.os, "replace", record_replace)
         config.save_settings(_settings("durable-key"))
 
-        # ``save_settings`` performs a SECOND ``os.replace`` since bead
-        # ...-04c0u.8 landed: ``_project_mcp_api_key`` publishes the sidecar's
-        # ``api-key`` projection, after the cache assignment and so after the
-        # settings file's durability sequence. That projection is not what
-        # this test is about, and it is the only event dropped here — the
-        # remainder is still asserted as an exact ordered list, so moving the
-        # directory fsync before the settings replace still fails.
-        settings_durability = [
-            event for event in events if event != ("replace", str(config.MCP_KEY_FILE))
-        ]
-        assert settings_durability == [
+        assert events == [
             ("replace", str(isolated_settings)),
             ("fsync-directory", isolated_settings.parent.stat().st_ino),
         ]
@@ -361,105 +357,6 @@ class TestSerializedDurableWrite:
         assert not first.is_alive() and not second.is_alive()
 
         assert _cached_value() == _stored_key(isolated_settings)
-
-    def test_stale_load_cannot_restore_a_superseded_projection(
-        self, monkeypatch, isolated_settings
-    ):
-        """A load begun before rotation must linearize before or after the save."""
-        projected_key = isolated_settings.parent / "api-key"
-        monkeypatch.setattr(config, "MCP_KEY_FILE", projected_key)
-        config.save_settings(_settings("before-rotation"))
-        config.clear_settings_cache()
-
-        stale_read = threading.Event()
-        release_reader = threading.Event()
-        writer_waiting = threading.Event()
-        writer_finished = threading.Event()
-        progress = threading.Event()
-        real_loads = json.loads
-
-        class ObservableRLock:
-            def __init__(self):
-                self._lock = threading.RLock()
-
-            def __enter__(self):
-                if not self._lock.acquire(blocking=False):
-                    writer_waiting.set()
-                    progress.set()
-                    self._lock.acquire()
-                return self
-
-            def __exit__(self, *_args):
-                self._lock.release()
-
-        def pause_stale_reader(document, *args, **kwargs):
-            parsed = real_loads(document, *args, **kwargs)
-            if threading.current_thread().name == "stale-reader":
-                stale_read.set()
-                assert release_reader.wait(timeout=10)
-            return parsed
-
-        monkeypatch.setattr(config, "_settings_write_lock", ObservableRLock())
-        monkeypatch.setattr(config.json, "loads", pause_stale_reader)
-
-        loaded = []
-
-        def reader():
-            loaded.append(config.load_settings().mcp_api_key)
-
-        def writer():
-            config.save_settings(_settings("after-rotation"))
-            writer_finished.set()
-            progress.set()
-
-        reader_thread = threading.Thread(target=reader, name="stale-reader")
-        writer_thread = threading.Thread(target=writer, name="rotating-writer")
-        reader_thread.start()
-        assert stale_read.wait(timeout=10)
-        writer_thread.start()
-
-        # With serialized loads the writer is waiting on the reader. Without
-        # it the writer has completed, reproducing the reviewed stale publish.
-        assert progress.wait(timeout=10)
-        assert writer_waiting.is_set() or writer_finished.is_set()
-        release_reader.set()
-        reader_thread.join(timeout=30)
-        writer_thread.join(timeout=30)
-
-        assert not reader_thread.is_alive() and not writer_thread.is_alive()
-        assert loaded == ["before-rotation"]
-        assert _stored_key(isolated_settings) == "after-rotation"
-        assert _cached_value() == "after-rotation"
-        assert projected_key.read_text() == "after-rotation\n"
-
-    def test_peer_process_rotation_invalidates_the_local_cache(
-        self, monkeypatch, isolated_settings
-    ):
-        """A second ECM process rotating the key invalidates this process's cache."""
-        projected_key = isolated_settings.parent / "api-key"
-        monkeypatch.setattr(config, "MCP_KEY_FILE", projected_key)
-        config.save_settings(_settings("before-peer-rotation"))
-
-        writer_source = """
-from config import DispatcharrSettings, save_settings
-save_settings(DispatcharrSettings(mcp_api_key='after-peer-rotation'))
-"""
-        environment = os.environ.copy()
-        environment["CONFIG_DIR"] = str(isolated_settings.parent)
-        environment["MCP_SECRETS_DIR"] = str(isolated_settings.parent)
-        environment["PYTHONPATH"] = str(BACKEND_ROOT)
-        completed = subprocess.run(
-            [sys.executable, "-c", writer_source],
-            cwd=str(isolated_settings.parent),
-            env=environment,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        assert completed.returncode == 0, completed.stderr
-
-        assert config.get_settings().mcp_api_key == "after-peer-rotation"
-        assert projected_key.read_text() == "after-peer-rotation\n"
 
     def test_a_peer_process_holding_the_lock_defers_the_write(self, isolated_settings):
         """Cross-process exclusion, proven against a real second process.

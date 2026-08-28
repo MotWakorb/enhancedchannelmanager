@@ -7,6 +7,7 @@
 import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
+import { HttpError } from '../../services/httpClient';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { MCP_TOOL_CATEGORIES } from './mcpToolCategories';
@@ -36,6 +37,30 @@ const ALWAYS_PRESENT: readonly SettingsSectionMeta[] = [SECTIONS.serverStatus, S
 
 interface Props {
   isAdmin: boolean;
+}
+
+interface MCPApiKeyDurabilityDetail {
+  code: 'mcp_api_key_durability_indeterminate';
+  message: string;
+  operation: 'rotation' | 'revocation';
+  mcp_api_key?: string;
+}
+
+function getDurabilityDetail(error: unknown): MCPApiKeyDurabilityDetail | null {
+  if (!(error instanceof HttpError) || error.status !== 503) return null;
+  const detail = error.detail;
+  if (
+    detail === null ||
+    typeof detail !== 'object' ||
+    (detail as Record<string, unknown>).code !== 'mcp_api_key_durability_indeterminate' ||
+    typeof (detail as Record<string, unknown>).message !== 'string' ||
+    !['rotation', 'revocation'].includes(
+      (detail as Record<string, unknown>).operation as string,
+    )
+  ) {
+    return null;
+  }
+  return detail as MCPApiKeyDurabilityDetail;
 }
 
 export function MCPSettingsSection({ isAdmin }: Props) {
@@ -95,6 +120,14 @@ export function MCPSettingsSection({ isAdmin }: Props) {
       setShowKey(true);
       notifications.success('MCP API key generated');
     } catch (err) {
+      const detail = getDurabilityDetail(err);
+      if (detail?.operation === 'rotation' && typeof detail.mcp_api_key === 'string') {
+        setApiKey(detail.mcp_api_key);
+        setKeyConfigured(true);
+        setShowKey(true);
+        notifications.warning(detail.message, 'MCP Key Durability');
+        return;
+      }
       logger.error('Failed to generate MCP API key:', err);
       notifications.error('Failed to generate API key');
     } finally {
@@ -111,6 +144,15 @@ export function MCPSettingsSection({ isAdmin }: Props) {
       setShowKey(false);
       notifications.success('MCP API key revoked');
     } catch (err) {
+      const detail = getDurabilityDetail(err);
+      if (detail?.operation === 'revocation') {
+        setApiKey('');
+        setKeyConfigured(false);
+        setShowKey(false);
+        notifications.warning(detail.message, 'MCP Key Durability');
+        await checkMcpStatus();
+        return;
+      }
       logger.error('Failed to revoke MCP API key:', err);
       notifications.error('Failed to revoke API key');
     } finally {

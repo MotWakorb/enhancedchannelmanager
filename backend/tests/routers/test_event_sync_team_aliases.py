@@ -11,7 +11,9 @@ settings store (JSON setting — no DB table, no migration).
 import pytest
 from unittest.mock import patch
 
-from config import DispatcharrSettings
+from httpx import ASGITransport, AsyncClient
+
+from config import DispatcharrSettings, MCPApiKeyStorageError
 
 
 def _current(groups=None):
@@ -94,6 +96,47 @@ class TestPutTeamAliases:
             )
         assert response.status_code == 200
         assert response.json() == {"groups": []}
+
+    @pytest.mark.asyncio
+    async def test_storage_failure_uses_sanitized_app_level_503(self):
+        from main import app
+
+        secret = "mcp-secret-that-must-not-escape"
+        resolved_path = "/resolved/private/ecm-mcp/api-key"
+        failure = MCPApiKeyStorageError(
+            f"authority {resolved_path} contains {secret}"
+        )
+        transport = ASGITransport(app=app, raise_app_exceptions=False)
+
+        with patch(
+            "routers.event_sync_aliases.get_settings", return_value=_current()
+        ), patch(
+            "routers.event_sync_aliases.save_settings", side_effect=failure
+        ), patch("routers.event_sync_aliases.journal.log_entry"):
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                response = await client.put(
+                    "/api/event-sync/team-aliases", json=_VALID_BODY
+                )
+
+        assert response.status_code == 503
+        assert response.json() == {
+            "detail": {
+                "code": "mcp_api_key_storage_unavailable",
+                "message": (
+                    "MCP credential storage is unavailable or untrusted. Repair "
+                    "api-key and .api-key.recovery under MCP_SECRETS_DIR as "
+                    "owner-only regular files (mode 0600, correct PUID/PGID, no "
+                    "links), then retry. Preserve malformed recovery content; do "
+                    "not guess, rewrite, or delete it."
+                ),
+                "operation": "settings save",
+                "retry_after_storage_repair": True,
+            }
+        }
+        assert secret not in response.text
+        assert resolved_path not in response.text
 
 
 class TestPutValidation:

@@ -305,43 +305,64 @@ Things you can ask Claude to do:
 
 ### Setup
 
-> **`settings.json` field reference**
+> **Dispatcharr fields in `settings.json` (GH #273)**
 >
 > | Field in `settings.json` | What it is for |
 > |---|---|
 > | `url` | Dispatcharr base URL |
 > | `dispatcharr_api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. (Canonical field name as of v0.17.1, GH #273. Operators upgrading from v0.17.0 or earlier will have the value in the legacy `api_key` field; ECM auto-migrates on next startup with a one-time `[CONFIG] Reading deprecated 'api_key' field …` WARN log.) Never replace it with an MCP key. |
-> | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
-> | `mcp_api_key` | **ECM MCP static key:** clients present it in the `Authorization: Bearer` header. This is what the Generate / Regenerate button in Settings > MCP Integration writes. Query-string credentials are rejected. |
+> | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and mirrors the value into `dispatcharr_api_key` on the next save. |
 >
-> When rotating an MCP key, use ECM Settings > MCP Integration. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias): overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). ECM projects only the MCP key into the sidecar's dedicated credential volume. If `/health` reports `api_key_configured: false`, its status distinguishes an absent (`file_not_found`), blank (`field_empty`), or malformed/unreadable (`invalid_key`) projection. Read it with `GET http://localhost:6101/health` on the Docker host.
+> **MCP key authority (separate from Dispatcharr settings)**
+>
+> Generate, regenerate, or revoke the MCP client key only through **Settings >
+> MCP Integration**. Copy the generated or regenerated key from the UI into
+> each client. The owner-only `/run/secrets/ecm-mcp/api-key` projection is the
+> sole live authority for inbound MCP authentication. The
+> `settings.json:mcp_api_key` field is only a compatibility mirror; generic
+> settings saves and manual changes cannot promote it over the authority and
+> instead repair it from the validated projection. An explicitly empty
+> authority is durable revocation.
+>
+> The separate `mcp-service.json` projection contains the sidecar's private
+> backend and confirmation credentials. Operators never copy those credentials
+> into a client. `.api-key.recovery` is an internal redo record for interrupted
+> rotation or revocation; do not edit or delete it as cleanup.
+>
+> Do **not** put the MCP key in `dispatcharr_api_key` (or its legacy `api_key`
+> alias): doing so breaks every channel and stream operation because
+> Dispatcharr rejects the wrong credential. If `/health` reports
+> `api_key_configured: false`, its status distinguishes an absent
+> (`file_not_found`), blank (`field_empty`), or malformed/unreadable
+> (`invalid_key`) projection. Read it with
+> `GET http://localhost:6101/health` on the Docker host.
 >
 > **Migration example.** A v0.17.0 `settings.json` from an operator hit by GH #273:
 > ```json
 > {
 >   "url": "http://dispatcharr:9191",
->   "api_key": "real-dispatcharr-rest-token-abc",
->   "mcp_api_key": "ecm-mcp-key-xyz"
+>   "api_key": "REDACTED_DISPATCHARR_REST_TOKEN"
 > }
 > ```
 > After the first v0.17.1 startup and the next settings save, the file becomes:
 > ```json
 > {
 >   "url": "http://dispatcharr:9191",
->   "dispatcharr_api_key": "real-dispatcharr-rest-token-abc",
->   "api_key": "real-dispatcharr-rest-token-abc",
->   "mcp_api_key": "ecm-mcp-key-xyz"
+>   "dispatcharr_api_key": "REDACTED_DISPATCHARR_REST_TOKEN",
+>   "api_key": "REDACTED_DISPATCHARR_REST_TOKEN"
 > }
 > ```
-> Both fields hold the same Dispatcharr token (the duplicate is intentional — external scripts that still read `api_key` keep working). Once you've removed any such scripts, you can manually delete the legacy `api_key` line; ECM will keep using `dispatcharr_api_key` from then on.
+> Both fields hold the same Dispatcharr token. The duplicate is intentional so
+> external scripts that still read `api_key` keep working. ECM handles the
+> migration and compatibility writes; neither field is an MCP credential.
 
-1. **Generate an API key** in ECM Settings > MCP Integration (this writes to `mcp_api_key` in `settings.json`)
+1. **Generate an API key** in ECM Settings > MCP Integration and copy the displayed key for your MCP client. ECM publishes the authoritative projection and compatibility mirror automatically.
 2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
 3. **Connect Claude** — choose your method:
 
 ### Choose your connection method
 
-ECM's MCP server is authenticated with a static API key (`mcp_api_key`) in an `Authorization: Bearer` header. The default deployment is available only on the Docker host's loopback interface. Use the HTTPS remote profile above for access from another machine.
+ECM's MCP server is authenticated with the public MCP client key in an `Authorization: Bearer` header. The default deployment is available only on the Docker host's loopback interface. Use the HTTPS remote profile above for access from another machine.
 
 | Method | Node.js? | Best for |
 |---|---|---|
@@ -378,7 +399,9 @@ Set `ECM_MCP_AUTH` in the operating-system environment to `Bearer <your key>`
 before starting Claude Desktop. `--allow-http` is appropriate only for this
 loopback URL; use `https://` and omit it for remote access.
 
-> **Note:** the Bearer value is your `mcp_api_key` from `settings.json`, not your Dispatcharr `api_key`.
+> **Note:** the Bearer value is the MCP key copied from Settings > MCP
+> Integration, not the Dispatcharr REST token in `dispatcharr_api_key` or its
+> legacy `api_key` alias.
 
 ---
 
@@ -412,9 +435,9 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 
 ---
 
-**Upgrading from an earlier version:** remove `?api_key=...` from every MCP URL and configure the Bearer header shown above. The deprecated SSE endpoints remain removed. Rotate the old key after removing URL-based configs because URLs may have been retained in logs or histories.
+**Upgrading from an earlier version:** remove `?api_key=...` from every MCP URL and configure the Bearer header shown above. The deprecated SSE endpoints remain removed. Rotate the old key through Settings > MCP Integration after removing URL-based configs because URLs may have been retained in logs or histories.
 
-**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key, then update the local environment variable used for the Bearer header. Rotation is effective on the next request without restarting the sidecar. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias).
+**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key, copy the returned key, then update the local environment variable used for the Bearer header. Rotation is effective on the next request without restarting the sidecar. Revoke access with Settings > MCP Integration > Revoke Key. Do **not** edit server-side credential projection files or `dispatcharr_api_key` (or its legacy `api_key` alias).
 
 **For the full reference** — step-by-step connection setup, key rotation details, and troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
 

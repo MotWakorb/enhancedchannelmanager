@@ -9,10 +9,12 @@ import { logger } from '../utils/logger';
 /** HTTP error with status code so callers can distinguish auth errors from server errors. */
 export class HttpError extends Error {
   status: number;
-  constructor(message: string, status: number) {
+  detail: unknown;
+  constructor(message: string, status: number, detail?: unknown) {
     super(message);
     this.name = 'HttpError';
     this.status = status;
+    this.detail = detail;
   }
 }
 
@@ -24,10 +26,31 @@ function extractDetail(detail: unknown): string {
   } else if (Array.isArray(detail)) {
     // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
     msg = detail.map((e: Record<string, unknown>) => e.msg || JSON.stringify(e)).join('; ');
+  } else if (
+    detail !== null &&
+    typeof detail === 'object' &&
+    typeof (detail as Record<string, unknown>).message === 'string'
+  ) {
+    msg = (detail as Record<string, string>).message;
   } else {
-    msg = JSON.stringify(detail);
+    msg = 'Request failed';
   }
   return msg.trim() || 'Server returned an empty error';
+}
+
+async function httpErrorFromResponse(response: Response): Promise<HttpError> {
+  let message = response.statusText;
+  let detail: unknown;
+  try {
+    const errorBody = await response.json();
+    if (errorBody.detail !== undefined) {
+      detail = errorBody.detail;
+      message = extractDetail(detail);
+    }
+  } catch {
+    // Response body isn't JSON or couldn't be parsed
+  }
+  return new HttpError(message, response.status, detail);
 }
 
 /**
@@ -203,13 +226,9 @@ export async function fetchJson<T>(url: string, options?: RequestInit, logPrefix
         });
 
         if (!retryResponse.ok) {
-          let errorDetail = retryResponse.statusText;
-          try {
-            const errorBody = await retryResponse.json();
-            if (errorBody.detail) errorDetail = extractDetail(errorBody.detail);
-          } catch { /* not JSON */ }
-          logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${errorDetail}`);
-          throw new HttpError(errorDetail, retryResponse.status);
+          const httpError = await httpErrorFromResponse(retryResponse);
+          logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${httpError.message}`);
+          throw httpError;
         }
 
         if (retryResponse.status === 204) {
@@ -223,17 +242,9 @@ export async function fetchJson<T>(url: string, options?: RequestInit, logPrefix
     }
 
     if (!response.ok) {
-      let errorDetail = response.statusText;
-      try {
-        const errorBody = await response.json();
-        if (errorBody.detail) {
-          errorDetail = extractDetail(errorBody.detail);
-        }
-      } catch {
-        // Response body isn't JSON or couldn't be parsed
-      }
-      logger.error(`${logPrefix} error: ${method} ${url} - ${response.status} ${errorDetail}`);
-      throw new HttpError(errorDetail, response.status);
+      const httpError = await httpErrorFromResponse(response);
+      logger.error(`${logPrefix} error: ${method} ${url} - ${response.status} ${httpError.message}`);
+      throw httpError;
     }
 
     // 204 No Content has no body to parse
@@ -275,13 +286,9 @@ export async function fetchText(url: string, options?: RequestInit, logPrefix = 
         });
 
         if (!retryResponse.ok) {
-          let errorDetail = retryResponse.statusText;
-          try {
-            const errorBody = await retryResponse.json();
-            if (errorBody.detail) errorDetail = extractDetail(errorBody.detail);
-          } catch { /* not JSON */ }
-          logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${errorDetail}`);
-          throw new HttpError(errorDetail, retryResponse.status);
+          const httpError = await httpErrorFromResponse(retryResponse);
+          logger.error(`${logPrefix} error after retry: ${method} ${url} - ${retryResponse.status} ${httpError.message}`);
+          throw httpError;
         }
 
         const text = await retryResponse.text();
@@ -291,17 +298,9 @@ export async function fetchText(url: string, options?: RequestInit, logPrefix = 
     }
 
     if (!response.ok) {
-      let errorDetail = response.statusText;
-      try {
-        const errorBody = await response.json();
-        if (errorBody.detail) {
-          errorDetail = extractDetail(errorBody.detail);
-        }
-      } catch {
-        // Response body isn't JSON
-      }
-      logger.error(`${logPrefix} error: ${method} ${url} - ${response.status} ${errorDetail}`);
-      throw new HttpError(errorDetail, response.status);
+      const httpError = await httpErrorFromResponse(response);
+      logger.error(`${logPrefix} error: ${method} ${url} - ${response.status} ${httpError.message}`);
+      throw httpError;
     }
 
     const text = await response.text();

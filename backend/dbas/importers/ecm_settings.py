@@ -97,6 +97,7 @@ CONNECTION_KEYS: frozenset[str] = frozenset(
         "password",
         "dispatcharr_api_key",
         "api_key",
+        "mcp_api_key",
     }
 )
 
