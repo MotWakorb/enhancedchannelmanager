@@ -124,7 +124,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.1-0162"
+APP_VERSION = "0.18.1-0163"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -6083,8 +6083,10 @@ async def restore_from_yaml(
     (``_restore_settings`` -> ``save_settings``) writes the settings blob
     wholesale, the same admin-only-field-bypass surface as the ZIP restores.
 
-    Accepts a YAML file and a list of section keys. Each section is restored
-    independently; partial failures are reported without aborting other sections.
+    Accepts a YAML file and a list of section keys. Independent section failures
+    are reported without aborting other sections. When settings and Dispatcharr
+    sections are both selected, settings is restored first; if that fails, the
+    Dispatcharr sections are not attempted against stale connection settings.
     Restore semantics: delete existing → recreate from YAML (replace all).
     """
     logger.info("[BACKUP] YAML restore requested, filename=%s", file.filename)
@@ -6125,7 +6127,35 @@ async def restore_from_yaml(
     warnings = []
     errors = []
 
-    for section_key in selected_sections:
+    has_dispatcharr_sections = any(
+        RESTORABLE_SECTIONS[section_key].get("dispatcharr")
+        for section_key in selected_sections
+    )
+    restore_order = selected_sections
+    if "settings" in selected_sections and has_dispatcharr_sections:
+        restore_order = ["settings"] + [
+            section_key
+            for section_key in selected_sections
+            if section_key != "settings"
+        ]
+
+    settings_restore_failed = False
+    for section_key in restore_order:
+        if (
+            settings_restore_failed
+            and RESTORABLE_SECTIONS[section_key].get("dispatcharr")
+        ):
+            sections_failed.append(section_key)
+            errors.append(
+                "%s: settings restore failed; Dispatcharr restore not attempted"
+                % section_key
+            )
+            logger.error(
+                "[BACKUP] Did not restore Dispatcharr section %s because the "
+                "selected settings section failed",
+                section_key,
+            )
+            continue
         try:
             result = await _restore_section(data, section_key)
             sections_restored.append(section_key)
@@ -6134,6 +6164,8 @@ async def restore_from_yaml(
             logger.info("[BACKUP] Restored section: %s", section_key)
         except MCPApiKeyStorageError as error:
             sections_failed.append(section_key)
+            if section_key == "settings":
+                settings_restore_failed = True
             errors.append(
                 "%s: MCP credential storage is unavailable or untrusted; "
                 "preserve lifecycle artifacts, repair storage metadata, and retry "
@@ -6147,6 +6179,8 @@ async def restore_from_yaml(
             )
         except Exception as e:
             sections_failed.append(section_key)
+            if section_key == "settings":
+                settings_restore_failed = True
             # CodeQL py/stack-trace-exposure (#1412): do NOT include str(e) in
             # the response. The full exception is logged with type and trace
             # via logger.exception so operators can correlate via X-Request-ID;
@@ -6176,7 +6210,10 @@ async def restore_from_yaml(
 async def _restore_section(data: dict, section_key: str) -> dict:
     """Restore a single section from parsed YAML. Returns {warnings: [...]}."""
     if section_key == "settings":
-        return _restore_settings(data.get("settings", {}))
+        settings_data = data.get("settings")
+        if not isinstance(settings_data, dict) or not settings_data:
+            raise ValueError("Selected settings section is missing or empty")
+        return _restore_settings(settings_data)
 
     # Check DB sections
     db_data = data.get("database", {})

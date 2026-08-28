@@ -849,7 +849,13 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                 type(settings_err).__name__,
             )
         except Exception as settings_err:
-            logger.warning("[M3U] Failed to clean up linked_m3u_accounts: %s", settings_err)
+            linked_settings_cleanup_failed = True
+            logger.error(
+                "[M3U] Account %s was deleted, but linked-settings cleanup "
+                "failed (%s); the DELETE must not be retried",
+                account_id,
+                type(settings_err).__name__,
+            )
 
         # Log to journal
         journal.log_entry(
@@ -893,8 +899,8 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     "linked_settings_cleanup": "failed",
                     "message": (
                         "The M3U account was deleted, but linked-settings cleanup "
-                        "failed. This DELETE must not be retried. Repair MCP "
-                        "credential storage, then update linked accounts separately."
+                        "failed. This DELETE must not be retried. Repair settings "
+                        "storage, then update linked accounts separately."
                     ),
                 }
             )

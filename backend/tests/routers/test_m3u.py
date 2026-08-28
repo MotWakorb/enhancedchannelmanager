@@ -318,6 +318,42 @@ class TestDeleteM3UAccount:
         assert journal_after["linked_settings_cleanup"] == "failed"
 
     @pytest.mark.asyncio
+    async def test_linked_account_write_failure_returns_partial_delete_result(
+        self, async_client
+    ):
+        from config import DispatcharrSettings
+
+        mock_client = AsyncMock()
+        mock_client.get_m3u_account.return_value = {"id": 2, "name": "IPTV-2"}
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 2, "name": "IPTV-2", "channel_groups": []}
+        ]
+        mock_settings = DispatcharrSettings(linked_m3u_accounts=[[1, 2, 3]])
+        secret = "write-failure-detail-that-must-not-escape"
+
+        with patch("routers.m3u.get_client", return_value=mock_client), patch(
+            "routers.m3u.journal.log_entry"
+        ) as log_entry, patch(
+            "routers.m3u.get_settings", return_value=mock_settings
+        ), patch(
+            "routers.m3u.save_settings", side_effect=OSError(secret)
+        ):
+            response = await async_client.delete("/api/m3u/accounts/2")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "deleted_with_cleanup_warning"
+        assert body["account_deleted"] is True
+        assert body["linked_settings_cleanup"] == "failed"
+        assert "must not be retried" in body["message"].lower()
+        assert secret not in response.text
+        mock_client.delete_m3u_account.assert_awaited_once_with(2)
+        assert mock_settings.linked_m3u_accounts == [[1, 2, 3]]
+        journal_after = log_entry.call_args.kwargs["after_value"]
+        assert journal_after["account_deleted"] is True
+        assert journal_after["linked_settings_cleanup"] == "failed"
+
+    @pytest.mark.asyncio
     async def test_missing_account_returns_404_not_500(self, async_client):
         """Deleting a nonexistent account surfaces upstream 404 as 404, not 500
         (bd-lq38l.4). The before-state get_m3u_account raises 404."""
