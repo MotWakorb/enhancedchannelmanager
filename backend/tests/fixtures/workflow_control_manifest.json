@@ -239,6 +239,17 @@
         "jobs",
         "benchmark",
         "steps",
+        2,
+        "if"
+      ],
+      "value": "github.event_name == 'pull_request'"
+    },
+    {
+      "file": "perf-benchmarks.yml",
+      "path": [
+        "jobs",
+        "benchmark",
+        "steps",
         3,
         "if"
       ],
@@ -272,7 +283,7 @@
         "jobs",
         "benchmark",
         "steps",
-        7,
+        8,
         "if"
       ],
       "value": "always()"

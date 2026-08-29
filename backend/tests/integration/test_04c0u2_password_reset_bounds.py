@@ -330,7 +330,7 @@ async def test_rollout_accepts_existing_access_token_without_auth_epoch(
 ):
     """Pre-migration access JWTs remain valid while the user is at epoch zero."""
     from auth.tokens import ALGORITHM, _get_secret_key, create_access_token, decode_token
-    from jose import jwt
+    import jwt
 
     claims = decode_token(create_access_token(local_user.id, local_user.username))
     claims.pop("auth_epoch")

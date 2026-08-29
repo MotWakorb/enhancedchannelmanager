@@ -6,8 +6,10 @@ They will FAIL initially - implementation makes them pass.
 
 Test Spec: JWT Tokens (v6dxf.8.3)
 """
-import pytest
 from datetime import datetime, timedelta
+
+import jwt as pyjwt
+import pytest
 
 
 class TestTokenCreation:
@@ -22,6 +24,21 @@ class TestTokenCreation:
         parts = token.split(".")
         assert len(parts) == 3
         assert all(len(part) > 0 for part in parts)
+
+    def test_access_token_uses_pyjwt_with_hs256_wire_contract(self):
+        """ECM tokens remain standard HS256 JWTs while using PyJWT."""
+        from auth import tokens
+
+        token = tokens.create_access_token(user_id=1, username="testuser")
+
+        assert tokens.jwt is pyjwt
+        assert tokens.ALGORITHM == "HS256"
+        assert pyjwt.get_unverified_header(token)["alg"] == "HS256"
+        assert pyjwt.decode(
+            token,
+            tokens._get_secret_key(),
+            algorithms=[tokens.ALGORITHM],
+        )["sub"] == "1"
 
     def test_access_token_contains_required_claims(self):
         """Token contains user_id, exp, iat claims."""
@@ -139,6 +156,112 @@ class TestTokenValidation:
 
         with pytest.raises(InvalidTokenError):
             decode_token(bad_sig_token)
+
+    def test_decode_token_rejects_non_string_subject_claim(self):
+        """The existing subject claim validation remains enforced."""
+        from auth.tokens import (
+            ALGORITHM,
+            InvalidTokenError,
+            _get_secret_key,
+            decode_token,
+        )
+
+        now = datetime.utcnow()
+        token = pyjwt.encode(
+            {
+                "sub": 1,
+                "exp": now + timedelta(minutes=5),
+                "iat": now,
+            },
+            _get_secret_key(),
+            algorithm=ALGORITHM,
+        )
+
+        with pytest.raises(InvalidTokenError, match=r"^Invalid token:"):
+            decode_token(token)
+
+    def test_decode_token_rejects_non_integer_issued_at_claim(self):
+        """The existing issued-at claim type validation remains enforced."""
+        from auth.tokens import (
+            ALGORITHM,
+            InvalidTokenError,
+            _get_secret_key,
+            decode_token,
+        )
+
+        token = pyjwt.encode(
+            {
+                "sub": "1",
+                "exp": datetime.utcnow() + timedelta(minutes=5),
+                "iat": "not-a-numeric-date",
+            },
+            _get_secret_key(),
+            algorithm=ALGORITHM,
+        )
+
+        with pytest.raises(InvalidTokenError, match=r"^Invalid token:"):
+            decode_token(token)
+
+    @pytest.mark.parametrize(
+        "issued_at",
+        ["12345", 12345.75],
+        ids=["numeric-string", "fractional-number"],
+    )
+    def test_decode_token_accepts_integer_coercible_issued_at_claim(self, issued_at):
+        """Issued-at validation retains python-jose's int() compatibility."""
+        from auth.tokens import ALGORITHM, _get_secret_key, decode_token
+
+        token = pyjwt.encode(
+            {
+                "sub": "1",
+                "exp": datetime.utcnow() + timedelta(minutes=5),
+                "iat": issued_at,
+            },
+            _get_secret_key(),
+            algorithm=ALGORITHM,
+        )
+
+        assert decode_token(token)["iat"] == issued_at
+
+    def test_decode_token_preserves_future_issued_at_compatibility(self):
+        """A valid token is not rejected solely for future clock skew in iat."""
+        from auth.tokens import ALGORITHM, _get_secret_key, decode_token
+
+        now = datetime.utcnow()
+        token = pyjwt.encode(
+            {
+                "sub": "1",
+                "exp": now + timedelta(minutes=10),
+                "iat": now + timedelta(minutes=5),
+            },
+            _get_secret_key(),
+            algorithm=ALGORITHM,
+        )
+
+        assert decode_token(token)["sub"] == 1
+
+    def test_decode_token_rejects_non_hs256_algorithm(self):
+        """A valid signature under a different HMAC algorithm is still refused."""
+        from auth.tokens import (
+            ALGORITHM,
+            InvalidTokenError,
+            _get_secret_key,
+            decode_token,
+        )
+
+        token = pyjwt.encode(
+            {
+                "sub": "1",
+                "exp": datetime.utcnow() + timedelta(minutes=5),
+                "iat": datetime.utcnow(),
+            },
+            _get_secret_key(),
+            algorithm="HS384",
+        )
+
+        assert ALGORITHM == "HS256"
+        with pytest.raises(InvalidTokenError, match=r"^Invalid token:"):
+            decode_token(token)
 
     def test_decode_token_raises_for_malformed_token(self):
         """decode_token() raises for malformed token."""

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Removed the unpatched `ecdsa` runtime dependency by replacing `python-jose` with PyJWT for ECM's existing HS256-only tokens (bead `enhancedchannelmanager-tm9ma`, build 0169).** This resolves Dependabot alert #1 / [GHSA-wj6h-64fc-37mp](https://github.com/advisories/GHSA-wj6h-64fc-37mp) without changing access, refresh, password-reset, expiry, claim-validation, or revocation behavior. The separate `josepy` dependency remains for ACME certificate management.
+
 ### Fixed
 
 - **Auto-Sync no longer lets one provider silently decide channel-profile membership when several source groups feed the same effective channel group (bead `enhancedchannelmanager-fes61`, build 0168).** ECM evaluates the complete source/account fan-in without depending on API row order. If the sources select different non-empty Channel Profile sets, membership writes and normalization for that effective group stop before any channel is changed. An app-root **Profile choice required** dialog names the effective group, competing profiles, source groups, and M3U accounts; the operator's explicit choice is recorded before ECM harmonizes every source row. The notification center can reopen a choice deferred for the current browser session. Partial account failures stay visible and retry automatically, and a conflict whose source shape changes becomes a new question instead of applying a stale decision.
@@ -202,7 +206,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **60 dependency updates across backend, mcp-server and frontend, with no functional change intended and everything gated green (epic `enhancedchannelmanager-gflo5`, build 0146).** 39 backend packages, 2 mcp-server packages and 17 frontend packages move to their latest compatible release, plus `starlette` and `uvicorn` moving separately — 60 in total. Every gate ran green against a venv and lock built fresh from the new pins: backend `pytest tests/` 11522 passed / 9 skipped, the canonical `scripts/backend-gate.sh` 11456 passed / 3 skipped / 2 deselected, and frontend 253 files / 3568 tests passed, with lint and `tsc --noEmit` clean and `npm ci` reproducing the lock.
 
-  **Zero known vulnerabilities were introduced or remain outstanding.** The single standing advisory, `ecdsa` PYSEC-2026-1325 (transitive via `python-jose`), has no published fix, is already ignored in CI by explicit flag, and is unchanged by this work. This is a currency sweep, not a security fix — nothing here hardens ECM against a threat it wasn't already resistant to.
+  **Build 0146 introduced no new known vulnerabilities, but it left the standing `ecdsa` PYSEC-2026-1325 advisory unresolved at that time.** The dependency was transitive via `python-jose`, had no published fix, and remained ignored in CI by an explicit waiver. Build 0169 / bead `enhancedchannelmanager-tm9ma` subsequently replaced `python-jose` with PyJWT, removing both `ecdsa` and the CI waiver. The build 0146 work was a currency sweep, not a security fix. Nothing in that sweep hardened ECM against a threat it wasn't already resistant to.
 
   **Frontend dependencies are now hard-pinned.** Every caret and tilde in `frontend/package.json` is gone, so an install resolves exactly the versions that were tested rather than a range.
 

@@ -1000,7 +1000,7 @@ class TestRefreshCryptographicGate:
         """A signed refresh token whose ``exp`` is ``delta`` from now."""
         import secrets
         from datetime import datetime, timedelta
-        from jose import jwt
+        import jwt
         from auth.tokens import ALGORITHM, _get_secret_key
 
         now = datetime.utcnow()
@@ -1088,7 +1088,7 @@ class TestRefreshCryptographicGate:
         different signing key never reaches the session lookup."""
         import secrets
         from datetime import datetime, timedelta
-        from jose import jwt
+        import jwt
         from auth.tokens import ALGORITHM
 
         now = datetime.utcnow()
