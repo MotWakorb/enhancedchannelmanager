@@ -1,14 +1,14 @@
 {
   "schema": 1,
   "version": "0.18.1-0169",
-  "created": "2026-08-29T15:31:10Z",
+  "created": "2026-08-29T16:26:09Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
   "channelNote": "Transient snapshot of the dev branch, NOT an artifact of record. There is at most one and it is superseded rather than accumulated. The version below names the build this snapshot was taken at, not what dev carries now; the binding that matters is the source-manifest hashes.",
   "subject": {
     "type": "source-tree",
-    "note": "These documents describe the dependency manifests of the release source tree. They do NOT describe a container image and assert no image digest; see sbom/README.md."
+    "note": "These documents describe the dependency manifests of the release source tree. They do NOT describe a container image and assert no subject image digest. Digest-pinned base and build image references are recorded; see sbom/README.md."
   },
   "coverage": {
     "includes": [
@@ -19,7 +19,7 @@
     "excludes": [
       "Operating-system packages inside the base images (apt/apk); the Dockerfiles also run `apt-get upgrade` / `apk upgrade` at build time, so the installed OS package set is not derivable from the source tree at all",
       "Transitive native libraries vendored inside Python wheels",
-      "Any image digest: no release image exists when this document is cut"
+      "Published subject image digest: no release image exists when this document is cut"
     ]
   },
   "sources": {
@@ -34,13 +34,13 @@
       "path": "ecm.spdx.json",
       "subject": "ecm",
       "packages": 445,
-      "sha256": "d1a0612ca5f40e843b638fefb79754d76d83d4bca0f021428e397f0253f9cc5e"
+      "sha256": "05d8341797886904d4f8be33e264a9f9076d80861b008eab075b86cd064dd95d"
     },
     {
       "path": "mcp.spdx.json",
       "subject": "mcp",
       "packages": 43,
-      "sha256": "c7bd059aad66b600f2f8fcaa77fb5e009b02749bc6dce63fc420f4803d7106ed"
+      "sha256": "4d99176021ef65bc2439d1274d3bfd55a00f1e344e95226627328651c66d29ff"
     }
   ]
 }
