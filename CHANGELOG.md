@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.18.1] — 2026-08-29
+
 ### Security
 
 - **Removed the unpatched `ecdsa` runtime dependency by replacing `python-jose` with PyJWT for ECM's existing HS256-only tokens (bead `enhancedchannelmanager-tm9ma`, build 0169).** This resolves Dependabot alert #1 / [GHSA-wj6h-64fc-37mp](https://github.com/advisories/GHSA-wj6h-64fc-37mp) without changing access, refresh, password-reset, expiry, claim-validation, or revocation behavior. The separate `josepy` dependency remains for ACME certificate management.
@@ -1279,7 +1281,8 @@ Full notes: [GitHub Release v0.13.0](https://github.com/MotWakorb/enhancedchanne
 
 Entries for `0.12.x` and earlier have not been backfilled into this file. See the [GitHub Releases page](https://github.com/MotWakorb/enhancedchannelmanager/releases) for the original release notes. Future releases will be recorded here under the appropriate Keep-a-Changelog sections.
 
-[Unreleased]: https://github.com/MotWakorb/enhancedchannelmanager/compare/v0.15.2...HEAD
+[Unreleased]: https://github.com/MotWakorb/enhancedchannelmanager/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.18.1
 [0.15.2]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.2
 [0.15.1]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.1
 [0.15.0]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.0
