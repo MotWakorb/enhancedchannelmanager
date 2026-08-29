@@ -189,11 +189,15 @@ jobs:
           # is the GitHub-normalized severity (vs. .rule.severity which is
           # the CodeQL native level). HIGH and CRITICAL are the gating tiers
           # per ADR-004 G1b.
-          alerts=$(gh api --paginate 'repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100' \
-            --jq '[.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")
-                       | {number, severity: .rule.security_severity_level, rule_id: .rule.id, html_url}]')
+          all_alerts=$(gh api --paginate 'repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100' \
+            | jq -se 'if length > 0 and all(.[]; type == "array") then add
+                      else error("CodeQL API must return one or more JSON array pages") end')
+          alerts=$(printf '%s\n' "$all_alerts" | jq -e \
+            '[.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")
+                  | {number, severity: .rule.security_severity_level, rule_id: .rule.id, html_url}]')
 
-          count=$(echo "$alerts" | jq 'length')
+          count=$(printf '%s\n' "$alerts" | jq -er \
+            'if type == "array" then length else error("filtered CodeQL alerts must be an array") end')
           if [[ "$count" -gt 0 ]]; then
             echo "::error::G1b FAIL: $count open HIGH/CRITICAL CodeQL alert(s) not dismissed."
             echo "Open alerts:"
