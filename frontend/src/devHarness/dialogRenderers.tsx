@@ -50,6 +50,7 @@ import { MergeChannelsModal } from '../components/MergeChannelsModal'
 import { NormalizeNamesModal } from '../components/NormalizeNamesModal'
 import { NumberingConflictDialog } from '../components/NumberingConflictDialog'
 import { PreviewStreamModal } from '../components/PreviewStreamModal'
+import { ProfileConflictReviewModal } from '../components/ProfileConflictReviewModal'
 import { PrintGuideModal } from '../components/PrintGuideModal'
 import { ScheduledTasksSection } from '../components/ScheduledTasksSection'
 import { SecurityFirstRunModal } from '../components/SecurityFirstRunModal'
@@ -463,6 +464,10 @@ const RENDERERS = {
         providerName="Primary Provider (EU edge)"
       />
     ),
+  },
+
+  'profile-conflict-review': {
+    render: () => <ProfileConflictReviewModal />,
   },
 
   'print-guide': {

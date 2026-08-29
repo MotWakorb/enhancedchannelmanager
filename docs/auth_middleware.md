@@ -117,6 +117,13 @@ Debug bundles instead use `require_authenticated_human_admin`, which always
 chains `get_current_user` and therefore never enters an auth-disabled
 short-circuit.
 
+Profile-conflict review is deliberately stricter. Its
+`RequireHumanAdminForOperatorDecision` gate uses `always_require_auth=True`, so
+the no-identity carve-out below does not apply: selecting which upstream profile
+set becomes authoritative is a human decision, not first-run administration.
+A headless instance must create an operator identity and sign in before listing
+or accepting those reviews.
+
 ### The carve-out: instances with no operator identity
 
 The identity primitives and connection tests still serve an anonymous caller on an instance that holds **no**

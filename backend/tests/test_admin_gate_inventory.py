@@ -23,8 +23,9 @@ ECM has two admin gates that look interchangeable and are not:
   ``auth.RequireHumanAdminForTLSMaterial`` /
   ``auth.RequireHumanAdminForOutboundPolicy`` /
   ``auth.RequireHumanAdminForNotificationCredential`` /
-  ``auth.RequireHumanAdminForStatisticsReset`` — admin required AND the MCP
-  service principal is refused. These seven behave identically; they differ
+  ``auth.RequireHumanAdminForStatisticsReset`` /
+  ``auth.RequireHumanAdminForOperatorDecision`` — admin required AND the MCP
+  service principal is refused. These eight behave identically; they differ
   only in the 403 body, which names the surface being refused so incident
   triage starts in the right place.
 
@@ -45,7 +46,7 @@ identity (a user row, or ``setup_complete``), they require a real human admin
 even while ``require_auth`` is false. On an instance with none, they still
 no-op, so no first-run or headless deployment is locked out.
 
-Two axes, both different from the seven MCP rules below and both cutting across
+Two axes, both different from the eight MCP rules below and both cutting across
 them:
 
 * DURABILITY OF THE RESULTING IDENTITY (jy006, 2026-08-13). Minting an
@@ -232,6 +233,7 @@ from fastapi.routing import APIRoute
 from auth import (
     RequireAdminIfEnabled,
     RequireHumanAdminForNotificationCredential,
+    RequireHumanAdminForOperatorDecision,
     RequireHumanAdminForOutboundPolicy,
     RequireHumanAdminForOutboundTest,
     RequireHumanAdminForServiceCredential,
@@ -655,6 +657,14 @@ _DESTRUCTIVE_DATA_RESET = {
     ("POST", "/api/settings/reset-stats"),
 }
 
+# Profile conflicts require an operator to choose which upstream source rows
+# become authoritative. The sidecar has no tool for this review workflow, and
+# silently choosing a profile set exceeds its channel-maintenance authority.
+_OPERATOR_DECISIONS = {
+    ("GET", "/api/profile-conflict-reviews"),
+    ("POST", "/api/profile-conflict-reviews/{review_id}/accept"),
+}
+
 # i4qrp / 9kwzp.6 / 9kwzp.7: every one of these reaches the network with
 # operator-supplied or STORED credentials and reports the upstream verdict
 # back. That is a status-code oracle and an in-band port scanner, and for the
@@ -733,6 +743,7 @@ MCP_DENIED: frozenset = frozenset(
     | _OUTBOUND_POLICY_WRITE
     | _NOTIFICATION_CREDENTIAL
     | _DESTRUCTIVE_DATA_RESET
+    | _OPERATOR_DECISIONS
 )
 
 
@@ -807,7 +818,7 @@ def test_classifier_distinguishes_the_two_gates():
 
     If ``_gate_kind`` stopped telling the two gates apart, the set assertions
     below would still pass whenever both sets happened to be classified the
-    same way. Pin the classifier against the eight shipped dependencies first.
+    same way. Pin the classifier against the nine shipped dependencies first.
     """
     assert _gate_kind(RequireAdminIfEnabled.dependency) == "admitted"
     assert _gate_kind(RequireHumanAdminIfEnabled.dependency) == "denied"
@@ -817,12 +828,13 @@ def test_classifier_distinguishes_the_two_gates():
     assert _gate_kind(RequireHumanAdminForOutboundPolicy.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForNotificationCredential.dependency) == "denied"
     assert _gate_kind(RequireHumanAdminForStatisticsReset.dependency) == "denied"
+    assert _gate_kind(RequireHumanAdminForOperatorDecision.dependency) == "denied"
 
 
 def test_every_human_admin_gate_names_its_own_surface():
     """No two human-admin gates may share a 403 body.
 
-    The seven denial gates behave identically; the ONLY thing that
+    The eight denial gates behave identically; the ONLY thing that
     distinguishes them is the operator-facing message, which exists so a
     refusal points triage at the right subsystem. A copy-paste that reused a
     neighbour's body would leave every behavioural test in the suite green
@@ -838,6 +850,7 @@ def test_every_human_admin_gate_names_its_own_surface():
             RequireHumanAdminForOutboundPolicy,
             RequireHumanAdminForNotificationCredential,
             RequireHumanAdminForStatisticsReset,
+            RequireHumanAdminForOperatorDecision,
         )
     ]
     assert len(set(details)) == len(details)

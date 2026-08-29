@@ -395,6 +395,7 @@ def require_admin_if_enabled(
     reject_mcp_service_principal: bool = False,
     mcp_denial_detail: str = _MCP_DENIAL_DETAIL_DEFAULT,
     enforce_when_auth_disabled: bool = False,
+    always_require_auth: bool = False,
 ):
     """
     Factory function to create a dependency that requires admin when auth is enabled.
@@ -410,6 +411,10 @@ def require_admin_if_enabled(
     mode and stays fully permissive for ordinary data and configuration routes.
     The flag marks the surfaces that are refused to an ANONYMOUS caller even in
     that mode.
+
+    ``always_require_auth`` has no first-run carve-out. It is reserved for
+    actions that are themselves human decisions rather than ordinary instance
+    administration, so anonymous reachability can never stand in for identity.
 
     THE RULE. A surface carries the flag when reaching it anonymously gives the
     caller something the mode itself does not already give them — something
@@ -494,15 +499,18 @@ def require_admin_if_enabled(
         # If auth not required or setup not complete, allow anonymous access
         enforcing_over_disabled_auth = False
         if not settings.require_auth or not settings.setup_complete:
-            if not enforce_when_auth_disabled:
+            if always_require_auth:
+                enforcing_over_disabled_auth = True
+            elif not enforce_when_auth_disabled:
                 return None
-            if not instance_has_operator_identity(session):
+            elif not instance_has_operator_identity(session):
                 # Genuine first run, or a deliberately headless auth-disabled
                 # instance that never created a user. Nothing exists here for a
                 # caller to take over, and refusing would lock the operator out
                 # of the only path that configures this surface.
                 return None
-            enforcing_over_disabled_auth = True
+            else:
+                enforcing_over_disabled_auth = True
 
         # Auth is required - get the user and check admin
         try:
@@ -832,6 +840,22 @@ RequireHumanAdminForStatisticsReset = Depends(
             "The MCP service principal cannot reset statistics. Clearing the "
             "channel, stream, bandwidth, popularity and telemetry history is "
             "an irreversible destructive operation with no undo and must be "
+            "driven by a human operator admin."
+        ),
+    )
+)
+
+
+# Profile-conflict acceptance resolves contradictory upstream settings by
+# choosing which source rows become authoritative. That is an operator policy
+# decision rather than unattended channel maintenance.
+RequireHumanAdminForOperatorDecision = Depends(
+    require_admin_if_enabled(
+        reject_mcp_service_principal=True,
+        always_require_auth=True,
+        mcp_denial_detail=(
+            "The MCP service principal cannot review or accept profile "
+            "conflicts. Choosing the authoritative channel profiles must be "
             "driven by a human operator admin."
         ),
     )

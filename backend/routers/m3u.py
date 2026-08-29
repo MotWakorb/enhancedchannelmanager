@@ -26,6 +26,11 @@ from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
 from alert_methods import send_alert
 from tasks.m3u_digest import send_immediate_digest
+from services.m3u_group_state import (
+    acquire_effective_group_locks,
+    coerce_profile_id,
+    merge_group_settings_row,
+)
 import journal
 
 logger = logging.getLogger(__name__)
@@ -246,6 +251,7 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
             recon.get("groups_partial_failure", 0)
             + recon.get("groups_degraded", 0)
             + recon.get("groups_errored", 0)
+            + recon.get("groups_conflicted", 0)
             + recon.get("accounts_normalize_failed", 0)
         )
         if incomplete:
@@ -254,6 +260,7 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
                 f"({recon.get('groups_partial_failure', 0)} partial_failure, "
                 f"{recon.get('groups_degraded', 0)} degraded, "
                 f"{recon.get('groups_errored', 0)} errored, "
+                f"{recon.get('groups_conflicted', 0)} pending review, "
                 f"{recon.get('accounts_normalize_failed', 0)} account(s) not normalized) "
                 f"— it will retry on the next scheduled sync"
             )
@@ -1158,47 +1165,6 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
 # M3U Group Settings
 # -------------------------------------------------------------------------
 
-# The exact field set Dispatcharr's update_group_settings upserts (its
-# bulk_create update_fields list, apps/m3u/api_views.py). Dispatcharr
-# v0.25.0+ performs a FULL-ROW upsert with ``setting.get(...)`` defaults:
-# every field omitted from a row is silently reset (enabled -> True,
-# auto_channel_sync -> False, start/end -> None, custom_properties -> {}).
-# Every write must therefore carry the complete set, merged over the
-# group's current stored state (bead enhancedchannelmanager-igqcy).
-GROUP_SETTINGS_UPSERT_FIELDS = (
-    "enabled",
-    "auto_channel_sync",
-    "auto_sync_channel_start",
-    "auto_sync_channel_end",
-    "custom_properties",
-)
-
-
-def merge_group_settings_row(current: dict | None, incoming: dict) -> dict:
-    """Overlay an incoming (possibly partial) group-settings row onto the
-    group's CURRENT stored state so Dispatcharr's full-row upsert never
-    resets fields the caller did not intend to change.
-
-    Semantics: a key **present** in ``incoming`` wins verbatim (explicit
-    ``null`` clears a value); a key **absent** from ``incoming`` is filled
-    from ``current``. ``custom_properties`` is taken verbatim when present —
-    callers that edit it must send the already-merged dict (unknown keys
-    preserved), because a deep merge here would make clearing a key
-    impossible. Unknown/new upsert fields in ``incoming`` pass through
-    untouched.
-    """
-    current = current or {}
-    merged = dict(incoming)
-    # Dispatcharr identifies the row by (m3u_account, channel_group); the id
-    # is optional but forwarded when known (matches the modal's payloads).
-    if "id" not in merged and current.get("id") is not None:
-        merged["id"] = current["id"]
-    for field in GROUP_SETTINGS_UPSERT_FIELDS:
-        if field not in merged and field in current:
-            merged[field] = current[field]
-    return merged
-
-
 def _row_selection_set(cp) -> frozenset:
     """The channel_profile_ids in a custom_properties dict as an int SET (order-
     insensitive; non-ints dropped). Empty set = no/empty selection."""
@@ -1315,9 +1281,7 @@ async def _apply_enforced_global_save(
     primary keeps its selection). ``changed_siblings`` are the sibling accounts
     whose row WAS mutated before the abort — the caller journals them and reports
     the truthful partial (finding 4), never "no write" when a sibling changed."""
-    from services.profile_reconcile import (
-        acquire_effective_group_locks, resolve_effective_master_group_id,
-    )
+    from services.profile_reconcile import resolve_effective_master_group_id
 
     desired = _compute_changed_selections(edited_rows, before_groups)
     eff_gids = {resolve_effective_master_group_id(all_settings, gid) for gid in desired}
@@ -1438,7 +1402,6 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         # clear). Normalizes the payload in place so Dispatcharr + the cascade
         # store ints.
         if isinstance(incoming_settings, list):
-            from services.profile_reconcile import coerce_profile_id
             for gs in incoming_settings:
                 if not isinstance(gs, dict):
                     continue

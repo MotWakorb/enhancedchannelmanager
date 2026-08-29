@@ -243,3 +243,26 @@ async def test_monitor_reflects_reconcile_degraded_as_warning(test_session):
     assert result.failed_count == 2  # partial_failure + degraded
     assert "incomplete" in result.message
     assert result.details.get("profile_reconcile", {}).get("groups_degraded") == 1
+
+
+@pytest.mark.asyncio
+async def test_monitor_counts_profile_conflicts_as_incomplete(test_session):
+    account = {"id": 11, "name": "HD Homerun", "is_active": True, "updated_at": "T1"}
+    result = await _run_monitor(
+        test_session,
+        accounts=[account],
+        snapshot_ts="T1",
+        sweep_return={
+            "groups_reconciled": 0,
+            "groups_partial_failure": 0,
+            "groups_degraded": 0,
+            "groups_errored": 0,
+            "groups_conflicted": 1,
+            "groups_with_selection": 1,
+            "accounts_normalized": 0,
+            "accounts_normalize_failed": 0,
+        },
+    )
+
+    assert result.failed_count == 1
+    assert "1 profile group(s) incomplete" in result.message

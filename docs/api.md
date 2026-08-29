@@ -756,6 +756,62 @@ curl -X POST "http://localhost:6100/api/channel-merges/42/dismiss" \
 
 ---
 
+## Profile Conflict Reviews
+
+The `/api/profile-conflict-reviews/*` family is the human-operated queue for
+effective channel groups whose participating M3U source rows disagree about
+`channel_profile_ids`. While a review is pending, channel-profile membership is
+frozen. Review evidence includes the effective target, every participating
+source group/account (including unset selections), and the normalized profile
+names and IDs used by the durable fingerprint.
+
+| Endpoint | Description |
+|-|-|
+| `GET /api/profile-conflict-reviews` | List reviews by `status`: `pending` (default), `accepted`, or `superseded`. The default queue also includes accepted choices whose source-row convergence or operator audit is still pending. |
+| `POST /api/profile-conflict-reviews/{review_id}/accept` | Persist one opaque `choice_key`, then harmonize only divergent participating source rows. A saved partial choice is final and retryable. |
+
+Both routes use `RequireHumanAdminForOperatorDecision`: an authenticated human
+admin is always required, even when general authentication is disabled or the
+instance has no existing operator identity. Public MCP keys and the private MCP
+sidecar credential are refused.
+The POST is forwarded from the HTTPS subprocess to the authoritative main
+process so all accepts share the same effective-group lock.
+
+### `GET /api/profile-conflict-reviews`
+
+Query parameter `status` defaults to `pending`. Invalid values return `400`.
+The response is `{reviews, total}`. Each record carries its durable state and a
+typed `evidence` object. If an old/corrupt stored evidence snapshot cannot be
+decoded, ECM returns a safe target fallback with `choices: []` rather than a
+malformed response.
+
+### `POST /api/profile-conflict-reviews/{review_id}/accept`
+
+Request body:
+
+```json
+{"choice_key": "opaque-sha256-choice-key"}
+```
+
+Response:
+
+```json
+{
+  "status": "accepted",
+  "applied": true,
+  "updated_account_ids": [2],
+  "failed_account_ids": [],
+  "retry_error": null
+}
+```
+
+`applied: false` means the decision is durable but at least one source account
+or the operator audit still needs retry. Re-submit the same choice or let the
+scheduled reconcile retry it. A different choice after acceptance returns
+`422`; a changed/superseded conflict returns `409`; an unknown ID returns `404`.
+
+---
+
 ## Event Sync Reviews
 
 The `/api/event-sync-reviews/*` family (bead ti939.3.2) is the review queue for ambiguous Event Sync matches: ambiguous-band scores and contested ties enqueue here instead of being silently skipped. Rows key on **content fingerprints**: `(rule_id, provider_id, stream_name_hash, event_key)`, never channel/stream IDs, so decisions survive Dispatcharr refreshes and re-apply on every future run. Feature guide: [`docs/event_sync.md`](event_sync.md) → "Reviewing ambiguous matches"; fingerprint semantics: `backend/services/event_sync_review.py`.

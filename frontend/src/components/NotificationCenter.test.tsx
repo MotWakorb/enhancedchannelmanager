@@ -19,6 +19,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import type { Notification } from '../services/api';
+import { PROFILE_CONFLICT_REVIEW_EVENT } from './ProfileConflictReviewModal';
 
 vi.mock('../services/api', () => ({
   getNotifications: vi.fn(),
@@ -96,6 +97,37 @@ async function openPanel() {
 describe('NotificationCenter probe controls', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('offers a review action for profile conflicts and routes it to the app root', async () => {
+    const notification = probeNotification('completed', {
+      id: 44,
+      type: 'warning',
+      title: 'Channel profile choice required',
+      message: 'NBA has competing source selections.',
+      source: 'profile_reconcile',
+      metadata: { review_id: 91, fingerprint: 'profile-fingerprint' },
+    });
+    const onNotificationClick = vi.fn();
+    const event = vi.fn();
+    window.addEventListener(PROFILE_CONFLICT_REVIEW_EVENT, event);
+    (api.getNotifications as Mock).mockResolvedValue({
+      notifications: [notification],
+      unread_count: 1,
+    });
+
+    render(<NotificationCenter onNotificationClick={onNotificationClick} />);
+    await waitFor(() => expect(api.getNotifications).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole('button', { name: /Notifications/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Review choice' }));
+
+    expect(onNotificationClick).toHaveBeenCalledWith(notification);
+    expect(event).toHaveBeenCalledTimes(1);
+    expect((event.mock.calls[0][0] as CustomEvent).detail).toEqual({
+      review_id: 91,
+      fingerprint: 'profile-fingerprint',
+    });
+    window.removeEventListener(PROFILE_CONFLICT_REVIEW_EVENT, event);
   });
 
   it('renders a Pause button for an actively probing notification and calls the real pause endpoint', async () => {

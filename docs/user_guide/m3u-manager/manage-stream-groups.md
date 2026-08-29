@@ -88,6 +88,36 @@ Two settings are worth a second look before you save them:
   actively managing this group's profile membership going forward. Channels
   a Channel Pipeline rule already assigned to a profile are excluded from
   Auto-Sync's profile management entirely.
+- **An override can make several source groups share one profile decision.**
+  When groups from different M3U accounts use **Override Channel Group** to
+  feed the same effective Channel Manager group, ECM evaluates all of those
+  source rows together. Their API order and provider refresh order do not
+  decide the winner. If two sources select different non-empty **Channel
+  Profile Assignment** sets, ECM freezes profile-membership updates for that
+  effective group and opens **Profile choice required** at the app root. The
+  dialog names the effective group, each competing profile set, the source
+  groups, and their M3U accounts. Select one option explicitly; ECM records
+  that decision first, then writes the selected profile set back to every
+  source account row. It never changes group or channel membership as part of
+  accepting the choice.
+
+  This review always requires a signed-in administrator, including when ECM's
+  general authentication requirement is turned off. Browse to `/login` first;
+  a headless instance with no operator account must create one before it can
+  resolve profile conflicts.
+
+  **Decide later**, the close button, and Escape dismiss only that exact
+  question for the current browser session. Use **Review choice** on its
+  notification to reopen it. A changed source/profile shape is a new question
+  and prompts again. If an account write fails after the decision is saved,
+  the dialog says so and ECM retries; do not make a second, different choice
+  merely to trigger a retry.
+
+  If the dialog is unavailable, apply the same profile set manually under
+  **Auto-Sync Settings → Channel Profile Assignment** for every source group
+  and account named by the notification, then run **Save & Refresh**. Profile
+  membership remains frozen until the source settings agree; ECM will not
+  choose whichever provider happens to return first.
 - **Stream Profile Assignment is where assignment actually happens.** The
   top-level **Stream Profiles** screen (reached from **M3U setup actions**
   → **Stream Profiles**) is a catalog you can add to, but it doesn't attach

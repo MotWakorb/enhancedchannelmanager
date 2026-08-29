@@ -646,6 +646,54 @@ export const STUB_ROUTES: StubRoute[] = [
   { match: /\/api\/stream-stats/, body: envelope([]) },
 
   // --- misc -------------------------------------------------------------
+  {
+    match: /\/api\/profile-conflict-reviews\/\d+\/accept$/,
+    method: 'POST',
+    body: {
+      status: 'accepted',
+      applied: false,
+      updated_account_ids: [1],
+      failed_account_ids: [2],
+      retry_error: 'account 2: harness partial failure',
+    },
+  },
+  {
+    match: /\/api\/profile-conflict-reviews$/,
+    body: {
+      reviews: [{
+        id: 901,
+        fingerprint: 'harness-profile-conflict',
+        effective_group_id: 665,
+        status: 'pending',
+        accepted_choice_key: null,
+        accepted_profile_ids: null,
+        created_at: 1,
+        last_seen_at: 1,
+        resolved_at: null,
+        applied_at: null,
+        retry_error: null,
+        evidence: {
+          fingerprint_version: 1,
+          target: { effective_group_id: 665, name: 'NBA Events' },
+          choices: [
+            {
+              choice_key: 'harness-choice-a',
+              profile_ids: [6, 7],
+              profile_names: ['Sports', 'Family'],
+              sources: [{ source_group_id: 823, source_group_name: 'NBA US', m3u_account_id: 1, m3u_account_name: 'Primary provider' }],
+            },
+            {
+              choice_key: 'harness-choice-b',
+              profile_ids: [14],
+              profile_names: ['Strong only'],
+              sources: [{ source_group_id: 2866, source_group_name: 'NBA Backup', m3u_account_id: 2, m3u_account_name: 'Backup provider' }],
+            },
+          ],
+        },
+      }],
+      total: 1,
+    },
+  },
   { match: /\/api\/notifications/, body: envelope([]) },
   { match: /\/api\/journal\/stats/, body: { total: 0, by_kind: {} } },
   { match: /\/api\/journal/, body: envelope([]) },

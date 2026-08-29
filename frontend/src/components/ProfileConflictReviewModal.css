@@ -1,0 +1,108 @@
+.profile-conflict-overlay {
+  z-index: calc(var(--z-overlay) + 10);
+}
+
+.profile-conflict-modal {
+  border-top: 3px solid var(--warning);
+}
+
+.profile-conflict-header h2 .material-icons {
+  color: var(--warning-text);
+}
+
+.profile-conflict-body {
+  display: grid;
+  gap: 1rem;
+  overflow-y: auto;
+}
+
+.profile-conflict-target {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-primary);
+  border-left: 4px solid var(--warning);
+  border-radius: var(--radius-md);
+  background: var(--warning-bg);
+}
+
+.profile-conflict-target span,
+.profile-conflict-choice-copy span {
+  color: var(--text-secondary);
+}
+
+.profile-conflict-intro {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.profile-conflict-choices {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.profile-conflict-choice {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+
+.profile-conflict-choice:hover,
+.profile-conflict-choice.is-selected {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 8%, var(--bg-secondary));
+}
+
+.profile-conflict-choice input {
+  margin-top: 0.2rem;
+  accent-color: var(--accent-primary);
+}
+
+.profile-conflict-choice-copy {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+}
+
+.profile-conflict-message {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border-radius: var(--radius-md);
+}
+
+.profile-conflict-message.is-error {
+  color: var(--error-text, var(--error));
+  background: var(--error-bg);
+}
+
+.profile-conflict-message.is-warning {
+  color: var(--warning-text);
+  background: var(--warning-bg);
+}
+
+.profile-conflict-footer {
+  justify-content: space-between;
+}
+
+@media (max-width: 640px) {
+  .profile-conflict-target,
+  .profile-conflict-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .profile-conflict-footer .modal-btn {
+    width: 100%;
+  }
+}

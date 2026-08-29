@@ -36,6 +36,9 @@ import type { NumberingConflict, ReconcileDecision } from './utils/channelNumber
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
+import {
+  ProfileConflictReviewModal,
+} from './components/ProfileConflictReviewModal';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPromptContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -3466,6 +3469,7 @@ function App() {
         streamName={vlcModalStreamName || 'Stream'}
       />
     </div>
+    <ProfileConflictReviewModal />
     </BackupDestinationPromptProvider>
     </NotificationProvider>
   );

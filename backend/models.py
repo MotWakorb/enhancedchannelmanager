@@ -570,6 +570,10 @@ class Notification(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
+        try:
+            metadata = json.loads(self.extra_data) if self.extra_data else None
+        except (TypeError, ValueError):
+            metadata = None
         return {
             "id": self.id,
             "type": self.type,
@@ -580,7 +584,7 @@ class Notification(Base):
             "source_id": self.source_id,
             "action_label": self.action_label,
             "action_url": self.action_url,
-            "metadata": json.loads(self.extra_data) if self.extra_data else None,
+            "metadata": metadata,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "read_at": self.read_at.isoformat() + "Z" if self.read_at else None,
             "expires_at": self.expires_at.isoformat() + "Z" if self.expires_at else None,
@@ -3178,6 +3182,46 @@ class PendingMergeJournal(Base):
             f"action={self.action_type}, "
             f"trigger={self.trigger_context})>"
         )
+
+
+class ProfileConflictReview(Base):
+    """Durable operator question for one effective-group profile conflict."""
+
+    __tablename__ = "profile_conflict_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fingerprint = Column(Text, nullable=False)
+    fingerprint_version = Column(Integer, nullable=False, default=1, server_default="1")
+    effective_group_id = Column(Integer, nullable=False)
+    status = Column(Text, nullable=False, default="pending", server_default="pending")
+    accepted_choice_key = Column(Text, nullable=True)
+    accepted_profile_ids = Column(Text, nullable=True)
+    evidence = Column(Text, nullable=False)
+    created_at = Column(Integer, nullable=False)
+    last_seen_at = Column(Integer, nullable=False)
+    resolved_at = Column(Integer, nullable=True)
+    applied_at = Column(Integer, nullable=True)
+    actor_token_id = Column(Text, nullable=True)
+    retry_error = Column(Text, nullable=True)
+    notified_at = Column(Integer, nullable=True)
+    accept_journaled_at = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','accepted','superseded')",
+            name="ck_profile_conflict_reviews_status",
+        ),
+        Index(
+            "uq_profile_conflict_reviews_fingerprint", "fingerprint", unique=True
+        ),
+        Index(
+            "idx_profile_conflict_reviews_status_seen", "status", "last_seen_at"
+        ),
+        Index(
+            "idx_profile_conflict_reviews_effective_status",
+            "effective_group_id", "status",
+        ),
+    )
 
 
 class EventSyncReview(Base):

@@ -222,6 +222,7 @@ class M3UChangeMonitorTask(TaskScheduler):
                         recon.get("groups_partial_failure", 0)
                         + recon.get("groups_degraded", 0)
                         + recon.get("groups_errored", 0)
+                        + recon.get("groups_conflicted", 0)
                     )
                     if recon.get("groups_reconciled") or reconcile_warnings:
                         logger.info(
