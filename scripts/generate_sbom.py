@@ -91,8 +91,12 @@ PINNED_REQUIREMENT = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<ver
 DOCKER_IMAGE_REF = re.compile(
     r"^(?P<image>[^\s@:]+(?::[^\s@]+)?)@(?P<digest>sha256:[0-9a-f]{64})$"
 )
+DOCKER_INSTRUCTION_WHITESPACE = " \t\v\f\r"
+DOCKER_INSTRUCTION_WHITESPACE_PATTERN = r"[\t\v\f\r ]+"
 DOCKER_IMAGE_INSTRUCTION = re.compile(
-    r"^(?P<instruction>FROM|COPY)(?:[ \t]+(?P<arguments>.*))?$", re.IGNORECASE
+    rf"^(?P<instruction>FROM|COPY)(?:{DOCKER_INSTRUCTION_WHITESPACE_PATTERN}"
+    r"(?P<arguments>.*))?$",
+    re.IGNORECASE,
 )
 SPDX_ID_UNSAFE = re.compile(r"[^A-Za-z0-9.-]")
 
@@ -272,15 +276,21 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
         images.setdefault(key, entry)
         return key
 
-    for number, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
+    # Docker physical lines end at LF; CR is also valid instruction whitespace
+    # and must not split an instruction when it appears anywhere else.
+    for number, raw in enumerate(text.split("\n"), start=1):
+        line = raw.strip(DOCKER_INSTRUCTION_WHITESPACE)
         match = DOCKER_IMAGE_INSTRUCTION.fullmatch(line)
         if match is None:
             continue
         instruction = match["instruction"].upper()
-        arguments = match["arguments"] or ""
+        arguments = (match["arguments"] or "").strip(DOCKER_INSTRUCTION_WHITESPACE)
         if instruction == "FROM":
-            tokens = arguments.split()
+            tokens = (
+                re.split(DOCKER_INSTRUCTION_WHITESPACE_PATTERN, arguments)
+                if arguments
+                else []
+            )
             if not tokens:
                 raise SbomError(f"{source} line {number} has a bare FROM")
             reference = tokens[0]
@@ -292,7 +302,11 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
                 stage_base[tokens[2]] = key
             runtime_key = key
         elif "--from=" in arguments:
-            reference = arguments.split("--from=", 1)[1].split()[0]
+            reference = re.split(
+                DOCKER_INSTRUCTION_WHITESPACE_PATTERN,
+                arguments.split("--from=", 1)[1],
+                maxsplit=1,
+            )[0]
             if reference in stage_base:
                 continue
             _record(_pinned_image(reference, source, number, "build"))

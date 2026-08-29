@@ -40,6 +40,14 @@ NODE_DIGEST = "a" * 64
 PYTHON_DIGEST = "b" * 64
 UV_DIGEST = "c" * 64
 ALPINE_DIGEST = "d" * 64
+BUILDKIT_INSTRUCTION_WHITESPACE = (" ", "\t", "\v", "\f", "\r")
+BUILDKIT_INSTRUCTION_WHITESPACE_IDS = (
+    "space",
+    "tab",
+    "vertical-tab",
+    "form-feed",
+    "carriage-return",
+)
 
 
 def _load():
@@ -469,25 +477,58 @@ def test_an_empty_requirements_file_is_rejected(sbom):
         sbom.parse_pinned_requirements("# only a comment\n", "requirements.txt")
 
 
-def test_a_floating_base_image_is_rejected(sbom):
+@pytest.mark.parametrize(
+    "instruction_whitespace",
+    BUILDKIT_INSTRUCTION_WHITESPACE,
+    ids=BUILDKIT_INSTRUCTION_WHITESPACE_IDS,
+)
+def test_a_floating_base_image_is_rejected_for_every_buildkit_instruction_whitespace(
+    sbom, instruction_whitespace
+):
     with pytest.raises(sbom.SbomError, match="python:3.12-slim.*floating image reference"):
-        sbom.parse_dockerfile_images("FROM python:3.12-slim\n", "Dockerfile")
+        sbom.parse_dockerfile_images(
+            f"FROM{instruction_whitespace}python:3.12-slim\n", "Dockerfile"
+        )
 
 
-def test_a_floating_copy_from_image_is_rejected(sbom):
+@pytest.mark.parametrize(
+    "instruction_whitespace",
+    BUILDKIT_INSTRUCTION_WHITESPACE,
+    ids=BUILDKIT_INSTRUCTION_WHITESPACE_IDS,
+)
+def test_a_floating_copy_from_image_is_rejected_for_every_buildkit_instruction_whitespace(
+    sbom, instruction_whitespace
+):
     with pytest.raises(sbom.SbomError, match="busybox:latest.*floating image reference"):
         sbom.parse_dockerfile_images(
-            f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST}\nCOPY --from=busybox:latest /x /x\n",
+            f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST}\n"
+            f"COPY{instruction_whitespace}--from=busybox:latest /x /x\n",
             "Dockerfile",
         )
 
 
-def test_tabbed_image_instructions_are_parsed_and_stage_aliases_are_ignored(sbom):
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize(
+    "instruction_whitespace",
+    BUILDKIT_INSTRUCTION_WHITESPACE,
+    ids=BUILDKIT_INSTRUCTION_WHITESPACE_IDS,
+)
+def test_pinned_images_and_stage_aliases_work_for_every_buildkit_instruction_whitespace(
+    sbom, instruction_whitespace, line_ending
+):
     images = sbom.parse_dockerfile_images(
-        f"FROM\tnode:20-alpine@sha256:{NODE_DIGEST}\tAS\tbuild\n"
-        f"COPY\t--from=busybox:1.36@sha256:{UV_DIGEST} /bin/x /bin/x\n"
-        "FROM\tbuild\n"
-        "COPY\t--from=build /app /app\n",
+        line_ending.join(
+            [
+                f"FROM{instruction_whitespace}node:20-alpine@sha256:{NODE_DIGEST}"
+                f"{instruction_whitespace}AS{instruction_whitespace}build",
+                f"COPY{instruction_whitespace}--from=busybox:1.36@sha256:{UV_DIGEST}"
+                f"{instruction_whitespace}/bin/x{instruction_whitespace}/bin/x",
+                f"FROM{instruction_whitespace}build",
+                f"COPY{instruction_whitespace}--from=build"
+                f"{instruction_whitespace}/app{instruction_whitespace}/app",
+                "",
+            ]
+        ),
         "Dockerfile",
     )
 
@@ -503,20 +544,6 @@ def test_tabbed_image_instructions_are_parsed_and_stage_aliases_are_ignored(sbom
             "role": "runtime",
         },
     ]
-
-
-def test_a_tabbed_floating_base_image_reports_the_reference(sbom):
-    with pytest.raises(sbom.SbomError, match="python:3.12-slim.*floating image reference"):
-        sbom.parse_dockerfile_images("FROM\tpython:3.12-slim\n", "Dockerfile")
-
-
-def test_a_tabbed_floating_copy_image_reports_the_reference(sbom):
-    with pytest.raises(sbom.SbomError, match="busybox:latest.*floating image reference"):
-        sbom.parse_dockerfile_images(
-            f"FROM\tpython:3.12-slim@sha256:{PYTHON_DIGEST}\n"
-            "COPY\t--from=busybox:latest /x /x\n",
-            "Dockerfile",
-        )
 
 
 def test_a_dockerfile_without_a_from_is_rejected(sbom):
