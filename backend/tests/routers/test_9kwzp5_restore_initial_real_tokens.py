@@ -51,8 +51,8 @@ succeeded.
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+import jwt
 import pytest
-from jose import jwt
 
 from auth.tokens import ALGORITHM, _get_secret_key, create_access_token
 from models import User
@@ -240,8 +240,9 @@ class TestIsAdminComesFromTheRow:
                 "type": "access",
                 "is_admin": True,
                 "admin": True,
-                "exp": jwt.get_unverified_claims(
-                    create_access_token(user.id, user.username)
+                "exp": jwt.decode(
+                    create_access_token(user.id, user.username),
+                    options={"verify_signature": False},
                 )["exp"],
             },
             _get_secret_key(),
@@ -268,7 +269,7 @@ class TestRealTokenValidationChain:
         """Well-formed, unexpired, correct claims — only the signature is wrong."""
         user = _seed_user(test_session, "operator", is_admin=True)
         real = create_access_token(user.id, user.username)
-        payload = jwt.get_unverified_claims(real)
+        payload = jwt.decode(real, options={"verify_signature": False})
         forged = jwt.encode(payload, "not-the-ecm-signing-key", algorithm=ALGORITHM)
         assert forged != real
 

@@ -37,7 +37,9 @@ python-multipart>=0.0.31
 # Authentication
 bcrypt>=4.0.0
 slowapi>=0.1.9
-python-jose[cryptography]>=3.3.0
+# HS256 JWT signing/validation. Keep this independent of josepy, which is the
+# ACME JOSE implementation below and serves a different protocol.
+pyjwt>=2.10.0
 # Floored at 48.0.1 to clear GHSA-537c-gmf6-5ccf (v0.18.0 release-scan blocker).
 cryptography>=50.0.0
 

@@ -1,7 +1,7 @@
 """
 JWT token generation and validation utilities.
 
-Uses python-jose for JWT handling with HS256 algorithm.
+Uses PyJWT for JWT handling with HS256 algorithm.
 """
 import hashlib
 import logging
@@ -9,7 +9,8 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Optional, Tuple
 
-from jose import JWTError, jwt, ExpiredSignatureError
+import jwt
+from jwt.exceptions import ExpiredSignatureError, InvalidIssuedAtError, PyJWTError
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +222,19 @@ def decode_token(token: str, ignore_revocation: bool = False) -> dict:
         raise InvalidTokenError("Malformed token")
 
     try:
-        payload = jwt.decode(token, _get_secret_key(), algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            token,
+            _get_secret_key(),
+            algorithms=[ALGORITHM],
+            options={"verify_iat": False},
+        )
+
+        # python-jose validated the iat type but allowed future values. Keep
+        # that contract rather than adopting PyJWT's stricter clock check.
+        if "iat" in payload and not isinstance(payload["iat"], int):
+            raise InvalidIssuedAtError(
+                "Issued At claim (iat) must be an integer."
+            )
 
         # Check if token is revoked
         jti = payload.get("jti")
@@ -239,7 +252,7 @@ def decode_token(token: str, ignore_revocation: bool = False) -> dict:
 
     except ExpiredSignatureError:
         raise TokenExpiredError("Token has expired")
-    except JWTError as e:
+    except PyJWTError as e:
         raise InvalidTokenError(f"Invalid token: {str(e)}")
 
 

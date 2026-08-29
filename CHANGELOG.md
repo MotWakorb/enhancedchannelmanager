@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Removed the unpatched `ecdsa` runtime dependency by replacing `python-jose` with PyJWT for ECM's existing HS256-only tokens (bead `enhancedchannelmanager-tm9ma`, build 0169).** This resolves Dependabot alert #1 / [GHSA-wj6h-64fc-37mp](https://github.com/advisories/GHSA-wj6h-64fc-37mp) without changing access, refresh, password-reset, expiry, claim-validation, or revocation behavior. The separate `josepy` dependency remains for ACME certificate management.
+
 ### Fixed
 
 - **Auto-Sync no longer lets one provider silently decide channel-profile membership when several source groups feed the same effective channel group (bead `enhancedchannelmanager-fes61`, build 0168).** ECM evaluates the complete source/account fan-in without depending on API row order. If the sources select different non-empty Channel Profile sets, membership writes and normalization for that effective group stop before any channel is changed. An app-root **Profile choice required** dialog names the effective group, competing profiles, source groups, and M3U accounts; the operator's explicit choice is recorded before ECM harmonizes every source row. The notification center can reopen a choice deferred for the current browser session. Partial account failures stay visible and retry automatically, and a conflict whose source shape changes becomes a new question instead of applying a stale decision.
