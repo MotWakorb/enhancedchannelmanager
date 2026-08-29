@@ -229,12 +229,16 @@ def decode_token(token: str, ignore_revocation: bool = False) -> dict:
             options={"verify_iat": False},
         )
 
-        # python-jose validated the iat type but allowed future values. Keep
-        # that contract rather than adopting PyJWT's stricter clock check.
-        if "iat" in payload and not isinstance(payload["iat"], int):
-            raise InvalidIssuedAtError(
-                "Issued At claim (iat) must be an integer."
-            )
+        # python-jose accepted any iat value coercible by int() and allowed
+        # future values. Keep that contract rather than adopting PyJWT's
+        # stricter type and clock checks.
+        if "iat" in payload:
+            try:
+                int(payload["iat"])
+            except ValueError:
+                raise InvalidIssuedAtError(
+                    "Issued At claim (iat) must be an integer."
+                )
 
         # Check if token is revoked
         jti = payload.get("jti")

@@ -202,6 +202,27 @@ class TestTokenValidation:
         with pytest.raises(InvalidTokenError, match=r"^Invalid token:"):
             decode_token(token)
 
+    @pytest.mark.parametrize(
+        "issued_at",
+        ["12345", 12345.75],
+        ids=["numeric-string", "fractional-number"],
+    )
+    def test_decode_token_accepts_integer_coercible_issued_at_claim(self, issued_at):
+        """Issued-at validation retains python-jose's int() compatibility."""
+        from auth.tokens import ALGORITHM, _get_secret_key, decode_token
+
+        token = pyjwt.encode(
+            {
+                "sub": "1",
+                "exp": datetime.utcnow() + timedelta(minutes=5),
+                "iat": issued_at,
+            },
+            _get_secret_key(),
+            algorithm=ALGORITHM,
+        )
+
+        assert decode_token(token)["iat"] == issued_at
+
     def test_decode_token_preserves_future_issued_at_compatibility(self):
         """A valid token is not rejected solely for future clock skew in iat."""
         from auth.tokens import ALGORITHM, _get_secret_key, decode_token
