@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 import pytest
 
@@ -76,7 +77,25 @@ def tree(tmp_path: Path) -> Path:
                 "lockfileVersion": 3,
                 "packages": {
                     "": {"name": "app", "version": "9.9.9"},
+                    "node_modules/@scope/widget": {
+                        "version": "1.2.3",
+                        "license": "Apache-2.0",
+                    },
+                    "node_modules/first/node_modules/semver": {
+                        "version": "7.8.5",
+                        "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+                        "integrity": "sha512-same-package-bytes",
+                        "dev": True,
+                        "license": "ISC",
+                    },
                     "node_modules/react": {"version": "19.0.0", "license": "MIT"},
+                    "node_modules/second/node_modules/semver": {
+                        "version": "7.8.5",
+                        "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+                        "integrity": "sha512-same-package-bytes",
+                        "dev": True,
+                        "license": "ISC",
+                    },
                     "node_modules/vite": {"version": "6.0.0", "dev": True},
                 },
             }
@@ -162,6 +181,101 @@ def test_a_copy_from_a_named_build_stage_is_not_an_image(sbom, generated):
     assert "python-builder" not in names
     assert "frontend-builder" not in names
     assert "ghcr.io/astral-sh/uv:latest" in names
+
+
+def test_exact_duplicate_npm_identity_is_deduplicated_and_ids_are_globally_unique(
+    sbom, generated
+):
+    ecm = json.loads((generated / "ecm.spdx.json").read_text(encoding="utf-8"))
+    semver = [package for package in ecm["packages"] if package["name"] == "semver"]
+    assert len(semver) == 1
+
+    for name in ("ecm.spdx.json", "mcp.spdx.json"):
+        document = json.loads((generated / name).read_text(encoding="utf-8"))
+        package_ids = [package["SPDXID"] for package in document["packages"]]
+        assert len(package_ids) == len(set(package_ids))
+
+
+@pytest.mark.parametrize(
+    ("field", "conflicting_value"),
+    [
+        ("dev", False),
+        ("license", "MIT"),
+        ("resolved", "https://registry.example/semver-7.8.5.tgz"),
+        ("integrity", "sha512-different-package-bytes"),
+    ],
+)
+def test_conflicting_duplicate_npm_identity_is_rejected(sbom, field, conflicting_value):
+    metadata = {
+        "version": "7.8.5",
+        "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+        "integrity": "sha512-same-package-bytes",
+        "dev": True,
+        "license": "ISC",
+    }
+    conflicting = dict(metadata)
+    conflicting[field] = conflicting_value
+
+    with pytest.raises(sbom.SbomError, match="conflicting metadata"):
+        sbom.parse_lockfile_packages(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/first/node_modules/semver": metadata,
+                    "node_modules/second/node_modules/semver": conflicting,
+                },
+            },
+            "package-lock.json",
+        )
+
+
+def test_scoped_npm_purl_is_canonical(sbom, generated):
+    document = json.loads((generated / "ecm.spdx.json").read_text(encoding="utf-8"))
+    package = next(
+        package for package in document["packages"] if package["name"] == "@scope/widget"
+    )
+    assert package["externalRefs"] == [
+        {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:npm/%40scope/widget@1.2.3",
+        }
+    ]
+
+
+def test_oci_purls_are_canonical_and_use_only_supported_qualifiers(sbom, generated):
+    expected = {
+        f"pkg:oci/node@sha256:{NODE_DIGEST}"
+        "?repository_url=docker.io%2Flibrary%2Fnode&tag=20-alpine",
+        f"pkg:oci/python@sha256:{PYTHON_DIGEST}"
+        "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim",
+        f"pkg:oci/uv@sha256:{UV_DIGEST}"
+        "?repository_url=ghcr.io%2Fastral-sh%2Fuv&tag=latest",
+        f"pkg:oci/python@sha256:{ALPINE_DIGEST}"
+        "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-alpine",
+    }
+    actual = set()
+    for name in ("ecm.spdx.json", "mcp.spdx.json"):
+        document = json.loads((generated / name).read_text(encoding="utf-8"))
+        actual.update(
+            ref["referenceLocator"]
+            for package in document["packages"]
+            for ref in package.get("externalRefs", [])
+            if ref["referenceLocator"].startswith("pkg:oci/")
+        )
+
+    assert actual == expected
+    for locator in actual:
+        qualifiers = dict(parse_qsl(locator.partition("?")[2]))
+        assert set(qualifiers) == {"repository_url", "tag"}
+
+
+def test_creator_identifies_the_generator_format_version(sbom, generated):
+    for name in ("ecm.spdx.json", "mcp.spdx.json"):
+        document = json.loads((generated / name).read_text(encoding="utf-8"))
+        assert document["creationInfo"]["creators"] == [
+            "Tool: scripts/generate_sbom.py-2"
+        ]
 
 
 def test_generation_is_deterministic_for_a_fixed_timestamp(sbom, tree):

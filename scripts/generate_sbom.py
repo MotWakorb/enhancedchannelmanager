@@ -73,11 +73,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 SPDX_VERSION = "SPDX-2.3"
 DATA_LICENSE = "CC0-1.0"
 NOASSERTION = "NOASSERTION"
 INDEX_SCHEMA = 1
+GENERATOR_FORMAT_VERSION = "2"
 
 # Namespaces are required by SPDX to be unique per document. Version plus
 # document name is unique across this repository and, unlike a UUID, is
@@ -200,7 +202,7 @@ def parse_lockfile_packages(document: Any, source: str) -> list[dict[str, Any]]:
     entries = document.get("packages")
     if not isinstance(entries, dict) or not entries:
         raise SbomError(f"{source} has no 'packages' map")
-    packages: list[dict[str, Any]] = []
+    packages: dict[tuple[str, str], tuple[dict[str, Any], str]] = {}
     for location, entry in entries.items():
         if location == "" or not isinstance(entry, dict):
             continue
@@ -213,17 +215,30 @@ def parse_lockfile_packages(document: Any, source: str) -> list[dict[str, Any]]:
         version = entry.get("version")
         if not isinstance(name, str) or not isinstance(version, str) or not version:
             raise SbomError(f"{source} entry {location!r} has no resolved name/version")
-        packages.append(
-            {
-                "name": name,
-                "version": version,
-                "dev": bool(entry.get("dev")),
-                "license": entry.get("license") if isinstance(entry.get("license"), str) else None,
-            }
-        )
+        package = {
+            "name": name,
+            "version": version,
+            "dev": bool(entry.get("dev")),
+            "license": entry.get("license") if isinstance(entry.get("license"), str) else None,
+            "resolved": entry.get("resolved") if isinstance(entry.get("resolved"), str) else None,
+            "integrity": (
+                entry.get("integrity") if isinstance(entry.get("integrity"), str) else None
+            ),
+        }
+        identity = (name, version)
+        previous = packages.get(identity)
+        if previous is not None:
+            previous_package, previous_location = previous
+            if previous_package != package:
+                raise SbomError(
+                    f"{source} entries {previous_location!r} and {location!r} resolve "
+                    f"duplicate identity {name!r}@{version!r} with conflicting metadata"
+                )
+            continue
+        packages[identity] = (package, location)
     if not packages:
         raise SbomError(f"{source} resolves no packages")
-    return packages
+    return [package for package, _location in packages.values()]
 
 
 def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
@@ -317,7 +332,10 @@ def _npm_package(entry: dict[str, Any]) -> dict[str, Any]:
             {
                 "referenceCategory": "PACKAGE-MANAGER",
                 "referenceType": "purl",
-                "referenceLocator": f"pkg:npm/{entry['name']}@{entry['version']}",
+                "referenceLocator": (
+                    f"pkg:npm/{quote(entry['name'], safe='/')}"
+                    f"@{quote(entry['version'], safe='')}"
+                ),
             }
         ],
     }
@@ -338,6 +356,25 @@ def _image_package(entry: dict[str, str]) -> dict[str, Any]:
         "base": "Intermediate build-stage base image; not published.",
         "build": "Pulled during the build to copy a tool out of; not published.",
     }[entry["role"]]
+    repository, tag = entry["image"], None
+    if ":" in repository.rsplit("/", 1)[-1]:
+        repository, tag = repository.rsplit(":", 1)
+    first_fragment = repository.split("/", 1)[0]
+    if "." not in first_fragment and ":" not in first_fragment and first_fragment != "localhost":
+        repository = (
+            f"docker.io/{repository}"
+            if "/" in repository
+            else f"docker.io/library/{repository}"
+        )
+    repository = repository.lower()
+    name = repository.rsplit("/", 1)[-1]
+    qualifiers = {"repository_url": repository}
+    if tag is not None:
+        qualifiers["tag"] = tag
+    qualifier_string = "&".join(
+        f"{key}={quote(value, safe='')}" for key, value in sorted(qualifiers.items())
+    )
+
     return {
         "SPDXID": _spdx_id("Package", "oci", entry["image"], entry["digest"][7:19]),
         "name": entry["image"],
@@ -358,8 +395,9 @@ def _image_package(entry: dict[str, str]) -> dict[str, Any]:
             {
                 "referenceCategory": "PACKAGE-MANAGER",
                 "referenceType": "purl",
-                "referenceLocator": f"pkg:oci/{entry['image'].rsplit('/', 1)[-1]}"
-                f"?repository_url={entry['image']}&digest={entry['digest']}",
+                "referenceLocator": (
+                    f"pkg:oci/{quote(name, safe='')}@{entry['digest']}?{qualifier_string}"
+                ),
             }
         ],
     }
@@ -424,6 +462,13 @@ def build_document(
         kind = "DEV_DEPENDENCY_OF" if entry["dev"] else "BUILD_DEPENDENCY_OF"
         relationships.append(_relationship(package["SPDXID"], kind, root_id))
 
+    package_ids = [package["SPDXID"] for package in packages]
+    duplicate_ids = sorted(
+        package_id for package_id in set(package_ids) if package_ids.count(package_id) > 1
+    )
+    if duplicate_ids:
+        raise SbomError(f"document has duplicate package SPDXIDs: {', '.join(duplicate_ids)}")
+
     packages[1:] = sorted(packages[1:], key=lambda item: item["SPDXID"])
     relationships[1:] = sorted(
         relationships[1:],
@@ -437,7 +482,9 @@ def build_document(
         "documentNamespace": f"{NAMESPACE_ROOT}/v{version}/{subject}",
         "creationInfo": {
             "created": created,
-            "creators": ["Tool: scripts/generate_sbom.py"],
+            "creators": [
+                f"Tool: scripts/generate_sbom.py-{GENERATOR_FORMAT_VERSION}"
+            ],
             "comment": CREATION_COMMENT,
         },
         "documentDescribes": [root_id],
