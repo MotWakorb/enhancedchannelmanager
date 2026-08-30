@@ -15,6 +15,7 @@ import {
 } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './BulkEPGAssignModal.css';
 
 /** Assignment to be made after user confirms */
@@ -85,6 +86,7 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
   onAssign,
   epgAutoMatchThreshold = 80,
 }: BulkEPGAssignModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const [phase, setPhase] = useState<Phase>('configure');
   const [matchResults, setMatchResults] = useState<EPGMatchChannelResult[]>([]);
   const [conflictResolutions, setConflictResolutions] = useState<Map<number, EPGMatchEntry | null>>(new Map());
@@ -494,10 +496,10 @@ export const BulkEPGAssignModal = memo(function BulkEPGAssignModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-xxl bulk-epg-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-xxl bulk-epg-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Bulk EPG Assignment</h2>
+          <h2 id={titleId}>Bulk EPG Assignment</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

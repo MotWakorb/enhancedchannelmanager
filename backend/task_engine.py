@@ -9,20 +9,146 @@ Background service that manages and executes scheduled tasks:
 - Provides error handling and retry logic
 """
 import asyncio
+import copy
 import contextlib
 import logging
 from datetime import datetime
 from typing import Optional
+
+from sqlalchemy import and_, or_
 
 import journal
 from database import get_session
 from log_throttle import should_log
 from models import TaskExecution
 from task_registry import get_registry
-from task_scheduler import TaskResult
+from task_scheduler import (
+    TaskOutcome,
+    TaskResult,
+    completion_notification_type,
+    execution_status,
+    execution_succeeded,
+    task_outcome,
+)
 from journal import log_entry
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Execution history is scoped to the target INSTANCE, not the id (bead …-5dp92)
+# ---------------------------------------------------------------------------
+#
+# A per-target cross-instance-sync task is keyed ``dbas_sync_<target_id>``
+# (``tasks/dbas_sync.py`` → ``sync_task_id_for``), and ``SyncTarget.id`` is a
+# SQLite autoincrement primary key, so it is REUSED after a delete. Deleting a
+# target prunes its ``scheduled_tasks`` and ``task_schedules`` rows
+# (``remove_sync_target_task``) but not its ``task_executions`` rows — so the
+# next target handed the same id opened carrying its predecessor's runs,
+# including failures that were not its own, on the surface an operator uses to
+# judge whether the target is healthy.
+#
+# THE INVARIANT these helpers enforce (the specification — delete-then-recreate
+# is one example of it, not the definition): a ``task_executions`` row is
+# attributed to a per-target sync task only when the live ``SyncTarget`` behind
+# that id already existed when the run STARTED; an id with no live target
+# behind it has no history at all.
+#
+# ``started_at`` and not ``completed_at``: a run in flight when its target is
+# deleted is deliberately not interrupted, so it can finish after the
+# replacement is created. It still is not the replacement's run.
+#
+# Enforced at the READ rather than by purging on delete. Purging would be a
+# cleanup step, not a guarantee — ``remove_sync_target_task`` is best-effort by
+# contract, runs after the delete has already committed, and would do nothing
+# for installs already carrying orphaned rows. The rows are left in place (the
+# ordinary 30-day ``purge_old_history`` retires them) so the audit trail of what
+# a since-deleted target actually did is not destroyed.
+
+
+def _sync_target_id_from_task_id(task_id: Optional[str]) -> Optional[int]:
+    """The ``SyncTarget`` id inside ``dbas_sync_<n>``, or None if not one.
+
+    Deliberately NOT a SQL ``LIKE``: in SQL ``_`` is a single-character
+    wildcard, so ``LIKE 'dbas_sync_%'`` also matches ids like
+    ``dbas_syncx_report`` that this rule has no business touching. The suffix of
+    a real per-target id is an integer, and nothing else is.
+    """
+    from tasks.dbas_sync import SYNC_TASK_ID_PREFIX
+
+    if not task_id or not task_id.startswith(SYNC_TASK_ID_PREFIX):
+        return None
+    suffix = task_id[len(SYNC_TASK_ID_PREFIX):]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def _live_sync_target_lifetimes(session) -> dict[str, Optional[datetime]]:
+    """Per-target sync task id → the instant its live target came into being.
+
+    Key PRESENCE means "a live target owns this id"; a present-but-None value
+    means the row carries no creation instant and therefore imposes no time
+    restriction (``SyncTarget.created_at`` is NOT NULL, so this is a
+    degradation path, and it degrades toward showing a live target's real
+    history rather than hiding it).
+    """
+    from export_models import SyncTarget
+    from tasks.dbas_sync import sync_task_id_for
+
+    return {
+        sync_task_id_for(target_id): created_at
+        for target_id, created_at in session.query(
+            SyncTarget.id, SyncTarget.created_at
+        ).all()
+    }
+
+
+def _scope_to_sync_target_lifetimes(session, query, task_id: Optional[str]):
+    """Apply the instance scope to a ``TaskExecution`` query.
+
+    Returns ``(query, empty)``. ``empty`` is True when the requested id is a
+    per-target sync id that no live target owns — there is nothing to show and
+    no filter can express "nothing" as cleanly.
+
+    Tasks whose ids are release constants (``epg_refresh``, the legacy shared
+    ``dbas_sync`` from bead …-5gzg5) are not touched.
+    """
+    if task_id is not None:
+        # Ordinary tasks are the overwhelming majority of these reads and must
+        # not pay for a lookup that cannot apply to them.
+        if _sync_target_id_from_task_id(task_id) is None:
+            return query, False
+        lifetimes = _live_sync_target_lifetimes(session)
+        if task_id not in lifetimes:
+            return query, True
+        started_at_floor = lifetimes[task_id]
+        if started_at_floor is None:
+            return query, False
+        return query.filter(TaskExecution.started_at >= started_at_floor), False
+
+    # The all-tasks feed resolves the same ids to the same target names, so the
+    # violation would simply be reachable one screen over. Constrain every
+    # per-target sync id PRESENT in the table rather than pattern-matching in
+    # SQL (see `_sync_target_id_from_task_id` for why LIKE is wrong here).
+    lifetimes = _live_sync_target_lifetimes(session)
+    clauses = []
+    for (present_id,) in session.query(TaskExecution.task_id).distinct().all():
+        if _sync_target_id_from_task_id(present_id) is None:
+            continue
+        if present_id not in lifetimes:
+            clauses.append(TaskExecution.task_id != present_id)
+            continue
+        started_at_floor = lifetimes[present_id]
+        if started_at_floor is None:
+            continue
+        clauses.append(
+            or_(
+                TaskExecution.task_id != present_id,
+                TaskExecution.started_at >= started_at_floor,
+            )
+        )
+    if clauses:
+        query = query.filter(and_(*clauses))
+    return query, False
 
 
 @contextlib.contextmanager
@@ -201,7 +327,17 @@ def _trip_run_on_refresh_circuit_breaker() -> None:
     write. Best-effort: a settings failure is logged but never aborts startup.
     """
     try:
-        from config import get_settings, save_settings
+        from config import (
+            get_settings,
+            save_settings,
+            settings_file_allows_startup_writes,
+        )
+        if not settings_file_allows_startup_writes():
+            logger.warning(
+                "[TASK-ENGINE] Run-on-refresh circuit breaker was not persisted "
+                "because settings.json is valid JSON but not an object"
+            )
+            return
         settings = get_settings()
         if getattr(settings, "auto_creation_run_on_refresh_disabled", False):
             return
@@ -288,8 +424,65 @@ def _success_task_completion_message(task_id: str, result: TaskResult) -> str:
             msg += f" ({black} black screen, {low} low FPS)"
         return msg
 
+    if task_id == "dbas_backup":
+        # …-fexq1: this task's counts are CATEGORIES, not opaque "items" (see
+        # tasks.dbas_backup._counts_from_artifact). The generic line below left
+        # the unit invisible, and before the counts meant anything it rendered
+        # the boolean as "1 items processed". The task's WARNING message
+        # already names categories; this is its clean-run counterpart. Only a
+        # run with zero degraded categories reaches here, so "all" is exact.
+        total = result.total_items
+        return "Backup artifact built. All %d categor%s archived%s" % (
+            total, "y" if total == 1 else "ies", dur,
+        )
+
     skip_note = f", {result.skipped_count} skipped" if result.skipped_count else ""
     return f"Successfully completed. {result.success_count} items processed{skip_note}{dur}"
+
+
+def _warning_task_completion_message(task_id: str, result: TaskResult) -> str:
+    """Human-readable partial-success ('Completed with Warnings') line.
+
+    Mirrors :func:`_success_task_completion_message`'s per-task_id branching so
+    a task that needs a richer partial-success message (rather than the
+    generic "N failures out of M items" phrasing) gets one WITHOUT a new
+    notification path — this still feeds the single existing "Completed with
+    Warnings" branch in the scheduler loop below (enhancedchannelmanager-zt3kf:
+    reuse the existing branch, invent no new copy).
+    """
+    details = result.details if isinstance(result.details, dict) else {}
+
+    if task_id == "stream_probe":
+        return (
+            f"Completed with {result.failed_count} failures out of {result.total_items} streams. "
+            f"({result.success_count} ok, {result.skipped_count} skipped)"
+        )
+
+    if task_id == "dbas_backup":
+        # zt3kf — a DBAS backup whose gather stubbed one or more Dispatcharr
+        # categories (upstream fetch failure) is a WARNING, not a clean
+        # success: the artifact was built but is missing real data for the
+        # named category/categories. Name them here so the operator does not
+        # have to open the artifact to discover what is missing.
+        degraded = details.get("degraded_categories") or []
+        if degraded:
+            plural = len(degraded) != 1
+            return (
+                "Backup artifact built, but %d Dispatcharr categor%s could not "
+                "be fetched from Dispatcharr and %s degraded in this backup: "
+                "%s. Check Dispatcharr connectivity and re-run to fill the "
+                "gap." % (
+                    len(degraded),
+                    "ies" if plural else "y",
+                    "are" if plural else "is",
+                    ", ".join(degraded),
+                )
+            )
+
+    return (
+        f"Completed with {result.failed_count} failures out of {result.total_items} items. "
+        f"({result.success_count} succeeded, {result.skipped_count} skipped)"
+    )
 
 
 class TaskEngine:
@@ -719,23 +912,27 @@ class TaskEngine:
         Returns:
             TaskResult or None if task not found
         """
-        # Get parameters from the first triggered schedule (if any)
-        # Multiple schedules could trigger at the same time; use the first one's parameters
-        schedule_parameters = None
-        schedule_id = None
-        if triggered_schedules:
-            first_schedule = triggered_schedules[0]
-            schedule_parameters = first_schedule.get_parameters()
-            schedule_id = first_schedule.id
+        results = []
+        for schedule in triggered_schedules:
+            schedule_parameters = schedule.get_parameters()
             if schedule_parameters:
-                logger.info("[%s] Using parameters from schedule %s: %s", task_id, schedule_id,
-                            _param_keys(schedule_parameters))
-
-        # Execute the task with parameters
-        result = await self._execute_task(task_id, triggered_by, parameters=schedule_parameters, schedule_id=schedule_id)
+                logger.info(
+                    "[%s] Using parameters from schedule %s: %s",
+                    task_id,
+                    schedule.id,
+                    _param_keys(schedule_parameters),
+                )
+            result = await self._execute_task(
+                task_id,
+                triggered_by,
+                parameters=schedule_parameters,
+                schedule_id=schedule.id,
+            )
+            if result:
+                results.append((schedule.id, result))
 
         # Update next_run_at for triggered schedules
-        if result:
+        if results:
             try:
                 from database import get_session
                 from models import TaskSchedule, ScheduledTask
@@ -743,11 +940,11 @@ class TaskEngine:
 
                 session = get_session()
                 try:
-                    for schedule in triggered_schedules:
+                    for schedule_id, schedule_result in results:
                         # Update last_run_at and recalculate next run time
-                        db_schedule = session.query(TaskSchedule).get(schedule.id)
+                        db_schedule = session.query(TaskSchedule).get(schedule_id)
                         if db_schedule:
-                            db_schedule.last_run_at = result.completed_at
+                            db_schedule.last_run_at = schedule_result.completed_at
                             if db_schedule.enabled:
                                 db_schedule.next_run_at = calculate_next_run(
                                     schedule_type=db_schedule.schedule_type,
@@ -756,9 +953,9 @@ class TaskEngine:
                                     timezone=db_schedule.timezone,
                                     days_of_week=db_schedule.get_days_of_week_list(),
                                     day_of_month=db_schedule.day_of_month,
-                                    last_run=result.completed_at,
+                                    last_run=schedule_result.completed_at,
                                 )
-                            logger.debug("[%s] Updated schedule %s last_run_at=%s, next_run_at=%s", task_id, db_schedule.id, result.completed_at, db_schedule.next_run_at)
+                            logger.debug("[%s] Updated schedule %s last_run_at=%s, next_run_at=%s", task_id, db_schedule.id, schedule_result.completed_at, db_schedule.next_run_at)
 
                     # Update parent task's next_run_at (earliest of all enabled schedules)
                     all_schedules = session.query(TaskSchedule).filter(
@@ -782,7 +979,7 @@ class TaskEngine:
             except Exception as e:
                 logger.exception("[%s] Failed to update schedule next_run_at: %s", task_id, e)
 
-        return result
+        return results[-1][1] if results else None
 
     async def _execute_task(
         self,
@@ -851,16 +1048,33 @@ class TaskEngine:
             if triggered_by == "scheduled"
             else None
         )
+        invocation_config = None
 
         try:
+            # Registry instances are long-lived singletons. Treat run parameters
+            # as an overlay on their hydrated persisted/default configuration,
+            # then restore that baseline in ``finally`` before another schedule
+            # or manual run can observe it.
+            invocation_config = copy.deepcopy(instance.get_config())
+
+            prepare_invocation = getattr(instance, "prepare_invocation", None)
+            if prepare_invocation:
+                prepare_invocation(triggered_by)
+
+            prepare_parameters = getattr(instance, "prepare_invocation_parameters", None)
+            if prepare_parameters:
+                parameters = prepare_parameters(triggered_by, schedule_id, parameters)
+
+            if triggered_by == "scheduled":
+                validator = getattr(instance, "validate_schedule_parameters", None)
+                if validator:
+                    validator(parameters)
+
             # Apply schedule parameters to the task instance
             if parameters and hasattr(instance, 'update_config'):
-                try:
-                    instance.update_config(parameters)
-                    logger.info("[%s] Applied schedule parameters: %s", task_id,
-                                _param_keys(parameters))
-                except Exception as e:
-                    logger.warning("[%s] Failed to apply parameters: %s", task_id, e)
+                instance.update_config(parameters)
+                logger.info("[%s] Applied schedule parameters: %s", task_id,
+                            _param_keys(parameters))
 
             logger.info("[%s] Starting task execution (triggered_by=%s)", task_id, triggered_by)
 
@@ -918,6 +1132,7 @@ class TaskEngine:
                 user_initiated=(triggered_by == "manual"),
             )
 
+            instance.set_run_trigger(triggered_by)
             result = await instance.run()
 
             # Update execution record
@@ -928,14 +1143,14 @@ class TaskEngine:
                     if execution:
                         execution.completed_at = result.completed_at
                         execution.duration_seconds = result.duration_seconds
-                        # Set status based on result: completed, cancelled, or failed
-                        if result.error == "CANCELLED":
-                            execution.status = "cancelled"
-                        elif result.success:
-                            execution.status = "completed"
-                        else:
-                            execution.status = "failed"
-                        execution.success = result.success
+                        # Severity comes from the ONE derivation (bead …-fexq1),
+                        # so the stored row cannot contradict the alert emitted
+                        # for the same run a few lines below. Previously both
+                        # fields were read off result.success alone, which
+                        # stored a degraded-but-completed run as "failed" while
+                        # its own notification said "Completed with Warnings".
+                        execution.status = execution_status(result)
+                        execution.success = execution_succeeded(result)
                         execution.message = result.message
                         execution.error = result.error
                         execution.total_items = result.total_items
@@ -957,9 +1172,15 @@ class TaskEngine:
             # For stream_probe tasks, use "probe_failures" to allow min_failures threshold
             alert_category = "probe_failures" if task_id == "stream_probe" else None
 
-            # Log task completion to journal and send notifications
-            # Check for cancellation first - cancelled tasks should show a distinct message
-            if result.error == "CANCELLED":
+            # ONE branch per TaskOutcome (bead …-fexq1). Severity is derived
+            # once, in task_scheduler.task_outcome, and the Journal row, the
+            # completion notification and the TaskExecution row written above all
+            # map from it. Before this, each surface re-derived severity from
+            # ``result.success`` plus ``failed_count > 0`` and they disagreed:
+            # the drill's degraded restore alerted "Completed with Warnings"
+            # while its history row said ``failed``.
+            outcome = task_outcome(result)
+            if outcome is TaskOutcome.CANCELLED:
                 log_entry(
                     category="task",
                     action_type="cancel",
@@ -997,101 +1218,13 @@ class TaskEngine:
                 await self._notify_task_result(
                     task_name=instance.task_name,
                     task_id=task_id,
-                    notification_type="warning",
+                    notification_type=completion_notification_type(result),
                     title=f"Task Cancelled: {instance.task_name}",
                     message=cancel_msg,
                     result=result,
                     alert_category=alert_category,
                 )
-            elif result.success:
-                # bd-qxi02 (SRE recommendation from bd-p5b8i spike):
-                # stamp the per-task success gauge so the
-                # ECMTaskScheduleStale* alerts in prometheus_rules.yaml
-                # can distinguish "task hasn't been scheduled in days"
-                # (the disease bd-p5b8i hid for 39+ days) from "task
-                # is healthy." Wrapped defensively in observability —
-                # this MUST NOT break the task completion path.
-                #
-                # CANCELLED is intentionally excluded from success-
-                # stamping. The `if result.error == "CANCELLED"`
-                # branch above is part of the same if/elif chain, so
-                # a cancelled result never reaches this elif — even
-                # if a task returns success=True alongside
-                # error="CANCELLED", the gauge is not stamped. This
-                # is the right behavior: a cancelled run is not a
-                # successful run and should not reset the staleness
-                # clock.
-                try:
-                    from observability import record_task_success
-                    record_task_success(task_id)
-                except Exception as obs_err:  # pragma: no cover — best-effort
-                    logger.debug(
-                        "[%s] Failed to record task success gauge: %s",
-                        task_id, obs_err,
-                    )
-
-                log_entry(
-                    category="task",
-                    action_type="complete",
-                    entity_name=instance.task_name,
-                    description=f"Completed {instance.task_name}: {result.success_count} ok, {result.failed_count} failed",
-                    entity_id=execution_id,
-                    after_value={
-                        "task_id": task_id,
-                        "success": True,
-                        "duration_seconds": result.duration_seconds,
-                        "total_items": result.total_items,
-                        "success_count": result.success_count,
-                        "failed_count": result.failed_count,
-                        "skipped_count": result.skipped_count,
-                    },
-                    user_initiated=(triggered_by == "manual"),
-                )
-
-                # Send notification - warning if partial failure, success if all ok.
-                # y3m6o.1 review (Finding 2): a task that already emitted ONE
-                # coherent completion notification (e.g. a channel-pipeline run
-                # that was BOTH capped and had failed actions) sets
-                # suppress_completion_notification so we do NOT emit a second,
-                # competing warning here. Journal + gauge above still ran.
-                if result.suppress_completion_notification:
-                    logger.debug(
-                        "[%s] Completion notification suppressed by task "
-                        "(single coherent notification already emitted)", task_id,
-                    )
-                elif result.failed_count > 0:
-                    # Partial success - some items failed
-                    if task_id == "stream_probe":
-                        warn_msg = (
-                            f"Completed with {result.failed_count} failures out of {result.total_items} streams. "
-                            f"({result.success_count} ok, {result.skipped_count} skipped)"
-                        )
-                    else:
-                        warn_msg = (
-                            f"Completed with {result.failed_count} failures out of {result.total_items} items. "
-                            f"({result.success_count} succeeded, {result.skipped_count} skipped)"
-                        )
-                    await self._notify_task_result(
-                        task_name=instance.task_name,
-                        task_id=task_id,
-                        notification_type="warning",
-                        title=f"Task Completed with Warnings: {instance.task_name}",
-                        message=warn_msg,
-                        result=result,
-                        alert_category=alert_category,
-                    )
-                else:
-                    # Full success
-                    await self._notify_task_result(
-                        task_name=instance.task_name,
-                        task_id=task_id,
-                        notification_type="success",
-                        title=f"Task Completed: {instance.task_name}",
-                        message=_success_task_completion_message(task_id, result),
-                        result=result,
-                        alert_category=alert_category,
-                    )
-            else:
+            elif outcome is TaskOutcome.ERROR:
                 logger.error("[%s] Task failed: %s (error=%s)", task_id, result.message, result.error)
                 log_entry(
                     category="task",
@@ -1102,27 +1235,146 @@ class TaskEngine:
                     after_value={
                         "task_id": task_id,
                         "success": False,
+                        "severity": outcome.value,
                         "error": result.error,
                         "message": result.message,
                     },
                     user_initiated=(triggered_by == "manual"),
                 )
-
-                # Send error notification
                 await self._notify_task_result(
                     task_name=instance.task_name,
                     task_id=task_id,
-                    notification_type="error",
+                    notification_type=completion_notification_type(result),
                     title=f"Task Failed: {instance.task_name}",
                     message=result.error or result.message or "Unknown error",
                     result=result,
                     alert_category=alert_category,
                 )
+            else:
+                # SUCCESS or WARNING — the run reached the end and left real,
+                # kept state. Both were previously reachable only through
+                # ``result.success``, which excluded the degraded runs of bead
+                # ``…-daziw`` (a DBAS restore whose only shortfall is a channel
+                # with no playable stream) and pushed them into the failure
+                # branch above. They belong here: nothing was rolled back.
+                warned = outcome is TaskOutcome.WARNING
+
+                # bd-qxi02 (SRE recommendation from bd-p5b8i spike):
+                # stamp the per-task success gauge so the
+                # ECMTaskScheduleStale* alerts in prometheus_rules.yaml
+                # can distinguish "task hasn't been scheduled in days"
+                # (the disease bd-p5b8i hid for 39+ days) from "task
+                # is healthy."  Wrapped defensively in observability —
+                # this MUST NOT break the task completion path.
+                #
+                # THE TRIGGER IS DELIBERATELY ``result.success``, NOT THE
+                # OUTCOME (bead …-fexq1). The gauge answers a NARROWER question
+                # than the history row: "when did this task last run CLEANLY".
+                # Widening it to every warning-level run would let a task that
+                # degrades on every run keep resetting the staleness clock and
+                # mask exactly the alert this gauge exists to raise; narrowing
+                # it to clean runs only would start a stale-schedule alert storm
+                # for the tasks that always report some failed items. So the
+                # condition is left exactly where bd-qxi02 put it, and a
+                # degraded run does not stamp.
+                #
+                # CANCELLED is excluded structurally: the branch above is part
+                # of the same if/elif chain, so a cancelled result never reaches
+                # here even if a task returns success=True alongside
+                # error="CANCELLED".
+                if result.success:
+                    try:
+                        from observability import record_task_success
+                        record_task_success(task_id)
+                    except Exception as obs_err:  # pragma: no cover — best-effort
+                        logger.debug(
+                            "[%s] Failed to record task success gauge: %s",
+                            task_id, obs_err,
+                        )
+
+                if getattr(result, "completed_degraded", False):
+                    # Kept as narrow as it was: only a task that DECLARED itself
+                    # degraded logs here. Widening it to every partial-failure
+                    # run would put a WARNING line in the log for each routine
+                    # probe that could not reach two streams.
+                    logger.warning(
+                        "[%s] Task completed in a degraded state: %s", task_id, result.message
+                    )
+
+                # fexq1: the Journal row said "Completed X: 0 ok, 1 failed"
+                # beside ``success: true`` — self-contradictory at a glance for
+                # an operator scanning the Journal rather than the notification.
+                # The severity now LEADS the line, and the row carries it
+                # explicitly instead of leaving it to be inferred from counts.
+                log_entry(
+                    category="task",
+                    action_type="complete",
+                    entity_name=instance.task_name,
+                    description=(
+                        f"Completed with warnings — {instance.task_name}: "
+                        f"{result.success_count} ok, {result.failed_count} failed"
+                        if warned else
+                        f"Completed {instance.task_name}: {result.success_count} ok, {result.failed_count} failed"
+                    ),
+                    entity_id=execution_id,
+                    after_value={
+                        "task_id": task_id,
+                        "success": True,
+                        "severity": outcome.value,
+                        "message": result.message,
+                        "duration_seconds": result.duration_seconds,
+                        "total_items": result.total_items,
+                        "success_count": result.success_count,
+                        "failed_count": result.failed_count,
+                        "skipped_count": result.skipped_count,
+                    },
+                    user_initiated=(triggered_by == "manual"),
+                )
+
+                # y3m6o.1 review (Finding 2): a task that already emitted ONE
+                # coherent completion notification (e.g. a channel-pipeline run
+                # that was BOTH capped and had failed actions) sets
+                # suppress_completion_notification so we do NOT emit a second,
+                # competing warning here. Journal + gauge above still ran.
+                if result.suppress_completion_notification:
+                    logger.debug(
+                        "[%s] Completion notification suppressed by task "
+                        "(single coherent notification already emitted)", task_id,
+                    )
+                elif warned:
+                    # Two shapes of warning message, both preserved exactly:
+                    # a run with failed ITEMS gets the per-task count summary,
+                    # and a degraded run with clean counts gets its own message,
+                    # which is the only place the shortfall is named.
+                    await self._notify_task_result(
+                        task_name=instance.task_name,
+                        task_id=task_id,
+                        notification_type=completion_notification_type(result),
+                        title=f"Task Completed with Warnings: {instance.task_name}",
+                        message=(
+                            _warning_task_completion_message(task_id, result)
+                            if result.failed_count > 0
+                            else result.message or result.error or "Completed with warnings"
+                        ),
+                        result=result,
+                        alert_category=alert_category,
+                    )
+                else:
+                    await self._notify_task_result(
+                        task_name=instance.task_name,
+                        task_id=task_id,
+                        notification_type=completion_notification_type(result),
+                        title=f"Task Completed: {instance.task_name}",
+                        message=_success_task_completion_message(task_id, result),
+                        result=result,
+                        alert_category=alert_category,
+                    )
 
             return result
 
         except Exception as e:
             logger.exception("[%s] Task execution failed: %s", task_id, e)
+            failure_error = getattr(e, "error_code", str(e))
 
             # Determine alert category for granular filtering
             alert_category = "probe_failures" if task_id == "stream_probe" else None
@@ -1162,7 +1414,7 @@ class TaskEngine:
                         execution.completed_at = datetime.utcnow()
                         execution.status = "failed"
                         execution.success = False
-                        execution.error = str(e)
+                        execution.error = failure_error
                         session.commit()
                     session.close()
                 except Exception as db_err:
@@ -1171,16 +1423,23 @@ class TaskEngine:
             return TaskResult(
                 success=False,
                 message=f"Task execution failed: {str(e)}",
-                error=str(e),
+                error=failure_error,
                 started_at=datetime.utcnow(),
                 completed_at=datetime.utcnow(),
             )
 
         finally:
-            if _scheduler_source_token is not None:
-                journal.reset_mutation_source(_scheduler_source_token)
-            async with self._lock:
-                self._active_tasks.discard(task_id)
+            try:
+                if invocation_config is not None:
+                    instance.restore_invocation_config(invocation_config)
+            except Exception as e:
+                logger.exception("[%s] Failed to restore invocation config: %s", task_id, e)
+            finally:
+                instance.set_run_trigger("manual")
+                if _scheduler_source_token is not None:
+                    journal.reset_mutation_source(_scheduler_source_token)
+                async with self._lock:
+                    self._active_tasks.discard(task_id)
 
     async def run_task(self, task_id: str, schedule_id: Optional[int] = None, parameters: Optional[dict] = None) -> Optional[TaskResult]:
         """
@@ -1278,6 +1537,10 @@ class TaskEngine:
 
                 if task_id:
                     query = query.filter(TaskExecution.task_id == task_id)
+
+                query, empty = _scope_to_sync_target_lifetimes(session, query, task_id)
+                if empty:
+                    return []
 
                 executions = query.offset(offset).limit(limit).all()
                 return [e.to_dict() for e in executions]

@@ -10,7 +10,7 @@ from typing import Literal, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, model_validator
 
-from auth import ResolveIsAdminIfEnabled
+from auth import ResolveIsAdminIfEnabled, ResolveIsMcpServicePrincipalIfEnabled
 from database import get_session
 from dispatcharr_client import get_client
 
@@ -28,7 +28,48 @@ router = APIRouter(tags=["Tasks"])
 # remote Dispatcharr-B on apply) — equally privileged to backup/restore (bead
 # 5gzg5). Keep this set in sync with any new privileged task registered in
 # backend/tasks/.
+#
+# 7ipq2.3: cross-instance sync tasks are registered PER TARGET as
+# ``dbas_sync_<sync_target_id>`` (ADR-013 S6 — dynamic ids, one per SyncTarget
+# row), so exact-set membership cannot cover them; use
+# :func:`is_privileged_task_id`, which also matches the per-target prefix.
+# The legacy ``dbas_sync`` id stays in the set as defence in depth (it is no
+# longer registered, so a run attempt 404s — but it must never be less gated).
 PRIVILEGED_TASK_IDS = frozenset({"dbas_restore", "dbas_backup", "dbas_sync"})
+
+# Prefixes of dynamically registered privileged task-id families (currently
+# only per-target cross-instance sync). Dynamic ids come from code-controlled
+# registration (SyncTarget rows), never raw user input — matching the prefix
+# conservatively over-gates at worst.
+PRIVILEGED_TASK_ID_PREFIXES = ("dbas_sync_",)
+
+
+def is_privileged_task_id(task_id: str) -> bool:
+    """Whether this task id requires an admin to run/cancel (O8TBV-1)."""
+    return task_id in PRIVILEGED_TASK_IDS or task_id.startswith(
+        PRIVILEGED_TASK_ID_PREFIXES
+    )
+
+
+def _reject_mcp_privileged_task(task_id: str, caller_is_mcp: bool) -> None:
+    """Keep outbound/restore task activation under human authority."""
+    if caller_is_mcp and is_privileged_task_id(task_id):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "The MCP service principal cannot activate or configure this "
+                "privileged task; a human operator admin is required"
+            ),
+        )
+
+
+def _authorize_privileged_task_write(
+    task_id: str, is_admin: bool, caller_is_mcp: bool
+) -> None:
+    """Require a human admin for privileged task configuration or activation."""
+    if is_privileged_task_id(task_id) and not is_admin:
+        raise HTTPException(status_code=403, detail="Admin access required")
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
 
 
 # -------------------------------------------------------------------------
@@ -537,8 +578,14 @@ async def get_task(task_id: str):
 
 
 @router.patch("/api/tasks/{task_id}", tags=["Tasks"])
-async def update_task(task_id: str, config: TaskConfigUpdate):
+async def update_task(
+    task_id: str,
+    config: TaskConfigUpdate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Update task configuration."""
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s", task_id)
     try:
         from task_registry import get_registry
@@ -580,6 +627,7 @@ async def run_task(
     task_id: str,
     request: Optional[TaskRunRequest] = None,
     is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Manually trigger a task execution.
 
@@ -588,11 +636,15 @@ async def run_task(
     admin-gated restore path) are refused for authenticated non-admins (O8TBV-1).
     """
     logger.debug("[TASKS] POST /api/tasks/%s/run", task_id)
-    if task_id in PRIVILEGED_TASK_IDS and not is_admin:
+    if is_privileged_task_id(task_id) and not is_admin:
         logger.warning(
             "[TASKS] Refusing privileged task run for non-admin: task=%s", task_id
         )
         raise HTTPException(status_code=403, detail="Admin access required")
+    # DBAS backup is human-only as a whole. Its ad-hoc parameters can activate
+    # outbound uploads, retention pruning, or credential export; filtering a
+    # few truthy spellings would leave coercion and future-parameter bypasses.
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
     try:
         from task_engine import get_engine
         engine = get_engine()
@@ -612,7 +664,11 @@ async def run_task(
 
 
 @router.post("/api/tasks/{task_id}/cancel", tags=["Tasks"])
-async def cancel_task(task_id: str, is_admin: bool = ResolveIsAdminIfEnabled):
+async def cancel_task(
+    task_id: str,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Cancel a running task.
 
     Privileged tasks (:data:`PRIVILEGED_TASK_IDS`) are refused for non-admins,
@@ -620,11 +676,12 @@ async def cancel_task(task_id: str, is_admin: bool = ResolveIsAdminIfEnabled):
     interfere with a privileged task.
     """
     logger.debug("[TASKS] POST /api/tasks/%s/cancel", task_id)
-    if task_id in PRIVILEGED_TASK_IDS and not is_admin:
+    if is_privileged_task_id(task_id) and not is_admin:
         logger.warning(
             "[TASKS] Refusing privileged task cancel for non-admin: task=%s", task_id
         )
         raise HTTPException(status_code=403, detail="Admin access required")
+    _reject_mcp_privileged_task(task_id, caller_is_mcp)
     try:
         from task_engine import get_engine
         engine = get_engine()
@@ -653,15 +710,138 @@ async def get_task_history(task_id: str, limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _run_parameter_schema(task_id: str) -> Optional[dict]:
+    """The task's own declaration of its ad-hoc run parameters, or None.
+
+    Read off the registered task CLASS (never instantiated here) so this stays a
+    cheap read on a GET. See :attr:`task_scheduler.TaskScheduler.run_parameter_schema`.
+    """
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:  # pragma: no cover — registry lookup is best-effort
+        logger.debug("[TASKS] Could not read run parameters for %s: %s", task_id, e)
+        return None
+    schema = getattr(task_class, "run_parameter_schema", None) if task_class else None
+    if not schema or not schema.get("parameters"):
+        return None
+    return schema
+
+
+def _schedule_parameter_schema(task_id: str) -> Optional[dict]:
+    """Return schedule-only parameters declared by the registered task class."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:  # pragma: no cover - registry lookup is best-effort
+        logger.debug("[TASKS] Could not read schedule parameters for %s: %s", task_id, e)
+        return None
+    schema = (
+        getattr(task_class, "schedule_parameter_schema", None)
+        if task_class
+        else None
+    )
+    if not schema or not schema.get("parameters"):
+        return None
+    return schema
+
+
+def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> None:
+    """Apply task-specific invariants before a schedule can be persisted."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:
+        if is_privileged_task_id(task_id):
+            logger.error(
+                "[TASKS] Cannot validate privileged task schedule for %s: %s",
+                task_id,
+                e,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"Cannot validate privileged task schedule for {task_id}: "
+                    "task registry is unavailable"
+                ),
+            ) from e
+        logger.debug("[TASKS] Could not validate schedule parameters for %s: %s", task_id, e)
+        return
+    if task_class is None and is_privileged_task_id(task_id):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Cannot validate privileged task schedule for {task_id}: "
+                "task is not registered"
+            ),
+        )
+    validator = getattr(task_class, "validate_schedule_parameters", None) if task_class else None
+    if validator:
+        try:
+            validator(parameters)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+def _bind_sync_schedule_credential_version(
+    session, task_id: str, parameters: dict
+) -> dict:
+    """Bind confirmed sync apply to the target's current server-side version."""
+    if not task_id.startswith(PRIVILEGED_TASK_ID_PREFIXES):
+        return parameters
+
+    from export_models import SyncTarget
+    from task_registry import get_registry
+
+    task_class = get_registry().get_task_class(task_id)
+    target_id = getattr(task_class, "bound_sync_target_id", None)
+    if target_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot authorize sync schedule: task has no bound sync target",
+        )
+
+    target = session.query(SyncTarget).filter(SyncTarget.id == target_id).first()
+    if target is None or target.credential_version is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Cannot authorize sync schedule: sync target is unavailable",
+        )
+
+    bound = dict(parameters)
+    bound["cloud_credential_version"] = int(target.credential_version)
+    return bound
+
+
 @router.get("/api/tasks/{task_id}/parameter-schema", tags=["Tasks"])
 async def get_task_parameter_schema(task_id: str):
-    """Get the parameter schema for a task type."""
+    """Get the parameter schema for a task type.
+
+    ``parameters`` are the SCHEDULE-configurable parameters (rendered by the
+    schedule editor and persisted with the schedule). ``run_parameters``, when
+    present, are ad-hoc parameters the task honours only in the ``parameters``
+    body of ``POST /api/tasks/{task_id}/run`` and that must NOT be persisted to a
+    schedule (bead ``enhancedchannelmanager-sdpzy``). The two lists share the same
+    per-entry shape; the keys are separate because their lifetimes are.
+    """
     logger.debug("[TASKS] GET /api/tasks/%s/parameter-schema", task_id)
-    schema = TASK_PARAMETER_SCHEMAS.get(task_id)
-    if not schema:
+    declared_schedule_schema = _schedule_parameter_schema(task_id)
+    schema = declared_schedule_schema or TASK_PARAMETER_SCHEMAS.get(task_id)
+    run_schema = _run_parameter_schema(task_id)
+    if not schema and not run_schema:
         # Return empty schema for tasks without special parameters
         return {"task_id": task_id, "description": "No configurable parameters", "parameters": []}
-    return {"task_id": task_id, **schema}
+    if schema:
+        response = {"task_id": task_id, **schema}
+    else:
+        response = {
+            "task_id": task_id,
+            "description": run_schema["description"],
+            "parameters": [],
+        }
+    if run_schema:
+        response["run_parameters"] = run_schema["parameters"]
+    return response
 
 
 # -------------------------------------------------------------------------
@@ -809,8 +989,14 @@ async def list_task_schedules(task_id: str):
 
 
 @router.post("/api/tasks/{task_id}/schedules", tags=["Tasks"])
-async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
+async def create_task_schedule(
+    task_id: str,
+    data: TaskScheduleCreate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Create a new schedule for a task."""
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] POST /api/tasks/%s/schedules - type=%s", task_id, data.schedule_type)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -822,6 +1008,8 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
             task = session.query(ScheduledTask).filter(ScheduledTask.task_id == task_id).first()
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+            _validate_schedule_parameters(task_id, data.parameters)
 
             # Create the schedule
             schedule = TaskSchedule(
@@ -842,6 +1030,9 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
             # Set task-specific parameters if provided (strip internal metadata keys)
             if data.parameters:
                 clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                clean_params = _bind_sync_schedule_credential_version(
+                    session, task_id, clean_params
+                )
                 schedule.set_parameters(clean_params)
 
             # Calculate next run time
@@ -885,8 +1076,15 @@ async def create_task_schedule(task_id: str, data: TaskScheduleCreate):
 
 
 @router.patch("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
-async def update_task_schedule(task_id: str, schedule_id: int, data: TaskScheduleUpdate):
+async def update_task_schedule(
+    task_id: str,
+    schedule_id: int,
+    data: TaskScheduleUpdate,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Update a task schedule."""
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule, ScheduledTask
@@ -902,6 +1100,13 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
 
             if not schedule:
                 raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
+
+            effective_parameters = (
+                data.parameters
+                if data.parameters is not None
+                else schedule.get_parameters()
+            )
+            _validate_schedule_parameters(task_id, effective_parameters)
 
             # Update fields if provided
             if data.name is not None:
@@ -942,6 +1147,9 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
                 schedule.day_of_month = data.day_of_month
             if data.parameters is not None:
                 clean_params = {k: v for k, v in data.parameters.items() if not k.startswith("_")}
+                clean_params = _bind_sync_schedule_credential_version(
+                    session, task_id, clean_params
+                )
                 schedule.set_parameters(clean_params)
 
             # Recalculate next run time
@@ -986,8 +1194,14 @@ async def update_task_schedule(task_id: str, schedule_id: int, data: TaskSchedul
 
 
 @router.delete("/api/tasks/{task_id}/schedules/{schedule_id}", tags=["Tasks"])
-async def delete_task_schedule(task_id: str, schedule_id: int):
+async def delete_task_schedule(
+    task_id: str,
+    schedule_id: int,
+    is_admin: bool = ResolveIsAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Delete a task schedule."""
+    _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] DELETE /api/tasks/%s/schedules/%s", task_id, schedule_id)
     try:
         from models import TaskSchedule

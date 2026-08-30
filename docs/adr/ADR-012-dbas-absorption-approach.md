@@ -63,13 +63,13 @@ security prerequisites → Phase 1 backup + cloud upload → Phase 2 full restor
 | **D1** | Artifact format | ZIP-wrapping per-category YAML + a binary subtree (per-image logo files + `metadata.json` + `url-mappings.json`) + a SHA-256 checksum file alongside the ZIP + a manifest carrying `schema_version`. **`schema_version` is mandatory from the first release.** Restore on an unknown version refuses with a user-facing `"Unsupported backup version"` (full detail server-side only). |
 | **D2** | Phase-1 scope | v0.18.0 **MUST ship backup AND restore.** Backup without restore is pointless (you cannot recover from a backup you cannot apply). The two are one user-facing capability, not two releases. |
 | **D3** | Credential storage | Fernet symmetric encryption via the **existing** `backend/cloud_storage/crypto.py` primitive. **No KMS for the MVP.** No new crypto surface is introduced. *(Note 2026-06-16: **D12 partially supersedes this** — optional whole-artifact passphrase encryption introduces a new KDF+AEAD surface for the opt-in cred-carrying path. D3 still governs at-rest credential storage.)* |
-| **D4** | Outbound URL policy | A **first-run SSRF wizard** (LAN-friendly default: RFC1918 + loopback allowed; public-only mode blocks them) + an **always-on denylist** (metadata/link-local/CGNAT/IPv6-special/non-`http(s)` schemes, rejected in *both* modes, no opt-out) + **DNS-rebinding mitigations** (resolve-then-connect-by-IP, redirect re-validation). |
+| **D4** | Outbound URL policy | A **first-run SSRF wizard** (LAN-friendly default: RFC1918 + RFC 6598 shared space + loopback allowed; public-only mode blocks them) + an **always-on denylist** (metadata/link-local/other IPv6-special/non-`http(s)` schemes, rejected in *both* modes, no opt-out) + **DNS-rebinding mitigations** (resolve-then-connect-by-IP, redirect re-validation). |
 | **D5** | Progress transport | **HTTP polling**, reusing `task_scheduler` + the NotificationCenter. **WebSocket is NOT ported** from DBAS. |
 | **D6** | Release sequencing | **v0.18.0 (DBAS) then v0.18.1 (Sync), sequential**, per the ADR-004 "one major thing per cut" discipline. DBAS is the sole major item of v0.18.0; Sync is the sole major item of v0.18.1. |
 | **D7** | Dry-run engine | **Counts-only** (would-create / would-update / would-skip per entity per action). The full entity-level diff tree is **deferred to v0.19.x.** Dry-run is **default-ON** for Dispatcharr restores (opt in to apply; cannot opt out of the dry-run guardrail). |
 | **D8** | Logo memory model | **Streaming upload** pattern (read one logo → decode → upload → release before the next), **not** a port of DBAS's `CumulativeMemoryTracker`. Re-evaluable at implementation kickoff. |
 | **D9** | Logo-miss severity | A logo that cannot be matched on restore produces a **WARN log + an aggregate count + a prominent red banner on the restore-complete screen** — not a silent DEBUG line. |
-| **D10** | Plugins scope | **Plugins are EXCLUDED from v0.18.0** backup/restore (RCE-surface unknown; sidesteps the question and unblocks the rest of `0i2vt.13`). Revisit once plugin semantics are understood. *(Added 2026-06-16; full rationale in the Amendment below.)* |
+| **D10** | Plugins scope | *(**AMENDED 2026-08-23 by [the plugin-determination amendment](#amendment-2026-08-23-d10s-premise-measured--plugins-are-code-and-config-and-the-two-separate-cleanly-bead-enhancedchannelmanager-ne0gf) -> D10': the RCE surface is CONFIRMED for plugin CODE, which stays excluded; plugin CONFIGURATION is measured separable and is NOT excluded.**)* **Plugins are EXCLUDED from v0.18.0** backup/restore (RCE-surface unknown; sidesteps the question and unblocks the rest of `0i2vt.13`). Revisit once plugin semantics are understood. *(Added 2026-06-16; full rationale in the Amendment below.)* |
 | **D11** | Cross-instance restore | **IN SCOPE for v0.18.0.** The archive is **trusted operator input**, but always-on safety validations apply regardless of source (SSRF denylist on every URL, schema validation, never restore a foreign admin that locks out the current operator). No archive signing/provenance for a self-hosted LAN tool. *(Added 2026-06-16; rationale in the Amendment.)* |
 | **D12** | Passphrase encryption | **Optional whole-artifact passphrase encryption SHIPS in v0.18.0** (overrides the architect's defer recommendation) so credentials travel with a cross-instance migration (pairs with D11). Opt-in; redact-by-default (D1) stays the default. Introduces a new KDF+AEAD surface (**partially supersedes D3**) and a decrypt path across all Phase-2 restore beads. *(Added 2026-06-16. Grooming 2026-06-17: design-gated — crypto spike `0zrse` precedes build; v0.18.0-vs-v0.18.1 placement decided on spike output. Rationale in the Amendment.)* |
 
@@ -192,9 +192,141 @@ decisions that the PO resolved on 2026-06-16. They extend D1–D9:
 
 | # | Decision | Rationale / impact |
 |---|----------|--------------------|
-| **D10** | **Plugins are EXCLUDED from v0.18.0 backup/restore.** | We do not yet know whether a Dispatcharr "plugin" is executable code (RCE surface on restore) or declarative config (`grep plugin backend/` = 0 hits). Excluding it sidesteps the RCE question entirely and unblocks the rest of `0i2vt.13` (settings/DVR/comskip/users/agents). Revisit in a later release once plugin semantics are understood. `0i2vt.13` drops the plugins category. |
+| **D10** | **Plugins are EXCLUDED from v0.18.0 backup/restore.** *(**AMENDED 2026-08-23 -> D10': split. See [the plugin-determination amendment](#amendment-2026-08-23-d10s-premise-measured--plugins-are-code-and-config-and-the-two-separate-cleanly-bead-enhancedchannelmanager-ne0gf).**)* | We do not yet know whether a Dispatcharr "plugin" is executable code (RCE surface on restore) or declarative config (`grep plugin backend/` = 0 hits). Excluding it sidesteps the RCE question entirely and unblocks the rest of `0i2vt.13` (settings/DVR/comskip/users/agents). Revisit in a later release once plugin semantics are understood. `0i2vt.13` drops the plugins category. **The premise italicised above was measured on 2026-08-23 and was half right: the code IS an RCE surface (`spec.loader.exec_module`), and the configuration is separable, API-reachable and harmless. The `grep` cited here searched ECM's tree, not Dispatcharr's.** |
 | **D11** | **Cross-instance restore is IN SCOPE for v0.18.0.** The archive is treated as **trusted operator input** (same trust as the operator typing config), but the always-on safety validations apply **regardless of source**: SSRF denylist on every URL, schema validation, and never restoring a foreign admin that locks out the current operator. | The epic's headline value is migration (back up instance A, restore onto instance B). Full untrusted-archive provenance/signature checking is overkill for a self-hosted single-operator LAN tool; operator-trusted-input + unconditional safety guards is the right posture. The threat model (currently same-instance-scoped, Draft) must be re-pointed at this ADR and lifted out of Draft to cover the cross-instance case. |
 | **D12** | **Optional whole-artifact passphrase encryption SHIPS in v0.18.0** (overrides the architect's recommendation to defer to v0.18.x). | So credentials travel with a cross-instance migration instead of being re-entered on the target (pairs with D11). This ADDS scope to v0.18.0: passphrase → key-derivation (e.g. scrypt/PBKDF2), lost-passphrase handling (unrecoverable — must be made explicit to the operator), and the encrypt/decrypt UX on backup + restore. The redact-by-default path (D1) remains the default; passphrase encryption is opt-in for operators who want secrets included. Needs dedicated design at grooming. A new bead covers it. |
 
 These are recorded as PO-accepted. The threat model and the affected child beads (`0i2vt.13`,
 the new passphrase-encryption bead, `0i2vt.7`/restore) are updated to match.
+
+## Amendment, 2026-08-17: "redact by default" covers structured credentials (bead `enhancedchannelmanager-gi4zn`)
+
+PO decision, 2026-08-05, implemented 2026-08-17. This does not overturn a decision above; it fixes
+what one of them was taken to mean, after a live drill showed the shipped behaviour was narrower
+than the words.
+
+**Reading note first.** D12 and the threat model both cite "redact-by-default (D1)". D1 as
+recorded in the decision table is the **artifact format** decision and says nothing about
+redaction, so a reader chasing that citation finds nothing. Read those citations as pointing at
+the redact-by-default *posture* the epic carried from the start, now specified here.
+
+**What redact-by-default now means.** A standard (non-encrypted, default) artifact carries no
+value that identifies **or** authenticates against a third-party service, and no ECM
+authentication state. Not "the password field is redacted". The 2026-08-05 drill found an Xtream
+Codes `username` in clear beside a correctly redacted `password`: for that provider the username
+is half the credential pair and the half that names the subscription, so an artifact carrying it
+was not a redacted artifact. Enumerating a real artifact against the corrected rule found five
+more instances of the same protected-beside-unprotected asymmetry, three bearer credentials an
+exact-name denylist had never matched, and (after external review) ECM's own `users` table
+complete with the operator's bcrypt admin hash.
+
+Three consequences for this ADR's decisions:
+
+| Decision | What changes |
+|---|---|
+| **D1 / redact-by-default** | Specified as the property above rather than as a field list. Implemented as three rules in one place: a credential-class key denylist, provider-identity keys (`username`), and a value-level URL credential scrub. Identity redaction is on by default so a new caller fails closed; there is exactly one exemption, `dispatcharr_users`, whose username is the operator's own instance and the natural key its importer creates and collision-checks on. |
+| **D12 / preserve set** | The cred-carrying encrypted artifact is unaffected, and that required a deliberate widening: the provider-identity keys join its **preserve set** (`_REDACT_KEYS` plus `_PROVIDER_IDENTITY_KEYS`), and the URL scrub is off on that path. Half a credential pair is not a credential, so omitting them would have widened redaction into the one artifact D12 exists to leave alone. `password_hash` is in neither the denylist nor the preserve set and is never carried by a category; the encrypted artifact carries the operator's accounts through its byte-for-byte `journal.db` copy instead. |
+| **D3 / at-rest ciphertext** | Unchanged as a storage decision, but `cloud_storage_targets` and `sync_targets` are now dropped from a standard artifact entirely. Fernet ciphertext is still credential material in an artifact whose purpose is to remove working credentials before export. Operator-authored configuration remains and still requires a disclosure review. |
+
+**The `journal.db` scrub is now an allowlist.** Three review rounds each found more tables that
+should not ship, which is the failure mode of any denylist maintained by people who keep
+discovering it is incomplete. Fourteen named tables may ship, each with its reason recorded beside
+the entry; every other table is dropped and the file is `VACUUM`ed. Thirty further model-declared
+tables carry an explicit drop decision, and a test fails when a model declares a table classified
+in neither, so a new table cannot reach production unclassified. Both registries live in the
+source rather than in a doc, because the test reads them.
+
+**The scrub fails closed.** Every error path in it previously fell back to shipping the raw
+database behind a `200`. A backup whose `journal.db` cannot be read now fails outright and writes
+no artifact. This is a deliberate availability-for-confidentiality trade on the producer side
+only; the restore side stays best-effort, because there the worst case is the operator running
+first-run setup.
+
+**Operator-facing effect, and a compatibility constraint.** A standard artifact is now safe to
+attach to a support ticket. Restoring one onto an instance with no ECM accounts lands at first-run
+setup, and restoring onto an instance that has accounts leaves them alone; the restore response
+carries `notices` naming what this instance actually lost. Because `schema_version` did not move,
+nothing refuses a new artifact being restored by an older build, and that combination has three
+gaps that cannot be fixed retroactively. See the compatibility note in
+`docs/security/threat_model_dbas_import.md` §8.5 and the operator-facing version in
+`docs/user_guide/backup-restore/backup-overview.md`.
+
+## Amendment, 2026-08-23: D10's premise measured — plugins are code AND config, and the two separate cleanly (bead `enhancedchannelmanager-ne0gf`)
+
+- **Status**: Accepted. Amends **D10**, which is now **split rather than blanket**.
+- **What changed**: nothing about the world; D10 rested on an explicitly unmeasured premise
+  (*"we do not yet know whether a Dispatcharr 'plugin' is executable code … or declarative
+  config"*) and that premise has now been measured against `ghcr.io/dispatcharr/dispatcharr:latest`.
+  D10's original rationale cited `grep plugin backend/` = 0 hits — a search of **ECM's** tree,
+  which could not answer a question about **Dispatcharr's**. That is the gap this amendment closes.
+
+### The measurement
+
+Run 2026-08-23 against a disposable account/plugin on the `dbas-sync-testenv` Dispatcharr **B**
+instance (`ghcr.io/dispatcharr/dispatcharr:latest`), all fixtures removed afterward.
+
+**A plugin is both, and the halves live in different places.**
+
+| Half | Where it lives | Reachable over the API? |
+|---|---|---|
+| **Code** | `/data/plugins/<key>/plugin.py` (or a package `__init__.py`), plus `plugin.json`, optional `logo.png` — **on disk, in the container** | Only as an opaque **zip upload** (`POST /api/plugins/plugins/import/`) or an install-by-reference from a signed repo manifest (`POST /api/plugins/repos/install/`). The code itself is never *readable* through the API. |
+| **Configuration** | `plugins_pluginconfig` row: `key`, `name`, `version`, `description`, `enabled`, `ever_enabled`, `settings` (JSON) — **in Postgres** | Yes, fully: `GET /api/plugins/plugins/`, `POST /api/plugins/plugins/<key>/settings/`, `POST /api/plugins/plugins/<key>/enabled/`. |
+
+**Replicating code means shipping executable code, and Dispatcharr says so itself.**
+`apps/plugins/loader.py::_load_module_from_path` ends in `spec.loader.exec_module(module)` —
+plugin files are imported into the running Django process. Measured directly: a probe plugin whose
+`plugin.py` wrote a marker file at *module* scope produced that marker the moment an action ran
+(`PluginManager.run_action` → `{"status": "ok", …}`, marker present). Dispatcharr's own
+`Plugins.md` states it plainly: *"Treat plugins as trusted code: they run with full app
+permissions"*, and the UI shows a first-enable trust modal *"explaining that plugins can run
+arbitrary server-side code."* **D10's suspected RCE surface is real. The exclusion of plugin CODE
+survives on a named harm, no longer on an unknown.**
+
+**Configuration separates cleanly from code, and this is the half D10 was wrong to sweep up.**
+Three measured facts:
+
+1. `loader.py::_sync_db_with_registry` only ever `get_or_create`s and updates. **It never deletes a
+   `PluginConfig` row whose code is absent from disk.** A config row written to an instance that
+   does not have the plugin installed *persists indefinitely*.
+2. Dispatcharr **already reports** that state. A seeded config row with no code on disk came back
+   from `GET /api/plugins/plugins/` as `"missing": true, "loaded": false`, and the shipped
+   `PluginCard` bundle branches on `e.missing`. The operator-facing surface for a
+   config-without-code plugin exists upstream; ECM does not have to invent one.
+3. When the code later arrives, **the pre-existing settings win**. A row seeded with
+   `{"limit": 99, "note": "replicated-from-A", "mode": "fast"}` was still exactly that after the
+   plugin was installed and rediscovered — *not* reset to the manifest defaults
+   (`5` / `""` / `"safe"`), and `missing` flipped to `false`.
+
+**One field is its own harm, and it is not `settings`.** The trust modal is gated on
+`ever_enabled`: the built `PluginCard` reads
+`if (t && !e.ever_enabled && r && !await r(e)) { … }`. Replicating `ever_enabled: true` (or
+`enabled: true`) to a destination therefore **permanently suppresses the "this runs arbitrary
+server-side code" confirmation** for that plugin on that instance. Those two flags are a
+privilege/consent decision about the destination, in the same harm class as `users` and
+`network_access` in ADR-013 — not configuration.
+
+### D10, restated
+
+**Plugin CODE stays excluded** — from backup/restore and from sync — on a **confirmed** harm:
+replication would write executable Python to a destination's `/data/plugins`, which Dispatcharr
+imports into its own server process with full application permissions. That is remote code
+execution by construction, and an archive is only *operator-trusted* input (D11), which is a
+weaker warrant than "may execute arbitrary code on the destination". Install-by-reference from the
+signed official repo manifest is the upstream-sanctioned path and remains an operator action, not
+an ECM one.
+
+**Plugin CONFIGURATION (`settings`, and the `key`/`name`/`version` identity it hangs on) is NOT
+excluded.** It is ordinary declarative state, it is fully reachable over the API, it survives on a
+destination that lacks the code, it is adopted when the code arrives, and Dispatcharr already
+renders the interim state as `missing`. Under ADR-013's faithful-copy principle a replica that
+silently loses every plugin setting is unfaithful, and nothing about that half is harmful.
+Excluding it was collateral from the unmeasured code question.
+
+**`enabled` and `ever_enabled` are excluded on their own named harm** (trust-modal suppression),
+separately from both of the above. A replicated plugin config must land disabled and
+never-yet-enabled, leaving the destination operator to make the consent decision the modal exists
+to obtain.
+
+`0i2vt.13` keeping no plugins category was correct for the code half and wrong for the config
+half. The remaining build work, and the operator-facing statement of the code-half exclusion, are
+tracked on `enhancedchannelmanager-ne0gf`.

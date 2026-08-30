@@ -89,6 +89,35 @@ _ACCOUNT_CREATE_PAYLOAD = {"name": CUSTOM_STREAM_ACCOUNT_NAME}
 # re-home the orphan, not preserve its dead source provider).
 _DROPPED_STREAM_KEYS = frozenset({"id", "pk", "m3u_account"})
 
+# Derived / read-only echoes a LIVE stream GET carries that the archive shape
+# never had (live two-instance validation, bead 7ipq2.2 — field survey of a
+# real Dispatcharr 0.28.2 channel-streams response is in the bead). Viewer
+# counts, staleness, stats and the server-computed hash are destination-owned;
+# ``is_custom`` is set by the destination for streams created via this path.
+_DERIVED_STREAM_KEYS = frozenset(
+    {
+        "current_viewers",
+        "updated_at",
+        "last_seen",
+        "is_stale",
+        "stream_hash",
+        "stream_stats",
+        "stream_stats_updated_at",
+        "is_custom",
+    }
+)
+
+# FK fields on a stream record that carry SOURCE-instance pks. Resolved through
+# the shared IdRemapTable (the groups/profiles importers register every source
+# id — created AND existing-identical); an unresolvable reference is DROPPED
+# (soft degradation — the stream still lands under the synthesized account),
+# never forwarded stale. Forwarding a stale ``channel_group`` pk made EVERY
+# orphan create fail 400 on a real Dispatcharr-B (bead 7ipq2.2).
+_REMAPPED_STREAM_FK_FIELDS: dict[str, EntityType] = {
+    "channel_group": EntityType.CHANNEL_GROUP,
+    "stream_profile_id": EntityType.STREAM_PROFILE,
+}
+
 
 @dataclass
 class _FallbackState:
@@ -196,7 +225,7 @@ async def synthesize_custom_streams(
     for orphan in orphans:
         source_export_id = orphan.get("id")
         label = _orphan_label(orphan)
-        payload = _build_stream_payload(orphan, account_id)
+        payload = _build_stream_payload(orphan, account_id, remap)
 
         try:
             created = await client.create_stream(payload)
@@ -242,6 +271,22 @@ async def synthesize_custom_streams(
             continue
 
         cat.created += 1
+        # Bead …-msqf7: an Xtream Codes stream URL authenticates by path segment,
+        # so the redactor cuts the credential OUT of the address rather than
+        # dropping the address. What lands is a stream that names where it
+        # pointed and cannot play until the destination has its own provider
+        # account.
+        #
+        # THE REPORTING USED TO HAPPEN HERE, and bead ``…-ukjx5`` moved it out.
+        # This site can only ever see what THIS cycle created, and a scheduled
+        # cross-instance sync creates these rows exactly once: on every later
+        # cycle the archived stream matches the row it made last time, nothing is
+        # created, and the counter read zero over a destination whose streams
+        # were all still redacted. The count is now taken from the DESTINATION's
+        # own stream rows by the post-refresh rebind pass
+        # (``dbas.placeholder_rebind``), which reads them on every apply. Do not
+        # re-add a recorder here: a create-time count and a destination-state
+        # count would disagree on cycle two and one of them would be wrong.
         result.created_stream_ids.append(dest_id)
         ledger.record_created(EntityType.STREAM, dest_id, label)
         src_int = _as_int_or_none(source_export_id)
@@ -331,17 +376,25 @@ def _find_account_id_by_name(accounts, name: str) -> int | None:
     return None
 
 
-def _build_stream_payload(orphan: Mapping, account_id: int) -> dict:
+def _build_stream_payload(
+    orphan: Mapping, account_id: int, remap: IdRemapTable | None = None
+) -> dict:
     """Build the ``create_stream`` payload for an orphan, attributed to the account.
 
     Copies the orphan's fields, drops archive-source identifiers
-    (:data:`_DROPPED_STREAM_KEYS`), and forces ``m3u_account`` to the synthesized
-    account id — the attribution that re-homes the orphan onto the custom-stream
-    provider. Never mutates the input orphan.
+    (:data:`_DROPPED_STREAM_KEYS`) and live-GET derived echoes
+    (:data:`_DERIVED_STREAM_KEYS`), rewrites the source-instance FK pks
+    (:data:`_REMAPPED_STREAM_FK_FIELDS`) through ``remap`` — dropping any that
+    do not resolve, never forwarding a stale source pk (bead 7ipq2.2) — and
+    forces ``m3u_account`` to the synthesized account id — the attribution that
+    re-homes the orphan onto the custom-stream provider. Never mutates the
+    input orphan.
 
     Args:
         orphan: The archived stream record (a Mapping).
         account_id: The synthesized account's destination id to attribute to.
+        remap: The shared IdRemapTable for FK resolution. ``None`` (legacy
+            callers) drops every remappable FK field rather than forwarding it.
 
     Returns:
         A fresh dict payload for ``client.create_stream``.
@@ -350,7 +403,20 @@ def _build_stream_payload(orphan: Mapping, account_id: int) -> dict:
         key: value
         for key, value in orphan.items()
         if key not in _DROPPED_STREAM_KEYS
+        and key not in _DERIVED_STREAM_KEYS
+        and key not in _REMAPPED_STREAM_FK_FIELDS
     }
+    for field, entity_type in _REMAPPED_STREAM_FK_FIELDS.items():
+        source_id = orphan.get(field)
+        if source_id is None:
+            continue
+        try:
+            source_id = int(source_id)
+        except (TypeError, ValueError):
+            continue
+        dest_id = remap.resolve(entity_type, source_id) if remap else None
+        if dest_id is not None:
+            payload[field] = dest_id
     payload["m3u_account"] = account_id
     return payload
 

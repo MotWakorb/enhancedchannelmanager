@@ -22,10 +22,13 @@ Mocks at router module level per backend/CLAUDE.md
 """
 import io
 import json
+import os
 import zipfile
 
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+from .test_backup import _minimal_journal_db_bytes
 
 
 def _make_backup_zip() -> bytes:
@@ -33,7 +36,7 @@ def _make_backup_zip() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("settings.json", json.dumps({"url": "http://test:9191"}))
-        zf.writestr("journal.db", b"SQLite format 3\x00" + b"\x00" * 100)
+        zf.writestr("journal.db", _minimal_journal_db_bytes())
         zf.writestr(
             "ecm_backup.json",
             json.dumps(
@@ -46,6 +49,25 @@ def _make_backup_zip() -> bytes:
         )
     buf.seek(0)
     return buf.getvalue()
+
+
+class _CloseCountingFile:
+    def __init__(self, file):
+        self.file = file
+        self.close_count = 0
+
+    def close(self):
+        self.close_count += 1
+        self.file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    def __getattr__(self, name):
+        return getattr(self.file, name)
 
 
 @pytest.fixture
@@ -164,6 +186,22 @@ class TestListSavedIncludesZip:
 # POST /api/backup/restore-saved — restore from on-disk zip
 # ---------------------------------------------------------------------------
 class TestRestoreSaved:
+    @staticmethod
+    def _track_archive_open(path):
+        real_fdopen = os.fdopen
+        opened = []
+        target = path.stat()
+
+        def fdopen(descriptor, mode):
+            opened_file = os.fstat(descriptor)
+            if (opened_file.st_dev, opened_file.st_ino) != (target.st_dev, target.st_ino):
+                return real_fdopen(descriptor, mode)
+            archive = _CloseCountingFile(real_fdopen(descriptor, mode))
+            opened.append(archive)
+            return archive
+
+        return opened, fdopen
+
     @pytest.mark.asyncio
     async def test_restore_saved_valid_filename(self, async_client, backups_dir, tmp_path):
         """A valid on-disk .zip is restored via the shared restore path; the
@@ -206,6 +244,132 @@ class TestRestoreSaved:
                 json={"filename": "ecm-backup-2099-12-31_235959.zip"},
             )
         assert response.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_closes_archive_when_zip_open_raises_oserror(
+        self, async_client, backups_dir
+    ):
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        path = backups_dir / fname
+        path.write_bytes(_make_backup_zip())
+        opened, fdopen = self._track_archive_open(path)
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup.os.fdopen", side_effect=fdopen
+        ), patch("routers.backup.zipfile.ZipFile", side_effect=OSError("zip read failed")):
+            with pytest.raises(OSError, match="zip read failed"):
+                await async_client.post(
+                    "/api/backup/restore-saved", json={"filename": fname}
+                )
+
+        assert len(opened) == 1
+        assert opened[0].close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_closes_archive_once_for_bad_zip(
+        self, async_client, backups_dir
+    ):
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        path = backups_dir / fname
+        path.write_bytes(b"not a zip")
+        opened, fdopen = self._track_archive_open(path)
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup.os.fdopen", side_effect=fdopen
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Saved file is not a valid zip archive"
+        assert len(opened) == 1
+        assert opened[0].close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_closes_archive_once_for_valid_zip(
+        self, async_client, backups_dir
+    ):
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        path = backups_dir / fname
+        path.write_bytes(_make_backup_zip())
+        opened, fdopen = self._track_archive_open(path)
+        manifest = MagicMock()
+        manifest.get.side_effect = {"version": "test", "created_at": "today"}.get
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup.os.fdopen", side_effect=fdopen
+        ), patch("routers.backup._validate_backup_zip", return_value=manifest), patch(
+            "routers.backup._restore_from_zip", return_value=[]
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 200
+        assert len(opened) == 1
+        assert opened[0].close_count == 1
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_rejects_symlink(self, async_client, backups_dir, tmp_path):
+        """A valid-name symlink is not a saved regular-file archive."""
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        outside = tmp_path / "outside.zip"
+        outside.write_bytes(_make_backup_zip())
+        (backups_dir / fname).symlink_to(outside)
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup._restore_from_zip"
+        ) as mock_restore:
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 404
+        mock_restore.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_rejects_non_regular_entry(self, async_client, backups_dir):
+        """A direct child with a valid archive name must still be a regular file."""
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        (backups_dir / fname).mkdir()
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup._restore_from_zip"
+        ) as mock_restore:
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 404
+        mock_restore.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_restore_saved_does_not_follow_substituted_symlink(
+        self, async_client, backups_dir, tmp_path
+    ):
+        """A regular file replaced after enumeration cannot redirect the open."""
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        selected = backups_dir / fname
+        selected.write_bytes(_make_backup_zip())
+        outside = tmp_path / "outside.zip"
+        outside.write_bytes(_make_backup_zip())
+        real_open = os.open
+
+        def substitute_then_open(path, flags, *args, **kwargs):
+            selected.unlink()
+            selected.symlink_to(outside)
+            return real_open(path, flags, *args, **kwargs)
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "routers.backup.os.open", side_effect=substitute_then_open
+        ), patch("routers.backup._restore_from_zip") as mock_restore:
+            response = await async_client.post(
+                "/api/backup/restore-saved", json={"filename": fname}
+            )
+
+        assert response.status_code == 404
+        mock_restore.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_restore_saved_rejects_yaml_artifact(self, async_client, backups_dir):

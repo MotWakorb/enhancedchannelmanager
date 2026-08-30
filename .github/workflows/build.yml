@@ -1,36 +1,124 @@
 name: Build and Push Docker Image
 
+# ─── ONE SOURCE OF TRUTH PER REQUIRED CONTEXT (bead enhancedchannelmanager-5rwzy) ──
+#
+# This workflow owns two of the four required status checks on `dev`:
+# `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)`,
+# both from the `codeql-analysis` matrix below. The other two, `Backend
+# Tests` and `Frontend Tests`, come from test.yml.
+#
+# The path filter that used to sit here is gone for the reason spelled out at
+# the top of test.yml: `docs-only-pass.yml` mirrored these two names to fill
+# the gap on Markdown-only changes, and its `paths:` filter was not the
+# complement of this `paths-ignore`, so a PR touching code AND Markdown got
+# two check-runs per required context, one of them a permanently green echo.
+#
+# So `codeql-analysis` now runs on every event and gates its expensive steps
+# on the `detect` job. Image verification is independent of Tests; only the
+# exact-SHA publication workflow joins their authoritative results.
+
 on:
   push:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      - '**.md'
   pull_request:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      - '**.md'
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  # ─── Changed-path classifier ──────────────────────────────────────────
+  # Mirrors test.yml's `detect` job. Both call the same classifier script,
+  # scripts/classify_changed_paths.py, so the inert-path rule has
+  # exactly one definition. As there, the gate is written `!= 'false'` so an
+  # empty or missing output runs the real work.
+  detect:
+    name: Detect Changed Paths
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code_paths_changed: ${{ steps.classify.outputs.code_paths_changed }}
+      docs_site_affected: ${{ steps.classify.outputs.docs_site_affected }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 1
+
+      - name: Classify the changed file set
+        id: classify
+        uses: ./.github/actions/classify-changed-paths
+
+  # ADR-001 input classifier. This is separate from the broad code-path
+  # classifier because dependency/image manifests trigger more expensive
+  # pre-merge SCA, DAST, and container gates on PRs targeting dev.
+  detect-dependency-change:
+    name: Detect Dependency Changes
+    runs-on: ubuntu-latest
+    outputs:
+      dependency_files_changed: ${{ steps.classify.outputs.dependency_files_changed }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Classify dependency inputs
+        id: classify
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -uo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if ! git diff --name-only --no-renames -z "$BASE_SHA" "$HEAD_SHA" > dependency-paths.nul; then
+              echo "::warning::could not acquire PR diff; dependency gates will run"
+              : > dependency-paths.nul
+            fi
+          elif [[ "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ && ! "$BEFORE_SHA" =~ ^0+$ ]] \
+            && git cat-file -e "$BEFORE_SHA^{commit}" \
+            && git cat-file -e "$HEAD_SHA^{commit}"; then
+            if ! git diff --name-only --no-renames -z "$BEFORE_SHA" "$HEAD_SHA" > dependency-paths.nul; then
+              echo "::warning::could not acquire push diff; dependency gates will run"
+              : > dependency-paths.nul
+            fi
+          else
+            echo "::warning::missing exact push range; dependency gates will run"
+            : > dependency-paths.nul
+          fi
+          python scripts/dependency_change_policy.py dependency-paths.nul >> "$GITHUB_OUTPUT"
+
   # Security scanning jobs - run on pushes to main and PRs to main
+  # NOT a required context, so it may skip at the job level. The
+  # `code_paths_changed` clause keeps the pre-5rwzy behaviour: before this workflow
+  # ran on every event, a Markdown-only PR to main never reached npm audit,
+  # and a fresh advisory should not block a typo fix.
   security-scan-frontend:
     name: Frontend Security Scan
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: [detect, detect-dependency-change]
+    if: >-
+      needs.detect.outputs.code_paths_changed != 'false'
+      && ((github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'push' && github.ref == 'refs/heads/dev'
+      && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')
+      || (github.event_name == 'pull_request' && github.base_ref == 'main')
+      || (github.event_name == 'pull_request' && github.base_ref == 'dev'
+      && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
           cache: 'npm'
@@ -44,16 +132,25 @@ jobs:
         working-directory: frontend
         run: npm audit --audit-level=high
 
+  # NOT a required context; may skip at the job level (see above).
   security-scan-backend:
     name: Backend Security Scan
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
+    needs: [detect, detect-dependency-change]
+    if: >-
+      needs.detect.outputs.code_paths_changed != 'false'
+      && ((github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'push' && github.ref == 'refs/heads/dev'
+      && needs.detect-dependency-change.outputs.dependency_files_changed == 'true')
+      || (github.event_name == 'pull_request' && github.base_ref == 'main')
+      || (github.event_name == 'pull_request' && github.base_ref == 'dev'
+      && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.12'
 
@@ -63,14 +160,64 @@ jobs:
       - name: Run pip-audit
         working-directory: backend
         # PYSEC-2024-48: aiohttp (no fix available for our version range)
-        # CVE-2024-23342: ecdsa timing attack - transitive dep via python-jose,
-        #   unused (cryptography backend handles actual signing), no fix planned
-        run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2024-48 --ignore-vuln CVE-2024-23342
+        run: pip-audit -r requirements.txt --ignore-vuln PYSEC-2024-48
 
+  # MCP dependencies are a publication gate on dev and main as well as a
+  # pre-merge signal. Unlike the legacy backend scan above, this job cannot
+  # skip on dev: both MCP image builders require it before pushing a digest.
+  security-scan-mcp:
+    name: MCP Dependency Security Scan
+    runs-on: ubuntu-latest
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned pip-audit
+        run: python -m pip install pip-audit==2.10.0
+
+      - name: Audit MCP dependencies
+        run: pip-audit -r mcp-server/requirements.txt
+
+      - name: Prove MCP dependency audit fails closed
+        run: |
+          set +e
+          audit_output=$(pip-audit -r backend/tests/fixtures/mcp_vulnerable_requirements.txt 2>&1)
+          audit_status=$?
+          set -e
+          echo "$audit_output"
+          if [ "$audit_status" -eq 0 ]; then
+            echo "::error::pip-audit accepted the deliberately vulnerable MCP fixture"
+            exit 1
+          fi
+          if ! grep -Eq '^starlette[[:space:]]+0\.27\.0[[:space:]]+[^[:space:]]+' <<< "$audit_output"; then
+            echo "::error::pip-audit failed without reporting the fixture's Starlette advisories"
+            exit 1
+          fi
+
+      - name: Verify MCP publication policy
+        run: python scripts/check_mcp_supply_chain.py
+
+  # REQUIRED CONTEXTS: the matrix expands this job's name into
+  # `CodeQL Analysis (python)` and `CodeQL Analysis (javascript-typescript)`.
+  # It must therefore run on every event so each name is emitted exactly
+  # once, and gate its steps rather than itself. `!cancelled()` is there so a
+  # `detect` failure cannot skip the job: a skipped job counts as a satisfied
+  # required check, which is the hole this whole change closes.
   codeql-analysis:
     name: CodeQL Analysis
     runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev'))
+    needs: [detect]
+    if: >-
+      !cancelled()
+      && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'))
+      || (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev')))
     permissions:
       security-events: write
       contents: read
@@ -79,21 +226,40 @@ jobs:
       matrix:
         language: ['javascript-typescript', 'python']
     steps:
+      # Only explicitly inert machine state can reach this no-op. Every
+      # Markdown path runs CodeQL with the rest of the required gates.
+      - name: Inert-only change, no code to analyse
+        if: needs.detect.outputs.code_paths_changed == 'false'
+        run: |
+          echo "Every changed path is on the classifier's explicit inert allowlist."
+          echo "CodeQL has no changed ${{ matrix.language }} source to scan,"
+          echo "so this check passes without running the analysis."
+          # The check name is the same whether the analysis ran or not. Say
+          # which happened in the run summary so the rollup is readable
+          # without opening the job log. See bead enhancedchannelmanager-t4d5w.
+          echo "**CodeQL Analysis (${{ matrix.language }})**: inert machine-state change, the analysis and delta-zero alert gate were NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout repository
-        uses: actions/checkout@v6
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
           config-file: .github/codeql/codeql-config.yml
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        uses: github/codeql-action/autobuild@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        id: analyze
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4
         with:
           category: "/language:${{ matrix.language }}"
 
@@ -105,7 +271,8 @@ jobs:
       # CodeQL setup, so we enforce delta-zero in the workflow itself and
       # make this job a required status check.
       - name: Enforce CodeQL delta-zero (fail on open HIGH/CRITICAL)
-        if: github.event_name == 'pull_request'
+        id: delta_zero
+        if: needs.detect.outputs.code_paths_changed != 'false' && github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -250,1250 +417,336 @@ jobs:
 
           echo "Delta-zero check passed: 0 open HIGH/CRITICAL alerts on ref=$REF (language=${LANGUAGE})"
 
-  # IaC Security Scanning
-  iac-security-scan:
-    name: IaC Security Scan
-    runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Run Checkov IaC scanner
-        uses: bridgecrewio/checkov-action@v12
-        with:
-          directory: .
-          framework: dockerfile,github_actions
-          soft_fail: false
-          output_format: cli
-          download_external_modules: false
-          # Skip CKV2_GHA_1 - CodeQL requires security-events:write permission
-          # Skip CKV_DOCKER_3 - We use gosu in entrypoint to drop to non-root user after fixing volume permissions
-          # Skip CKV_DOCKER_8 - Same reason, entrypoint starts as root then switches to appuser
-          # Skip CKV_GHA_7 - flake-pr-comment.yml's workflow_dispatch.inputs.pr_number is an
-          #   intentional manual-run knob (which PR to re-post the flake comment on); it doesn't
-          #   influence build output, only which PR a read-then-comment job targets.
-          skip_check: CKV2_GHA_1,CKV_DOCKER_3,CKV_DOCKER_8,CKV_GHA_7
-
-  # bd-ruzzg: gate every image build/push on test.yml's results for THIS
-  # commit. test.yml is a separate workflow file — GitHub Actions has no
-  # cross-workflow `needs:`, so without this job, build-amd64/build-arm64/
-  # build-mcp-amd64/build-mcp-arm64 only depended on the security-scan jobs
-  # above and would build (and, on a push to dev/main, PUSH to ghcr.io)
-  # regardless of whether the backend/frontend/MCP test suites had finished
-  # or passed on this exact commit. Polls the GitHub Checks API instead of
-  # a cross-workflow trigger (workflow_run) or merging the two workflow
-  # files — both of those would either complicate the required-status-check
-  # setup or risk drifting the check names dev/main branch protection and
-  # docs-only-pass.yml's sentinel depend on byte-for-byte.
-  wait-for-tests:
-    name: Wait for Test Suite
-    runs-on: ubuntu-latest
-    permissions:
-      checks: read
-    steps:
-      - name: Poll test.yml check-runs for this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          # PR events check the PR head SHA (github.sha on a pull_request
-          # event is a synthetic merge commit, not the commit test.yml's
-          # check-runs are actually posted against).
-          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          set -euo pipefail
-
-          # test.yml job display names that must all report success before
-          # any image build proceeds. Keep in sync with the required-status-
-          # check list in dev/main branch protection (docs/shipping.md §6).
-          # Fake-Test Guard isn't a required check for merging, but it's a
-          # real test-quality signal worth gating an image push on too.
-          CHECKS=(
-            "Backend Tests"
-            "Frontend Tests"
-            "MCP Server Tests"
-            "Semgrep Lint"
-            "Version Consistency"
-            "Fake-Test Guard"
-          )
-          # 60 attempts * 30s = 30 minutes. Generous relative to observed suite
-          # runtime (Backend Tests alone has taken 7m+) so a busy runner queue
-          # or a cold dependency cache doesn't false-positive this into a
-          # "failed" gate for image publishing.
-          MAX_ATTEMPTS=60
-          SLEEP_SECONDS=30
-
-          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-            # --paginate emits one JSON object per page (each {check_runs: [...]}
-            # here); --jq '.check_runs' turns that into one array PER PAGE, and
-            # the external `jq -s 'add // []'` slurps + flattens those into a
-            # single combined array. Mirrors the codeql-analysis job's alert
-            # pagination above (same object-shaped paginated-response pattern) —
-            # if you're fixing a pagination bug here, check that job too.
-            #
-            # Deliberately NOT a bare assignment: `set -e` only exempts a
-            # failing command when its status is tested directly (as in this
-            # `if !`), so a transient gh api hiccup (5xx, secondary rate
-            # limit) retries instead of hard-failing the whole gate.
-            if ! runs_json=$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs" --jq '.check_runs' \
-              | jq -s 'add // []'); then
-              echo "Transient error polling the Checks API (attempt $attempt/$MAX_ATTEMPTS) — retrying in ${SLEEP_SECONDS}s"
-              sleep "$SLEEP_SECONDS"
-              continue
-            fi
-            all_done=true
-
-            for name in "${CHECKS[@]}"; do
-              # A name can legitimately appear MORE than once: a PR that
-              # touches both a .md file and code triggers both the real
-              # test.yml job AND docs-only-pass.yml's sentinel stub for the
-              # same check name (see docs-only-pass.yml's "Mixed-PR safety"
-              # section). Every matching run must be completed and successful
-              # — not just the first one found.
-              matches=$(echo "$runs_json" | jq -c --arg n "$name" '[.[] | select(.name == $n)]')
-              count=$(echo "$matches" | jq 'length')
-
-              if [ "$count" -eq 0 ]; then
-                echo "No check-run yet for '$name'"
-                all_done=false
-                continue
-              fi
-
-              incomplete=$(echo "$matches" | jq '[.[] | select(.status != "completed")] | length')
-              if [ "$incomplete" -gt 0 ]; then
-                echo "'$name' still running ($incomplete in progress)"
-                all_done=false
-                continue
-              fi
-
-              failed=$(echo "$matches" | jq '[.[] | select(.conclusion != "success")] | length')
-              if [ "$failed" -gt 0 ]; then
-                echo "::error::'$name' completed without success"
-                echo "$matches" | jq '[.[] | {conclusion, html_url}]'
-                exit 1
-              fi
-
-              echo "'$name' passed"
-            done
-
-            if [ "$all_done" = true ]; then
-              echo "All test.yml checks passed for $SHA"
-              exit 0
-            fi
-
-            echo "Waiting for test suite to finish (attempt $attempt/$MAX_ATTEMPTS)..."
-            sleep "$SLEEP_SECONDS"
-          done
-
-          echo "::error::Timed out after $((MAX_ATTEMPTS * SLEEP_SECONDS / 60)) minutes waiting for test.yml checks to complete"
-          exit 1
-
-  # DAST - Dynamic Application Security Testing (loads image from build-amd64 cache)
-  dast-scan:
-    name: DAST Security Scan
-    runs-on: ubuntu-latest
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
-    needs: [build-amd64]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
+      # Separate step because the delta-zero script above exits early on its
+      # clean fast path, so a trailing line inside it would not always run.
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
         continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LANGUAGE: ${{ matrix.language }}
+          ANALYZE: ${{ steps.analyze.outcome }}
+          DELTA_ZERO: ${{ steps.delta_zero.outcome }}
         run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      - name: Extract version and set release channel
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            echo "channel=dev" >> $GITHUB_OUTPUT
-          else
-            echo "channel=latest" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Load Docker image from build cache
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          load: true
-          tags: ecm:dast-test
-          platforms: linux/amd64
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          cache-from: type=gha,scope=amd64
-
-      - name: Start application container
-        run: |
-          docker run -d --name ecm-dast -p 6100:6100 \
-            -e DISPATCHARR_URL=http://localhost:9999 \
-            ecm:dast-test
-
-          # Wait for the app to be ready
-          echo "Waiting for application to start..."
-          READY=false
-          for i in {1..30}; do
-            if curl -sf http://localhost:6100/api/health > /dev/null 2>&1; then
-              echo "✓ Application is ready!"
-              READY=true
-              break
+          # A failed analysis stops the delta-zero gate from running at all,
+          # so each half reports its own outcome instead of one line claiming
+          # both happened.
+          {
+            echo "**CodeQL Analysis (${LANGUAGE})**:"
+            echo "- security-and-quality analysis: ${ANALYZE:-did not run}"
+            if [ "$EVENT_NAME" = "pull_request" ]; then
+              echo "- delta-zero HIGH/CRITICAL alert gate: ${DELTA_ZERO:-did not run}"
+            else
+              echo "- delta-zero alert gate: pull-request-only, does not apply to this event"
             fi
-            echo "Waiting... ($i/30)"
-            sleep 2
-          done
+          } >> "$GITHUB_STEP_SUMMARY"
 
-          # Fail if app never became ready
-          if [ "$READY" = "false" ]; then
-            echo "✗ Application failed to start within 60 seconds"
-            echo "Container logs:"
-            docker logs ecm-dast
-            echo "Container status:"
-            docker ps -a | grep ecm-dast
-            exit 1
-          fi
-
-      - name: Verify application health
-        run: |
-          echo "Testing health endpoint..."
-          HEALTH_RESPONSE=$(curl -s http://localhost:6100/api/health)
-          echo "Health response: $HEALTH_RESPONSE"
-
-          echo "Container status:"
-          docker ps | grep ecm-dast
-
-          echo "Recent container logs:"
-          docker logs --tail 50 ecm-dast
-
-      - name: Run OWASP ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.15.0
-        with:
-          target: 'http://localhost:6100'
-          rules_file_name: '.zap/rules.tsv'
-          allow_issue_writing: false
-          # fail_action: false means only actual FAIL alerts fail the build
-          # WARN alerts are logged but don't fail (appropriate for informational security headers)
-          fail_action: false
-
-      - name: Show container logs and stop
-        if: always()
-        run: |
-          echo "Final container logs:"
-          docker logs ecm-dast || true
-          echo "Stopping container..."
-          docker stop ecm-dast || true
-          docker rm ecm-dast || true
-
-  # Build AMD64 image natively
+  # Each architecture is built once into an OCI archive. Verification jobs
+  # consume that exact archive; publication later promotes it without rebuilding.
   build-amd64:
     name: Build Docker Image (AMD64)
     runs-on: ubuntu-latest
-    # On PRs to main, wait for security scans; on dev branch pushes, run immediately.
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike the
-    # security scans, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, wait-for-tests]
-    if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
-      packages: write
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - id: version
         run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
-      # Buildx-setup retry above and the build-push-action retry pattern.
-      - name: Log in to Container Registry
-        id: login
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait before registry login retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        run: |
-          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Log in to Container Registry — retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set lowercase image name
-        id: image
-        run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-
-      - name: Extract version and set release channel
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            echo "channel=dev" >> $GITHUB_OUTPUT
-          else
-            echo "channel=latest" >> $GITHUB_OUTPUT
-          fi
-
-      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
-      # See bd-42aai: GHCR returned 502/504 with
-      # "error writing layer blob: failed to parse error response 50x" in a
-      # 30min window across 4 jobs, each needing manual rerun. Retries are
-      # scoped to this step only; build cache is reused across attempts.
-      - name: Build and push (AMD64)
-        id: build
-        uses: docker/build-push-action@v7
-        continue-on-error: true
+          echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
+          test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - name: Build immutable ECM AMD64 candidate
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=oci,dest=/tmp/ecm-amd64.oci.tar
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=amd64
           cache-to: type=gha,mode=max,scope=amd64
-
-      - name: Wait before retry 1 (AMD64)
-        if: steps.build.outcome == 'failure'
-        run: |
-          echo "::warning::Build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
-          sleep 30
-
-      - name: Build and push (AMD64) — retry 1
-        id: build_retry1
-        if: steps.build.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        continue-on-error: true
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=amd64
-          cache-to: type=gha,mode=max,scope=amd64
-
-      - name: Wait before retry 2 (AMD64)
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        run: |
-          echo "::warning::Build/push attempt 2 failed. Sleeping 60s before final retry."
-          sleep 60
-
-      - name: Build and push (AMD64) — retry 2
-        id: build_retry2
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=amd64
-          cache-to: type=gha,mode=max,scope=amd64
-
-      - name: Capture digest (AMD64)
+      - name: Capture non-empty OCI manifest digest
         id: digest
-        run: |
-          # Pick the digest from whichever attempt actually succeeded.
-          DIGEST="${{ steps.build.outputs.digest }}"
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then
-            echo "::error::No digest produced by any build attempt"
-            exit 1
-          fi
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-
-  # Container vulnerability scanning with Trivy (loads image from build-amd64 cache)
-  trivy-scan:
-    name: Container Security Scan (Trivy)
-    runs-on: ubuntu-latest
-    needs: [build-amd64]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
-        run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      - name: Extract version and set release channel
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "channel=latest" >> $GITHUB_OUTPUT
-
-      - name: Load Docker image from build cache
-        uses: docker/build-push-action@v7
+        run: echo "digest=$(python scripts/candidate_image.py digest /tmp/ecm-amd64.oci.tar)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          context: .
-          load: true
-          tags: ecm-scan:latest
-          platforms: linux/amd64
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          cache-from: type=gha,scope=amd64
+          name: ecm-amd64-candidate
+          path: /tmp/ecm-amd64.oci.tar
+          retention-days: 1
+          if-no-files-found: error
 
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ecm-scan:latest
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-
-  # Build ARM64 image natively on ARM runner (avoids QEMU emulation issues)
   build-arm64:
     name: Build Docker Image (ARM64)
     runs-on: ubuntu-24.04-arm
-    # On PRs to main, wait for security scans; on dev branch pushes, run immediately.
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike the
-    # security scans, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-frontend, security-scan-backend, codeql-analysis, iac-security-scan, wait-for-tests]
-    if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
-      packages: write
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - id: version
         run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
-      # Buildx-setup retry above and the build-push-action retry pattern.
-      - name: Log in to Container Registry
-        id: login
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait before registry login retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        run: |
-          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Log in to Container Registry — retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set lowercase image name
-        id: image
-        run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-
-      - name: Extract version and set release channel
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          if [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            echo "channel=dev" >> $GITHUB_OUTPUT
-          else
-            echo "channel=latest" >> $GITHUB_OUTPUT
-          fi
-
-      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
-      # See bd-42aai for the incident that motivated this.
-      - name: Build and push (ARM64)
-        id: build
-        uses: docker/build-push-action@v7
-        continue-on-error: true
+          echo "version=$(jq -r '.version' frontend/package.json)" >> "$GITHUB_OUTPUT"
+          test "${{ github.ref }}" = refs/heads/dev && channel=dev || channel=latest
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+      - name: Build immutable ECM ARM64 candidate
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=oci,dest=/tmp/ecm-arm64.oci.tar
           build-args: |
             GIT_COMMIT=${{ github.sha }}
             ECM_VERSION=${{ steps.version.outputs.version }}
             RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
           cache-from: type=gha,scope=arm64
           cache-to: type=gha,mode=max,scope=arm64
-
-      - name: Wait before retry 1 (ARM64)
-        if: steps.build.outcome == 'failure'
-        run: |
-          echo "::warning::Build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
-          sleep 30
-
-      - name: Build and push (ARM64) — retry 1
-        id: build_retry1
-        if: steps.build.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        continue-on-error: true
-        with:
-          context: .
-          platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=arm64
-          cache-to: type=gha,mode=max,scope=arm64
-
-      - name: Wait before retry 2 (ARM64)
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        run: |
-          echo "::warning::Build/push attempt 2 failed. Sleeping 60s before final retry."
-          sleep 60
-
-      - name: Build and push (ARM64) — retry 2
-        id: build_retry2
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=arm64
-          cache-to: type=gha,mode=max,scope=arm64
-
-      - name: Capture digest (ARM64)
+      - name: Capture non-empty OCI manifest digest
         id: digest
-        run: |
-          DIGEST="${{ steps.build.outputs.digest }}"
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then
-            echo "::error::No digest produced by any build attempt"
-            exit 1
-          fi
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
-
-  # Container vulnerability scanning with Trivy — ARM64 (loads image from build-arm64 cache)
-  trivy-scan-arm64:
-    name: Container Security Scan (Trivy ARM64)
-    runs-on: ubuntu-24.04-arm
-    needs: [build-arm64]
-    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'pull_request' && github.base_ref == 'main')
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
-        run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      - name: Extract version and set release channel
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "channel=latest" >> $GITHUB_OUTPUT
-
-      - name: Load Docker image from build cache
-        uses: docker/build-push-action@v7
+        run: echo "digest=$(python scripts/candidate_image.py digest /tmp/ecm-arm64.oci.tar)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          context: .
-          load: true
-          tags: ecm-scan:latest
-          platforms: linux/arm64
-          build-args: |
-            GIT_COMMIT=${{ github.sha }}
-            ECM_VERSION=${{ steps.version.outputs.version }}
-            RELEASE_CHANNEL=${{ steps.version.outputs.channel }}
-          cache-from: type=gha,scope=arm64
-
-      - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ecm-scan:latest
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-
-  # Create multi-arch manifest by merging AMD64 and ARM64 images
-  merge-manifests:
-    name: Create Multi-Arch Manifest
-    runs-on: ubuntu-latest
-    needs: [build-amd64, build-arm64, trivy-scan, trivy-scan-arm64, dast-scan]
-    if: >-
-      always() && github.event_name != 'pull_request'
-      && needs.build-amd64.result == 'success'
-      && needs.build-arm64.result == 'success'
-      && !contains(fromJSON('["failure","cancelled"]'), needs.trivy-scan.result)
-      && !contains(fromJSON('["failure","cancelled"]'), needs.trivy-scan-arm64.result)
-      && !contains(fromJSON('["failure","cancelled"]'), needs.dast-scan.result)
-    permissions:
-      contents: read
-      packages: write
-
-    steps:
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
-        run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
-      # Buildx-setup retry above and the build-push-action retry pattern.
-      - name: Log in to Container Registry
-        id: login
-        continue-on-error: true
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait before registry login retry
-        if: steps.login.outcome == 'failure'
-        run: |
-          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Log in to Container Registry — retry
-        if: steps.login.outcome == 'failure'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Checkout repository (for version extraction)
-        uses: actions/checkout@v6
-
-      - name: Set lowercase image name
-        id: image
-        run: echo "name=${GITHUB_REPOSITORY,,}" >> $GITHUB_OUTPUT
-
-      - name: Extract version from package.json
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "full=${VERSION}" >> $GITHUB_OUTPUT
-          # Extract major.minor (e.g., 0.7 from 0.7.20080)
-          echo "minor=$(echo $VERSION | cut -d. -f1,2)" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-          tags: |
-            # Branch name tag (e.g. dev → dev after docker-tag sanitization)
-            type=ref,event=branch
-            # SHA tag for traceability
-            type=sha,prefix={{branch}}-
-            # Latest tag only on main branch
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            # Dev tag on dev branch
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            # Semver tags with branch suffix on dev, plain on main
-            type=raw,value=${{ steps.version.outputs.full }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=${{ steps.version.outputs.full }},enable=${{ github.ref == 'refs/heads/main' }}
-            # Minor version tags (e.g., 0.7-dev or 0.7)
-            type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
-
-      # Bounded retry with backoff on transient registry timeouts (bd-n6197):
-      # run 30144328147 failed this job's "Set up Docker Buildx" step, but
-      # `docker buildx imagetools create` talks to the registry too and can
-      # hit the same class of blip. A bash loop is simpler here than
-      # duplicating a `uses:` step, since this is already a `run:` step.
-      - name: Create manifest list and push
-        working-directory: /tmp
-        run: |
-          TAGS=$(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {})
-          SRC1="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-amd64.outputs.digest }}"
-          SRC2="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-arm64.outputs.digest }}"
-
-          MAX_ATTEMPTS=3
-          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-            if docker buildx imagetools create $TAGS "$SRC1" "$SRC2"; then
-              exit 0
-            fi
-            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-              WAIT=$((attempt * 30))
-              echo "::warning::docker buildx imagetools create failed (attempt $attempt/$MAX_ATTEMPTS, likely transient registry timeout). Sleeping ${WAIT}s before retry."
-              sleep "$WAIT"
-            fi
-          done
-
-          echo "::error::docker buildx imagetools create failed after $MAX_ATTEMPTS attempts"
-          exit 1
-
-  # ─── MCP Server Build Pipeline ───────────────────────────────────────
+          name: ecm-arm64-candidate
+          path: /tmp/ecm-arm64.oci.tar
+          retention-days: 1
+          if-no-files-found: error
 
   build-mcp-amd64:
     name: Build MCP Image (AMD64)
     runs-on: ubuntu-latest
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike
-    # security-scan-backend, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-backend, wait-for-tests]
-    if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
-      packages: write
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
-        run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
-      # Buildx-setup retry above and the build-push-action retry pattern.
-      - name: Log in to Container Registry
-        id: login
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait before registry login retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        run: |
-          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Log in to Container Registry — retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set lowercase image name
-        id: image
-        run: echo "name=${GITHUB_REPOSITORY,,}-mcp" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-
-      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
-      # See bd-42aai for the incident that motivated this.
-      - name: Build and push MCP (AMD64)
-        id: build
-        uses: docker/build-push-action@v7
-        continue-on-error: true
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build immutable MCP AMD64 candidate
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: ./mcp-server
           platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          outputs: type=oci,dest=/tmp/mcp-amd64.oci.tar
           cache-from: type=gha,scope=mcp-amd64
           cache-to: type=gha,mode=max,scope=mcp-amd64
-
-      - name: Wait before MCP retry 1 (AMD64)
-        if: steps.build.outcome == 'failure'
-        run: |
-          echo "::warning::MCP build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
-          sleep 30
-
-      - name: Build and push MCP (AMD64) — retry 1
-        id: build_retry1
-        if: steps.build.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        continue-on-error: true
-        with:
-          context: ./mcp-server
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=mcp-amd64
-          cache-to: type=gha,mode=max,scope=mcp-amd64
-
-      - name: Wait before MCP retry 2 (AMD64)
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        run: |
-          echo "::warning::MCP build/push attempt 2 failed. Sleeping 60s before final retry."
-          sleep 60
-
-      - name: Build and push MCP (AMD64) — retry 2
-        id: build_retry2
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        with:
-          context: ./mcp-server
-          platforms: linux/amd64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=mcp-amd64
-          cache-to: type=gha,mode=max,scope=mcp-amd64
-
-      - name: Capture MCP digest (AMD64)
+      - name: Capture non-empty OCI manifest digest
         id: digest
-        run: |
-          DIGEST="${{ steps.build.outputs.digest }}"
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then
-            echo "::error::No digest produced by any MCP build attempt"
-            exit 1
-          fi
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+        run: echo "digest=$(python scripts/candidate_image.py digest /tmp/mcp-amd64.oci.tar)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mcp-amd64-candidate
+          path: /tmp/mcp-amd64.oci.tar
+          retention-days: 1
+          if-no-files-found: error
 
   build-mcp-arm64:
     name: Build MCP Image (ARM64)
     runs-on: ubuntu-24.04-arm
-    # wait-for-tests (bd-ruzzg) is a HARD gate regardless of push vs PR — unlike
-    # security-scan-backend, a failed/incomplete test suite must never be waved through.
-    needs: [security-scan-backend, wait-for-tests]
-    if: >-
-      always() && needs.wait-for-tests.result == 'success'
-      && (github.event_name != 'pull_request' || !contains(needs.*.result, 'failure'))
+    needs: [detect]
+    if: needs.detect.outputs.code_paths_changed != 'false'
     permissions:
       contents: read
-      packages: write
     outputs:
       digest: ${{ steps.digest.outputs.digest }}
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
-        run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
-      # Buildx-setup retry above and the build-push-action retry pattern.
-      - name: Log in to Container Registry
-        id: login
-        if: github.event_name != 'pull_request'
-        continue-on-error: true
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait before registry login retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        run: |
-          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Log in to Container Registry — retry
-        if: github.event_name != 'pull_request' && steps.login.outcome == 'failure'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set lowercase image name
-        id: image
-        run: echo "name=${GITHUB_REPOSITORY,,}-mcp" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-
-      # Build + push with 2 retries on transient GHCR 50x during layer blob push.
-      # See bd-42aai for the incident that motivated this.
-      - name: Build and push MCP (ARM64)
-        id: build
-        uses: docker/build-push-action@v7
-        continue-on-error: true
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4
+      - name: Build immutable MCP ARM64 candidate
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: ./mcp-server
           platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
+          outputs: type=oci,dest=/tmp/mcp-arm64.oci.tar
           cache-from: type=gha,scope=mcp-arm64
           cache-to: type=gha,mode=max,scope=mcp-arm64
-
-      - name: Wait before MCP retry 1 (ARM64)
-        if: steps.build.outcome == 'failure'
-        run: |
-          echo "::warning::MCP build/push attempt 1 failed (likely transient GHCR 50x). Sleeping 30s before retry."
-          sleep 30
-
-      - name: Build and push MCP (ARM64) — retry 1
-        id: build_retry1
-        if: steps.build.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        continue-on-error: true
-        with:
-          context: ./mcp-server
-          platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=mcp-arm64
-          cache-to: type=gha,mode=max,scope=mcp-arm64
-
-      - name: Wait before MCP retry 2 (ARM64)
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        run: |
-          echo "::warning::MCP build/push attempt 2 failed. Sleeping 60s before final retry."
-          sleep 60
-
-      - name: Build and push MCP (ARM64) — retry 2
-        id: build_retry2
-        if: steps.build.outcome == 'failure' && steps.build_retry1.outcome == 'failure'
-        uses: docker/build-push-action@v7
-        with:
-          context: ./mcp-server
-          platforms: linux/arm64
-          push: ${{ github.event_name != 'pull_request' }}
-          labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }}
-          cache-from: type=gha,scope=mcp-arm64
-          cache-to: type=gha,mode=max,scope=mcp-arm64
-
-      - name: Capture MCP digest (ARM64)
+      - name: Capture non-empty OCI manifest digest
         id: digest
-        run: |
-          DIGEST="${{ steps.build.outputs.digest }}"
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry1.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then DIGEST="${{ steps.build_retry2.outputs.digest }}"; fi
-          if [ -z "$DIGEST" ]; then
-            echo "::error::No digest produced by any MCP build attempt"
-            exit 1
-          fi
-          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+        run: echo "digest=$(python scripts/candidate_image.py digest /tmp/mcp-arm64.oci.tar)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mcp-arm64-candidate
+          path: /tmp/mcp-arm64.oci.tar
+          retention-days: 1
+          if-no-files-found: error
 
-  merge-mcp-manifests:
-    name: Create MCP Multi-Arch Manifest
+  # ECM candidate scans, one per architecture. The two jobs are deliberate
+  # mirror images of each other: same Trivy action pin, same
+  # `exit-code: '1'`, same `ignore-unfixed: true`, same
+  # `severity: 'CRITICAL,HIGH'`, each reading only the OCI archive its own
+  # build job produced. Change one and change the other, or one
+  # architecture publishes on a weaker bar than its twin.
+  #
+  # This is enforced, not merely asked for: `scripts/check_mcp_supply_chain.py`
+  # requires four scans carrying `exit-code: '1'` and `severity:
+  # 'CRITICAL,HIGH'`, and `attest-image-candidates` below needs all four,
+  # so dropping or weakening one fails `Backend Tests` and stops publication.
+  trivy-scan:
+    name: Container Security Scan (Trivy)
+    runs-on: ubuntu-24.04
+    needs: [build-amd64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ecm-amd64-candidate
+          path: /tmp
+      - name: Verify exact candidate identity
+        run: |
+          python scripts/candidate_image.py verify-archive /tmp/ecm-amd64.oci.tar --expected '${{ needs.build-amd64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/ecm-amd64.oci.tar docker-archive:/tmp/trivy-ecm-amd64-scan.docker.tar
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: /tmp/trivy-ecm-amd64-scan.docker.tar
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: 'CRITICAL,HIGH'
+
+  trivy-scan-arm64:
+    name: Container Security Scan (Trivy ARM64)
+    runs-on: ubuntu-24.04-arm
+    needs: [build-arm64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: ecm-arm64-candidate
+          path: /tmp
+      - name: Verify exact candidate identity
+        run: |
+          python scripts/candidate_image.py verify-archive /tmp/ecm-arm64.oci.tar --expected '${{ needs.build-arm64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/ecm-arm64.oci.tar docker-archive:/tmp/trivy-ecm-arm64-scan.docker.tar
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: /tmp/trivy-ecm-arm64-scan.docker.tar
+          format: table
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: 'CRITICAL,HIGH'
+
+  trivy-scan-mcp-amd64:
+    name: MCP Container Security Scan (Trivy AMD64)
+    runs-on: ubuntu-24.04
+    needs: [build-mcp-amd64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: mcp-amd64-candidate
+          path: /tmp
+      - run: |
+          python scripts/candidate_image.py verify-archive /tmp/mcp-amd64.oci.tar --expected '${{ needs.build-mcp-amd64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/mcp-amd64.oci.tar docker-archive:/tmp/trivy-mcp-amd64-scan.docker.tar
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: /tmp/trivy-mcp-amd64-scan.docker.tar
+          format: table
+          exit-code: '1'
+          vuln-type: os,library
+          severity: 'CRITICAL,HIGH'
+
+  trivy-scan-mcp-arm64:
+    name: MCP Container Security Scan (Trivy ARM64)
+    runs-on: ubuntu-24.04-arm
+    needs: [build-mcp-arm64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: mcp-arm64-candidate
+          path: /tmp
+      - run: |
+          python scripts/candidate_image.py verify-archive /tmp/mcp-arm64.oci.tar --expected '${{ needs.build-mcp-arm64.outputs.digest }}'
+          test "$(skopeo --version)" = "skopeo version 1.13.3"
+          skopeo copy oci-archive:/tmp/mcp-arm64.oci.tar docker-archive:/tmp/trivy-mcp-arm64-scan.docker.tar
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          input: /tmp/trivy-mcp-arm64-scan.docker.tar
+          format: table
+          exit-code: '1'
+          vuln-type: os,library
+          severity: 'CRITICAL,HIGH'
+
+  attest-image-candidates:
+    name: Attest Verified Image Candidates
     runs-on: ubuntu-latest
-    needs: [build-mcp-amd64, build-mcp-arm64]
+    needs:
+      - detect-dependency-change
+      - security-scan-frontend
+      - security-scan-backend
+      - security-scan-mcp
+      - build-amd64
+      - build-arm64
+      - build-mcp-amd64
+      - build-mcp-arm64
+      - trivy-scan
+      - trivy-scan-arm64
+      - trivy-scan-mcp-amd64
+      - trivy-scan-mcp-arm64
     if: >-
-      always() && github.event_name != 'pull_request'
+      always() && github.event_name == 'push'
+      && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main')
+      && needs.build-amd64.result == 'success'
+      && needs.build-arm64.result == 'success'
       && needs.build-mcp-amd64.result == 'success'
       && needs.build-mcp-arm64.result == 'success'
-    permissions:
-      contents: read
-      packages: write
-
+      && needs.trivy-scan.result == 'success'
+      && needs.trivy-scan-arm64.result == 'success'
+      && needs.trivy-scan-mcp-amd64.result == 'success'
+      && needs.trivy-scan-mcp-arm64.result == 'success'
+      && needs.security-scan-mcp.result == 'success'
     steps:
-      # Retry on transient registry timeouts pulling the buildkit builder image
-      # (e.g. "net/http: request canceled while waiting for connection" against
-      # registry-1.docker.io). See bd-n6197: run 30144328147 failed here on a
-      # one-off Docker Hub blip while the build/push jobs on the same commit
-      # succeeded. docker/setup-buildx-action has no built-in retry input, so
-      # this duplicates the step with continue-on-error, matching the
-      # build-push-action retry pattern used elsewhere in this file.
-      - name: Set up Docker Buildx
-        id: buildx
-        uses: docker/setup-buildx-action@v4
-        continue-on-error: true
-
-      - name: Wait before Buildx retry
-        if: steps.buildx.outcome == 'failure'
+      - name: Bind digests and per-SHA SCA evidence
+        env:
+          DEPENDENCY_CHANGE: ${{ needs.detect-dependency-change.outputs.dependency_files_changed }}
+          FRONTEND_SCA: ${{ needs.security-scan-frontend.result }}
+          BACKEND_SCA: ${{ needs.security-scan-backend.result }}
         run: |
-          echo "::warning::Docker Buildx setup failed (likely transient registry timeout pulling the buildkit image). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Set up Docker Buildx — retry
-        if: steps.buildx.outcome == 'failure'
-        uses: docker/setup-buildx-action@v4
-
-      # Retry on transient registry-connect timeouts (bd-n6197), mirroring the
-      # Buildx-setup retry above and the build-push-action retry pattern.
-      - name: Log in to Container Registry
-        id: login
-        continue-on-error: true
-        uses: docker/login-action@v4
+          set -euo pipefail
+          if test "$DEPENDENCY_CHANGE" = true; then
+            test "$FRONTEND_SCA" = success
+            test "$BACKEND_SCA" = success
+          elif test "$DEPENDENCY_CHANGE" != false; then
+            echo "::error::Missing dependency-change verdict"
+            exit 1
+          fi
+          jq -n \
+            --arg sha '${{ github.sha }}' \
+            --argjson run_id '${{ github.run_id }}' \
+            --argjson dependency_change "$DEPENDENCY_CHANGE" \
+            --arg frontend_sca "$FRONTEND_SCA" \
+            --arg backend_sca "$BACKEND_SCA" \
+            --arg ecm_amd64 '${{ needs.build-amd64.outputs.digest }}' \
+            --arg ecm_arm64 '${{ needs.build-arm64.outputs.digest }}' \
+            --arg mcp_amd64 '${{ needs.build-mcp-amd64.outputs.digest }}' \
+            --arg mcp_arm64 '${{ needs.build-mcp-arm64.outputs.digest }}' \
+            '{sha:$sha,build_run_id:$run_id,dependency_change:$dependency_change,
+              frontend_sca:$frontend_sca,backend_sca:$backend_sca,
+              digests:{ecm_amd64:$ecm_amd64,ecm_arm64:$ecm_arm64,
+                       mcp_amd64:$mcp_amd64,mcp_arm64:$mcp_arm64}}' > candidate-attestation.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Wait before registry login retry
-        if: steps.login.outcome == 'failure'
-        run: |
-          echo "::warning::Container registry login failed (likely transient network timeout). Sleeping 15s before retry."
-          sleep 15
-
-      - name: Log in to Container Registry — retry
-        if: steps.login.outcome == 'failure'
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Checkout repository (for version extraction)
-        uses: actions/checkout@v6
-
-      - name: Set lowercase image name
-        id: image
-        run: echo "name=${GITHUB_REPOSITORY,,}-mcp" >> $GITHUB_OUTPUT
-
-      - name: Extract version from package.json
-        id: version
-        run: |
-          VERSION=$(jq -r '.version' frontend/package.json)
-          echo "full=${VERSION}" >> $GITHUB_OUTPUT
-          echo "minor=$(echo $VERSION | cut -d. -f1,2)" >> $GITHUB_OUTPUT
-
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.REGISTRY }}/${{ steps.image.outputs.name }}
-          tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=${{ steps.version.outputs.full }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=${{ steps.version.outputs.full }},enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ steps.version.outputs.minor }}-dev,enable=${{ github.ref == 'refs/heads/dev' }}
-            type=raw,value=${{ steps.version.outputs.minor }},enable=${{ github.ref == 'refs/heads/main' }}
-
-      # Bounded retry with backoff on transient registry timeouts (bd-n6197):
-      # run 30144328147 failed THIS job's "Set up Docker Buildx" step. A bash
-      # loop is simpler here than duplicating a `uses:` step, since this is
-      # already a `run:` step.
-      - name: Create manifest list and push
-        working-directory: /tmp
-        run: |
-          TAGS=$(echo "${{ steps.meta.outputs.tags }}" | xargs -I {} echo --tag {})
-          SRC1="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-amd64.outputs.digest }}"
-          SRC2="${{ env.REGISTRY }}/${{ steps.image.outputs.name }}@${{ needs.build-mcp-arm64.outputs.digest }}"
-
-          MAX_ATTEMPTS=3
-          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
-            if docker buildx imagetools create $TAGS "$SRC1" "$SRC2"; then
-              exit 0
-            fi
-            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
-              WAIT=$((attempt * 30))
-              echo "::warning::docker buildx imagetools create failed (attempt $attempt/$MAX_ATTEMPTS, likely transient registry timeout). Sleeping ${WAIT}s before retry."
-              sleep "$WAIT"
-            fi
-          done
-
-          echo "::error::docker buildx imagetools create failed after $MAX_ATTEMPTS attempts"
-          exit 1
+          name: verified-image-candidates
+          path: candidate-attestation.json
+          retention-days: 1
+          if-no-files-found: error

@@ -12,10 +12,9 @@ unpacked into structured records.
 Decode pipeline (validate-before-decode, never the reverse)
 -----------------------------------------------------------
 1. :func:`routers.backup.validate_artifact_manifest` runs FIRST (version gate +
-   per-member SHA-256). It is the caller's responsibility to call it before
-   :func:`decode_artifact_to_plan`; this module re-asserts the manifest is
-   present and parses it but does NOT re-run integrity (the caller already did,
-   on the same open ``ZipFile``). The orchestrator then re-checks the
+   per-member SHA-256) and passes its parsed manifest to
+   :func:`decode_artifact_to_plan`; decode never reads it a second time. The
+   orchestrator then re-checks the
    schema-version a SECOND time in pre-flight (defence in depth — .17 + .18).
 
 2. Per-category YAML (``categories/<section>.yaml``) is parsed and the entity
@@ -23,22 +22,19 @@ Decode pipeline (validate-before-decode, never the reverse)
    slice. Each artifact section maps to exactly one :class:`EntityType`.
 
 3. The binary subtree (``binary/logos/<rel>`` + ``binary/metadata.json``) is
-   decoded into the per-logo records the logos importer (.15) consumes:
-   ``{"name", "filename", "content_b64", "size"}``. The bytes are base64-encoded
-   here so the importer's one-at-a-time decode/upload loop (.15, D8) drives the
-   memory profile — this module never decodes a logo's IMAGE bytes, only reads
-   the stored file bytes and re-encodes them as the transport the importer
-   already expects.
+   decoded into metadata-only per-logo records. :func:`logo_content_provider`
+   reads and base64-encodes one member only when the importer reaches that logo,
+   so the plan never retains aggregate logo payloads.
 
 ZIP-SLIP / PATH-TRAVERSAL SAFETY (the untrusted-upload surface)
 ---------------------------------------------------------------
-This module NEVER extracts a member to the filesystem — it only ``zf.read()``s
-named members it itself chose (the manifest-listed categories + the enumerated
-binary subtree). Even so, every member name pulled from the artifact's own
-listing is screened by :func:`_is_safe_member` (reject absolute paths, ``..``
-segments, and backslash separators) before it is read, so a crafted archive
-entry can never widen the read surface. The logos importer (.15) independently
-re-validates each filename basename before any upload — defence in depth.
+This module NEVER extracts a member to the filesystem. It reads named metadata
+members and streams only logo members it chose from the enumerated binary
+subtree. Every member name pulled from the artifact's own listing is screened by
+:func:`_is_safe_member` (reject absolute paths, ``..`` segments, and backslash
+separators) before it is read, so a crafted archive entry can never widen the
+read surface. The logos importer (.15) independently re-validates each filename
+basename before any upload — defence in depth.
 
 Conventions (``docs/style_guide.md``): ``snake_case``; Google-style docstrings;
 lazy ``%``-formatted logging; no secrets in any log line.
@@ -50,6 +46,7 @@ import base64
 import logging
 import posixpath
 import zipfile
+from collections.abc import Awaitable, Callable
 
 import yaml
 
@@ -64,7 +61,7 @@ logger = logging.getLogger(__name__)
 _CATEGORY_DIR = "categories"
 _LOGO_DIR = "binary/logos"
 _BINARY_METADATA = "binary/metadata.json"
-_MANIFEST_NAME = "manifest.json"
+_LOGO_READ_CHUNK_BYTES = (64 * 1024) - 1  # divisible by 3 for base64 chunking
 
 # Artifact category-file (section) -> the EntityType it restores. The section
 # key is the YAML leaf the builder wrote under ``dispatcharr`` / ``database``.
@@ -89,6 +86,18 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
     # and decode through their own seam (_decode_settings_category).
     "user_agents": EntityType.USER_AGENT,
     "dvr_rules": EntityType.DVR_RULE,
+    # tyrg1 — the Dispatcharr ServerGroup an M3U account's ``server_group`` FK
+    # points at. Its category is ordered BEFORE M3U_ACCOUNT in all three
+    # registries so the account's FK has a populated namespace to remap
+    # through; without this row the account could only drop the FK (g8tyd) and
+    # the replica lost its provider connection-limit grouping.
+    "server_groups": EntityType.SERVER_GROUP,
+    # …-ciabe — the DVR category's instance half. The producer has already done
+    # the upcoming/completed split, so every row in this section is one the
+    # importer may schedule; it re-checks staleness against the clock at apply
+    # time, because the interval between the backup and the restore is exactly
+    # when "upcoming" stops being true.
+    "upcoming_recordings": EntityType.UPCOMING_RECORDING,
 }
 
 # The SETTINGS-blob artifact sections (key/value mappings, not entity lists).
@@ -98,6 +107,22 @@ _SECTION_TO_ENTITY: dict[str, EntityType] = {
 # (restore_orchestrator._settings -> settings_agents.import_core_settings /
 # import_comskip). Order here is the fixed apply order.
 _SETTINGS_BLOB_SECTIONS: tuple[str, ...] = ("core_settings", "comskip")
+
+# ECM's OWN settings blob (…-dfkbn item 4). It lives at the TOP LEVEL of
+# ``categories/settings.yaml`` — not under ``dispatcharr`` / ``database`` — and
+# decodes into its own :data:`EntityType.ECM_SETTINGS` category, distinct from
+# the Dispatcharr core-settings blobs above. The builder has emitted this member
+# since the artifact format existed; there was simply no decoder row for it, so
+# ECM's settings silently reverted to defaults on every restore.
+_ECM_SETTINGS_SECTION = "settings"
+
+# The Dispatcharr LOGO INVENTORY section (…-dfkbn item 1). Deliberately absent
+# from :data:`_SECTION_TO_ENTITY`: its rows are MERGED into the single
+# ``EntityType.LOGO`` category alongside the binary subtree's byte-bearing
+# records (see :func:`_merge_logo_records`), because two plan categories of the
+# same EntityType would leave one of them permanently shadowed by
+# ``ImportPlan.category``.
+_LOGO_INVENTORY_SECTION = "logos"
 
 # Where in the parsed category YAML each section's entity list lives. The
 # Dispatcharr-managed sections sit under ``dispatcharr``; ECM DB sections under
@@ -221,6 +246,92 @@ def _decode_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
     return PlanCategory(entity_type=EntityType.SETTINGS, entities=entities)
 
 
+def _read_category_yaml(zf: zipfile.ZipFile, section_key: str) -> object:
+    """Parse ``categories/<section>.yaml``, or ``None`` when absent/unreadable.
+
+    A malformed member is a logged empty, never a whole-restore crash — the same
+    containment :func:`_decode_categories` applies per category.
+    """
+    member = "%s/%s.yaml" % (_CATEGORY_DIR, section_key)
+    if member not in set(zf.namelist()) or not _is_safe_member(member):
+        return None
+    try:
+        return yaml.safe_load(zf.read(member).decode("utf-8"))
+    except (yaml.YAMLError, UnicodeDecodeError) as exc:
+        logger.warning(
+            "[DBAS-RESTORE] Category %s YAML unreadable; treating as empty: %s",
+            section_key, exc,
+        )
+        return None
+
+
+def _decode_ecm_settings_category(zf: zipfile.ZipFile) -> PlanCategory:
+    """Decode ECM's own ``settings`` blob into the ECM_SETTINGS plan category.
+
+    The blob sits at the TOP LEVEL of ``categories/settings.yaml`` (it is neither
+    Dispatcharr-managed nor an ECM DB table), and becomes ONE record
+    ``{"values": {...}}`` — the contract the orchestrator's ECM-settings step
+    consumes. The category is always returned, empty when the member is absent,
+    so the operator sees "0" rather than a gap.
+    """
+    parsed = _read_category_yaml(zf, _ECM_SETTINGS_SECTION)
+    values = parsed.get(_ECM_SETTINGS_SECTION) if isinstance(parsed, dict) else None
+    entities = [{"values": values}] if isinstance(values, dict) and values else []
+    return PlanCategory(entity_type=EntityType.ECM_SETTINGS, entities=entities)
+
+
+def _decode_logo_inventory(zf: zipfile.ZipFile) -> list[dict]:
+    """Decode ``categories/logos.yaml`` into the Dispatcharr logo inventory rows.
+
+    Each row is ``{"id", "name", "url"}`` as Dispatcharr's ``LogoSerializer``
+    emits it. These carry NO bytes — the URL is the restorable identity.
+    """
+    parsed = _read_category_yaml(zf, _LOGO_INVENTORY_SECTION)
+    return _extract_section_entities(parsed, _LOGO_INVENTORY_SECTION)
+
+
+def _merge_logo_records(binary_records: list[dict], inventory: list[dict]) -> list[dict]:
+    """Merge the byte-bearing binary records with the URL-bearing inventory rows.
+
+    Both describe the SAME logos from different angles, joined on the source
+    Dispatcharr logo id (the builder correlates each archived file to its logo
+    record by URL basename and carries the id in ``binary/metadata.json``):
+
+    * a logo present in BOTH is emitted ONCE — the binary record wins (it has the
+      actual image) and gains the inventory's ``url`` so the importer's match and
+      the URL-recreate fallback both have everything they need;
+    * a logo present only in the inventory is emitted as a URL-only record — the
+      case that covers every remotely-hosted logo, which the binary subtree could
+      never carry;
+    * a byte-bearing record the builder could not correlate to an id is emitted
+      unchanged (it still matches by name/basename).
+
+    Order is deterministic: binary records first, in their decoded order, then
+    the inventory-only rows in archive order.
+    """
+    merged = list(binary_records)
+    by_source_id: dict[int, dict] = {}
+    for record in merged:
+        source_id = record.get("id")
+        if isinstance(source_id, int) and not isinstance(source_id, bool):
+            by_source_id.setdefault(source_id, record)
+
+    for row in inventory:
+        source_id = row.get("id")
+        url = row.get("url")
+        existing = (
+            by_source_id.get(source_id)
+            if isinstance(source_id, int) and not isinstance(source_id, bool)
+            else None
+        )
+        if existing is not None:
+            if isinstance(url, str) and url and "url" not in existing:
+                existing["url"] = url
+            continue
+        merged.append(dict(row))
+    return merged
+
+
 def _parse_logo_metadata_index(zf: zipfile.ZipFile) -> dict[str, dict]:
     """Parse ``binary/metadata.json`` into a filename -> entry index.
 
@@ -257,7 +368,7 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
     consumes::
 
         {"name": <display name or basename-stem>, "filename": <basename>,
-         "content_b64": <base64 of the file bytes>, "size": <byte length>,
+         "archive_member": <validated ZIP member>, "size": <byte length>,
          "id": <source Dispatcharr logo id, when correlated>}
 
     ``id`` + display ``name`` come from the builder's source-logo correlation in
@@ -283,7 +394,6 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
         info = zf.getinfo(name)
         if info.is_dir():
             continue
-        raw = zf.read(name)
         basename = posixpath.basename(name)
         if not basename:
             continue
@@ -291,8 +401,8 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
         record = {
             "name": stem,
             "filename": basename,
-            "content_b64": base64.b64encode(raw).decode("ascii"),
-            "size": len(raw),
+            "archive_member": name,
+            "size": info.file_size,
         }
         # Metadata is keyed by the file's logos-dir-relative path (== the member
         # name minus the binary/logos/ prefix).
@@ -308,27 +418,47 @@ def _decode_logo_records(zf: zipfile.ZipFile) -> list[dict]:
     return records
 
 
-def _parse_manifest(zf: zipfile.ZipFile) -> dict:
-    """Parse the cleartext ``manifest.json`` header, or return ``{}`` if absent.
+def _read_logo_content_b64(zf: zipfile.ZipFile, member: str) -> str:
+    """Base64-encode one logo member without materializing its raw bytes."""
+    encoded = bytearray()
+    with zf.open(member, "r") as source:
+        while chunk := source.read(_LOGO_READ_CHUNK_BYTES):
+            encoded.extend(base64.b64encode(chunk))
+    return encoded.decode("ascii")
 
-    The caller is expected to have already run
-    :func:`routers.backup.validate_artifact_manifest` (which refuses a missing /
-    malformed / newer-version manifest). This is a best-effort re-parse so the
-    plan carries the manifest for pre-flight's second version check.
+
+def logo_content_provider(
+    zf: zipfile.ZipFile,
+) -> Callable[[dict], Awaitable[str | None]]:
+    """Return an async, bounded loader for metadata-only archive logo records.
+
+    The caller must keep ``zf`` open until orchestration finishes. Records are
+    accepted only when they still point inside the screened logo subtree and the
+    ZIP metadata remains within the importer's existing per-logo limit.
     """
-    import json
+    from dbas.importers.logos import MAX_LOGO_BYTES
 
-    if _MANIFEST_NAME not in zf.namelist():
-        return {}
-    try:
-        manifest = json.loads(zf.read(_MANIFEST_NAME))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        logger.warning("[DBAS-RESTORE] Manifest unreadable during decode: %s", exc)
-        return {}
-    return manifest if isinstance(manifest, dict) else {}
+    async def load(record: dict) -> str | None:
+        member = record.get("archive_member")
+        prefix = _LOGO_DIR + "/"
+        if (
+            not isinstance(member, str)
+            or not member.startswith(prefix)
+            or not _is_safe_member(member)
+        ):
+            return None
+        try:
+            info = zf.getinfo(member)
+        except KeyError:
+            return None
+        if info.is_dir() or info.file_size > MAX_LOGO_BYTES:
+            return None
+        return _read_logo_content_b64(zf, member)
+
+    return load
 
 
-def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
+def decode_artifact_to_plan(zf: zipfile.ZipFile, *, manifest: dict) -> ImportPlan:
     """Decode a validated DBAS artifact into an :class:`ImportPlan`.
 
     PRECONDITION: the caller has already run
@@ -344,6 +474,7 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     Args:
         zf: An OPEN, already-validated artifact ``ZipFile`` (read mode).
+        manifest: The parsed object returned by ``validate_artifact_manifest``.
 
     Returns:
         The :class:`ImportPlan` — categories default to ``selected=True`` so the
@@ -359,7 +490,6 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
 
     guard_artifact_against_zip_bomb(zf)
 
-    manifest = _parse_manifest(zf)
     categories = _decode_categories(zf)
 
     # lc6zu — the SETTINGS category (core_settings + comskip blobs) decodes
@@ -368,7 +498,18 @@ def decode_artifact_to_plan(zf: zipfile.ZipFile) -> ImportPlan:
     # {"section", "values"} records (the orchestrator settings-step contract).
     categories.append(_decode_settings_category(zf))
 
-    logo_records = _decode_logo_records(zf)
+    # dfkbn item 4 — ECM's OWN settings.json blob, which had no decoder row at
+    # all and so was silently dropped on every restore.
+    categories.append(_decode_ecm_settings_category(zf))
+
+    # dfkbn item 1 — ONE LOGO category built from BOTH sources: the binary
+    # subtree (bytes, ECM's own uploads dir only) and the Dispatcharr logo
+    # inventory (id + name + URL, every logo the source instance had). Merged
+    # rather than appended as two categories, because ``ImportPlan.category``
+    # returns the first match and the second would be permanently shadowed.
+    logo_records = _merge_logo_records(
+        _decode_logo_records(zf), _decode_logo_inventory(zf)
+    )
     categories.append(
         PlanCategory(entity_type=EntityType.LOGO, entities=logo_records)
     )

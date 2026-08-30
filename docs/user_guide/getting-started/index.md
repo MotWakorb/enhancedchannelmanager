@@ -1,42 +1,21 @@
 # Getting Started
 
-> **Audience:** Operator, day one. You have ECM installed (or are about to) and need to get it talking to Dispatcharr.
->
-> **Status:** In progress. The installation/Dispatcharr-connection articles are
-> still stubs (planned below), but the end-to-end "build your first channels"
-> workflow tutorial has shipped.
-
 ## Section purpose
 
 Get a new operator from "I just installed ECM" to "ECM is connected to Dispatcharr and I can see my channels." Everything in the rest of the user guide assumes a working ECM-to-Dispatcharr connection. If that's broken, this section is what you need.
 
-## Intended audience
-
-- **Operator** running ECM for the first time.
-- **Operator** rebuilding after a migration, container rebuild, or Dispatcharr URL change.
-
-End users do not read this section.
-
 ## Articles
-
-| Article | Purpose | Status |
-|-|-|-|
-| [`your-first-channels.md`](your-first-channels.md) | End-to-end workflow tutorial: add an M3U account, add an EPG source, choose which stream groups to sync, refresh, then create channels, channel groups, and stream assignments in Channel Manager. Spans M3U Manager → EPG Manager → Channel Manager. | **Shipped** |
-
-## Planned articles
 
 | Article | Purpose |
 |-|-|
-| `installation.md` | Prerequisites (Docker, a running Dispatcharr, network reachability), pulling the ECM image, the minimum compose snippet, where the persistent `/config` volume should live. |
-| `first-run.md` | What you see the first time you load the UI, the initial admin user setup, where to find the version number. |
-| `connect-dispatcharr.md` | Entering the Dispatcharr base URL and credentials, what each field means, how to verify the connection succeeded, common reasons it fails. |
-| `verify-healthy-connection.md` | What a healthy connection looks like — channels visible, streams visible, no banner warnings — plus the `/health` endpoint as the operator-friendly readiness check. |
-| `next-steps.md` | A short "where do I go from here?" — pointing at Channels & Streams for day-to-day work, Auto Creation for power features, and Backup & Restore so a new operator sets up backups before they need them. |
+| [Install ECM](installation.md) | Prerequisites (Docker, a running Dispatcharr, network reachability), the minimum compose snippet, where the persistent `/config` volume should live, confirming the container is up. |
+| [First Run](first-run.md) | What you see the first time you load the UI, the initial admin user setup, how the preflight checks and config-persistence warning work. |
+| [Connect ECM to Dispatcharr](connect-dispatcharr.md) | Entering the Dispatcharr base URL and credentials, what each field means, how to verify the connection succeeded, common reasons it fails. |
+| [Set Up Your First Channels](your-first-channels.md) | End-to-end workflow tutorial: add an M3U account, add an EPG source, choose which stream groups to sync, refresh, then create channels, channel groups, and stream assignments in Channel Manager. Spans M3U Manager → EPG Manager → Channel Manager. |
+| [Next Steps](next-steps.md) | A short "where do I go from here?", pointing at Channels & Streams for day-to-day work, Channel Pipeline for automation, and Backup & Restore so a new operator sets up backups before they need them. |
 
-## Going deeper (for now)
+## Going deeper
 
-Until the articles are filled in, the following developer-facing docs are the closest substitute:
-
-- [`docs/architecture.md`](../../architecture.md) — system overview, ports, where the SPA is served from.
-- [`docs/auth_middleware.md`](../../auth_middleware.md) — auth model details if the connection setup is failing on credentials.
-- [`docs/dispatcharr_api.md`](../../dispatcharr_api.md) — what ECM expects from Dispatcharr's API surface.
+- [`docs/architecture.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/architecture.md) (in the repository, not part of this published guide): system overview, ports, where the SPA is served from.
+- [`docs/auth_middleware.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/auth_middleware.md) (in the repository, not part of this published guide): auth model details if the connection setup is failing on credentials.
+- [`docs/dispatcharr_api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/dispatcharr_api.md) (in the repository, not part of this published guide): what ECM expects from Dispatcharr's API surface.

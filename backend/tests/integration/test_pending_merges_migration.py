@@ -148,10 +148,17 @@ class TestMigration0014Fresh:
                 "id", "stream_name", "group_id", "candidate_channel_id",
                 "confidence", "status", "created_at", "resolved_at",
                 "resolution_source", "trigger_context",
+                # Added by 0043 (bead enhancedchannelmanager-i5ic0, PO decision
+                # 2026-08-16). This upgrade goes to HEAD, not to 0014, so the
+                # pin is "the shape §D8 specified plus every deliberate
+                # extension since" — a column arriving here without a migration
+                # and an ADR amendment behind it still fails.
+                "unapplied_reason",
             }, (
-                f"pending_merges column set differs from ADR-008 §D8: "
-                f"{sorted(pm_cols)}"
+                f"pending_merges column set differs from ADR-008 §D8 plus its "
+                f"ratified extensions: {sorted(pm_cols)}"
             )
+            assert pm_cols["unapplied_reason"]["nullable"] is True
             assert pm_cols["stream_name"]["nullable"] is False
             assert pm_cols["group_id"]["nullable"] is True
             assert pm_cols["candidate_channel_id"]["nullable"] is False

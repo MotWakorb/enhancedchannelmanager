@@ -2,10 +2,19 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import type { DuplicateGroup, BulkMergeItem } from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
+import { IrreversibleActionNotice } from './IrreversibleActionNotice';
 import './ModalBase.css';
 import './FindDuplicatesModal.css';
 
 interface FindDuplicatesModalProps {
+  /**
+   * True when opened from Edit Mode's selection toolbar. The merge this modal
+   * runs is the same immediate, unstageable operation as the toolbar Merge
+   * button's, and needs the same point-of-action notice (bead
+   * enhancedchannelmanager-kz089).
+   */
+  isEditMode?: boolean;
   onClose: () => void;
   onMerged: () => void;
   /** Checkbox-selected channel ids to scope the scan to (enhancedchannelmanager-uahp6).
@@ -13,7 +22,8 @@ interface FindDuplicatesModalProps {
   channelIds?: number[];
 }
 
-export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDuplicatesModalProps) {
+export function FindDuplicatesModal({ isEditMode = false, onClose, onMerged, channelIds }: FindDuplicatesModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   // A selection of zero channels isn't a meaningful scope — treat it the
   // same as "no selection passed" (global scan) rather than sending an
   // empty channel_ids that the backend would interpret as "scope to
@@ -37,6 +47,8 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
   const [includedGroups, setIncludedGroups] = useState<Record<string, boolean>>({});
 
   const [merging, setMerging] = useState(false);
+  // Ticked before Merge will run inside Edit Mode (bead …-kz089).
+  const [irreversibleAcknowledged, setIrreversibleAcknowledged] = useState(false);
   const [mergeResult, setMergeResult] = useState<{ merged: number; failed: number } | null>(null);
 
   // Merge-blind safety net (enhancedchannelmanager-uahp6): a large result set
@@ -116,6 +128,13 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
   );
 
   const handleMerge = async () => {
+    // Same handler-level refusal as MergeChannelsModal: this merge deletes the
+    // duplicate channels, so it must refuse independently of the button's
+    // `disabled` expression (bead …-kz089, fix round 2).
+    if (isEditMode && !irreversibleAcknowledged) {
+      setError('Acknowledge that this merge applies immediately before merging.');
+      return;
+    }
     setMerging(true);
     setError(null);
 
@@ -145,11 +164,11 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg find-duplicates-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg find-duplicates-modal" ref={containerRef}>
         <div className="modal-header">
           <div>
-            <h2>
+            <h2 id={titleId}>
               <span className="material-icons">content_copy</span>
               Find Duplicate Channels
             </h2>
@@ -295,6 +314,14 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
         </div>
 
         <div className="modal-footer">
+          {isEditMode && groups.length > 0 && !mergeResult && (
+            <IrreversibleActionNotice
+              what="This merge"
+              consequence="Each group's source channels are deleted once their streams have moved."
+              acknowledged={irreversibleAcknowledged}
+              onAcknowledgedChange={setIrreversibleAcknowledged}
+            />
+          )}
           <button className="modal-btn modal-btn-secondary" onClick={onClose}>
             Cancel
           </button>
@@ -302,7 +329,7 @@ export function FindDuplicatesModal({ onClose, onMerged, channelIds }: FindDupli
             <button
               className="modal-btn modal-btn-primary"
               onClick={handleMerge}
-              disabled={merging || includedCount === 0 || renderGuardTripped}
+              disabled={merging || includedCount === 0 || renderGuardTripped || (isEditMode && !irreversibleAcknowledged)}
               title={renderGuardTripped ? 'Merge disabled — duplicate groups failed to render' : undefined}
             >
               {merging ? 'Merging...' : `Merge ${includedCount} Group${includedCount !== 1 ? 's' : ''}`}

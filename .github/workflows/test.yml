@@ -1,36 +1,111 @@
 name: Tests
 
+# ─── ONE SOURCE OF TRUTH PER REQUIRED CONTEXT (bead enhancedchannelmanager-5rwzy) ──
+#
+# INVARIANT: every job in this file whose `name:` is a branch-protection
+# required status check runs on EVERY event, so the context is emitted
+# exactly once, and gates its expensive STEPS on the `detect` job below.
+#
+# Do NOT add a path filter to this workflow, and do NOT give such a job a
+# job-level `if:` that can evaluate false. Both reintroduce the defect this
+# design closes:
+#
+#   * A path filter means the context is absent on the filtered half, so
+#     something else has to fill in for it. That was `docs-only-pass.yml`,
+#     whose `paths: ['**.md', '.beads/**']` was NOT the complement of the
+#     `paths-ignore` here. A PR touching code AND Markdown matched both, so
+#     every required context existed twice: once real, once a permanently
+#     green echo. On PR #797 `Backend Tests` reported failure and success on
+#     the same commit, and the failure was a genuine test defect.
+#   * GitHub treats a SKIPPED job as satisfying a required status check, so
+#     skipping the job is the same hole wearing a different hat.
+#
+# Jobs that are NOT required contexts may skip at the job level. Adding one
+# of them to branch protection without converting it to step-gating reopens
+# the hole; `backend/tests/unit/test_classify_changed_paths.py` fails the PR
+# if a required context ever gains a second emitter or this workflow regains
+# a path filter.
+#
+# `dev` requires four contexts: `Backend Tests` and `Frontend Tests` from
+# this workflow, and `CodeQL Analysis (python)` and
+# `CodeQL Analysis (javascript-typescript)` from build.yml. `MCP Server
+# Tests` runs here too and is not required; it is product coverage of the
+# sidecar, kept for what it tests rather than for what it gates.
+
 on:
   push:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      - '**.md'
   pull_request:
     branches:
       - main
       - dev
-    paths-ignore:
-      - '.beads/**'
-      # Docs-only PRs are satisfied by docs-only-pass.yml (the sentinel posts
-      # the required Backend/Frontend/Semgrep check-runs). Without this, the
-      # real suite ALSO runs and needlessly gates a Markdown-only merge.
-      # Keep in sync with the push trigger above + build.yml's paths-ignore.
-      - '**.md'
   workflow_dispatch:
 
 jobs:
-  # ─── Backend tests ────────────────────────────────────────────────────
-  backend:
-    name: Backend Tests
+  # ─── Changed-path classifier ──────────────────────────────────────────
+  # Decides whether any code-gate input or unknown path changed. Every
+  # other job reads `needs.detect.outputs.code_paths_changed`.
+  #
+  # The gate is written as `!= 'false'` everywhere on purpose: if this job
+  # fails outright its output is empty, `!= 'false'` is true, and the real
+  # work runs. Fail-open is the only safe direction, because the failure
+  # mode of fail-closed is a green required check that ran nothing.
+  detect:
+    name: Detect Changed Paths
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code_paths_changed: ${{ steps.classify.outputs.code_paths_changed }}
+      docs_site_affected: ${{ steps.classify.outputs.docs_site_affected }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
+        with:
+          # Only scripts/classify_changed_paths.py is needed; the changed-file
+          # set comes from the API, not from git, so no history is required.
+          # That also sidesteps the depth-1 CI checkout trap from bd-t8fqg
+          # (no `origin/<base>` remote-tracking ref in a single-branch clone).
+          fetch-depth: 1
+
+      - name: Classify the changed file set
+        id: classify
+        uses: ./.github/actions/classify-changed-paths
+
+  # ─── Backend tests ────────────────────────────────────────────────────
+  # REQUIRED CONTEXT. Always runs; the steps below are gated. See the
+  # invariant at the top of this file before changing `if:` on this job.
+  backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    # Healthy runs complete in under ten minutes. Bound future deadlocks so a
+    # wedged test cannot occupy a runner for GitHub's six-hour default.
+    timeout-minutes: 30
+    needs: [detect]
+    if: ${{ !cancelled() }}
+    steps:
+      - name: Inert-only change, nothing for pytest to run
+        if: needs.detect.outputs.code_paths_changed == 'false'
+        run: |
+          echo "Every changed path is on the classifier's explicit inert allowlist."
+          echo "The backend suite has no changed Python to exercise, so this"
+          echo "check passes without running it. Any change under backend/"
+          echo "runs the full suite below."
+          # The check name says "Backend Tests" either way. Say in the run
+          # summary which of the two things actually happened, so a reader of
+          # the rollup does not have to open the job log to find out.
+          echo "**Backend Tests**: inert machine-state change, the pytest suite was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Checkout repository
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        uses: actions/checkout@v6
 
       - name: Setup Python
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -38,6 +113,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install dependencies
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         run: |
           python -m pip install --upgrade pip
@@ -45,8 +121,10 @@ jobs:
           # Belt-and-suspenders: these are in requirements.txt already, but
           # pin them here so the CI command is self-documenting.
           pip install pytest pytest-asyncio pytest-cov httpx
+          pip install detect-secrets==1.5.0
 
       - name: Verify required test deps are importable (bd-s8kq3)
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         # Fast-fail guard: if the install step above silently failed to
         # bring in a required test dep (alembic for migration tests,
@@ -58,9 +136,9 @@ jobs:
         run: python scripts/verify_test_deps.py
 
       - name: Prepare CI SQLite database
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         run: |
-          mkdir -p /tmp/ecm_test_config
           rm -f /tmp/ecm-test.db
           # Materialize an empty SQLite file — tests that opt into the
           # `ci_seed_db` fixture load their own tmp DBs; this file exists so
@@ -68,9 +146,13 @@ jobs:
           python -c "import sqlite3; sqlite3.connect('/tmp/ecm-test.db').close()"
 
       - name: Run pytest
+        id: pytest
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: backend
         env:
-          CONFIG_DIR: /tmp/ecm_test_config
+          # conftest owns baseline creation. This is only the private parent
+          # for its per-process mkdtemp directory, so no runner state is reused.
+          ECM_TEST_CONFIG_ROOT: ${{ runner.temp }}
           RATE_LIMIT_ENABLED: '0'
           ECM_CI_DB_PATH: /tmp/ecm-test.db
         run: |
@@ -97,8 +179,25 @@ jobs:
             -m "not slow" --tb=short --no-header -p no:warnings \
             --junitxml=junit.xml
 
+      # `always()` so the count still lands when the suite failed; that is
+      # exactly when a reader wants to know how much actually ran.
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
+        env:
+          PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
+        run: |
+          python3 scripts/ci_junit_summary.py \
+            --label "Backend Tests" \
+            --ran "ran the backend pytest suite" \
+            --junit backend/junit.xml \
+            --outcome "$PYTEST_OUTCOME" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload backend coverage artifact
-        if: always()
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: backend-coverage
@@ -109,7 +208,7 @@ jobs:
           retention-days: 14
 
       - name: Upload backend JUnit artifact (flake tracking — bead xq19y)
-        if: always()
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-backend` artifact name is consumed by
@@ -135,14 +234,31 @@ jobs:
   # docs/testing.md § "Coverage ratchet cadence"). The --cov-config
   # points at mcp-server/.coveragerc which excludes tests/ from the
   # measurement (so self-coverage doesn't inflate the TOTAL).
+  #
+  # NOT a required context on `dev`. It keeps the always-run, step-gated
+  # shape anyway because `publish-verified-dev-images` needs it and refuses
+  # to publish on a skipped dependency.
   mcp-server:
     name: MCP Server Tests
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     steps:
+      - name: Inert-only change, nothing for pytest to run
+        if: needs.detect.outputs.code_paths_changed == 'false'
+        run: |
+          echo "Every changed path is on the classifier's explicit inert allowlist."
+          echo "The mcp-server suite has no changed Python to exercise, so"
+          echo "this check passes without running it."
+          echo "**MCP Server Tests**: inert machine-state change, the pytest suite was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout repository
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/checkout@v6
 
       - name: Setup Python
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
@@ -150,6 +266,7 @@ jobs:
           cache-dependency-path: mcp-server/requirements.txt
 
       - name: Install dependencies
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: mcp-server
         run: |
           python -m pip install --upgrade pip
@@ -159,6 +276,8 @@ jobs:
           pip install pytest pytest-asyncio pytest-cov
 
       - name: Run pytest
+        id: pytest
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: mcp-server
         run: |
           # Coverage threshold is enforced via --cov-fail-under=26 with
@@ -179,8 +298,57 @@ jobs:
             --cov=. --cov-config=.coveragerc --cov-fail-under=26 \
             --junitxml=junit.xml
 
+      # Split from the assertion step below on purpose. A transient Alpine
+      # mirror, PyPI or npm failure is a build failure, and reporting it under
+      # a step named "Assert MCP container runtime isolation" reads as a
+      # security regression to everyone who sees the red check.
+      - name: Build the ECM and MCP images for the isolation gate
+        id: isolation_build
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        run: bash scripts/test_mcp_container_hardening.sh --build-only
+
+      - name: Assert MCP container runtime isolation
+        id: isolation
+        if: needs.detect.outputs.code_paths_changed != 'false'
+        env:
+          COMPOSE_BUILD: "false"
+        run: |
+          # Twice, because the invariant is "any PUID/PGID pair the compose
+          # file accepts", not "1000:1000". Only the second run exercises the
+          # entrypoint's chown against a uid the images were not built with.
+          # The images are already built, so the second run costs container
+          # startup, not a rebuild.
+          bash scripts/test_mcp_container_hardening.sh
+          PUID=1571 PGID=1572 bash scripts/test_mcp_container_hardening.sh
+
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
+        env:
+          PYTEST_OUTCOME: ${{ steps.pytest.outcome }}
+          ISOLATION_BUILD_OUTCOME: ${{ steps.isolation_build.outcome }}
+          ISOLATION_OUTCOME: ${{ steps.isolation.outcome }}
+        run: |
+          # The summary must describe everything this check gates. Reporting
+          # only the pytest outcome let the check go red for a failed
+          # isolation gate while its own summary said the suite passed.
+          summary_outcome="$PYTEST_OUTCOME"
+          for step_outcome in "$ISOLATION_BUILD_OUTCOME" "$ISOLATION_OUTCOME"; do
+            if [ "$step_outcome" = failure ] || [ "$step_outcome" = cancelled ]; then
+              summary_outcome="$step_outcome"
+            fi
+          done
+          python3 scripts/ci_junit_summary.py \
+            --label "MCP Server Tests" \
+            --ran "ran the mcp-server pytest suite, built the ECM and MCP images, and asserted live MCP container isolation end to end (build: ${ISOLATION_BUILD_OUTCOME:-skipped}, isolation: ${ISOLATION_OUTCOME:-skipped}, pytest: ${PYTEST_OUTCOME:-skipped})" \
+            --junit mcp-server/junit.xml \
+            --outcome "$summary_outcome" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload mcp-server coverage artifact
-        if: always()
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: mcp-server-coverage
@@ -191,7 +359,7 @@ jobs:
           retention-days: 14
 
       - name: Upload mcp-server JUnit artifact (flake tracking — bead xq19y)
-        if: always()
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-mcp` artifact name is consumed by
@@ -206,28 +374,53 @@ jobs:
           retention-days: 30
 
   # ─── Frontend lint / typecheck / unit tests ───────────────────────────
+  # REQUIRED CONTEXT. Always runs; the steps below are gated.
+  #
+  # Lint, typecheck and vitest, and nothing else. No browser is installed and
+  # no Playwright spec runs here: `npx playwright install --with-deps chromium`
+  # hung for 2h35m on a dev run and has no business sitting on a required
+  # check. The modal-typography inventory spec and `playwright.visual.config.ts`
+  # still exist and are runnable by hand; they are simply not wired to CI.
   frontend:
     name: Frontend Tests
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     steps:
+      - name: Inert-only change, nothing for the frontend to check
+        if: needs.detect.outputs.code_paths_changed == 'false'
+        run: |
+          echo "Every changed path is on the classifier's explicit inert allowlist."
+          echo "There is no changed TypeScript to lint, typecheck or test, so"
+          echo "this check passes without running the suite."
+          echo "**Frontend Tests**: inert machine-state change, lint, typecheck and vitest were NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout repository
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/checkout@v6
         with:
           # Need full history so we can diff against origin/main in PR mode.
           fetch-depth: 0
 
       - name: Setup Node.js
+        if: needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/setup-node@v6
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            frontend/package-lock.json
 
       - name: Install dependencies
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: npm ci
 
       - name: Lint (full repo, blocking)
+        id: lint
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: |
           # Full-repo lint at --max-warnings 0. Baseline was cleared in
@@ -236,10 +429,14 @@ jobs:
           npm run lint
 
       - name: Typecheck
+        id: typecheck
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: npm run typecheck
 
       - name: Unit tests with coverage (blocking)
+        id: vitest
+        if: needs.detect.outputs.code_paths_changed != 'false'
         working-directory: frontend
         run: |
           # Coverage thresholds are configured in frontend/vitest.config.ts
@@ -259,8 +456,32 @@ jobs:
             --reporter=junit \
             --outputFile.junit=./junit.xml
 
+      - name: Summarize what this check did
+        # A run summary must never be the reason a required check reports
+        # red. If this step breaks, the conclusion the check is named for
+        # still stands.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
+        env:
+          LINT: ${{ steps.lint.outcome }}
+          TYPECHECK: ${{ steps.typecheck.outcome }}
+          VITEST: ${{ steps.vitest.outcome }}
+        run: |
+          # Three separately-failing gates, so three separate outcomes. Lint
+          # runs first: when it fails, typecheck and vitest never execute,
+          # and a single line claiming all three ran would be false.
+          {
+            python3 scripts/ci_junit_summary.py \
+              --label "Frontend Tests" \
+              --ran "ran the vitest suite" \
+              --junit frontend/junit.xml \
+              --outcome "$VITEST"
+            echo "- lint: ${LINT:-did not run}"
+            echo "- typecheck: ${TYPECHECK:-did not run}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload coverage artifact
-        if: always()
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           name: frontend-coverage
@@ -269,7 +490,7 @@ jobs:
           retention-days: 14
 
       - name: Upload frontend JUnit artifact (flake tracking — bead xq19y)
-        if: always()
+        if: always() && needs.detect.outputs.code_paths_changed != 'false'
         uses: actions/upload-artifact@v4
         with:
           # NOTE: the `junit-frontend` artifact name is consumed by
@@ -282,202 +503,115 @@ jobs:
           # flake-pr-comment aggregator.
           retention-days: 30
 
-  # ─── Version-bump consistency guard (bd-9rtlc) ────────────────────────
-  # The version string lives in three hand-edited files: frontend/package.json
-  # (canonical), backend/routers/backup.py (APP_VERSION), and backend/main.py
-  # (FastAPI version kwarg). Today's bump workflow requires updating all three
-  # in lockstep — and historically didn't (PR #277 caught backup.py at 0.16.0
-  # while package.json was 0.17.0-0027; the 9rtlc audit caught main.py at
-  # 0.16.0-0003 while package.json was 0.17.0-0033). This job fails the PR if
-  # the touchpoints disagree, so the next missed bump fails before merge
-  # instead of leaking divergence into dev. See docs/versioning.md →
-  # Touchpoints for the canonical list and bd-9rtlc for the audit history.
-  version-consistency:
-    name: Version Consistency
+  # ─── Docs link check (advisory) ────────────────────────────────────────
+  # ADVISORY BY PO DECISION: a release blocks on the app being broken, not on
+  # a bad link. `Docs Link Check` is deliberately NOT a branch-protection
+  # required context, and deliberately NOT in `publish-verified-dev-images`'
+  # `needs:` below — adding it there would make a bad link stop publication,
+  # which is the opposite of the decision.
+  #
+  # It keeps the always-run, step-gated shape anyway. Advisory is about what
+  # the result is allowed to block, not about how the job is written: a
+  # job-level `if:` that can evaluate false renders as a pass in the checks
+  # rollup, so a reader scanning for red would see green on a run that built
+  # nothing. Gate the steps, and keep the job-level guard at `!cancelled()`
+  # so a failed `detect` cannot make this check disappear.
+  #
+  # The gate is `docs_site_affected`, not `code_paths_changed`: this job
+  # builds the published site, and that verdict is precisely "a changed path
+  # is an input the site is built from". Written `!= 'false'` like every other
+  # gate here, so an absent or empty output still builds.
+  #
+  # The Python and dependency setup mirrors the `build` job in
+  # docs-pages.yml on purpose — same '3.12', same
+  # `docs/requirements-docs.txt`, same `mkdocs build --strict`. If they drift,
+  # this check stops being a preview of the deploy and starts being a second
+  # opinion, which is worse than nothing.
+  #
+  # WHAT THIS DOES NOT BUY (bead enhancedchannelmanager-h2jjg): a link from a
+  # published page to a file `mkdocs.yml` excludes — `docs/adr/*.md` and the
+  # rest of the internal tree — is logged by mkdocs at INFO, not WARNING, so
+  # `--strict` exits 0 on it. Measured on mkdocs 1.6.1: the level is
+  # `min(logging.INFO, validation.links.not_found)` in
+  # `mkdocs/structure/pages.py`, so no `validation:` setting can raise it
+  # above INFO. This job catches links to files that do not exist. It does
+  # not catch links to files that exist but are not published, which is the
+  # shape of all 18 dead links h2jjg records.
+  docs-link-check:
+    name: Docs Link Check
     runs-on: ubuntu-latest
+    needs: [detect]
+    if: ${{ !cancelled() }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          # Full history so the build-advance step below can read the base
-          # branch's frontend/package.json via `git show origin/<base>:...`.
-          fetch-depth: 0
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-
-      - name: Verify version touchpoints agree
-        run: python scripts/check_version_consistency.py
-
-      # ─── Build-number ADVANCE gate (bead enhancedchannelmanager-w9irb) ──
-      # The consistency check above proves the three touchpoints MATCH; this
-      # step proves the canonical BUILD number strictly ADVANCED past the base
-      # branch — closing the failure mode where ~9 source PRs shipped to dev
-      # at 0.17.6-0084 with no bump, undetected. Additive: it does not weaken
-      # the consistency check.
-      #
-      # Scope / exemptions:
-      #   - Runs ONLY on pull_request events whose base is `dev`. A release-cut
-      #     PR targets `main` (base_ref=main) and is therefore skipped here;
-      #     the shared script *also* exempts a no-suffix (X.Y.Z) version as a
-      #     second safety net.
-      #   - Docs-only PRs never reach this job: test.yml has
-      #     `paths-ignore: ['**.md', '.beads/**']`, so a docs-only PR runs no
-      #     real job — docs-only-pass.yml posts the "Version Consistency"
-      #     check-run instead. The docs-only exemption is inherited for free.
-      # The CHANGELOG [Unreleased] check inside the script is SOFT: it emits a
-      # ::warning:: annotation and never fails the job.
-      - name: Verify build number advances past base (PRs to dev only)
-        if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+      - name: Nothing the published site is built from changed
+        if: needs.detect.outputs.docs_site_affected == 'false'
         run: |
-          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-          python scripts/check_version_advances.py \
-            --baseline-ref "origin/${{ github.base_ref }}"
+          echo "No changed path is an input to the mkdocs user-guide site."
+          echo "There are no published pages or links to re-check, so this"
+          echo "check passes without building the site. Any change under"
+          echo "docs/user_guide/, docs/index.md or mkdocs.yml builds it below."
+          echo "**Docs Link Check**: no site input changed, mkdocs was NOT run." \
+            >> "$GITHUB_STEP_SUMMARY"
 
-  # ─── Fake-test guard (bd-ulp7q.9) ────────────────────────────────────────
-  # Fails the PR if `assert True` (Python) or `expect(true).toBe(true)`
-  # (TypeScript) appear in any test file. Both patterns always pass and
-  # provide zero regression signal — they are the canonical fake-test
-  # anti-pattern from the ulp7q audit.
-  #
-  # No Python deps needed: the script uses only stdlib (pathlib, re, sys).
-  # No Node deps needed: it scans the source tree with pathlib, no build step.
-  #
-  # Convention doc: docs/style_guide.md § "Test validity / anti-patterns".
-  # Suppression: add `# fake-test-ok: <reason>` (Python) or
-  # `// fake-test-ok: <reason>` (TypeScript) on the same line.
-  fake-test-guard:
-    name: Fake-Test Guard
-    runs-on: ubuntu-latest
-    steps:
       - name: Checkout repository
+        if: needs.detect.outputs.docs_site_affected != 'false'
         uses: actions/checkout@v6
 
       - name: Setup Python
+        if: needs.detect.outputs.docs_site_affected != 'false'
         uses: actions/setup-python@v6
         with:
           python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: docs/requirements-docs.txt
 
-      - name: Check for fake-test markers
-        run: python scripts/check_fake_tests.py
+      - name: Install docs dependencies
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        run: pip install -r docs/requirements-docs.txt
 
-  # ─── Visual regression (Playwright — bd-lln2x) ─────────────────────────
-  # Screenshots the Heatmap chart primitive in isolation and diffs against
-  # the committed baseline PNG. Catches the bd-yteek → bd-wdpve class of
-  # bug (label rotation that passes jsdom unit tests but renders
-  # incorrectly in real browsers). The fixture page boots from the Vite
-  # dev server with no backend dependency, so this job runs without a
-  # live ECM container — unlike the bd-2lw25-deferred E2E suite under
-  # `e2e/*.spec.ts`. Config: `playwright.visual.config.ts`.
-  visual-regression:
-    name: Visual Regression
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Build site (strict)
+        id: mkdocs
+        if: needs.detect.outputs.docs_site_affected != 'false'
+        # Identical to the docs-pages.yml deploy build. `--strict` turns
+        # mkdocs warnings into a non-zero exit, which is what makes a link to
+        # a nonexistent page fail here instead of shipping.
+        run: mkdocs build --strict --site-dir _site
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-          # The repo-root package.json hosts @playwright/test; the
-          # frontend/ package.json hosts the Vite dev server that serves
-          # the fixture HTML. Both lockfiles feed the cache key.
-          cache-dependency-path: |
-            package-lock.json
-            frontend/package-lock.json
-
-      - name: Install root dependencies (Playwright)
-        run: npm ci
-
-      - name: Install frontend dependencies (Vite + React)
-        working-directory: frontend
-        run: npm ci
-
-      # Cache Playwright browsers separately from npm — the binaries
-      # are large (~300 MB) and rotate independently of dep changes.
-      # Key includes the Playwright version so a version bump triggers
-      # a fresh download.
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Install Playwright browsers (chromium only)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        # --with-deps installs the OS-level libs Chromium needs on
-        # ubuntu-latest. Only install chromium since the visual config
-        # has a single chromium project — installing firefox/webkit
-        # would triple the cache size for no test coverage.
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Playwright system deps (cache hit path)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        # When browsers are cached the binaries are restored but the
-        # OS libs may not be — `install-deps` is idempotent and fast.
-        run: npx playwright install-deps chromium
-
-      - name: Run visual regression tests
+      - name: Summarize what this check did
+        # A run summary must never be the reason a check reports red.
+        continue-on-error: true
+        if: always() && needs.detect.outputs.docs_site_affected != 'false'
         env:
-          # CI=1 makes Playwright start its own dev server (vs. reusing
-          # an existing one) — see playwright.visual.config.ts comment
-          # on `reuseExistingServer`.
-          CI: '1'
-        run: npx playwright test --config=playwright.visual.config.ts
-
-      - name: Upload Playwright report on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-visual-report
-          path: |
-            playwright-report/
-            test-results-visual/
-          if-no-files-found: ignore
-          retention-days: 14
-
-  # ─── Semgrep lint (ReDoS / safe_regex guard — bd-eio04.8) ──────────────
-  # Enforces the `no-bare-re-on-dynamic-pattern` rule in .semgrep.yml so
-  # new PRs cannot introduce a stdlib `re.search/match/sub/compile/…` call
-  # on a non-literal pattern. See docs/style_guide.md#regex for the
-  # full convention. Rule-level excludes cover backend/tests/** and
-  # backend/safe_regex.py; case-by-case exemptions are annotated inline
-  # with `# nosemgrep: no-bare-re-on-dynamic-pattern` + justification or
-  # a TODO(<bead-id>) pointer to a follow-up migration.
-  semgrep-lint:
-    name: Semgrep Lint
-    runs-on: ubuntu-latest
-    # Pinned image tag — semgrep 1.160.x (matches the version used to
-    # author and validate the .semgrep.yml rule). Bump deliberately; the
-    # rule self-test under .semgrep/tests/ is the canary for regressions.
-    container:
-      image: returntocorp/semgrep:1.160.0
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-
-      - name: Validate Semgrep rule config
-        run: semgrep --validate --config .semgrep.yml
-
-      - name: Run Semgrep rule self-test
-        # Runs the fixture file (`# ruleid:` / `# ok:` annotations) against
-        # the live .semgrep.yml so the test locks the rule's accept/reject
-        # boundary — if the rule drifts, the self-test fails before the
-        # backend scan runs.
+          MKDOCS: ${{ steps.mkdocs.outcome }}
         run: |
-          semgrep --test \
-            --config .semgrep.yml \
-            .semgrep/tests/no-bare-re-on-dynamic-pattern.py
+          {
+            echo "**Docs Link Check** (advisory, not a required context):"
+            echo "- \`mkdocs build --strict\`: ${MKDOCS:-did not run}"
+            echo "- catches links to pages that do not exist; does NOT catch"
+            echo "  links to internal files excluded from the site."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run Semgrep against backend/
-        run: |
-          # --error flag exits non-zero on any finding. The rule is
-          # severity: ERROR so any hit blocks the job.
-          semgrep --config .semgrep.yml --error backend/
+  # Publication rides on the test jobs that remain in this workflow. Every
+  # name below must be a job that still exists here: `needs:` naming a deleted
+  # job is a workflow-level error, and GitHub then runs nothing at all, so dev
+  # image publication would stop silently.
+  publish-verified-dev-images:
+    name: Publish Verified Dev Images
+    needs:
+      - backend
+      - mcp-server
+      - frontend
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/dev'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+      && !contains(needs.*.result, 'skipped')
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-images.yml
+    with:
+      candidate_sha: ${{ github.sha }}
+      candidate_branch: dev
+      tests_attested: true

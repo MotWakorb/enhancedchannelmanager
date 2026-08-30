@@ -1,0 +1,180 @@
+import { useRef } from 'react';
+import { useModalFocusLifecycle } from '../hooks/useModalFocusLifecycle';
+import type { StagedOperation } from '../types';
+import type {
+  DroppedLedgerOperation,
+  WithdrawnAcknowledgement,
+} from '../utils/stagedLedgerStorage';
+import './EditMode.css';
+
+export interface EditModeRestoreDialogProps {
+  isOpen: boolean;
+  /** When the ledger was last written, from the persisted record. */
+  savedAt: number;
+  /** Operations that are still applicable, from `planLedgerRestore`. */
+  restorable: StagedOperation[];
+  /** Operations that are not, with the reason each one moved. */
+  dropped: DroppedLedgerOperation[];
+  /**
+   * Operations restored WITHOUT the duplicate-number confirmation they were
+   * staged with, because the channels on that number changed while the session
+   * was dead. The change itself is coming back; only the consent is not.
+   */
+  withdrawnAcknowledgements: WithdrawnAcknowledgement[];
+  onRestore: () => void;
+  onDiscard: () => void;
+}
+
+/**
+ * The offer an operator gets on returning to a tab that still holds staged
+ * Edit Mode work from a session that died (epic enhancedchannelmanager-r93hq).
+ *
+ * WHY AN OFFER RATHER THAN AN AUTOMATIC RESTORE. Staged operations name
+ * channel ids, group ids and stream ids, and any of them can have moved while
+ * the session was dead — a channel deleted, a group renamed away, numbers
+ * reassigned by another operator or by a pipeline run. Some of the ledger may
+ * therefore not be applicable at all. Restoring silently would drop the
+ * operator back into Edit Mode holding a ledger quietly smaller than the one
+ * they left, with no way to see which changes went or why, and the next thing
+ * they do is press Apply. A partial restore is fine; a partial restore nobody
+ * was told about is not.
+ *
+ * SO THE ACCOUNT IS NOT COLLAPSIBLE AND NOT TRUNCATED. Every dropped operation
+ * gets its own line naming what it was and what moved, and so does every
+ * duplicate-number confirmation the lineup outgrew — that change IS coming
+ * back, but the operator has to know it will be asked about again rather than
+ * discovering it at Apply.
+ *
+ * NEITHER BUTTON IS A DEFAULT ESCAPE. There is no Escape handler and no
+ * click-away: both would destroy staged work by accident, which is the exact
+ * failure the epic's exit guard exists to stop. That is also why this dialog
+ * does NOT compose `ModalOverlay`, whose entire behaviour is Escape-to-close;
+ * it marks its own backdrop `data-modal-overlay` instead, which is what the
+ * shared focus lifecycle keys Tab containment off and what
+ * `e2e/visual/modal-typography-inventory.spec.ts` counts as a real modal. The
+ * two are deliberately separable: this dialog takes the focus contract and
+ * declines the dismissal one.
+ *
+ * FOCUS LANDS ON RESTORE, NOT DISCARD. `useModalFocusLifecycle` would
+ * otherwise take the first focusable control, and the first control here
+ * throws staged work away — one stray Enter from an operator who has not read
+ * the account yet. When nothing is restorable there is no Restore button, and
+ * the fallback is the only remaining action.
+ */
+export function EditModeRestoreDialog({
+  isOpen,
+  savedAt,
+  restorable,
+  dropped,
+  withdrawnAcknowledgements,
+  onRestore,
+  onDiscard,
+}: EditModeRestoreDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const restoreButtonRef = useRef<HTMLButtonElement>(null);
+  useModalFocusLifecycle({
+    containerRef: dialogRef,
+    initialFocusRef: restoreButtonRef,
+    active: isOpen,
+  });
+
+  if (!isOpen) return null;
+
+  const staged = new Date(savedAt);
+  const restorableCount = restorable.length;
+  const droppedCount = dropped.length;
+
+  return (
+    <div className="edit-mode-dialog-overlay" data-modal-overlay>
+      <div
+        className="edit-mode-dialog"
+        ref={dialogRef}
+        data-testid="edit-mode-restore-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-mode-restore-title"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="edit-mode-dialog-header">
+          <h2 id="edit-mode-restore-title">Unsaved Changes From Your Previous Session</h2>
+        </div>
+
+        <div className="edit-mode-dialog-content">
+          <p>
+            Your session ended before these Edit Mode changes were applied. They were
+            last staged{' '}
+            <time data-testid="edit-mode-restore-when" dateTime={staged.toISOString()}>
+              {staged.toLocaleString()}
+            </time>
+            .
+          </p>
+
+          {restorableCount > 0 ? (
+            <p className="edit-mode-restore-headline">
+              <strong>
+                {restorableCount} change{restorableCount !== 1 ? 's' : ''}
+              </strong>{' '}
+              can be restored and staged again for you to review before applying.
+            </p>
+          ) : (
+            <p className="edit-mode-restore-headline" role="alert">
+              <strong>None of your staged changes can be restored.</strong> Everything
+              they referred to has changed since you staged them.
+            </p>
+          )}
+
+          {droppedCount > 0 && (
+            <div className="edit-mode-restore-dropped">
+              <p role="alert">
+                <span className="material-icons" aria-hidden="true">error_outline</span>
+                {droppedCount} change{droppedCount !== 1 ? 's' : ''} can no longer be
+                applied and will not be restored:
+              </p>
+              <ul data-testid="edit-mode-restore-dropped">
+                {dropped.map((entry) => (
+                  <li key={entry.id}>
+                    <strong>{entry.description}</strong> — {entry.detail}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {withdrawnAcknowledgements.length > 0 && (
+            <div className="edit-mode-restore-dropped">
+              <p role="alert">
+                <span className="material-icons" aria-hidden="true">error_outline</span>
+                {withdrawnAcknowledgements.length} duplicate channel number
+                {withdrawnAcknowledgements.length !== 1 ? 's you' : ' you'} confirmed will be
+                checked again:
+              </p>
+              <ul data-testid="edit-mode-restore-withdrawn">
+                {withdrawnAcknowledgements.map((entry) => (
+                  <li key={entry.id}>
+                    <strong>{entry.description}</strong> — {entry.detail}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          <p className="edit-mode-dialog-question">
+            Nothing has been written to Dispatcharr. Restoring re-stages the changes;
+            discarding throws them away for good.
+          </p>
+        </div>
+
+        <div className="edit-mode-dialog-actions">
+          <button className="edit-mode-dialog-btn" onClick={onDiscard}>
+            Discard {restorableCount > 0 ? 'Them' : 'and Continue'}
+          </button>
+          {restorableCount > 0 && (
+            <button className="edit-mode-dialog-btn primary" ref={restoreButtonRef} onClick={onRestore}>
+              Restore {restorableCount} Change{restorableCount !== 1 ? 's' : ''}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

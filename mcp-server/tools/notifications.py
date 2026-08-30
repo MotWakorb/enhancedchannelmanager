@@ -43,11 +43,17 @@ def register(mcp: FastMCP):
             return f"Error listing notifications: {e}"
 
     @mcp.tool()
-    async def mark_notifications_read() -> str:
+    async def mark_notifications_read(
+        plan_notification_ids: list[int] | None = None,
+    ) -> str:
         """Mark all notifications as read."""
         try:
             client = get_ecm_client()
-            await client.call_endpoint(ENDPOINTS["notifications_mark_all_read"])
+            body = (
+                {"notification_ids": plan_notification_ids}
+                if plan_notification_ids is not None else None
+            )
+            await client.call_endpoint(ENDPOINTS["notifications_mark_all_read"], body=body)
             # Read-back: confirm there are no unread notifications left.
             try:
                 result = await client.call_endpoint(ENDPOINTS["notifications_list"], query={"page_size": 1})
@@ -62,7 +68,10 @@ def register(mcp: FastMCP):
             return f"Error marking notifications as read: {e}"
 
     @mcp.tool()
-    async def delete_all_notifications(include_unread: bool = False) -> str:
+    async def delete_all_notifications(
+        include_unread: bool = False,
+        plan_notification_ids: list[int] | None = None,
+    ) -> str:
         """Delete notifications.
 
         By default only deletes read notifications (safe behaviour).  Set
@@ -85,6 +94,10 @@ def register(mcp: FastMCP):
             await client.call_endpoint(
                 ENDPOINTS["notifications_delete_all"],
                 query={"read_only": read_only},
+                body=(
+                    {"notification_ids": plan_notification_ids}
+                    if plan_notification_ids is not None else None
+                ),
             )
             # Read-back: confirm the notification list reflects the deletion.
             try:
@@ -105,7 +118,38 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def list_alert_methods() -> str:
-        """List all configured alert methods (Discord, Telegram, email)."""
+        """List all configured alert methods.
+
+        The backing endpoint, ``GET /api/alert-methods``, carried no route
+        dependency at all until bead enhancedchannelmanager-9kwzp.10 item 4,
+        which gated it as ADMIN — plain ``RequireAdminIfEnabled``, which
+        admits the MCP service principal, so this tool keeps working. That
+        bead briefly human-admin-gated the route (403 to this tool); the PO
+        reversed it, because the tool is the operator's inventory of their
+        own alert methods.
+
+        THE RESPONSE IS MASKED AT THE SOURCE (bead
+        enhancedchannelmanager-9kwzp.13). The endpoint used to return each
+        method's ``config`` VERBATIM, which handed this principal the Discord
+        webhook URL, the Telegram bot token and the SMTP password, the exact
+        values bead 9ej7f withholds from it on ``GET /api/settings``. The
+        handler now serializes through
+        ``models.AlertMethod.to_dict(include_sensitive=False)``, so those keys
+        come back as ``********`` and no credential VALUE reaches this tool.
+
+        The response is still operator configuration rather than public data:
+        it carries the non-credential config keys, which for Telegram includes
+        the destination ``chat_id`` and for SMTP the recipient list. This tool
+        prints only the name, id, type, enabled flag and severity filters, and
+        deliberately does NOT print ``config``. Keep it that way, and do not
+        echo a raw response from this endpoint into a transcript.
+
+        The four write/single-read routes on this router (create, get by id,
+        update, delete) DO refuse this principal, and ``test_alert_method``
+        has been refused since bead 9kwzp.6. There are no MCP tools for them;
+        an ECM admin manages alert methods in the UI, Settings tab, Alert
+        Methods section.
+        """
         try:
             client = get_ecm_client()
             methods = await client.call_endpoint(ENDPOINTS["alert_methods_list"])
@@ -138,7 +182,32 @@ def register(mcp: FastMCP):
 
     @mcp.tool()
     async def test_alert_method(method_id: int) -> str:
-        """Send a test notification through an alert method.
+        """Send a test notification through an alert method. NOT USABLE OVER MCP.
+
+        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is enabled
+        (bead enhancedchannelmanager-9kwzp.6), and since bead
+        enhancedchannelmanager-2u4e0 also whenever authentication is DISABLED on
+        an instance that already holds an operator identity. The backing endpoint,
+        ``POST /api/alert-methods/{method_id}/test``, carries
+        ``RequireHumanAdminForOutboundTest``, which rejects the static MCP
+        service principal with HTTP 403 and the body "The MCP service
+        principal cannot run connection tests." Calling this tool returns that
+        403 as an error string. It is the designed outcome, not a
+        misconfiguration and not a permission an operator can grant to the MCP
+        key: the test sends with the method's STORED credentials (the Discord
+        webhook URL, the Telegram bot token, the SMTP password held in
+        ``AlertMethod.config``), which the caller never had to know, and
+        reports the upstream verdict back, so it is reserved for a human
+        operator identity.
+
+        HUMAN PATH: an ECM admin runs it from the UI, Settings tab, Alert
+        Methods section, via the "Send test message" button on the method.
+        There is no MCP equivalent. ``list_alert_methods`` works, so the
+        configured methods remain readable over MCP; only the send is gated.
+
+        The one case where this tool still works is an install with
+        authentication turned off, because the gate no-ops when
+        ``require_auth`` is false or setup is incomplete. Do not rely on that.
 
         Args:
             method_id: The alert method ID to test

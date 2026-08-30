@@ -1,7 +1,7 @@
 /**
  * Main Channel Pipeline tab component for managing channel pipeline rules and executions.
  */
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useEffect, useCallback, useId, useMemo, useRef } from 'react';
 import type {
   ChannelPipelineRule,
   ChannelPipelineExecution,
@@ -33,6 +33,8 @@ import { copyToClipboard } from '../../utils/clipboard';
 import { getDateLocale } from '../../utils/formatting';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { OverflowMenu } from '../OverflowMenu';
 import '../ModalBase.css';
 import './ChannelPipelineTab.css';
 
@@ -232,6 +234,7 @@ function getActionCategory(action: ActionLogEntry): string | null {
 }
 
 export function ChannelPipelineTab() {
+  const dialogId = useId();
   const { user } = useAuth();
   const isAdmin = Boolean(user?.is_admin);
 
@@ -894,8 +897,8 @@ export function ChannelPipelineTab() {
     <div className={`channel-pipeline-tab ${isMobile ? 'mobile' : ''}`} data-testid="channel-pipeline-tab">
       {/* Header */}
       <header className="tab-header">
-        <h2>Channel Pipeline</h2>
-        <div className="header-actions">
+        <span className="visually-hidden">Channel Pipeline</span>
+        <RouteHeaderSlot name="primary-action">
           <button
             className="btn-primary"
             onClick={handleCreateRule}
@@ -904,6 +907,8 @@ export function ChannelPipelineTab() {
             <span className="material-icons">add</span>
             Create Rule
           </button>
+        </RouteHeaderSlot>
+        <RouteHeaderSlot name="controls"><div className="header-actions">
           <button
             className="btn-secondary"
             onClick={() => handleRun(false)}
@@ -923,7 +928,7 @@ export function ChannelPipelineTab() {
             )}
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={() => handleRun(true)}
             disabled={!hasEnabledRules || runningPipeline}
             aria-label="Dry run"
@@ -932,7 +937,7 @@ export function ChannelPipelineTab() {
             Dry Run
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={() => setShowImportDialog(true)}
             aria-label="Import"
           >
@@ -940,7 +945,7 @@ export function ChannelPipelineTab() {
             Import
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={handleExport}
             aria-label="Export"
           >
@@ -948,7 +953,7 @@ export function ChannelPipelineTab() {
             Export
           </button>
           <button
-            className="btn-secondary"
+            className="btn-secondary channel-pipeline-secondary-action"
             onClick={handleDebugBundle}
             disabled={debugBundleLoading}
             aria-label="Pipeline Debug Bundle"
@@ -957,7 +962,37 @@ export function ChannelPipelineTab() {
             <span className="material-icons">{debugBundleLoading ? 'hourglass_empty' : 'bug_report'}</span>
             {debugBundleLoading ? 'Generating...' : 'Pipeline Debug Bundle'}
           </button>
-        </div>
+          <span className="channel-pipeline-compact-actions">
+            <OverflowMenu
+              label="More Channel Pipeline actions"
+              items={[
+                {
+                  label: 'Dry Run',
+                  icon: 'visibility',
+                  onClick: () => handleRun(true),
+                  disabled: !hasEnabledRules || runningPipeline,
+                },
+                {
+                  label: 'Import',
+                  icon: 'upload',
+                  onClick: () => setShowImportDialog(true),
+                },
+                {
+                  label: 'Export',
+                  icon: 'download',
+                  onClick: handleExport,
+                },
+                {
+                  label: debugBundleLoading ? 'Generating Pipeline Debug Bundle…' : 'Pipeline Debug Bundle',
+                  icon: debugBundleLoading ? 'hourglass_empty' : 'bug_report',
+                  onClick: handleDebugBundle,
+                  disabled: debugBundleLoading,
+                  title: 'Download a debug bundle scoped to Channel Pipeline rules and execution history. For a whole-app bundle, see Settings → General.',
+                },
+              ]}
+            />
+          </span>
+        </div></RouteHeaderSlot>
       </header>
 
       {/* Circuit-breaker banner — shown when run-on-refresh auto-fire is suppressed */}
@@ -974,7 +1009,7 @@ export function ChannelPipelineTab() {
       <AutoCreationGateBanner rules={rules} />
 
       {/* Statistics Summary */}
-      <div className="channel-pipeline-stats">
+      <RouteHeaderSlot name="status"><div className="channel-pipeline-stats">
         <div className="stat-item">
           <span className="stat-value">{stats.totalRules}</span>
           <span className="stat-label">{stats.totalRules === 1 ? 'Rule' : 'Rules'}</span>
@@ -987,7 +1022,7 @@ export function ChannelPipelineTab() {
           <span className="stat-value">{stats.totalMatches}</span>
           <span className="stat-label">Matches</span>
         </div>
-      </div>
+      </div></RouteHeaderSlot>
 
       {/* Event Sync review queue (ti939.3.2) — only meaningful when an
           event_sync rule exists; the component self-fetches its rows. */}
@@ -1083,16 +1118,23 @@ export function ChannelPipelineTab() {
                 <thead>
                   <tr>
                     <th className="col-select" scope="col">
-                      <input
-                        ref={selectAllCheckboxRef}
-                        type="checkbox"
-                        checked={
-                          filteredRules.length > 0 && visibleSelectedCount === filteredRules.length
-                        }
-                        onChange={toggleSelectAllVisible}
-                        aria-label="Select all visible rules"
-                        title="Select all visible rules"
-                      />
+                      {/* The label carries the cell's padding so the pointer
+                          target is the whole cell rather than the 16px box —
+                          see .col-select-target in ChannelPipelineTab.css
+                          (bead enhancedchannelmanager-m26f8). It holds no text
+                          of its own; the name comes from aria-label. */}
+                      <label className="col-select-target">
+                        <input
+                          ref={selectAllCheckboxRef}
+                          type="checkbox"
+                          checked={
+                            filteredRules.length > 0 && visibleSelectedCount === filteredRules.length
+                          }
+                          onChange={toggleSelectAllVisible}
+                          aria-label="Select all visible rules"
+                          title="Select all visible rules"
+                        />
+                      </label>
                     </th>
                     <th className="col-drag"></th>
                     <th className="col-name">Name</th>
@@ -1120,12 +1162,14 @@ export function ChannelPipelineTab() {
                         onMouseDown={(e) => e.stopPropagation()}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selectedRuleIds.has(rule.id)}
-                          onChange={() => toggleRuleSelected(rule.id)}
-                          aria-label={`Select ${rule.name}`}
-                        />
+                        <label className="col-select-target">
+                          <input
+                            type="checkbox"
+                            checked={selectedRuleIds.has(rule.id)}
+                            onChange={() => toggleRuleSelected(rule.id)}
+                            aria-label={`Select ${rule.name}`}
+                          />
+                        </label>
                       </td>
                       <td className="col-drag">
                         <span
@@ -1364,13 +1408,16 @@ export function ChannelPipelineTab() {
                         when has_snapshot=true; hidden for dry runs, legacy runs,
                         and already-reverted executions so the operator always
                         knows what will happen. */}
-                    {execution.has_snapshot && (execution.status === 'completed' || execution.status === 'completed_with_errors') && execution.mode === 'execute' && (
+                    {execution.has_snapshot && (execution.status === 'completed' || execution.status === 'completed_with_errors' || execution.status === 'failed') && execution.mode === 'execute' && (
                       <button
                         className="action-btn action-btn-revert"
                         onClick={() => handleRevertClick(execution)}
-                        aria-label="Undo this run"
+                        aria-label={execution.status === 'failed' ? 'Recover from snapshot' : 'Undo this run'}
                         title={
-                          'Undo this run — restores affected channels to their exact stream state ' +
+                          (execution.status === 'failed'
+                            ? 'Recover from snapshot — this failed run may have applied some changes before it stopped. '
+                            : 'Undo this run — ') +
+                          'Restores affected channels to their exact stream state ' +
                           'from the pre-run snapshot, overwriting any changes made since ' +
                           '(including edits made after this run). Unlike Rollback, this is a ' +
                           "full snapshot restore, not just this run's own changes." +
@@ -1382,6 +1429,11 @@ export function ChannelPipelineTab() {
                       >
                         <span className="material-icons">settings_backup_restore</span>
                       </button>
+                    )}
+                    {execution.has_snapshot && execution.status === 'failed' && execution.mode === 'execute' && (
+                      <span className="execution-no-snapshot" role="status">
+                        Failed after some changes may have been applied; snapshot recovery is available.
+                      </span>
                     )}
                     {!execution.has_snapshot && execution.mode === 'execute' && (execution.status === 'completed' || execution.status === 'completed_with_errors') && (
                       <span
@@ -1500,10 +1552,10 @@ export function ChannelPipelineTab() {
 
       {/* Delete Confirmation Dialog */}
       {showDeleteConfirm && (
-        <ModalOverlay onClose={() => setShowDeleteConfirm(null)} role="dialog" aria-modal="true">
-          <div className="modal-container modal-sm">
+        <ModalOverlay onClose={() => setShowDeleteConfirm(null)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-delete-title`}>
+          <div className="modal-container modal-sm pipeline-delete-confirm">
             <div className="modal-header">
-              <h2>Confirm Delete</h2>
+              <h2 id={`${dialogId}-delete-title`}>Confirm Delete</h2>
             </div>
             <div className="modal-body">
               <p>Are you sure you want to delete &quot;{showDeleteConfirm.name}&quot;?</p>
@@ -1538,7 +1590,7 @@ export function ChannelPipelineTab() {
           aria-modal="true"
           aria-labelledby="event-sync-run-confirm-title"
         >
-          <div className="modal-container modal-sm" data-testid="event-sync-run-confirm">
+          <div className="modal-container modal-sm event-sync-run-confirm" data-testid="event-sync-run-confirm">
             <div className="modal-header">
               <h2 id="event-sync-run-confirm-title">
                 {showEventSyncRunConfirm.dryRun
@@ -1609,10 +1661,10 @@ export function ChannelPipelineTab() {
 
       {/* Rollback Confirmation Dialog */}
       {showRollbackConfirm && (
-        <ModalOverlay onClose={() => setShowRollbackConfirm(null)} role="dialog" aria-modal="true">
-          <div className="modal-container modal-sm">
+        <ModalOverlay onClose={() => setShowRollbackConfirm(null)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-rollback-title`}>
+          <div className="modal-container modal-sm pipeline-rollback-confirm">
             <div className="modal-header">
-              <h2>Confirm Rollback</h2>
+              <h2 id={`${dialogId}-rollback-title`}>Confirm Rollback</h2>
             </div>
             <div className="modal-body">
               <p>
@@ -1864,10 +1916,10 @@ export function ChannelPipelineTab() {
         };
 
         return (
-        <ModalOverlay onClose={() => setShowExecutionDetails(null)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowExecutionDetails(null)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-execution-details-title`}>
           <div className="modal-container modal-lg">
             <div className="modal-header">
-              <h2>Execution Details</h2>
+              <h2 id={`${dialogId}-execution-details-title`}>Execution Details</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => setShowExecutionDetails(null)}
@@ -2228,10 +2280,10 @@ export function ChannelPipelineTab() {
 
       {/* Import Dialog */}
       {showImportDialog && (
-        <ModalOverlay onClose={() => setShowImportDialog(false)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowImportDialog(false)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-import-title`}>
           <div className="modal-container modal-md">
             <div className="modal-header">
-              <h2>Import Rules</h2>
+              <h2 id={`${dialogId}-import-title`}>Import Rules</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => { setShowImportDialog(false); setImportConflicts([]); setImportNewCount(0); }}
@@ -2305,10 +2357,10 @@ export function ChannelPipelineTab() {
 
       {/* Export Dialog */}
       {showExportDialog && (
-        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true">
+        <ModalOverlay onClose={() => setShowExportDialog(false)} role="dialog" aria-modal="true" aria-labelledby={`${dialogId}-export-title`}>
           <div className="modal-container modal-md">
             <div className="modal-header">
-              <h2>Export Rules (YAML)</h2>
+              <h2 id={`${dialogId}-export-title`}>Export Rules (YAML)</h2>
               <button
                 className="modal-close-btn"
                 onClick={() => setShowExportDialog(false)}

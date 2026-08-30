@@ -6,7 +6,7 @@ Covers the outbound service-to-service auth introduced for option A:
   - auth_method="api_key"  (X-API-Key header, no token lifecycle)
 """
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
@@ -19,6 +19,61 @@ def _response(status_code: int, json_body=None):
     resp.status_code = status_code
     resp.json = lambda: json_body or {}
     return resp
+
+
+@pytest.mark.asyncio
+async def test_provider_credentials_are_registered_before_account_data_is_logged():
+    settings = DispatcharrSettings(url="http://dispatcharr:8000")
+    accounts = [{"id": 1, "username": "retired-user", "password": "xy"}]
+    response = MagicMock(spec=httpx.Response)
+    response.json.return_value = accounts
+    events = []
+
+    with patch(
+        "log_utils.register_sensitive_values_from_object",
+        side_effect=lambda value: events.append(("registered", value)),
+    ):
+        client = DispatcharrClient(settings)
+        try:
+            client._request = AsyncMock(
+                side_effect=lambda *_args, **_kwargs: events.append(
+                    ("response", None)
+                ) or response
+            )
+            result = await client.get_m3u_accounts()
+        finally:
+            await client._client.aclose()
+
+    assert result == accounts
+    assert events[-2:] == [("response", None), ("registered", accounts)]
+
+
+@pytest.mark.asyncio
+async def test_provider_mutation_registers_new_value_before_network_request():
+    settings = DispatcharrSettings(url="http://dispatcharr:8000")
+    data = {"name": "guide", "api_key": "new-provider-key"}
+    response = MagicMock(spec=httpx.Response)
+    response.json.return_value = {"id": 1, **data}
+    events = []
+
+    with patch(
+        "log_utils.register_sensitive_values_from_object",
+        side_effect=lambda value: events.append(("registered", value)),
+    ):
+        client = DispatcharrClient(settings)
+        try:
+            client._request = AsyncMock(
+                side_effect=lambda *_args, **_kwargs: events.append(
+                    ("request", None)
+                ) or response
+            )
+            await client.create_epg_source(data)
+        finally:
+            await client._client.aclose()
+
+    data_registration = events.index(("registered", data))
+    request = events.index(("request", None))
+    assert data_registration < request
 
 
 @pytest.mark.asyncio
@@ -260,8 +315,8 @@ def test_settings_hash_changes_when_any_field_changes():
 # ---------------------------------------------------------------------------
 # Clear-text-logging hygiene for the shared ``_request`` (bead 0i2vt.13).
 # CodeQL py/clear-text-logging-sensitive-data flagged 5 sinks in ``_request``
-# because a credential-named value can flow into ``path`` (e.g.
-# ``update_core_setting`` builds it from a settings key) and an httpx exception
+# because a credential-named value can flow into ``path`` (callers interpolate
+# caller-supplied identifiers into it) and an httpx exception
 # can embed the full request URL with a token. The error path must log only the
 # HTTP method, status code, and exception TYPE -- never the path, the full
 # exception object, or ``str(e)``.

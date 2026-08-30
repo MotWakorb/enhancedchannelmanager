@@ -54,6 +54,7 @@ from sqlalchemy.pool import StaticPool
 
 import database
 from channel_pipeline_engine import ChannelPipelineEngine
+from channel_pipeline_executor import ActionExecutor
 from models import ChannelPipelineRule
 from services.event_sync_matcher import ParsedEvent, StreamMatchResult
 from services.event_sync_promote import (
@@ -524,6 +525,39 @@ class TestIdempotence:
         assert [e for e in second_journal
                 if e.get("action_type") == "merge_stream"] == []
         assert second["channels_created"] == 0
+
+    def test_rerun_adoption_rides_on_the_managed_ledger(
+        self, db_session_factory
+    ):
+        """GH #801 / bead 0ippw: what makes the re-run adopt.
+
+        This path used to force ``allow_manual_channel_merge=True`` because
+        the promoted channel reloads from Dispatcharr without the in-run
+        ``auto_created`` marker (the fake client reproduces that: it stores
+        the create payload, which never carries the key). The override is
+        gone; adoption now rides on the persisted ``managed_channel_ids``
+        ledger, which ``_is_manual_channel`` consults.
+
+        Pinning the two facts the removal depends on: run 1 registers the
+        promoted channel in the ledger, and run 2's executor is handed it.
+        Neuter either and the idempotence test above goes red.
+        """
+        rule_id = _add_rule(db_session_factory, _promote_config())
+        state = _promote_state()
+        client = make_promote_client(state)
+
+        first, _ = _manual_run(client, db_session_factory)
+        promoted_id = first["event_sync"][0]["promotion"]["channel_ids"][0]
+        assert _managed_ids(db_session_factory, rule_id) == [promoted_id]
+        # The reloaded row carries no provenance marker of its own.
+        assert "auto_created" not in state.channels[promoted_id]
+
+        with patch(
+            "channel_pipeline_engine.ActionExecutor", wraps=ActionExecutor
+        ) as executor_cls:
+            _manual_run(client, db_session_factory)
+
+        assert promoted_id in executor_cls.call_args.kwargs["managed_channel_ids"]
 
     def test_cross_provider_streams_share_one_channel(
         self, db_session_factory

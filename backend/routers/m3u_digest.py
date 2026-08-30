@@ -11,6 +11,7 @@ from typing import Optional, List
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from auth import RequireHumanAdminForOutboundTest
 from database import get_session
 import journal
 import safe_regex
@@ -364,8 +365,21 @@ async def update_m3u_digest_settings(request: M3UDigestSettingsUpdate):
 
 
 @router.post("/digest/test")
-async def send_test_m3u_digest():
-    """Send a test M3U digest email."""
+async def send_test_m3u_digest(_admin=RequireHumanAdminForOutboundTest):
+    """Send a test M3U digest email.
+
+    bead 9kwzp.6: admin-gated, and the static MCP service principal is
+    refused. This endpoint carried NO route dependency. It runs the real
+    digest task with ``force=True``, which sends to the STORED recipient list
+    over the STORED SMTP credentials and the STORED Discord webhook — the
+    caller supplies nothing and learns the delivery verdict, the same class as
+    ``/api/settings/test-smtp`` that bead i4qrp closed.
+
+    ``RequireAdminIfEnabled`` would NOT do here: the MCP principal carries
+    ``is_admin=True``, so the plain admin gate leaves exactly the half this
+    bead is about open. The gate no-ops when ``require_auth`` is False or
+    setup is incomplete, so first-run configuration is untouched.
+    """
     logger.debug("[M3U-DIGEST] POST /api/m3u/digest/test")
     from tasks.m3u_digest import M3UDigestTask, get_or_create_digest_settings
 

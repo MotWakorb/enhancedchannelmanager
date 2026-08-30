@@ -11,6 +11,11 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from alert_methods import get_alert_manager, get_method_types, create_method
+from auth import (
+    RequireAdminIfEnabled,
+    RequireHumanAdminForNotificationCredential,
+    RequireHumanAdminForOutboundTest,
+)
 from database import get_session
 
 logger = logging.getLogger(__name__)
@@ -111,8 +116,20 @@ def validate_alert_sources(alert_sources: Optional[dict]) -> Optional[str]:
 
 
 @router.get("/types")
-async def get_alert_method_types():
-    """Get available alert method types and their configuration fields."""
+async def get_alert_method_types(_admin=RequireAdminIfEnabled):
+    """Get available alert method types and their configuration fields. Admin only.
+
+    bead 9kwzp.10 item 4: takes the PLAIN admin tier on the strongest grounds
+    in this router. It returns a static catalogue of the method types this
+    build supports and their field descriptors — no install data, no stored
+    value, nothing per-operator — so admitting the MCP service principal
+    discloses nothing at all.
+
+    :func:`list_alert_methods` is on the same tier for a different and weaker
+    reason (a shipped MCP tool needs it, and it does disclose credentials);
+    the four remaining non-test routes are human-admin, see
+    :func:`create_alert_method`.
+    """
     logger.debug("[ALERTS] GET /types")
     try:
         types = get_method_types()
@@ -124,8 +141,47 @@ async def get_alert_method_types():
 
 
 @router.get("")
-async def list_alert_methods():
-    """List all configured alert methods."""
+async def list_alert_methods(_admin=RequireAdminIfEnabled):
+    """List all configured alert methods. Admin only, MCP principal ADMITTED.
+
+    bead 9kwzp.10 item 4. This router carried NO route dependency on any of its
+    six non-test routes, so every one of them was reachable by any
+    authenticated non-admin and by the static MCP service principal. The
+    non-admin half is closed here and on every sibling below.
+
+    THE MCP HALF IS A DELIBERATE ADMISSION, AND THE RESPONSE IS MASKED. The
+    shipped MCP tool ``list_alert_methods`` is the operator's inventory of
+    their own alert methods, and refusing it removed a capability the sidecar
+    was built to provide, so the principal stays admitted. What used to make
+    that admission expensive was the RESPONSE, not the gate: this handler
+    hand-rolled its dict and emitted ``AlertMethod.config`` VERBATIM, and that
+    blob is where the Discord webhook URL, the Telegram bot token and the SMTP
+    password live — the same families bead 9ej7f withheld from this principal
+    on GET /api/settings, handed out in clear through a second table.
+
+    Bead enhancedchannelmanager-9kwzp.13 closed that at the response. This
+    handler now serializes through
+    ``models.AlertMethod.to_dict(include_sensitive=False)``, which substitutes
+    ``'********'`` for ``password``, ``bot_token``, ``webhook_url`` and
+    ``api_key``, so an admitted caller — human admin or automation credential
+    — receives the inventory without any credential VALUE. No caller is
+    permitted ``include_sensitive=True`` over HTTP; there is no route, query
+    parameter or header that reaches it, and adding one would reopen exactly
+    this hole.
+
+    DO NOT REINTRODUCE A HAND-ROLLED RESPONSE DICT HERE. ``to_dict`` is the
+    single masking implementation this route shares with
+    :func:`get_alert_method`, and ``routers/backup.py`` keeps its DBAS
+    redaction denylist in lock-step with the same key set; a second
+    implementation is how those two drift apart.
+    ``tests/routers/test_9kwzp13_alert_method_masking.py`` pins that neither
+    read route emits a raw credential value.
+
+    The five sibling routes below keep
+    ``RequireHumanAdminForNotificationCredential``: no MCP tool calls any of
+    them, so denying the principal there costs nothing and holds the line on
+    the write half and on the single-method read.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] GET /alert-methods")
@@ -133,29 +189,7 @@ async def list_alert_methods():
     try:
         methods = session.query(AlertMethodModel).all()
         logger.debug("[ALERTS] Found %s alert methods in database", len(methods))
-        result = []
-        for m in methods:
-            alert_sources = None
-            if m.alert_sources:
-                try:
-                    alert_sources = json.loads(m.alert_sources)
-                except (json.JSONDecodeError, TypeError):
-                    pass  # Malformed alert_sources JSON; fall back to None
-            result.append({
-                "id": m.id,
-                "name": m.name,
-                "method_type": m.method_type,
-                "enabled": m.enabled,
-                "config": json.loads(m.config) if m.config else {},
-                "notify_info": m.notify_info,
-                "notify_success": m.notify_success,
-                "notify_warning": m.notify_warning,
-                "notify_error": m.notify_error,
-                "alert_sources": alert_sources,
-                "last_sent_at": m.last_sent_at.isoformat() + "Z" if m.last_sent_at else None,
-                "created_at": m.created_at.isoformat() + "Z" if m.created_at else None,
-            })
-        return result
+        return [m.to_dict(include_sensitive=False) for m in methods]
     except Exception as e:
         logger.exception("[ALERTS] Failed to list alert methods")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -164,8 +198,29 @@ async def list_alert_methods():
 
 
 @router.post("")
-async def create_alert_method(data: AlertMethodCreate):
-    """Create a new alert method."""
+async def create_alert_method(
+    data: AlertMethodCreate,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Create a new alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4, and the canonical statement of the verdict the four
+    ``RequireHumanAdminForNotificationCredential`` routes in this router share.
+
+    This route writes the notification credentials ECM later sends under — the
+    Discord webhook URL, the Telegram bot token, the SMTP password that live in
+    ``AlertMethod.config`` — so it can point the operator's own alerts at a
+    destination the caller names. That is the shape bead kgz3k denies the MCP
+    service principal on ``POST /api/settings``, so the principal is denied
+    here too.
+
+    The denial costs the sidecar nothing: NO shipped MCP tool calls this route,
+    or :func:`get_alert_method`, :func:`update_alert_method` or
+    :func:`delete_alert_method`. The one alert-method tool that exists,
+    ``list_alert_methods``, calls :func:`list_alert_methods`, which is on the
+    plain admin tier for that reason and carries a disclosure residual recorded
+    in its own docstring.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] POST /alert-methods - name=%s type=%s", data.name, data.method_type)
@@ -235,8 +290,29 @@ async def create_alert_method(data: AlertMethodCreate):
 
 
 @router.get("/{method_id}")
-async def get_alert_method(method_id: int):
-    """Get a specific alert method."""
+async def get_alert_method(
+    method_id: int,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Get a specific alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4: see :func:`create_alert_method` for the group
+    verdict on the gate.
+
+    Note honestly what this gate does and does not buy. :func:`list_alert_methods`
+    is on the plain admin tier and returns exactly these fields for EVERY
+    method, so against the MCP service principal this route discloses nothing
+    the list does not already. The gate here is held because no MCP tool needs
+    the route, not because it is containing a disclosure.
+
+    What contains the disclosure is bead
+    enhancedchannelmanager-9kwzp.13, which landed: this handler serializes
+    through ``models.AlertMethod.to_dict(include_sensitive=False)`` instead of
+    hand-rolling a dict that emitted ``config`` verbatim, so the webhook URL,
+    the bot token and the SMTP password come back as ``'********'`` for every
+    caller. No caller receives ``include_sensitive=True`` over HTTP. See
+    :func:`list_alert_methods` for why the hand-rolled dict must not come back.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] GET /alert-methods/%s", method_id)
@@ -251,26 +327,7 @@ async def get_alert_method(method_id: int):
             raise HTTPException(status_code=404, detail="Alert method not found")
 
         logger.debug("[ALERTS] Found alert method: id=%s name=%s", method.id, method.name)
-        alert_sources = None
-        if method.alert_sources:
-            try:
-                alert_sources = json.loads(method.alert_sources)
-            except (json.JSONDecodeError, TypeError):
-                pass  # Malformed alert_sources JSON; fall back to None
-        return {
-            "id": method.id,
-            "name": method.name,
-            "method_type": method.method_type,
-            "enabled": method.enabled,
-            "config": json.loads(method.config) if method.config else {},
-            "notify_info": method.notify_info,
-            "notify_success": method.notify_success,
-            "notify_warning": method.notify_warning,
-            "notify_error": method.notify_error,
-            "alert_sources": alert_sources,
-            "last_sent_at": method.last_sent_at.isoformat() + "Z" if method.last_sent_at else None,
-            "created_at": method.created_at.isoformat() + "Z" if method.created_at else None,
-        }
+        return method.to_dict(include_sensitive=False)
     except HTTPException:
         raise
     except Exception as e:
@@ -281,8 +338,16 @@ async def get_alert_method(method_id: int):
 
 
 @router.patch("/{method_id}")
-async def update_alert_method(method_id: int, data: AlertMethodUpdate):
-    """Update an alert method."""
+async def update_alert_method(
+    method_id: int,
+    data: AlertMethodUpdate,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Update an alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4: can replace the stored notification credentials, so
+    it can repoint where ECM sends alerts. See :func:`create_alert_method`.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] PATCH /alert-methods/%s", method_id)
@@ -344,8 +409,16 @@ async def update_alert_method(method_id: int, data: AlertMethodUpdate):
 
 
 @router.delete("/{method_id}")
-async def delete_alert_method(method_id: int):
-    """Delete an alert method."""
+async def delete_alert_method(
+    method_id: int,
+    _admin=RequireHumanAdminForNotificationCredential,
+):
+    """Delete an alert method. Human-admin only.
+
+    bead 9kwzp.10 item 4: silently ends the operator's alert delivery, which
+    is the availability half of the same control. See
+    :func:`create_alert_method`.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] DELETE /alert-methods/%s", method_id)
@@ -378,8 +451,26 @@ async def delete_alert_method(method_id: int):
 
 
 @router.post("/{method_id}/test")
-async def test_alert_method(method_id: int):
-    """Test an alert method by sending a test message."""
+async def test_alert_method(
+    method_id: int,
+    _admin=RequireHumanAdminForOutboundTest,
+):
+    """Test an alert method by sending a test message.
+
+    bead 9kwzp.6: admin-gated, and the static MCP service principal is
+    refused. This endpoint carried NO route dependency, so any authenticated
+    caller could drive it. It sends with the method's STORED credentials (the
+    Discord webhook URL, the Telegram bot token, the SMTP password held in
+    ``AlertMethod.config``) — the caller never has to know them, which is the
+    same class as ``/api/settings/test-smtp`` that bead i4qrp closed, and it
+    reports the upstream verdict back.
+
+    ``RequireAdminIfEnabled`` would NOT do here: the MCP principal carries
+    ``is_admin=True`` (``auth.dependencies._build_mcp_service_principal``), so
+    the plain admin gate would close the non-admin half and leave the MCP half
+    open. The gate no-ops when ``require_auth`` is False or setup is
+    incomplete, so first-run configuration is untouched.
+    """
     from models import AlertMethod as AlertMethodModel
 
     logger.debug("[ALERTS] POST /alert-methods/%s/test", method_id)

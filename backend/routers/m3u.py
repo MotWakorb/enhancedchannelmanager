@@ -15,11 +15,22 @@ from pydantic import BaseModel
 
 from auth import RequireAdminIfEnabled
 from cache import get_cache
-from config import CONFIG_DIR, get_settings, save_settings, validate_url_scheme
+from config import (
+    CONFIG_DIR,
+    MCPApiKeyStorageError,
+    get_settings,
+    save_settings,
+    validate_url_scheme,
+)
 from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
 from alert_methods import send_alert
 from tasks.m3u_digest import send_immediate_digest
+from services.m3u_group_state import (
+    acquire_effective_group_locks,
+    coerce_profile_id,
+    merge_group_settings_row,
+)
 import journal
 
 logger = logging.getLogger(__name__)
@@ -240,6 +251,7 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
             recon.get("groups_partial_failure", 0)
             + recon.get("groups_degraded", 0)
             + recon.get("groups_errored", 0)
+            + recon.get("groups_conflicted", 0)
             + recon.get("accounts_normalize_failed", 0)
         )
         if incomplete:
@@ -248,6 +260,7 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
                 f"({recon.get('groups_partial_failure', 0)} partial_failure, "
                 f"{recon.get('groups_degraded', 0)} degraded, "
                 f"{recon.get('groups_errored', 0)} errored, "
+                f"{recon.get('groups_conflicted', 0)} pending review, "
                 f"{recon.get('accounts_normalize_failed', 0)} account(s) not normalized) "
                 f"— it will retry on the next scheduled sync"
             )
@@ -261,6 +274,35 @@ async def _reconcile_profiles_after_refresh(client, account_name: str):
         return (f"the channel-profile reconcile failed ({e}) — it will retry on "
                 f"the next scheduled sync")
     return None
+
+
+async def _rebind_restore_placeholders(account_name: str) -> None:
+    """Rebind leftover DBAS-restore placeholders now that this refresh has streams.
+
+    Bead ``enhancedchannelmanager-2o0cz`` residual. Restoring a STANDARD
+    (redacted) backup leaves every channel bound to a URL-less placeholder,
+    because the M3U account has no credential yet and its refresh materializes
+    nothing. Re-entering the credential and refreshing is the recovery an
+    operator reaches for first, and until this hook existed it changed nothing
+    they could see — the real streams appeared BESIDE the placeholders and not
+    one channel was rebound. This is the hook that makes that step sufficient.
+
+    Costs one ``get_m3u_accounts`` call and stays silent on any instance with no
+    synthetic custom-stream account, which is every instance that has never
+    restored (see ``dbas.placeholder_rebind`` for both no-op gates). Imported
+    lazily so the M3U router keeps no import-time dependency on the DBAS
+    subsystem. Best-effort — a failure here never affects the refresh.
+    """
+    try:
+        from dbas.placeholder_rebind import rebind_placeholders_after_refresh
+
+        await rebind_placeholders_after_refresh(
+            client=get_client(), trigger=f"M3U refresh of '{account_name}'",
+        )
+    except Exception as e:
+        logger.warning(
+            "[M3U-REFRESH] Placeholder rebind after '%s' failed: %s", account_name, e
+        )
 
 
 async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initial_updated):
@@ -313,6 +355,12 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
 
+                # Bead …-2o0cz residual: the streams this refresh just
+                # materialized are the first thing a leftover restore
+                # placeholder can be rebound onto. No-ops (and stays silent) on
+                # any instance with no synthetic custom-stream account.
+                await _rebind_restore_placeholders(account_name)
+
                 # GH #720 Part B (bead y3m6o): reinforcing instant reconcile
                 # of every auto-sync group's channel_profile_ids selection.
                 reconcile_incomplete = await _reconcile_profiles_after_refresh(client, account_name)
@@ -363,6 +411,12 @@ async def _poll_m3u_refresh_completion(account_id: int, account_name: str, initi
 
                 # Capture M3U changes after refresh
                 await _capture_m3u_changes_after_refresh(account_id, account_name)
+
+                # Bead …-2o0cz residual: the streams this refresh just
+                # materialized are the first thing a leftover restore
+                # placeholder can be rebound onto. No-ops (and stays silent) on
+                # any instance with no synthetic custom-stream account.
+                await _rebind_restore_placeholders(account_name)
 
                 # GH #720 Part B (bead y3m6o): reinforcing instant reconcile
                 # of every auto-sync group's channel_profile_ids selection.
@@ -777,6 +831,7 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     logger.warning("[M3U] Failed to delete channel group %s: %s", group_id, group_err)
 
         # Clean up linked_m3u_accounts in settings
+        linked_settings_cleanup_failed = False
         try:
             settings = get_settings()
             if settings.linked_m3u_accounts:
@@ -787,11 +842,27 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                     if len(filtered) >= 2:
                         cleaned.append(filtered)
                 if cleaned != settings.linked_m3u_accounts:
-                    settings.linked_m3u_accounts = cleaned
-                    save_settings(settings)
+                    updated_settings = settings.model_copy(
+                        update={"linked_m3u_accounts": cleaned}, deep=True
+                    )
+                    save_settings(updated_settings)
                     logger.info("[M3U] Cleaned up linked_m3u_accounts after deleting account %s", account_id)
+        except MCPApiKeyStorageError as settings_err:
+            linked_settings_cleanup_failed = True
+            logger.error(
+                "[M3U] Account %s was deleted, but linked-settings cleanup was "
+                "refused (%s); the DELETE must not be retried",
+                account_id,
+                type(settings_err).__name__,
+            )
         except Exception as settings_err:
-            logger.warning("[M3U] Failed to clean up linked_m3u_accounts: %s", settings_err)
+            linked_settings_cleanup_failed = True
+            logger.error(
+                "[M3U] Account %s was deleted, but linked-settings cleanup "
+                "failed (%s); the DELETE must not be retried",
+                account_id,
+                type(settings_err).__name__,
+            )
 
         # Log to journal
         journal.log_entry(
@@ -801,7 +872,8 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
             entity_name=account_name,
             description=f"Deleted M3U account '{account_name}'" +
                        (f" and {len(deleted_groups)} orphaned channel groups" if deleted_groups else "") +
-                       (f" (kept {len(skipped_groups)} shared groups)" if skipped_groups else ""),
+                       (f" (kept {len(skipped_groups)} shared groups)" if skipped_groups else "") +
+                       ("; linked-settings cleanup failed and the DELETE must not be retried" if linked_settings_cleanup_failed else ""),
             before_value={
                 "name": account_name,
                 "channel_groups": channel_group_ids,
@@ -810,16 +882,37 @@ async def delete_m3u_account(account_id: int, delete_groups: bool = True):
                 "deleted_groups": deleted_groups,
                 "skipped_groups": skipped_groups,
                 "failed_groups": failed_groups,
-            } if channel_group_ids else None,
+                "account_deleted": True,
+                "linked_settings_cleanup": (
+                    "failed" if linked_settings_cleanup_failed else "completed"
+                ),
+            } if channel_group_ids or linked_settings_cleanup_failed else None,
         )
 
-        return {
-            "status": "deleted",
+        result = {
+            "status": (
+                "deleted_with_cleanup_warning"
+                if linked_settings_cleanup_failed
+                else "deleted"
+            ),
             "deleted_groups": deleted_groups,
             "skipped_groups": skipped_groups,
             "failed_groups": failed_groups,
         }
-    except HTTPException:
+        if linked_settings_cleanup_failed:
+            result.update(
+                {
+                    "account_deleted": True,
+                    "linked_settings_cleanup": "failed",
+                    "message": (
+                        "The M3U account was deleted, but linked-settings cleanup "
+                        "failed. This DELETE must not be retried. Repair settings "
+                        "storage, then update linked accounts separately."
+                    ),
+                }
+            )
+        return result
+    except (HTTPException, MCPApiKeyStorageError):
         raise
     except Exception as e:
         # A missing account id surfaces as an upstream 404 — return 404, not 500
@@ -1072,47 +1165,6 @@ async def delete_m3u_profile(account_id: int, profile_id: int):
 # M3U Group Settings
 # -------------------------------------------------------------------------
 
-# The exact field set Dispatcharr's update_group_settings upserts (its
-# bulk_create update_fields list, apps/m3u/api_views.py). Dispatcharr
-# v0.25.0+ performs a FULL-ROW upsert with ``setting.get(...)`` defaults:
-# every field omitted from a row is silently reset (enabled -> True,
-# auto_channel_sync -> False, start/end -> None, custom_properties -> {}).
-# Every write must therefore carry the complete set, merged over the
-# group's current stored state (bead enhancedchannelmanager-igqcy).
-GROUP_SETTINGS_UPSERT_FIELDS = (
-    "enabled",
-    "auto_channel_sync",
-    "auto_sync_channel_start",
-    "auto_sync_channel_end",
-    "custom_properties",
-)
-
-
-def merge_group_settings_row(current: dict | None, incoming: dict) -> dict:
-    """Overlay an incoming (possibly partial) group-settings row onto the
-    group's CURRENT stored state so Dispatcharr's full-row upsert never
-    resets fields the caller did not intend to change.
-
-    Semantics: a key **present** in ``incoming`` wins verbatim (explicit
-    ``null`` clears a value); a key **absent** from ``incoming`` is filled
-    from ``current``. ``custom_properties`` is taken verbatim when present —
-    callers that edit it must send the already-merged dict (unknown keys
-    preserved), because a deep merge here would make clearing a key
-    impossible. Unknown/new upsert fields in ``incoming`` pass through
-    untouched.
-    """
-    current = current or {}
-    merged = dict(incoming)
-    # Dispatcharr identifies the row by (m3u_account, channel_group); the id
-    # is optional but forwarded when known (matches the modal's payloads).
-    if "id" not in merged and current.get("id") is not None:
-        merged["id"] = current["id"]
-    for field in GROUP_SETTINGS_UPSERT_FIELDS:
-        if field not in merged and field in current:
-            merged[field] = current[field]
-    return merged
-
-
 def _row_selection_set(cp) -> frozenset:
     """The channel_profile_ids in a custom_properties dict as an int SET (order-
     insensitive; non-ints dropped). Empty set = no/empty selection."""
@@ -1229,9 +1281,7 @@ async def _apply_enforced_global_save(
     primary keeps its selection). ``changed_siblings`` are the sibling accounts
     whose row WAS mutated before the abort — the caller journals them and reports
     the truthful partial (finding 4), never "no write" when a sibling changed."""
-    from services.profile_reconcile import (
-        acquire_effective_group_locks, resolve_effective_master_group_id,
-    )
+    from services.profile_reconcile import resolve_effective_master_group_id
 
     desired = _compute_changed_selections(edited_rows, before_groups)
     eff_gids = {resolve_effective_master_group_id(all_settings, gid) for gid in desired}
@@ -1352,7 +1402,6 @@ async def update_m3u_group_settings(account_id: int, request: Request):
         # clear). Normalizes the payload in place so Dispatcharr + the cascade
         # store ints.
         if isinstance(incoming_settings, list):
-            from services.profile_reconcile import coerce_profile_id
             for gs in incoming_settings:
                 if not isinstance(gs, dict):
                     continue

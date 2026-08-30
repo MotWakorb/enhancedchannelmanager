@@ -1,20 +1,18 @@
-# Stats — Users Panel
+# Stats: Users Panel
 
-> **Audience:** ECM operator. Requires Dispatcharr authentication with an **admin** account.
->
 > **v0.17.0 and later.** The Users panel is part of the Stats v2 feature set introduced in v0.17.0.
 
-The Users panel is the fifth panel on the Stats tab. It shows watch-time totals for every Dispatcharr user in your installation. Use it to understand which users watch the most, which channels they watch, and when they last tuned in.
+The Users panel is the fifth panel on the Stats page. It shows watch-time totals for every Dispatcharr user in your installation. Use it to understand which users watch the most, which channels they watch, and when they last tuned in.
 
 ---
 
 ## Who can see it
 
-The Users panel is **admin-only**. If you open the Stats tab while logged in as a non-admin user you will see an "admin access required" notice in the panel area. Log out and back in with an admin account to access watch-time data.
+The Users panel is **admin-only**. If you open the Stats page while logged in as a non-admin user you will see an "admin access required" notice in the panel area. Log out and back in with an admin account to access watch-time data.
 
-When global authentication is disabled (no auth required to access ECM), the panel behaves as admin — all watch-time data is visible.
+When global authentication is disabled (no auth required to access ECM), the panel behaves as admin. All watch-time data is visible.
 
-> **TODO: screenshot placeholder** — Users panel "admin access required" notice (non-admin view). Awaiting container deployment refresh.
+> **TODO: screenshot placeholder.** Users panel "admin access required" notice (non-admin view). Awaiting container deployment refresh.
 
 ---
 
@@ -30,7 +28,7 @@ The top section lists every Dispatcharr user ECM has observed watching a channel
 | Total watch time | Sum of all poll intervals where ECM saw this user streaming any channel, converted to seconds (see [metric glossary](metric-glossary.md#total_watch_seconds)) |
 | Last watched | The most recent timestamp ECM recorded a polling observation for this user |
 
-> **TODO: screenshot placeholder** — per-user watch totals table. Awaiting container deployment refresh.
+> **TODO: screenshot placeholder.** Per-user watch totals table. Awaiting container deployment refresh.
 
 ### Per-user channel breakdown
 
@@ -43,21 +41,21 @@ Clicking a user row (or navigating to the per-user detail view) shows a channel-
 | Times watched | Count of distinct viewing sessions for this channel (see [metric glossary](metric-glossary.md#session_count)) |
 | Last watched | Most recent poll observation for this (user, channel) pair |
 
-> **TODO: screenshot placeholder** — per-user channel breakdown. Awaiting container deployment refresh.
+> **TODO: screenshot placeholder.** Per-user channel breakdown. Awaiting container deployment refresh.
 
 ### Date-range selector
 
 Both views support a date-range filter. The available windows are:
 
-- **7 days** — last 7 days of data (default)
-- **30 days** — last 30 days
-- **90 days** — last 90 days
+- **7 days**: last 7 days of data (default)
+- **30 days**: last 30 days
+- **90 days**: last 90 days
 
 Selecting a range restricts all rows to observations within that window. Watch time, times watched, and last-watched all reflect only observations inside the chosen range.
 
-> **Raw data retention is 30 days.** Observations older than 30 days are pruned from the database per the ADR-007 retention policy. For 90-day queries, data older than 30 days is served from the daily rollup table, not raw rows. In practice, 7-day and 30-day queries feel identical; a 90-day query on an installation younger than 90 days will show zeros for the missing history. See [stats-v2-history-cutover.md](stats-v2-history-cutover.md) for the "metrics start on deploy day" caveat.
+> **Raw data retention is 30 days.** Observations older than 30 days are pruned from the database. For 90-day queries, data older than 30 days is served from the daily rollup table, not raw rows. In practice, 7-day and 30-day queries feel identical; a 90-day query on an installation younger than 90 days will show zeros for the missing history. See [stats-v2-history-cutover.md](stats-v2-history-cutover.md) for the "metrics start on deploy day" caveat.
 
-> **TODO: screenshot placeholder** — date-range selector UI. Awaiting container deployment refresh.
+> **TODO: screenshot placeholder.** Date-range selector UI. Awaiting container deployment refresh.
 
 ---
 
@@ -65,7 +63,7 @@ Selecting a range restricts all rows to observations within that window. Watch t
 
 ### Polling cadence
 
-ECM's `BandwidthTracker` polls Dispatcharr for active channel activity on a fixed interval — **10 seconds by default** (configurable via `stats_poll_interval` in Settings). Each time a user is seen streaming a channel during a poll, ECM writes one row to the `session_telemetry` table recording:
+ECM's `BandwidthTracker` polls Dispatcharr for active channel activity on a fixed interval: **10 seconds by default** (configurable via `stats_poll_interval` in Settings). Each time a user is seen streaming a channel during a poll, ECM writes one row to the `session_telemetry` table recording:
 
 - The user's ID
 - The channel being watched
@@ -79,7 +77,7 @@ Watch time is derived from these rows: **watch time = sum of `poll_interval_ms` 
 
 ### Multi-client collapse
 
-If the same user has multiple active sessions on the same channel in the same poll cycle — for example, two browser tabs open simultaneously — ECM counts that as **one poll interval**, not two. This prevents overcounting: a user watching from two devices is counted once per tick, not twice.
+If the same user has multiple active sessions on the same channel in the same poll cycle (for example, two browser tabs open simultaneously), ECM counts that as **one poll interval**, not two. This prevents overcounting: a user watching from two devices is counted once per tick, not twice.
 
 The technical mechanism is a `DISTINCT (user_id, channel_id, observed_at)` aggregation that collapses concurrent sessions to a single observation per tick before summing.
 
@@ -103,7 +101,6 @@ Poll observations where no Dispatcharr user was identified (no auth, or an Dispa
 
 ## Going deeper
 
-- [Metric glossary](metric-glossary.md) — precise definition of every number shown in this panel.
-- [Stats v2 history cutover](stats-v2-history-cutover.md) — why data starts from the v0.17.0 deploy date and not before.
-- [ADR-007: session_telemetry retention policy](../../adr/ADR-007-session-telemetry-retention.md) — the 30-day raw retention and rollup design.
-- [`docs/api.md`](../../api.md) — the `/api/stats/watch-time` and `/api/stats/watch-time/{user_id}` endpoints that back this panel.
+- [Metric glossary](metric-glossary.md): precise definition of every number shown in this panel.
+- [Stats v2 history cutover](stats-v2-history-cutover.md): why data starts from the v0.17.0 deploy date and not before.
+- [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md): the API reference for this panel's data, useful if you want to query it programmatically instead of through the UI.

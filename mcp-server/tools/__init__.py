@@ -56,3 +56,8 @@ def register_all_tools(mcp: FastMCP):
     """Register all ECM tools with the MCP server."""
     for module in _MODULES:
         module.register(mcp)
+    # Central, fail-closed policy is applied only after aliases from every
+    # module have joined the live registry.
+    from ._safety_policy import install_safety_policy
+
+    install_safety_policy(mcp)

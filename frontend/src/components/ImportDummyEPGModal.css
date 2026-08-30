@@ -44,8 +44,9 @@
   flex-shrink: 0;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .import-source-icon .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
@@ -54,17 +55,22 @@
   min-width: 0;
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .import-source-name {
-  font-weight: 500;
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
 }
 
+/* Meta role. 12px -> 11px. */
 .import-source-meta {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   margin-top: 0.125rem;
 }
@@ -75,8 +81,9 @@
   gap: 0.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 12px -> 18px. */
 .import-source-status .material-icons {
-  font-size: 12px;
+  font-size: var(--icon-status);
 }
 
 .import-source-status.active {
@@ -96,7 +103,8 @@
   flex-shrink: 0;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .import-source-check .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }

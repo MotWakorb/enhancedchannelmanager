@@ -5,6 +5,7 @@ import { useNotifications } from '../../contexts/NotificationContext';
 import { useBackupDestinationPrompt } from '../../contexts/BackupDestinationPromptContext';
 import { CloudTargetEditor } from './CloudTargetEditor';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import '../ModalBase.css';
 import './CloudTargetsCard.css';
 
@@ -41,6 +42,8 @@ export function CloudTargetsCard() {
   const [editorOpen, setEditorOpen] = useState(false);
   const [editingTarget, setEditingTarget] = useState<CloudTarget | null>(null);
   const [deletingTarget, setDeletingTarget] = useState<CloudTarget | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { titleId: deleteTitleId, containerRef: deleteContainerRef } = useOwnedDialog(Boolean(deletingTarget));
   const [testingId, setTestingId] = useState<number | null>(null);
 
   const loadTargets = useCallback(async () => {
@@ -77,6 +80,7 @@ export function CloudTargetsCard() {
 
   const handleDelete = async () => {
     if (!deletingTarget) return;
+    setDeleting(true);
     try {
       await cloudApi.deleteCloudTarget(deletingTarget.id);
       notifications.success(`Deleted target '${deletingTarget.name}'`);
@@ -84,8 +88,11 @@ export function CloudTargetsCard() {
       loadTargets();
     } catch (e) {
       notifications.error(e instanceof Error ? e.message : 'Delete failed');
+    } finally {
+      setDeleting(false);
     }
   };
+  const closeDelete = () => { if (!deleting) setDeletingTarget(null); };
 
   const handleTest = async (target: CloudTarget) => {
     setTestingId(target.id);
@@ -201,15 +208,15 @@ export function CloudTargetsCard() {
       )}
 
       {deletingTarget && (
-        <ModalOverlay onClose={() => setDeletingTarget(null)}>
-          <div className="modal-container modal-sm">
-            <div className="modal-header"><h3>Delete Target</h3></div>
+        <ModalOverlay onClose={closeDelete} role="dialog" aria-modal="true" aria-labelledby={deleteTitleId}>
+          <div className="modal-container modal-sm cloud-target-delete-confirm" ref={deleteContainerRef}>
+            <div className="modal-header"><h3 id={deleteTitleId}>Delete Target</h3></div>
             <div className="modal-body">
               <p>Delete cloud target <strong>{deletingTarget.name}</strong>? Scheduled backups using this target will stop uploading off-site.</p>
             </div>
             <div className="modal-footer">
-              <button className="modal-btn modal-btn-secondary" onClick={() => setDeletingTarget(null)}>Cancel</button>
-              <button className="modal-btn modal-btn-danger" onClick={handleDelete}>Delete</button>
+              <button className="modal-btn modal-btn-secondary" onClick={closeDelete} disabled={deleting}>Cancel</button>
+              <button className="modal-btn modal-btn-danger" onClick={handleDelete} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete'}</button>
             </div>
           </div>
         </ModalOverlay>

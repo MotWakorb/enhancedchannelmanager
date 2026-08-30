@@ -43,8 +43,28 @@ strategies, in strict priority order — the first that hits wins:
 A match means the logo already exists on the destination: it is NOT re-uploaded
 (``ALREADY_EXISTS_IDENTICAL``), its ``source->dest`` id is recorded in the remap
 so channel ``logo_id`` references can resolve, and nothing is ledgered (nothing
-to roll back). A MISS uploads the logo (streaming), ledgers it, remaps it, and
-feeds :attr:`RestoreReport.logo_misses` (D9 red banner).
+to roll back). A MISS uploads the logo (streaming), ledgers it and remaps it, and
+increments the INTERNAL :attr:`LogoImportResult.misses` counter.
+
+----------------------------------------------------------------------------
+WHAT COUNTS AS A LOGO MISS (the operator-facing loss report)
+----------------------------------------------------------------------------
+
+``LogoImportResult.misses`` above and :attr:`RestoreReport.logo_misses` are NOT
+the same counter and must never be wired to each other:
+
+* ``LogoImportResult.misses`` answers "did the destination already have this
+  logo?". Internal bookkeeping. Never rendered to an operator.
+* :attr:`RestoreReport.logo_misses` answers "did the operator LOSE this logo?".
+  It gates the D9 red banner and the restore summary line.
+
+The canonical definition, the rule for all three producers, and the history that
+produced it live in ONE place: :meth:`RestoreReport.record_logo_miss`. Read it
+before touching any miss-recording site. The short form for this module: record
+a miss ONLY where a logo failed to come back (unreadable bytes, failed
+validation, failed upload, failed URL re-create), NEVER on a path that restored
+it, and record it through ``report.record_logo_miss()`` rather than by
+incrementing the field.
 
 ----------------------------------------------------------------------------
 SECURITY VALIDATION (untrusted file upload — the security-review surface)
@@ -101,6 +121,7 @@ import base64
 import binascii
 import logging
 import os
+from typing import Awaitable, Callable, Optional
 
 from pydantic import BaseModel, Field
 
@@ -110,7 +131,6 @@ from dbas.restore_contracts import (
     FailureReason,
     IdRemapTable,
     LogoMissChannel,
-    LogoMissDetail,
     RestoreReport,
     RollbackLedger,
     SkipDetail,
@@ -177,6 +197,19 @@ class LogoImportResult(BaseModel):
     misses: int = Field(default=0)
     rejected: int = Field(default=0)
     deleted_existing: int = Field(default=0)
+    # SOURCE (archive) ids of the logos a DRY RUN determined it would create —
+    # by upload or by URL re-create (bead …-dgnms). Empty on an apply, where a
+    # created logo has a real destination id in the LOGO remap instead.
+    #
+    # A source id, never a fabricated destination id: this importer deliberately
+    # registers NO dry-run remap entry for a would-create (the id an apply mints
+    # is not knowable, and inventing one would corrupt every FK resolved through
+    # it). But ``channel_reattach.reattach_channel_logos`` still needs to know
+    # the logo WILL exist, or its preview split reads 0 for a restore that
+    # reattaches N — drill run 4 measured preview 0 against apply 11 on a fresh
+    # target, because a fresh target matches nothing and every logo is a
+    # would-create. This set is the missing fact, carried without faking an id.
+    would_create_source_ids: set[int] = Field(default_factory=set)
 
 
 def _logo_label(archive_logo: dict) -> str:
@@ -358,6 +391,10 @@ def _sanitize_failure(exc: Exception | str) -> str:
     carries any path/url marker, replace it wholesale with a generic message
     rather than risk leaking a path or token into the report.
     """
+    from dbas.destination_read import DestinationReadError
+
+    if isinstance(exc, DestinationReadError):
+        return str(exc)
     text = (str(exc) or "").strip()
     lowered = text.lower()
     if not text or any(m in lowered for m in _PATH_LEAK_MARKERS):
@@ -416,6 +453,194 @@ def _validate_logo(archive_logo: dict) -> tuple[bytes | None, str | None, str | 
     return data, basename, None
 
 
+# Schemes a logo URL may carry for the re-create-by-URL path. Anything else (a
+# Dispatcharr-local ``/data/logos/...`` path, a ``file:`` URI, a bare basename)
+# names a location only the SOURCE instance could read, so it must not be turned
+# into a dangling destination row. Those logos are restored from their ARCHIVED
+# BYTES instead (the backup fetches them from Dispatcharr at gather time, bead
+# …-xb58a); when an older artifact carries no bytes for one, an honest miss is
+# the correct outcome.
+_REMOTE_URL_SCHEMES = ("http://", "https://")
+
+
+def hydratable_bytes(archive_logo: dict, content_provider) -> bool:
+    """True when this record can supply image BYTES for an upload.
+
+    Either the record already carries its base64 payload (the archive-restore
+    path) or a lazy ``content_provider`` is wired that can fetch it (the
+    cross-instance sync path). When neither holds, the only way to restore the
+    logo is by URL.
+
+    A LAZY PROVIDER IS ONLY CREDITED FOR A RECORD THAT NAMES A FILE (bead
+    …-sgrez). ``filename`` is not decoration here: the upload path below cannot
+    run without it — the hydration pre-check gates on
+    :func:`_safe_basename`, :func:`_validate_logo` rejects a record without one
+    outright, and ``client.upload_logo_file`` needs a basename to write under.
+    So a byte-less record carrying no filename can NEVER be restored by upload
+    however capable the provider is, and answering "hydratable" for it would
+    send it down a path whose only possible outcome is a VALIDATION_ERROR while
+    denying it the URL path that would have restored it. That is exactly what
+    happened to the cross-instance sync gather: it wired a provider for every
+    record, so every REMOTE-url logo — 59 of 60 on a real XC-sourced instance —
+    was locked out of the re-create-by-URL branch. The archive-restore path
+    (``content_provider is None``) is unchanged.
+    """
+    if archive_logo.get("content_b64"):
+        return True
+    if content_provider is None:
+        return False
+    return bool(archive_logo.get("filename"))
+
+
+def _remote_logo_url(archive_logo: dict) -> str | None:
+    """The archived logo's REMOTE url, or ``None`` when it has no usable one.
+
+    Only absolute ``http(s)`` URLs qualify — see the call site for why a
+    Dispatcharr-local path is deliberately excluded. Control characters are
+    rejected outright (log-forging / header-injection hygiene, mirroring
+    :func:`_safe_basename`).
+    """
+    url = archive_logo.get("url")
+    if not isinstance(url, str):
+        return None
+    trimmed = url.strip()
+    if not trimmed or any(ord(ch) in _CONTROL_BYTES for ch in trimmed):
+        return None
+    lowered = trimmed.lower()
+    if not lowered.startswith(_REMOTE_URL_SCHEMES):
+        return None
+    return trimmed
+
+
+# Public aliases for the PRODUCER side (``routers.backup``). The backup builder
+# has to make the SAME two judgements this importer makes, and it must make them
+# identically or the artifact it writes is one the restore cannot consume:
+#
+#   * which logos are remotely hosted (those restore from their archived URL and
+#     their bytes are deliberately NOT archived), and
+#   * whether a filename is safe (a record whose ``filename`` this validator
+#     rejects is a guaranteed VALIDATION_ERROR on the way back in).
+#
+# The producer therefore calls THESE functions rather than re-implementing them.
+# The drill (bead …-dgnms) is the cautionary tale: the producer emitted logo
+# records with no ``filename`` key at all, and every one of them failed the
+# consumer's first check.
+remote_logo_url = _remote_logo_url
+safe_logo_basename = _safe_basename
+
+
+async def _create_logo_from_url(
+    *,
+    archive_logo: dict,
+    remote_url: str,
+    label: str,
+    source_id,
+    client: DispatcharrClient,
+    cat,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: IdRemapTable,
+    result: "LogoImportResult",
+    channels_by_logo: dict[int, list[dict]],
+) -> None:
+    """Re-create a byte-less, remotely-hosted logo from its archived URL.
+
+    Mirrors the upload path's bookkeeping exactly — ledger, remap, per-category
+    counts — so a URL-restored logo is indistinguishable downstream from an
+    uploaded one and the channel-logo reattach
+    (:func:`dbas.channel_reattach.reattach_channel_logos`) can resolve it.
+
+    A failure is a per-entity ``UPSTREAM_API_ERROR`` plus a COUNTED logo miss:
+    the operator must be told which logos did not come back, which is the whole
+    point of the bead. A SUCCESS records no miss, because the logo came back.
+    """
+    try:
+        created = await client.create_logo({"name": label, "url": remote_url})
+    except Exception as exc:  # noqa: BLE001 - per-entity failure, never a crash
+        reason_enum = _upstream_reason_for(exc)
+        cat.failed += 1
+        result.rejected += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=reason_enum,
+                label=label,
+                message=_sanitize_failure(exc),
+                source_export_id=source_id,
+            )
+        )
+        _record_logo_loss(
+            report=report, label=label, source_id=source_id,
+            channels_by_logo=channels_by_logo, remap=remap,
+            is_dry_run=False, result=result,
+        )
+        logger.warning(
+            "[DBAS-LOGOS] Failed to re-create remote logo '%s': %s",
+            label, reason_enum.value,
+        )
+        return
+
+    new_id = created.get("id") if isinstance(created, dict) else None
+    cat.created += 1
+    result.uploaded += 1
+    if new_id is not None:
+        new_id = int(new_id)
+        if source_id is not None:
+            remap.add(EntityType.LOGO, int(source_id), new_id)
+        ledger.record_created(EntityType.LOGO, new_id, label)
+    logger.info(
+        "[DBAS-LOGOS] Re-created remotely-hosted logo '%s' from its archived URL "
+        "(id=%s).",
+        label, new_id,
+    )
+
+
+def _simulate_create_logo_from_url(
+    *,
+    label: str,
+    source_id,
+    cat,
+    result: "LogoImportResult",
+) -> None:
+    """Dry-run twin of :func:`_create_logo_from_url` (bead …-dgnms).
+
+    The preview must predict what the apply will DO, so it simulates the same
+    decision: a byte-less logo with a usable absolute ``http(s)`` URL is a
+    ``would_create``, not a failure. Before this existed the URL branch was
+    gated on ``not is_dry_run``, so every byte-less record fell through to
+    :func:`_validate_logo`, which needs a ``filename`` a URL-only record does
+    not carry. The drill's preview reported 11 of 11 logos as
+    ``validation_error`` for an artifact whose apply then restored 10 of them,
+    burying the ONE genuinely unrestorable logo in invented noise.
+
+    Nothing is written: no ledger entry, no remap registration (a dry-run remap
+    id would be a fabrication), and no logo miss (the apply's URL path does not
+    record one either, because the logo does come back). The SOURCE id is
+    recorded on the result instead, so the logo-reattach pass can count a channel
+    whose logo this preview knows will exist without inventing its id.
+    """
+    cat.would_create += 1
+    result.uploaded += 1
+    _note_would_create(result, source_id)
+    logger.info(
+        "[DBAS-LOGOS] Dry run: logo '%s' would be re-created from its archived "
+        "URL (source id=%s).",
+        label, source_id,
+    )
+
+
+def _note_would_create(result: "LogoImportResult", source_id) -> None:
+    """Record that a DRY RUN would create the logo with this SOURCE id.
+
+    The one place :attr:`LogoImportResult.would_create_source_ids` is written, so
+    the two dry-run create branches (URL re-create and validated upload) cannot
+    diverge. A record with no usable integer id is skipped rather than guessed —
+    the reattach pass keys on the archived ``logo_id`` FK, which is an int or
+    nothing.
+    """
+    if isinstance(source_id, int) and not isinstance(source_id, bool):
+        result.would_create_source_ids.add(source_id)
+
+
 def _channels_by_logo_id(archive_channels: list[dict] | None) -> dict[int, list[dict]]:
     """Index the archive channels by their ``logo_id`` FK (bead cm9bi).
 
@@ -464,6 +689,36 @@ def _affected_channels(
     return affected
 
 
+def _record_logo_loss(
+    *,
+    report: RestoreReport,
+    label: str,
+    source_id,
+    channels_by_logo: dict[int, list[dict]],
+    remap: IdRemapTable,
+    is_dry_run: bool,
+    result: "LogoImportResult",
+) -> None:
+    """Report ONE logo this importer could not bring back (the D9 loss signal).
+
+    The single call site pattern for every failure path in :func:`import_logos`.
+    See :meth:`RestoreReport.record_logo_miss` for the invariant this enforces:
+    a miss is a logo the operator LOST, so this is called only after a path has
+    already decided the logo is not coming back, and never on a success path.
+
+    Also attaches the AFFECTED CHANNELS (bead cm9bi) so the drill-down behind
+    the aggregate names which channels lost their artwork, and bumps the
+    importer's own ``misses`` counter, which tracks the same events for the
+    caller's summary.
+    """
+    report.record_logo_miss(
+        label=label,
+        source_export_id=source_id,
+        channels=_affected_channels(source_id, channels_by_logo, remap, is_dry_run),
+    )
+    result.misses += 1
+
+
 async def import_logos(
     *,
     archive_logos: list[dict],
@@ -475,6 +730,7 @@ async def import_logos(
     is_dry_run: bool = False,
     clear_existing: bool = False,
     archive_channels: list[dict] | None = None,
+    content_provider: Optional[Callable[[dict], Awaitable[Optional[str]]]] = None,
 ) -> LogoImportResult:
     """Restore the LOGO category: 3-tier match + streaming upload of the misses.
 
@@ -504,6 +760,22 @@ async def import_logos(
             the destination channel id resolved through the CHANNEL remap
             namespace (populated by the channels importer, which runs earlier).
             ``None``/empty -> misses carry an empty channel list.
+        content_provider: OPTIONAL lazy per-logo payload loader (bead
+            ``7ipq2.1`` — the cross-instance sync path). When set, a MISSED
+            logo whose record carries no ``content_b64`` is hydrated by
+            awaiting ``content_provider(record)`` (must return the base64
+            string, or ``None`` on failure) IMMEDIATELY before validation +
+            upload — one logo at a time, so the D8 streaming guarantee holds
+            for plans that are assembled METADATA-ONLY (holding every logo's
+            base64 in the plan at once would defeat D8). The hydrated payload
+            lives on a per-iteration COPY; the caller's record is never
+            mutated (no accumulation). Cheap pre-checks (safe basename,
+            declared-size cap) run BEFORE hydration so a logo that is already
+            rejectable is never read. A provider failure (``None`` / raise) is
+            a per-logo ``VALIDATION_ERROR`` with a path-free message, never a
+            crash. Archive restore supplies this loader from its still-open,
+            already-validated ZIP; legacy in-memory records still work with the
+            default ``None`` because they carry ``content_b64`` directly.
 
     Returns:
         A :class:`LogoImportResult` with safe aggregate counters.
@@ -584,8 +856,101 @@ async def import_logos(
             )
             continue
 
-        # MISS — this logo must be uploaded. Validate+decode BEFORE upload.
-        data, basename, reason = _validate_logo(archive_logo)
+        # MISS with a REMOTE URL and no bytes: re-create it BY URL rather than
+        # by upload (bead …-dfkbn item 1). A logo whose image lives on a CDN has
+        # an archived URL and no bytes, because the backup does not fetch what
+        # it does not host. The drill lost 12 such logos: their URLs WERE in the
+        # archive and nothing re-resolved them. Dispatcharr's Logo model is
+        # exactly ``{name, url}`` (0.28.2 apps/channels/models.py), so
+        # re-creating the row from the archived URL restores it byte-identically.
+        # The image was never ours to hold.
+        #
+        # ONLY an absolute http(s) URL qualifies. A Dispatcharr-LOCAL path
+        # (``/data/logos/x.png``) names bytes on the SOURCE instance's volume,
+        # not a fetchable location; re-creating that row would give the operator
+        # a channel whose logo silently 404s, which is strictly worse than an
+        # honest miss. Those logos are archived WITH their bytes at backup time
+        # (bead …-xb58a, ``routers.backup._gather_dispatcharr_logo_payloads``),
+        # so on a current artifact they arrive here hydratable and take the
+        # upload path below. An OLDER artifact built before that fix carries no
+        # bytes for them, and they still fall through to the validate/upload
+        # path and are reported as an honest miss.
+        #
+        # The dry run takes the SAME branch (bead …-dgnms) so the preview's
+        # counts match the apply's.
+        if not hydratable_bytes(archive_logo, content_provider):
+            remote_url = _remote_logo_url(archive_logo)
+            if remote_url is not None:
+                if is_dry_run:
+                    _simulate_create_logo_from_url(
+                        label=label,
+                        source_id=source_id,
+                        cat=cat,
+                        result=result,
+                    )
+                else:
+                    await _create_logo_from_url(
+                        archive_logo=archive_logo,
+                        remote_url=remote_url,
+                        label=label,
+                        source_id=source_id,
+                        client=client,
+                        cat=cat,
+                        report=report,
+                        ledger=ledger,
+                        remap=remap,
+                        result=result,
+                        channels_by_logo=channels_by_logo,
+                    )
+                continue
+
+        # MISS — this logo must be uploaded. Hydrate lazily when the record is
+        # metadata-only (sync path), then validate+decode BEFORE upload. The
+        # cheap pre-checks (basename, declared-size cap) run FIRST so a logo
+        # that is already rejectable is never read from the source; when they
+        # fail, hydration is skipped and _validate_logo below produces the
+        # canonical rejection reason for the un-hydrated record.
+        hydrated = archive_logo
+        if content_provider is not None and not archive_logo.get("content_b64"):
+            declared_size = archive_logo.get("size")
+            precheck_ok = _safe_basename(archive_logo.get("filename")) is not None and not (
+                isinstance(declared_size, int) and declared_size > MAX_LOGO_BYTES
+            )
+            if precheck_ok:
+                try:
+                    payload_b64 = await content_provider(archive_logo)
+                except Exception:  # noqa: BLE001 - per-logo containment, path-free
+                    payload_b64 = None
+                if not payload_b64:
+                    cat.failed += 1
+                    result.rejected += 1
+                    cat.failure_details.append(
+                        FailureDetail(
+                            reason=FailureReason.VALIDATION_ERROR,
+                            label=label,
+                            # Path-free by construction — never the provider's
+                            # exception text (it can echo a filesystem path).
+                            message="logo content could not be read from the source",
+                            source_export_id=source_id,
+                        )
+                    )
+                    # The bytes could not be read, so this logo does NOT come
+                    # back: an operator-facing loss.
+                    _record_logo_loss(
+                        report=report, label=label, source_id=source_id,
+                        channels_by_logo=channels_by_logo, remap=remap,
+                        is_dry_run=is_dry_run, result=result,
+                    )
+                    logger.warning(
+                        "[DBAS-LOGOS] Rejected logo '%s': source content unavailable.",
+                        label,
+                    )
+                    continue
+                # Per-iteration COPY: the caller's plan record stays
+                # metadata-only (no accumulation across the loop — D8).
+                hydrated = {**archive_logo, "content_b64": payload_b64}
+
+        data, basename, reason = _validate_logo(hydrated)
         if reason is not None:
             cat.failed += 1
             result.rejected += 1
@@ -597,36 +962,35 @@ async def import_logos(
                     source_export_id=source_id,
                 )
             )
+            # A record we refuse does not come back: an operator-facing loss.
+            _record_logo_loss(
+                report=report, label=label, source_id=source_id,
+                channels_by_logo=channels_by_logo, remap=remap,
+                is_dry_run=is_dry_run, result=result,
+            )
             # Log only the reason enum-style string + label — never the filename.
             logger.warning(
                 "[DBAS-LOGOS] Rejected logo '%s': %s.", label, reason
             )
             continue
 
-        # A valid miss feeds the logo-miss aggregate (D9 red banner) regardless of
-        # dry-run vs. apply — it is a logo the destination did not already have.
-        # It also records a per-logo detail row (id + name, bead qhui4) with the
-        # AFFECTED CHANNELS (destination id where known + name, bead cm9bi) for
-        # the drill-down behind the aggregate count — additive to the D9 banner.
-        report.logo_misses += 1
-        report.logo_miss_details.append(
-            LogoMissDetail(
-                source_export_id=source_id,
-                label=label,
-                channels=_affected_channels(
-                    source_id, channels_by_logo, remap, is_dry_run
-                ),
-            )
-        )
-        result.misses += 1
-
+        # From here the logo is VALIDATED and will be uploaded. It is NOT a logo
+        # miss: a miss is a logo the operator lost, and this one is coming back.
+        # It was one until bead …-xb58a made archived bytes the normal case for a
+        # Dispatcharr-hosted logo, at which point the pre-upload increment here
+        # started reporting every successfully restored logo as lost. See
+        # :meth:`RestoreReport.record_logo_miss` for the invariant.
         if is_dry_run:
             cat.would_create += 1
+            # The apply WILL upload this logo, so a channel pointing at it will
+            # get its logo back. Record the source id for the reattach pass's
+            # preview split (bead …-dgnms) — see would_create_source_ids.
+            _note_would_create(result, source_id)
             # Release the decoded bytes promptly (no upload in dry-run).
             del data
             continue
 
-        content_type = _safe_content_type(archive_logo)
+        content_type = _safe_content_type(archive_logo, data)
         try:
             created = await client.upload_logo_file(
                 label, basename, data, content_type
@@ -641,6 +1005,15 @@ async def import_logos(
                     message=_sanitize_failure(exc),
                     source_export_id=source_id,
                 )
+            )
+            # The upload failed, so this logo does NOT come back: an
+            # operator-facing loss. This is the residual case bead …-d0agi is
+            # the safety net for (an upstream 5xx on a logo the backup DID
+            # archive), and it must reach the D9 banner.
+            _record_logo_loss(
+                report=report, label=label, source_id=source_id,
+                channels_by_logo=channels_by_logo, remap=remap,
+                is_dry_run=is_dry_run, result=result,
             )
             logger.warning(
                 "[DBAS-LOGOS] Failed to upload logo '%s': %s", label, reason_enum.value
@@ -666,13 +1039,45 @@ async def import_logos(
     return result
 
 
-def _safe_content_type(archive_logo: dict) -> str:
+# Validated-magic -> content-type map for _safe_content_type's fallback. Keyed
+# by the SAME signatures _MAGIC_PREFIXES accepts (plus the BMP path), so the
+# derived type can only ever describe bytes the magic gate already validated.
+_MAGIC_CONTENT_TYPES: tuple[tuple[bytes, int, str], ...] = (
+    (b"\x89PNG\r\n\x1a\n", 0, "image/png"),
+    (b"\xff\xd8\xff", 0, "image/jpeg"),
+    (b"GIF87a", 0, "image/gif"),
+    (b"GIF89a", 0, "image/gif"),
+    (b"WEBP", 8, "image/webp"),
+)
+
+
+def _content_type_from_magic(data: bytes) -> Optional[str]:
+    """Derive the image content-type from ALREADY-VALIDATED magic bytes.
+
+    Called only after :func:`_validate_logo` accepted ``data``, so this is a
+    classification of known-image bytes, not a validation step. Returns ``None``
+    for a magic outside the map (BMP falls back to its own type below).
+    """
+    head = data[:_MAGIC_INSPECT_LEN]
+    for prefix, offset, content_type in _MAGIC_CONTENT_TYPES:
+        if head[offset:offset + len(prefix)] == prefix:
+            return content_type
+    if _bmp_ok(data):
+        return "image/bmp"
+    return None
+
+
+def _safe_content_type(archive_logo: dict, data: bytes = b"") -> str:
     """Return a SAFE content-type for the multipart upload.
 
-    The archive's declared content-type is advisory only (the magic-byte check is
-    the real gate). We pass it through when it looks like an image content-type,
-    else default to ``application/octet-stream`` so we never forward an arbitrary
-    attacker-controlled header value.
+    The archive's declared content-type is advisory only (the magic-byte check
+    is the real gate). We pass it through when it looks like an image
+    content-type. When the record declares no usable type — the sync
+    live-gather records are METADATA-ONLY and carry none (bead 7ipq2.2) — the
+    type is derived from the already-validated magic bytes: a real Dispatcharr
+    0.28.2 upload endpoint REJECTS ``application/octet-stream`` outright
+    ("Unsupported file type"), so the octet-stream fallback is a last resort
+    only when even the magic is outside the map.
     """
     declared = archive_logo.get("content_type")
     if isinstance(declared, str) and declared.lower().startswith("image/"):
@@ -680,6 +1085,9 @@ def _safe_content_type(archive_logo: dict) -> str:
         clean = declared.split(";", 1)[0].strip().lower()
         if clean and all(ord(c) >= 0x20 for c in clean):
             return clean
+    derived = _content_type_from_magic(data) if data else None
+    if derived:
+        return derived
     return "application/octet-stream"
 
 

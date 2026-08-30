@@ -64,6 +64,22 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menuitem')).not.toBeInTheDocument();
   });
 
+  it('supports arrow navigation, Escape, and trigger focus return', () => {
+    render(<OverflowMenu items={items()} label="More actions" />);
+    const trigger = screen.getByRole('button', { name: /more actions/i });
+
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: /first/i })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'End' });
+    expect(screen.getByRole('menuitem', { name: /second/i })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'ArrowDown' });
+    expect(screen.getByRole('menuitem', { name: /first/i })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   // bead 09x38.15 item 9: the Stats section jump nav reuses this component
   // with a non-kebab trigger icon (e.g. "list") instead of the default
   // "more_vert", so other consumers can signal a different affordance

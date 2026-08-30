@@ -180,6 +180,23 @@ class TestCloudStorageChokepointGuard:
             "guard — the D1 guard-extension AC is unenforced"
         )
 
+    # THE PROVISIONING-WRITER TESTS WERE DELETED HERE (2026-08-22).
+    #
+    # ``test_provisioning_writer_is_in_scope`` and
+    # ``test_provisioning_writer_makes_no_raw_outbound_call`` asserted that
+    # ``backend/tasks/dbas_sync_provisioning.py`` was scanned by this guard and
+    # was clean. That module was the one-time credential-provisioning writer
+    # (bead ``wd20y``), and the PO's 2026-08-22 ruling removed the whole feature:
+    # provider credentials now cross on the ordinary sync cycle instead
+    # (ADR-013 amendment (b)).
+    #
+    # The chokepoint property they protected is NOT weakened by their removal —
+    # it moved rather than went away. The credential now leaves A through
+    # ``tasks.dbas_sync_engine`` -> ``tasks.dbas_sync_client.make_remote_client``,
+    # and both of those modules are in ``_SYNC_GLOB`` and are covered by
+    # ``test_sync_module_is_in_scope`` above and by the module sweep. There is no
+    # longer a second outbound path to guard.
+
     def test_sync_factory_passes_only_via_tagged_import(self):
         """The real sync factory passes BECAUSE its httpx import is # ssrf-ok:.
 

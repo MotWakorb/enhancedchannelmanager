@@ -1,6 +1,6 @@
 # Runbook: Normalization Canary Divergence
 
-> The nightly canary detected that the Test Rules preview path and the Channel Pipeline executor path produce different output for at least one fixture. This is an **SLO-5 (Normalization Correctness) breach** — zero error budget.
+> The nightly canary detected that the Test Rules preview path and the Channel Pipeline executor path produce different output for at least one fixture. This is an **SLO-5 (Normalization Correctness) breach**: zero error budget.
 
 - **Severity**: P2
 - **Owner**: Project Engineer (primary) + SRE (support)
@@ -13,10 +13,10 @@
 The canary fires exactly one of the following:
 
 - **Slack alert** (`#ops` or whichever channel the `SLACK_WEBHOOK_URL` secret routes to): title `Normalization canary DIVERGED`.
-- **GitHub issue** (durable fallback — always created regardless of Slack): label `regression,normalization`, title `[CANARY] normalization divergence YYYY-MM-DD`.
+- **GitHub issue** (durable fallback, always created regardless of Slack): label `regression,normalization`, title `[CANARY] normalization divergence YYYY-MM-DD`.
 - **Workflow** (drives both): `.github/workflows/normalization-canary.yml`, job `canary`.
 
-Manual trigger — if you suspect divergence outside the nightly window:
+Manual trigger: if you suspect divergence outside the nightly window:
 
 ```bash
 gh workflow run normalization-canary.yml
@@ -34,13 +34,13 @@ python -m scripts.normalization_canary
 - The `canary` job on the `Normalization Canary` workflow is red.
 - The workflow log ends with `[canary] FAIL — N divergence(s) detected:` followed by a JSON report listing each fixture name, both outputs, and the mismatch reason.
 - `ecm_normalization_canary_divergence_total` has incremented by 1 for this run (visible on the Normalization dashboard once metrics are scraped from the CI-adjacent Prometheus).
-- Users may or may not have reported impact yet — the canary is deliberately a **leading** indicator. Do not wait for a user report to act.
+- Users may or may not have reported impact yet. The canary is deliberately a **leading** indicator. Do not wait for a user report to act.
 
-If the canary job is red but the JSON report is absent / truncated, the harness itself crashed. Treat that as a runbook execution failure — skip to **Escalation**.
+If the canary job is red but the JSON report is absent / truncated, the harness itself crashed. Treat that as a runbook execution failure: skip to **Escalation**.
 
 ## Diagnosis
 
-Work the JSON report top-down. Each `divergences[].reason` is one of two classes — they require different diagnostic moves.
+Work the JSON report top-down. Each `divergences[].reason` is one of two classes: they require different diagnostic moves.
 
 1. **Read the JSON report from the workflow run.**
    - Pull the `normalization-canary-log` artifact from the failed run, or scroll to the `Run canary harness` step for the inline output.
@@ -91,11 +91,11 @@ Work the JSON report top-down. Each `divergences[].reason` is one of two classes
 
 - You've been in diagnosis for more than 60 minutes without finding the diverging commit.
 - The diverging change is in a dependency (FastAPI, Pydantic, uvicorn) rather than our code.
-- You cannot reproduce the divergence locally — the CI environment is producing different results than `python -m scripts.normalization_canary` on your machine.
+- You cannot reproduce the divergence locally: the CI environment is producing different results than `python -m scripts.normalization_canary` on your machine.
 
 ## Resolution
 
-**Mitigation is not "silence the canary" — it is "close the divergence."** If you cannot close it in one commit, revert the offending change.
+**Mitigation is not "silence the canary." It is "close the divergence."** If you cannot close it in one commit, revert the offending change.
 
 Pick the smallest move that makes the canary green, in this order:
 
@@ -112,7 +112,7 @@ Pick the smallest move that makes the canary green, in this order:
 2. **Land a corrective fix in both paths.**
 
    - Patch `normalization_engine.py` so `test_rule` / `test_rules_batch` and `normalize` apply the same preprocessing and rule sequencing.
-   - The parity tests in `backend/tests/unit/test_normalization_parity.py` must pass before merging — they are the same contract the canary enforces.
+   - The parity tests in `backend/tests/unit/test_normalization_parity.py` must pass before merging: they are the same contract the canary enforces.
 
 3. **Add the failing input to the fixture bank.**
 
@@ -130,7 +130,7 @@ Pick the smallest move that makes the canary green, in this order:
    )
    ```
 
-   This is mandatory — without it, the exact same regression can slip back in.
+   This is mandatory: without it, the exact same regression can slip back in.
 
 4. **Verify the canary turns green.**
 
@@ -144,7 +144,7 @@ Pick the smallest move that makes the canary green, in this order:
 
    Cross-reference the fixing PR in the issue body before closing.
 
-If any step fails, **stop** and escalate — do not merge half-fixes. A canary that's green because the failing fixture was removed is worse than a red canary.
+If any step fails, **stop** and escalate. Do not merge half-fixes. A canary that's green because the failing fixture was removed is worse than a red canary.
 
 ## Escalation
 
@@ -152,12 +152,12 @@ If resolution is not complete within **4 hours** of the initial alert:
 
 - Escalate to SRE + the engineer who last touched `backend/normalization_engine.py` per `git log`.
 - Post to the `#ops` channel (or equivalent) with: incident start time, divergence count, fixture names, commits under suspicion, diagnosis steps already run.
-- If release cuts are in-flight, notify the PM — SLO-5 policy blocks the next cut until the canary is green.
+- If release cuts are in-flight, notify the PM: SLO-5 policy blocks the next cut until the canary is green.
 
 ## Post-incident
 
 - [ ] Cross-reference the fixing PR in the canary GH issue; close the issue once the next canary run is green.
-- [ ] Add the failing input to `unicode_fixtures.py` with `origin=canary-YYYY-MM-DD` (mandatory — see Resolution step 3).
+- [ ] Add the failing input to `unicode_fixtures.py` with `origin=canary-YYYY-MM-DD` (mandatory, see Resolution step 3).
 - [ ] If the root cause was a class of bug the canary cannot catch (e.g., a divergence that only appears under load), file a bead for a fuzz / load variant.
 - [ ] If this is the second SLO-5 breach within 30 days, schedule a blameless postmortem (`/postmortem` skill) per the SLO-5 error-budget policy.
 - [ ] If the runbook was unclear or missing a step, edit this file and reference the incident in the update commit.
@@ -170,4 +170,4 @@ If resolution is not complete within **4 hours** of the initial alert:
 - Parity tests (same contract, different cadence): `backend/tests/unit/test_normalization_parity.py`
 - Unified-policy implementation: `backend/normalization_engine.py` (`NormalizationPolicy`)
 - Observability wiring (metrics + decision log): `backend/observability.py` (`record_normalization_decision`, `NORMALIZATION_DECISION_LOGGER`)
-- Epic: bd-eio04 (Normalization parity) — wave 1 closed GH #104, wave 2 added the observability layer this runbook protects.
+- Epic: bd-eio04 (Normalization parity): wave 1 closed GH #104, wave 2 added the observability layer this runbook protects.

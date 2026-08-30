@@ -2,11 +2,21 @@ import { useState, useMemo } from 'react';
 import type { Channel, Logo, MergeChannelsRequest } from '../types';
 import { CustomSelect, type SelectOption } from './CustomSelect';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
+import { IrreversibleActionNotice } from './IrreversibleActionNotice';
+import { parseChannelNumberInput } from '../utils/channelNumber';
 import * as api from '../services/api';
 import './ModalBase.css';
 import './MergeChannelsModal.css';
 
 export interface MergeChannelsModalProps {
+  /**
+   * True when the operator opened this from Edit Mode's selection toolbar.
+   * Merge is one of the two operations Edit Mode cannot stage (bead
+   * enhancedchannelmanager-kz089), so inside the mode it has to say so before
+   * it will run. Outside the mode there is no staging promise to correct.
+   */
+  isEditMode?: boolean;
   channels: Channel[];
   logos: Logo[];
   epgData: { id: number; tvg_id: string; name: string; icon_url: string | null; epg_source: number }[];
@@ -19,6 +29,7 @@ export interface MergeChannelsModalProps {
 }
 
 export function MergeChannelsModal({
+  isEditMode = false,
   channels,
   logos,
   epgData,
@@ -29,19 +40,23 @@ export function MergeChannelsModal({
   onClose,
   onMerged,
 }: MergeChannelsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   // Default values from the first selected channel
   const first = channels[0];
 
   const [name, setName] = useState(first.name);
-  const [channelNumber, setChannelNumber] = useState<string>(
-    String(
-      Math.min(
-        ...channels
-          .map((c) => c.channel_number)
-          .filter((n): n is number => n !== null)
-      ) || ''
-    )
-  );
+  // Ticked before Merge will run inside Edit Mode (bead …-kz089).
+  const [irreversibleAcknowledged, setIrreversibleAcknowledged] = useState(false);
+  // Lowest assigned number among the sources, or blank when none of them has
+  // one. `Math.min()` over an empty list is `Infinity`, which used to reach the
+  // box as the literal text "Infinity" and then the API as a non-finite number
+  // (bead enhancedchannelmanager-ic884.1).
+  const [channelNumber, setChannelNumber] = useState<string>(() => {
+    const assigned = channels
+      .map((c) => c.channel_number)
+      .filter((n): n is number => n !== null && n !== undefined);
+    return assigned.length ? String(Math.min(...assigned)) : '';
+  });
   const [groupId, setGroupId] = useState<number | null>(first.channel_group_id);
   const [logoId, setLogoId] = useState<number | null>(first.logo_id);
   const [epgDataId, setEpgDataId] = useState<number | null>(first.epg_data_id);
@@ -114,15 +129,35 @@ export function MergeChannelsModal({
       .map((p) => ({ value: String(p.id), label: p.name })),
   ];
 
+  // The merge target's number is held to the canonical contract before the
+  // request is built, so an out-of-contract entry never reaches the API and is
+  // never rounded onto a neighbouring tenth (bead enhancedchannelmanager-ic884.1).
+  const channelNumberParse = parseChannelNumberInput(channelNumber);
+  const channelNumberError = channelNumberParse.ok ? null : channelNumberParse.message;
+  const parsedChannelNumber = channelNumberParse.ok ? channelNumberParse.value : null;
+
   const handleMerge = async () => {
+    // Defence in depth for a destructive, unstageable action (bead
+    // enhancedchannelmanager-kz089, fix round 2). The button is disabled until
+    // the acknowledgement is ticked, and no bypass of that was demonstrated —
+    // but a `disabled` expression is a rendering decision, and this merge
+    // deletes the source channels. The refusal belongs in the handler, where it
+    // holds regardless of what any button says.
+    if (isEditMode && !irreversibleAcknowledged) {
+      setError('Acknowledge that this merge applies immediately before merging.');
+      return;
+    }
+    if (channelNumberError) {
+      setError(channelNumberError);
+      return;
+    }
     setMerging(true);
     setError(null);
     try {
-      const parsedNumber = parseFloat(channelNumber);
       const request: MergeChannelsRequest = {
         source_channel_ids: channels.map((c) => c.id),
         target_name: name.trim(),
-        target_channel_number: !isNaN(parsedNumber) ? parsedNumber : null,
+        target_channel_number: parsedChannelNumber,
         target_channel_group_id: groupId,
         target_logo_id: logoId,
         target_tvg_id: tvgId || null,
@@ -139,10 +174,10 @@ export function MergeChannelsModal({
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg merge-channels-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg merge-channels-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Merge {channels.length} Channels</h2>
+          <h2 id={titleId}>Merge {channels.length} Channels</h2>
           <button className="modal-close-btn" onClick={onClose} title="Close" aria-label="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
@@ -191,7 +226,13 @@ export function MergeChannelsModal({
               value={channelNumber}
               onChange={(e) => setChannelNumber(e.target.value)}
               placeholder="123"
+              aria-invalid={channelNumberError ? true : undefined}
             />
+            {channelNumberError && (
+              <span className="field-error" role="alert">
+                {channelNumberError}
+              </span>
+            )}
           </div>
 
           {/* Group selector */}
@@ -303,13 +344,21 @@ export function MergeChannelsModal({
         </div>
 
         <div className="modal-footer">
+          {isEditMode && (
+            <IrreversibleActionNotice
+              what="This merge"
+              consequence={`The ${channels.length} source channels are deleted once their streams have moved.`}
+              acknowledged={irreversibleAcknowledged}
+              onAcknowledgedChange={setIrreversibleAcknowledged}
+            />
+          )}
           <button className="modal-btn modal-btn-secondary" onClick={onClose}>
             Cancel
           </button>
           <button
             className="modal-btn modal-btn-primary"
             onClick={handleMerge}
-            disabled={merging || !name.trim()}
+            disabled={merging || !name.trim() || !!channelNumberError || (isEditMode && !irreversibleAcknowledged)}
           >
             {merging ? 'Merging...' : `Merge ${channels.length} Channels`}
           </button>

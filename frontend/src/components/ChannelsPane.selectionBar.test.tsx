@@ -13,9 +13,9 @@
  */
 import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ChannelsPane } from './ChannelsPane';
+import { ChannelsPane, PaneToolbarMenu } from './ChannelsPane';
 import { NotificationProvider } from '../contexts/NotificationContext';
 import { tabUntil } from '../test/utils/keyboardNav';
 import type { Channel, ChannelGroup, ChannelListFilterSettings } from '../types';
@@ -61,9 +61,11 @@ const groups: ChannelGroup[] = [
 function renderPane({
   isEditMode = true,
   selectedChannelIds = new Set<number>(),
+  paneOverrides = {},
 }: {
   isEditMode?: boolean;
   selectedChannelIds?: Set<number>;
+  paneOverrides?: Partial<React.ComponentProps<typeof ChannelsPane>>;
 } = {}) {
   const channels = [makeChannel(1, 'Alpha'), makeChannel(2, 'Beta')];
   return render(
@@ -92,12 +94,36 @@ function renderPane({
         onClearChannelSelection={vi.fn()}
         channelListFilters={makeFilters()}
         onChannelListFiltersChange={vi.fn()}
+        {...paneOverrides}
       />
     </NotificationProvider>
   );
 }
 
 describe('ChannelsPane selection action bar integration', () => {
+  it('keeps group reorder affordances out of normal mode and uses the approved accessible Edit Mode icon', () => {
+    const groupedChannels = [
+      { ...makeChannel(1, 'Alpha'), channel_group_id: 10 },
+      { ...makeChannel(2, 'Beta'), channel_group_id: 10 },
+    ];
+    const normal = renderPane({
+      isEditMode: false,
+      paneOverrides: { channels: groupedChannels, selectedGroups: [10] },
+    });
+    expect(normal.container.querySelector('.group-drag-handle')).not.toBeInTheDocument();
+    normal.unmount();
+
+    const edit = renderPane({
+      isEditMode: true,
+      paneOverrides: { channels: groupedChannels, selectedGroups: [10] },
+    });
+    const handle = edit.container.querySelector('.group-drag-handle');
+    expect(handle).toHaveAttribute('aria-label', 'Drag channel group News to reorder');
+    expect(handle).toHaveAttribute('title', 'Drag channel group News to reorder');
+    expect(handle?.querySelector('.material-icons')).toHaveTextContent('drag_indicator');
+    expect(handle?.querySelector('.material-icons')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('renders the floating bar when channels are selected in edit mode', () => {
     renderPane({ selectedChannelIds: new Set([1, 2]) });
 
@@ -159,6 +185,79 @@ describe('ChannelsPane selection action bar integration', () => {
     expect(labels.some((l) => l.includes('Normalize Names'))).toBe(false);
     expect(labels.some((l) => l.includes('Enable in Profile'))).toBe(false);
     expect(labels.some((l) => l.includes('Disable in Profile'))).toBe(false);
+  });
+
+  it('exposes every Edit Mode pane action to roving keyboard navigation, including the sort submenu', async () => {
+    const user = userEvent.setup();
+    renderPane({ selectedChannelIds: new Set([1]) });
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+
+    const menu = screen.getByRole('menu', { name: 'Channel pane actions' });
+    const expected = [
+      'Channel Profiles', 'Hidden Groups', 'Sort All Streams',
+      'Renumber All Groups', 'CSV Template', 'Export CSV', 'Import CSV',
+    ];
+    for (const name of expected) {
+      const item = within(menu).getByRole('menuitem', { name });
+      expect(item.querySelector('.material-icons')).toHaveAttribute('aria-hidden', 'true');
+    }
+    expect(within(menu).getAllByRole('menuitem')).toHaveLength(expected.length);
+    expect(within(menu).getByRole('menuitem', { name: 'Channel Profiles' })).toHaveFocus();
+    expect(within(menu).getByRole('menuitem', { name: 'Channel Profiles' })).toHaveAttribute('tabindex', '0');
+    expect(within(menu).getByRole('menuitem', { name: 'Hidden Groups' })).toHaveAttribute('tabindex', '-1');
+
+    await user.keyboard('{ArrowDown}{ArrowDown}');
+    const sort = within(menu).getByRole('menuitem', { name: 'Sort All Streams' });
+    expect(sort).toHaveFocus();
+    await user.keyboard('{ArrowRight}');
+    const submenu = screen.getByRole('menu', { name: 'Sort all streams' });
+    expect(within(submenu).getByRole('menuitem', { name: 'Smart Sort' })).toHaveFocus();
+    expect(within(submenu).getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
+      'auto_awesomeSmart Sort', 'aspect_ratioBy Resolution', 'speedBy Bitrate', 'slow_motion_videoBy Framerate',
+    ]);
+    await user.keyboard('{ArrowLeft}');
+    expect(sort).toHaveFocus();
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('menu', { name: 'Channel pane actions' })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('returns focus after background actions but preserves focus transferred by modal launchers', async () => {
+    const user = userEvent.setup();
+    const onExportCSV = vi.fn();
+    const onShowHiddenGroups = vi.fn(() => {
+      const control = document.createElement('button');
+      control.textContent = 'Hidden groups dialog control';
+      document.body.append(control);
+      control.focus();
+    });
+    render(
+      <PaneToolbarMenu
+        isEditMode
+        onExportCSV={onExportCSV}
+        onDownloadTemplate={vi.fn()}
+        onOpenProfiles={vi.fn()}
+        onShowHiddenGroups={onShowHiddenGroups}
+        onImportCSV={vi.fn()}
+        onSortAllByMode={vi.fn()}
+        bulkSortingByQuality={false}
+        onRenumberAllGroups={vi.fn()}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: 'More actions' });
+
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: 'Export CSV' }));
+    expect(onExportCSV).toHaveBeenCalledOnce();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: 'Hidden Groups' }));
+    expect(onShowHiddenGroups).toHaveBeenCalledOnce();
+    expect(screen.getByText('Hidden groups dialog control')).toHaveFocus();
+    screen.getByText('Hidden groups dialog control').remove();
   });
 });
 

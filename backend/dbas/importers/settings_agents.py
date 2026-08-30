@@ -1,9 +1,15 @@
-"""The settings/agents DBAS restore importer (Phase-2 bulk importer).
+"""The settings/agents/DVR DBAS restore importer (Phase-2 bulk importer).
 
-Bead ``enhancedchannelmanager-0i2vt.13``. Restores FOUR net-new categories that
-split into TWO shapes. PLUGINS are EXCLUDED (ADR-012 D10 — RCE-vs-config
-unresolved). USERS are restored by a SEPARATE crown-jewel importer
+Bead ``enhancedchannelmanager-0i2vt.13``, extended by ``…-ciabe``. Restores FIVE
+categories that split into TWO shapes. PLUGINS are EXCLUDED (ADR-012 D10 —
+RCE-vs-config unresolved). USERS are restored by a SEPARATE crown-jewel importer
 (``importers/users.py`` — bead ``…-l1p4p``); they are NOT touched here.
+
+The whole DVR surface lives in this ONE module — rules and the recording
+instances alike — because they share every helper that decides identity,
+payload shape and failure classification. Splitting the recordings half into its
+own file would have meant either duplicating those helpers or importing another
+module's private names across a seam.
 
 ----------------------------------------------------------------------------
 TWO SHAPES
@@ -19,19 +25,49 @@ ENTITY categories — create rows, remappable, ledger-tracked (mirror
   ``ALREADY_EXISTS_IDENTICAL`` and remapped to the existing destination id so a
   DVR rule (or channel) that references it still resolves.
 
-* **dvr_rules** (:func:`import_dvr_rules`) -> ``EntityType.DVR_RULE`` (a.k.a.
-  recording / series rules). Identity by name/title. Its ``channel`` FK is
-  remapped through the IdRemapTable; an unresolvable FK is failed
-  ``DEPENDENCY_UNRESOLVED`` (or skipped ``DEPENDENCY_UNRESOLVED`` on dry-run) and
-  never sent upstream with a dangling source id.
+* **dvr_rules** (:func:`import_dvr_rules`) -> ``EntityType.DVR_RULE``. The
+  upstream resource is Dispatcharr's RECURRING RECORDING RULE
+  (``/api/channels/recurring-rules/`` — channel + weekly schedule); the category
+  was retargeted there by ``…-lsa0s`` after its original ``/api/dvr/rules/``
+  guess turned out to have no route at all. Identity is by name/title with a
+  SCHEDULE fallback for unnamed rules (``name`` is optional upstream). Its
+  ``channel`` FK is remapped through the IdRemapTable; an unresolvable FK is
+  failed ``DEPENDENCY_UNRESOLVED`` — identically on apply and on dry-run, per the
+  y6zg6 preview-parity rule — and never sent upstream with a dangling source id.
+  Dispatcharr's SERIES rules are deliberately out of this category: they live
+  inside the ``dvr_settings`` core-setting the ``core_settings`` category
+  already carries.
+
+* **upcoming_recordings** (:func:`import_upcoming_recordings`) ->
+  ``EntityType.UPCOMING_RECORDING`` (bead ``…-ciabe``). The recording INSTANCES
+  (``/api/channels/recordings/``) that have not started yet — the half of the DVR
+  surface that used to be excluded wholesale, leaving a replica with no scheduled
+  recordings at all. Identity is (destination channel, start instant, end
+  instant); its ``channel`` FK remaps through the same namespace the DVR rule's
+  does, and an unresolvable one is recorded through
+  :meth:`RestoreReport.record_dependency_unresolved` so the blocked entity is
+  NAMED and COUNTED rather than filed as a no-op skip. A row whose absolute start
+  has passed since the backup was taken is skipped ``SCHEDULE_ALREADY_PAST`` —
+  the destination refuses a past-dated create anyway. COMPLETED recordings never
+  reach this importer: they are not archived at all, and the BACKUP producer
+  reports that exclusion to the operator (ADR-013).
 
 SETTINGS categories — APPLY key/value config; NOT entity-create, NOT
 id-remapped, NOT ledgered as creates:
 
 * **core_settings** (:func:`import_core_settings`) — apply the archived core/
-  global settings to the destination via PER-KEY PATCH
-  (``client.update_core_setting``). Reported as ``updated`` / ``skipped`` on the
-  ``EntityType.SETTINGS`` report category — never ``created``, never ledgered.
+  global settings to the destination one row at a time
+  (``client.update_core_setting``). The archive carries key->value only, and
+  Dispatcharr's detail route is keyed by an integer pk, so each key is first
+  resolved to the DESTINATION's row id by the run-scoped
+  :class:`CoreSettingIdResolver` — one ``GET /api/core/settings/`` per run,
+  apply OR dry-run (bead ``…-q6xjl``; the previous key-string URL 404'd on every
+  key). A key that resolves is ``updated`` (or ``would_update`` on dry-run); a
+  key with no row on the destination is ``failed`` DEPENDENCY_UNRESOLVED on
+  BOTH apply and dry-run (bead ``…-y6zg6``) — the preview resolves against the
+  SAME destination the apply would, so a dry-run cannot certify WOULD-UPDATE for
+  a key the apply then fails on. Reported on the ``EntityType.SETTINGS`` report
+  category — never ``created``, never ledgered.
 * **comskip** (:func:`import_comskip`) — same shape; a comskip config blob applied
   conservatively.
 
@@ -77,7 +113,9 @@ This module imports the contracts module READ-ONLY.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
+from dbas.archive_keys import as_instant
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -96,6 +134,82 @@ logger = logging.getLogger(__name__)
 # applied (updated/skipped), never created and never ledgered — this is a
 # report-only key, not a remap/ledger namespace.
 SETTINGS_CATEGORY_TYPE = EntityType.SETTINGS
+
+
+class CoreSettingNotFoundError(LookupError):
+    """A settings key in the archive has no row on the DESTINATION instance.
+
+    Carries NO payload deliberately: the only caller
+    (:func:`_apply_settings_blob`) already holds the key name and builds the
+    operator-facing message from its own variable, so the key name can never
+    reach a logging sink via this exception's text.
+    """
+
+
+class CoreSettingsUnavailableError(RuntimeError):
+    """The destination's core-settings list could not be read at all.
+
+    Distinct from :class:`CoreSettingNotFoundError`: nothing about the archive is
+    wrong, the destination just did not answer. Every key in the run fails
+    ``UPSTREAM_API_ERROR``. Payload-free for the same reason.
+    """
+
+
+class CoreSettingIdResolver:
+    """Resolve a core-setting KEY to the destination's row id, fetching ONCE.
+
+    Dispatcharr's core-settings detail route is ``/api/core/settings/{id}/`` with
+    an integer pk — a key-string URL matches no route and 404s
+    (enhancedchannelmanager-q6xjl: 7/7 settings failed exactly this way on a
+    same-instance round-trip). Row ids are per-instance and are NOT carried in a
+    backup artifact (the producer flattens core settings to key->value), so they
+    must be resolved against the destination at apply time.
+
+    One instance is shared for the whole apply run — core_settings and comskip
+    live in the SAME Dispatcharr settings namespace, so both blobs resolve
+    against a single ``GET /api/core/settings/``. The fetch is LAZY (a dry-run or
+    an opted-out category costs no request) and its outcome is memoized including
+    the failure case, so a dead destination cannot turn into a per-key fetch
+    storm.
+    """
+
+    def __init__(self, client: DispatcharrClient):
+        self._client = client
+        self._id_map: dict | None = None
+        self._fetch_failed = False
+
+    async def resolve(self, setting_name: str) -> int:
+        """Return the destination row id for ``setting_name``.
+
+        Raises:
+            CoreSettingsUnavailableError: the settings list could not be read.
+            CoreSettingNotFoundError: the destination has no row for this key.
+        """
+        if self._id_map is None and not self._fetch_failed:
+            try:
+                self._id_map = await self._client.get_core_setting_id_map()
+            except Exception as exc:
+                self._fetch_failed = True
+                # Exception TYPE name only -- never the exception's message text
+                # (no-key-names/no-URLs hygiene: the message could echo a
+                # request URL or upstream body). The type alone is enough for an
+                # operator to distinguish timeout vs 5xx vs unreachable at 3 AM.
+                logger.warning(
+                    "[DBAS-SETTINGS] Could not read the destination core-settings "
+                    "list (%s); no setting can be resolved this run.",
+                    type(exc).__name__,
+                )
+        if self._fetch_failed:
+            # Payload-free and unchained: an upstream error's text can echo the
+            # request URL or a response body carrying setting VALUES.
+            raise CoreSettingsUnavailableError(
+                "Destination core-settings list unavailable"
+            ) from None
+
+        setting_id = self._id_map.get(setting_name)
+        if not isinstance(setting_id, int):
+            raise CoreSettingNotFoundError from None
+        return setting_id
 
 # Archive-source identifiers the destination assigns itself, never forwarded.
 _SOURCE_ID_KEYS = frozenset({"id", "pk"})
@@ -311,6 +425,13 @@ async def import_user_agents(
 
         if is_dry_run:
             cat.would_create += 1
+            # Provisional remap so a stream profile whose ``user_agent`` FK points
+            # at this would-be-created agent resolves on the PREVIEW exactly as it
+            # will on apply (bead …-lvfwd; same anti-drift device as
+            # ``importers/groups_profiles``). The source id doubles as a stable
+            # provisional destination id — a dry-run sends nothing upstream.
+            if source_id is not None:
+                remap.add(EntityType.USER_AGENT, int(source_id), int(source_id))
             continue
 
         payload = _build_create_payload(rec)
@@ -342,11 +463,123 @@ async def import_user_agents(
 
 # ===========================================================================
 # DVR RULES (entity, FK remap)
+#
+# Upstream resource: Dispatcharr's recurring-recording-rules ViewSet
+# (``dispatcharr_client._DVR_RECURRING_RULES_PATH``). A rule is a channel + a
+# weekly schedule; ``name`` is OPTIONAL upstream, which is why identity below is
+# name-first with a schedule fallback (enhancedchannelmanager-lsa0s).
 # ===========================================================================
 
 # FK fields on a DVR rule that point at another restored entity and must be
 # remapped before the rule is sent upstream.
 _DVR_FK_FIELDS = (("channel", EntityType.CHANNEL),)
+
+# The date/time fields that make an UNNAMED DVR rule what it is. Dispatcharr's
+# RecurringRecordingRule leaves ``name`` blank-able (lsa0s recorded fixture:
+# ``name`` is not in the schema's ``required`` set), so a name-only identity
+# would re-create every unnamed rule on every restore of the same artifact. Two
+# rules on the same destination channel, for the same weekdays, over the same
+# clock window and the same date range, in the same ``enabled`` state, produce
+# the same recordings — treating those as the same rule is what keeps a repeated
+# restore idempotent.
+#
+# ``enabled`` is part of the key but not of this tuple: it needs its own
+# normalization (see :func:`_norm_enabled`) rather than the stringify below, and
+# it is NOT cosmetic — it decides whether the rule records at all, so an archived
+# ENABLED rule must never be satisfied by a disabled one already sitting in the
+# same slot on the destination (PR #768 review, Warn 1).
+_DVR_SCHEDULE_FIELDS = ("start_time", "end_time", "start_date", "end_date")
+
+
+def _as_int(value) -> int | None:
+    """Coerce an archive/upstream id to ``int``, or ``None`` when it is not one.
+
+    Mirrors the tolerance of :func:`_remap_dvr_fks` (which accepts a stringified
+    id) so the identity lookup and the FK rewrite agree on what a usable id is.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _norm_enabled(value) -> bool:
+    """Normalize a DVR rule's ``enabled`` flag for the identity key.
+
+    An ABSENT flag normalizes to ``True``: that is the upstream model default, so
+    it is also what a create built from such a record would end up with — the key
+    therefore compares the state the rule would actually have, not the state the
+    archive happened to serialize.
+    """
+    if value is None:
+        return True
+    return bool(value)
+
+
+def _norm_days_of_week(value) -> tuple:
+    """Order-insensitive, duplicate-free weekday key; ``()`` when unusable.
+
+    Dispatcharr's serializer stores ``sorted(set(...))`` of ints, but an archive
+    row is whatever the source instance serialized at capture time, so the key
+    normalizes rather than trusting the order.
+    """
+    if not isinstance(value, list):
+        return ()
+    days = set()
+    for entry in value:
+        try:
+            days.add(int(entry))
+        except (TypeError, ValueError):
+            continue
+    return tuple(sorted(days))
+
+
+def _dvr_schedule_key(record: dict, channel_id) -> tuple | None:
+    """Identity key for an unnamed DVR rule, or None when it cannot be formed.
+
+    ``channel_id`` must ALWAYS be a DESTINATION channel id — the archive side
+    passes its remapped id, the existing-destination side passes the id the
+    destination already reports. Without a channel there is nothing to be
+    identical to, so the caller falls back to creating the rule.
+
+    The key spans the destination channel, the weekdays, the ``enabled`` state
+    and the date/time fields in :data:`_DVR_SCHEDULE_FIELDS` — everything that
+    decides WHETHER and WHEN the rule records.
+    """
+    if channel_id is None:
+        return None
+    try:
+        channel_key = int(channel_id)
+    except (TypeError, ValueError):
+        return None
+    schedule = tuple(
+        str(record.get(field)) if record.get(field) is not None else None
+        for field in _DVR_SCHEDULE_FIELDS
+    )
+    return (
+        channel_key,
+        _norm_days_of_week(record.get("days_of_week")),
+        _norm_enabled(record.get("enabled")),
+    ) + schedule
+
+
+def _index_existing_dvr_by_schedule(records: list[dict]) -> dict[tuple, dict]:
+    """Index destination DVR rules by their schedule key (see above).
+
+    NAMED destination rules are indexed too: a name is a label, not a behaviour,
+    so an unnamed archive rule that matches a named destination rule's schedule
+    is still the same recording and must not be duplicated.
+    """
+    index: dict[tuple, dict] = {}
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        key = _dvr_schedule_key(rec, rec.get("channel"))
+        if key is not None and key not in index:
+            index[key] = rec
+    return index
 
 
 def _remap_dvr_fks(
@@ -385,10 +618,22 @@ async def import_dvr_rules(
 ) -> None:
     """Restore the DVR_RULE category: remap FKs, create, remap + ledger.
 
-    Identity is by name/title. An unresolvable FK (e.g. ``channel``) fails the
-    rule ``DEPENDENCY_UNRESOLVED`` (skip ``DEPENDENCY_UNRESOLVED`` on dry-run) and
-    never sends a dangling source id upstream. A name collision is skipped
-    ``ALREADY_EXISTS_IDENTICAL`` and remapped. Opt-in via ``selected``.
+    Identity is by name/title, falling back to the rule's SCHEDULE
+    (:func:`_dvr_schedule_key`) when the archived rule has no name — Dispatcharr
+    leaves ``name`` optional on a recurring recording rule, and a name-only
+    identity would duplicate every unnamed rule each time the same artifact is
+    restored (enhancedchannelmanager-lsa0s). A collision is skipped
+    ``ALREADY_EXISTS_IDENTICAL`` and remapped to the existing destination id.
+
+    An unresolvable FK (e.g. ``channel``) fails the rule
+    ``DEPENDENCY_UNRESOLVED`` and never sends a dangling source id upstream. That
+    outcome is reported IDENTICALLY on dry-run and on apply — same reason, same
+    message — because whether the FK resolves is a fact about the run's remap
+    state, not about the mode: the channels importer registers a provisional
+    remap for every would-create channel, so a dry-run resolves exactly what the
+    apply would. (Previously the dry-run reported a would_skip while the apply
+    reported a failure, which is the preview-lies defect y6zg6 closed for the
+    settings category.) Opt-in via ``selected``.
     """
     cat = report.category(EntityType.DVR_RULE)
 
@@ -408,14 +653,38 @@ async def import_dvr_rules(
     except Exception as exc:
         logger.warning("[DBAS-SETTINGS] Could not list existing DVR rules: %s", exc)
         existing = []
+    # Both indexes are a SNAPSHOT of the destination taken once, before the loop,
+    # and are never updated as this run creates rows — the same pre-existing
+    # limitation ``import_user_agents`` has. Two consequences, neither new here
+    # (PR #768 review nits 3/4): two identical rules within ONE archive are both
+    # created, and a rule RENAMED on the destination is not matched by name (the
+    # schedule fallback only runs for archive rules that have no name of their
+    # own). Both duplicate rather than clobber, which is the safe direction.
     existing_by_name = _index_existing_by_name(existing)
+    existing_by_schedule = _index_existing_dvr_by_schedule(existing)
 
     for rec in archive_dvr_rules:
         label = _label(rec, "name", "title")
         source_id = rec.get("id")
         name_key = _norm_name(rec.get("name")) or _norm_name(rec.get("title"))
 
-        existing_rec = existing_by_name.get(name_key) if name_key else None
+        if name_key:
+            existing_rec = existing_by_name.get(name_key)
+        else:
+            # Unnamed: match on the schedule, keyed by the DESTINATION channel
+            # the rule would be created against. An unresolvable channel yields
+            # no key, so the rule falls through to the FK check below and is
+            # reported DEPENDENCY_UNRESOLVED rather than guessed at.
+            source_channel = _as_int(rec.get("channel"))
+            dest_channel = (
+                remap.resolve(EntityType.CHANNEL, source_channel)
+                if source_channel is not None
+                else None
+            )
+            schedule_key = _dvr_schedule_key(rec, dest_channel)
+            existing_rec = (
+                existing_by_schedule.get(schedule_key) if schedule_key else None
+            )
         if existing_rec is not None:
             _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
             existing_id = existing_rec.get("id")
@@ -427,20 +696,22 @@ async def import_dvr_rules(
         payload = _build_create_payload(rec)
         unresolved_fk = _remap_dvr_fks(payload, remap)
         if unresolved_fk is not None:
-            if is_dry_run:
-                _skip(cat, SkipReason.DEPENDENCY_UNRESOLVED, label, source_id, is_dry_run)
-            else:
-                cat.failed += 1
-                cat.failure_details.append(
-                    FailureDetail(
-                        reason=FailureReason.DEPENDENCY_UNRESOLVED,
-                        label=label,
-                        message=f"DVR rule references an unresolved {unresolved_fk}; not restored.",
-                        source_export_id=source_id,
-                    )
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                    label=label,
+                    message=(
+                        f"DVR rule references a '{unresolved_fk}' that is not "
+                        "present on the destination Dispatcharr; nothing was "
+                        "created for it."
+                    ),
+                    source_export_id=source_id,
                 )
+            )
             logger.warning(
-                "[DBAS-SETTINGS] DVR rule '%s' has unresolved FK '%s'; skipped.", label, unresolved_fk
+                "[DBAS-SETTINGS] DVR rule '%s' has unresolved FK '%s'; not created.",
+                label, unresolved_fk
             )
             continue
 
@@ -475,6 +746,269 @@ async def import_dvr_rules(
 
 
 # ===========================================================================
+# UPCOMING RECORDINGS (…-ciabe) — the DVR category's instance half
+# ===========================================================================
+
+# Read-only / server-assigned keys a recording GET echoes back that must never
+# be sent on a create. ``task_id`` is Dispatcharr's own celery handle
+# (``dvr-recording-<id>``) and is ``readOnly`` in the recorded 0.29.0 schema;
+# forwarding the source's would name a task that does not exist on the
+# destination.
+_RECORDING_NON_CREATE_KEYS = frozenset({"task_id"})
+
+
+def _recording_identity(record: dict, channel_id) -> tuple | None:
+    """Identity key for one recording, or None when it cannot be formed.
+
+    ``channel_id`` must ALWAYS be a DESTINATION channel id — the archive side
+    passes its remapped id, the existing-destination side passes the id the
+    destination already reports. Without a channel there is nothing to be
+    identical to, so the caller falls back to the FK check that names the
+    unresolved dependency.
+
+    THE KEY IS (channel, start instant, end instant) AND NOTHING ELSE, and the
+    exclusions are the load-bearing part:
+
+    * ``custom_properties`` is NOT in it. The destination REWRITES that blob of
+      its own accord — a recording created with ``custom_properties: {}`` came
+      back from the very next GET carrying ``{"poster_logo_id": 316}`` that
+      Dispatcharr's artwork pass had written (measured on 0.29.0, recorded in
+      ``tests/fixtures/dispatcharr_recordings_recorded.json``). Including it
+      would make every restore after the first duplicate every recording.
+    * The timestamps are compared as INSTANTS, never as strings, for the same
+      measured reason: the server re-serialized a second-precision ``start_time``
+      to microsecond precision on the way back out.
+    * ``id`` is not in it either — it is the SOURCE instance's row id and means
+      nothing on the destination.
+    """
+    if channel_id is None:
+        return None
+    try:
+        channel_key = int(channel_id)
+    except (TypeError, ValueError):
+        return None
+    start = as_instant(record.get("start_time"))
+    end = as_instant(record.get("end_time"))
+    if start is None:
+        return None
+    return (channel_key, start, end)
+
+
+def _index_existing_recordings(records: list[dict]) -> dict[tuple, dict]:
+    """Index destination recordings by :func:`_recording_identity`."""
+    index: dict[tuple, dict] = {}
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        key = _recording_identity(rec, rec.get("channel"))
+        if key is not None and key not in index:
+            index[key] = rec
+    return index
+
+
+def _recording_label(record: dict) -> str:
+    """Operator-facing identifier for a recording — never a secret.
+
+    A recording has no name of its own. Its programme title, when the source had
+    one, lives in ``custom_properties.program.title``; otherwise the start time
+    is the only thing that distinguishes it to a human reading the report.
+    """
+    props = record.get("custom_properties")
+    if isinstance(props, dict):
+        program = props.get("program")
+        if isinstance(program, dict):
+            title = program.get("title")
+            if title:
+                return str(title)
+    start = record.get("start_time")
+    return str(start) if start else "<unknown>"
+
+
+def _build_recording_payload(archive_record: dict) -> dict:
+    """Strip source ids and server-assigned fields from a recording create."""
+    return {
+        k: v
+        for k, v in archive_record.items()
+        if k not in _DROPPED_CREATE_KEYS and k not in _RECORDING_NON_CREATE_KEYS
+    }
+
+
+async def import_upcoming_recordings(
+    *,
+    archive_recordings: list[dict],
+    client: DispatcharrClient,
+    selected: bool,
+    report: RestoreReport,
+    ledger: RollbackLedger,
+    remap: IdRemapTable,
+    is_dry_run: bool = False,
+) -> None:
+    """Restore the UPCOMING_RECORDING category (bead …-ciabe).
+
+    THE INVARIANT, stated as a property rather than as the cases below::
+
+        Never create a recording the destination already holds, never create one
+        whose scheduled start has already passed, and never send a source
+        instance's id upstream — an unresolvable reference is NAMED and COUNTED
+        rather than silently dropped.
+
+    Three consequences, in the order the loop reaches them:
+
+    STALENESS IS CHECKED AGAIN AT RESTORE TIME, not only at backup time. The
+    archive pins ABSOLUTE timestamps, and the time between the backup and the
+    restore is exactly the interval over which "upcoming" stops being true — a
+    week-old artifact can carry nothing but stale rows. The row is skipped
+    :attr:`~dbas.restore_contracts.SkipReason.SCHEDULE_ALREADY_PAST`, which is a
+    faithful absence and never a delivery shortfall: the destination REFUSES a
+    past-dated create outright (``400 "End time must be in the future."``,
+    measured on 0.29.0), so this is not ECM declining to deliver something the
+    destination could have held. ECM's gate is on ``start_time`` where upstream's
+    is on ``end_time``, so it is strictly the stricter of the two and can never
+    hand upstream a create that validator would reject.
+
+    THE ``channel`` FK RESOLVES THROUGH THE REMAP or the recording is not
+    created. Recorded through :meth:`RestoreReport.record_dependency_unresolved`
+    (bead …-4mkoe) rather than a bespoke counter, so the per-entity reason, the
+    category count and ``entities_blocked_by_dependency`` are three views of ONE
+    decision instead of three that can drift. That recorder is also what
+    distinguishes the two opposite facts an unresolved FK can be — and a
+    recording is a first-class entity the operator selected, so an unresolvable
+    channel is a genuine shortfall in every case it can reach here.
+
+    IDENTITY IS (channel, start, end) — see :func:`_recording_identity` for the
+    two measured reasons ``custom_properties`` and string timestamps are excluded
+    from it. A collision is skipped ``ALREADY_EXISTS_IDENTICAL``, so restoring
+    the same artifact twice schedules each recording once.
+
+    Like its DVR-rule sibling the destination index is a SNAPSHOT taken once
+    before the loop, so two identical recordings within ONE archive are both
+    created — duplicating rather than clobbering, which is the safe direction.
+
+    Every outcome above is reported IDENTICALLY on dry-run and on apply (the
+    y6zg6 preview-parity rule): staleness is a fact about the clock and FK
+    resolution is a fact about the run's remap state, and neither depends on
+    whether this run is going to write. Opt-in via ``selected``.
+    """
+    cat = report.category(EntityType.UPCOMING_RECORDING)
+
+    if not selected:
+        logger.info("[DBAS-SETTINGS] Upcoming recordings not selected; skipping category.")
+        for rec in archive_recordings:
+            _skip(
+                cat,
+                SkipReason.EXCLUDED_BY_OPERATOR,
+                _recording_label(rec),
+                rec.get("id"),
+                is_dry_run,
+            )
+        return
+
+    logger.info(
+        "[DBAS-SETTINGS] Restoring upcoming recordings (dry_run=%s); %d archived.",
+        is_dry_run,
+        len(archive_recordings),
+    )
+    try:
+        existing = await client.get_recordings()
+    except Exception as exc:
+        logger.warning("[DBAS-SETTINGS] Could not list existing recordings: %s", exc)
+        existing = []
+    existing_by_identity = _index_existing_recordings(existing)
+
+    now = datetime.now(timezone.utc)
+
+    for rec in archive_recordings:
+        label = _recording_label(rec)
+        source_id = rec.get("id")
+
+        start = as_instant(rec.get("start_time"))
+        if start is None or start <= now:
+            _skip(cat, SkipReason.SCHEDULE_ALREADY_PAST, label, source_id, is_dry_run)
+            logger.info(
+                "[DBAS-SETTINGS] Recording '%s' is no longer upcoming; not scheduled.",
+                label,
+            )
+            continue
+
+        source_channel = _as_int(rec.get("channel"))
+        dest_channel = (
+            remap.resolve(EntityType.CHANNEL, source_channel)
+            if source_channel is not None
+            else None
+        )
+        if dest_channel is None:
+            reason = report.record_dependency_unresolved(
+                recorded_under=EntityType.UPCOMING_RECORDING,
+                dependency=EntityType.CHANNEL,
+                label=label,
+                remap=remap,
+                is_dry_run=is_dry_run,
+                source_export_id=source_id,
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] Recording '%s' references a channel that is not "
+                "on the destination (%s); nothing was scheduled for it.",
+                label,
+                reason.value,
+            )
+            continue
+
+        identity = _recording_identity(rec, dest_channel)
+        existing_rec = existing_by_identity.get(identity) if identity else None
+        if existing_rec is not None:
+            _skip(cat, SkipReason.ALREADY_EXISTS_IDENTICAL, label, source_id, is_dry_run)
+            existing_id = existing_rec.get("id")
+            if source_id is not None and existing_id is not None:
+                remap.add(
+                    EntityType.UPCOMING_RECORDING, int(source_id), int(existing_id)
+                )
+            logger.info(
+                "[DBAS-SETTINGS] Recording '%s' already scheduled (id=%s); skipped.",
+                label,
+                existing_id,
+            )
+            continue
+
+        payload = _build_recording_payload(rec)
+        payload["channel"] = dest_channel
+
+        if is_dry_run:
+            cat.would_create += 1
+            continue
+
+        try:
+            created = await client.create_recording(payload)
+        except Exception as exc:
+            reason = _failure_reason_for(exc)
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=reason,
+                    label=label,
+                    message=_sanitize_failure(
+                        exc, "Upstream rejected the recording create."
+                    ),
+                    source_export_id=source_id,
+                )
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] Failed to schedule recording '%s': %s",
+                label,
+                reason.value,
+            )
+            continue
+
+        dest_id = created.get("id") if isinstance(created, dict) else None
+        cat.created += 1
+        if dest_id is not None:
+            dest_id = int(dest_id)
+            if source_id is not None:
+                remap.add(EntityType.UPCOMING_RECORDING, int(source_id), dest_id)
+            ledger.record_created(EntityType.UPCOMING_RECORDING, dest_id, label)
+        logger.info("[DBAS-SETTINGS] Scheduled recording '%s' (id=%s).", label, dest_id)
+
+
+# ===========================================================================
 # SETTINGS (core settings + comskip — apply key/value, conservative)
 # ===========================================================================
 
@@ -487,15 +1021,30 @@ async def _apply_settings_blob(
     report: RestoreReport,
     is_dry_run: bool,
     source_label: str,
+    id_resolver: CoreSettingIdResolver,
 ) -> None:
     """Apply a key/value settings blob conservatively (core_settings / comskip).
 
-    Safe keys (:func:`is_safe_setting_key`) are PATCHed per-key. Dangerous keys
-    are skipped (reported by NAME only — never their value). Results land on the
-    ``EntityType.SETTINGS`` report category as ``updated`` / ``skipped`` (or
-    ``would_update`` / ``would_skip`` on dry-run). NEVER ledgered (settings are
-    config, not created entities — rollback of settings is out of scope). NEVER
-    logs/echoes a setting VALUE.
+    Safe keys (:func:`is_safe_setting_key`) are PATCHed one row at a time, at the
+    destination row id ``id_resolver`` resolves for that key. Dangerous keys are
+    skipped (reported by NAME only — never their value). Results land on the
+    ``EntityType.SETTINGS`` report category as ``updated`` / ``skipped`` /
+    ``failed`` on apply — or ``would_update`` / ``would_skip`` on dry-run.
+
+    ``failed`` / ``failure_details`` are populated on BOTH apply AND dry-run
+    (enhancedchannelmanager-y6zg6): whether a key resolves to a destination row
+    id is a FACT about the destination, true regardless of whether this run
+    actually applies, so the dry-run branch resolves each safe key through the
+    SAME ``id_resolver`` the apply branch uses before deciding would-update vs
+    would-fail. There is no separate ``would_fail`` counter — this mirrors the
+    existing convention for per-item conflicts that are facts about the source
+    data (see ``dbas/importers/channels.py``'s ambiguous-null-key collision and
+    ``tasks/dbas_sync.py``'s ``_counts_from_report`` docstring). Before this fix,
+    the dry-run branch never contacted upstream at all and unconditionally
+    reported would_update, which is what let a preview certify "Settings 7 WILL
+    UPDATE / 0 FAILED" for an apply that then failed 7/7 (q6xjl). NEVER ledgered
+    (settings are config, not created entities — rollback of settings is out of
+    scope). NEVER logs/echoes a setting VALUE.
     """
     cat = report.category(SETTINGS_CATEGORY_TYPE)
 
@@ -549,13 +1098,63 @@ async def _apply_settings_blob(
             )
             continue
 
+        # Resolve the DESTINATION row id for this key BEFORE deciding
+        # would-update vs would-fail — the detail route is keyed by integer pk,
+        # and an archive carries no ids (enhancedchannelmanager-q6xjl). This
+        # runs on dry-run too (enhancedchannelmanager-y6zg6): whether the key
+        # resolves is a fact about the destination the preview must surface, not
+        # something only the apply run discovers. The resolver fetches the list
+        # once per run (dry-run OR apply) and serves every later lookup —
+        # including the comskip blob's — from memory.
+        try:
+            setting_id = await id_resolver.resolve(setting_name)
+        except CoreSettingNotFoundError:
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                    label=f"{source_label}:{setting_name}",
+                    message=(
+                        f"Setting key '{setting_name}' is not present on the "
+                        "destination Dispatcharr; nothing was applied for it."
+                    ),
+                    source_export_id=None,
+                )
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] %s setting %s has no row on the destination; "
+                "not applied.",
+                source_label,
+                _safe_key_label(setting_index, setting_name),
+            )
+            continue
+        except Exception:
+            cat.failed += 1
+            cat.failure_details.append(
+                FailureDetail(
+                    reason=FailureReason.UPSTREAM_API_ERROR,
+                    label=f"{source_label}:{setting_name}",
+                    message=(
+                        "Could not read the destination Dispatcharr settings list, "
+                        f"so setting '{setting_name}' could not be resolved/applied."
+                    ),
+                    source_export_id=None,
+                )
+            )
+            logger.warning(
+                "[DBAS-SETTINGS] Could not resolve %s setting %s.",
+                source_label,
+                _safe_key_label(setting_index, setting_name),
+            )
+            continue
+
         if is_dry_run:
             cat.would_update += 1
             continue
 
         try:
-            await client.update_core_setting(setting_name, setting_value)
-        except Exception as exc:
+            await client.update_core_setting(setting_id, setting_value)
+        except Exception:
             cat.failed += 1
             cat.failure_details.append(
                 FailureDetail(
@@ -590,12 +1189,25 @@ async def import_core_settings(
     report: RestoreReport,
     ledger: RollbackLedger,  # accepted for entry-point symmetry; settings NEVER ledger
     is_dry_run: bool = False,
+    id_resolver: CoreSettingIdResolver | None = None,
 ) -> None:
-    """Apply archived core/global settings conservatively (denylist; per-key PATCH).
+    """Apply archived core/global settings conservatively (denylist; per-row PATCH).
 
     See module docstring: dangerous keys are skipped (by name), safe keys applied,
     reported updated/skipped on ``EntityType.SETTINGS``, NEVER created, NEVER
     ledgered (settings rollback is out of scope). NEVER logs a setting value.
+
+    On ``is_dry_run=True`` a safe key is still resolved against the destination
+    (bead ``…-y6zg6``): a key that resolves reports ``would_update``; a key with
+    no destination row reports ``failed`` DEPENDENCY_UNRESOLVED — the SAME
+    reason/wording the apply path uses — so the preview cannot certify
+    WOULD-UPDATE for a key the apply run then fails on.
+
+    Args:
+        id_resolver: The run-scoped key->row-id resolver. Pass the SAME instance
+            used for :func:`import_comskip` so one run (apply OR dry-run) costs
+            one ``GET /api/core/settings/``; omitted, a private one is created
+            (still one GET, just not shared).
     """
     await _apply_settings_blob(
         archive_settings=archive_core_settings,
@@ -604,6 +1216,7 @@ async def import_core_settings(
         report=report,
         is_dry_run=is_dry_run,
         source_label="core_settings",
+        id_resolver=id_resolver or CoreSettingIdResolver(client),
     )
 
 
@@ -615,11 +1228,18 @@ async def import_comskip(
     report: RestoreReport,
     ledger: RollbackLedger,  # accepted for symmetry; comskip settings NEVER ledger
     is_dry_run: bool = False,
+    id_resolver: CoreSettingIdResolver | None = None,
 ) -> None:
     """Apply archived comskip config conservatively — same shape as core settings.
 
-    Dangerous keys skipped (by name), safe keys applied; reported updated/skipped;
-    never created, never ledgered. NEVER logs a setting value.
+    Dangerous keys skipped (by name), safe keys applied; reported updated/skipped
+    on apply, would_update/failed(DEPENDENCY_UNRESOLVED) on dry-run per key
+    resolution (bead ``…-y6zg6`` — see :func:`import_core_settings`); never
+    created, never ledgered. NEVER logs a setting value.
+
+    Comskip config lives in the SAME Dispatcharr core-settings namespace (there is
+    no comskip endpoint), so ``id_resolver`` is the same run-scoped resolver the
+    core_settings blob uses — see :func:`import_core_settings`.
     """
     await _apply_settings_blob(
         archive_settings=archive_comskip,
@@ -628,6 +1248,7 @@ async def import_comskip(
         report=report,
         is_dry_run=is_dry_run,
         source_label="comskip",
+        id_resolver=id_resolver or CoreSettingIdResolver(client),
     )
 
 
@@ -687,6 +1308,9 @@ async def import_settings_agents(
         remap=remap,
         is_dry_run=is_dry_run,
     )
+    # ONE resolver for both settings blobs — they share Dispatcharr's single
+    # core-settings namespace, so the run costs one GET (q6xjl).
+    id_resolver = CoreSettingIdResolver(client)
     await import_core_settings(
         archive_core_settings=archive.get("core_settings") or {},
         client=client,
@@ -694,6 +1318,7 @@ async def import_settings_agents(
         report=report,
         ledger=ledger,
         is_dry_run=is_dry_run,
+        id_resolver=id_resolver,
     )
     await import_comskip(
         archive_comskip=archive.get("comskip") or {},
@@ -702,4 +1327,5 @@ async def import_settings_agents(
         report=report,
         ledger=ledger,
         is_dry_run=is_dry_run,
+        id_resolver=id_resolver,
     )

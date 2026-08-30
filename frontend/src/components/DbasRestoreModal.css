@@ -10,18 +10,22 @@
   margin: 0.875rem 0;
 }
 
+/* Label role. 13px -> 13px. */
 .dbr-field label {
-  font-size: 0.8125rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary, #888);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .dbr-field input[type='password'] {
   padding: 0.5rem 0.625rem;
   background: var(--bg-tertiary, #2a2a4a);
   color: var(--text-primary, #fff);
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-lg, 8px);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .dbr-field input[type='password']:focus {
@@ -56,21 +60,28 @@
   flex-shrink: 0;
 }
 
+/* Body role. 14px -> 13px. */
 .dbr-mode-option span {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Meta role. 12px -> 11px. */
 .dbr-mode-option .dbr-mode-hint {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
 }
 
 /* Apply-mode warning (mirrors the section's restore-warning, scoped here so the
    modal does not depend on BackupRestoreSection.css). */
+/* Body role. 13px -> 13px. */
 .backup-restore-modal-container .restore-warning {
   display: flex;
   align-items: flex-start;
@@ -79,13 +90,56 @@
   background: rgba(245, 158, 11, 0.08);
   border: 1px solid rgba(245, 158, 11, 0.2);
   border-radius: var(--radius-lg, 8px);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--warning, #f59e0b);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .backup-restore-modal-container .restore-warning .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 0.0625rem;
+}
+
+/* Channel-reattach mode picker (bead dfkbn). Reuses .dbr-mode / .dbr-mode-option
+   above; only the fieldset chrome is new, because this control needs a group
+   label and the apply/dry-run picker does not. */
+/* Block, NOT flex: a <legend> is not a normal flex item in Chromium, so the
+   option column lives on .crm-options inside instead of on the fieldset. */
+.crm-fieldset {
+  display: block;
+  border: none;
+  padding: 0;
+  margin: 0.875rem 0;
+  min-width: 0;
+}
+
+/* The flex column that .dbr-mode provides, on an element with no <legend>. */
+.crm-options {
+  margin: 0;
+}
+
+/* Label role. */
+.crm-legend {
+  padding: 0;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
+  color: var(--text-secondary, #888);
+}
+
+/* Meta role. */
+.crm-help {
+  margin: 0.25rem 0 0.5rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
+  color: var(--text-muted, #666);
+}
+
+.crm-fieldset:disabled .dbr-mode-option {
+  opacity: 0.6;
+  cursor: not-allowed;
 }

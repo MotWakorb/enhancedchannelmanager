@@ -32,6 +32,8 @@ from unittest.mock import patch
 
 from config import DispatcharrSettings
 
+from .test_backup import _minimal_journal_db_bytes
+
 
 MCP_KEY = "mcp-secret-key-6n76m"
 
@@ -62,7 +64,7 @@ def _make_backup_zip() -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as zf:
         zf.writestr("settings.json", json.dumps({"url": "http://attacker:9191"}))
-        zf.writestr("journal.db", b"SQLite format 3\x00" + b"\x00" * 100)
+        zf.writestr("journal.db", _minimal_journal_db_bytes())
         zf.writestr(
             "ecm_backup.json",
             json.dumps({

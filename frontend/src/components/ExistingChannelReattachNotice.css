@@ -1,0 +1,123 @@
+/* What a restore did to channels it did NOT create (bead dfkbn).
+   Sits inside RestoreCompleteSummary, above the outcome banner. Tone matches the
+   neighbouring restore-warning treatment so the operator reads it as the same
+   class of signal. */
+
+.ecrn {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  margin-bottom: 0.75rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-lg, 8px);
+  background: var(--bg-tertiary, #2a2a4a);
+}
+
+.ecrn.ecrn-warn {
+  background: rgba(245, 158, 11, 0.08);
+  border-color: rgba(245, 158, 11, 0.28);
+}
+
+/* Status/panel glyph -> --icon-status. */
+.ecrn-icon {
+  font-size: var(--icon-status);
+  flex-shrink: 0;
+  margin-top: 0.0625rem;
+  color: var(--text-muted, #666);
+}
+
+.ecrn.ecrn-warn .ecrn-icon {
+  color: var(--warning, #f59e0b);
+}
+
+.ecrn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+/* Item-title role. */
+.ecrn-title {
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
+  color: var(--text-primary, #fff);
+}
+
+.ecrn-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.ecrn-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+/* Label role. */
+.ecrn-row-label {
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
+  color: var(--text-secondary, #888);
+}
+
+/* Body role. Long channel-name lists must wrap, never widen the modal. */
+.ecrn-row-detail {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
+  color: var(--text-primary, #fff);
+  overflow-wrap: anywhere;
+}
+
+.ecrn-row-detail.ecrn-destructive {
+  color: var(--warning, #f59e0b);
+}
+
+/* "This check did not run" (bead r1ei7). Muted rather than warning-toned: it is
+   not a finding about the lineup, it is the absence of one — but it still sits
+   at body size, because a caveat set in meta type reads as a footnote and this
+   one is the whole content of the panel when it appears alone. */
+.ecrn-row-detail.ecrn-row-note {
+  color: var(--text-secondary, #888);
+}
+
+/* Meta role. */
+.ecrn-note {
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
+  color: var(--text-muted, #666);
+}
+
+/* The per-channel channel-group drift rows (bead r1ei7). One line per channel:
+   "<channel>: <group it is in> -> <group the backup assigns>". Indented under
+   its row detail so the list reads as evidence for the count above it, and
+   inheriting the row's colour so a "moved" list carries the destructive tone
+   without a second rule. */
+.ecrn-drift-list {
+  list-style: none;
+  margin: 0.25rem 0 0;
+  padding: 0 0 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+/* Meta role. */
+.ecrn-drift-item {
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
+  color: inherit;
+  overflow-wrap: anywhere;
+}

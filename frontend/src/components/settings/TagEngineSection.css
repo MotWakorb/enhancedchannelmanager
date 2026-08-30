@@ -31,35 +31,15 @@
   padding: 0.25rem 0.5rem;
 }
 
-.search-box .material-icons {
-  color: var(--text-muted);
-  font-size: 1.25rem;
-}
-
-.search-box input {
-  flex: 1;
-  border: none;
-  background: transparent;
-  padding: 0.375rem;
-  color: var(--text-primary);
-  font-size: 0.875rem;
-}
-
+/* The `.search-box` glyph, input, clear button and clear glyph are owned by
+   shared/common.css § 11 SEARCH INPUTS. This file is part of the lazy
+   Settings chunk, which is appended after common.css and never removed, so
+   these bare copies became the app-wide winners the moment anyone opened
+   Settings — the 1.25rem magnifier and the 0.875rem input then applied to
+   every search box in the product. Only the box's own padding/border, above,
+   is genuinely local (bead enhancedchannelmanager-6z299). */
 .search-box input:focus {
   outline: none;
-}
-
-.search-box .clear-search {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-}
-
-.search-box .clear-search .material-icons {
-  font-size: 1rem;
 }
 
 /* .loading-state, .empty-state, .spinning → shared/common.css */
@@ -86,7 +66,7 @@
   border: none;
   padding: 0.25rem;
   cursor: pointer;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   opacity: 0;
   transition: opacity 0.2s, color 0.2s;
 }
@@ -97,6 +77,13 @@
 
 .tag-group-wrapper .delete-group-btn:hover {
   color: var(--error-text, #ef4444);
+}
+
+/* Icon-only row action — the glyph IS the affordance, so --icon-action. It had
+   no rule and rendered at index.css's base 24px, oversized against the 32px
+   button box it sits in (bead enhancedchannelmanager-7bsxj). */
+.tag-group-wrapper .delete-group-btn .material-icons {
+  font-size: var(--icon-action);
 }
 
 /* Tag Group Card */
@@ -139,9 +126,31 @@
   gap: 0.5rem;
 }
 
-.expand-icon {
-  color: var(--text-muted);
-  font-size: 1.5rem;
+/* Scoped to this section. `.expand-icon` is also rendered by StreamsPane's five
+   collapsible headers and by BulkLCNFetchModal, all in the EAGER bundle. The
+   ones with a scoped rule (`common.css:732`, `StreamsPane.css:257/480/1253/
+   1291`, `ModalBase.css:1146`) beat this on specificity, but BulkLCNFetchModal's
+   three have no rule of their own — so they took this file's 24px glyph and
+   muted colour the moment Settings had been visited, this file being in the
+   lazy Settings chunk appended after the eager bundle
+   (bead enhancedchannelmanager-6z299.2). `:where()` keeps this at (0,1,0), so
+   nothing in the Tag Engine moves. */
+:where(.tag-engine-section) .expand-icon {
+  color: var(--text-secondary);
+  font-size: var(--icon-status);
+}
+
+/* ...and the size in that rule never rendered, precisely because `:where()`
+   holds it at (0,1,0): that also ties index.css's base
+   `.material-icons { font-size: 24px }`, which is emitted later, so the glyph
+   painted 24px. The colour was unaffected (nothing else declares it), which is
+   why only the size was wrong. Restated here at (0,3,0) against this section's
+   own markup, so the Tag Engine's chevrons take --icon-status while the
+   deliberately-weak rule above still leaves StreamsPane's and
+   BulkLCNFetchModal's `.expand-icon` precedence untouched
+   (bead enhancedchannelmanager-7bsxj). */
+.tag-engine-section .tag-group-info .expand-icon {
+  font-size: var(--icon-status);
 }
 
 .tag-group-title {
@@ -150,21 +159,28 @@
   gap: 0.5rem;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299). */
 .tag-group-title h4 {
   margin: 0;
-  font-size: 0.9375rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
+/* Badge role. */
 .builtin-badge {
-  font-size: 0.6875rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   padding: 0.125rem 0.375rem;
   background: var(--bg-tertiary);
   color: var(--text-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
-  font-weight: 500;
 }
 
 .tag-group-meta {
@@ -173,16 +189,22 @@
   gap: 1rem;
 }
 
+/* Meta role — a count sitting beside the group title, the relationship
+   `.account-meta` has to `.account-name` in the f4yc7 pilot. */
 .tag-count {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
+/* Badge icon, not action icon: this glyph is inline in a meta-sized string,
+   and 16px next to 11px text reads as an oversized bullet. */
 .tag-count .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-badge);
 }
 
 /* Tag Group Content */
@@ -202,7 +224,9 @@
   background: var(--error-bg, rgba(239, 68, 68, 0.1));
   border-radius: var(--radius-md);
   color: var(--error-text, #ef4444);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .tag-error .dismiss-error {
@@ -216,7 +240,7 @@
 }
 
 .tag-error .dismiss-error .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Description */
@@ -239,13 +263,15 @@
 
 .description-text {
   color: var(--text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   font-style: italic;
 }
 
 .description-view .edit-icon {
-  font-size: 0.875rem;
-  color: var(--text-muted);
+  font-size: var(--icon-badge);
+  color: var(--text-secondary);
   opacity: 0;
   transition: opacity 0.2s;
 }
@@ -267,22 +293,14 @@
   border-radius: var(--radius-md);
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
 }
 
-.btn-icon {
-  background: none;
-  border: none;
-  padding: 0.25rem;
-  cursor: pointer;
-  color: var(--text-muted);
-  display: flex;
-  align-items: center;
-}
-
-.btn-icon:hover {
-  color: var(--text-primary);
-}
+/* `.btn-icon` is owned by shared/common.css § 3 BUTTONS. Three files
+   declared it bare — this one, the since-removed LookupTableSection.css and
+   M3ULinkedAccountsModal.css — two of them in the SAME lazy Settings chunk,
+   where whichever imported later silently won, and they disagreed on
+   padding, colour and glyph size (bead enhancedchannelmanager-6z299). */
 
 /* Tags Container */
 .tags-container {
@@ -291,16 +309,24 @@
   gap: 0.5rem;
 }
 
+/* Meta, not micro: "12 of 30 tags enabled" is a sentence, not the uppercase
+   caption idiom. --text-secondary rather than --text-muted throughout this
+   file: --text-muted measures 2.61:1 on --bg-secondary in the light theme,
+   below the AA floor (bead enhancedchannelmanager-6z299.4). */
 .tags-header {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 .tags-loading {
   padding: 1rem;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .tags-list {
@@ -310,13 +336,20 @@
 }
 
 /* Tag Chip */
+/* Badge role. This is the largest single shrink in the P1 sweep — 13px to
+   10px, ~23% — inside a chip whose padding and border are unchanged, so the
+   chips get shorter and narrower rather than just lighter. It is still the
+   right role: a tag chip is the archetypal badge
+   (bead enhancedchannelmanager-6z299.4). */
 .tag-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   padding: 0.25rem 0.5rem;
   border-radius: var(--radius-md);
-  font-size: 0.8125rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
 
@@ -329,9 +362,9 @@
 .tag-chip.disabled {
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   text-decoration: line-through;
-  text-decoration-color: var(--text-muted);
+  text-decoration-color: var(--text-secondary);
 }
 
 .tag-chip.builtin {
@@ -342,8 +375,10 @@
   cursor: pointer;
 }
 
+/* Badge role — already 10px; weight stays 600 for a two-letter "Aa" marker. */
 .case-sensitive-badge {
-  font-size: 0.625rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
   padding: 0 0.25rem;
   background: var(--warning-bg, rgba(234, 179, 8, 0.2));
   color: var(--warning-text, #eab308);
@@ -357,12 +392,12 @@
   padding: 0;
   cursor: pointer;
   display: flex;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   margin-left: 0.125rem;
 }
 
 .tag-delete .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
 }
 
 .tag-delete:hover {
@@ -388,7 +423,7 @@
   border-radius: var(--radius-lg);
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .add-tag-row input:focus {
@@ -405,6 +440,8 @@
   border-radius: var(--radius-lg);
 }
 
+/* The textarea keeps its own size: free-text tag data typed by the operator
+   is content, not UI chrome, and § 7 of the P1 spec excludes it. */
 .bulk-add-section textarea {
   width: 100%;
   padding: 0.5rem;
@@ -428,64 +465,35 @@
   justify-content: flex-end;
 }
 
-/* Buttons */
-.btn-primary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem 1rem;
-  background: var(--button-primary-bg);
-  color: var(--button-primary-text);
-  border: none;
-  border-radius: var(--radius-lg);
-  font-size: 0.875rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: opacity 0.2s;
-}
+/* Buttons
+   `.btn-primary` and `.btn-secondary` — base, hover, disabled and glyph —
+   are owned by shared/common.css § 3 BUTTONS. Re-declaring them bare in a
+   lazy chunk meant that after one visit to Settings every primary button in
+   the app took this file's tighter padding and its 18px glyph. Deleted
+   rather than scoped: nothing here was an intentional local variant
+   (bead enhancedchannelmanager-6z299). */
 
-.btn-primary:hover {
-  opacity: 0.9;
-}
-
-.btn-primary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-primary .material-icons {
-  font-size: 1.125rem;
-}
-
-.btn-secondary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--input-bg);
-  color: var(--text-primary);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
-  font-size: 0.8125rem;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-
-.btn-secondary:hover {
-  background: var(--bg-hover);
-}
-
-.btn-secondary:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.btn-secondary .material-icons {
-  font-size: 1rem;
-}
-
-/* Modal */
-.modal-overlay {
+/* Create Tag Group modal — a private chassis, now scoped to it.
+   Every rule below was declared BARE and this file is in the Settings lazy
+   chunk, which is appended after the eager bundle and never removed. So one
+   visit to Settings handed this 400px-wide, unblurred, 12px-radius chassis to
+   every ModalBase modal in the app — `.modal-overlay`, `.modal-content`,
+   `.modal-header`, `.modal-header h3`, `.modal-body` and `.modal-footer` all
+   collided with ModalBase.css and StreamsPane.css, and `.form-group` /
+   `.form-group input:focus` with shared/common.css § 4 FORMS
+   (bead enhancedchannelmanager-6z299.2).
+   Spec § 5 preferred deleting this chassis and reusing ModalBase. It is NOT
+   safe in this wave: the geometry genuinely differs (max-width 400px vs
+   ModalBase's size classes, 12px radius, no backdrop blur, no overlay padding,
+   an <h3> rather than an <h2>),
+   so the conversion is a visible change to this modal and Wave 1 has no visual
+   budget. Scoped instead; the conversion is left for a page wave.
+   `.tag-engine-group-modal` is passed to ModalOverlay in
+   TagEngineSection.tsx — the same idiom CSVImportModal.tsx already uses — and
+   every selector wraps it in `:where()` so it contributes no specificity. Each
+   rule keeps exactly the specificity it had, so this modal's own cascade is
+   byte-for-byte what it was; only the app-wide leak stops. */
+.modal-overlay:where(.tag-engine-group-modal) {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.5);
@@ -495,7 +503,7 @@
   z-index: var(--z-overlay);
 }
 
-.modal-content {
+:where(.tag-engine-group-modal) .modal-content {
   background: var(--card-bg);
   border: 1px solid var(--border-primary);
   border-radius: 12px;
@@ -504,67 +512,71 @@
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
 }
 
-.modal-header {
+/* The padding was a literal `1rem 1.25rem` copied from ModalBase. This file is
+   in the Settings lazy chunk, which is appended after the eager bundle, so at
+   equal (0,1,0) specificity this rule WINS over ModalBase's `.modal-header` on
+   byte order — which meant that when bead enhancedchannelmanager-99o0x
+   shortened `--modal-header-padding` to 0.5rem, this one dialog kept a 59px
+   band while the whole rest of the estate went to 49px. Pointed at the token
+   so it tracks the chassis instead of shadowing it. The chassis conversion
+   this modal still needs (see the note above) is unchanged and still pending;
+   this is one value, not the conversion. */
+:where(.tag-engine-group-modal) .modal-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1rem 1.25rem;
+  padding: var(--modal-header-padding);
   border-bottom: 1px solid var(--border-primary);
 }
 
-.modal-header h3 {
+/* Modal-title role. Follows the role token, so 18px -> 16px with the estate
+   (bead enhancedchannelmanager-99o0x). */
+:where(.tag-engine-group-modal) .modal-header h3 {
   margin: 0;
-  font-size: 1.125rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
-.modal-close {
-  background: none;
-  border: none;
-  padding: 0.25rem;
-  cursor: pointer;
-  color: var(--text-muted);
-  display: flex;
-}
-
-.modal-close:hover {
-  color: var(--text-primary);
-}
-
-.modal-body {
+:where(.tag-engine-group-modal) .modal-body {
   padding: 1.25rem;
   display: flex;
   flex-direction: column;
   gap: 1rem;
 }
 
-.form-group {
+/* `.form-group` is this modal's only consumer in this file — the Import Tags
+   modal uses `.modal-form-group`. */
+:where(.tag-engine-group-modal) .form-group {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
 }
 
-.form-group label {
-  font-size: 0.8125rem;
-  font-weight: 500;
-  color: var(--text-secondary);
-}
+/* `.form-group label` is owned by shared/common.css § 4 FORMS, which now
+   carries the label role (13px/500) — the same size and weight this copy
+   declared. It comes with --button-text instead of --text-secondary and a
+   0.375rem bottom margin on top of this modal's own column gap; that is the
+   shared treatment every other form in the app already gets
+   (bead enhancedchannelmanager-6z299). */
 
-.form-group input {
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
+:where(.tag-engine-group-modal) .form-group input {
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   background: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
-.form-group input:focus {
+:where(.tag-engine-group-modal) .form-group input:focus {
   outline: none;
   border-color: var(--accent-primary);
 }
 
-.modal-footer {
+:where(.tag-engine-group-modal) .modal-footer {
   display: flex;
   justify-content: flex-end;
   gap: 0.75rem;
@@ -605,10 +617,14 @@
   gap: 0.5rem;
 }
 
+/* Section role — this is the test panel's own title, the twin of
+   `.norm-engine-test-header h4` (PO decision, bead
+   enhancedchannelmanager-6z299). Was 14.4px. */
 .tag-test-header h5 {
   margin: 0;
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
@@ -617,8 +633,8 @@
 }
 
 .tag-test-expand {
-  font-size: 1.1rem;
-  color: var(--text-muted);
+  font-size: var(--icon-status);
+  color: var(--text-secondary);
   transition: transform 0.2s;
 }
 
@@ -644,7 +660,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .tag-test-input-row input:focus {
@@ -657,13 +673,17 @@
 }
 
 .tag-test-no-matches {
-  color: var(--text-muted);
-  font-size: 0.85rem;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .tag-test-match-count {
   display: block;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
   margin-bottom: 0.4rem;
 }
@@ -673,4 +693,3 @@
   flex-wrap: wrap;
   gap: 0.4rem;
 }
-

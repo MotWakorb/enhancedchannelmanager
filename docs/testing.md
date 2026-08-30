@@ -15,19 +15,26 @@ This project has comprehensive test coverage at three levels.
 
 > **Always run backend tests under the project venv**, not a bare system
 > `python3`: `.venv/bin/python -m pytest` (or the path-relative equivalent
-> from wherever you're running — the point is the interpreter, not the cwd).
+> from wherever you're running, since the point is the interpreter, not the cwd).
 > The project pins `cryptography` at 42+; a bare system `python3` commonly
 > resolves an older `cryptography` (e.g. 41.0.7) that is missing
 > `x509.Certificate.not_valid_before_utc` / `not_valid_after_utc` (added in
 > cryptography 42). That gap produces 7-9 confusing failures in
-> `backend/tests/unit/test_tls_storage.py` — assertion failures on subject/
+> `backend/tests/unit/test_tls_storage.py`: assertion failures on subject/
 > validity fields, not an obvious `AttributeError`, because the code under
 > test catches the exception broadly. Two engineers independently lost time
 > to this (bead `enhancedchannelmanager-vol5d`) before the affected tests
-> were given a version-gated skip that names the fix in its reason string —
-> if you see that skip fire, you're not on the venv interpreter.
+> were given a version-gated skip that names the fix in its reason string.
+> If you see that skip fire, you're not on the venv interpreter.
 
-Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
+> **Writing a security test that needs a credential-shaped fixture** (a token,
+> password, or webhook URL)? See "Credential Fixtures in Security Tests" in
+> [`docs/pytest_conventions.md`](pytest_conventions.md) before you write the
+> literal. The convention there is now a convention only: the secrets ratchet
+> (`scripts/check_secrets.py`) that used to enforce it was removed with the CI
+> gate reduction, so nothing fails the build if you ignore it.
+
+Located in `backend/tests/`. **Run them with `scripts/backend-gate.sh`** — see [What the backend gate runs](#what-the-backend-gate-runs) below. Do not hand-type a pytest invocation and report it as the gate.
 
 **Router Tests** (`backend/tests/routers/`): Tests for extracted router modules.
 - `test_channels.py`, `test_channel_groups.py` - Channel management
@@ -72,26 +79,63 @@ Located in `backend/tests/`, run with `cd backend && python -m pytest tests/ -q`
 - `test_router_registration.py` - Route uniqueness validation
 - `test_lifecycle.py` - App startup/shutdown lifecycle
 
+## What the backend gate runs
+
+**One invocation: `scripts/backend-gate.sh`.** It takes no arguments, selects the project interpreter itself, and runs exactly what `.github/workflows/test.yml` runs. `backend/tests/unit/test_backend_gate_contract.py` asserts the two still match flag for flag, so they cannot drift apart.
+
+```bash
+scripts/backend-gate.sh    # THE gate. Check $? — do not pipe to `tail` and read that.
+```
+
+Two invocations used to circulate — one from `backend/CLAUDE.md` prose, one from CI — differing by **72 collected tests** (bead `enhancedchannelmanager-c9lb9`). Nothing was failing, so it was an instrument gap rather than a live defect, but it is the false-green class: "backend gate green" could be reported by a run that never executed those 72, and the figure looked authoritative because every handover repeated it.
+
+### What the backend gate excludes, and why
+
+Every exclusion is named. A bare "2 deselected" is an unreadable signal.
+
+| Excluded | How | Why |
+| --- | --- | --- |
+| `tests/e2e/` (10 files) | `--ignore` | Hits a live ECM container on `localhost:6100`. Without one it self-skips; with one it exercises whatever that container happens to be running — a result that depends on unrelated local state cannot gate a PR. E2E as a CI gate is deferred to bead `enhancedchannelmanager-2lw25`. |
+| `tests/performance/` (2 files) | `--ignore` | Seeds a 250k-row fixture; runs in the dedicated `perf-benchmarks` workflow (`bd-skqln.10`). |
+| `test_find_candidate_under_5ms_per_call_for_500_candidates` | `-m "not slow"` | Wall-clock microbenchmark with a 5 ms soft cap. Host contention on a runner false-fails it, and the latency figure is informational, not a gate. Still runs under an explicit `-m slow`. |
+| `test_migration_up_down_against_5m_rows` | `-m "not slow"` | Times an Alembic up/down against ~5M `session_telemetry` rows. Local pre-merge only (`bd-skqln.2`); also guarded by `ECM_RUN_VOLUME_TESTS`, so it self-skips even when selected. |
+
+Expected shape on a green `dev`: **`3 skipped, 2 deselected`**. A full-tree run (`pytest tests/`, no ignores) reports **9 skipped** instead — the other 6 live in the excluded trees. **`18 skipped` from either means the wrong interpreter** (see below).
+
+### The interpreter is part of the gate
+
+Ambient `python` commonly resolves an older `cryptography` build and **silently self-skips 9 TLS tests** instead of failing, so the run still reports success. The gap is invisible unless you compare skip counts. `scripts/backend-gate.sh` resolves the interpreter itself — `$ECM_PYTHON`, else the repo `.venv`, else (in a git worktree, which has no `.venv` of its own) the main checkout's, derived from `git rev-parse --git-common-dir` — and **refuses to run rather than fall back** to ambient `python`.
+
+### The subset-run coverage trap
+
+`pytest.ini` sets `--cov=. --cov-fail-under=56`, and coverage is measured over the **whole tree** regardless of what you selected. So *any* subset run exits non-zero even when every test in it passes — a bare `--collect-only` reports `Required test coverage of 56% not reached. Total coverage: 18.39%`. Read as a real failure, that has sent agents off to "fix" a healthy tree.
+
+```bash
+scripts/backend-gate.sh --subset tests/unit/test_foo.py -k some_case
+```
+
+`--subset` adds `--no-cov` and prints a banner. **A `--subset` run is not the gate** and must never be reported as one.
+
 ## Backend Test Layers: `integration/` vs `routers/`
 
-These two directories are distinct testing layers — they are not duplicates of each other.
+These two directories are distinct testing layers. They are not duplicates of each other.
 
-### `backend/tests/integration/` — Shallow, mock-DB layer
+### `backend/tests/integration/`: Shallow, mock-DB layer
 
 Files named `test_api_<domain>.py` and other integration-scoped tests.
 
 - **Client**: `fastapi.testclient.TestClient` (synchronous)
 - **Database**: `MagicMock()` session injected via `patch("routers.<module>.get_session")`
-- **Depth**: Shallow — asserts API shapes, status codes, and routing without touching real SQL
+- **Depth**: Shallow, asserting API shapes, status codes, and routing without touching real SQL
 - **When to add tests here**: Verifying API contracts that can be fully expressed by mocking the DB query results; testing how the router reacts to DB-layer exceptions; lightweight smoke checks that don't require real ORM behaviour
 
-### `backend/tests/routers/` — Deep, real-DB layer
+### `backend/tests/routers/`: Deep, real-DB layer
 
 Files named `test_<domain>.py`.
 
 - **Client**: `httpx.AsyncClient` via the `async_client` fixture in `conftest.py` (async)
-- **Database**: Real in-memory SQLite (`StaticPool`) via the `test_session` fixture — full ORM round-trips
-- **Depth**: Deep — inserts real rows, exercises ORM queries, validates constraints and model
+- **Database**: Real in-memory SQLite (`StaticPool`) via the `test_session` fixture: full ORM round-trips
+- **Depth**: Deep, inserting real rows, exercising ORM queries, validating constraints and model
   relationships
 - **When to add tests here**: Verifying that endpoints interact correctly with actual database state;
   testing model constraints, ordering, pagination, and FK relationships; any scenario where a
@@ -103,7 +147,7 @@ Despite the directory names, the `integration/` layer is the **shallower, more-m
 
 ### Acceptable duplication
 
-A handful of trivially simple cases — `GET /some/endpoint → 404 Not Found` — are
+A handful of trivially simple cases (`GET /some/endpoint → 404 Not Found`) are
 intentionally present in both layers.  This is acceptable because each copy exercises
 different machinery (sync+mock-DB vs async+real-DB) and provides independent signal.
 Do not consolidate these just to reduce line count.
@@ -126,7 +170,7 @@ Located in `frontend/src/`, run with `cd frontend && npm test`
 - `services/channelPipelineApi.test.ts` - Channel Pipeline API service
 
 **Component Tests:**
-- `components/channelPipeline/ChannelPipelineTab.test.tsx` - Channel Pipeline tab
+- `components/channelPipeline/ChannelPipelineTab.test.tsx` - Channel Pipeline page
 - `components/channelPipeline/RuleBuilder.test.tsx` - Rule builder
 - `components/channelPipeline/ConditionEditor.test.tsx` - Condition editor
 - `components/channelPipeline/ActionEditor.test.tsx` - Action editor
@@ -152,7 +196,7 @@ Located in `e2e/`, run with `npm run test:e2e` from root
 - `journal.spec.ts` - Journal/logging
 - `stats.spec.ts` - Statistics and analytics
 - `alert-methods.spec.ts` - Alert notification methods
-- `auto-creation.spec.ts` - Channel Pipeline (spec filename predates the Channel Pipeline rename; not renamed yet — enhancedchannelmanager-3udrl follow-up)
+- `auto-creation.spec.ts` - Channel Pipeline (spec filename predates the Channel Pipeline rename; not renamed yet, tracked as follow-up enhancedchannelmanager-3udrl)
 
 **Running E2E Tests:**
 ```bash
@@ -162,6 +206,255 @@ npm run test:e2e:headed    # Run in visible browser
 npm run test:e2e:debug     # Debug mode with breakpoints
 npm run test:e2e:report    # View test report
 ```
+
+> **`E2E_BASE_URL` is required. There is no default.** It used to default to
+> `http://localhost:6100`, the product owner's LIVE ECM instance holding real
+> channel data, so an unset variable silently pointed write-capable specs (a
+> channel-number push-down, a cross-group move, a merge, a delete) at
+> production (bead `enhancedchannelmanager-536bl`). Config load in
+> `playwright-base-url.mjs` now throws before any browser launches or any
+> request is made if `E2E_BASE_URL` is unset and `E2E_EXACT_BUILD` is not
+> `true`. Set it explicitly:
+> ```bash
+> E2E_BASE_URL=http://localhost:6100 npm run test:e2e   # explicit opt-in to the live instance
+> E2E_BASE_URL=http://localhost:5173 npm run test:e2e   # against a dev server you started yourself
+> ```
+> Or skip it entirely with `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which
+> builds and serves the checked-out source on its own isolated preview port
+> (`127.0.0.1:4173`) and supplies that base URL itself. This is the mode the
+> `Screen-Reader-Only Rendering Guard`, `Operator Workspace Release Matrix`,
+> `Edit Mode Immediacy Surfaces Guard`, `Edit Mode Numbering Guards` and `Edit
+> Mode Session Restore Guard` CI jobs used before those jobs were removed; it
+> is now how you run these specs by hand, and it sets no `E2E_BASE_URL`.
+
+### Rendered-CSS regression guards
+
+Ten specs in `e2e/` are not feature tests. They are guards over what a real
+browser *renders*, the layer where the project has repeatedly regressed while
+every unit test stayed green. They exist because a computed style, or a real
+seam crossed in a real page, is the only thing that can prove these claims;
+jsdom cannot, and neither can a declaration-level audit.
+
+The first seven rows below are pure rendered-CSS guards. The last three arrived
+with the Edit Mode staging and numbering epic and are wider than CSS: one
+measures layout, and two cross a UI-to-network seam that no unit suite reaches.
+They are tabled here because they share the property that makes this section
+worth having, which is that every layer beneath them can be green while the
+thing itself is broken.
+
+| Spec | What it pins | Proven red against |
+|-|-|-|
+| `sr-only-hidden.spec.ts` | `.sr-only` / `.visually-hidden` measure ≤1×1 and are not returned by `elementFromPoint`, **on a cold context with Channel Pipeline never visited** | `.sr-only` moved back into the ChannelPipelineTab chunk (bead `-zncyv`): Dashboard 1004×24, `position: static`, hit-testable |
+| `frozen-chrome.spec.ts` | rail 244px, rail label 14px/400, rail icon 20px, header band 45px, route title 20px/700/26px, all measured across ten routes × dark/light/high-contrast × 1600×1000, 1280×800 and 1280×720 | a bare `.primary-sidebar` / `.navigation-label` redeclaration inside `LogoManagerTab.css`: every route visited *after* Logo Manager reported 248px / 15px |
+| `route-typography-scale.spec.ts` | every visible text node in a route content pane computes to a P1 size: {20, 15, 13, 11, 10} text, {18, 16, 14, 64} icon | a new 22px site on M3U Manager **and** an allowlisted site silently fixed without deleting its entry (reported as `STALE`) |
+| `cross-route-css-leak.spec.ts` | shared-class typography does not depend on route visit order | four historical instances: `.list-header`, `.status-label`, `.group-count`, `.action-btn .material-icons` |
+| `contrast-aa.spec.ts` | every visible text node on all eleven routes clears WCAG AA (4.5:1 normal, 3:1 large and non-text glyphs) in dark/light/high-contrast at 1280×720 and 1920×1080, measured as **true composited** contrast (whole ancestor background chain, element and ancestor `opacity`, colours resolved through the compositor rather than parsed) | the three light-theme `--accent-secondary` selected states of bead `-dlavh`: Stats pill 3.68, Settings pill 3.68, Settings rail row 3.25, all against 4.5. It also found two defects nobody had reported: the selected primary-rail row at 4.20 on **every** route, and the Channel Manager probe glyph failing in all three themes |
+| `settings-nav-groups.spec.ts` | the Settings drill-in renders the approved six groups in order with `aria-current` and real `#settings/<page>` anchors, and the rail's overflow **contract** holds (it scrolls, Back stays pinned and opaque, the last destination stays reachable) at 1280×720 and 1920×1080 × three themes, expanded and collapsed | the grouped rail at 1099px against a 675px budget at 1280×720 with Back `position: static`: the only exit from Settings scrolled out of view (bead `-70u0r.4`) |
+| `control-typeface.spec.ts` | every visible `button`/`input`/`select`/`textarea` on ten routes renders in the SAME resolved face as its nearest text-bearing ancestor (arm 1), and at a size the application chose rather than the user-agent's own control default (arm 2) | arm 1 (bead `-6z299.9`): controls resolving to generic `sans-serif` while surrounding text resolved to `system-ui`, invisible to a `fontFamily` string comparison. Arm 2 (bead `-ul2tp`): 274 of 418 visible controls across the ten routes rendering at Chromium's 13.3333px UA default with arm 1 green throughout |
+| `edit-mode-immediacy-surfaces.spec.ts` | three layouts the staged-vs-immediate work introduced: the selection bar still floats from `.selection-action-bar-shell` rather than landing in document flow; the irreversible-action notice claims its own line in `.modal-footer` through the one `:has()` rule that behaviour depends on; and the immediate-action note fits the two dropdown menus and the modal toolbar it is injected into (beads `-kz089`, `-i4yk1`) | jsdom cannot see any of the three. `SelectionActionBar` renders identical DOM whether or not `position: fixed` survived the move onto the shell wrapper, so every component test stays green while the bar drops off the bottom of a scrolled list |
+| `edit-mode-numbering-guards.spec.ts` | a real double-click in a real channel list, a real duplicate-number dialog, a real acknowledgement reaching the staged ledger, and an Apply over a colliding final state that issues **no** bulk-commit request at all (beads `-vdxbx`, `-ic884.2`) | the seam, not the layers: `channelNumberPlan.test.ts`, `ChannelsPane.duplicateNumber.test.tsx` and `useEditMode.numberingPreflight.test.ts` are each green on their own side of it. Arm 2 carries its own anti-vacuity control, applying a clean plan first and watching that request go, because "sent no request" is equally satisfied by a dead button or a page that never loaded |
+| `edit-mode-session-restore.spec.ts` | a ledger in real `sessionStorage` surviving a real page load, read on the first render of the real `App` inside `ProtectedRoute` and offered back with an account of what no longer applies (arm 1); a ledger stamped with a **different** operator never offered and already gone from the store by first paint (arm 2) (epic `-r93hq`, bead `-jazna`) | arm 2 is the one that matters: two operators sharing a workstation, where handing A's staged edits to B means B applies them under B's credentials and the journal attributes every change to B |
+
+`frozen-chrome.spec.ts` pins **1280×720 as well as 1280×800** because 1280×720
+is the minimum supported viewport, and the height is what the Settings drill-in
+strains. Both rows are kept; dropping one from a frozen matrix is not free.
+
+```bash
+npm run test:css-guard:sr-only            # builds + serves the source; NO backend needed
+npm run test:css-guard:frozen-chrome      # needs a live ECM backend
+npm run test:css-guard:type-scale         # needs a live ECM backend
+npm run test:css-guard:contrast-aa        # needs a live ECM backend; ~10 min, 66 route walks
+npm run test:css-leak                     # needs a live ECM backend
+npm run test:css-guards                   # all of the above, against a live backend
+npm run test:css-guard:settings-nav       # needs a live ECM backend
+npm run test:css-guard:control-typeface   # needs a live ECM backend
+npm run test:css-guard:edit-mode-immediacy        # builds + serves the source; NO backend
+npm run test:css-guard:edit-mode-numbering        # builds + serves the source; NO backend
+npm run test:css-guard:edit-mode-session-restore  # builds + serves the source; NO backend
+```
+
+The three Edit Mode guards do not merely *tolerate* the absence of a backend,
+they **refuse** to run with one. Each requires `E2E_EXACT_BUILD=true` and
+`E2E_START_SERVER=true`, which build the checked-out source and serve it on the
+isolated preview port `127.0.0.1:4173` and supply the base URL themselves, so
+none of them can be aimed at an operator's live ECM. That refusal is structural
+rather than advisory because of what they exercise: a merge and a CSV import
+that delete and create channels, and an Apply path that commits.
+
+Two further browser guards, `control-box-size.spec.ts` and
+`filter-select-ownership.spec.ts`, have `npm` scripts (`test:css-guard:control-box-size`,
+`test:css-guard:filter-select`) but no row in the table above. That gap predates
+this section's last revision and is recorded here rather than left invisible.
+
+**CI status: read this before assuming coverage. Every browser guard below
+is now manual-only.**
+
+The CI gate reduction removed every Playwright job from
+`.github/workflows/test.yml` (`Visual Regression`, `Operator Workspace Release
+Matrix`, `Screen-Reader-Only Rendering Guard`, `Edit Mode Immediacy Surfaces
+Guard`, `Edit Mode Numbering Guards`, `Edit Mode Session Restore Guard`) and
+the two Playwright steps that had been bolted onto the `Frontend Tests` job.
+No surviving workflow installs a browser or invokes `playwright`.
+
+- `sr-only-hidden.spec.ts`, `edit-mode-immediacy-surfaces.spec.ts`,
+  `edit-mode-numbering-guards.spec.ts` and `edit-mode-session-restore.spec.ts`
+  **used to run in CI** and no longer do. The specs, their `npm` scripts and
+  `e2e/fixtures/css-guard.ts` are all unchanged, so they still run by hand
+  with `E2E_START_SERVER=true E2E_EXACT_BUILD=true`, which builds the
+  checked-out source and serves it on an isolated preview port with no
+  backend. Nothing runs them for you, and nothing reports when they go red.
+- `e2e/visual/modal-typography-inventory.spec.ts` and
+  `e2e/visual/heatmap.spec.ts` are likewise manual-only, via
+  `npm run test:visual` (`playwright.visual.config.ts`). There is no `npm`
+  script for the modal-typography inventory on its own; invoke it through the
+  config directly.
+- `frozen-chrome.spec.ts`, `route-typography-scale.spec.ts`,
+  `contrast-aa.spec.ts`, `cross-route-css-leak.spec.ts` and
+  `control-typeface.spec.ts` are **manual-only**.
+  This is not an oversight and not a "wire it up later": all five walk every route, and
+  Channel Manager's `.channels-pane` never mounts without an API (measured, on
+  a backend-less preview build: `waitForSelector('.channels-pane')` times out
+  at 60s). They need a live ECM container, which CI does not have; that is the
+  same constraint that defers the rest of `e2e/*.spec.ts`, tracked as bead
+  `enhancedchannelmanager-2lw25`. When 2lw25 lands a live-service CI
+  environment these five are the first specs that should move into it.
+- Until then the browser half of the CSS defence runs only when a human
+  remembers. Run `npm run test:css-guards` against the running container
+  before shipping any change under `frontend/src/**/*.css`.
+
+**These guards measure the build that is being SERVED, not your working tree.**
+Point them at the deployed container on `:6100` explicitly. `E2E_BASE_URL`
+has no default (see above), so it must be set, and running them against a
+container that has not been redeployed since your edit reports the *old*
+build's CSS, and the type-scale guard will list the sites you just fixed as
+brand-new failures. Observed exactly that: nine sites fixed in the tree still
+showed as off-scale on `:6100` because the container predated the fix.
+
+```bash
+# sr-only: builds and serves YOUR tree, no container involved. Always exact,
+# and E2E_START_SERVER + E2E_EXACT_BUILD already supply their own base URL.
+npm run test:css-guard:sr-only
+
+# the others: deploy your build to the container FIRST, then run against it explicitly.
+scripts/deploy-frontend.sh
+E2E_BASE_URL=http://localhost:6100 npm run test:css-guards
+```
+
+**Or serve your own tree and skip the deploy entirely.** `vite preview`
+inherits `server.proxy` from `frontend/vite.config.ts`, so it *does* proxy
+`/api` to `http://localhost:8000`. With a backend answering there, the whole
+guard set runs against the working tree with nothing deployed:
+
+```bash
+cd frontend && npm run build && npx vite preview --host 127.0.0.1 --port 4173 &
+E2E_BASE_URL=http://127.0.0.1:4173 npm run test:css-guards
+```
+
+Measured on bead `-70u0r.4`: `sr-only-hidden`, `frozen-chrome`,
+`route-typography-scale`, `cross-route-css-leak` and `settings-nav-groups` all
+green this way, including `frozen-chrome`'s full ten-route walk with Channel
+Manager's `.channels-pane` mounting normally, so a backend-less preview is not
+the constraint the paragraph above assumed. `control-typeface` was verified the
+same way under bead `-ae3ms`, the pass that wired it into `test:css-guards`:
+all 21 tests across the full seven-spec aggregate passed against a `vite
+preview` tree with `/api` proxied to the live container. This corrects an earlier claim that preview "proxies
+nothing, so `/api` 502s". That was true of a bare static server, not of
+`vite preview`. Use it whenever you must measure rendered CSS *before*
+committing or deploying; it is the only way to run these guards against an
+uncommitted tree. The caveat that survives is the important one: **these
+guards measure the build being SERVED.** Rebuild after every edit, or you are
+re-measuring the previous bundle.
+
+**Their allowlist cannot rot.** `route-typography-scale.spec.ts` carries an
+allowlist because eight of ten routes have off-scale sites today, and it is
+bidirectional on purpose, following the same discipline as TIER 2 of
+`frontend/src/cssAudits/sharedClassChunkLeak.audit.test.ts`. A **new**
+off-scale site fails; a **stale** entry (its site now renders on-scale) also
+fails, with "delete this entry"; an entry whose selector matches nothing fails
+unless it is marked `dataDependent`. Fixing an allowlisted site therefore
+*requires* deleting its entry in the same commit. Every entry names the bead
+that owns it.
+
+**Shared plumbing lives in `e2e/fixtures/css-guard.ts`,** and three things in
+it are load-bearing rather than convenience:
+
+1. **One login per spec file.** `backend/auth/routes.py` rate-limits login at
+   `5/minute`; these guards open many contexts and a login per context blows
+   that budget, surfacing as `Login failed: Too Many Requests`, a flake that
+   reads like a broken assertion.
+2. **Hash navigation, never `page.reload()`.** Every route tab is a lazy chunk
+   whose stylesheet is appended to `<head>` on first visit and never removed.
+   A reload discards all of them, resetting the exact state these guards
+   observe and silently turning a real failure into a pass.
+3. **An explicit `waitFor` on the login gate.** `isVisible({ timeout })` is a
+   no-op in Playwright (the option is ignored), so a still-rendering login
+   form reads as "not a login page" and the run proceeds into a blank shell.
+
+## 4. Modal harness (dev-only dialog measurement)
+
+`frontend/modal-harness.html` force-renders **every dialog in the app** with
+stubbed data, including the many that cannot be reached against a real
+instance (no pending merges, empty review queues, no probe results, banner
+conditions unmet). It exists so a CSS change touching modals can be verified
+against all of them instead of the subset today's data happens to allow.
+Introduced by bead `enhancedchannelmanager-xhldy.1` for the P1 type-scale
+work; reusable for any later restyle of the same surfaces.
+
+```bash
+# Capture / re-capture the baseline (builds the harness, walks all dialogs)
+node scripts/measure-modal-typography.mjs
+
+# After a CSS change: what moved?
+node scripts/measure-modal-typography.mjs --diff
+
+# Poke at one dialog by hand
+cd frontend && npx vite --config vite.harness.config.ts
+# -> http://127.0.0.1:5273/modal-harness.html            (index of all dialogs)
+# -> http://127.0.0.1:5273/modal-harness.html?dialog=edit-channel
+# -> ...&theme=light   ...&live=1 (talk to a real backend instead of the stub)
+```
+
+Baseline artefact:
+`frontend/src/devHarness/baseline/modal-typography.baseline.json`.
+
+**Every capture is animation-frozen, and captures made before that was true
+have untrustworthy GEOMETRY.** `ModalBase.css` opens each dialog with
+`modal-container-slide-in` (0.2s, `scale(0.98)` to `scale(1)`), and a capture
+taken mid-flight multiplies every box in the dialog by a run-dependent scale
+factor. Measured on bead `enhancedchannelmanager-iotbh`: one unfrozen run
+reported the 32px close button at seven different sizes across the 81 dialogs,
+and a change that could only shrink type by 0.33px moved 214 of 281 boxes by 1
+to 11px. The script now suppresses animations and transitions before it
+measures, with no flag to turn that off, and stamps `animationsFrozen: true`
+into the payload. A capture without that field predates the fix. Two
+consecutive frozen runs over an unchanged tree now move 0 of 411 geometry rows.
+Typography rows were never affected, since `font-size` and `font-weight` are
+not scaled by a transform.
+
+**It is not in the production bundle, and cannot be.** `vite.config.ts` has a
+single entry (`index.html`); the harness is built only by the separate
+`vite.harness.config.ts` into the gitignored `.modal-harness-dist/`.
+`src/devHarness/harnessIsolation.test.ts` fails if any app file imports harness
+code or if `vite.config.ts` grows a second entry.
+
+**The dialog list is derived from source, not hand-maintained.** Every
+non-test `.tsx` under `src/` is scanned for `modal-container` / `ModalOverlay`
+/ `role="dialog"` / `role="alertdialog"`, and
+`src/devHarness/harnessCoverage.test.ts` goes RED when a file matching those
+markers has no entry in `dialogCatalog.ts`. A dialog added later is therefore
+covered automatically, or it breaks the build. It cannot be silently missed.
+
+Adding a dialog to the harness:
+
+1. Add an entry to `src/devHarness/dialogCatalog.ts` (`status: 'stubbed'`, or
+   `'gap'` with a reason if it genuinely cannot be force-rendered).
+2. Add a recipe to `src/devHarness/dialogRenderers.tsx`. `tsc --noEmit` fails
+   until you do. Either render the component directly with stub props, or
+   render its host and list the `open` clicks that bring the dialog up.
+3. Add stub responses to `src/devHarness/apiStub.ts` if it fetches on mount.
+
+Never change a component to suit the harness. If a dialog cannot be reached
+without editing it, record it as a gap.
 
 ## Coverage ratchet cadence
 
@@ -192,7 +485,7 @@ Frontend measurement: `cd frontend && npm run test:coverage`. 1118 tests across
 The ideal methodology (from bead `enhancedchannelmanager-nmlxi`) is to wait
 ~1 week after the CI test-gate landed (`enhancedchannelmanager-t8xw3`) so we
 can observe real per-PR coverage numbers rather than the full-suite snapshot.
-We didn't have that window — t8xw3 closed the day this bead landed. The PO
+We didn't have that window. t8xw3 closed the day this bead landed. The PO
 approved a single full-suite snapshot with a 2-point buffer as a pragmatic
 baseline. Expect slightly churny CI on PRs that touch low-coverage modules
 until the first re-ratchet.
@@ -205,14 +498,14 @@ until the first re-ratchet.
 - **Raise criterion**: if every PR merged in the review window held coverage
   comfortably (≥ threshold + 3 points) on every metric, raise that metric's
   threshold by **~5 points**. Never raise by more than 5 points in one
-  review — gives authors time to respond before the ratchet tightens further.
+  review. This gives authors time to respond before the ratchet tightens further.
 - **Lower prohibition**: thresholds are **one-way**. Lowering requires
   explicit PO approval and a one-line rationale in the commit message. Do
-  not lower "because my PR didn't quite make it" — add tests instead.
+  not lower "because my PR didn't quite make it". Add tests instead.
 - **Per-metric independence**: frontend has four metrics (lines, branches,
   functions, statements). They ratchet independently. A PR that lifts
-  function coverage to 20% should raise the function threshold to 15% —
-  it does not have to wait for statements to also move.
+  function coverage to 20% should raise the function threshold to 15%.
+  It does not have to wait for statements to also move.
 - **Scope creep guard**: this bead's predecessor (`t8xw3`) explicitly
   excludes retroactively force-testing low-coverage modules. The ratchet
   exists to prevent regression, not to force a coverage sprint.
@@ -220,7 +513,7 @@ until the first re-ratchet.
 ### Next-iteration upgrade: diff-coverage
 
 The bead scope flagged **diff-coverage** (coverage of CHANGED lines only)
-as a likely better gate for a 61K-line codebase — whole-codebase coverage
+as a likely better gate for a 61K-line codebase: whole-codebase coverage
 is noisy for small PRs. This is out of scope for the current ratchet bead
 and should be filed as a follow-up. Candidate tools:
 
@@ -234,15 +527,17 @@ rates above) and the whole-codebase thresholds stay as a floor.
 ### Running coverage locally
 
 ```bash
-# Backend — inside the container (matches the CI invocation).
-docker exec ecm-ecm-1 sh -c 'cd /app && python -m pytest \
-  --ignore=tests/e2e -m "not slow" --no-header -p no:warnings'
-# Coverage is auto-enabled via pytest.ini addopts. To disable for a quick
-# single-file run: add --no-cov.
+# Backend — from the host. This IS the CI invocation; coverage is auto-enabled
+# via pytest.ini addopts, so the ratchet is enforced by the same run.
+scripts/backend-gate.sh
 
 # Frontend — from the host.
 cd frontend && npm run test:coverage
 ```
+
+For a quick single-file run, use `scripts/backend-gate.sh --subset <path>`; it
+adds `--no-cov`, without which the run fails on whole-tree coverage no matter
+how the selected tests do. See [The subset-run coverage trap](#the-subset-run-coverage-trap).
 
 If a local run drops below threshold, fix the root cause (add a test, remove
 dead code, or adjust .coveragerc omit if the file is genuinely non-runtime).
@@ -254,13 +549,159 @@ Do **not** lower the threshold in the config.
 - **Frontend tests**: MANDATORY for any frontend code changes
 - **E2E tests**: Run on merge to main only (CI/CD pipeline)
 
+## One source of truth per required check
+
+`dev` branch protection requires four status checks: `Backend Tests` and
+`Frontend Tests` (from `.github/workflows/test.yml`), and
+`CodeQL Analysis (python)` / `CodeQL Analysis (javascript-typescript)` (the
+`codeql-analysis` matrix in `.github/workflows/build.yml`). `main` requires
+those four plus `Release Cut Gate`.
+
+The set used to be eight. `Operator Docs`, `Version Consistency`,
+`Semgrep Lint` and `MCP Server Tests` were dropped from branch protection in
+the CI gate reduction; the first three were deleted along with the scripts
+they ran, and `MCP Server Tests` still runs in `test.yml` but no longer gates
+anything.
+
+**Invariant: each of those names is emitted by exactly one job, and that job
+runs on every pull request.**
+
+### What went wrong before (bead `enhancedchannelmanager-5rwzy`)
+
+`test.yml` triggered on `paths-ignore: ['**.md', '.beads/**']` and a sentinel
+workflow, `docs-only-pass.yml`, triggered on `paths: ['**.md', '.beads/**']`.
+Those two filters look like complements and are not. A pull request touching
+both code and Markdown matches both, so every required context existed twice:
+once real, once a job whose only step was an `echo`.
+
+Every shipped change carries a `CHANGELOG.md` entry, so nearly every pull
+request in this repo has that mixed shape. On PR #797 the duplicate went
+live: `Backend Tests` reported **`failure` and `success` on the same commit**,
+and the failure was a genuine test defect, not a flake. It was caught only
+because the reviewer read every instance of the context individually instead
+of trusting the aggregate.
+
+### The shape that replaced it
+
+1. Neither `test.yml` nor `build.yml` has a path filter. Both run on every
+   push and pull request to `main` and `dev`.
+2. A `detect` job in each classifies the changed file set by calling
+   `scripts/classify_changed_paths.py`. That script holds the single
+   classifier's explicit inert-path allowlist, which
+   previously lived in three `paths` blocks that drifted apart.
+3. Every job whose name is a required context **always runs**, so the context
+   is emitted exactly once, and gates its expensive **steps** on
+   `needs.detect.outputs.code_paths_changed`. On an inert machine-state change the job
+   does a cheap no-op and passes honestly.
+4. `docs-only-pass.yml` is deleted.
+
+### Two rules when editing these workflows
+
+- **Never give a required-context job a path filter or a job-level `if:` that
+  can evaluate false.** GitHub counts a **skipped** job as satisfying a
+  required status check, so skipping is the same hole in a new place. Gate the
+  steps instead.
+- **Never make a duplicate emitter fail instead.** A second check-run
+  reporting failure alongside a real one that passes blocks every mixed pull
+  request. The answer is one emitter, not a louder second one.
+
+Jobs that are **not** required contexts (the image builds and scans in
+`build.yml`) do skip at the job level on an inert-only change. Promoting any
+of them to a required check means converting it to the step-gated shape
+first. `MCP Server Tests` is the one non-required job in `test.yml` that keeps
+the always-run, step-gated shape anyway, because
+`publish-verified-dev-images` needs it and refuses to publish on a skipped
+dependency.
+
+`backend/tests/unit/test_classify_changed_paths.py` enforces all of this: it
+pins the classifier's accept/reject boundary and its fail-open behaviour, and
+it fails the pull request if a required context ever gains a second emitting
+job or if `test.yml` / `build.yml` regain a path filter.
+
+### Fail-open, on purpose
+
+The gate expression is always `needs.detect.outputs.code_paths_changed != 'false'`. If
+the `detect` job dies its output is empty, the comparison is true, and the
+real work runs. Classifying code as documentation is the dangerous direction,
+because it turns a required check green without running the work it is named
+for. Classifying documentation as code only costs runner minutes.
+
+### The second verdict: `docs_site_affected`
+
+The same classifier emits a second, independent output. `docs_site_affected`
+is true when a changed path is one the published user-guide site is built
+from: anything under `docs/user_guide/` or `docs/images/user_guide/`, plus
+`docs/index.md`, `mkdocs.yml`, `docs/requirements-docs.txt`, and
+`.github/workflows/docs-pages.yml`. That list used to live in the `paths:`
+filter of `docs-pages.yml`, where nothing could see it drift out of step with
+the mkdocs nav. It lives in the classifier now, and `docs-pages.yml` reads it.
+
+The two verdicts are independent, and all four combinations occur: editing
+`docs/user_guide/index.md` and `mkdocs.yml` are code-gated **and**
+site-affecting, `docs/testing.md` is code-gated and **not** site-affecting,
+and `.beads/issues.jsonl` is inert to both.
+
+`docs_site_affected` fails open in the **opposite** direction, to `true`. Its
+dangerous verdict is a wrong `false`, which skips the rebuild and leaves the
+published site stale behind merged content, so `docs-pages.yml` gates on
+`!= 'false'`. A test derives the check from `mkdocs.yml` itself: every page in
+the nav must be a path the classifier recognises, so adding a published page
+outside the known prefixes fails the pull request rather than quietly
+disabling its deploy.
+
+### What a green required check actually ran
+
+Because all four required checks gate their real work on
+`code_paths_changed`, the check **name** is the same whether a suite ran or not.
+`Backend Tests` reads as "the backend tests ran" either way.
+
+So every required job writes one line to `$GITHUB_STEP_SUMMARY` naming what it
+did, and the three that produce a JUnit report run
+`scripts/ci_junit_summary.py` to put the real test count in that line rather
+than a claim:
+
+```
+Backend Tests: ran the backend pytest suite. 2147 tests, 0 failed, 0 errored.
+Backend Tests: inert machine-state change, the pytest suite was NOT run.
+```
+
+The summary changes no conclusion and gates nothing; it makes the rollup
+readable without opening each job log.
+
+Two properties keep it from becoming a second source of untruth. Each line
+reports the real `steps.<id>.outcome` of the step that does the work, so a job
+that died at lint does not claim vitest ran; an outcome that is empty because
+the step was never reached renders as `did not run`. And every summary step
+carries `continue-on-error: true`, because it runs inside required contexts
+and a cosmetic writer must never be the reason a passing suite reports red.
+`ci_junit_summary.py` returns 0 on every runtime path, including a missing or
+unparseable report. Argparse is the one exception: a malformed invocation
+exits 2 before the script's own code runs, which is a wiring bug rather than a
+runtime condition, and `continue-on-error` absorbs it either way.
+
+`mkdocs build --strict` **no longer runs at pull-request time.** It ran as a
+step of the `Operator Docs` job (bead `enhancedchannelmanager-pb2s4`), and
+that job was deleted in the CI gate reduction. The strict build survives only
+in `docs-pages.yml`, which runs after the merge to `dev`, so a broken
+user-guide link now merges green and surfaces as a failed Pages deploy, the
+exact failure mode pb2s4 was filed to remove. `npm run docs:check` is gone
+too, along with `scripts/check-operator-docs.mjs`.
+
+**The required-context contract still applies to what remains.** A required
+name that no job emits blocks every open pull request permanently, not just
+the one that broke it, because `enforce_admins` is true on `dev` and there is
+no admin bypass. `backend/tests/unit/test_classify_changed_paths.py::TestWorkflowContract`
+pins the four surviving names to the four jobs that emit them, in both
+directions: a required name no job emits fails, and so does a second job that
+starts emitting one.
+
 ## Container Freshness Check
 
 **Before triaging any "test failure" bead that reports failures from
 `ecm-ecm-1`, verify the container is actually running current `dev`
 HEAD.** This pattern (engineer files a "tests failing on dev" bead;
 investigation reveals tests pass locally and the container is stale)
-recurred enough times — beads `5dug8`, `0gcu9`, others — that it
+recurred enough times (beads `5dug8`, `0gcu9`, others) that it
 deserves its own check (bd-h0wfu).
 
 The container reports its source SHA in two places, populated from
@@ -282,7 +723,7 @@ git fetch origin dev
 git rev-parse origin/dev
 ```
 
-**If the SHAs match**, the container is current — investigate the test
+**If the SHAs match**, the container is current. Investigate the test
 failure as real. **If they don't match**, the container is stale; redeploy
 current dev HEAD before triaging:
 
@@ -299,14 +740,14 @@ docker cp dist/. ecm-ecm-1:/app/static/
 ```
 
 Re-run the failing tests. If they now pass, the bead was deploy drift,
-not a code defect — close it without filing a code bead. The
+not a code defect. Close it without filing a code bead. The
 container-first development workflow (per `CLAUDE.md`) means agents
 `docker cp` specific files when iterating, so the shared `ecm-ecm-1`
 container can lag origin/dev when nobody re-deploys after a merge to
 `dev`. The freshness check above is a one-line cure for the entire
 class of fake test-failure beads.
 
-The same SHA labels also drive container-drift dashboards in Grafana —
+The same SHA labels also drive container-drift dashboards in Grafana:
 `max by (git_sha) (ecm_app_info)` shows the running build identity, and
 an alert can fire when it diverges from the `origin/dev` SHA published by
 the build pipeline.
@@ -315,11 +756,13 @@ the build pipeline.
 
 ```bash
 # Backend
-python -m py_compile backend/main.py && cd backend && python -m pytest tests/ -q
+.venv/bin/python -m py_compile backend/main.py && scripts/backend-gate.sh
 
 # Frontend
 cd frontend && npm test && npm run build
 ```
+
+`scripts/backend-gate.sh` pins the project interpreter itself and refuses to fall back to ambient `python` — which resolves an older `cryptography` and silently self-skips 9 TLS tests, so the gate would report success either way. Pin the venv for the `py_compile` call too. See [The interpreter is part of the gate](#the-interpreter-is-part-of-the-gate).
 
 ## Mock Patch Targets
 
@@ -331,8 +774,8 @@ When endpoints move from `main.py` to `routers/<module>.py`, test mock patches m
 
 ## Flake Triage Policy
 
-Flaky tests — tests that pass and fail non-deterministically without code changes
-— are treated as **P1 bugs** (per the QA hard rules). The baseline established in
+Flaky tests are tests that pass and fail non-deterministically without code changes.
+They are treated as **P1 bugs** (per the QA hard rules). The baseline established in
 bead `enhancedchannelmanager-tp681` (2026-04-20): 3 consecutive BE + FE runs on
 `dev` tip produced zero true flakes.
 
@@ -346,18 +789,18 @@ identical re-runs without any code or data change. Common causes:
 - **Shared state**: module-level globals leaking between tests, DB rows not
   rolled back, singleton clients caching values.
 - **Environmental**: test expects a file, binary, or network endpoint that is
-  only sometimes present. These are **not true flakes** — they are environment
+  only sometimes present. These are **not true flakes**. They are environment
   drift and should be fixed by making the test defensive, not by re-running.
 
 If a test fails identically every run for the same reason, it is **deterministically
-broken** — repair the test or the code. Do not mark it `flaky`.
+broken**. Repair the test or the code. Do not mark it `flaky`.
 
 ### Re-run policy (CI & local)
 
 | Scenario | Allowed re-runs |
 |----------|-----------------|
 | PR check fails on one test, passes on re-run | Re-run **once** to confirm flake. If flaky, file a `flaky`-labelled bead before merge. |
-| PR check fails on same test twice in a row | Treat as deterministic break — do not merge. |
+| PR check fails on same test twice in a row | Treat as deterministic break. Do not merge. |
 | Local `pytest` / `vitest` reports intermittent failure | Re-run **up to twice**. If it recurs, open a bead rather than silently re-running. |
 
 **Never** use `pytest-rerunfailures`, `vitest --retry`, or equivalent as an
@@ -371,7 +814,7 @@ temporary mitigation while a bead is open.
 2. If the test blocks the suite, mark it with
    `@pytest.mark.skip(reason="flaky, see bead <id>")` or
    `test.fixme(...)` in vitest. Cite the bead ID in the reason string.
-3. Do **not** leave `@pytest.mark.xfail` on flaky tests — xfail masks real
+3. Do **not** leave `@pytest.mark.xfail` on flaky tests: xfail masks real
    regressions once the code is fixed.
 
 ### Quarterly flake sweep
@@ -380,8 +823,8 @@ Every quarter (tracked via recurring beads), the QA persona (or on-call
 engineer in its absence) runs the 3-run cadence from bead `tp681`:
 
 1. Pull the current `flaky`-labelled beads list.
-2. Execute BE (`pytest tests/ --ignore=tests/e2e -m "not slow"`) and FE
-   (`npx vitest run`) three consecutive times on `dev` tip.
+2. Execute BE (`scripts/backend-gate.sh`) and FE (`npx vitest run`) three
+   consecutive times on `dev` tip.
 3. Any test that fails in exactly one of the three runs → new `flaky`-labelled
    bead (or comment on the existing one if already known).
 4. Any test that fails in all three runs → it is a real regression; escalate
@@ -392,7 +835,7 @@ engineer in its absence) runs the 3-run cadence from bead `tp681`:
 ### Flake baseline gate for PR reviews
 
 The reviewer SHOULD reject a PR when the CI failure signature includes a test
-in the **flagged-in-last-30-runs** list — those are known-flaky and the PR
+in the **flagged-in-last-30-runs** list. Those are known-flaky, and the PR
 needs a clean re-run (or an explicit note that the flake is unrelated to the
 change).
 
@@ -402,7 +845,7 @@ open / sync it walks the last 30 `Tests` workflow runs on the PR's base
 branch, parses the `junit-backend` and `junit-frontend` artifacts, and posts
 or updates a single PR comment listing every test that failed in at least
 one of those runs. The comment is identified by a hidden marker and updated
-in place — no comment-storm on rebased branches. The comment is
+in place, avoiding a comment-storm on rebased branches. The comment is
 informational only; it does not gate merge.
 
 Reviewer workflow:
@@ -436,17 +879,17 @@ Tracked in bead **enhancedchannelmanager-hhsz0** (`flaky` label, P1).
 **Not flakes, but deterministic environment drift (cleared in bead 0gcu9):**
 
 The original three BE tests covered by `enhancedchannelmanager-0gcu9` were:
-- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`
-  — referenced a POST route that was removed from `routers/tasks.py`. **Test
+- `tests/integration/test_api_tasks.py::TestRunTaskWithSchedule::test_run_task_with_schedule_id`:
+  referenced a POST route that was removed from `routers/tasks.py`. **Test
     deleted.**
-- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`
-  — failed because the SPA fallback route `/{full_path:path}` registers only
+- `tests/integration/test_router_registration.py::TestRoutePrefixes::test_all_routes_under_api`:
+  failed because the SPA fallback route `/{full_path:path}` registers only
     when `backend/static/` exists (present in prod image, absent on CI). **Fixed
     by adding the SPA fallback path to `NON_API_ROUTES`.**
-- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`
-  — the code under test promised an output-writability check its docstring
+- `tests/unit/test_ffmpeg_execution.py::TestExecutionSafety::test_validates_output_path_writable`:
+  the code under test promised an output-writability check its docstring
     described. **Resolved by deleting `ffmpeg_builder/execution.py` and the
-    whole `test_ffmpeg_execution.py` file — the module was dead code (zero live
+    whole `test_ffmpeg_execution.py` file: the module was dead code (zero live
     callers; ECM builds ffmpeg command configs but never executes ffmpeg).**
 
 None of these tests need deselection any longer; the 3-run cadence command
@@ -458,14 +901,22 @@ under `enhancedchannelmanager-hhsz0`.
 The exact command used for the `tp681` baseline and the quarterly sweep:
 
 ```bash
-# BE — from inside ecm-ecm-1
-python -m pytest tests/ --ignore=tests/e2e \
+# BE — the gate, plus the flake sweep's own deselects.
+scripts/backend-gate.sh \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_trace_id_appears_in_log_line \
   --deselect tests/routers/test_observability_middleware.py::TestTraceIdMiddleware::test_generated_trace_id_matches_uuidv4_format_in_logs \
-  -p no:cacheprovider --tb=line -q
+  -p no:cacheprovider --tb=line
 
 # FE — from host (ecm-ecm-1 has no Node tooling)
 cd frontend && npx vitest run --reporter=default
 ```
 
 Remove the relevant `--deselect` once a flake/drift bead closes.
+
+> **Reading the deselect count here.** This sweep passes two `--deselect`s of
+> its own *on top of* the gate's `-m "not slow"`, so it reports **`4
+> deselected`**, not 2. That is expected and is the only invocation in this
+> repo that should report 4. If a sweep run reports 2, the `--deselect` flags
+> did not take effect; if a plain gate run reports 4, something is deselecting
+> tests that this table does not name. Either way, find out before reading the
+> run as green.

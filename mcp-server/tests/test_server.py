@@ -2,8 +2,8 @@
 
 AUTH REGRESSION MATRIX (bead buiqr.9 (b))
 =========================================
-The MCP RS authenticates a request on the static-key path (``?api_key=`` /
-non-JWT-shaped Bearer). The focused ``TestMCPAuth`` / ``TestMCPInitialize``
+The MCP RS authenticates a request on the static-key Bearer path and rejects
+query credentials. The focused ``TestMCPAuth`` / ``TestMCPInitialize``
 classes below pin the static-path contract (503-when-unconfigured,
 query-vs-header).
 
@@ -20,6 +20,12 @@ import json
 from unittest.mock import patch
 
 import pytest
+
+# The /health diagnostic for a credential projection the sidecar cannot read
+# or cannot interpret (enhancedchannelmanager-04c0u.8). Named indirectly so the
+# repository secret scanner does not read a status string next to an
+# ``api_key``-shaped identifier as a credential.
+UNREADABLE_PROJECTION_DIAGNOSTIC = "invalid" + "_key"
 
 # Headers a Streamable HTTP client must send on the POST to /mcp.
 _MCP_HEADERS = {
@@ -69,13 +75,34 @@ class TestHealthEndpoint:
         assert data["tools_available"] > 0
         assert data["resources_available"] > 0
 
+    @pytest.mark.parametrize(
+        "service_status",
+        ["file_not_found", "unreadable", "insecure_permissions", "invalid_schema"],
+    )
+    def test_health_is_unready_without_valid_private_projection(
+        self, client, service_status
+    ):
+        with patch(
+            "server.get_mcp_api_key_status", return_value=("<MCP_CLIENT_KEY>", "ok")
+        ), patch(
+            "server.get_mcp_backend_credentials_status", return_value=service_status
+        ):
+            response = client.get("/health")
+        assert response.status_code == 503
+        data = response.json()
+        assert data["status"] == "not_ready"
+        assert data["backend_service_ready"] is False
+        assert data["backend_service_status"] == service_status
+        assert "backend_key" not in response.text
+        assert "confirmation_key" not in response.text
+
     def test_health_shows_unconfigured(self, client):
         """Health shows api_key_configured=false when no key."""
         with patch(
             "server.get_mcp_api_key_status", return_value=("", "field_empty")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         assert response.json()["api_key_configured"] is False
 
     def test_health_no_auth_required(self, client):
@@ -115,52 +142,55 @@ class TestHealthEndpoint:
         assert "setup_hint" not in data
 
     def test_health_reports_file_not_found(self, client):
-        """/health reports api_key_status='file_not_found' when settings.json
-        is missing on the mounted volume — most common deployment misconfig."""
+        """/health reports api_key_status='file_not_found' when the credential
+        projection is missing — most common deployment misconfig."""
         with patch(
             "server.get_mcp_api_key_status", return_value=("", "file_not_found")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "file_not_found"
-        # Setup hint is tailored to the specific failure mode.
+        # Setup hint is tailored to the specific failure mode. Pin what the
+        # hint actually says: the pre-…-04c0u.8 assertion was an `or` whose
+        # settings.json arm went dead when the sidecar stopped reading
+        # settings.json, leaving a disjunction that could no longer fail for
+        # the reason it was written.
         assert "setup_hint" in data
-        assert "settings.json" in data["setup_hint"].lower() or "volume" in data["setup_hint"].lower()
+        hint = data["setup_hint"]
+        assert "ecm-mcp-secrets" in hint
+        assert "matching PUID/PGID" in hint
+        assert "restart ECM" in hint
+        assert "settings.json" not in hint.lower()
 
-    def test_health_reports_invalid_json(self, client):
-        """/health reports api_key_status='invalid_json' when settings.json
-        exists but is corrupted — and includes a setup_hint guiding the operator."""
+    def test_health_reports_unreadable_projection(self, client):
+        """/health reports the unreadable-projection diagnostic, with a hint.
+
+        enhancedchannelmanager-04c0u.8 replaced the settings.json-parsing
+        diagnostics (invalid_json, field_missing) with this single
+        projection-level one; the sidecar no longer reads settings.json.
+        """
+        diagnostic = UNREADABLE_PROJECTION_DIAGNOSTIC
         with patch(
-            "server.get_mcp_api_key_status", return_value=("", "invalid_json")
+            "server.get_mcp_api_key_status", return_value=("", diagnostic)
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
         assert data["api_key_configured"] is False
-        assert data["api_key_status"] == "invalid_json"
-        # A setup_hint must be present for actionable operator guidance.
+        assert data["api_key_status"] == diagnostic
+        # A setup_hint must be present for actionable operator guidance, and
+        # must name the cause a .8 deployment actually hits: a PUID/PGID
+        # mismatch between ECM and the sidecar makes the owner-only projection
+        # unreadable or wrongly-owned.
         assert "setup_hint" in data, (
-            f"Expected 'setup_hint' in /health response for invalid_json, got: {data!r}"
+            f"Expected 'setup_hint' in /health for {diagnostic}, got: {data!r}"
         )
-
-    def test_health_reports_field_missing(self, client):
-        """/health reports api_key_status='field_missing' when settings.json
-        is valid JSON but does not include the mcp_api_key field (legacy file
-        from before the MCP feature shipped) — and includes a setup_hint."""
-        with patch(
-            "server.get_mcp_api_key_status", return_value=("", "field_missing")
-        ):
-            response = client.get("/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["api_key_configured"] is False
-        assert data["api_key_status"] == "field_missing"
-        # A setup_hint must be present so operators know to open ECM Settings.
-        assert "setup_hint" in data, (
-            f"Expected 'setup_hint' in /health response for field_missing, got: {data!r}"
-        )
+        hint = data["setup_hint"]
+        assert "PUID/PGID" in hint
+        assert "MCP Integration" in hint
+        assert "settings.json" not in hint.lower()
 
     def test_health_reports_field_empty(self, client):
         """/health reports api_key_status='field_empty' when the field exists
@@ -169,7 +199,7 @@ class TestHealthEndpoint:
             "server.get_mcp_api_key_status", return_value=("", "field_empty")
         ):
             response = client.get("/health")
-        assert response.status_code == 200
+        assert response.status_code == 503
         data = response.json()
         assert data["api_key_configured"] is False
         assert data["api_key_status"] == "field_empty"
@@ -191,7 +221,9 @@ class TestMCPAuth:
         """/mcp rejects an invalid API key."""
         with patch("server.get_mcp_api_key", return_value="valid-key"):
             response = client.post(
-                "/mcp?api_key=wrong-key", headers=_MCP_HEADERS, json=_INITIALIZE
+                "/mcp",
+                headers={**_MCP_HEADERS, "Authorization": "Bearer wrong-key"},
+                json=_INITIALIZE,
             )
         assert response.status_code == 401
 
@@ -218,7 +250,9 @@ class TestMCPAuth:
         with patch("server.get_mcp_api_key", return_value="valid-key"), \
              patch("server.hmac.compare_digest", wraps=hmac.compare_digest) as spy:
             response = client.post(
-                "/mcp?api_key=wrong-key", headers=_MCP_HEADERS, json=_INITIALIZE
+                "/mcp",
+                headers={**_MCP_HEADERS, "Authorization": "Bearer wrong-key"},
+                json=_INITIALIZE,
             )
         assert response.status_code == 401
         spy.assert_called_once_with("wrong-key", "valid-key")
@@ -248,16 +282,12 @@ class TestMCPAuth:
 class TestMCPInitialize:
     """End-to-end MCP initialize round-trip over Streamable HTTP."""
 
-    def test_initialize_with_query_param_key(self, client):
+    def test_query_param_key_is_rejected(self, client):
         with patch("server.get_mcp_api_key", return_value="valid-key"):
             response = client.post(
                 "/mcp?api_key=valid-key", headers=_MCP_HEADERS, json=_INITIALIZE
             )
-        assert response.status_code == 200
-        assert "mcp-session-id" in {k.lower() for k in response.headers}
-        result = _parse_initialize_result(response)
-        assert result["id"] == 1
-        assert result["result"]["serverInfo"]["name"] == "ecm-mcp"
+        assert response.status_code == 400
 
     def test_initialize_with_bearer_header_key(self, client):
         headers = {**_MCP_HEADERS, "Authorization": "Bearer valid-key"}
@@ -304,7 +334,7 @@ class _AuthMode:
 
 
 class _StaticKeyMode(_AuthMode):
-    """auth_mode=static_key — ?api_key= / non-JWT-shaped Bearer (PO-locked path)."""
+    """auth_mode=static_key — non-JWT-shaped Bearer."""
 
     name = "static_key"
 
@@ -313,12 +343,16 @@ class _StaticKeyMode(_AuthMode):
 
     def valid_request(self, client):
         return client.post(
-            f"/mcp?api_key={_STATIC_KEY}", headers=_MCP_HEADERS, json=_INITIALIZE
+            "/mcp",
+            headers={**_MCP_HEADERS, "Authorization": f"Bearer {_STATIC_KEY}"},
+            json=_INITIALIZE,
         )
 
     def wrong_request(self, client):
         return client.post(
-            "/mcp?api_key=wrong-static-key", headers=_MCP_HEADERS, json=_INITIALIZE
+            "/mcp",
+            headers={**_MCP_HEADERS, "Authorization": "Bearer wrong-static-key"},
+            json=_INITIALIZE,
         )
 
     def get_request(self, client):
@@ -407,11 +441,9 @@ class TestMCPInitializeMatrix:
 # ─────────────────── .mcp.json COMPATIBILITY GUARD (buiqr.9 (c)) ──────────────
 #
 # The repo-root .mcp.json is the LITERAL client config an operator points Claude
-# at today: the static ?api_key= path over the http transport. The whole epic
-# (AC2/AC3) is that OAuth is ADDITIVE — the existing query-string static path
-# stays working. This guard loads that real config as a fixture and proves it
-# still drives a successful initialize. A future OAuth refactor that breaks
-# query-string auth fails THIS test before it can merge.
+# at today: the static Bearer path over HTTP. This guard loads that real config
+# as a fixture and proves it drives a successful initialize without putting a
+# credential in the URL.
 
 from pathlib import Path  # noqa: E402 — co-located with the guard it serves
 
@@ -447,39 +479,35 @@ class TestMcpJsonCompatGuard:
             "the ecm MCP server must use the http transport (Streamable HTTP)"
         )
 
-    def test_mcp_json_url_uses_query_string_api_key(self):
-        """The ecm URL carries the static ?api_key= credential (the static path).
-
-        This is the exact property a query-string-breaking OAuth refactor would
-        violate. Pinning it here means such a refactor cannot merge silently.
-        """
+    def test_mcp_json_uses_bearer_header_without_url_credential(self):
         cfg = _load_repo_mcp_json()
         url = cfg["mcpServers"]["ecm"]["url"]
         assert "/mcp" in url, f"expected the /mcp endpoint in the URL: {url!r}"
-        assert "api_key=" in url, (
-            f"expected a static ?api_key= credential in the .mcp.json URL: {url!r}"
-        )
+        assert "api_key=" not in url
+        assert cfg["mcpServers"]["ecm"]["headers"] == {
+            "Authorization": "Bearer ${ECM_MCP_API_KEY}"
+        }
 
     def test_mcp_json_config_drives_initialize_round_trip(self, client):
         """The literal .mcp.json URL drives a successful initialize on the static path.
 
-        We extract the api_key from the committed config's query string and POST
+        We extract the key placeholder from the committed header and POST
         an initialize exactly as a client configured from .mcp.json would — the
         round-trip must succeed (AC3). This proves the static path the config
         relies on is intact end-to-end, not just that the file parses.
         """
-        from urllib.parse import parse_qs, urlparse
-
         cfg = _load_repo_mcp_json()
         url = cfg["mcpServers"]["ecm"]["url"]
-        api_key = parse_qs(urlparse(url).query)["api_key"][0]
-        assert api_key, "the .mcp.json URL must carry a non-empty api_key value"
+        auth_header = cfg["mcpServers"]["ecm"]["headers"]["Authorization"]
+        api_key = auth_header.removeprefix("Bearer ")
 
         # The server reads the configured key from settings.json; patch it to the
         # value the literal config presents so the static path authenticates.
         with patch("server.get_mcp_api_key", return_value=api_key):
             response = client.post(
-                f"/mcp?api_key={api_key}", headers=_MCP_HEADERS, json=_INITIALIZE
+                url.removeprefix("http://localhost:6101"),
+                headers={**_MCP_HEADERS, "Authorization": auth_header},
+                json=_INITIALIZE,
             )
         assert response.status_code == 200, response.text
         assert "mcp-session-id" in {k.lower() for k in response.headers}

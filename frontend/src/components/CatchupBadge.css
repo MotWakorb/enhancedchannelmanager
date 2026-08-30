@@ -19,10 +19,13 @@
   align-self: flex-start;
   flex-shrink: 0;
   gap: 3px;
-  font-size: 11px;
-  font-weight: 500;
+  /* The badge role from the P1 content-pane type scale (10px/500), replacing
+     the hand-set 11px this shipped with. See index.css § Typography Roles. */
+  font-size: var(--type-badge-size, 0.625rem);
+  font-weight: var(--type-badge-weight, 500);
+  line-height: var(--type-badge-line-height, 1.4);
   padding: 1px 6px;
-  border-radius: 10px;
+  border-radius: var(--radius-full, 9999px);
   background: var(--bg-elevated, rgba(255, 255, 255, 0.06));
   color: var(--text-secondary, rgba(255, 255, 255, 0.7));
   border: 1px solid var(--border-primary, rgba(255, 255, 255, 0.1));
@@ -30,11 +33,26 @@
   vertical-align: middle;
 }
 
-.catchup-badge__icon {
-  font-size: 12px;
+/* Two classes deep on purpose. `.catchup-badge__icon` alone ties with the
+   base `.material-icons` rule in index.css (both 0,1,0) and lost it,
+   because index.css is loaded after this component's lazily-imported
+   stylesheet — so the glyph rendered at the Material default 24px and
+   inflated the whole pill to 28px tall regardless of the 12px declared
+   here. Bead enhancedchannelmanager-sccol.
+
+   `1em` rather than a number from the icon scale: --icon-status (18px) and
+   --icon-action (16px) are both larger than the badge's own 10px text and
+   would put the pill straight back where it was. Tying the glyph to the
+   badge text is what keeps the pill coherent if the badge role moves. */
+.catchup-badge .catchup-badge__icon {
+  font-size: 1em;
+  width: 1em;
   line-height: 1;
 }
 
-.catchup-badge__text {
-  line-height: 1;
+/* Inherits the badge role's 1.4 line box — with the glyph now at 1em the
+   pill no longer needs the `line-height: 1` clamp that kept the old 24px
+   icon from making it taller still. */
+.catchup-badge .catchup-badge__text {
+  line-height: inherit;
 }

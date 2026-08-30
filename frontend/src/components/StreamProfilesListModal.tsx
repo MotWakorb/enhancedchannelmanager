@@ -3,6 +3,7 @@ import type { StreamProfile } from '../types';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './StreamProfilesListModal.css';
 
@@ -22,6 +23,7 @@ interface StreamProfilesListModalProps {
  * operations outside this bead).
  */
 export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: StreamProfilesListModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const notifications = useNotifications();
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
@@ -57,10 +59,10 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md stream-profiles-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md stream-profiles-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2 className="modal-title">Stream Profiles</h2>
+          <h2 className="modal-title" id={titleId}>Stream Profiles</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
@@ -130,14 +132,14 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
               </label>
               <div className="stream-profile-create-actions">
                 <button
-                  className="modal-btn-secondary"
+                  className="modal-btn modal-btn-secondary"
                   onClick={() => setShowCreateForm(false)}
                   disabled={creating}
                 >
                   Cancel
                 </button>
                 <button
-                  className="modal-btn-primary"
+                  className="modal-btn modal-btn-primary"
                   onClick={handleCreate}
                   disabled={!canCreate || creating}
                 >
@@ -146,7 +148,7 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
               </div>
             </div>
           ) : (
-            <button className="modal-btn-primary" onClick={() => setShowCreateForm(true)}>
+            <button className="modal-btn modal-btn-primary" onClick={() => setShowCreateForm(true)}>
               <span className="material-icons">add</span>
               New Stream Profile
             </button>
@@ -154,7 +156,7 @@ export function StreamProfilesListModal({ streamProfiles, onClose, onChanged }: 
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn-secondary" onClick={onClose}>Close</button>
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>Close</button>
         </div>
       </div>
     </ModalOverlay>

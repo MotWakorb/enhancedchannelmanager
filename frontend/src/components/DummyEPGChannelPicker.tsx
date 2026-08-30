@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, memo } from 'react';
 import type { Channel, ChannelGroup, DummyEPGChannelAssignment } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { CustomSelect } from './CustomSelect';
 import { useNotifications } from '../contexts/NotificationContext';
 import { logger } from '../utils/logger';
@@ -23,6 +24,7 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
   onClose,
   onChanged,
 }: DummyEPGChannelPickerProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [channels, setChannels] = useState<Channel[]>([]);
   const [groups, setGroups] = useState<ChannelGroup[]>([]);
@@ -142,10 +144,10 @@ export const DummyEPGChannelPicker = memo(function DummyEPGChannelPicker({
   ];
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-xl channel-picker-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-xl channel-picker-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Channels - {profileName}</h2>
+          <h2 id={titleId}>Channels - {profileName}</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

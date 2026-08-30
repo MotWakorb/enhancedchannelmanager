@@ -12,11 +12,22 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import gzip
 import socket
+import threading
 import time
 
 from fastapi import HTTPException
 from security.ssrf import SSRFMode
 from services.epg_migration import build_xmltv_lcn_index
+
+# Safety bound for the off-loop handshake in
+# test_large_xml_index_parse_does_not_block_event_loop. It is a deadlock guard,
+# not an assertion threshold: the healthy path clears it in microseconds, and a
+# value this generous (10x the worst event-loop stall ever observed on a
+# saturated CI runner) cannot be reached by machine load alone.
+_LOOP_LIVENESS_TIMEOUT = 10.0
+# Async task handshakes must never turn a rejected launch into an unbounded
+# suite hang. Healthy in-process launches signal in milliseconds.
+_TASK_HANDSHAKE_TIMEOUT = 10.0
 
 
 class _FakeEPGHTTPClient:
@@ -432,14 +443,47 @@ class TestGuideMigration:
 
     @pytest.mark.asyncio
     async def test_large_xml_index_parse_does_not_block_event_loop(self):
+        """The bounded XMLTV header parse must run off the event loop thread.
+
+        ``_load_xmltv_migration_index`` hands ``_parse_bounded_xmltv_header`` to
+        ``concurrency.run_cpu_bound``, which is ``loop.run_in_executor`` over the
+        bounded ``ecm-cpu`` thread pool. That thread hop is the property under
+        test.
+
+        Asserted as a *mechanism*, not as a latency budget. The previous shape
+        measured the wall-clock scheduling latency of a 10ms sleep against a 50ms
+        budget, and that measurement cannot separate the two cases it needs to
+        tell apart. The identical shape in
+        tests/unit/test_dispatcharr_client_epg_bounds.py failed CI twice on
+        healthy code (0.7936s and 0.9696s) while a genuinely inline parse costs
+        only ~0.11s here — the noise band sits entirely above the signal band, so
+        no threshold both catches the regression and survives a loaded runner
+        (beads enhancedchannelmanager-kcyiq, -ssvvl; commit bb4dc67c). Both
+        assertions below are event-driven rather than clock-driven and are
+        therefore immune to machine load.
+        """
         from routers.epg import _load_xmltv_migration_index
 
         fake_http = _FakeEPGHTTPClient(
             {"https://epg.test/large.xml": _xmltv('<channel id="x"><gnid>1</gnid></channel>')}
         )
 
+        loop_thread_ident = threading.get_ident()
+        parse_entered = threading.Event()
+        loop_advanced = threading.Event()
+        observed: dict = {}
+
         def slow_parse(content, source_id):
-            time.sleep(0.1)
+            observed["thread_ident"] = threading.get_ident()
+            observed["thread_name"] = threading.current_thread().name
+            parse_entered.set()
+            # Hold the parse open until the event loop proves it is still
+            # running. This replaces a fixed sleep: the parse is guaranteed to
+            # still be in flight when liveness is observed, instead of racing a
+            # timer.
+            observed["loop_advanced_during_parse"] = loop_advanced.wait(
+                timeout=_LOOP_LIVENESS_TIMEOUT
+            )
             return build_xmltv_lcn_index([("x", "1")])
 
         with patch("routers.epg.httpx.AsyncClient", return_value=fake_http), patch(
@@ -450,11 +494,23 @@ class TestGuideMigration:
                     {"id": 1, "url": "https://epg.test/large.xml"}
                 )
             )
-            started = time.perf_counter()
-            await asyncio.sleep(0.01)
-            elapsed = time.perf_counter() - started
+            # Reaching this poll at all means the loop was not blocked by the
+            # parse. The deadline is a hang guard, not an assertion.
+            poll_deadline = time.monotonic() + _LOOP_LIVENESS_TIMEOUT
+            while not parse_entered.is_set() and time.monotonic() < poll_deadline:
+                await asyncio.sleep(0.001)
+            loop_advanced.set()
             result = await parse_task
-        assert elapsed < 0.05
+
+        assert parse_entered.is_set(), "_parse_bounded_xmltv_header was never called"
+        assert observed["thread_ident"] != loop_thread_ident, (
+            "_parse_bounded_xmltv_header ran on the event loop thread "
+            f"({observed['thread_name']}) — the parse is blocking the loop"
+        )
+        assert observed["loop_advanced_during_parse"] is True, (
+            "the event loop did not advance while the parse was in flight — "
+            f"parse ran on {observed['thread_name']}"
+        )
         assert result.channel_to_lcn == {"x": "1"}
 
     @pytest.mark.asyncio
@@ -818,11 +874,17 @@ class TestGuideMigration:
             "routers.epg._run_guide_migration", side_effect=slow_run
         ):
             first = await async_client.post("/api/epg/migration/apply", json=payload)
-            await started.wait()
-            second = await async_client.post("/api/epg/migration/apply", json=payload)
-            assert first.status_code == 202
-            assert second.status_code == 409
-            release.set()
+            assert first.status_code == 202, first.text
+            try:
+                await asyncio.wait_for(
+                    started.wait(), timeout=_TASK_HANDSHAKE_TIMEOUT
+                )
+                second = await async_client.post(
+                    "/api/epg/migration/apply", json=payload
+                )
+                assert second.status_code == 409
+            finally:
+                release.set()
             terminal = await _poll_migration(async_client, first)
         assert terminal["status"] == "completed"
 

@@ -5,15 +5,15 @@
 You are an expert on ECM's (Enhanced Channel Manager) Channel Pipeline rule engine. A user has shared their YAML rule configuration and/or execution log and needs help understanding why it isn't working as expected, or wants optimization suggestions.
 
 The user may provide:
-- **YAML only** — analyze the rules for potential issues and suggest improvements
-- **YAML + execution log** — correlate the log output with the rules to pinpoint exactly what went wrong
-- **Execution log only** — diagnose issues from the log entries
+- **YAML only**: analyze the rules for potential issues and suggest improvements
+- **YAML + execution log**: correlate the log output with the rules to pinpoint exactly what went wrong
+- **Execution log only**: diagnose issues from the log entries
 
 ## Your Task
 
 1. **Read the source code** from GitHub to ground your analysis in actual behavior:
-   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/channel_pipeline_executor.py — the execution engine (how actions actually run)
-   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/channel_pipeline_schema.py — schema definitions (all condition types, action types, template variables, if_exists behaviors)
+   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/channel_pipeline_executor.py: the execution engine (how actions actually run)
+   - https://raw.githubusercontent.com/MotWakorb/enhancedchannelmanager/dev/backend/channel_pipeline_schema.py: schema definitions (all condition types, action types, template variables, if_exists behaviors)
 
    Fetch these files using WebFetch before analyzing. This ensures your analysis reflects the actual code behavior.
 
@@ -28,33 +28,33 @@ The user may provide:
 
 ### Group Creation Issues
 - **Missing `create_group` action**: If the user wants channels in dynamic groups (e.g., per stream_group), they need a `create_group` action *before* `create_channel`.
-- **Hardcoded `group_id`/`group_name`**: Overrides dynamic group creation — everything goes to one group.
+- **Hardcoded `group_id`/`group_name`**: Overrides dynamic group creation; everything goes to one group.
 
 ### Condition Issues
-- **`always` condition** matches everything — usually too broad. Suggest filtering by stream_group, provider, quality, etc.
+- **`always` condition** matches everything, usually too broad. Suggest filtering by stream_group, provider, quality, etc.
 - **Missing `negate: true`** for exclusion patterns.
 - **Regex vs contains** confusion (`stream_name_matches` is regex, `stream_name_contains` is substring).
 
 ### Rule Ordering Issues
-- **`stop_on_first_match: false`** means every matching stream hits every rule — later rules may undo earlier ones.
-- **Priority ordering** — lower priority number = runs first.
-- **`orphan_action: delete`** — removes channels that no longer match any stream. Can be destructive if conditions are too narrow.
+- **`stop_on_first_match: false`** means every matching stream hits every rule. Later rules may undo earlier ones.
+- **Priority ordering**: lower priority number = runs first.
+- **`orphan_action: delete`**: removes channels that no longer match any stream. Can be destructive if conditions are too narrow.
 
 ### Merge/Stream Issues
-- **`merge_streams` with `target: auto`** — looks for existing channels by normalized name; if no match, skips the stream entirely.
+- **`merge_streams` with `target: auto`**: looks for existing channels by normalized name; if no match, skips the stream entirely.
 - **Sort order affects which stream becomes primary** in a channel.
 
 ### Unicode-Suffix Normalization Surprises
 
-If a pattern appears to match when you read it but the engine says otherwise (or vice versa) for inputs containing Unicode suffixes — `ᴴᴰ`, `ᴿᴬᵂ`, `²`, `³`, zero-width joiners, NFD-decomposed accents — the cause is almost always a Unicode-normal-form mismatch between the pattern and the input.
+If a pattern appears to match when you read it but the engine says otherwise (or vice versa) for inputs containing Unicode suffixes (`ᴴᴰ`, `ᴿᴬᵂ`, `²`, `³`, zero-width joiners, NFD-decomposed accents), the cause is almost always a Unicode-normal-form mismatch between the pattern and the input.
 
-Under the unified NormalizationPolicy (bd-eio04.1), every input is NFC-canonicalized, Cf-stripped (ZWSP/ZWNJ/ZWJ/BOM), and superscript-converted (letters + numerics) **before** any rule pattern runs. A pattern typed against the pre-policy raw bytes (e.g. containing a ZWSP you can't see, or an NFD-decomposed `é`) will not match the post-policy input — and looks identical in the UI.
+Under the unified NormalizationPolicy (bd-eio04.1), every input is NFC-canonicalized, Cf-stripped (ZWSP/ZWNJ/ZWJ/BOM), and superscript-converted (letters + numerics) **before** any rule pattern runs. A pattern typed against the pre-policy raw bytes (e.g. containing a ZWSP you can't see, or an NFD-decomposed `é`) will not match the post-policy input, and looks identical in the UI.
 
 When diagnosing this class:
 
 - Paste the raw input into Settings → Normalization → Test Rules and read the trace drawer. Test Rules applies the policy and shows you the bytes your pattern actually runs against.
 - Ensure both your pattern and your sample input are in the same normal form (NFC, no stray Cf code points). Re-type the pattern inside the rule editor rather than pasting from a source with unknown provenance.
-- For `²` / `³` / `ᴴᴰ` / `ᴿᴬᵂ`: these now strip on every code path. If a rule expected to see them in the input, the rule is running too late in the pipeline (after the policy has already converted them) — condition against the ASCII equivalent.
+- For `²` / `³` / `ᴴᴰ` / `ᴿᴬᵂ`: these now strip on every code path. If a rule expected to see them in the input, the rule is running too late in the pipeline (after the policy has already converted them); condition against the ASCII equivalent.
 
 Full reference: [`docs/normalization.md`](../normalization.md). Operator triage for duplicate channels caused by Unicode-suffix divergence: [`docs/runbooks/duplicate-channels-unicode-suffix.md`](../runbooks/duplicate-channels-unicode-suffix.md).
 
@@ -62,14 +62,14 @@ Full reference: [`docs/normalization.md`](../normalization.md). Operator triage 
 
 The execution log uses the `[AUTO-CREATE-EXEC]` prefix. Key patterns to look for:
 
-- **`name='X' if_exists=merge`** — shows what name was resolved and what strategy is being used
-- **`Lookup 'X': found id=N`** / **`Lookup 'X': not found`** — whether the channel name matched an existing channel. "not found" with `if_exists=merge` means a new channel was created (often the root cause of unexpected new channels/groups)
-- **`Channel 'X' already exists, skipped`** — channel matched, action skipped (if_exists=skip)
-- **`Created channel 'X' (#N) in group Y`** — new channel was created (check: was this intended?)
-- **`No existing channel found — stream skipped`** — merge_streams couldn't find a target
-- **`became 'Y' after normalization and matched an existing channel`** — normalization collapsed a name
-- **`spec='100-99999' (range) -> N`** — channel number assignment from range
-- **Stream summary lines**: `created=True/False modified=True/False skipped=True/False` — per-action outcomes
+- **`name='X' if_exists=merge`**: shows what name was resolved and what strategy is being used
+- **`Lookup 'X': found id=N`** / **`Lookup 'X': not found`**: whether the channel name matched an existing channel. "not found" with `if_exists=merge` means a new channel was created (often the root cause of unexpected new channels/groups)
+- **`Channel 'X' already exists, skipped`**: channel matched, action skipped (if_exists=skip)
+- **`Created channel 'X' (#N) in group Y`**: new channel was created (check: was this intended?)
+- **`No existing channel found — stream skipped`**: merge_streams couldn't find a target
+- **`became 'Y' after normalization and matched an existing channel`**: normalization collapsed a name
+- **`spec='100-99999' (range) -> N`**: channel number assignment from range
+- **Stream summary lines**: `created=True/False modified=True/False skipped=True/False`, per-action outcomes
 
 When correlating log with YAML:
 1. Find streams that produced unexpected results (wrong group, new channel when merge expected, skipped when creation expected)
@@ -80,9 +80,9 @@ When correlating log with YAML:
 
 Structure your response as:
 
-1. **What the rules currently do** — walk through each rule's behavior step by step, as the executor would process them
-2. **Issues found** — specific problems with the YAML, referencing the actual executor behavior
-3. **Suggested changes** — concrete YAML modifications, with explanations of why each change helps. Show the corrected YAML.
-4. **Tips** — any general best practices relevant to their use case
+1. **What the rules currently do**: walk through each rule's behavior step by step, as the executor would process them
+2. **Issues found**: specific problems with the YAML, referencing the actual executor behavior
+3. **Suggested changes**: concrete YAML modifications, with explanations of why each change helps. Show the corrected YAML.
+4. **Tips**: any general best practices relevant to their use case
 
-Keep it practical and specific to their YAML. Don't lecture about every feature — focus on what's relevant to their problem.
+Keep it practical and specific to their YAML. Don't lecture about every feature. Focus on what's relevant to their problem.

@@ -5,8 +5,8 @@ validated new-format DBAS artifact ZIP into the orchestrator's
 :class:`~dbas.preflight.ImportPlan`:
 
   * per-category YAML (``categories/<section>.yaml``) -> PlanCategory entities,
-  * the binary logo subtree (``binary/logos/<rel>``) -> .15 logo records
-    (``name`` / ``filename`` / ``content_b64`` / ``size``),
+  * the binary logo subtree (``binary/logos/<rel>``) -> metadata-only .15 logo
+    records (``name`` / ``filename`` / ``archive_member`` / ``size``),
   * the cleartext manifest carried through for pre-flight's version gate,
   * zip-slip / path-traversal member-name safety.
 """
@@ -21,7 +21,7 @@ import yaml
 
 from dbas.restore_artifact import (
     _is_safe_member,
-    decode_artifact_to_plan,
+    decode_artifact_to_plan as _decode_artifact_to_plan,
 )
 from dbas.restore_contracts import EntityType
 
@@ -101,6 +101,10 @@ def _open(zip_bytes: bytes) -> zipfile.ZipFile:
     return zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
 
 
+def decode_artifact_to_plan(zf: zipfile.ZipFile):
+    return _decode_artifact_to_plan(zf, manifest={"schema_version": 1})
+
+
 class TestCategoryDecode:
     def test_decodes_m3u_accounts(self):
         art = _build_artifact(m3u=[{"id": 1, "name": "Provider A"}, {"id": 2, "name": "Provider B"}])
@@ -169,6 +173,41 @@ class TestSettingsAgentsDecode:
         assert dvr is not None
         assert dvr.entities[0]["channel"] == 5
 
+    def test_legacy_dvr_rules_warning_stub_decodes_to_an_empty_category(self):
+        """Artifacts taken BEFORE lsa0s restore without crashing.
+
+        Every backup written while ``_DVR_RULES_PATH`` pointed at the dead
+        ``/api/dvr/rules/`` route carries a ``categories/dvr_rules.yaml`` whose
+        ``dispatcharr`` block is the gather failure stub — a MAPPING with a
+        ``_warning`` key and no ``dvr_rules`` list at all. Those artifacts stay
+        readable: the category decodes to zero entities (so the operator sees
+        "0" rather than a gap or a traceback), and the rest of the artifact
+        decodes normally.
+        """
+        legacy_stub = yaml.dump(
+            {
+                "ecm_export": {"version": "0.18.1-0015", "sections_included": ["dvr_rules"]},
+                "dispatcharr": {
+                    "_warning": (
+                        "Dispatcharr not connected — Expecting value: line 1 column 1 (char 0)"
+                    )
+                },
+            },
+            sort_keys=False,
+        ).encode("utf-8")
+        art = _build_artifact(
+            m3u=[{"id": 1, "name": "P"}],
+            extra_members={"categories/dvr_rules.yaml": legacy_stub},
+        )
+        with _open(art) as zf:
+            plan = decode_artifact_to_plan(zf)
+
+        dvr = plan.category(EntityType.DVR_RULE)
+        assert dvr is not None
+        assert dvr.entities == []
+        # The neighbouring categories are unaffected by the stub.
+        assert plan.category(EntityType.M3U_ACCOUNT).entities[0]["name"] == "P"
+
     def test_decodes_settings_blobs_into_section_records(self):
         art = _build_artifact(
             core_settings={"default_user_agent": "ECM/1.0"},
@@ -200,18 +239,34 @@ class TestSettingsAgentsDecode:
 
 
 class TestLogoDecode:
-    def test_decodes_logo_records(self):
-        art = _build_artifact(logos={"espn.png": _PNG_BYTES})
+    def test_decodes_logo_records_without_materializing_payloads(self):
+        art = _build_artifact(
+            logos={
+                "espn.png": _PNG_BYTES,
+                "cnn.png": _PNG_BYTES,
+                "bbc.png": _PNG_BYTES,
+            }
+        )
         with _open(art) as zf:
+            read_members = []
+            original_read = zf.read
+
+            def tracked_read(member, *args, **kwargs):
+                name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+                read_members.append(name)
+                return original_read(member, *args, **kwargs)
+
+            zf.read = tracked_read
             plan = decode_artifact_to_plan(zf)
         logos = plan.category(EntityType.LOGO).entities
-        assert len(logos) == 1
+        assert len(logos) == 3
         rec = logos[0]
         assert rec["filename"] == "espn.png"
         assert rec["name"] == "espn"
         assert rec["size"] == len(_PNG_BYTES)
-        # content_b64 round-trips to the original bytes (the .15 importer decodes it).
-        assert base64.b64decode(rec["content_b64"]) == _PNG_BYTES
+        assert rec["archive_member"] == "binary/logos/espn.png"
+        assert all("content_b64" not in logo for logo in logos)
+        assert not any(name.startswith("binary/logos/") for name in read_members)
 
     def test_nested_logo_basename(self):
         art = _build_artifact(logos={"sub/dir/cnn.png": _PNG_BYTES})

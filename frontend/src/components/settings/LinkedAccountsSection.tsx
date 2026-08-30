@@ -11,6 +11,7 @@ import * as api from '../../services/api';
 import type { UserIdentity, IdentityProvider, AuthStatus } from '../../types';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import './LinkedAccountsSection.css';
 import { formatDateCompact } from '../../utils/formatting';
 import '../ModalBase.css';
@@ -62,6 +63,7 @@ interface LinkModalProps {
 }
 
 function LinkModal({ provider, onClose, onLink, loading }: LinkModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
@@ -73,15 +75,16 @@ function LinkModal({ provider, onClose, onLink, loading }: LinkModalProps) {
 
   const config = PROVIDER_CONFIG[provider];
 
+  const closeModal = () => { if (!loading) onClose(); };
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-sm">
+    <ModalOverlay onClose={closeModal} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-sm" ref={containerRef}>
         <div className="modal-header">
-          <h2 className="modal-title">
-            <span className="material-icons">{config.icon}</span>
+          <h2 className="modal-title" id={titleId}>
+            <span className="material-icons" aria-hidden="true">{config.icon}</span>
             Link {config.label} Account
           </h2>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+          <button className="modal-close-btn" onClick={closeModal} disabled={loading} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
@@ -113,7 +116,7 @@ function LinkModal({ provider, onClose, onLink, loading }: LinkModalProps) {
             </div>
           </div>
           <div className="modal-footer">
-            <button type="button" className="modal-btn modal-btn-secondary" onClick={onClose}>
+            <button type="button" className="modal-btn modal-btn-secondary" onClick={closeModal} disabled={loading}>
               Cancel
             </button>
             <button
@@ -239,10 +242,6 @@ export function LinkedAccountsSection() {
 
   return (
     <div className="linked-accounts-section">
-      <div className="settings-page-header">
-        <h2>Linked Accounts</h2>
-        <p>Link external service accounts for single sign-on and synchronization.</p>
-      </div>
 
       {/* Current Linked Identities */}
       {identities.length === 0 ? (
@@ -310,7 +309,7 @@ export function LinkedAccountsSection() {
       <div className="link-account-section">
         <h4>Link Another Account</h4>
         {availableProviders.length === 0 ? (
-          <p className="no-providers-message">
+          <p className="empty-inline">
             All enabled authentication providers are already linked to your account.
           </p>
         ) : (

@@ -11,11 +11,12 @@
  */
 import type * as React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { LogoManagerTab } from './LogoManagerTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import * as api from '../../services/api';
 import type { Logo, PaginatedResponse } from '../../types';
+import { HttpError } from '../../services/httpClient';
 
 vi.mock('../../services/api');
 
@@ -45,7 +46,7 @@ describe('LogoManagerTab', () => {
   ];
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(api.getLogos).mockResolvedValue(pageResponse(mockLogos, 2));
   });
 
@@ -60,6 +61,18 @@ describe('LogoManagerTab', () => {
     });
   }
 
+  it('names delete confirmation and blocks Close, Cancel, and Escape while delete is pending', async () => {
+    vi.mocked(api.deleteLogo).mockReturnValue(new Promise(() => {}));
+    await renderAndSettle();
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete logo' })[0]);
+    const dialog = screen.getByRole('dialog', { name: 'Delete Logo' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled());
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(dialog).toBeInTheDocument();
+  });
+
   it('loads the first page with the default sort (name, ascending)', async () => {
     await renderAndSettle();
 
@@ -68,6 +81,54 @@ describe('LogoManagerTab', () => {
     );
     expect(screen.getByText('ESPN')).toBeInTheDocument();
     expect(screen.getByText('Fox News')).toBeInTheDocument();
+  });
+
+  it('recovers from a transient failure through the scoped Retry action', async () => {
+    vi.mocked(api.getLogos)
+      .mockRejectedValueOnce(new Error('Network down'))
+      .mockResolvedValueOnce(pageResponse([makeLogo({ name: 'Recovered Logo' })]));
+
+    renderWithProviders(<LogoManagerTab />);
+
+    expect(await screen.findByRole('status', { name: 'Logos unavailable' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry loading logos' }));
+
+    expect(await screen.findByText('Recovered Logo')).toBeVisible();
+    expect(screen.getByText('1 total logos')).toBeVisible();
+    expect(api.getLogos).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes cached protected content when a later request is forbidden', async () => {
+    vi.mocked(api.getLogos)
+      .mockResolvedValueOnce(pageResponse([makeLogo({ name: 'Private Logo' })]))
+      .mockRejectedValueOnce(new HttpError('Forbidden', 403));
+
+    await renderAndSettle();
+    expect(screen.getByText('Private Logo')).toBeVisible();
+
+    fireEvent.change(screen.getByPlaceholderText('Search logos...'), {
+      target: { value: 'private' },
+    });
+
+    expect(await screen.findByRole('status', { name: 'Logos access denied' })).toBeVisible();
+    expect(screen.queryByText('Private Logo')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Add Logo/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Retry loading/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps cached content visible but marks it stale after a transient refresh failure', async () => {
+    vi.mocked(api.getLogos)
+      .mockResolvedValueOnce(pageResponse([makeLogo({ name: 'Cached Logo' })]))
+      .mockRejectedValueOnce(new Error('Network down'));
+
+    await renderAndSettle();
+    fireEvent.change(screen.getByPlaceholderText('Search logos...'), {
+      target: { value: 'cached' },
+    });
+
+    expect(await screen.findByText('Logos unavailable — showing previously loaded data')).toBeVisible();
+    expect(screen.getByText('Cached Logo')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Retry loading logos' })).toBeVisible();
   });
 
   it('clicking the Name header toggles sort order and re-fetches', async () => {
@@ -119,6 +180,20 @@ describe('LogoManagerTab', () => {
         expect.objectContaining({ page: 1, sortBy: 'channel_count' }),
       );
     });
+  });
+
+  it('uses native sort buttons and exposes the active sort direction', async () => {
+    await renderAndSettle();
+    const nameButton = screen.getByRole('button', { name: /Sort by Name, currently ascending/ });
+
+    fireEvent.click(nameButton);
+
+    await waitFor(() => {
+      expect(api.getLogos).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortBy: 'name', sortOrder: 'desc' }),
+      );
+    });
+    expect(screen.getByRole('button', { name: /Sort by Name, currently descending/ })).toBeInTheDocument();
   });
 
   it('toggling "Unused only" re-fetches with unusedOnly=true, then back off', async () => {

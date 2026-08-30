@@ -1,7 +1,15 @@
 /* Guided-setup auto-sync fix confirmation dialog (bead ti939.3.4). */
 
+.event-sync-autosync-fix-dialog > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+}
+
+/* Body role. 13px -> 13px. */
 .autosync-fix-error {
-  color: var(--error);
-  font-size: 13px;
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-top: 8px;
 }

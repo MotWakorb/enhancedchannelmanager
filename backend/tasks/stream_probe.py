@@ -82,6 +82,13 @@ class StreamProbeTask(TaskScheduler):
                    self.task_id, self._channel_groups, self._auto_sync_groups,
                    self._timeout_override, self._max_concurrent_override)
 
+    def restore_invocation_config(self, config: dict) -> None:
+        """Restore the exact baseline, preserving ``None`` as probe-all."""
+        self._channel_groups = config["channel_groups"]
+        self._auto_sync_groups = config["auto_sync_groups"]
+        self._timeout_override = config["timeout"]
+        self._max_concurrent_override = config["max_concurrent"]
+
     def set_prober(self, prober):
         """Set the StreamProber instance to delegate to.
 
@@ -237,10 +244,24 @@ class StreamProbeTask(TaskScheduler):
             black_screen = self._prober._probe_progress_black_screen_count
             low_fps = self._prober._probe_progress_low_fps_count
 
+            # Why the failures happened, not just how many (bead
+            # enhancedchannelmanager-3dn59). ``failed_streams`` below is capped
+            # at 50 for storage, so on a run where a whole provider fails the
+            # cause would otherwise be invisible in this report -- which is the
+            # surface the operator reads after a scheduled run.
+            failure_breakdown = self._prober._failure_breakdown()
+            failure_summary = (
+                f" — most common failure: {failure_breakdown[0]['reason']} "
+                f"({failure_breakdown[0]['count']})"
+                if failed_count and failure_breakdown
+                else ""
+            )
+
             # Build result details
             details = {
                 "black_screen_count": black_screen,
                 "low_fps_count": low_fps,
+                "failure_breakdown": failure_breakdown,
                 "success_streams": [
                     {"id": s.get("id"), "name": s.get("name")}
                     for s in self._prober._probe_success_streams[:50]  # Limit for storage
@@ -271,6 +292,7 @@ class StreamProbeTask(TaskScheduler):
                     message=(
                         f"Stream probe completed: {failed_count} failed, {skipped_count} skipped "
                         f"(of {total} scheduled; {black_screen} black screen, {low_fps} low FPS)"
+                        + failure_summary
                     ),
                     started_at=started_at,
                     completed_at=datetime.utcnow(),
@@ -290,6 +312,7 @@ class StreamProbeTask(TaskScheduler):
                         if (black_screen or low_fps)
                         else ""
                     )
+                    + failure_summary
                 ),
                 started_at=started_at,
                 completed_at=datetime.utcnow(),

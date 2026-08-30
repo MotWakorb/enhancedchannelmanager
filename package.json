@@ -5,16 +5,33 @@
   "description": "Enhanced Channel Manager - Root workspace for E2E tests",
   "scripts": {
     "test:e2e": "playwright test",
+    "test:playwright-config": "node --test playwright-base-url.test.mjs",
+    "test:e2e:operator-shell": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/operator-shell.spec.ts --project=chromium",
+    "test:e2e:operator-workspace-release": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/operator-shell.spec.ts --project=chromium --grep release:operator-workspace --workers=1 --retries=0 && node scripts/verify-operator-workspace-release-artifacts.mjs --require-icon-metadata",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:debug": "playwright test --debug",
     "test:e2e:report": "playwright show-report",
     "test:css-smoke": "playwright test e2e/css-smoke.spec.ts",
     "test:css-smoke:update": "playwright test e2e/css-smoke.spec.ts --update-snapshots",
+    "test:css-leak": "playwright test e2e/cross-route-css-leak.spec.ts",
+    "test:css-guard:sr-only": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/sr-only-hidden.spec.ts --project=chromium",
+    "test:css-guard:frozen-chrome": "playwright test e2e/frozen-chrome.spec.ts --project=chromium",
+    "test:css-guard:type-scale": "playwright test e2e/route-typography-scale.spec.ts --project=chromium",
+    "test:css-guard:contrast-aa": "playwright test e2e/contrast-aa.spec.ts --project=chromium",
+    "test:css-guard:settings-nav": "playwright test e2e/settings-nav-groups.spec.ts --project=chromium",
+    "test:css-guard:control-typeface": "playwright test e2e/control-typeface.spec.ts --project=chromium",
+    "test:css-guard:control-box-size": "playwright test e2e/control-box-size.spec.ts --project=chromium",
+    "test:css-guard:filter-select": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/filter-select-ownership.spec.ts --project=chromium --workers=1 --retries=0",
+    "test:css-guard:edit-mode-immediacy": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/edit-mode-immediacy-surfaces.spec.ts --project=chromium --workers=1 --retries=0",
+    "test:css-guard:edit-mode-numbering": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/edit-mode-numbering-guards.spec.ts --project=chromium --workers=1 --retries=0",
+    "test:css-guard:edit-mode-session-restore": "E2E_START_SERVER=true E2E_EXACT_BUILD=true playwright test e2e/edit-mode-session-restore.spec.ts --project=chromium --workers=1 --retries=0",
+    "test:css-guards": "playwright test e2e/sr-only-hidden.spec.ts e2e/frozen-chrome.spec.ts e2e/route-typography-scale.spec.ts e2e/contrast-aa.spec.ts e2e/cross-route-css-leak.spec.ts e2e/settings-nav-groups.spec.ts e2e/control-typeface.spec.ts e2e/control-box-size.spec.ts --project=chromium --workers=2",
     "test:visual": "playwright test --config=playwright.visual.config.ts",
     "test:visual:update": "playwright test --config=playwright.visual.config.ts --update-snapshots"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.10.2",
     "@playwright/test": "1.59.1"
   }
 }

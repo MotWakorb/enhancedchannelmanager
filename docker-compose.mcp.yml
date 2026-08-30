@@ -1,4 +1,12 @@
 services:
+  ecm:
+    volumes:
+      # ECM writes MCP credential material here; this is the only ECM-owned
+      # directory the AI-facing sidecar can see (enhancedchannelmanager-04c0u.8).
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp
+    environment:
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
+
   # MCP server — exposes ECM tools for Claude Desktop/Code over the
   # Streamable HTTP transport (single /mcp endpoint on port 6101).
   ecm-mcp:
@@ -6,13 +14,35 @@ services:
       context: ./mcp-server
       dockerfile: Dockerfile
     ports:
-      - "${MCP_PORT:-6101}:${MCP_PORT:-6101}"
+      # Secure default: MCP is reachable only from this Docker host. Use the
+      # explicit remote overlay behind an HTTPS reverse proxy for LAN clients.
+      - "127.0.0.1:${MCP_PORT:-6101}:${MCP_PORT:-6101}"
     volumes:
-      - ecm-config:/config:ro
+      # Credential projection only — no /config mount, so a compromised sidecar
+      # cannot read settings.json, auth_settings.json, the journal, TLS keys,
+      # or backups (enhancedchannelmanager-04c0u.8).
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp:ro
+    # Match ECM's runtime identity. The backend creates the private service
+    # projection as owner-only (0600), and the sidecar rejects other owners.
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
     environment:
-      - CONFIG_DIR=/config
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
       - ECM_URL=http://ecm:${ECM_PORT:-6100}
       - MCP_PORT=${MCP_PORT:-6101}
+      - MCP_BIND_ADDRESS=0.0.0.0
+      # Comma-separated LAN hostnames/IPs clients use for this sidecar.
+      - MCP_ALLOWED_HOSTS=${MCP_ALLOWED_HOSTS:-}
+      - MCP_ALLOWED_ORIGINS=${MCP_ALLOWED_ORIGINS:-}
     depends_on:
       ecm:
         condition: service_healthy
@@ -20,3 +50,4 @@ services:
 
 volumes:
   ecm-config:
+  ecm-mcp-secrets:

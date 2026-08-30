@@ -22,7 +22,9 @@ is read, and that a normal artifact still passes.
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import zipfile
 from unittest.mock import patch
 
@@ -31,6 +33,29 @@ from fastapi import HTTPException
 
 from routers import backup as backup_mod
 from routers.backup import guard_artifact_against_zip_bomb
+
+
+def _manifest_artifact(entries, manifest_paths=None):
+    """Build an artifact while preserving duplicate ZIP member names."""
+    if manifest_paths is None:
+        manifest_paths = [name for name, _ in entries if not name.endswith("/")]
+    hashes = {}
+    for name, content in entries:
+        hashes.setdefault(name, hashlib.sha256(content).hexdigest())
+    manifest = {
+        "schema_version": 1,
+        "files": [
+            {"path": path, "sha256": hashes.get(path, hashlib.sha256(b"missing").hexdigest())}
+            for path in manifest_paths
+        ],
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as zf:
+        zf.writestr("manifest.json", json.dumps(manifest))
+        for name, content in entries:
+            zf.writestr(name, content)
+    buf.seek(0)
+    return buf
 
 
 def _zip_from_infos(entries):
@@ -140,6 +165,19 @@ class TestGuardAgainstZipBomb:
         finally:
             zf.close()
 
+    def test_oversized_logo_refused_from_metadata(self):
+        zf = _open_with_declared_sizes([
+            ("manifest.json", 200, 120),
+            ("binary/logos/oversized.png", backup_mod.MAX_LOGO_BYTES + 1, 49_000_000),
+        ])
+        try:
+            with pytest.raises(HTTPException) as ei:
+                guard_artifact_against_zip_bomb(zf)
+            assert ei.value.status_code == 400
+            assert ei.value.detail == "Backup archive rejected"
+        finally:
+            zf.close()
+
 
 class TestGuardWiredIntoReadSites:
     """The guard must run at BOTH read sites before any zf.read()."""
@@ -192,8 +230,160 @@ class TestGuardWiredIntoReadSites:
         zf.read = _tracked_read  # type: ignore[assignment]
         try:
             with pytest.raises(HTTPException) as ei:
-                decode_artifact_to_plan(zf)
+                decode_artifact_to_plan(zf, manifest={})
             assert ei.value.status_code == 400
             assert "bomb.bin" not in read_targets
         finally:
             zf.close()
+
+
+class TestManifestIntegrityMemoryShape:
+    def test_integrity_hashes_logo_without_reading_it_whole(self):
+        import hashlib
+        import json
+
+        from routers.backup import validate_artifact_manifest
+
+        logo = b"\x89PNG\r\n\x1a\n" + (b"x" * 128_000)
+        manifest = {
+            "schema_version": 1,
+            "files": [{
+                "path": "binary/logos/a.png",
+                "sha256": hashlib.sha256(logo).hexdigest(),
+            }],
+        }
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_STORED) as out:
+            out.writestr("manifest.json", json.dumps(manifest))
+            out.writestr("binary/logos/a.png", logo)
+        buf.seek(0)
+
+        with zipfile.ZipFile(buf, "r") as zf:
+            original_read = zf.read
+
+            def tracked_read(member, *args, **kwargs):
+                name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+                assert name != "binary/logos/a.png"
+                return original_read(member, *args, **kwargs)
+
+            zf.read = tracked_read
+            validate_artifact_manifest(zf)
+
+
+class TestManifestMembershipIsOneToOne:
+    @pytest.mark.parametrize(
+        "entries,manifest_paths",
+        [
+            (
+                [("binary/logos/a.png", b"one"), ("binary/logos/a.png", b"one")],
+                ["binary/logos/a.png"],
+            ),
+            (
+                [("categories/a.yaml", b"a")],
+                ["categories/a.yaml", "categories/a.yaml"],
+            ),
+            (
+                [("categories/a.yaml", b"a"), ("binary/logos/unlisted.png", b"x")],
+                ["categories/a.yaml"],
+            ),
+            (
+                [("categories/a.yaml", b"a")],
+                ["categories/a.yaml", "categories/missing.yaml"],
+            ),
+            (
+                [("categories/a.yaml", b"a")],
+                ["manifest.json", "categories/a.yaml"],
+            ),
+            (
+                [("categories/", b""), ("categories/a.yaml", b"a")],
+                ["categories/", "categories/a.yaml"],
+            ),
+        ],
+        ids=[
+            "duplicate-zip-name",
+            "duplicate-manifest-path",
+            "unlisted-member",
+            "missing-member",
+            "manifest-listed",
+            "directory-listed",
+        ],
+    )
+    def test_rejects_non_bijective_manifest_membership(self, entries, manifest_paths):
+        from routers.backup import validate_artifact_manifest
+
+        with zipfile.ZipFile(_manifest_artifact(entries, manifest_paths), "r") as zf:
+            with pytest.raises(HTTPException, match="Backup integrity check failed"):
+                validate_artifact_manifest(zf)
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "./categories/a.yaml",
+            "categories//a.yaml",
+            "categories/../a.yaml",
+            "/categories/a.yaml",
+            "categories\\a.yaml",
+        ],
+    )
+    def test_rejects_ambiguous_or_unsafe_member_names(self, name):
+        from routers.backup import validate_artifact_manifest
+
+        with zipfile.ZipFile(_manifest_artifact([(name, b"a")]), "r") as zf:
+            with pytest.raises(HTTPException, match="Backup integrity check failed"):
+                validate_artifact_manifest(zf)
+
+    def test_rejects_ambiguous_manifest_path_even_when_zip_name_is_canonical(self):
+        from routers.backup import validate_artifact_manifest
+
+        artifact = _manifest_artifact(
+            [("categories/a.yaml", b"a")], ["categories/./a.yaml"]
+        )
+        with zipfile.ZipFile(artifact, "r") as zf:
+            with pytest.raises(HTTPException, match="Backup integrity check failed"):
+                validate_artifact_manifest(zf)
+
+    def test_manifest_and_true_directory_entries_are_the_only_unlisted_exclusions(self):
+        from routers.backup import validate_artifact_manifest
+
+        artifact = _manifest_artifact(
+            [("categories/", b""), ("categories/a.yaml", b"a")],
+            ["categories/a.yaml"],
+        )
+        with zipfile.ZipFile(artifact, "r") as zf:
+            manifest = validate_artifact_manifest(zf)
+        assert [entry["path"] for entry in manifest["files"]] == ["categories/a.yaml"]
+
+    def test_unlisted_member_is_rejected_before_any_payload_is_opened(self):
+        from routers.backup import validate_artifact_manifest
+
+        artifact = _manifest_artifact(
+            [("categories/a.yaml", b"a"), ("binary/logos/unlisted.png", b"x")],
+            ["categories/a.yaml"],
+        )
+        with zipfile.ZipFile(artifact, "r") as zf:
+            opened = []
+            original_open = zf.open
+
+            def tracked_open(member, *args, **kwargs):
+                name = member.filename if isinstance(member, zipfile.ZipInfo) else member
+                opened.append(name)
+                return original_open(member, *args, **kwargs)
+
+            zf.open = tracked_open
+            with pytest.raises(HTTPException, match="Backup integrity check failed"):
+                validate_artifact_manifest(zf)
+        assert opened == ["manifest.json"]
+
+
+class TestManifestSpecificReadBound:
+    def test_oversized_manifest_is_rejected_before_read(self):
+        from routers.backup import validate_artifact_manifest
+
+        buf = _manifest_artifact([])
+        with zipfile.ZipFile(buf, "r") as zf:
+            manifest_info = zf.getinfo("manifest.json")
+            manifest_info.file_size = backup_mod._ARTIFACT_MAX_MANIFEST_BYTES + 1
+            with patch.object(zf, "open") as opened:
+                with pytest.raises(HTTPException, match="Invalid backup manifest"):
+                    validate_artifact_manifest(zf)
+            opened.assert_not_called()

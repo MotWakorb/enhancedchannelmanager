@@ -15,6 +15,8 @@ handshake chained from https; crypto is the HLS AES-128 segment demuxer.
 Neither is a user-supplied URL scheme, so they do not widen the attack
 surface relative to the original threat model.
 """
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -23,6 +25,16 @@ from stream_prober import FFPROBE_PROTOCOL_WHITELIST, StreamProber
 
 
 EXPECTED_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
+
+
+@pytest.fixture(autouse=True)
+def _allow_synthetic_subprocess_destination():
+    @asynccontextmanager
+    async def allowed(url, **_kwargs):
+        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
+
+    with patch("stream_prober.validated_subprocess_input", allowed):
+        yield
 
 
 def _make_prober(**kwargs) -> StreamProber:

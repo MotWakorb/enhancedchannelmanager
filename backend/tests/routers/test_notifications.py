@@ -56,6 +56,21 @@ class TestGetNotifications:
         assert len(data["notifications"]) == 2
 
     @pytest.mark.asyncio
+    async def test_malformed_metadata_isolated_to_its_notification(
+        self, async_client, test_session,
+    ):
+        """One malformed persisted payload cannot crash the collection."""
+        _create_notification(test_session, title="Valid", extra_data='{"review_id": 9}')
+        _create_notification(test_session, title="Malformed", extra_data="not-json")
+
+        response = await async_client.get("/api/notifications")
+
+        assert response.status_code == 200
+        by_title = {item["title"]: item for item in response.json()["notifications"]}
+        assert by_title["Valid"]["metadata"] == {"review_id": 9}
+        assert by_title["Malformed"]["metadata"] is None
+
+    @pytest.mark.asyncio
     async def test_pagination(self, async_client, test_session):
         """Pagination works with page and page_size."""
         for i in range(5):

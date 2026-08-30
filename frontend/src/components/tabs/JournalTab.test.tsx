@@ -7,6 +7,7 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { JournalTab } from './JournalTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import * as api from '../../services/api';
+import { HttpError } from '../../services/httpClient';
 import type { JournalEntry, JournalResponse, JournalStats } from '../../types';
 
 // Mock the API module
@@ -58,6 +59,18 @@ describe('JournalTab', () => {
   });
 
   describe('initial rendering', () => {
+    it('keeps a disabled safe toolbar mounted during initial loading', () => {
+      vi.mocked(api.getJournalEntries).mockReset().mockReturnValue(new Promise(() => {}));
+      vi.mocked(api.getJournalStats).mockReset().mockReturnValue(new Promise(() => {}));
+
+      renderWithProviders(<JournalTab />);
+
+      expect(screen.getByRole('toolbar', { name: 'Journal entry controls' })).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Search entries...')).toBeDisabled();
+      expect(screen.getByLabelText('Days to keep')).toBeDisabled();
+      expect(screen.getByRole('button', { name: /purge old entries/i })).toBeDisabled();
+    });
+
     it('renders the Journal header', async () => {
       renderWithProviders(<JournalTab />);
 
@@ -285,6 +298,86 @@ describe('JournalTab', () => {
     });
   });
 
+  /**
+   * The backend records a before-state it could not read under a reserved key
+   * rather than defaulting it to `null`, because "it held null" and "I never
+   * saw it" are different facts (bead enhancedchannelmanager-kz089, commit
+   * 0cc5efdf). The wire key is correct; rendering it raw is not — an operator
+   * reading the Before block saw the literal string `__before_state_unknown__`
+   * with no way to know what it meant.
+   */
+  describe('an unreadable before-state (bd-kz089)', () => {
+    const expandFirstRow = async () => {
+      renderWithProviders(<JournalTab />);
+      await waitFor(() => {
+        expect(screen.queryByText('Loading journal...')).not.toBeInTheDocument();
+      });
+      fireEvent.keyDown(document.querySelector('.entry-row') as HTMLElement, { key: 'Enter' });
+    };
+
+    it('never shows the operator the reserved key', async () => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name', 'tvg_id'], channel_number: 5 },
+        after_value: { name: 'ESPN', tvg_id: 'espn.us', channel_number: 6 },
+      })]));
+      await expandFirstRow();
+
+      const details = document.querySelector('.entry-details') as HTMLElement;
+      expect(details.textContent).not.toContain('__before_state_unknown__');
+    });
+
+    it('names the fields it could not read, in words', async () => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name', 'tvg_id'], channel_number: 5 },
+        after_value: { name: 'ESPN', tvg_id: 'espn.us', channel_number: 6 },
+      })]));
+      await expandFirstRow();
+
+      const unknown = screen.getByTestId('journal-before-unknown');
+      expect(unknown.textContent).toContain('name');
+      expect(unknown.textContent).toContain('tvg_id');
+    });
+
+    it('still shows the before-values it DID read', async () => {
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name'], channel_number: 5 },
+        after_value: { name: 'ESPN', channel_number: 6 },
+      })]));
+      await expandFirstRow();
+
+      const before = document.querySelector('.detail-section pre') as HTMLElement;
+      expect(before.textContent).toContain('channel_number');
+      expect(before.textContent).toContain('5');
+    });
+
+    it('says so plainly when the whole before-state was unreadable', async () => {
+      // Nothing was read at all, so there is no JSON worth rendering and the
+      // note is the entire Before block.
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { __before_state_unknown__: ['name'] },
+        after_value: { name: 'ESPN' },
+      })]));
+      await expandFirstRow();
+
+      expect(screen.getByTestId('journal-before-unknown')).toBeInTheDocument();
+      expect(document.querySelector('.entry-details')!.textContent)
+        .not.toContain('__before_state_unknown__');
+    });
+
+    it('leaves an ordinary before-state exactly as it was', async () => {
+      // The anti-vacuity control: the presentation only appears for the key.
+      vi.mocked(api.getJournalEntries).mockResolvedValue(mockResponse([makeEntry({
+        before_value: { name: 'Old' },
+        after_value: { name: 'New' },
+      })]));
+      await expandFirstRow();
+
+      expect(screen.queryByTestId('journal-before-unknown')).not.toBeInTheDocument();
+      expect((document.querySelector('.detail-section pre') as HTMLElement).textContent)
+        .toContain('Old');
+    });
+  });
+
   describe('entry-row keyboard accessibility (bd-6n14l)', () => {
     it('exposes the entry row as a focusable button with aria-expanded reflecting collapsed state', async () => {
       renderWithProviders(<JournalTab />);
@@ -373,6 +466,59 @@ describe('JournalTab', () => {
         expect(api.getJournalEntries).toHaveBeenCalled();
         expect(api.getJournalStats).toHaveBeenCalled();
       });
+    });
+
+    it('retains populated rows as stale after refresh failure and recovers on retry', async () => {
+      vi.mocked(api.getJournalEntries).mockReset()
+        .mockResolvedValueOnce(mockResponse([makeEntry()]))
+        .mockRejectedValueOnce(new Error('Refresh failed'))
+        .mockResolvedValueOnce(mockResponse([makeEntry()]));
+      renderWithProviders(<JournalTab />);
+      expect(await screen.findByText('Test Channel')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+
+      expect(await screen.findByText(/showing previously loaded entries/i)).toBeInTheDocument();
+      expect(screen.getByText('Test Channel')).toBeInTheDocument();
+      expect(screen.getByText(/1-1 of 1 entries/)).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(screen.queryByText(/showing previously loaded entries/i)).not.toBeInTheDocument());
+      expect(screen.getByText('Test Channel')).toBeInTheDocument();
+    });
+
+    it('treats 401 as permission and clears protected rows and actions', async () => {
+      vi.mocked(api.getJournalEntries).mockReset();
+      vi.mocked(api.getJournalEntries).mockRejectedValue(new HttpError('Unauthorized', 401));
+      renderWithProviders(<JournalTab />);
+
+      expect(await screen.findByText(/don't have permission/i)).toBeInTheDocument();
+      expect(screen.queryByText('Test Channel')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /purge old entries/i })).not.toBeInTheDocument();
+    });
+
+    it('ignores an older refresh response after a newer filter request completes', async () => {
+      let resolveRefresh!: (value: JournalResponse) => void;
+      let resolveFilter!: (value: JournalResponse) => void;
+      vi.mocked(api.getJournalEntries).mockReset()
+        .mockResolvedValueOnce(mockResponse([makeEntry({ entity_name: 'Initial row' })]))
+        .mockReturnValueOnce(new Promise(resolve => { resolveRefresh = resolve; }))
+        .mockReturnValueOnce(new Promise(resolve => { resolveFilter = resolve; }));
+
+      renderWithProviders(<JournalTab />);
+      expect(await screen.findByText('Initial row')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /refresh/i }));
+      fireEvent.click(screen.getByText('All Categories'));
+      fireEvent.click(await screen.findByRole('option', { name: 'Channel' }));
+
+      resolveFilter(mockResponse([makeEntry({ id: 3, entity_name: 'Newest filtered row' })]));
+      expect(await screen.findByText('Newest filtered row')).toBeInTheDocument();
+
+      resolveRefresh(mockResponse([makeEntry({ id: 2, entity_name: 'Late stale row' })]));
+      await waitFor(() => expect(screen.queryByText('Late stale row')).not.toBeInTheDocument());
+      expect(screen.getByText('Newest filtered row')).toBeInTheDocument();
     });
   });
 

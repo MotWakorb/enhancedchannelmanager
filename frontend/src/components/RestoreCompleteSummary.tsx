@@ -12,6 +12,9 @@
  *   2. A PER-ENTITY breakdown — one row per {@link EntityCategoryReport} with
  *      created / updated / skipped / failed counts; skipped and failed rows
  *      expand to their reasons (human-readable labels, not raw enum values).
+ *      A dry-run category the backend could not predict renders as "not
+ *      predicted" instead of four zeroes, and a category carrying a `caveat`
+ *      renders it under the counts (bead tddmw).
  *
  * The SAME component renders both the dry-run counts-only preview (bead .16)
  * and the realized restore result. The `mode` prop switches the framing
@@ -36,6 +39,9 @@ import type {
   RestoreReport,
   RestoreSkipReason,
 } from '../services/api';
+import { CredentialReentryNotice } from './CredentialReentryNotice';
+import { ExistingChannelReattachNotice } from './ExistingChannelReattachNotice';
+import { StreamReattachNotice } from './StreamReattachNotice';
 import './RestoreCompleteSummary.css';
 
 /** Which framing the summary renders. `dry-run` reads would_* counts. */
@@ -65,18 +71,35 @@ const ENTITY_LABELS: Record<RestoreEntityType, string> = {
   channel: 'Channels',
   stream: 'Streams',
   user_agent: 'User agents',
+  server_group: 'Server groups',
   dvr_rule: 'DVR rules',
-  settings: 'Settings',
+  upcoming_recording: 'Upcoming recordings',
+  settings: 'Dispatcharr settings',
+  ecm_settings: 'ECM settings',
   user: 'Users',
   logo: 'Logos',
 };
 
 const SKIP_REASON_LABELS: Record<RestoreSkipReason, string> = {
   already_exists_identical: 'Already exists (identical)',
+  // Deliberately NOT "identical" (bead 3t74w): a channel group is adopted on its
+  // NAME with nothing else compared, and the label has to stop short of the
+  // claim the restore never checked.
+  already_exists_name_match: 'Already exists (matched by name)',
   excluded_by_operator: 'Excluded by operator',
   current_admin_preserved: 'Current admin preserved',
   unsupported_in_this_version: 'Unsupported in this version',
   dependency_unresolved: 'Dependency unresolved',
+  // Bead 4mkoe. The two read alike and mean opposite things, so the label says
+  // WHY rather than repeating "dependency": this row exists because the operator
+  // excluded the category the dependency lives in, which makes it an ordinary
+  // no-op beside "Excluded by operator" — not the shortfall above it.
+  dependency_deselected: 'Dependency excluded by operator',
+  // Bead ciabe. Says what happened rather than naming a dependency, because
+  // nothing is missing: the recording's slot passed while the backup sat on
+  // disk, and the destination would refuse to schedule it either. Sits beside
+  // the two no-op reasons above, not beside the shortfall.
+  schedule_already_past: 'Scheduled time has passed',
 };
 
 const FAILURE_REASON_LABELS: Record<RestoreFailureReason, string> = {
@@ -96,15 +119,18 @@ const COUNT_LABELS: Record<RestoreSummaryMode, { created: string; updated: strin
 };
 
 interface OutcomePresentation {
-  tone: 'success' | 'error';
+  tone: 'success' | 'warning' | 'error';
   icon: string;
   title: string;
   detail?: string;
 }
 
 /**
- * Map the tri-state outcome to its banner treatment. The rolled-back states are
- * presented as FAILURES (error tone, explicit "failed" copy) — never as success.
+ * Map the outcome to its banner treatment. The rolled-back states are presented
+ * as FAILURES (error tone, explicit "failed" copy) — never as success, and
+ * `completed_with_failures` is presented as a WARNING: the applied state is real
+ * and kept, so calling it a failure would send the operator hunting for a
+ * rollback that never happened.
  */
 const OUTCOME_PRESENTATION: Record<NonNullable<RestoreReport['outcome']>, OutcomePresentation> = {
   success: {
@@ -112,6 +138,13 @@ const OUTCOME_PRESENTATION: Record<NonNullable<RestoreReport['outcome']>, Outcom
     icon: 'check_circle',
     title: 'Restore complete',
     detail: 'Your configuration was restored.',
+  },
+  completed_with_failures: {
+    tone: 'warning',
+    icon: 'warning',
+    title: 'Restore complete — some items could not be restored',
+    detail:
+      'Everything else was restored and nothing was rolled back. Expand the categories below to see which items failed and why.',
   },
   partial_failed_rolled_back: {
     tone: 'error',
@@ -153,18 +186,36 @@ function CategoryRow({ category, mode }: { category: EntityCategoryReport; mode:
   const labels = COUNT_LABELS[mode];
   const hasSkipDetails = category.skip_details.length > 0;
   const hasFailureDetails = category.failure_details.length > 0;
+  // `predicted: false` (bead tddmw) means this preview did not predict the
+  // category at all. Rendering its four zeroes would be a confident claim
+  // derived from having looked at nothing — the same mistake the null
+  // stream-health counters exist to stop. Say "not predicted" instead. Only a
+  // preview can carry it; an apply reports facts.
+  const notPredicted = isDryRun && category.predicted === false;
 
   return (
     <div className="rcs-category" data-testid={`rcs-category-${category.entity_type}`}>
       <div className="rcs-category-header">
         <span className="rcs-category-name">{ENTITY_LABELS[category.entity_type]}</span>
-        <div className="rcs-counts">
-          <CountCell kind="created" value={created} label={labels.created} />
-          <CountCell kind="updated" value={updated} label={labels.updated} />
-          <CountCell kind="skipped" value={skipped} label={labels.skipped} />
-          <CountCell kind="failed" value={failed} label={labels.failed} />
-        </div>
+        {notPredicted ? (
+          <span className="rcs-not-predicted" data-testid="rcs-not-predicted">
+            Not predicted
+          </span>
+        ) : (
+          <div className="rcs-counts">
+            <CountCell kind="created" value={created} label={labels.created} />
+            <CountCell kind="updated" value={updated} label={labels.updated} />
+            <CountCell kind="skipped" value={skipped} label={labels.skipped} />
+            <CountCell kind="failed" value={failed} label={labels.failed} />
+          </div>
+        )}
       </div>
+
+      {category.caveat && (
+        <p className="rcs-category-caveat" data-testid="rcs-category-caveat">
+          {category.caveat}
+        </p>
+      )}
 
       {hasSkipDetails && (
         <div className="rcs-detail-block">
@@ -236,6 +287,35 @@ export function RestoreCompleteSummary({ report, mode, bannerSlot }: RestoreComp
     >
       {/* SEAM for bead .19 — logo-miss RED banner slots here, above everything. */}
       {bannerSlot}
+
+      {/*
+        Credential re-entry action item (bead 6pilh). Rendered FIRST-CLASS rather
+        than through `bannerSlot`: it needs nothing but the report, so every
+        caller of this component gets it — a restore whose credentials were
+        redacted has perfect counts and a `success` outcome, and this is the
+        only signal the operator has that nothing will actually fetch.
+      */}
+      <CredentialReentryNotice report={report} mode={effectiveMode} />
+
+      {/*
+        Which channels cannot play (bead d0bd3). The sibling of the credentials
+        panel and first-class for the same reason: the drill's redacted restore
+        reported 12 of 12 channels with NO playable stream, named every one of
+        them, and the modal showed only the credentials panel — so the single
+        condition that makes a restored instance useless was the one condition
+        the UI omitted.
+      */}
+      <StreamReattachNotice report={report} mode={effectiveMode} />
+
+      {/*
+        What this restore does to channels it did NOT create (bead dfkbn). Also
+        first-class rather than a slot, and rendered on the DRY RUN too: the
+        count of live guide links and logos a restore would overwrite is the
+        number that decides whether the operator wants that at all, and it is
+        useless after the fact: the rollback ledger compensates creates, so
+        nothing undoes a PATCH onto a channel the restore did not make.
+      */}
+      <ExistingChannelReattachNotice report={report} mode={effectiveMode} />
 
       {presentation && (
         <div

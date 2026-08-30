@@ -14,7 +14,7 @@
  * retention windows from Settings → Tasks → Database Cleanup.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { TaskEditorModal } from './TaskEditorModal';
 import type { TaskStatus } from '../services/api';
@@ -102,6 +102,64 @@ function makeCleanupTask(configOverrides: Record<string, unknown> = {}): TaskSta
 describe('TaskEditorModal — bd-ia28g retention fields', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('blocks every parent dismissal affordance while the task save is unresolved', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    vi.mocked(api.updateTask).mockReturnValue(new Promise(() => {}));
+    render(<TaskEditorModal task={makeCleanupTask()} onClose={onClose} onSaved={vi.fn()} />);
+    const dialog = await screen.findByRole('dialog', { name: 'Configure Task' });
+    await user.click(within(dialog).getByRole('button', { name: 'Save Changes' }));
+
+    const headerClose = within(dialog).getByRole('button', { name: 'Close' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    expect(headerClose).toBeDisabled();
+    expect(cancel).toBeDisabled();
+    await user.click(headerClose);
+    await user.click(cancel);
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toBeInTheDocument();
+  });
+
+  it('blocks Add Schedule header, Cancel, and Escape while create is unresolved', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, 'createTaskSchedule').mockReturnValue(new Promise(() => {}));
+    render(<TaskEditorModal task={makeCleanupTask()} onClose={vi.fn()} onSaved={vi.fn()} openAddSchedule />);
+    const dialog = await screen.findByRole('dialog', { name: 'Add Schedule' });
+    await user.click(within(dialog).getByRole('button', { name: /Add Schedule$/ }));
+    const headerClose = within(dialog).getByRole('button', { name: 'Close' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    await waitFor(() => expect(cancel).toBeDisabled());
+    expect(headerClose).toBeDisabled();
+    await user.click(headerClose);
+    await user.click(cancel);
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Add Schedule' })).toBe(dialog);
+  });
+
+  it('blocks Edit Schedule header, Cancel, and Escape while update is unresolved', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getTaskSchedules).mockResolvedValue({ schedules: [{
+      id: 7, task_id: 'cleanup', name: 'Daily', enabled: true, schedule_type: 'daily',
+      schedule_time: '03:00', timezone: 'UTC', interval_seconds: null, days_of_week: null,
+      day_of_month: null, week_parity: null, parameters: {}, next_run_at: null,
+      last_run_at: null, description: '', created_at: '', updated_at: null,
+    }] });
+    vi.spyOn(api, 'updateTaskSchedule').mockReturnValue(new Promise(() => {}));
+    render(<TaskEditorModal task={makeCleanupTask()} onClose={vi.fn()} onSaved={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: 'Edit schedule' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit Schedule' });
+    await user.click(within(dialog).getByRole('button', { name: /Update Schedule$/ }));
+    const headerClose = within(dialog).getByRole('button', { name: 'Close' });
+    const cancel = within(dialog).getByRole('button', { name: 'Cancel' });
+    await waitFor(() => expect(cancel).toBeDisabled());
+    expect(headerClose).toBeDisabled();
+    await user.click(headerClose);
+    await user.click(cancel);
+    await user.keyboard('{Escape}');
+    expect(screen.getByRole('dialog', { name: 'Edit Schedule' })).toBe(dialog);
   });
 
   it('renders the channel pipeline BLOB retention input with the config value', async () => {

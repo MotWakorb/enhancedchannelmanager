@@ -10,12 +10,13 @@
   padding: 0.625rem 0.75rem;
   border-radius: var(--radius-lg, 8px);
   margin-bottom: 0.75rem;
-  font-size: 0.8125rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .sync-targets-card .stc-warning .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
   margin-top: 0.0625rem;
 }
@@ -28,10 +29,11 @@
 .sync-targets-card .stc-warning-oneway {
   background: rgba(239, 68, 68, 0.08);
   border: 1px solid rgba(239, 68, 68, 0.25);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
-/* Credentials-not-synced — caution level. */
+/* Provider-credential transmission notice — caution level: it states what
+   crosses on every cycle, and that certificate checking off sends it in clear. */
 .sync-targets-card .stc-warning-creds {
   background: rgba(245, 158, 11, 0.08);
   border: 1px solid rgba(245, 158, 11, 0.25);
@@ -41,8 +43,10 @@
 .sync-targets-card .stc-empty {
   padding: 0.875rem;
   text-align: center;
-  color: var(--text-muted, #666);
-  font-size: 0.875rem;
+  color: var(--text-secondary, #888);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* --- Target list --- */
@@ -77,14 +81,20 @@
   flex: 1 1 auto;
 }
 
+/* Item title, not section. 15px is size-exact for the section role, but this
+   is the NAME OF A ROW in a list, not a heading over a card — the call the
+   f4yc7 pilot made on `.account-name` (bead enhancedchannelmanager-6z299.4). */
 .sync-targets-card .stc-target-name {
-  font-size: 0.9375rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary, #fff);
 }
 
 .sync-targets-card .stc-target-url {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary, #888);
   word-break: break-all;
 }
@@ -97,18 +107,26 @@
   flex-wrap: wrap;
 }
 
+/* Meta role, and --text-secondary rather than --text-muted: --text-muted
+   measures 2.61:1 on --bg-secondary in the light theme, below the AA floor. */
 .sync-targets-card .stc-last-synced {
-  font-size: 0.75rem;
-  color: var(--text-muted, #666);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary, #888);
 }
 
-/* --- Tri-state status badge --- */
+/* --- Tri-state status badge ---
+   Badge role. Weight stays 600 — this chip carries the sync outcome and is
+   the only thing distinguishing success from failure at a glance besides
+   colour, which WCAG 1.4.1 does not let us rely on alone. */
 .sync-targets-card .stc-badge {
   display: inline-flex;
   align-items: center;
   padding: 0.125rem 0.5rem;
   border-radius: 999px;
-  font-size: 0.6875rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
   font-weight: 600;
   text-transform: capitalize;
   border: 1px solid transparent;
@@ -128,13 +146,13 @@
 
 .sync-targets-card .stc-badge-failure {
   background: rgba(239, 68, 68, 0.12);
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
   border-color: rgba(239, 68, 68, 0.3);
 }
 
 .sync-targets-card .stc-badge-none {
   background: rgba(136, 136, 136, 0.12);
-  color: var(--text-muted, #888);
+  color: var(--text-secondary, #888);
   border-color: rgba(136, 136, 136, 0.3);
 }
 
@@ -149,8 +167,20 @@
   text-transform: none;
 }
 
-.sync-targets-card .stc-badge-insecure .material-icons {
-  font-size: 0.9rem;
+/* A stored Schedules Direct password — informational, not a warning: it is the
+   one credential the operator supplies, and its presence is a good state. */
+.sync-targets-card .stc-badge-sd {
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--info, #3b82f6);
+  border-color: rgba(59, 130, 246, 0.3);
+  gap: 0.25rem;
+  text-transform: none;
+}
+
+/* Badge icon role — a glyph inside a chip. */
+.sync-targets-card .stc-badge-insecure .material-icons,
+.sync-targets-card .stc-badge-sd .material-icons {
+  font-size: var(--icon-badge);
 }
 
 /* --- Per-target actions --- */
@@ -161,20 +191,23 @@
   flex-wrap: wrap;
 }
 
+/* Body role. A 12px control goes to body (13px), not meta — the body role's
+   own definition covers buttons and inputs, and the P1 scale sizes controls
+   by role, not by whichever token is numerically nearest. */
 .sync-targets-card .stc-action-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   padding: 0.375rem 0.625rem;
 }
 
 .sync-targets-card .stc-action-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .sync-targets-card .stc-delete-btn {
-  color: var(--error, #ef4444);
+  color: var(--danger-text);
 }
 
 /* Kill-switch toggle */
@@ -182,13 +215,13 @@
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   font-weight: 600;
   padding: 0.375rem 0.625rem;
   border-radius: var(--radius-lg, 8px);
   border: 1px solid var(--border-color, #3a3a5a);
   background: var(--bg-secondary, #20203a);
-  color: var(--text-muted, #888);
+  color: var(--text-secondary, #888);
   cursor: pointer;
 }
 
@@ -198,7 +231,15 @@
 }
 
 .sync-targets-card .stc-toggle .material-icons {
-  font-size: 1.125rem;
+  font-size: var(--icon-status);
+}
+
+/* Logo-replication opt-in (bead …-8gnik). Shares the toggle chrome with the
+   kill switch but carries its own ON colour, so a row's two toggles are not
+   mistaken for one another at a glance. */
+.sync-targets-card .stc-logos-toggle.is-on {
+  color: var(--accent-primary, #6366f1);
+  border-color: rgba(99, 102, 241, 0.4);
 }
 
 .sync-targets-card .stc-toggle:disabled,
@@ -231,8 +272,12 @@
   gap: 0.3125rem;
 }
 
+/* Label role — a form field's label, the treatment shared/common.css § 4 now
+   gives `.form-group label` (bead enhancedchannelmanager-6z299.4). */
 .sync-targets-card .stc-field label {
-  font-size: 0.8125rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary, #888);
 }
 
@@ -243,7 +288,7 @@
   color: var(--text-primary, #fff);
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-lg, 8px);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .sync-targets-card .stc-field input:focus,
@@ -256,9 +301,10 @@
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
   cursor: pointer;
 }
 
@@ -281,4 +327,13 @@
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
+}
+
+/* Correct-in-place form heading (bead …-a3lby). The form is shared between
+   creating a target and correcting one, so it has to say which it is doing —
+   an edit that looks like a create invites the operator to retype everything. */
+.sync-targets-card .stc-form-title {
+  font-size: var(--type-body-size);
+  font-weight: 600;
+  color: var(--text-primary, #fff);
 }

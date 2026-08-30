@@ -68,6 +68,7 @@ _FORWARD_ALLOWLIST = [
     # forwarded run cannot be cancelled from HTTPS (per-process _active_tasks).
     ("POST", re.compile(r"^/api/tasks/[^/]+/run$")),
     ("POST", re.compile(r"^/api/tasks/[^/]+/cancel$")),
+    ("POST", re.compile(r"^/api/profile-conflict-reviews/\d+/accept$")),
 ]
 
 # Hop-by-hop / length headers that must NOT be copied verbatim (httpx / the

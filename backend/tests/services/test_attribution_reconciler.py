@@ -23,8 +23,11 @@ Synthetic identities only.
 """
 from __future__ import annotations
 
+import logging
+
 import pytest
 
+from observability import JsonFormatter
 from services.attribution_reconciler import (
     AMBIGUOUS_GROUP_PREDICATE,
     CandidateUser,
@@ -89,6 +92,24 @@ def _assigned_names(result) -> dict[str, str | None]:
         a.client_id: (a.user.user_name if a.user else None)
         for a in result.assignments
     }
+
+
+def test_malformed_trusted_network_log_does_not_retain_input(caplog):
+    sensitive_value = "username:provider-password@example.invalid"
+
+    with caplog.at_level(logging.DEBUG, logger="services.attribution_reconciler"):
+        assert build_trusted_networks(configured_cidrs=[sensitive_value]) == []
+
+    records = [
+        record
+        for record in caplog.records
+        if record.name == "services.attribution_reconciler"
+    ]
+    assert [record.getMessage() for record in records] == [
+        "[ATTR-RECONCILE] Skipping unparsable trusted-network entry"
+    ]
+    assert all(sensitive_value not in repr(record.args) for record in records)
+    assert all(sensitive_value not in JsonFormatter().format(record) for record in records)
 
 
 # ---------------------------------------------------------------------------

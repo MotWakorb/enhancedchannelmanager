@@ -6,12 +6,25 @@ Extracted from main.py (Phase 2 of v0.13.0 backend refactor).
 """
 import logging
 import time
+import uuid
 
 from fastapi import APIRouter, HTTPException, Body
 from pydantic import BaseModel
 
+from channel_group_reparent import (
+    UNGROUPED_TARGET_GROUP_NAME,
+    UngroupedTargetUnavailable,
+    reparent_group_channels,
+)
 from database import get_session
 from dispatcharr_client import get_client, upstream_http_exception
+# The ONE journal writer, which CHECKS both of `journal`'s return values (bead
+# …-kz089, fix round 5). Imported from the channels router rather than
+# reimplemented here for the same reason `reparent_group_channels` lives in its
+# own module: a second implementation is a second thing to keep in step, and the
+# two delete paths drifting is the defect bead …-jd3kn exists for. No import
+# cycle — `routers.channels` does not import this module.
+from routers.channels import write_journal_rows
 import journal
 
 logger = logging.getLogger(__name__)
@@ -872,9 +885,66 @@ async def get_channel_groups_with_streams():
 # Parameterized routes — must come after all static routes
 # ---------------------------------------------------------------------------
 
+def _delete_failure_status(error: Exception) -> int:
+    """The status a failed group delete answers with.
+
+    An actionable upstream 4xx stays a 4xx (bd-1wq7z.22); anything else is a
+    500. Split out from the message so the two cannot drift.
+    """
+    mapped = upstream_http_exception(error)
+    return mapped.status_code if mapped is not None else 500
+
+
+def _delete_failure_detail(error: Exception, channels_moved: int) -> str:
+    """What the operator is told when a group delete fails.
+
+    Names the reparent that already LANDED, when one did. A group delete moves
+    the group's channels out first, and those moves are not undone by the
+    delete failing — the operator sent one action and half of it happened. A
+    bare "cannot delete group" leaves them to discover that themselves, and to
+    retry against a membership that has already changed (bead
+    ``enhancedchannelmanager-jd3kn``, designed with ``…-1e4at``).
+
+    Only an upstream 4xx's own text is relayed; anything else answers with a
+    fixed string, so a server fault cannot put a stack trace on the wire
+    (CodeQL ``py/stack-trace-exposure``).
+    """
+    mapped = upstream_http_exception(error)
+    detail = mapped.detail if mapped is not None else "Internal server error"
+    if not channels_moved:
+        return detail
+    return (
+        f"{detail} — the group still exists, but {channels_moved} of its "
+        f"channel(s) had already been moved to "
+        f"'{UNGROUPED_TARGET_GROUP_NAME}' before the delete failed and they "
+        f"stay moved. Check the Journal for which ones before retrying."
+    )
+
+
 @router.delete("/{group_id}")
 async def delete_channel_group(group_id: int):
-    """Delete a channel group (hides M3U-synced groups instead)."""
+    """Delete a channel group (hides M3U-synced groups instead).
+
+    Answers with ``{status, channels_moved, journalRowsUnwritten}``: the last is
+    the number of this request's journal rows that could NOT be written, always
+    present so a caller checks the number rather than probing for a key. It is
+    the same advisory the bulk-commit envelope and ``PATCH /api/channels/{id}``
+    carry, and it rides on the ``200`` for the same reason — the delete LANDED,
+    and reporting a failure to a caller whose change already applied is what
+    makes an integrator retry it.
+
+    JOURNAL DISCIPLINE, matching the bulk-commit path (bead
+    ``enhancedchannelmanager-jd3kn``). This route used to write no row at all —
+    not for the channels it reparents, not for the deletion — while the Edit
+    Mode bulk commit wrote both under one batch id. The same operator-visible
+    action left a full trail through one route and silence through the other,
+    and the silent one is the route the MCP ``delete_channel_group`` tool and
+    any direct API client take. Each move is recorded as it LANDS rather than
+    summarised after the delete succeeds, because the moves are N independent
+    writes and any of them can be the last: a move that landed is a fact
+    whatever fails next, including a delete that Dispatcharr rejects and a
+    request that ends as a 4xx.
+    """
     logger.debug("[GROUPS] DELETE /channel-groups/%s", group_id)
     client = get_client()
     try:
@@ -904,12 +974,147 @@ async def delete_channel_group(group_id: int):
             logger.debug("[GROUPS] Hid channel group %s in %.1fms", group_id, elapsed_ms)
             return {"status": "hidden", "message": "Group hidden (M3U sync active)"}
         else:
-            # No M3U sync, safe to delete
-            await client.delete_channel_group(group_id)
-            elapsed_ms = (time.time() - start) * 1000
-            logger.debug("[GROUPS] Deleted channel group %s via API in %.1fms", group_id, elapsed_ms)
-            logger.info("[GROUPS] Deleted channel group id=%s", group_id)
-            return {"status": "deleted"}
+            # No M3U sync, safe to delete — once the group is EMPTY. Dispatcharr
+            # refuses to delete a group that still has channels, and refuses a
+            # null channel_group_id, so the members have to be moved to a real
+            # group first. This is the same helper, and therefore the same
+            # semantics, as the Edit Mode bulk commit (bead
+            # enhancedchannelmanager-auocn, sharing …-ayfn9's fix): both paths
+            # reach one confirm dialog that promises the move, so one
+            # implementation keeps that promise.
+            #
+            # One id over the whole action, as the bulk run uses its own, so the
+            # moves and the delete read as one thing in the Journal instead of
+            # three rows an operator has to correlate by timestamp.
+            batch_id = str(uuid.uuid4())[:8]
+            pending_rows: list[dict] = []
+
+            def journal_moved_channel(
+                channel_id: int, channel_name: str, target_group: dict,
+            ) -> None:
+                """Queue a row the moment a channel's PATCH returns.
+
+                Called by ``reparent_group_channels`` per channel. Queued HERE
+                rather than after the delete succeeds because the move is
+                already true by the time this runs, and the delete is a
+                separate write that may never happen.
+                """
+                target_name = target_group.get("name") or UNGROUPED_TARGET_GROUP_NAME
+                pending_rows.append({
+                    "category": "channel",
+                    "action_type": "update",
+                    "entity_id": channel_id,
+                    "entity_name": channel_name,
+                    "description": (
+                        f"Moved channel '{channel_name}' to '{target_name}' "
+                        f"before channel group {group_id} was deleted"
+                    ),
+                    "before_value": {"channel_group_id": group_id},
+                    "after_value": {"channel_group_id": target_group.get("id")},
+                    "batch_id": batch_id,
+                })
+
+            def flush_rows() -> int:
+                """Write what is queued and return how many could not be written.
+
+                Idempotent by construction — the queue is emptied before the
+                write, so the ``finally`` below cannot write a row the success
+                path has already written.
+                """
+                if not pending_rows:
+                    return 0
+                draining = list(pending_rows)
+                pending_rows.clear()
+                return write_journal_rows(
+                    draining, batch_id=batch_id, log_tag="GROUPS",
+                )
+
+            try:
+                try:
+                    moved = await reparent_group_channels(
+                        client, group_id, on_channel_moved=journal_moved_channel,
+                    )
+                except UngroupedTargetUnavailable as reparent_err:
+                    # The operator can act on this, and the reason is the whole
+                    # value of the answer, so it must not become an opaque 500.
+                    # Raised BEFORE any move, so there is nothing landed to
+                    # report alongside it.
+                    logger.warning(
+                        "[GROUPS] Refusing to delete channel group %s: %s", group_id, reparent_err
+                    )
+                    raise HTTPException(status_code=400, detail=str(reparent_err))
+
+                try:
+                    await client.delete_channel_group(group_id)
+                except Exception as delete_err:
+                    # The moves LANDED and the group is still there. Reporting
+                    # only "cannot delete" sends the operator back to a group
+                    # whose membership has already silently changed under them —
+                    # the same defect the bulk envelope's
+                    # `operationsPartiallyApplied` names on its own path.
+                    #
+                    # Logged as well as returned, because a genuine server fault
+                    # answers 500 and `main.sanitized_http_exception_handler`
+                    # replaces the detail of every 500 to keep internals off the
+                    # wire. On that exit the log is the only place the advisory
+                    # can go, and it must still go somewhere a human will see it.
+                    if moved:
+                        logger.error(
+                            "[GROUPS] Delete of channel group %s FAILED after "
+                            "%s of its channel(s) had already been moved to "
+                            "'%s'; they stay moved and the group still exists: %s",
+                            group_id, moved, UNGROUPED_TARGET_GROUP_NAME, delete_err,
+                        )
+                    else:
+                        logger.warning(
+                            "[GROUPS] Delete of channel group %s failed: %s",
+                            group_id, delete_err,
+                        )
+                    raise HTTPException(
+                        status_code=_delete_failure_status(delete_err),
+                        detail=_delete_failure_detail(delete_err, moved),
+                    ) from delete_err
+
+                pending_rows.append({
+                    "category": "channel",
+                    "action_type": "group_delete",
+                    "entity_id": group_id,
+                    "entity_name": f"Group {group_id}",
+                    "description": (
+                        f"Deleted channel group {group_id}"
+                        + (
+                            f" (moved {moved} channel(s) to "
+                            f"'{UNGROUPED_TARGET_GROUP_NAME}')" if moved else ""
+                        )
+                    ),
+                    "before_value": {"group_id": group_id, "channels_moved": moved},
+                    "batch_id": batch_id,
+                })
+
+                elapsed_ms = (time.time() - start) * 1000
+                logger.debug("[GROUPS] Deleted channel group %s via API in %.1fms", group_id, elapsed_ms)
+                logger.info(
+                    "[GROUPS] Deleted channel group id=%s (moved %s channel(s) to '%s')",
+                    group_id, moved, UNGROUPED_TARGET_GROUP_NAME,
+                )
+                return {
+                    "status": "deleted",
+                    "channels_moved": moved,
+                    "journalRowsUnwritten": flush_rows(),
+                }
+            finally:
+                # Every other exit: a reparent that raised partway, a delete
+                # Dispatcharr rejected, a cancellation. Whatever moved, moved.
+                # `flush_rows` has already emptied the queue on the success
+                # path, so this writes only what that path never reached.
+                unwritten = flush_rows()
+                if unwritten:
+                    logger.error(
+                        "[GROUPS] %s journal row(s) for channel group %s could "
+                        "not be written and this request is not returning a "
+                        "body to carry the count; the rows are logged above",
+                        unwritten, group_id,
+                    )
     except HTTPException:
         raise
     except Exception as e:

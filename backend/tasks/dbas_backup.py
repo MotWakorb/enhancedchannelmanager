@@ -55,8 +55,62 @@ prefix), a ``journal`` entry, AND a NotificationCenter notification, and
 returns ``TaskResult(success=False, ...)``. A scheduled backup that silently
 stops = false safety.
 
+Degraded gather = WARNING, never a silent clean success (bead zt3kf)
+---------------------------------------------------------------------
+``build_backup_artifact`` gathers Dispatcharr-managed categories per-key
+(``routers.backup._gather_dispatcharr_sections``), and each category's fetch
+is isolated: a single upstream failure stubs ONLY that category into the
+artifact as ``{"_warning": ...}`` rather than aborting the whole gather or
+degrading unrelated categories. Before this fix, that stub was invisible
+downstream — a backup missing an entire category (e.g. every
+``dvr_rules.yaml`` on a run where the Dispatcharr endpoint errored) still
+reported a clean ``TaskResult(success=True, failed_count=0)``. Now:
+``artifact.degraded_categories`` (populated by the builder) is threaded into
+``details["degraded_categories"]`` and the run is reported as WARNING-level —
+``success`` stays ``True`` (a real, checksum-verified artifact WAS produced
+and is useful), but ``failed_count`` is set so task_engine.py's existing
+"Completed with Warnings" branch fires, naming the degraded category/
+categories in both the task message and the completion notification
+(``task_engine._warning_task_completion_message``). Cloud-upload health
+(below) takes precedence when both are unhealthy — an upload failure is the
+more severe, already-notified condition.
+
+The counts are ITEM counts, and the item is a CATEGORY (bead …-fexq1)
+--------------------------------------------------------------------
+``zt3kf`` reached that warning branch with ``total_items=1`` and the two
+counters in ``{0, 1}`` — enough to satisfy ``failed_count > 0``, but a boolean
+wearing the shape of item counts. One surface over, a backup that archived
+fifteen categories cleanly and stubbed one wrote ``0 ok, 1 failed`` into the
+Journal, the task-history row and the progress notification: a restorable
+artifact described as a total loss to anyone scanning at a glance.
+:meth:`DbasBackupTask._counts_from_artifact` now derives the counts from the
+artifact's own per-category outcome — the same shape ``dbas_restore``'s
+``RestoreCounts`` uses. Severity is deliberately unmoved by that: the ladder
+keys on ``failed_count > 0``, which still holds exactly when a category
+degraded.
+
+The SAME rule covers a partial LOGO-BYTE gather (bead …-xb58a). Logo images live
+in Dispatcharr, so the builder fetches them at gather time; when some of those
+fetches fail the artifact is built and useful but carries fewer logo bytes than
+the operator expects, and a restore will report those as logo misses. The
+builder therefore adds ``"logos"`` to ``degraded_categories`` and reports the
+COUNT in ``artifact.unarchived_logo_bytes``, which lands in
+``details["unarchived_logo_bytes"]`` and the task message. Shipping that as a
+clean success would be the same defect the logo-bytes bead exists to fix.
+
+A channel whose ``epg_data_id`` points at a guide row that no longer exists is
+DIFFERENT in kind (bead …-dfkbn, PR review W2). Its link cannot be restored, and
+the count reaches ``details["unresolved_epg_links"]`` and the task message so the
+operator can see it, but it does NOT set ``failed_count`` and does NOT add a
+degraded category: a dangling FK is common, largely unactionable, and is not ECM
+failing to gather something it could have. Making it a WARNING would erode the
+badge that the two conditions above depend on.
+
 Metrics: ``ecm_backup_runs_total{result="success"|"partial"|"skipped"|"failed"}``
-and ``ecm_backup_upload_total{provider,result}`` (per-upload outcome).
+and ``ecm_backup_upload_total{provider,result}`` (per-upload outcome). Gather
+degradation does not get its own metric label — it is a data-completeness
+signal on the local artifact, orthogonal to the upload-destination health this
+metric tracks.
 
 Concurrency: the engine's ``TaskScheduler.run()`` already rejects a second
 concurrent run of the same ``task_id`` (ALREADY_RUNNING guard), so no extra
@@ -75,7 +129,7 @@ from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskSchedul
 
 import journal
 import observability
-from dbas import retention
+from dbas import artifact_crypto, retention
 from routers.backup import (
     build_backup_artifact,
     verify_artifact_sha256,
@@ -91,6 +145,47 @@ BACKUPS_DIR = CONFIG_DIR / "backups"
 # per-target failure rather than silently skipped. Single source of truth lives
 # in cloud_storage (also gates the config-UI test surface — SEC-4).
 _SUPPORTED_UPLOAD_PROVIDERS = SUPPORTED_PROVIDERS
+
+
+def describe_recording_exclusions(already_started: int) -> str:
+    """The operator-facing sentence for the recordings this backup left behind.
+
+    Bead ``…-ciabe``. PUBLIC (no leading underscore) because it is the visible
+    half of an ADR-013 exclusion, and its own test asserts what it says — an
+    exclusion notice that nothing pins is one word away from silently becoming a
+    disclaimer with no content.
+
+    Two properties it has to hold, both learned from the counts already in this
+    message:
+
+    * It NAMES THE REMEDY, not just the number. The recordings are absent because
+      their media files sit on the SOURCE instance's disk and no API can carry
+      them; the only thing that can is the operator copying them. A count with no
+      remedy reads as a defect report rather than a boundary of the product.
+    * It says NOTHING WHEN THERE IS NOTHING TO SAY. A standing disclaimer on
+      every run is wallpaper — the operator stops reading it, which is the same
+      end state as never having printed it, and it would drown the counts beside
+      it that DO vary.
+
+    Recordings excluded because a recurring rule regenerates them are
+    deliberately not mentioned: nothing is lost, the ``dvr_rules`` category
+    carries their generator, and there is no action to take. That count is in
+    ``details`` for anyone who wants it.
+
+    Args:
+        already_started: How many recordings had already started or finished.
+
+    Returns:
+        A ``"; ..."`` fragment to append to the run message, or ``""``.
+    """
+    if not already_started:
+        return ""
+    return (
+        "; %d recording(s) had already started or finished and were not backed "
+        "up — their media files live on this Dispatcharr's disk, so copy them "
+        "across by hand if you need them on the restored instance"
+        % already_started
+    )
 
 
 def _bump_metric(result: str) -> None:
@@ -131,6 +226,61 @@ class DbasBackupTask(TaskScheduler):
     )
     default_enabled = False
 
+    # Manual-run encryption transients, declared so an operator can discover
+    # them (bead …-sdpzy). They are read by ``update_config`` below and are the
+    # ONLY way to produce an encrypted, credential-bearing artifact; sent at the
+    # top level of the run request instead of inside ``parameters`` they are
+    # silently ignored and the caller gets a plain artifact believing otherwise.
+    #
+    # Excluded from ``routers.tasks.TASK_PARAMETER_SCHEMAS`` on purpose: that
+    # list is the SCHEDULE form, and a persisted passphrase is exactly what the
+    # module docstring above forbids.
+    run_parameter_schema = {
+        "description": (
+            "Manual-run encryption parameters, sent in the 'parameters' object "
+            "of POST /api/tasks/dbas_backup/run. Never persisted to a schedule "
+            "— a scheduled run always produces the default redacted artifact."
+        ),
+        "parameters": [
+            {
+                "name": "passphrase",
+                "type": "string",
+                "label": "Passphrase",
+                "description": (
+                    "Encrypts the whole artifact. Minimum "
+                    f"{artifact_crypto.MIN_PASSPHRASE_LENGTH} characters, and "
+                    "requires acknowledge_unrecoverable. Omit for the default "
+                    "unencrypted, redacted artifact."
+                ),
+                "required": False,
+                "default": None,
+            },
+            {
+                "name": "include_credentials",
+                "type": "boolean",
+                "label": "Include credentials",
+                "description": (
+                    "Keep provider credentials in the artifact instead of "
+                    "redacting them (for migration). Requires a passphrase."
+                ),
+                "required": False,
+                "default": False,
+            },
+            {
+                "name": "acknowledge_unrecoverable",
+                "type": "boolean",
+                "label": "Acknowledge unrecoverable",
+                "description": (
+                    "Confirms that a lost passphrase makes the artifact "
+                    "permanently unrecoverable. Required whenever a passphrase "
+                    "is set."
+                ),
+                "required": False,
+                "default": False,
+            },
+        ],
+    }
+
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         if schedule_config is None:
             schedule_config = ScheduleConfig(schedule_type=ScheduleType.MANUAL)
@@ -163,9 +313,28 @@ class DbasBackupTask(TaskScheduler):
         # the default redact-by-default backup: there is nowhere safe to keep a
         # passphrase at rest for an unattended run, so encrypted backups are
         # opt-in + interactive only.
+        #
+        # ONE-SHOT (bead …-cytzj). Excluding them from get_config keeps them out
+        # of journal.db, but this task object is a LIVE SINGLETON that outlives
+        # the run: without the unconditional reset in execute()'s finally, one
+        # manual "Create Encrypted Backup" made EVERY later run in the same
+        # process — including an unattended scheduled one — emit an encrypted,
+        # credential-bearing artifact under that one-off passphrase, with no
+        # signal to the operator and no way to notice short of a restart.
         self.passphrase: Optional[str] = None
         self.include_credentials: bool = False
         self.acknowledge_unrecoverable: bool = False
+
+    def _reset_encryption_transients(self) -> None:
+        """Return the manual-run encryption transients to their defaults.
+
+        Called from execute()'s ``finally`` so it runs on EVERY exit path —
+        success, build failure, an exception, and the freshness gate's early
+        SKIP return — which is what makes "these apply to a single run" true.
+        """
+        self.passphrase = None
+        self.include_credentials = False
+        self.acknowledge_unrecoverable = False
 
     def get_config(self) -> dict:
         # Encryption transients (passphrase/include_credentials/
@@ -223,6 +392,17 @@ class DbasBackupTask(TaskScheduler):
             self.acknowledge_unrecoverable = bool(config["acknowledge_unrecoverable"])
 
     async def execute(self) -> TaskResult:
+        """Run one backup, then unconditionally disarm the encryption transients.
+
+        The ``finally`` is the whole point (bead …-cytzj): the transients must
+        not survive the run that supplied them, no matter how that run ended.
+        """
+        try:
+            return await self._execute_run()
+        finally:
+            self._reset_encryption_transients()
+
+    async def _execute_run(self) -> TaskResult:
         started_at = datetime.now(timezone.utc)
         self._set_progress(
             total=1, current=0, status="starting",
@@ -299,12 +479,76 @@ class DbasBackupTask(TaskScheduler):
                     logger.warning("[DBAS_BACKUP] Local retention prune failed: %s", e)
 
             self._set_progress(current=1, total=1, status="completed")
+
+            # zt3kf — a category whose Dispatcharr gather stubbed to
+            # {"_warning": ...} instead of real data (upstream fetch failure,
+            # isolated per-category by routers.backup._gather_dispatcharr_sections)
+            # makes this artifact DEGRADED: it was built and is on disk, but is
+            # missing real data for the named category/categories. Never silent —
+            # WARN log + named in details/message so the operator does not have
+            # to open the artifact to discover what is missing.
+            degraded_categories = list(artifact.degraded_categories or [])
+            if degraded_categories:
+                logger.warning(
+                    "[DBAS_BACKUP] Backup artifact %s built with %d degraded "
+                    "Dispatcharr categor%s (Dispatcharr fetch failed): %s",
+                    filename, len(degraded_categories),
+                    "y" if len(degraded_categories) == 1 else "ies",
+                    ", ".join(degraded_categories),
+                )
+
             details = {
                 "filename": filename,
                 "schema_version": artifact.schema_version,
                 "sha256": artifact.sha256,
                 "file_count": artifact.file_count,
             }
+            if degraded_categories:
+                details["degraded_categories"] = degraded_categories
+            # bead …-xb58a: a backup that could not fetch some Dispatcharr-hosted
+            # logo bytes already sets the "logos" degraded flag above; this
+            # carries the COUNT so the operator sees how much is missing, not
+            # just that something is.
+            unarchived_logos = getattr(artifact, "unarchived_logo_bytes", 0) or 0
+            if unarchived_logos:
+                details["unarchived_logo_bytes"] = unarchived_logos
+            # bead …-dfkbn (PR review W2): channels whose EPG link could not be
+            # resolved to its guide natural key. Those links cannot come back on
+            # restore, so the operator should be able to SEE the number here
+            # rather than discover it in a restore report. Deliberately does NOT
+            # set failed_count: a dangling epg_data_id is common and largely
+            # unactionable, and turning every one of them into a "Completed with
+            # Warnings" run would train the operator to ignore that badge.
+            unresolved_epg_links = getattr(artifact, "unresolved_epg_links", 0) or 0
+            epg_index_truncated = bool(getattr(artifact, "epg_index_truncated", False))
+            if unresolved_epg_links:
+                details["unresolved_epg_links"] = unresolved_epg_links
+                if epg_index_truncated:
+                    # A different diagnosis with a different remedy: the guide
+                    # read hit its ceiling, so some of those may be good links
+                    # the read never saw. Never conflate the two.
+                    details["epg_index_truncated"] = True
+            # bead …-ciabe: the DVR recordings this run deliberately did NOT
+            # archive. ADR-013's governing principle is that every exclusion is
+            # named, individually justified and VISIBLE — a gap the operator
+            # cannot see is indistinguishable from one nobody decided on. Same
+            # INFORMATIONAL shape as unresolved_epg_links above: a finished
+            # recording names a media file on the source instance's own disk,
+            # which is a technical impossibility rather than ECM failing to
+            # gather what it could have, so it never sets failed_count and never
+            # joins degraded_categories.
+            recordings_left_behind = (
+                getattr(artifact, "recordings_excluded_already_started", 0) or 0
+            )
+            recordings_from_rules = (
+                getattr(artifact, "recordings_excluded_regenerated_by_a_rule", 0) or 0
+            )
+            if recordings_left_behind:
+                details["recordings_excluded_already_started"] = recordings_left_behind
+            if recordings_from_rules:
+                details["recordings_excluded_regenerated_by_a_rule"] = (
+                    recordings_from_rules
+                )
             if upload_summary["attempted"]:
                 details["upload"] = {
                     "run_result": run_result,
@@ -316,23 +560,59 @@ class DbasBackupTask(TaskScheduler):
             message = "Built DBAS backup %s (schema v%d, %d files)" % (
                 filename, artifact.schema_version, artifact.file_count,
             )
+            if degraded_categories:
+                message += "; %d Dispatcharr categor%s degraded: %s" % (
+                    len(degraded_categories),
+                    "y" if len(degraded_categories) == 1 else "ies",
+                    ", ".join(degraded_categories),
+                )
+            if unarchived_logos:
+                message += "; %d logo(s) archived without their image bytes" % (
+                    unarchived_logos,
+                )
+            if unresolved_epg_links:
+                if epg_index_truncated:
+                    message += (
+                        "; %d channel EPG link(s) unresolved, but the guide read "
+                        "hit its row ceiling so the index may be incomplete"
+                        % unresolved_epg_links
+                    )
+                else:
+                    message += (
+                        "; %d channel EPG link(s) point at a guide entry that no "
+                        "longer exists and will not be restored"
+                        % unresolved_epg_links
+                    )
+            message += describe_recording_exclusions(recordings_left_behind)
             if upload_summary["attempted"]:
                 message += "; cloud upload: %s (%d ok, %d failed)" % (
                     run_result, upload_summary["succeeded"], upload_summary["failed"],
                 )
 
+            # PO decision: a backup run whose configured uploads did NOT all
+            # succeed is NOT reported as a clean success — partial/failed
+            # reconcile against the scheduled-job health metric. Cloud-upload
+            # health takes precedence over gather-completeness when both are
+            # unhealthy (an upload failure is the more severe condition and
+            # already drives its own dedicated notification via
+            # _notify_upload_outcome); gather degradation alone — uploads fine
+            # or not configured — is WARNING-level (success stays True,
+            # failed_count>0), which is what makes task_engine.py's existing
+            # "Completed with Warnings" branch reachable instead of a silent
+            # clean success (zt3kf; mirrors the tyei5/dbas_restore counts-wiring
+            # pattern — real counts, no new notification path).
+            success = (run_result == "success")
+            counts = self._counts_from_artifact(artifact, degraded_categories)
+
             return TaskResult(
-                # PO decision: a backup run whose configured uploads did NOT all
-                # succeed is NOT reported as a clean success — partial/failed
-                # reconcile against the scheduled-job health metric.
-                success=(run_result == "success"),
+                success=success,
                 message=message,
                 error=None if run_result == "success" else "CLOUD_UPLOAD_%s" % run_result.upper(),
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
-                total_items=1,
-                success_count=1 if run_result == "success" else 0,
-                failed_count=0 if run_result == "success" else 1,
+                total_items=counts["total_items"],
+                success_count=counts["success_count"],
+                failed_count=counts["failed_count"],
                 details=details,
             )
         except Exception as e:
@@ -346,6 +626,62 @@ class DbasBackupTask(TaskScheduler):
                 completed_at=datetime.now(timezone.utc),
                 failed_count=1,
             )
+
+    @staticmethod
+    def _counts_from_artifact(artifact, degraded_categories: list) -> dict:
+        """Item counts for a run that produced an artifact (bead …-fexq1).
+
+        THE ITEM IS A CATEGORY. That is what the gather iterates, what
+        ``degraded_categories`` already names, and the only unit this run has
+        more than one of. Mirrors ``dbas_restore``'s ``RestoreCounts``, which
+        likewise derives its numbers from the per-category outcome instead of
+        inventing a scalar::
+
+            total_items   = artifact.gathered_categories
+            failed_count  = len(degraded_categories)
+            success_count = total_items - failed_count
+
+        ``zt3kf`` originally wired the degraded signal in as ``total_items=1``
+        with the two counters in ``{0, 1}`` — a BOOLEAN in the shape of item
+        counts — because reaching the existing "Completed with Warnings" branch
+        only needed ``failed_count > 0``. The cost showed up one surface over:
+        a backup that archived fifteen categories cleanly and stubbed one wrote
+        ``0 ok, 1 failed`` into the Journal, the task-history row and the
+        progress notification. A real, checksum-verified, restorable artifact,
+        described as a total loss to an operator scanning at a glance.
+
+        SEVERITY IS UNCHANGED, and that is a requirement, not a coincidence.
+        ``task_scheduler``'s ladder keys on ``failed_count > 0``, and that
+        predicate still holds exactly when ``degraded_categories`` is non-empty
+        — the count moves from 1 to N, never from 1 to 0. A clean backup stays
+        ``success``, a degraded one stays ``warning``, and an upload failure
+        stays ``error`` through ``success=False``, which no count can soften.
+
+        The counts describe the GATHER, in both the upload-succeeded and
+        upload-failed cases, so the unit never silently changes meaning with
+        the weather; upload health is carried by ``success`` / ``error`` /
+        ``details["upload"]``.
+
+        Args:
+            artifact: The built :class:`routers.backup.BackupArtifact`.
+            degraded_categories: Categories that stubbed instead of gathering.
+
+        Returns:
+            A ``{total_items, success_count, failed_count}`` mapping.
+        """
+        failed_count = len(degraded_categories)
+        total_items = int(getattr(artifact, "gathered_categories", 0) or 0)
+        if total_items <= 0:
+            # An artifact object that does not report its gather count (an
+            # older build's, or a stub). Falling through to 0/0 would restate
+            # the defect this method removes, so the floor is the categories we
+            # do know about — never "0 ok" for a run that produced an artifact.
+            total_items = max(failed_count, 1)
+        return {
+            "total_items": total_items,
+            "success_count": max(total_items - failed_count, 0),
+            "failed_count": failed_count,
+        }
 
     async def _check_credential_freshness(
         self, started_at: datetime
@@ -531,7 +867,7 @@ class DbasBackupTask(TaskScheduler):
         """
         from cloud_storage import get_adapter
         from cloud_storage.crypto import decrypt_credentials
-        from cloud_storage.upload_security import mask_secrets
+        from cloud_storage.upload_security import redact_secrets
         from database import get_session
         from export_models import CloudStorageTarget
 
@@ -592,7 +928,7 @@ class DbasBackupTask(TaskScheduler):
             # adapter-level masking (adapter-returned `error` fields are already
             # masked at source), so mask it here.
             reason = "upload to target '%s' raised: %s" % (
-                target_name, mask_secrets(str(e)),
+                target_name, redact_secrets(str(e)),
             )
             await self._fail_target(target_id, target_name, reason, provider=provider)
             _bump_upload_metric(provider, "failed")
@@ -718,11 +1054,18 @@ class DbasBackupTask(TaskScheduler):
         msg = "DBAS backup upload to target id=%s failed — %s" % (target_id, reason)
         # The logger receives ONLY the safe target id, never `reason`/`msg`:
         # `reason` can carry a masked-but-credential-derived adapter error or a
-        # masked SDK-exception string, and CodeQL traces that value into any
-        # logging sink (it does not recognise mask_secrets() as a sanitizer).
-        # The masked detail still reaches the operator via the journal
-        # description and the notification message below (non-logging sinks
-        # that are stored/displayed, not logged).
+        # masked SDK-exception string. The masked detail still reaches the
+        # operator via the journal description and the notification message
+        # below (non-logging sinks that are stored/displayed, not logged).
+        #
+        # This started as a CodeQL workaround: the redactor used to be named
+        # `mask_secrets`, and CodeQL's name-based sensitive-data heuristic
+        # classified its OUTPUT as a secret, so any log line carrying it was
+        # flagged. That root cause is gone (see the naming rule on
+        # cloud_storage.upload_security.redact_secrets, bead
+        # enhancedchannelmanager-9kwzp), but the behaviour is kept on purpose:
+        # the journal row is the durable record for a failed upload, and the
+        # log line stays a pointer to it rather than a second copy.
         logger.warning("[DBAS_BACKUP] Upload to target id=%s failed (see journal/notification for detail)", target_id)
         try:
             journal.log_entry(

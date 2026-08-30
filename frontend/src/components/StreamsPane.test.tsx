@@ -9,13 +9,15 @@
  * auto-surface while a search is active.
  */
 import { describe, it, expect, vi, beforeEach, beforeAll, afterEach, afterAll } from 'vitest';
+import { useState } from 'react';
 import { render, screen, within, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import { StreamsPane } from './StreamsPane';
+import { NotificationProvider } from '../contexts/NotificationContext';
 import { server } from '../test/mocks/server';
 import { tabUntil } from '../test/utils/keyboardNav';
-import type { Stream, StreamGroupInfo, M3UAccount, ChannelGroup } from '../types';
+import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup } from '../types';
 
 function makeStream(overrides: Partial<Stream> & { id: number; name: string; channel_group_name: string }): Stream {
   const defaults: Stream = {
@@ -55,6 +57,7 @@ const PROVIDERS: M3UAccount[] = [];
 
 function renderPane(overrides: Partial<React.ComponentProps<typeof StreamsPane>> = {}) {
   return render(
+    <NotificationProvider>
     <StreamsPane
       streams={STREAMS}
       providers={PROVIDERS}
@@ -69,6 +72,7 @@ function renderPane(overrides: Partial<React.ComponentProps<typeof StreamsPane>>
       onGroupExpand={vi.fn()}
       {...overrides}
     />
+    </NotificationProvider>
   );
 }
 
@@ -149,6 +153,7 @@ describe('StreamsPane category headers', () => {
     // Clearing the search restores the default collapsed state -- the
     // auto-expand during search must not have written to localStorage.
     rerender(
+      <NotificationProvider>
       <StreamsPane
         streams={STREAMS}
         providers={PROVIDERS}
@@ -162,6 +167,7 @@ describe('StreamsPane category headers', () => {
         loading={false}
         onGroupExpand={vi.fn()}
       />
+      </NotificationProvider>
     );
     expect(screen.queryByText('CA | Documentary')).not.toBeInTheDocument();
   });
@@ -173,6 +179,234 @@ describe('StreamsPane category headers', () => {
     expect(screen.getByRole('button', { name: /^UK/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^CA/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^US/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('StreamsPane source inventory row contract (enhancedchannelmanager-2896r.12)', () => {
+  it('renders supported group and row handles only in Edit Mode with accessible instructions', async () => {
+    const user = userEvent.setup();
+    const normal = renderPane({ onBulkCreateFromGroup: vi.fn(), isEditMode: false });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    expect(normal.container.querySelector('.group-drag-handle')).not.toBeInTheDocument();
+    expect(normal.container.querySelector('.drag-handle')).not.toBeInTheDocument();
+    normal.unmount();
+
+    const edit = renderPane({ onBulkCreateFromGroup: vi.fn(), isEditMode: true });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    expect(edit.container.querySelector('.group-drag-handle')).toHaveAttribute(
+      'aria-label',
+      'Drag stream group CA | Documentary to Channels pane to create channels',
+    );
+    expect(edit.container.querySelector('.group-drag-handle .material-icons')).toHaveTextContent('drag_indicator');
+    expect(edit.container.querySelector('.drag-handle')).toHaveAttribute(
+      'aria-label',
+      'Drag inventory stream CA Documentary Stream 1 to assign it to a channel',
+    );
+    expect(edit.container.querySelector('.drag-handle')).toHaveTextContent('⋮⋮');
+  });
+
+  it('assigns an inventory row by keyboard with pickup, destination movement, drop, and announcements', async () => {
+    const user = userEvent.setup();
+    const onBulkAddToChannel = vi.fn();
+    renderPane({
+      isEditMode: true,
+      channels: [
+        {
+          id: 41, name: 'Alpha', channel_number: 1, channel_group_id: 10, streams: [],
+          logo_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+          stream_profile_id: null, uuid: 'alpha', auto_created: false,
+          auto_created_by: null, auto_created_by_name: null,
+        },
+        {
+          id: 42, name: 'Beta', channel_number: 2, channel_group_id: 10, streams: [],
+          logo_id: null, tvg_id: null, tvc_guide_stationid: null, epg_data_id: null,
+          stream_profile_id: null, uuid: 'beta', auto_created: false,
+          auto_created_by: null, auto_created_by_name: null,
+        },
+      ] satisfies Channel[],
+      onBulkAddToChannel,
+    });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    const handle = screen.getByRole('button', {
+      name: 'Drag inventory stream CA Documentary Stream 1 to assign it to a channel',
+    });
+    handle.focus();
+    await user.keyboard(' ');
+    expect(screen.getByRole('status')).toHaveTextContent(/Picked up inventory stream CA Documentary Stream 1/);
+    const destinations = screen.getByRole('menu', { name: 'Choose channel destination' });
+    await waitFor(() => expect(within(destinations).getByRole('menuitem', { name: /Alpha/ })).toHaveFocus());
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(onBulkAddToChannel).toHaveBeenCalledWith([1], 42);
+    expect(screen.getByRole('status')).toHaveTextContent(/Dropped inventory stream CA Documentary Stream 1 on channel Beta/);
+    await waitFor(() => expect(handle).toHaveFocus());
+  });
+
+  it('creates channels from an inventory group by keyboard and supports Escape cancellation', async () => {
+    const user = userEvent.setup();
+    const onKeyboardCreateFromGroup = vi.fn();
+    function KeyboardGroupHarness() {
+      const [trigger, setTrigger] = useState<{ names: string[]; targetGroupId: number } | null>(null);
+      return (
+        <StreamsPane
+          streams={STREAMS}
+          providers={PROVIDERS}
+          streamGroups={STREAM_GROUPS}
+          searchTerm=""
+          onSearchChange={vi.fn()}
+          providerFilter={null}
+          onProviderFilterChange={vi.fn()}
+          groupFilter={null}
+          onGroupFilterChange={vi.fn()}
+          loading={false}
+          onGroupExpand={vi.fn()}
+          isEditMode
+          channelGroups={[{ id: 10, name: 'News', channel_count: 0 }]}
+          onBulkCreateFromGroup={vi.fn()}
+          onKeyboardCreateFromGroup={(names, streamIds, targetGroupId) => {
+            onKeyboardCreateFromGroup(names, streamIds, targetGroupId);
+            setTrigger({ names, targetGroupId: targetGroupId! });
+          }}
+          externalTriggerGroupNames={trigger?.names ?? null}
+          externalTriggerTargetGroupId={trigger?.targetGroupId ?? null}
+          onExternalTriggerHandled={() => setTrigger(null)}
+        />
+      );
+    }
+    render(
+      <NotificationProvider>
+        <KeyboardGroupHarness />
+      </NotificationProvider>,
+    );
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    const handle = screen.getByRole('button', {
+      name: 'Drag stream group CA | Documentary to Channels pane to create channels',
+    });
+    handle.focus();
+    await user.keyboard('{Enter}');
+    const destinations = screen.getByRole('menu', { name: 'Choose channel group destination' });
+    await waitFor(() => expect(within(destinations).getByRole('menuitem', { name: /News/ })).toHaveFocus());
+    await user.keyboard('{Escape}');
+    expect(onKeyboardCreateFromGroup).not.toHaveBeenCalled();
+    expect(screen.getByRole('status')).toHaveTextContent(/Cancelled dragging stream group CA \| Documentary/);
+    await waitFor(() => expect(handle).toHaveFocus());
+
+    await user.keyboard('{Enter}');
+    await waitFor(() =>
+      expect(screen.getByRole('menu', { name: 'Choose channel group destination' })
+        .querySelector('[role="menuitem"]')).toHaveFocus(),
+    );
+    await user.keyboard('{Enter}');
+    expect(onKeyboardCreateFromGroup).toHaveBeenCalledWith(['CA | Documentary'], [1], 10);
+    expect(screen.getByRole('status')).toHaveTextContent(/Dropped stream group CA \| Documentary on channel group News/);
+    expect(handle).not.toHaveFocus();
+
+    const dialog = await screen.findByRole('dialog', {
+      name: 'Create Channels from "CA | Documentary"',
+    });
+    expect(within(dialog).getByText('"News"')).toBeInTheDocument();
+    await waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement | null));
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(handle).toHaveFocus());
+  });
+
+  it('keeps stable artwork, flexible identity, then fixed actions and renders no health noise', async () => {
+    const user = userEvent.setup();
+    renderPane({
+      streams: [
+        makeStream({
+          id: 40,
+          name: 'A deliberately long inventory identity that must ellipsize before its actions',
+          channel_group_name: 'US | News',
+          logo_url: null,
+          is_stale: true,
+          is_catchup: true,
+          catchup_days: 7,
+        }),
+      ],
+      streamGroups: [{ name: 'US | News', count: 1 }],
+    });
+    await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
+    const row = screen.getByText(/A deliberately long inventory identity/).closest('.stream-item')!;
+    const children = [...row.children];
+    expect(children.map((child) => child.className)).toEqual([
+      'stream-artwork-slot', 'stream-info', 'stream-actions',
+    ]);
+    expect(row.querySelector('.stream-logo')).not.toBeInTheDocument();
+    expect(row.querySelector('.stream-artwork-slot .material-icons')).not.toBeInTheDocument();
+    expect(row.querySelector('.meta-tag')).not.toBeInTheDocument();
+    expect(row).not.toHaveClass('is-stale');
+    expect(within(row as HTMLElement).getAllByRole('button').map((button) => button.getAttribute('aria-label')))
+      .toEqual(['Preview stream in browser', 'Open in VLC', 'Copy stream URL']);
+  });
+});
+
+describe('StreamsPane inventory count semantics', () => {
+  it('labels the provider-wide total when no result search or group filter is active', () => {
+    renderPane({
+      streams: STREAMS.slice(0, 1),
+      streamGroups: [{ name: 'CA | Documentary', count: 87 }],
+    });
+    expect(screen.getByLabelText('87 total streams')).toHaveTextContent('87');
+  });
+
+  it('uses the current server-search result set instead of the provider-wide total', () => {
+    renderPane({
+      searchTerm: 'documentary',
+      streams: STREAMS.slice(0, 1),
+      streamGroups: [{ name: 'CA | Documentary', count: 87 }],
+    });
+    expect(screen.getByLabelText('1 matching stream')).toHaveTextContent('1');
+    expect(screen.queryByLabelText('87 total streams')).toBeNull();
+  });
+
+  it('uses the server matching total when the loaded page is capped', () => {
+    renderPane({
+      searchTerm: 'documentary',
+      streams: Array.from({ length: 500 }, (_, index) => makeStream({
+        id: index + 100,
+        name: `Documentary ${index + 1}`,
+        channel_group_name: 'CA | Documentary',
+      })),
+      matchingTotal: 650,
+    });
+    expect(screen.getByLabelText('650 matching streams')).toHaveTextContent('650');
+  });
+
+  it('sums only selected inventory groups and returns to total when cleared', () => {
+    const { rerender } = renderPane({
+      selectedStreamGroups: ['CA | Documentary', 'UK | Sports'],
+      onSelectedStreamGroupsChange: vi.fn(),
+      streamGroups: [
+        { name: 'CA | Documentary', count: 12 },
+        { name: 'UK | Sports', count: 8 },
+        { name: 'US | News', count: 50 },
+      ],
+    });
+    expect(screen.getByLabelText('20 filtered streams')).toHaveTextContent('20');
+
+    rerender(
+      <NotificationProvider>
+      <StreamsPane
+        streams={STREAMS}
+        providers={PROVIDERS}
+        streamGroups={[
+          { name: 'CA | Documentary', count: 12 },
+          { name: 'UK | Sports', count: 8 },
+          { name: 'US | News', count: 50 },
+        ]}
+        searchTerm=""
+        onSearchChange={vi.fn()}
+        providerFilter={null}
+        onProviderFilterChange={vi.fn()}
+        groupFilter={null}
+        onGroupFilterChange={vi.fn()}
+        loading={false}
+        selectedStreamGroups={[]}
+        onSelectedStreamGroupsChange={vi.fn()}
+      />
+      </NotificationProvider>,
+    );
+    expect(screen.getByLabelText('70 total streams')).toHaveTextContent('70');
   });
 });
 
@@ -205,18 +439,17 @@ describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696
     expect((usHeader as HTMLElement).querySelector('.group-stale-count')).not.toBeInTheDocument();
   });
 
-  it('renders a stale-count pill on a group header containing a stale stream', async () => {
+  it('renders no stale-count warning on inventory group headers', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
 
     const ukHeader = screen.getByText('UK | Sports').closest('.stream-group-header');
     expect(ukHeader).not.toBeNull();
-    const pill = within(ukHeader as HTMLElement).getByTitle(/1 stream.*no longer listed by provider \(stale\)/i);
-    expect(pill).toHaveTextContent('1');
+    expect((ukHeader as HTMLElement).querySelector('.group-stale-count')).not.toBeInTheDocument();
   });
 
-  it('renders a STALE badge on a stale stream row but not on a fresh row', async () => {
+  it('does not render per-row STALE badges in source inventory', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
@@ -225,28 +458,28 @@ describe('StreamsPane stale streams (bead enhancedchannelmanager-po78p / GH #696
     const freshRow = screen.getByText('Fresh Stream').closest('.stream-item');
     expect(staleRow).not.toBeNull();
     expect(freshRow).not.toBeNull();
-    expect(within(staleRow as HTMLElement).getByText('STALE')).toBeInTheDocument();
+    expect(within(staleRow as HTMLElement).queryByText('STALE')).not.toBeInTheDocument();
     expect(within(freshRow as HTMLElement).queryByText('STALE')).not.toBeInTheDocument();
   });
 
-  it('applies the is-stale row class only to the stale stream row', async () => {
+  it('does not apply assigned-health styling to source inventory rows', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
 
     const staleRow = screen.getByText('Stale Stream').closest('.stream-item');
     const freshRow = screen.getByText('Fresh Stream').closest('.stream-item');
-    expect(staleRow).toHaveClass('is-stale');
+    expect(staleRow).not.toHaveClass('is-stale');
     expect(freshRow).not.toHaveClass('is-stale');
   });
 
-  it('includes the last-seen timestamp in the stale badge tooltip when available', async () => {
+  it('keeps last-seen warning detail out of source inventory rows', async () => {
     const user = userEvent.setup();
     renderStalePane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
 
-    const badge = screen.getByText('STALE');
-    expect(badge.closest('.meta-tag')).toHaveAttribute('title', expect.stringContaining('2026-07-01T00:00:00Z'));
+    expect(screen.queryByText('STALE')).not.toBeInTheDocument();
+    expect(screen.queryByTitle(expect.stringContaining('2026-07-01T00:00:00Z'))).not.toBeInTheDocument();
   });
 });
 
@@ -436,6 +669,132 @@ describe('StreamsPane create-in menu replaces the right-click context menu (bead
         await screen.findByRole('heading', { name: /Create Channels from 1 Selected Stream/i })
       ).toBeInTheDocument();
     });
+
+    /**
+     * bead enhancedchannelmanager-ok8tj. A doc tester created channels from
+     * two streams into a group already holding a similarly-named channel, saw
+     * no StreamDedupModal, and could not tell whether nothing had cleared the
+     * confidence threshold or the feature had not run. It had not run: the
+     * check is single-stream only. These tests pin every outcome as something
+     * the operator can read.
+     */
+    describe('outcome is legible to the operator (bead enhancedchannelmanager-ok8tj)', () => {
+      it('says the duplicate check did not run for a multi-stream selection', async () => {
+        const candidatesSpy = vi.fn();
+        server.use(
+          http.get('/api/channel-merges/candidates', () => {
+            candidatesSpy();
+            return HttpResponse.json({
+              stream_name: '', candidates: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+            });
+          })
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1', 'UK Sports Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(await screen.findByText('Duplicate check skipped')).toBeInTheDocument();
+        expect(
+          screen.getByText(/runs on a single-stream selection only/i)
+        ).toBeInTheDocument();
+        expect(candidatesSpy).not.toHaveBeenCalled();
+      });
+
+      it('says nothing matched when the single-stream lookup returns no candidate', async () => {
+        server.use(
+          http.get('/api/channel-merges/candidates', () =>
+            HttpResponse.json({
+              stream_name: 'US News Stream 1',
+              candidates: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+            })
+          )
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(await screen.findByText('No duplicate found')).toBeInTheDocument();
+        expect(screen.getByText(/close enough to "US News Stream 1"/i)).toBeInTheDocument();
+      });
+
+      it('says the check was unavailable when the candidates lookup fails', async () => {
+        server.use(
+          http.get('/api/channel-merges/candidates', () =>
+            HttpResponse.json({ detail: 'boom' }, { status: 500 })
+          )
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(await screen.findByText('Duplicate check unavailable')).toBeInTheDocument();
+      });
+
+      it('says nothing at all when a candidate is found — the modal is the message', async () => {
+        server.use(
+          http.get('/api/channel-merges/candidates', () =>
+            HttpResponse.json({
+              stream_name: 'US News Stream 1',
+              candidates: [
+                { channel_id: '77', channel_name: 'US News', confidence: 1.0 },
+              ],
+              total: 1, page: 1, page_size: 1, total_pages: 1,
+            })
+          )
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        expect(
+          await screen.findByRole('heading', { name: /Stream matches an existing channel/i })
+        ).toBeInTheDocument();
+        expect(screen.queryByText('No duplicate found')).not.toBeInTheDocument();
+        expect(screen.queryByText('Duplicate check skipped')).not.toBeInTheDocument();
+      });
+
+      /**
+       * PIN, not a red-proven regression test: the lookup already sent the raw
+       * stream name and always did. It is pinned because bead e9e5o made the
+       * Create Channels dialog's normalization toggle change the SUBMITTED
+       * name, and an operator must not lose dedup protection by turning
+       * normalization off. The lookup runs before that dialog exists, on the
+       * provider name, so the toggle cannot reach it — this test fails if a
+       * later change routes a normalized name into the lookup.
+       */
+      it('PIN: looks the candidate up under the RAW provider name, independent of any normalization', async () => {
+        const candidatesSpy = vi.fn();
+        server.use(
+          http.get('/api/channel-merges/candidates', ({ request }) => {
+            candidatesSpy(new URL(request.url).searchParams.get('stream_name'));
+            return HttpResponse.json({
+              stream_name: 'US News Stream 1',
+              candidates: [], total: 0, page: 1, page_size: 1, total_pages: 0,
+            });
+          })
+        );
+        const user = userEvent.setup();
+        renderEditPane();
+        await expandAndSelect(user, ['US News Stream 1']);
+
+        await user.click(screen.getByRole('button', { name: 'Create in…' }));
+        await user.click(screen.getByRole('button', { name: 'Sports TV' }));
+
+        await waitFor(() => expect(candidatesSpy).toHaveBeenCalledWith('US News Stream 1'));
+      });
+    });
   });
 });
 
@@ -517,7 +876,7 @@ describe('StreamsPane catch-up badge (bead enhancedchannelmanager-sy1sz)', () =>
     });
   }
 
-  it('renders the catch-up badge on a supported stream row but not on an unsupported one', async () => {
+  it('keeps catch-up status badges out of source inventory rows', async () => {
     const user = userEvent.setup();
     renderCatchupPane();
     await user.click(screen.getByRole('button', { name: /Expand all groups/i }));
@@ -528,8 +887,7 @@ describe('StreamsPane catch-up badge (bead enhancedchannelmanager-sy1sz)', () =>
     expect(plainRow).not.toBeNull();
 
     const badge = (catchupRow as HTMLElement).querySelector('.catchup-badge');
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveAttribute('title', 'Catch-up: 7 days');
+    expect(badge).not.toBeInTheDocument();
     // Flag is authoritative — is_catchup:false wins even with catchup_days:5.
     expect((plainRow as HTMLElement).querySelector('.catchup-badge')).not.toBeInTheDocument();
   });

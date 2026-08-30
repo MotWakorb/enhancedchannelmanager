@@ -6,21 +6,25 @@ Communicates with the ECM backend via HTTP API using an API key for auth.
 """
 import contextlib
 import hmac
+import ipaddress
 import logging
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
-from starlette.applications import Starlette
-from starlette.middleware import Middleware
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import JSONResponse
-from starlette.routing import Mount, Route
-
 from config import (
+    MCP_ALLOWED_HOSTS,
+    MCP_ALLOWED_ORIGINS,
+    MCP_BIND_ADDRESS,
     MCP_PORT,
+    MCP_REQUIRE_HTTPS,
+    MCP_TRUSTED_PROXY_IPS,
     get_mcp_api_key,
     get_mcp_api_key_status,
+    get_mcp_backend_credentials_status,
+    normalize_mcp_allowed_host,
 )
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import Settings as FastMCPSettings
+from mcp.server.transport_security import TransportSecuritySettings
+
 # MCP OAuth offering RETIRED (bd-9axgc). The OAuth Resource-Server verify path
 # (oauth_rs.verify_oauth_token), the RFC 9728 discovery module (oauth_discovery),
 # and the config OAuth helpers (get_signing_key / get_signing_key_status /
@@ -30,6 +34,12 @@ from config import (
 # fall through to the static-key path — CD1 no-fail-cascade).
 from oauth_rs import looks_like_jwt
 from resources import register_all_resources
+from starlette.applications import Starlette
+from starlette.datastructures import Headers
+from starlette.middleware import Middleware
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import JSONResponse, PlainTextResponse
+from starlette.routing import Mount, Route
 from tools import register_all_tools
 
 # Configure logging
@@ -41,10 +51,21 @@ logger = logging.getLogger(__name__)
 
 # Create MCP server using the high-level FastMCP API.
 #
-# DNS-rebinding protection (Host/Origin allowlisting) is disabled: ECM's MCP
-# sidecar is intended to be reached from another host by IP or hostname, and
-# FastMCP's default allowlist is localhost-only — which would 421 every remote
-# client. Access is gated by the static API key (APIKeyAuthMiddleware) instead.
+# MCP 1.29.0 leaves Settings.lifespan as an unresolved forward reference even
+# after its module has finished importing. Rebuild that dependency model before
+# FastMCP constructs it so pydantic-settings can inspect the field correctly.
+FastMCPSettings.model_rebuild()
+
+_MCP_SDK_ALLOWED_HOSTS = [
+    variant
+    for host in MCP_ALLOWED_HOSTS
+    for variant in (host, f"{host}:*")
+]
+
+# The home-lab defaults admit loopback and the canonical Compose service name.
+# Operators serving the sidecar at a LAN IP/hostname add it explicitly through
+# MCP_ALLOWED_HOSTS. The SDK performs the same check again at the transport
+# boundary, so a future outer-app routing change cannot silently remove it.
 mcp = FastMCP(
     "ecm-mcp",
     instructions=(
@@ -53,7 +74,11 @@ mcp = FastMCP(
         "manage M3U accounts, EPG sources, run auto-creation pipelines, probe "
         "stream health, view statistics, and more."
     ),
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_MCP_SDK_ALLOWED_HOSTS,
+        allowed_origins=list(MCP_ALLOWED_ORIGINS),
+    ),
 )
 
 # Register tools and resources
@@ -63,8 +88,152 @@ register_all_resources(mcp)
 
 #: The 401 challenge header (RFC 6750). Signals that a Bearer credential is
 #: required. The supported credential is the static MCP API key presented as
-#: ``?api_key=`` or a non-JWT-shaped ``Bearer <key>`` (OAuth retired — bd-9axgc).
+#: a non-JWT-shaped ``Bearer <key>`` (OAuth retired — bd-9axgc).
 _WWW_AUTHENTICATE = {"WWW-Authenticate": "Bearer"}
+
+
+class MCPSafeAccessLogMiddleware:
+    """Log bounded request metadata without raw targets, headers, or bodies."""
+
+    def __init__(self, app):
+        self.app = app
+
+    @staticmethod
+    def _route_class(scope) -> str:
+        path = scope.get("path")
+        if path == "/health":
+            return "health"
+        if path == "/mcp":
+            return "mcp"
+        return "other"
+
+    @staticmethod
+    def _method_class(scope) -> str:
+        method = scope.get("method")
+        if method in {"GET", "POST", "DELETE", "OPTIONS", "HEAD"}:
+            return method
+        return "OTHER"
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        status_code = 500
+
+        async def capture_status(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        try:
+            await self.app(scope, receive, capture_status)
+        finally:
+            # Both fields come from fixed vocabularies. Never interpolate a
+            # raw request target: decoded paths can still carry control chars.
+            logger.info(
+                "[MCP-ACCESS] request method=%s route=%s status=%d",
+                self._method_class(scope),
+                self._route_class(scope),
+                int(status_code),
+            )
+
+
+class MCPTransportSecurityMiddleware:
+    """Enforce exact browser origins and HTTPS for protected remote traffic."""
+
+    def __init__(self, app, allowed_origins: tuple[str, ...], require_https: bool):
+        self.app = app
+        self.allowed_origins = frozenset(allowed_origins)
+        self.require_https = require_https
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+
+        headers = Headers(scope=scope)
+        origin = headers.get("origin")
+        if origin is not None and origin not in self.allowed_origins:
+            response = PlainTextResponse("Invalid Origin header", status_code=403)
+            await response(scope, receive, send)
+            return
+
+        if (
+            self.require_https
+            and scope.get("path") != "/health"
+            and scope.get("scheme") != "https"
+        ):
+            response = JSONResponse(
+                {"error": "HTTPS is required for remote MCP access"},
+                status_code=400,
+            )
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
+def _validated_request_host(host_header: str) -> str | None:
+    """Return the normalized hostname when an HTTP Host authority is valid."""
+    if not host_header or any(character.isspace() for character in host_header):
+        return None
+
+    hostname: str
+    remainder: str
+    if host_header.startswith("["):
+        closing_bracket = host_header.find("]")
+        if closing_bracket < 0:
+            return None
+        hostname = host_header[: closing_bracket + 1]
+        remainder = host_header[closing_bracket + 1 :]
+        try:
+            ipaddress.IPv6Address(hostname[1:-1])
+        except ValueError:
+            return None
+    else:
+        if host_header.count(":") > 1:
+            return None
+        hostname, separator, port = host_header.partition(":")
+        remainder = f":{port}" if separator else ""
+
+    if remainder:
+        if not remainder.startswith(":"):
+            return None
+        port = remainder[1:]
+        if not port.isascii() or not port.isdigit() or int(port) > 65535:
+            return None
+
+    try:
+        return normalize_mcp_allowed_host(hostname)
+    except ValueError:
+        return None
+
+
+class MCPAllowedHostMiddleware:
+    """Reject malformed/untrusted Host values before Starlette routing.
+
+    Starlette's generic TrustedHostMiddleware splits on the first colon, which
+    cannot correctly validate bracketed IPv6 authorities. This small MCP-only
+    boundary validates the full RFC-style authority and compares the normalized
+    hostname against the configured exact allowlist.
+    """
+
+    def __init__(self, app, allowed_hosts: tuple[str, ...]) -> None:
+        self.app = app
+        self.allowed_hosts = frozenset(allowed_hosts)
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] not in {"http", "websocket"}:
+            await self.app(scope, receive, send)
+            return
+
+        host = _validated_request_host(Headers(scope=scope).get("host", ""))
+        if host not in self.allowed_hosts:
+            response = PlainTextResponse("Invalid Host header", status_code=400)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
 
 
 class APIKeyAuthMiddleware(BaseHTTPMiddleware):
@@ -72,8 +241,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
 
     The MCP OAuth offering was retired by PO decision (bd-9axgc): ECM no longer
     accepts OAuth 2.1 Bearer tokens for MCP. The ONLY supported credential is
-    the static ``?api_key=`` (or non-JWT-shaped ``Bearer <key>``) path —
-    PO-locked permanent.
+    a non-JWT-shaped ``Bearer <key>``. Query-string credentials are rejected
+    because request targets leak into logs, histories, and intermediary URLs.
 
     Routing (decided pre-validation, preserving the CD1 no-fail-cascade
     invariant — a JWT-shaped Bearer must NEVER be compared to the static key):
@@ -81,7 +250,8 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
         JSON with ``alg``) → **REJECTED 401**. OAuth/JWT-shaped tokens are no
         longer accepted; the request is NEVER tried against the static key
         (no fail-cascade leakage).
-      - ``?api_key=<value>`` OR ``Bearer <non-JWT-shaped>`` → **static-key path**.
+      - ``Bearer <non-JWT-shaped>`` → **static-key path**.
+      - ``?api_key=<value>`` → rejected; credentials never belong in URLs.
       - Neither → 401 + ``WWW-Authenticate: Bearer``.
 
     The OAuth verify path (``oauth_rs.verify_oauth_token``) and the RFC 9728
@@ -94,11 +264,26 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request, call_next):
-        path = request.url.path
+        # ``scope["path"]`` is the trusted path Uvicorn decoded from the HTTP
+        # request target. Never derive an auth exemption from ``request.url``:
+        # Starlette <=1.0.0 allowed a malformed Host header to poison its path
+        # and make a routed /mcp request appear to be /health (CVE-2026-48710).
+        path = request.scope.get("path", "")
 
         # Health endpoint is always public
         if path == "/health":
             return await call_next(request)
+
+        if "api_key" in request.query_params:
+            return JSONResponse(
+                {
+                    "error": (
+                        "Query credentials are not accepted. Use the "
+                        "Authorization Bearer header."
+                    )
+                },
+                status_code=400,
+            )
 
         # ── SHAPE CLASSIFICATION (before any validation — CD1 no-fail-cascade) ──
         # RFC 6750 §2.1: the "Bearer" auth-scheme token is case-insensitive and
@@ -119,7 +304,12 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
             # token was rejected — never the token value (CodeQL #1604).
             logger.warning("[MCP] OAuth/JWT-shaped Bearer rejected: MCP OAuth offering retired (bd-9axgc)")
             return JSONResponse(
-                {"error": "OAuth is not supported. Use the static ?api_key= MCP credential."},
+                {
+                    "error": (
+                        "OAuth is not supported. Use the static MCP credential "
+                        "as an Authorization Bearer header."
+                    )
+                },
                 status_code=401,
                 headers=_WWW_AUTHENTICATE,
             )
@@ -137,8 +327,7 @@ class APIKeyAuthMiddleware(BaseHTTPMiddleware):
                 status_code=503,
             )
 
-        # Extract key from query param, else the (non-JWT-shaped) Bearer value.
-        api_key = request.query_params.get("api_key", "") or bearer_value
+        api_key = bearer_value
 
         if not api_key:
             # No credential at all → 401 with the OAuth bootstrap challenge.
@@ -170,9 +359,9 @@ async def handle_health(request):
 
     Self-diagnosing /health (bd-ix1g6): in addition to the boolean
     ``api_key_configured`` flag, we surface ``api_key_status`` — a machine-
-    readable reason that distinguishes the four ways a key can be missing
-    (no settings file, corrupted JSON, missing field, empty field). This
-    lets an operator (and the ECM Settings UI's MCP Server Status panel)
+    readable reason that distinguishes the ways a key can be missing (no
+    credential projection, unreadable/malformed projection, empty projection).
+    This lets an operator (and the ECM Settings UI's MCP Server Status panel)
     diagnose a misconfigured deployment without container shell access.
 
     MCP OAuth offering RETIRED (bd-9axgc): the previously-reported
@@ -182,25 +371,21 @@ async def handle_health(request):
     """
     api_key, status = get_mcp_api_key_status()
     configured = bool(api_key)
+    service_status = get_mcp_backend_credentials_status()
+    ready = configured and service_status == "ok"
 
     # Pick a hint tailored to the specific failure mode so the user sees a
     # remediation matching the actual cause, not a one-size-fits-all message.
     setup_hints = {
         "file_not_found": (
-            "ECM has not written settings.json yet, or the MCP container's "
-            "/config volume is not sharing the same data as ECM. Verify both "
-            "containers mount the same volume and that ECM Settings has been "
-            "saved at least once."
+            "ECM could not publish the MCP credential. Verify both containers "
+            "mount the dedicated ecm-mcp-secrets volume with matching "
+            "PUID/PGID, then restart ECM."
         ),
-        "invalid_json": (
-            "/config/settings.json could not be parsed as JSON. The file may "
-            "be corrupted, partially written, or unrelated. Restore from a "
-            "backup or recreate it by saving ECM Settings."
-        ),
-        "field_missing": (
-            "settings.json predates the MCP feature and does not contain an "
-            "mcp_api_key field. Open ECM Settings > MCP Integration and "
-            "generate a key — saving will add the field."
+        "invalid_key": (
+            "The dedicated MCP credential projection is unreadable or "
+            "malformed. Confirm the sidecar runs under the same PUID/PGID as "
+            "ECM, then regenerate the key in ECM Settings > MCP Integration."
         ),
         "field_empty": (
             "No MCP API key configured. Generate one in ECM Settings > "
@@ -209,17 +394,19 @@ async def handle_health(request):
     }
 
     response = {
-        "status": "ok" if configured else "not_configured",
+        "status": "ok" if ready else "not_ready",
         "server": "ecm-mcp",
         "transport": "streamable-http",
         "api_key_configured": configured,
         "api_key_status": status,
+        "backend_service_ready": service_status == "ok",
+        "backend_service_status": service_status,
         "tools_available": len(mcp._tool_manager.list_tools()),
         "resources_available": len(mcp._resource_manager.list_resources()),
     }
     if not configured and status in setup_hints:
         response["setup_hint"] = setup_hints[status]
-    return JSONResponse(response)
+    return JSONResponse(response, status_code=200 if ready else 503)
 
 
 # MCP OAuth offering RETIRED (bd-9axgc). ``handle_protected_resource`` (RFC 9728
@@ -234,6 +421,26 @@ async def handle_health(request):
 # but Starlette does NOT propagate a Mounted sub-app's lifespan — so the outer
 # app must run the session manager itself.
 streamable_app = mcp.streamable_http_app()
+
+
+def mcp_http_middleware() -> list[Middleware]:
+    """Build the outer HTTP security stack used by production and E2E tests.
+
+    Authentication deliberately runs first: an unauthenticated poisoned /mcp
+    request receives the same 401 as any other missing-credential request.
+    Requests admitted by auth, plus public /health requests, then pass through
+    strict Host validation before routing.
+    """
+    return [
+        Middleware(MCPSafeAccessLogMiddleware),
+        Middleware(
+            MCPTransportSecurityMiddleware,
+            allowed_origins=MCP_ALLOWED_ORIGINS,
+            require_https=MCP_REQUIRE_HTTPS,
+        ),
+        Middleware(APIKeyAuthMiddleware),
+        Middleware(MCPAllowedHostMiddleware, allowed_hosts=MCP_ALLOWED_HOSTS),
+    ]
 
 
 @contextlib.asynccontextmanager
@@ -254,13 +461,18 @@ app = Starlette(
         Mount("/", app=streamable_app),
     ],
     lifespan=lifespan,
-    middleware=[
-        Middleware(APIKeyAuthMiddleware),
-    ],
+    middleware=mcp_http_middleware(),
 )
 
 if __name__ == "__main__":
     import uvicorn
 
-    logger.info("[MCP] Starting ECM MCP server on port %s", MCP_PORT)
-    uvicorn.run(app, host="0.0.0.0", port=MCP_PORT)
+    logger.info("[MCP] Starting ECM MCP server on %s:%s", MCP_BIND_ADDRESS, MCP_PORT)
+    uvicorn.run(
+        app,
+        host=MCP_BIND_ADDRESS,
+        port=MCP_PORT,
+        access_log=False,
+        proxy_headers=True,
+        forwarded_allow_ips=MCP_TRUSTED_PROXY_IPS,
+    )

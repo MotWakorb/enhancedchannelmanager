@@ -15,9 +15,24 @@
   margin-bottom: 16px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 14px.
+   `text-transform` / `letter-spacing` are reset explicitly. Until this bead
+   they came from StatsTab.css's bare `.section-title`, which every panel
+   title matches because the panels render inside `.stats-tab` — so these
+   headings were rendering 15px/600 UPPERCASE, a hybrid of the section role's
+   size and that rule's case. StatsTab's copy is now the micro role and this
+   panel title is a section heading in sentence case, which is what the
+   section role has always meant (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .section-title {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--text-primary);
   margin: 0;
 }
@@ -31,10 +46,15 @@
   border-radius: var(--radius-lg);
 }
 
+/* Body role: it is a control, and the body role's own definition covers
+   buttons and inputs — role definition beats closest-current-px, so a 12px
+   button goes to 13px body rather than 11px meta
+   (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .toggle-btn {
   padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   white-space: nowrap;
   border: none;
   border-radius: var(--radius-md);
@@ -73,16 +93,28 @@
   text-align: center;
 }
 
+/* A real metric tile: four figures across the panel in a `repeat(4, 1fr)`
+   grid, each centred over its label. Already exactly 20px/600/1.2, so this is
+   the literal-to-token swap the metric role was defined for — zero pixels
+   move (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .stat-value {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: var(--type-metric-size);
+  font-weight: var(--type-metric-weight);
+  line-height: var(--type-metric-line-height);
   color: var(--text-primary);
-  line-height: 1.2;
 }
 
+/* Micro role, spelled out in full. `text-transform` and `letter-spacing`
+   used to arrive from StatsTab.css's `.stat-label`, so this label was
+   rendering uppercase without saying so anywhere in this file. Also
+   --text-secondary, not --text-muted: 2.61:1 on --bg-secondary in the light
+   theme (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .stat-label {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
+  color: var(--text-secondary);
   margin-top: 4px;
 }
 
@@ -95,9 +127,15 @@
   margin-bottom: 16px;
 }
 
+/* Item title, not section. Chart headings and sub-list headings sit one step
+   below the panel's own `.section-title`; collapsing them onto the 15px
+   section role would flatten the only heading hierarchy the panel has. PO
+   decision 3 covers `.section-title`, not these
+   (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .chart-title {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
@@ -111,22 +149,30 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
+/* The tooltip's three lines take three different roles so the hierarchy
+   survives: the category is the item title, the figure is the 13px/500 label
+   role (its exact current metrics), the qualifier is meta
+   (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-tooltip .tooltip-label {
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .enhanced-stats-tooltip .tooltip-value {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--success);
 }
 
 .enhanced-stats-tooltip .tooltip-detail {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-top: 2px;
 }
 
@@ -137,8 +183,9 @@
 }
 
 .enhanced-stats-panel .subsection-title {
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-secondary);
   margin-bottom: 8px;
 }
@@ -161,23 +208,32 @@
   border-radius: var(--radius-md);
 }
 
+/* Meta, not item title. A muted grey ordinal in a fixed 24px gutter is
+   metadata about the row, not the row's title — the name beside it is the
+   item title. --text-secondary for the AA floor
+   (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .viewer-rank,
 .enhanced-stats-panel .channel-rank {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   min-width: 24px;
 }
 
 .enhanced-stats-panel .viewer-ip {
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   flex: 1;
 }
 
 .enhanced-stats-panel .channel-name {
-  font-size: 12px;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   flex: 1;
   overflow: hidden;
@@ -187,8 +243,10 @@
 
 .enhanced-stats-panel .viewer-stats,
 .enhanced-stats-panel .channel-viewers {
-  font-size: 11px;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 /* Bandwidth Section */
@@ -205,15 +263,20 @@
   margin-top: 4px;
 }
 
+/* The label role (13px/500) is for the caption that names a control, which is
+   exactly what this is (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .sort-label {
-  font-size: 12px;
-  color: var(--text-muted);
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
+  color: var(--text-secondary);
 }
 
 .enhanced-stats-panel .sort-btn {
   padding: 4px 10px;
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   background: var(--bg-tertiary);
@@ -240,16 +303,20 @@
   overflow: hidden;
 }
 
+/* Subtractive, not remapped. `.list-header` is owned by shared/common.css
+   § 15 for the strip and § 24 MICRO LABELS for its type; this rule was
+   repeating the typography at (0,2,0), so the shared owner never reached it —
+   the exact half-finished-extraction shape the load-order note at the top of
+   common.css warns about. Only the panel-specific grid, padding and
+   background stay; size, weight, case, tracking and colour now come from the
+   shared layer, which also moves the colour off --text-muted
+   (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .list-header {
   display: grid;
   grid-template-columns: 32px 1fr 90px 80px 80px;
   gap: 8px;
   padding: 8px 12px;
   background: var(--bg-tertiary);
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--text-muted);
-  text-transform: uppercase;
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -258,7 +325,9 @@
   grid-template-columns: 32px 1fr 90px 80px 80px;
   gap: 8px;
   padding: 10px 12px;
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -271,7 +340,7 @@
 }
 
 .enhanced-stats-panel .col-rank {
-  color: var(--text-muted);
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
@@ -300,12 +369,14 @@
 .enhanced-stats-panel .empty-state {
   padding: 32px;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .enhanced-stats-panel .error-state {
-  color: #ef4444;
+  color: #f87171;
 }
 
 /* Responsive */

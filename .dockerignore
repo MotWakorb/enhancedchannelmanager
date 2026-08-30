@@ -1,0 +1,28 @@
+# Build-context exclusions.
+#
+# Added with the end-to-end MCP isolation gate (enhancedchannelmanager-04c0u.8),
+# which builds the ECM image from a developer checkout rather than only from a
+# clean CI clone. Without this, `COPY frontend/ ./` copies a bootstrapped
+# worktree's `frontend/node_modules` over the `npm ci` output of the previous
+# layer, and a symlinked `.bin` inside it fails the build outright with
+# "cannot replace to directory .../node_modules/.bin with file".
+#
+# Everything listed here is either regenerated inside the image (node_modules,
+# dist, virtualenvs) or is not part of the application (VCS metadata, caches,
+# test artifacts). Nothing the Dockerfile copies is excluded.
+.git
+.gitignore
+**/node_modules
+**/.venv
+**/venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+frontend/dist
+frontend/coverage
+frontend/playwright-report
+frontend/test-results
+.beads
+.vite-temp

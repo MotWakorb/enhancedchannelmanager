@@ -24,7 +24,7 @@
 
 .error-boundary-icon {
   font-size: 40px !important;
-  color: var(--error);
+  color: var(--danger-text);
   margin-bottom: 12px;
 }
 

@@ -52,6 +52,8 @@ interface AuthContextState {
   logout: () => Promise<void>;
   // Refresh current user data
   refreshUser: () => Promise<void>;
+  // Re-read the server's auth configuration (see refreshAuthStatus below)
+  refreshAuthStatus: () => Promise<void>;
 }
 
 // Create context with undefined default
@@ -86,8 +88,31 @@ export function AuthProvider({ children }: AuthProviderProps) {
           const status = await getAuthStatus();
           setAuthStatus(status);
 
-          // If auth is not required or setup not complete, no need to check user
-          if (!status.require_auth || !status.setup_complete) {
+          // Only ONE of the two flags can skip the /me call, and it is not
+          // require_auth (bead enhancedchannelmanager-9kwzp, from a Codex
+          // review plus a live QA repro).
+          //
+          // `!setup_complete` genuinely means there is no session to resolve:
+          // no operator row exists, so no cookie can name one.
+          //
+          // `!require_auth` used to short-circuit here too, on the reasoning
+          // that an instance which does not demand a session cannot have one.
+          // Bead enhancedchannelmanager-p388h made that false: it reopened
+          // /login on an auth-disabled instance that already holds an operator
+          // identity, precisely so an operator could reach the three surfaces
+          // bead jy006 gated behind an authenticated human admin (initial
+          // restore, the MCP API key, TLS key material). Returning early threw
+          // that session away on the next render of the app: the operator
+          // signed in, then a refresh or a second tab resolved `user` to null,
+          // SettingsTab passed isAdmin={false}, and the TLS and MCP sections
+          // went back to "Admin access required". Signing in again fixed it
+          // until the next reload, which made the reopened route close to
+          // useless.
+          //
+          // The cost of falling through is one /me request (plus httpClient's
+          // one refresh retry) on an auth-off instance with no cookie, which
+          // 401s and leaves `user` null exactly as before.
+          if (!status.setup_complete) {
             setIsLoading(false);
             return;
           }
@@ -168,6 +193,28 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
+  // Re-read the server's auth configuration.
+  //
+  // The mount effect above fetches /api/auth/status exactly once, so anything
+  // that changes the server's answer mid-session leaves `authStatus` stale.
+  // First-run setup is exactly such an event: POST /api/auth/setup creates the
+  // operator row and persists `setup_complete` (bead
+  // enhancedchannelmanager-qg14z), while the value fetched before setup stays
+  // stale. Callers that change auth state must therefore re-read it rather than
+  // trust the value cached at mount (bead enhancedchannelmanager-lf29s).
+  //
+  // Failures deliberately leave the previous status in place, matching
+  // refreshUser(): a transient network error should not change what the app
+  // believes about the server's auth configuration.
+  const refreshAuthStatus = useCallback(async () => {
+    try {
+      const status = await getAuthStatus();
+      setAuthStatus(status);
+    } catch {
+      // Keep the cached status; see comment above.
+    }
+  }, []);
+
   // Reschedule the proactive refresh timer after ANY successful token
   // refresh — proactive (our timer below) or reactive (httpClient's
   // 401-retry path) — so the timer always tracks the newest token.
@@ -207,6 +254,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     loginWithDispatcharr,
     logout,
     refreshUser,
+    refreshAuthStatus,
   };
 
   return (
@@ -234,25 +282,71 @@ export function useAuth(): AuthContextState {
 }
 
 /**
- * Hook to check if auth is required for the app.
+ * What the server said about whether this app needs an authenticated session.
  *
- * Returns true if:
- * - Auth settings are loaded AND
- * - require_auth is true AND
- * - setup is complete
+ * `'resolving'` is a real third answer, not a transient nicety. GET
+ * /api/auth/status is fetched exactly once at mount, and when that fetch fails
+ * `authStatus` stays null forever. Collapsing that into `false` (bead
+ * enhancedchannelmanager-p388h) made an unreachable backend indistinguishable
+ * from a deliberately auth-disabled instance, so ProtectedRoute rendered the
+ * whole app shell with no session, no login prompt, and no way back: its
+ * `!authRequired` branch also rewrote /login to / so typing the URL did not
+ * help either.
+ */
+export type AuthRequirement = 'resolving' | 'required' | 'not-required';
+
+/**
+ * Hook reporting whether auth is required for the app.
  *
- * Returns false if:
- * - Still loading OR
- * - Auth is disabled OR
- * - Setup not complete
+ * - `'resolving'` while the initial check is in flight, AND after it has
+ *   failed. Both are the same fact: the server has not told us. Callers must
+ *   treat this as unknown and must NOT fall through to rendering the app.
+ * - `'required'` when the server reports require_auth AND setup_complete.
+ * - `'not-required'` when the server answered and one of those is false.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- hook co-located with AuthProvider by convention
-export function useAuthRequired(): boolean {
+export function useAuthRequirement(): AuthRequirement {
   const { authStatus, isLoading } = useAuth();
 
+  // isLoading covers the in-flight case. A null authStatus once loading has
+  // finished means the fetch threw and was swallowed in checkAuth's inner
+  // catch, which is unknown, not "no".
   if (isLoading || !authStatus) {
-    return false;
+    return 'resolving';
   }
 
-  return authStatus.require_auth && authStatus.setup_complete;
+  return authStatus.require_auth && authStatus.setup_complete ? 'required' : 'not-required';
+}
+
+/**
+ * Whether admin-only navigation destinations should be offered to this viewer.
+ *
+ * The other half of bead enhancedchannelmanager-p388h (absorbed from ee5f1),
+ * with the opposite polarity. Nav visibility was `Boolean(user?.is_admin)`,
+ * which resolves "no identity" to "not an admin" and hides the Administration
+ * settings group. On a `require_auth: false` instance there is never a user
+ * row in the client, so that group stayed hidden permanently while the backend
+ * served it to anyone: `auth.dependencies.require_admin_if_enabled` returns
+ * early when auth is disabled. The UI was strictly less permissive than the
+ * API, which is a usability defect and not a control.
+ *
+ * This is navigation only. Backend enforcement is independent, so showing a
+ * destination never grants anything; hiding one only prevented an operator
+ * from reaching what they were already allowed to use.
+ */
+// eslint-disable-next-line react-refresh/only-export-components -- hook co-located with AuthProvider by convention
+export function useAdminNavVisible(): boolean {
+  const { user } = useAuth();
+  const requirement = useAuthRequirement();
+
+  // Auth off: the backend admits anonymous callers to its admin gates, so the
+  // nav must not be narrower than the API.
+  if (requirement === 'not-required') {
+    return true;
+  }
+
+  // 'resolving' lands here and yields false. ProtectedRoute does not render
+  // the app in that state at all, so this is a defensive default rather than a
+  // reachable one.
+  return Boolean(user?.is_admin);
 }

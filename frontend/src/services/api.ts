@@ -93,6 +93,7 @@ import type {
   DummyEPGChannelAssignment,
   StaleStreamIdsResponse,
 } from '../types';
+export type { AcceptProfileConflictOutcome } from '../types/profileConflict';
 import type {
   AcceptEventSyncReviewOutcome,
   EventSyncExclusionCreateRequest,
@@ -101,7 +102,12 @@ import type {
   EventSyncReviewsListResponse,
   RejectEventSyncReviewOutcome,
 } from '../types/eventSync';
+import type {
+  AcceptProfileConflictOutcome,
+  ProfileConflictReviewsResponse,
+} from '../types/profileConflict';
 import { logger } from '../utils/logger';
+import { voidBackupBannerSnoozeIfScheduled } from '../utils/backupBannerSnooze';
 import { fetchJson, fetchText, buildQuery, HttpError } from './httpClient';
 import {
   type TimezonePreference,
@@ -123,6 +129,7 @@ import {
   detectRegionalVariants,
   filterStreamsByTimezone,
   normalizeStreamNamesWithBackend,
+  resolveCreateChannelNames,
 } from './streamNormalization';
 // Re-export stream normalization utilities for backward compatibility
 export type PrefixOrder = 'number-first' | 'country-first';
@@ -148,7 +155,13 @@ export {
   detectRegionalVariants,
   filterStreamsByTimezone,
   normalizeStreamNamesWithBackend,
+  resolveCreateChannelNames,
 };
+// `ResolvedCreateChannelNames` is a class, not an interface: it is exported as
+// a VALUE so nothing can satisfy it with an object literal carrying a plain
+// `Map`. Reintroducing the map is reintroducing the missing-entry case, which
+// is the defect (bead enhancedchannelmanager-e9e5o).
+export { ResolvedCreateChannelNames, NormalizationIncompleteError } from './streamNormalization';
 
 const API_BASE = '/api';
 
@@ -461,6 +474,25 @@ export interface BulkCommitResponse {
    * duplicates. False for full success and for total failure (nothing applied).
    */
   partial?: boolean;
+  /**
+   * Channels a failed numbering plan left on the wrong number, which the
+   * compensating write could not put back either (bead
+   * `enhancedchannelmanager-ic884.3`). Each entry names the channel, where it
+   * is, where it should be, and the one action that closes the gap.
+   *
+   * Non-empty is the ONLY case where neither the previous numbering nor the
+   * proposed one is what the operator is left with, so it must reach them
+   * rather than sitting in the envelope: an unexplained middle is the outcome
+   * the whole compensation pass exists to prevent.
+   */
+  numberingRecovery?: {
+    channelId: number;
+    channelName: string;
+    currentNumber: number | null;
+    targetNumber: number | null;
+    step: string;
+    error: string;
+  }[];
 }
 
 // 202+poll envelope for the async bulk-commit path (bd-ggxks). validateOnly
@@ -511,17 +543,30 @@ async function pollBulkCommitJob(jobId: string): Promise<BulkCommitResponse> {
  *   so callers still receive the same BulkCommitResponse on success and a
  *   thrown Error on failure. The hop is invisible to existing callers.
  */
-export async function bulkCommit(request: BulkCommitRequest): Promise<BulkCommitResponse> {
+export async function bulkCommit(
+  request: BulkCommitRequest,
+  batchId?: string,
+): Promise<BulkCommitResponse> {
+  // One Apply All fans out into a create request plus N batches of 200. Sending
+  // the same correlation id on all of them puts every journal row of that
+  // session under one batch, which is how a channel's history reads as one
+  // event instead of several unrelated ones (bead enhancedchannelmanager-r9py9).
+  // The backend middleware reads this header; omitting it mints a per-request
+  // id exactly as before.
+  const headers = batchId ? { 'X-ECM-Batch-Id': batchId } : undefined;
+
   if (request.validateOnly) {
     return fetchJson(`${API_BASE}/channels/bulk-commit`, {
       method: 'POST',
       body: JSON.stringify(request),
+      headers,
     });
   }
 
   const accepted = await fetchJson<BulkCommitJobAccepted>(`${API_BASE}/channels/bulk-commit`, {
     method: 'POST',
     body: JSON.stringify(request),
+    headers,
   });
   return pollBulkCommitJob(accepted.job_id);
 }
@@ -813,7 +858,17 @@ export async function patchM3UAccount(id: number, data: Partial<M3UAccount>): Pr
   });
 }
 
-export async function deleteM3UAccount(id: number): Promise<{ status: string }> {
+export interface DeleteM3UAccountResult {
+  status: string;
+  deleted_groups: number[];
+  skipped_groups: number[];
+  failed_groups: Array<{ id: number; error: string }>;
+  account_deleted?: boolean;
+  linked_settings_cleanup?: 'failed';
+  message?: string;
+}
+
+export async function deleteM3UAccount(id: number): Promise<DeleteM3UAccountResult> {
   return fetchJson(`${API_BASE}/m3u/accounts/${id}`, {
     method: 'DELETE',
   });
@@ -948,6 +1003,7 @@ export function profileApplyIncomplete(
       o.status === 'degraded' ||
       o.status === 'error' ||
       o.status === 'stale_selection' ||
+      o.status === 'conflict' ||
       o.conflict === true ||
       (o.failed_profile_ids?.length ?? 0) > 0
   );
@@ -968,8 +1024,8 @@ export function profileApplyWarningMessage(
   if (items.some((o) => o.status === 'stale_selection')) {
     return 'Saved, but the selected channel profile(s) no longer exist — open Auto-Sync settings and choose current profiles.';
   }
-  if (items.some((o) => o.conflict === true)) {
-    return 'Saved, but this group had conflicting profile selections across accounts — reopen Auto-Sync settings and re-save to normalize them.';
+  if (items.some((o) => o.status === 'conflict' || o.conflict === true)) {
+    return 'Saved, but this group has conflicting profile selections. Channel-profile membership is frozen pending review; choose the intended selection in the conflict prompt.';
   }
   if (items.some((o) => o.status === 'degraded')) {
     return 'Saved, but channel profiles could not be fully enforced (the profile list was unreachable). It will retry automatically on the next sync.';
@@ -1063,116 +1119,12 @@ export async function getHealth(): Promise<HealthResponse> {
   return fetchJson(`${API_BASE}/health`);
 }
 
-// Version check types
-export interface UpdateInfo {
-  updateAvailable: boolean;
-  latestVersion?: string;
-  latestCommit?: string;
-  releaseUrl?: string;
-  releaseNotes?: string;
-}
-
-const GITHUB_REPO = 'MotWakorb/enhancedchannelmanager';
-
-// Compare versions to determine if an update is available
-// Handles build suffixes like "0.10.0-0001" properly
-// Returns true if latestVersion is newer than currentVersion
-function isNewerVersion(latestVersion: string, currentVersion: string): boolean {
-  // Extract base version (before any - suffix)
-  const getBaseVersion = (v: string) => v.split('-')[0];
-  const getBuildNumber = (v: string) => {
-    const parts = v.split('-');
-    return parts.length > 1 ? parseInt(parts[1], 10) || 0 : 0;
-  };
-
-  const latestBase = getBaseVersion(latestVersion);
-  const currentBase = getBaseVersion(currentVersion);
-
-  // Parse semver parts
-  const parseVersion = (v: string) => {
-    const parts = v.split('.').map(p => parseInt(p, 10) || 0);
-    return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
-  };
-
-  const latest = parseVersion(latestBase);
-  const current = parseVersion(currentBase);
-
-  // Compare major.minor.patch
-  if (latest.major !== current.major) return latest.major > current.major;
-  if (latest.minor !== current.minor) return latest.minor > current.minor;
-  if (latest.patch !== current.patch) return latest.patch > current.patch;
-
-  // Base versions are equal - check build numbers
-  // If current has a build number (e.g., 0.10.0-0001) and latest doesn't (0.10.0),
-  // then current is at or after latest, so no update available
-  const latestBuild = getBuildNumber(latestVersion);
-  const currentBuild = getBuildNumber(currentVersion);
-
-  // Only newer if latest has a higher build number
-  return latestBuild > currentBuild;
-}
-
-// Check for updates based on release channel
-export async function checkForUpdates(
-  currentVersion: string,
-  releaseChannel: string
-): Promise<UpdateInfo> {
-  try {
-    if (releaseChannel === 'dev') {
-      // For dev channel, check package.json version on dev branch
-      const response = await fetch(
-        `https://raw.githubusercontent.com/${GITHUB_REPO}/dev/frontend/package.json`,
-        { cache: 'no-store' }  // Always fetch fresh
-      );
-      if (!response.ok) {
-        throw new Error(`GitHub fetch error: ${response.status}`);
-      }
-      const packageJson = await response.json();
-      const latestVersion = packageJson.version || 'unknown';
-
-      // Compare versions using semantic version comparison
-      const updateAvailable = currentVersion !== 'unknown' &&
-        latestVersion !== 'unknown' &&
-        isNewerVersion(latestVersion, currentVersion);
-
-      return {
-        updateAvailable,
-        latestVersion,
-        releaseUrl: `https://github.com/${GITHUB_REPO}/tree/dev`,
-      };
-    } else {
-      // For latest/stable channel, check GitHub releases
-      const response = await fetch(
-        `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
-        { headers: { 'Accept': 'application/vnd.github.v3+json' } }
-      );
-      if (!response.ok) {
-        if (response.status === 404) {
-          // No releases yet
-          return { updateAvailable: false };
-        }
-        throw new Error(`GitHub API error: ${response.status}`);
-      }
-      const data = await response.json();
-      const latestVersion = data.tag_name?.replace(/^v/, '') || 'unknown';
-
-      // Compare versions using semantic version comparison
-      const updateAvailable = currentVersion !== 'unknown' &&
-        latestVersion !== 'unknown' &&
-        isNewerVersion(latestVersion, currentVersion);
-
-      return {
-        updateAvailable,
-        latestVersion,
-        releaseUrl: data.html_url,
-        releaseNotes: data.body,
-      };
-    }
-  } catch (error) {
-    logger.warn('Failed to check for updates:', error);
-    return { updateAvailable: false };
-  }
-}
+// The update check used to live here (UpdateInfo / isNewerVersion /
+// checkForUpdates) and fed the header's "Update available" pill. Bead
+// enhancedchannelmanager-nhkd4 moved it to backend/services/version_check.py,
+// which reconciles a single notification-centre entry instead: one writer per
+// container rather than one per open tab, and the notice retires itself once
+// the operator has updated. Nothing in the frontend calls GitHub any more.
 
 // Settings
 export type Theme = 'dark' | 'light' | 'high-contrast';
@@ -1238,6 +1190,8 @@ export interface SettingsResponse {
   stats_poll_interval: number;  // Seconds between stats polling (default 10)
   user_timezone: string;  // IANA timezone name (e.g. "America/Los_Angeles")
   backend_log_level: string;  // Backend log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+  backend_log_file_max_bytes?: number;  // Restart-scoped persistent log file size; absent on older backends
+  backend_log_file_backup_count?: number;  // Restart-scoped rotated backup count; absent on older backends
   frontend_log_level: string;  // Frontend log level (DEBUG, INFO, WARN, ERROR)
   vlc_open_behavior: string;  // VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
@@ -1266,6 +1220,10 @@ export interface SettingsResponse {
   failed_stream_sort_order: FailedStreamCategory[];  // Order of deprioritized categories (first = sorted higher)
   strike_threshold: number;  // Consecutive failures before flagging stream (0 = disabled)
   normalize_on_channel_create: boolean;  // Default state for normalization toggle when creating channels
+  // Canonical public origin (scheme://host[:port]) for links ECM emails out.
+  // '' means unset, in which case those links are built from caller-supplied
+  // request headers (bead qsqfv). Admin-only on write.
+  public_base_url: string;
   // Shared SMTP settings
   smtp_configured: boolean;  // Whether shared SMTP is configured
   smtp_host: string;
@@ -1358,6 +1316,11 @@ export type StreamPreviewMode = 'passthrough' | 'transcode' | 'video_only';
 export interface TestConnectionResult {
   success: boolean;
   message: string;
+  // Non-blocking advisory returned alongside a SUCCESSFUL Dispatcharr
+  // connection test — today, "this Dispatcharr version is outside the set ECM's
+  // API contract is recorded against" (ADR-014, bead ax0kf). Never a failure:
+  // ``success`` stays true and the connection still saves.
+  warning?: string;
 }
 
 export async function getSettings(): Promise<SettingsResponse> {
@@ -1399,6 +1362,8 @@ export async function saveSettings(settings: {
   stats_poll_interval?: number;  // Optional - seconds between stats polling, defaults to 10
   user_timezone?: string;  // Optional - IANA timezone name (e.g. "America/Los_Angeles")
   backend_log_level?: string;  // Optional - Backend log level, defaults to INFO
+  backend_log_file_max_bytes?: number;  // Optional - admin-only, applied after restart
+  backend_log_file_backup_count?: number;  // Optional - admin-only, applied after restart
   frontend_log_level?: string;  // Optional - Frontend log level, defaults to INFO
   vlc_open_behavior?: string;  // Optional - VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
@@ -1427,6 +1392,7 @@ export async function saveSettings(settings: {
   failed_stream_sort_order?: FailedStreamCategory[];  // Optional - order of deprioritized categories
   strike_threshold?: number;  // Optional - consecutive failures before flagging stream, defaults to 3
   normalize_on_channel_create?: boolean;  // Optional - default state for normalization toggle, defaults to false
+  public_base_url?: string;  // Optional - public origin for emailed links; omit to keep the stored value, '' clears it
   // Shared SMTP settings
   smtp_host?: string;  // Optional - SMTP server hostname
   smtp_port?: number;  // Optional - SMTP port, defaults to 587
@@ -1471,7 +1437,12 @@ export async function saveSettings(settings: {
   jellyfin_api_key?: string;
   // bd-mlcla: trusted media/proxy networks (ranking hint only, never gates).
   trusted_media_networks?: string[];
-}): Promise<{ status: string; configured: boolean; server_changed: boolean }> {
+}): Promise<{
+  status: string;
+  configured: boolean;
+  server_changed: boolean;
+  restart_required?: boolean;
+}> {
   return fetchJson(`${API_BASE}/settings`, {
     method: 'POST',
     body: JSON.stringify(settings),
@@ -1589,15 +1560,17 @@ export async function getMCPStatus(): Promise<{
   reachable: boolean;
   status?: string;
   api_key_configured?: boolean;
-  // Self-diagnosing /health diagnostic (bd-ix1g6). Distinguishes the four
-  // ways a key can be missing so the Settings UI Server Status panel can
-  // explain WHY api_key_configured is false without operator shell access.
+  // Self-diagnosing /health diagnostic (bd-ix1g6). Distinguishes the ways a
+  // key can be missing so the Settings UI Server Status panel can explain WHY
+  // api_key_configured is false without operator shell access.
   // "ok" — key present and non-empty.
-  // "file_not_found" — /config/settings.json missing (volume mount issue).
-  // "invalid_json" — settings.json exists but is corrupted.
-  // "field_missing" — JSON valid but mcp_api_key field absent (legacy file).
-  // "field_empty" — field present but empty (no key generated / revoked).
-  api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
+  // "file_not_found" — the MCP credential projection is missing (volume issue).
+  // "invalid_key" — projection unreadable or ambiguous (…-04c0u.8).
+  // "field_empty" — projection present but empty (no key generated / revoked).
+  // "invalid_json" / "field_missing" — emitted only by pre-…-04c0u.8 sidecars
+  //   that still parsed settings.json; kept so a mixed-version deployment
+  //   still type-checks against the older image's payload.
+  api_key_status?: 'ok' | 'file_not_found' | 'invalid_key' | 'field_empty' | 'invalid_json' | 'field_missing';
   setup_hint?: string;
   tools_available?: number;
   resources_available?: number;
@@ -2970,6 +2943,7 @@ export interface TaskParameterSchema {
   label: string;
   description: string;
   default?: unknown;
+  required?: boolean;
   min?: number;
   max?: number;
   source?: string;  // e.g., 'channel_groups', 'm3u_accounts', 'epg_sources'
@@ -3031,7 +3005,18 @@ export interface TaskExecution {
   started_at: string;
   completed_at: string | null;
   duration_seconds: number | null;
-  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * How the run ended. `completed_with_warnings` (bead fexq1) is the run that
+   * reached the end and left real, kept state without being clean — some items
+   * failed, or the task declared itself degraded. It is NOT a failure and must
+   * never be rendered as one: a DBAS restore that applied everything and left a
+   * channel with no playable stream lands here.
+   *
+   * Rows written before that build carry `completed` or `failed` only, so any
+   * consumer that switches on this must keep whatever fallback it had.
+   */
+  status: 'running' | 'completed' | 'completed_with_warnings' | 'failed' | 'cancelled';
+  /** True when the run produced what it was asked for — warnings included. */
   success: boolean | null;
   message: string | null;
   error: string | null;
@@ -3064,16 +3049,31 @@ export interface TaskConfigUpdate {
   show_notifications?: boolean;  // Show in NotificationCenter (bell icon)
 }
 
+/**
+ * Every function below that can carry a `dbas_backup` schedule reports what it
+ * saw to `voidBackupBannerSnoozeIfScheduled`. That helper owns the invariant
+ * "an observed enabled backup schedule voids any stored banner snooze"; these
+ * call sites only owe it the observation. See `utils/backupBannerSnooze.ts` —
+ * the point of doing it here rather than in the banner component is that the
+ * fact has to take effect when the banner is not mounted, which is exactly the
+ * lifecycle that was broken (bead enhancedchannelmanager-pui76, round 2).
+ */
 export async function getTasks(): Promise<{ tasks: TaskStatus[] }> {
-  return fetchJson(`${API_BASE}/tasks`, {
+  const result = await fetchJson<{ tasks: TaskStatus[] }>(`${API_BASE}/tasks`, {
     method: 'GET',
   });
+  for (const task of result?.tasks ?? []) {
+    voidBackupBannerSnoozeIfScheduled(task.task_id, task.schedules);
+  }
+  return result;
 }
 
 export async function getTask(taskId: string): Promise<TaskStatus> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
+  const task = await fetchJson<TaskStatus>(`${API_BASE}/tasks/${encodeURIComponent(taskId)}`, {
     method: 'GET',
   });
+  voidBackupBannerSnoozeIfScheduled(taskId, task?.schedules);
+  return task;
 }
 
 export async function updateTask(taskId: string, config: TaskConfigUpdate): Promise<TaskStatus> {
@@ -3124,17 +3124,24 @@ export async function getTaskHistory(taskId: string, limit = 50, offset = 0): Pr
 // -------------------------------------------------------------------------
 
 export async function getTaskSchedules(taskId: string): Promise<{ schedules: TaskSchedule[] }> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
-    method: 'GET',
-  });
+  const result = await fetchJson<{ schedules: TaskSchedule[] }>(
+    `${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`,
+    {
+      method: 'GET',
+    }
+  );
+  voidBackupBannerSnoozeIfScheduled(taskId, result?.schedules);
+  return result;
 }
 
 export async function createTaskSchedule(taskId: string, data: TaskScheduleCreate): Promise<TaskSchedule> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
+  const schedule = await fetchJson<TaskSchedule>(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
+  voidBackupBannerSnoozeIfScheduled(taskId, schedule ? [schedule] : []);
+  return schedule;
 }
 
 export async function updateTaskSchedule(
@@ -3142,11 +3149,16 @@ export async function updateTaskSchedule(
   scheduleId: number,
   data: TaskScheduleUpdate
 ): Promise<TaskSchedule> {
-  return fetchJson(`${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  });
+  const schedule = await fetchJson<TaskSchedule>(
+    `${API_BASE}/tasks/${encodeURIComponent(taskId)}/schedules/${scheduleId}`,
+    {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }
+  );
+  voidBackupBannerSnoozeIfScheduled(taskId, schedule ? [schedule] : []);
+  return schedule;
 }
 
 export async function deleteTaskSchedule(taskId: string, scheduleId: number): Promise<{ status: string; id: number }> {
@@ -4200,6 +4212,15 @@ export interface RestoreResult {
   backup_version: string;
   backup_date: string;
   restored_files: string[];
+  /**
+   * What the artifact could NOT carry, read off the live post-restore instance
+   * (bead enhancedchannelmanager-gi4zn). A standard (non-encrypted) backup
+   * carries no ECM account credentials, so restoring one onto an instance with
+   * no accounts leaves first-run setup required. `restored_files` reports what
+   * landed and structurally cannot report that. Optional: a backend predating
+   * the field omits it, and every caller must tolerate that.
+   */
+  notices?: string[];
 }
 
 export async function restoreBackup(file: File): Promise<RestoreResult> {
@@ -4280,20 +4301,64 @@ export type RestoreEntityType =
   | 'channel'
   | 'stream'
   | 'user_agent'
+  // The Dispatcharr ServerGroup an M3U account's `server_group` FK points at
+  // (bead tyrg1). Its category is ordered before `m3u_account` in the restore
+  // and sync registries, so it appears in every sync report.
+  | 'server_group'
   | 'dvr_rule'
+  // The DVR recording INSTANCES that had not started yet when the backup was
+  // taken (bead ciabe). Distinct from `dvr_rule`, which is the recurring RULE
+  // that generates them. Completed recordings are never in a backup at all —
+  // they reference a media file on the source instance's disk — so there is no
+  // second entity type for them.
+  | 'upcoming_recording'
   // Report-only category for core_settings + comskip apply results (updated/
   // skipped, never created) — mirrors backend EntityType.SETTINGS (bead lc6zu).
   | 'settings'
+  // ECM's OWN settings.json apply results (bead dfkbn) — a DIFFERENT namespace
+  // from `settings` above, which is Dispatcharr's core-settings.
+  | 'ecm_settings'
   | 'user'
   | 'logo';
 
 /** Why an entity was (or would be) skipped. */
 export type RestoreSkipReason =
   | 'already_exists_identical'
+  /**
+   * A destination row was ADOPTED because its NAME matched, with nothing beyond
+   * the name compared (bead 3t74w). Distinct from `already_exists_identical`,
+   * which asserts the destination row matches the archive's. Channel groups
+   * report this: a group's contents live on the CHANNELS, restored after it, so
+   * at match time there is nothing to compare and "identical" was never earned.
+   */
+  | 'already_exists_name_match'
   | 'excluded_by_operator'
   | 'current_admin_preserved'
   | 'unsupported_in_this_version'
-  | 'dependency_unresolved';
+  /**
+   * A dependency the run WAS asked to deliver is not on the destination, so the
+   * entity was never created. A LOSS: its aggregate,
+   * `entities_blocked_by_dependency`, downgrades the outcome (bead 4mkoe).
+   */
+  | 'dependency_unresolved'
+  /**
+   * The same missing dependency, when the operator EXCLUDED the category it
+   * lives in and this row is a LINK INTO that category (bead 4mkoe) — an
+   * archived channel's membership of a channel profile the restore was told to
+   * leave out. Never a loss: the absence is what the operator asked for, and
+   * naming it would fire on every unattended cycle forever. Render it as an
+   * ordinary no-op beside `excluded_by_operator`, never as a problem.
+   */
+  | 'dependency_deselected'
+  /**
+   * The archived entity is pinned to an absolute moment that has since passed
+   * (bead ciabe) — an upcoming recording in a backup older than the recording
+   * itself. NEVER a loss: the destination cannot hold it either (Dispatcharr
+   * refuses a recording scheduled in the past), so a replica missing a
+   * programme that already aired has lost nothing. Render it as an ordinary
+   * no-op, never as a problem.
+   */
+  | 'schedule_already_past';
 
 /** Why an entity failed to apply. */
 export type RestoreFailureReason =
@@ -4306,12 +4371,15 @@ export type RestoreFailureReason =
   | 'internal_error';
 
 /**
- * Overall tri-state result of a realized restore. `null` on a dry-run (a plan
- * has no realized outcome). NEVER `success` on mixed state — the two rolled-back
- * states are explicit failures, surfaced as such by the summary UX.
+ * Overall result of a realized restore. `null` on a dry-run (a plan has no
+ * realized outcome). NEVER `success` on mixed state — the two rolled-back states
+ * are explicit failures, and `completed_with_failures` is a restore that ran to
+ * completion with some non-fatal rows failing and NOTHING rolled back. The
+ * summary UX surfaces each of them as such.
  */
 export type RestoreOutcome =
   | 'success'
+  | 'completed_with_failures'
   | 'partial_failed_rolled_back'
   | 'failed_rollback_incomplete';
 
@@ -4346,6 +4414,18 @@ export interface EntityCategoryReport {
   would_skip: number;
   skip_details: RestoreSkipDetail[];
   failure_details: RestoreFailureDetail[];
+  /**
+   * `false` when a DRY RUN could not predict this category at all (bead tddmw).
+   * Render the counts as "not predicted" rather than as a confident zero — the
+   * per-category form of the `null` the stream-health counters already use.
+   * Absent on reports produced before this field existed; treat as `true`.
+   */
+  predicted?: boolean;
+  /**
+   * Operator-facing note qualifying how far this category's counts can be
+   * trusted (bead tddmw). Only a preview carries one; an apply reports facts.
+   */
+  caveat?: string | null;
 }
 
 /**
@@ -4374,6 +4454,24 @@ export interface LogoMissDetail {
   channels?: LogoMissChannel[];
 }
 
+/**
+ * One restored entity whose credential the archive could not carry (bead 6pilh).
+ *
+ * A STANDARD (redact-by-default) artifact replaces every credential with the
+ * `***REDACTED***` placeholder. The restore importers refuse to write that
+ * placeholder into the destination, so the field is left UNSET — the entity
+ * exists but will not authenticate until the operator re-enters it. `fields`
+ * carries credential field NAMES only (`["password"]`), never values.
+ * `destination_id` is null on a dry-run (nothing was created).
+ */
+export interface CredentialReentryDetail {
+  entity_type: RestoreEntityType;
+  label: string;
+  fields: string[];
+  source_export_id?: number | null;
+  destination_id?: number | null;
+}
+
 /** The one restore response schema — dry-run, apply, and summary. */
 export interface RestoreReport {
   contract_version: number;
@@ -4388,9 +4486,363 @@ export interface RestoreReport {
    * May be absent on reports produced before this field existed.
    */
   logo_miss_details?: LogoMissDetail[];
+  /**
+   * Count of entities restored WITHOUT their credential because the artifact was
+   * redacted (bead 6pilh). A post-restore action item, not a failure — the
+   * outcome can still be `success` while these accounts authenticate nowhere.
+   * May be absent on reports produced before this field existed.
+   */
+  credentials_needing_reentry?: number;
+  /** Which entities need which credential fields re-entered (bead 6pilh). */
+  credential_reentry_details?: CredentialReentryDetail[];
+  /**
+   * How many provider records this cycle carried a credential onto (PO ruling
+   * 2026-08-22, ADR-013 amendment (b) S13').
+   *
+   * COUNT ONLY — never a value. Under per-cycle transmission the audit trail is
+   * the only record of how often a secret moved, so every run states it,
+   * including the runs that carried nothing. Replaced
+   * `destination_credentials_observed` / `destination_credentials_checked`,
+   * which fed the `insecure` refusal that this ruling removed.
+   * May be absent on reports produced before this field existed.
+   */
+  provider_credentials_transmitted?: number;
+  /**
+   * One line per provider record carrying a credential: operator-facing label
+   * plus the FIELD NAMES carried, never a value or a fragment of one.
+   */
+  provider_credential_transmission_details?: string[];
+  /**
+   * Replicated provider accounts whose own status and stream count indicate
+   * their provisioned credential has stopped working (bead wd20y, ADR-013
+   * INV-8, retained as information after amendment (b) voided the invariant's
+   * wording). An ACTION ITEM, not a failure and not a delivery shortfall: it
+   * does not move the run's outcome. There is no provisioning action to re-run
+   * any more — the cycle re-sends the current credential every time, so a
+   * persistently stale account is a problem to fix on the SOURCE.
+   * May be absent on older reports.
+   */
+  provisioned_credentials_stale?: number;
+  /**
+   * One sanitized operator-facing line per stale replicated provider account.
+   * Names and counts only — never an upstream error body, which can quote a
+   * request URL. May be absent on older reports.
+   */
+  provisioned_credential_stale_details?: string[];
+  /**
+   * Channels still holding at least one URL-less PLACEHOLDER stream slot after
+   * the restore's post-refresh rebind pass (bead 2o0cz). NOT an unplayability
+   * signal: a channel that kept its real streams and holds one leftover
+   * placeholder is counted here and plays fine (bead daziw). May be absent on
+   * reports produced before this field existed.
+   *
+   * `null` means NOT PREDICTED and only ever appears on a DRY RUN (bead dgnms):
+   * the rebind pass that answers this re-matches against provider streams the
+   * deferred M3U refresh materializes, and a preview refreshes nothing. Render
+   * it as "not predicted" or omit the row — never as `0`, which is the confident
+   * claim this null exists to stop making.
+   */
+  channels_needing_stream_reattach?: number | null;
+  /**
+   * The SUBSET of the above left with NO URL-bearing stream at all (bead daziw)
+   * — those channels CANNOT PLAY, and an apply that reports any of them
+   * resolves to `completed_with_failures`, never `success`.
+   *
+   * One of FIVE counters that carry that weight (beads posm1 / 4mkoe): an apply
+   * is also `completed_with_failures` when `stream_urls_redacted`,
+   * `epg_links_unrestored`, `logo_misses` or `entities_blocked_by_dependency`
+   * is above zero — each of them means the replica is missing something the
+   * source had. Do not render any one of them as the reason for the outcome;
+   * read `outcome` itself.
+   *
+   * `null` on a dry run, for the same reason as the field above (bead dgnms).
+   */
+  channels_with_no_playable_stream?: number | null;
+  /** Which channels still need a playable stream attached (bead 2o0cz). */
+  stream_reattach_details?: StreamReattachDetail[];
+  /** Placeholder bindings the rebind pass swapped for a real provider stream. */
+  streams_rebound?: number;
+  /**
+   * Destination streams holding a URL the provider credentials were cut out of
+   * (bead msqf7) — a real Xtream Codes address embeds the credential in its
+   * path, so it cannot be carried without it. Those streams name where they
+   * pointed and cannot play until the destination's own provider account
+   * supplies one. One of the five counters that make an apply
+   * `completed_with_failures`; read `outcome`, not this.
+   *
+   * A FACT ABOUT THE DESTINATION, NOT ABOUT THIS RUN (bead ukjx5). Recomputed
+   * from the destination's own stream rows on every cycle, so a shortfall the
+   * replica still exhibits is reported every time rather than only on the cycle
+   * that wrote it — the earlier count was cycle-scoped and read 53, then 0,
+   * while 53 of B's streams still could not play.
+   *
+   * `null` means NOT PREDICTED and only ever appears on a DRY RUN: the pass that
+   * reads the destination's streams cannot run before the apply, so a preview
+   * `0` would be a claim derived from having looked at nothing. Coerce with
+   * `?? 0` only where a number is unavoidable — never render the null as `0`.
+   */
+  stream_urls_redacted?: number | null;
+  /** Which streams lost the credential half of their URL (bead msqf7). */
+  stream_url_redaction_details?: StreamUrlRedactionDetail[];
+  /** Channels whose archived EPG link could not be reattached (bead dfkbn). */
+  epg_links_unrestored?: number;
+  /**
+   * Archived entities never created because something they reference is not on
+   * the destination (bead 4mkoe) — a degraded backup that lost the dependency's
+   * whole category, a collision that stopped it being created, or a selection
+   * that kept the dependants and dropped the dependency.
+   *
+   * Counts only the GENUINE half. A skip whose missing dependency lives in a
+   * category the operator DESELECTED, and which is itself a link into that
+   * category, carries `SkipReason.DEPENDENCY_DESELECTED` and is never counted
+   * here — that absence is exactly what the operator asked for. The named
+   * drill-down is each category's `skip_details`.
+   */
+  entities_blocked_by_dependency?: number;
+  /** Which channels restored with no EPG link, and the tvg_id that missed. */
+  epg_link_miss_details?: EpgLinkMissDetail[];
+  /**
+   * Channel/profile memberships corrected back to the ARCHIVED selection (bead
+   * dfkbn). Dispatcharr enables every new channel in every profile, so a profile
+   * built to EXCLUDE channels silently widens to all of them; this counts the
+   * channels the restore had to flip back.
+   */
+  profile_membership_drift?: number;
+  /** Which profiles drifted, and which channels were flipped back (bead dfkbn). */
+  profile_membership_drift_details?: ProfileMembershipDriftDetail[];
+  /**
+   * Channels sitting in a channel GROUP the archive does not assign them (bead
+   * r1ei7). The channel-group sibling of `profile_membership_drift`, and the
+   * counter a populated-target restore had no equivalent of: it kept the
+   * destination's whole grouping in BOTH relink modes while reporting success.
+   * Reported under `preserve` (which changes nothing) as well as `overwrite`.
+   */
+  channel_group_drift?: number;
+  /** Which channels drifted, the group they are in, and the archive's (r1ei7). */
+  channel_group_drift_details?: ChannelGroupDriftDetail[];
+  /**
+   * Per-account provider GROUP-ENABLE selections the destination's M3U account
+   * did not receive (bead avrix). Distinct from `channel_group_drift`, which is
+   * about which group a CHANNEL sits in: this is about which of a provider
+   * ACCOUNT's groups are switched on, i.e. what that account ingests on its next
+   * refresh. `channel_group_drift` read `0` throughout the run that found this,
+   * while the replica held zero selections — not wrong, measuring another thing.
+   *
+   * Deliberately NOT one of the five counters that move the outcome: an operator
+   * who deselects the channel-groups category leaves the destination without the
+   * groups these selections point at, so the count would stay non-zero forever
+   * with no action that clears it. It renders as a named action item instead —
+   * the `profile_membership_drift` precedent — visible without moving `outcome`.
+   */
+  provider_group_selection_unapplied?: number;
+  /**
+   * Which replicated M3U accounts did not receive their group selection, how
+   * many, and why (bead avrix).
+   */
+  provider_group_selection_details?: ProviderGroupSelectionDetail[];
+  /**
+   * Fields on an ALREADY-EXISTING replica M3U account that differ from the
+   * source's (bead zszjd). Counts FIELDS, not accounts — "3 settings on this
+   * account are not what you set on the primary".
+   *
+   * Deliberately NOT one of the counters that move the outcome, for the same
+   * reason `profile_membership_drift` is not: it counts every difference the
+   * cycle FOUND, including the ones it then converged, so downgrading on it
+   * would put a red mark on exactly the cycle that fixed the problem. The half
+   * that does move the outcome is `account_convergence_unapplied`.
+   */
+  account_field_drift?: number;
+  /**
+   * Which accounts drifted, WHICH FIELD NAMES (never values — a converging
+   * account carries `username`, `password` and a credential-bearing
+   * `server_url`), and whether this cycle wrote them (bead zszjd).
+   */
+  account_field_drift_details?: AccountFieldDriftDetail[];
+  /**
+   * Drifted fields an APPLY tried to write onto the replica and could not
+   * (bead zszjd). One of the counters that forbid a SUCCESS outcome: the
+   * replica is missing something the source has and the run tried to deliver
+   * it. Clears by itself once a later cycle's write lands.
+   */
+  account_convergence_unapplied?: number;
+  /**
+   * Set when the channel-group check did NOT run, because the operator
+   * deselected the channel groups category (bead r1ei7). Its absence is what
+   * makes `channel_group_drift: 0` trustworthy; when it is present that zero
+   * means "not examined", not "no drift" — the same distinction the per-category
+   * `predicted` flag draws (bead tddmw). Render it wherever the count renders.
+   */
+  channel_group_drift_note?: string | null;
+  /**
+   * How the EPG-link reattach split across channels this restore created and
+   * channels that already existed (bead dfkbn). Reported on the dry run AND the
+   * apply, so the preview predicts the split rather than describing it after.
+   */
+  epg_link_reattach?: ReattachPopulation;
+  /** The same split for the channel-logo reattach (bead dfkbn). */
+  logo_reattach?: ReattachPopulation;
+  /**
+   * The "I never read the destination" marker (bead jqfxm). Every count in this
+   * report is a claim ABOUT the destination — "would create 24" means "B does
+   * not have these 24" — but each importer degrades a failed destination read to
+   * "B is empty", so a run that could not authenticate produced the same shape
+   * as a run against an empty B: a full would-create plan, zero failures. A live
+   * cross-instance sync measured that against a WRONG PASSWORD and offered
+   * Apply, with seven 401/429s in B's log that no surface mentioned.
+   *
+   * Set whenever the run could not read the destination it claims to describe —
+   * credentials rejected, rate-limited, unreachable, TLS/DNS/SSRF refused, a
+   * 5xx, or aborted before any read. A report carrying this is NEVER a success
+   * and its counts describe the source, not the destination. Sanitized prose
+   * (status code + error class); never a URL, body or credential.
+   */
+  destination_unreadable?: string | null;
   started_at?: string | null;
   completed_at?: string | null;
   notes: string[];
+}
+
+/**
+ * What a restore does to channels it did NOT create (bead dfkbn).
+ *
+ * `preserve` leaves a channel that already existed on the destination with the
+ * EPG link, logo and channel group it already has; `overwrite` replaces all
+ * three with the archive's. On an empty destination every channel is created, so
+ * the two are indistinguishable: the choice only matters when merging into a
+ * live install.
+ *
+ * Grouping joined the other two in bead r1ei7. It differs in one way: `preserve`
+ * still REPORTS the divergence (`channel_group_drift`). Leaving state alone is a
+ * choice; leaving it unmentioned was the defect.
+ */
+export type ChannelReattachMode = 'preserve' | 'overwrite';
+
+/**
+ * How one post-create reattach pass split across the two channel populations
+ * (bead dfkbn). `existing_channels` is the destructive half: those are channels
+ * the operator already had, whose live reference was replaced by the archive's.
+ */
+export interface ReattachPopulation {
+  mode: ChannelReattachMode;
+  created_channels: number;
+  existing_channels: number;
+  preserved_channels: number;
+  existing_channels_named: string[];
+  preserved_channels_named: string[];
+}
+
+/**
+ * One restored channel that still cannot play (bead 2o0cz). `placeholder_streams`
+ * carries the names of the URL-less placeholder streams still attached — names
+ * only, never a stream URL (which can embed a provider token).
+ */
+export interface StreamReattachDetail {
+  channel_id?: number | null;
+  name: string;
+  placeholder_streams?: string[];
+  /**
+   * True (the default when absent) when the channel still holds a real,
+   * URL-bearing stream and PLAYS despite the leftover placeholder; false when
+   * every slot is a placeholder and the channel is dead (bead daziw).
+   */
+  has_playable_stream?: boolean;
+}
+
+/**
+ * One destination stream whose URL had the provider credentials cut out of it
+ * (bead msqf7) — the per-stream drill-down behind `stream_urls_redacted`.
+ * `label` is the operator-facing stream name; never the URL, which can embed a
+ * provider token. `stream_id` is the destination stream id when upstream
+ * returned one.
+ */
+export interface StreamUrlRedactionDetail {
+  stream_id?: number | null;
+  label: string;
+}
+
+/**
+ * One restored channel whose EPG link could not be reattached (bead dfkbn).
+ * The link is re-derived from the archived `tvg_id` — an EPG row's numeric id is
+ * instance-local and cannot round-trip.
+ */
+export interface EpgLinkMissDetail {
+  channel_id?: number | null;
+  name: string;
+  tvg_id?: string;
+}
+
+/**
+ * One channel profile whose membership the restore had to correct (bead dfkbn).
+ * `channels_disabled` are the channels the archive EXCLUDED that the destination
+ * had enabled by default — the silent widening this counter exists to surface.
+ */
+export interface ProfileMembershipDriftDetail {
+  profile_id?: number | null;
+  name: string;
+  channels_disabled?: string[];
+  channels_enabled?: string[];
+}
+
+/**
+ * One restored channel sitting in a group the archive does not put it in
+ * (bead r1ei7). A channel that already exists on the destination is never
+ * overwritten, so its group is never written: on a populated target the lineup
+ * silently keeps whatever grouping the destination had while the counts
+ * reconcile exactly.
+ *
+ * Both group fields are NAMES — the ids are instance-local and mean nothing to
+ * the reader. `moved` is true only under the `overwrite` relink mode, where the
+ * restore also puts the channel back in the archive's group (on a preview, the
+ * would-be move).
+ */
+export interface ChannelGroupDriftDetail {
+  channel_id?: number | null;
+  name: string;
+  current_group: string;
+  archive_group: string;
+  moved?: boolean;
+}
+
+/**
+ * One replicated M3U account whose per-group ENABLE selection did not fully land
+ * (bead avrix) — the drill-down behind `provider_group_selection_unapplied`.
+ *
+ * That selection is what decides how much of a provider's catalogue the account
+ * ingests, so losing it sends the replica one of two ways depending on the
+ * source account's auto-enable flag: a refresh that filters zero streams from
+ * zero enabled categories, or one that enables every category the provider has.
+ *
+ * IDS, NOT NAMES: the selections are keyed by destination account id and source
+ * channel-group pk, and neither name is in scope where they are recorded.
+ * `reason` is a sanitized phrase — never a secret.
+ */
+export interface ProviderGroupSelectionDetail {
+  destination_account_id: number;
+  selections_total: number;
+  selections_applied?: number;
+  selections_unapplied?: number;
+  enabled_applied?: number;
+  reason: string;
+}
+
+/**
+ * One replicated M3U account whose fields differ from the source's (bead zszjd).
+ *
+ * An account that already exists on the replica used to be matched
+ * ALREADY_EXISTS_IDENTICAL and never written to again — for every field, not
+ * one — so a setting changed on the primary afterwards diverged silently and
+ * permanently. The cycle now converges the account and reports what it moved.
+ *
+ * FIELD NAMES ONLY, NEVER VALUES: a converging account carries `username`,
+ * `password` and a credential-bearing `server_url`. `reason` is a sanitized
+ * phrase saying why a write did not happen, and is null when it did.
+ */
+export interface AccountFieldDriftDetail {
+  destination_account_id?: number | null;
+  name: string;
+  fields?: string[];
+  applied?: boolean;
+  reason?: string | null;
 }
 
 export async function getExportSections(): Promise<{key: string; label: string}[]> {
@@ -4506,13 +4958,17 @@ export interface DbasRestoreStartResult {
 export async function startDbasRestore(
   file: File,
   confirmApply = false,
-  passphrase?: string
+  passphrase?: string,
+  channelReattachMode: ChannelReattachMode = 'preserve'
 ): Promise<DbasRestoreStartResult> {
   const formData = new FormData();
   formData.append('file', file);
   if (passphrase) formData.append('passphrase', passphrase);
 
-  const query = buildQuery({ confirm_apply: confirmApply });
+  const query = buildQuery({
+    confirm_apply: confirmApply,
+    channel_reattach_mode: channelReattachMode,
+  });
   const response = await fetch(`${API_BASE}/backup/restore-dbas${query}`, {
     method: 'POST',
     body: formData,
@@ -4556,12 +5012,14 @@ export async function restoreDbasBackupSaved(
   filename: string,
   confirmApply = false,
   passphrase?: string,
+  channelReattachMode: ChannelReattachMode = 'preserve',
 ): Promise<DbasRestoreStartResult> {
   return fetchJson(`${API_BASE}/backup/restore-dbas-saved`, {
     method: 'POST',
     body: JSON.stringify({
       filename,
       confirm_apply: confirmApply,
+      channel_reattach_mode: channelReattachMode,
       ...(passphrase ? { passphrase } : {}),
     }),
   });
@@ -4634,61 +5092,6 @@ export async function testAlertMethod(methodId: number): Promise<{ success: bool
   });
 }
 
-// ---------------------------------------------------------------------------
-// Lookup Tables (dummy EPG template engine |lookup:<name> pipe)
-// ---------------------------------------------------------------------------
-
-export interface LookupTableSummary {
-  id: number;
-  name: string;
-  description: string | null;
-  entry_count: number;
-  created_at: string | null;
-  updated_at: string | null;
-}
-
-export interface LookupTable extends LookupTableSummary {
-  entries: Record<string, string>;
-}
-
-export interface LookupTableCreateRequest {
-  name: string;
-  description?: string;
-  entries?: Record<string, string>;
-}
-
-export interface LookupTableUpdateRequest {
-  name?: string;
-  description?: string;
-  entries?: Record<string, string>;
-}
-
-export async function listLookupTables(): Promise<LookupTableSummary[]> {
-  return fetchJson(`${API_BASE}/lookup-tables`);
-}
-
-export async function getLookupTable(id: number): Promise<LookupTable> {
-  return fetchJson(`${API_BASE}/lookup-tables/${id}`);
-}
-
-export async function createLookupTable(data: LookupTableCreateRequest): Promise<LookupTable> {
-  return fetchJson(`${API_BASE}/lookup-tables`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function updateLookupTable(id: number, data: LookupTableUpdateRequest): Promise<LookupTable> {
-  return fetchJson(`${API_BASE}/lookup-tables/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deleteLookupTable(id: number): Promise<void> {
-  return fetchJson(`${API_BASE}/lookup-tables/${id}`, { method: 'DELETE' });
-}
-
 // =============================================================================
 // Channel Merges (Pending Merges queue) — ADR-008 §D1
 // =============================================================================
@@ -4738,6 +5141,17 @@ export interface PendingMergeRecord {
   resolved_at: number | null;
   resolution_source: string | null;
   trigger_context: string;
+  /**
+   * Why the LAST accept on this row could not be applied to Dispatcharr, in
+   * operator-actionable prose; `null` when no accept has failed to apply.
+   *
+   * A `'pending'` row with this set is a merge the operator ALREADY accepted
+   * that ECM could not carry out. It deliberately stays in the queue, flagged,
+   * so the reason is on the row rather than only in the Journal, and accepting
+   * it again is an ordinary retry that clears the flag when it lands (bead
+   * enhancedchannelmanager-i5ic0, PO decision 2026-08-16).
+   */
+  unapplied_reason: string | null;
 }
 
 /** Paginated envelope for `GET /api/channel-merges`. */
@@ -4763,7 +5177,35 @@ export interface AcceptMergeOutcome {
   journal_entry_id: number;
   source_stream_id: string;
   confidence: number;
-  status: 'merged';
+  /**
+   * The QUEUE ROW's state, which is no longer always terminal. `'merged'` when
+   * the merge applied and the row left the queue; `'pending'` when ECM could
+   * not apply it, in which case the row STAYS queued carrying its
+   * `unapplied_reason` and remains retryable (PO decision 2026-08-16). Never a
+   * claim about Dispatcharr on its own — see `dispatcharr_updated`.
+   */
+  status: 'merged' | 'pending';
+  /**
+   * Whether the candidate channel ends the request holding the stream.
+   *
+   * THREE values, and each needs its own handling — `!== false` is not a test
+   * for success (bead enhancedchannelmanager-i5ic0):
+   *
+   * - `true`  — the channel holds the stream, whether this call PATCHed it or
+   *   it was already there.
+   * - `false` — no upstream write happened. The stream-name lookup matched
+   *   zero or several streams, matched one with no usable id, failed, or was
+   *   truncated at its page ceiling — a truncated search cannot establish
+   *   uniqueness even when exactly one match is visible on the page it saw.
+   * - `null`  — an idempotent replay. It made no Dispatcharr call and has no
+   *   evidence either way; treating it as success reports a certainty nothing
+   *   established.
+   */
+  dispatcharr_updated: boolean | null;
+  /** Operator-actionable prose whenever `dispatcharr_updated` is not `true`. */
+  unapplied_reason: string | null;
+  /** Journal rows this request could not write. Always present. */
+  journal_rows_unwritten: number;
 }
 
 /**
@@ -4888,6 +5330,29 @@ export async function rejectEventSyncReview(
 }
 
 // -------------------------------------------------------------------------
+// Effective-group profile conflict review queue.
+// -------------------------------------------------------------------------
+
+/** List unresolved conflicts that require an explicit operator profile choice. */
+export async function getProfileConflictReviews(): Promise<ProfileConflictReviewsResponse> {
+  return fetchJson(`${API_BASE}/profile-conflict-reviews`);
+}
+
+/** Persist a choice before harmonizing every source account row. */
+export async function acceptProfileConflictReview(
+  reviewId: number,
+  choiceKey: string,
+  signal?: AbortSignal,
+): Promise<AcceptProfileConflictOutcome> {
+  return fetchJson(`${API_BASE}/profile-conflict-reviews/${reviewId}/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ choice_key: choiceKey }),
+    signal,
+  });
+}
+
+// -------------------------------------------------------------------------
 // Event Sync operator exclusions (bead ti939.3.5) —
 // /api/event-sync-exclusions.
 //
@@ -4947,7 +5412,19 @@ export async function deleteEventSyncExclusion(
 // one-way sync engine. The CRUD mirrors backend/routers/sync_targets.py:
 // credentials are WRITE-ONLY (Fernet-encrypted at rest, never echoed back
 // decrypted — responses mask them to last-4). The actual sync is driven by
-// `runTask('dbas_sync', undefined, { sync_target_id, confirm_apply })`.
+// `runTask(`dbas_sync_${id}`, undefined, { sync_target_id, confirm_apply })` —
+// one registered task per target (7ipq2.3 / ADR-013 S6), so distinct targets
+// sync concurrently and a second run against the SAME target is refused.
+//
+// PROVIDER CREDENTIALS CROSS ON EVERY CYCLE (PO ruling 2026-08-22). The
+// replica's M3U accounts and EPG sources receive this instance's real provider
+// username, password and credential-bearing addresses as part of the ordinary
+// sync, so it authenticates and serves without the operator typing anything and
+// a rotation on the source reaches it on the next scheduled run. There is no
+// separate "provision credentials" action and no client function for one — that
+// action existed for two days and was removed. The only credential an operator
+// still supplies is the Schedules Direct password (write-only upstream, so
+// nothing on the source can be read), stored once on the target.
 // -------------------------------------------------------------------------
 
 /**
@@ -4963,6 +5440,44 @@ export interface SyncTarget {
   enabled: boolean;
   insecure: boolean;
   fuzzy_stream_matching: boolean;
+  /**
+   * Per-target logo replication. DEFAULT ON since bead 2yq19.
+   *
+   * It shipped OFF (ADR-013 S9) because the logos importer carries a
+   * streaming-upload cost S9 judged wrong to run every interval — a COST
+   * decision, not a correctness one. Under the faithful-copy principle an OFF
+   * default is a silent omission: the operator who never finds the toggle gets
+   * a replica with no artwork. The cost is answered by
+   * `logo_sync_interval_hours` instead, so the slice still does not run every
+   * cycle. The card offers a toggle; nothing flips it implicitly.
+   */
+  sync_logos: boolean;
+  /**
+   * How often the logo slice may run, in hours (default 24). `0` means every
+   * cycle. This is the throttle that lets `sync_logos` default ON.
+   */
+  logo_sync_interval_hours: number;
+  /** When the logo slice last actually ran; null == never (so the next cycle carries it). */
+  last_logo_sync_at?: string | null;
+  /**
+   * Core-settings blobs this target declines (bead 10wnq). Empty means
+   * "replicate every blob the engine allows", which is the default.
+   *
+   * Only two blobs have a real reason to be declined: `proxy_settings`
+   * (buffering tuning copied onto slower hardware) and `backup_settings` (both
+   * instances backing themselves up on one schedule, with the replica's
+   * retention bounded by the replica's storage). `network_access` is never
+   * replicated at all and cannot be named here — naming it is rejected rather
+   * than silently accepted, because accepting it would tell the operator their
+   * choice mattered.
+   */
+  core_settings_excluded: string[];
+  /**
+   * PRESENCE of a stored Schedules Direct password — never the value. True once
+   * the operator has supplied one; the backend re-sends it to the replica's
+   * Schedules Direct EPG sources on every cycle so it is never typed twice.
+   */
+  has_schedules_direct_password: boolean;
   credential_version: number;
   token_revoked_at?: string | null;
   last_full_sync_at?: string | null;
@@ -4980,6 +5495,19 @@ export interface SyncTargetCreateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
+  /** Omit to take the backend default (ON) — see `SyncTarget.sync_logos`. */
+  sync_logos?: boolean;
+  /** Omit to take the backend default (24). `0` means every cycle. */
+  logo_sync_interval_hours?: number;
+  /** Core-settings blobs to decline. Omit to replicate all of them. */
+  core_settings_excluded?: string[];
+  /**
+   * The ONE credential an operator types, and they type it once. Ask for it
+   * only when `getSyncSourceCredentialNeeds()` reports
+   * `needs_schedules_direct_password` — this instance having no Schedules
+   * Direct EPG source means there is nothing for the value to be written onto.
+   */
+  schedules_direct_password?: string;
 }
 
 /**
@@ -4994,6 +5522,30 @@ export interface SyncTargetUpdateRequest {
   enabled?: boolean;
   insecure?: boolean;
   fuzzy_stream_matching?: boolean;
+  sync_logos?: boolean;
+  logo_sync_interval_hours?: number;
+  /** Omit to leave the stored list untouched; `[]` clears it. */
+  core_settings_excluded?: string[];
+  /** Omit to leave the stored value untouched; `''` clears it. */
+  schedules_direct_password?: string;
+}
+
+/**
+ * What this instance CANNOT harvest and therefore has to be typed once.
+ *
+ * Normally nothing: every provider credential is read off the source's own
+ * records on every cycle. The Schedules Direct password is the sole exception —
+ * Dispatcharr marks it write-only and never returns it — so the create form
+ * shows a field for it if, and only if, this reports one.
+ */
+export interface SyncSourceCredentialNeeds {
+  needs_schedules_direct_password: boolean;
+  /** Operator-facing names of the Schedules Direct EPG sources on this instance. */
+  schedules_direct_sources: string[];
+}
+
+export async function getSyncSourceCredentialNeeds(): Promise<SyncSourceCredentialNeeds> {
+  return fetchJson(`${API_BASE}/sync-targets/source-credential-needs`);
 }
 
 export async function listSyncTargets(): Promise<SyncTarget[]> {

@@ -3,8 +3,11 @@ Authentication API endpoints.
 
 Provides login, logout, token refresh, and password management.
 """
+import ipaddress
 import logging
 import os
+import fcntl
+import re
 import secrets
 import smtplib
 import ssl
@@ -12,16 +15,26 @@ import time
 from datetime import datetime, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from typing import Optional
+from pathlib import Path
+from typing import NamedTuple, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from sqlalchemy import or_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from config import get_settings
+from config import get_public_base_url, get_settings
+from tls.settings import (
+    TLS_DIR,
+    break_glass_environment_override,
+    get_tls_settings,
+    tls_settings_load_failed,
+)
+from tls.storage import CertificateStorage
+from tls.https_server import https_server_manager
 from database import get_session
 from models import User, UserSession, PasswordResetToken
 from .password import verify_password, hash_password, validate_password
@@ -48,6 +61,66 @@ from .dependencies import (
 logger = logging.getLogger(__name__)
 
 limiter = Limiter(key_func=get_remote_address, enabled=os.environ.get("RATE_LIMIT_ENABLED", "1") != "0")
+
+RESET_ISSUE_RATE = "5/minute"
+RESET_VALIDATE_RATE = "10/minute"
+PASSWORD_RESET_ACCOUNT_COOLDOWN = timedelta(minutes=5)
+PASSWORD_RESET_MAX_ATTEMPTS = 10
+
+
+def _consume_reset_token(
+    session: Session,
+    token_id: int,
+    consumed_at: datetime,
+) -> bool:
+    """Claim one unused, unexpired reset credential with a conditional write."""
+    return session.query(PasswordResetToken).filter(
+        PasswordResetToken.id == token_id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.expires_at > consumed_at,
+    ).update(
+        {PasswordResetToken.used_at: consumed_at},
+        synchronize_session=False,
+    ) == 1
+
+
+def _serialize_initial_setup():
+    """Hold a non-blocking host-wide lock for the first-admin transaction."""
+    from . import settings as auth_settings_module
+
+    lock_fd = None
+    try:
+        auth_settings_module.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        lock_path = auth_settings_module.CONFIG_DIR / ".auth-setup.lock"
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Initial setup is already in progress.",
+        ) from None
+    except OSError:
+        if lock_fd is not None:
+            os.close(lock_fd)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Initial setup is temporarily unavailable.",
+        ) from None
+
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            logger.error("[AUTH] Failed to release initial setup lock")
+        finally:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                logger.error("[AUTH] Failed to close initial setup lock")
 
 
 def _cleanup_expired_sessions(session: Session, user_id: int) -> int:
@@ -178,7 +251,16 @@ Enhanced Channel Manager
                 server.login(smtp_user, smtp_password)
 
             server.sendmail(from_email, [to_email], msg.as_string())
-            logger.info("[AUTH] Password reset email sent to: %s", to_email)
+            # Deliberately silent on success (bead
+            # enhancedchannelmanager-5u5h9). This helper only ever receives an
+            # address, so anything it logged about a successful send named the
+            # subscriber's email; and its caller logged the SAME event on the
+            # same line, which wrote the address into the log twice and made
+            # the log read as two sends. The one success line now lives in
+            # ``forgot_password``, which holds the user and can say
+            # ``user_id=``. Failures below stay here: they carry an SMTP
+            # diagnostic the caller cannot see, and none of them names the
+            # recipient.
             return True
 
         finally:
@@ -344,23 +426,295 @@ def _access_token_seconds_remaining(request: Request) -> Optional[int]:
         return None
 
 
+class _SessionTransport(NamedTuple):
+    """The transport verdict for one request, decided from local state only."""
+
+    #: Emit session cookies with ``Secure``.
+    secure: bool
+    #: ECM terminates TLS itself and this request arrived in cleartext anyway,
+    #: with no break-glass and no https ``public_base_url``. There is no
+    #: legitimate plaintext client in that configuration, so routes that MINT a
+    #: browser session refuse rather than hand out a cookie the browser will
+    #: discard (RFC 6265bis 5.6) and then bounce the operator back to the login
+    #: form with no error.
+    refuse_plaintext: bool
+    #: An operator escape hatch is open (stored flag or environment variable).
+    break_glass: bool
+
+
+def _ecm_terminates_tls() -> bool:
+    """True when ECM's own HTTPS listener is serving, or we cannot tell.
+
+    ``has_certificate()`` is the SAME predicate ``tls/https_server.py`` starts
+    the listener from (``CertificateStorage(TLS_DIR)``, i.e. the hard-coded
+    ``cert.pem`` / ``key.pem`` under the TLS directory). Reading
+    ``tls_settings.cert_path`` / ``key_path`` instead would be a second,
+    independent notion of "the certificate exists" that a backup restore of
+    ``tls_settings.json`` can move out from under the listener.
+
+    Fails CLOSED on an unreadable ``tls_settings.json``: ``load_tls_settings``
+    degrades to ``enabled=False`` there, and reading that as "TLS is off" would
+    emit cleartext-replayable cookies while the HTTPS listener kept serving.
+    "Unreadable" includes a ``tls_settings.json`` that cannot even be
+    ``stat``-ed — an ``EACCES`` on the config directory used to be swallowed
+    into "there is no file", which failed OPEN; ``tls.settings._config_file_
+    stamp`` now distinguishes absence from every other ``OSError``. Enforced by
+    ``tests/unit/test_04c0u9_tls_settings_cache.py::
+    test_a_stat_failure_that_is_not_absence_is_a_load_failure``.
+
+    This drives the cookie ATTRIBUTE. It deliberately does NOT decide the
+    refusal on its own — see :func:`_https_listener_evidence`.
+    """
+    if tls_settings_load_failed():
+        return True
+    tls_settings = get_tls_settings()
+    return bool(tls_settings.enabled and CertificateStorage(TLS_DIR).has_certificate())
+
+
+def _https_listener_evidence() -> bool:
+    """Positive evidence that an HTTPS listener of ECM's own is serving.
+
+    ``_ecm_terminates_tls`` above answers "assume TLS is on unless we can see
+    that it is off". That is right for the cookie ATTRIBUTE — a ``Secure``
+    cookie on a plaintext instance is discarded, which is a lesser harm than a
+    replayable one — and disproportionate for REFUSING to mint a session at all.
+    Coupled to it, one unreadable ``tls_settings.json`` became a 403 on login,
+    dispatcharr_login AND refresh, on an instance that may never have enabled
+    TLS; the stored break-glass flag is unreachable behind the same failure
+    (``load_tls_settings`` degrades to defaults), so recovery needed
+    ``ECM_ALLOW_HTTP_SESSION_COOKIES`` plus a container restart, i.e. shell
+    access. The trigger was one non-atomic ``write_text`` away.
+
+    So the refusal additionally requires something observable: the key material
+    ``tls/https_server.py`` spawns uvicorn from (it checks exactly
+    ``CertificateStorage(TLS_DIR).has_certificate()``), or that subprocess
+    actually running. A corrupt settings file WITH key material still refuses —
+    that is the case where the listener is probably up and the pre-activation
+    replay is live. A corrupt settings file with no key material does not.
+    """
+    if CertificateStorage(TLS_DIR).has_certificate():
+        return True
+    return bool(https_server_manager.is_running)
+
+
+# Once per process, re-armed by ``_reset_session_transport_log_state`` in tests.
+_break_glass_suppression_warned: bool = False
+
+
+def _reset_session_transport_log_state() -> None:
+    """Re-arm the once-per-process break-glass warning."""
+    global _break_glass_suppression_warned
+    _break_glass_suppression_warned = False
+
+
+def _warn_break_glass_suppression() -> None:
+    """WARN, once per process, that break-glass is downgrading live sessions.
+
+    Bead 04c0u.9 remediation. The escape hatch was previously silent in every
+    surface: no log at issue time, no field in ``GET /api/tls/status``, nothing
+    in the UI. An operator who set it at 02:00 to recover and then forgot the
+    line had every session cookie shipping without ``Secure`` indefinitely,
+    with a 7-day ``refresh_token`` capturable by anyone on the LAN, and no
+    signal anywhere. There is no security-audit facility in this codebase, so a
+    rate-limited ``logger.warning`` is the house pattern for this.
+    """
+    global _break_glass_suppression_warned
+    if _break_glass_suppression_warned:
+        return
+    _break_glass_suppression_warned = True
+    logger.warning(
+        "[AUTH] Break-glass is ON: session cookies are being issued WITHOUT "
+        "Secure over plaintext HTTP even though this instance is otherwise "
+        "protected. Anyone who can observe this network can steal a live "
+        "session. Turn off 'Emergency recovery: allow authenticated sessions "
+        "over HTTP' in TLS Settings and unset "
+        "ECM_ALLOW_HTTP_SESSION_COOKIES as soon as HTTPS is reachable."
+    )
+
+
+def _break_glass_open() -> bool:
+    """True when either operator escape hatch is open (stored flag or env var)."""
+    return bool(
+        get_tls_settings().allow_http_session_cookies
+        or break_glass_environment_override()
+    )
+
+
+def break_glass_is_downgrading() -> bool:
+    """True when an open break-glass hatch is actually costing protection.
+
+    THE single definition of "session cookies are travelling in cleartext
+    because of the escape hatch". Two surfaces read it and they must not be
+    able to disagree: the WARN in :func:`_session_transport` below, and the
+    ``session_cookies_plaintext`` field of ``GET /api/tls/status``, which is the
+    only gate on the TLS Settings banner.
+
+    They did disagree. The status field required ECM's OWN TLS
+    (``enabled and has_certificate()``), so on a reverse-proxy deployment —
+    ``public_base_url`` an ``https://`` origin, ECM's own TLS off — with
+    break-glass on, cookies were issued WITHOUT ``Secure``, the log said so, and
+    the API reported ``false`` while the banner never rendered and the checkbox
+    looked harmless. That is precisely the population the break-glass reorder in
+    :func:`_session_transport` exists to serve.
+
+    The condition is "the hatch is open AND something would otherwise have
+    protected these cookies", not "the hatch is open": with no TLS and no https
+    origin the cookies are non-``Secure`` either way, and reporting a hazard
+    there would put a permanent banner and a permanent WARN on every plain-HTTP
+    install. Pinned by
+    ``tests/unit/test_04c0u9_session_transport.py::
+    test_the_downgrade_verdict_is_the_same_one_the_warning_uses``.
+    """
+    if not _break_glass_open():
+        return False
+    return (
+        get_public_base_url().lower().startswith("https://")
+        or _ecm_terminates_tls()
+    )
+
+
+def _session_transport(request: Request) -> _SessionTransport:
+    """Decide session-cookie transport policy from trusted local state.
+
+    Two trusted signals, both read from this process rather than from the
+    request body or headers:
+
+    * this connection was terminated as HTTPS by ECM itself, and
+    * ``public_base_url``, the operator-configured canonical origin, is an
+      ``https://`` origin.
+
+    The second is deliberately the SAME notion of proxy trust bead
+    ``...-qsqfv`` established for the password-reset link (``config.
+    get_public_base_url``), not a second one: a reverse-proxy deployment
+    declares its external scheme once, in configuration, and everything that
+    needs to know reads it there.
+
+    ECM's own policy code never consults ``X-Forwarded-Proto`` /
+    ``X-Forwarded-Host`` / ``Forwarded``. The ECM backend has no trusted-proxy
+    allowlist of its own (the one in ``mcp-server/config.py`` belongs to the
+    sidecar's listener, a different process). Note what that does and does not
+    claim: uvicorn's ``ProxyHeadersMiddleware`` is enabled by default and runs
+    OUTSIDE this application, so for a client within ``FORWARDED_ALLOW_IPS``
+    (default ``127.0.0.1``) it may itself rewrite ``scope['scheme']`` before
+    any ECM code sees the request. The property this function holds is that ECM
+    adds no header trust of its own on top of that.
+
+    ORDER IS LOAD-BEARING. Break-glass is evaluated BEFORE the
+    ``public_base_url`` signal: with an ``https://`` public base URL configured
+    the old order returned early and made BOTH escape hatches unreachable, so
+    the documented recovery did nothing on precisely the reverse-proxy
+    deployments whose operators had followed the qsqfv advice. Genuine TLS on
+    this connection still wins over everything, so break-glass can never
+    downgrade a real HTTPS session.
+    """
+    break_glass = _break_glass_open()
+
+    if request.url.scheme.lower() == "https":
+        return _SessionTransport(secure=True, refuse_plaintext=False, break_glass=break_glass)
+
+    proxy_https = get_public_base_url().lower().startswith("https://")
+    tls_active = _ecm_terminates_tls()
+
+    if break_glass:
+        # Only warn when the hatch actually changed the answer, and decide that
+        # through the SAME function GET /api/tls/status reports the verdict
+        # from, so the log and the API cannot contradict each other.
+        if break_glass_is_downgrading():
+            _warn_break_glass_suppression()
+        return _SessionTransport(secure=False, refuse_plaintext=False, break_glass=True)
+
+    if proxy_https:
+        return _SessionTransport(secure=True, refuse_plaintext=False, break_glass=False)
+
+    # ECM terminates TLS and this arrived in cleartext: protect the cookie AND
+    # refuse to mint a session at all (see ``refuse_plaintext``).
+    #
+    # The two are not the same predicate. ``secure`` fails closed on an
+    # unreadable tls_settings.json; the refusal additionally demands positive
+    # evidence of a listener, so a filesystem fault on an instance that never
+    # enabled TLS cannot become a permanent login lockout. See
+    # ``_https_listener_evidence``.
+    return _SessionTransport(
+        secure=tls_active,
+        refuse_plaintext=tls_active and _https_listener_evidence(),
+        break_glass=False,
+    )
+
+
+def _auth_cookie_secure(request: Request) -> bool:
+    """Return the cookie transport policy from trusted local state.
+
+    Single source of truth for the ``secure=`` attribute of every session
+    cookie ECM emits; see :func:`_session_transport` for the policy itself.
+    """
+    return _session_transport(request).secure
+
+
+def _https_sign_in_url(request: Request) -> str:
+    """Best-effort HTTPS address of this instance, for a recovery message."""
+    tls_settings = get_tls_settings()
+    host = tls_settings.domain or (request.url.hostname or "your-ecm-host")
+    return f"https://{host}:{tls_settings.https_port}"
+
+
+def _require_secure_session_transport(request: Request) -> None:
+    """Refuse to mint a browser session over cleartext when ECM terminates TLS.
+
+    Bead 04c0u.9 remediation, PO-authorised behaviour change. ``/api/auth/login``
+    is in ``AUTH_EXEMPT_PATHS``, so before this the request succeeded
+    server-side — password verified, ``UserSession`` row created,
+    ``200 {"message": "Login successful"}`` — and only then did the browser
+    silently discard the ``Secure`` cookie per RFC 6265bis 5.6. The SPA resolved
+    on the 200, the next call 401'd, and the operator was bounced back to the
+    login form with no error shown, so the usual response was to retry and ship
+    the cleartext password again.
+
+    The predicate is narrow on purpose: it fires ONLY when ECM itself is
+    terminating TLS, break-glass is closed, this request is cleartext, and no
+    ``https://`` ``public_base_url`` is configured. In that configuration there
+    is no legitimate plaintext client, so this cannot break a reverse-proxy
+    deployment.
+
+    Raised as 403 rather than 401 deliberately: the SPA's ``fetchJson`` treats
+    401 as "try a token refresh and retry", which would bury the message.
+    """
+    if not _session_transport(request).refuse_plaintext:
+        return
+    logger.warning(
+        "[AUTH] Refused a plaintext session request from %s: ECM is terminating "
+        "TLS and break-glass is closed.",
+        _client_address(request),
+    )
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=(
+            f"This instance terminates TLS, so ECM will not start a browser "
+            f"session over plaintext HTTP. Sign in at {_https_sign_in_url(request)} "
+            f"instead. If HTTPS is unreachable, an admin can enable 'Emergency "
+            f"recovery: allow authenticated sessions over HTTP' in TLS Settings, "
+            f"or set ECM_ALLOW_HTTP_SESSION_COOKIES=true on the container and "
+            f"restart ECM."
+        ),
+    )
+
+
 def _set_access_cookie(
     response: Response,
     access_token: str,
-    secure: bool = False,  # Set to True in production with HTTPS
+    request: Request,
 ) -> None:
     """Set ONLY the short-lived access-token cookie.
 
-    Used by the rotation grace path (bd-x67qe), which must NOT touch the
-    refresh cookie: the browser's jar already holds the winner's rotated
-    refresh token, and re-sending the loser's stale one would regress it.
+    Used by the predecessor path (bd-x67qe, bead upkp1), which must NOT touch
+    the refresh cookie: the browser's jar already holds the successor's
+    refresh token, and re-sending the superseded one would regress it.
     """
     settings = get_auth_settings()
     response.set_cookie(
         key="access_token",
         value=access_token,
         httponly=True,
-        secure=secure,
+        secure=_auth_cookie_secure(request),
         samesite="lax",
         max_age=settings.jwt.access_token_expire_minutes * 60,
         path="/",
@@ -371,7 +725,7 @@ def _set_auth_cookies(
     response: Response,
     access_token: str,
     refresh_token: str,
-    secure: bool = False,  # Set to True in production with HTTPS
+    request: Request,
 ) -> None:
     """
     Set authentication cookies on the response.
@@ -380,12 +734,17 @@ def _set_auth_cookies(
         response: FastAPI response object.
         access_token: JWT access token.
         refresh_token: JWT refresh token.
-        secure: Whether to set Secure flag (requires HTTPS).
+        request: Request whose trusted transport context selects cookie policy.
     """
     settings = get_auth_settings()
 
+    # One policy decision for both cookies: _set_access_cookie derives its own
+    # from the same request, and a split verdict between the two would be a
+    # bug, not a feature.
+    secure = _auth_cookie_secure(request)
+
     # Access token - short lived, httpOnly for security
-    _set_access_cookie(response, access_token, secure=secure)
+    _set_access_cookie(response, access_token, request)
 
     # Refresh token - longer lived, httpOnly for security
     response.set_cookie(
@@ -399,10 +758,31 @@ def _set_auth_cookies(
     )
 
 
-def _clear_auth_cookies(response: Response) -> None:
-    """Clear authentication cookies from the response."""
-    response.delete_cookie(key="access_token", path="/")
-    response.delete_cookie(key="refresh_token", path="/api/auth")
+def _clear_auth_cookies(response: Response, request: Request) -> None:
+    """Clear authentication cookies, mirroring the attributes they were set with.
+
+    Starlette's ``delete_cookie`` defaults to ``secure=False, httponly=False,
+    samesite="lax"``. Deletion matches on (name, domain, path) so the omission
+    works today, but RFC 6265bis 8.6 is explicit that a non-secure origin
+    cannot overwrite a ``Secure`` cookie, and a deletion that does not mirror
+    its issue-time attributes is a trap for the next change here. Same request,
+    same ``_auth_cookie_secure``, same answer as ``_set_auth_cookies``.
+    """
+    secure = _auth_cookie_secure(request)
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key="refresh_token",
+        path="/api/auth",
+        secure=secure,
+        httponly=True,
+        samesite="lax",
+    )
 
 
 @router.get("/status", response_model=AuthStatusResponse)
@@ -459,6 +839,7 @@ async def check_setup_required(
 async def initial_setup(
     setup_request: SetupRequest,
     session: Session = Depends(get_session),
+    _setup_lock=Depends(_serialize_initial_setup),
 ):
     """
     Create the initial admin user during first-run setup.
@@ -505,10 +886,65 @@ async def initial_setup(
     )
     session.add(identity)
 
-    session.commit()
+    # Persist the gate before returning success. The global middleware and
+    # every ``*_if_enabled`` dependency key on this flag; creating the user
+    # without it leaves the entire admin API anonymous until a later status
+    # request happens to repair the state (bead qg14z).
+    auth_settings = get_auth_settings()
+    previous_setup_complete = auth_settings.setup_complete
+    completed_auth_settings = auth_settings.model_copy(deep=True)
+    completed_auth_settings.setup_complete = True
+    try:
+        settings_persisted = save_auth_settings(completed_auth_settings)
+    except Exception:
+        session.rollback()
+        logger.error("[AUTH] Initial setup settings persistence failed")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Setup could not be persisted.",
+        )
+    if not settings_persisted:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Setup could not be persisted.",
+        )
+
+    try:
+        session.commit()
+    except Exception:
+        session.rollback()
+
+        # A database driver may raise after COMMIT reached durable storage.
+        # Verify through an independent Session before considering a rollback
+        # of the auth gate. Ambiguous outcomes remain fail-closed (True).
+        durable_user_exists: Optional[bool] = None
+        verification_session = None
+        try:
+            verification_session = Session(bind=session.get_bind())
+            durable_user_exists = verification_session.query(User.id).first() is not None
+        except Exception:
+            logger.error("[AUTH] Could not verify initial setup commit outcome")
+        finally:
+            if verification_session is not None:
+                verification_session.close()
+
+        if durable_user_exists is False:
+            restored_auth_settings = completed_auth_settings.model_copy(deep=True)
+            restored_auth_settings.setup_complete = previous_setup_complete
+            try:
+                settings_restored = save_auth_settings(restored_auth_settings)
+            except Exception:
+                settings_restored = False
+            if not settings_restored:
+                logger.error("[AUTH] Failed to restore setup state after database failure")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Setup could not be completed.",
+        ) from None
     session.refresh(user)
 
-    logger.info("[AUTH] Initial setup completed. Admin user created: %s", user.username)
+    logger.info("[AUTH] Initial setup completed. Admin user created")
 
     return SetupResponse(
         user=UserResponse.model_validate(user),
@@ -530,6 +966,10 @@ async def login(
     Sets httpOnly cookies with access and refresh tokens.
     Uses the user_identities table to find the user by local identity.
     """
+    # Before any credential is read: an instance that terminates TLS itself
+    # has no legitimate plaintext client (bead 04c0u.9 remediation).
+    _require_secure_session_transport(request)
+
     from models import UserIdentity
 
     # First, try to find user via identity table
@@ -545,7 +985,7 @@ async def login(
         # Fallback to direct user lookup for backwards compatibility
         user = session.query(User).filter(User.username == login_request.username).first()
 
-    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+    client_ip = _client_address(request)
 
     if user is None:
         logger.warning("[AUTH] Login attempt for nonexistent user: %s from %s", login_request.username, client_ip)
@@ -589,7 +1029,9 @@ async def login(
         )
 
     # Create tokens
-    access_token = create_access_token(user_id=user.id, username=user.username)
+    access_token = create_access_token(
+        user_id=user.id, username=user.username, auth_epoch=user.auth_epoch
+    )
     refresh_token = create_refresh_token(user_id=user.id)
 
     # Create session record
@@ -611,7 +1053,7 @@ async def login(
     _cleanup_expired_sessions(session, user.id)
 
     # Set cookies
-    _set_auth_cookies(response, access_token, refresh_token)
+    _set_auth_cookies(response, access_token, refresh_token, request)
 
     logger.info("[AUTH] User logged in: %s", user.username)
 
@@ -697,71 +1139,379 @@ async def update_current_user_profile(
     )
 
 
-# How long (seconds) the immediately-prior refresh token stays acceptable
-# after a rotation (bd-x67qe). Long enough to absorb the cross-tab race —
-# two tabs' proactive-refresh timers fire within milliseconds of each other —
-# and short enough that a stolen predecessor is useless almost immediately.
-REFRESH_ROTATION_GRACE_SECONDS = 10
+# Reason code for the one refusal that is the closest thing to a replay
+# signal this server can emit: signature and expiry check out, but the
+# presented credential matches no live session, current or predecessor. It
+# gets its own log message (bead yhk3r, L-2) so it is greppable on its own.
+_REFRESH_DENIAL_UNKNOWN_SESSION = "unknown_session"
+
+# Bounded refusal logging for POST /api/auth/refresh (bead yhk3r, L-5).
+#
+# The endpoint is unauthenticated and deliberately NOT rate limited: the
+# existing 5/min login limiter already makes several e2e specs unrunnable, and
+# behind a proxy ``get_remote_address`` can collapse every LAN client onto one
+# address (filed separately as SEC-03). One WARNING per refusal on an endpoint
+# anyone can POST to is therefore a disk-fill vector, so refusals are deduped
+# per (reason code, client address) for this interval. Nothing is dropped
+# silently: refusals skipped during an interval are counted and reported on
+# the next line that does get emitted.
+_REFRESH_DENIAL_LOG_INTERVAL_SECONDS = 60.0
+
+# Upper bound on tracked (reason, client) pairs, so a flood from many
+# addresses cannot grow the dedupe map without limit.
+_REFRESH_DENIAL_TRACKED_PAIRS = 256
+
+# (reason, client) -> (monotonic time of the last emitted line, refusals
+# skipped since then).
+_refresh_denial_log_state = {}
 
 
-def _refresh_via_rotation_grace(
+def _reset_refresh_denial_log_state() -> None:
+    """Forget all refusal dedupe bookkeeping.
+
+    Test seam: the state is module-global and survives between tests, so a
+    test asserting on refusal logging clears it first rather than depending
+    on whatever earlier tests left behind.
+    """
+    _refresh_denial_log_state.clear()
+
+
+def _refresh_denials_skipped_since_last(reason: str, client: str) -> Optional[int]:
+    """Record one refusal against the dedupe map.
+
+    Returns the number of refusals skipped since the last emitted line for
+    this (reason, client) pair, or ``None`` when this refusal is itself
+    inside the dedupe interval and must not be emitted.
+    """
+    now = time.monotonic()
+    key = (reason, client)
+    entry = _refresh_denial_log_state.get(key)
+
+    if entry is not None and now - entry[0] < _REFRESH_DENIAL_LOG_INTERVAL_SECONDS:
+        _refresh_denial_log_state[key] = (entry[0], entry[1] + 1)
+        return None
+
+    if (
+        entry is None
+        and len(_refresh_denial_log_state) >= _REFRESH_DENIAL_TRACKED_PAIRS
+    ):
+        for stale_key in [
+            k
+            for k, v in _refresh_denial_log_state.items()
+            if now - v[0] >= _REFRESH_DENIAL_LOG_INTERVAL_SECONDS
+        ]:
+            del _refresh_denial_log_state[stale_key]
+        if len(_refresh_denial_log_state) >= _REFRESH_DENIAL_TRACKED_PAIRS:
+            # Still full of live entries: start over rather than retain a map
+            # that can only grow. Worst case is one extra line per pair.
+            _refresh_denial_log_state.clear()
+
+    _refresh_denial_log_state[key] = (now, 0)
+    return entry[1] if entry is not None else 0
+
+
+def _forwarded_address(value: str) -> Optional[str]:
+    """Return ``value`` as a canonical IP literal, or ``None`` if it is not one.
+
+    ``X-Forwarded-For`` is caller-supplied and is only ever supposed to hold
+    an IP address (proxies may append a port, and IPv6 is bracketed when a
+    port is present). Anything else is discarded rather than trimmed: see
+    :func:`_client_address` for why the difference matters.
+    """
+    candidate = value.strip()
+    if not candidate:
+        return None
+
+    if candidate.startswith("["):
+        # "[2001:db8::1]:41234" — the bracketed form, with or without a port.
+        host, closed, _ = candidate.partition("]")
+        if not closed:
+            return None
+        candidate = host[1:]
+    elif candidate.count(":") == 1:
+        # "203.0.113.7:41234". A bare IPv6 address has more than one colon,
+        # so this cannot truncate one.
+        candidate = candidate.split(":")[0]
+
+    try:
+        return str(ipaddress.ip_address(candidate))
+    except ValueError:
+        return None
+
+
+def _client_address(request: Request) -> str:
+    """Best-effort client address for an auth log line.
+
+    The returned value is ALWAYS either an IP literal this function itself
+    rendered from :mod:`ipaddress`, the socket peer address, or the constant
+    ``"unknown"`` — never a substring of a request header.
+
+    That is the whole point of the function, and it is stricter than
+    truncating on purpose. ``X-Forwarded-For`` is set by whoever sent the
+    request; before this, its first comma-separated field was logged verbatim
+    and unbounded by the refusal lines in :func:`_deny_refresh` and by the
+    login-failure lines. A caller could therefore choose the text that landed
+    in an auth log: a refresh token, its full sha256 hash (which L-4 of the
+    upkp1 security spec says must never be logged, and which is separately a
+    CodeQL finding), or padding to fill the disk. Truncating would have
+    bounded the length while still emitting attacker-chosen text; validating
+    the shape means there is no attacker-chosen text to emit, which also
+    closes forged-log-line injection at this layer regardless of what the
+    HTTP parser in front of it accepts in a header value.
+
+    A header that does not parse as an address falls back to the socket peer
+    silently. The peer is the more truthful answer in that case, and the
+    alternative — logging that a bad header arrived — would hand the same
+    unauthenticated caller a second way to generate lines.
+    """
+    forwarded = _forwarded_address(
+        request.headers.get("X-Forwarded-For", "").split(",")[0]
+    )
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+# A run this long of token-alphabet characters does not occur in a real
+# User-Agent (its longest such run is a product token like "AppleWebKit"),
+# but it is exactly the shape of a secret: a sha256 hex digest is 64
+# characters and each dot-separated segment of a JWT is longer still.
+_SECRET_SHAPED_RUN = re.compile(r"[A-Za-z0-9_\-+/=]{32,}")
+
+# Cap on the User-Agent as logged. Long enough to keep the platform and
+# browser tokens that make the field worth logging at all.
+_LOGGED_AGENT_CHARS = 80
+
+
+def _log_safe_agent(value: Optional[str]) -> str:
+    """Render a caller-supplied User-Agent as a single safe log field.
+
+    Unlike an address, a User-Agent is free-form, so there is no shape to
+    validate it against and the defence has to be applied to the value
+    itself. Three things happen, in this order:
+
+    1. secret-shaped runs are redacted, so a caller cannot get a refresh
+       token or its hash into an auth log by putting it here instead of in
+       ``X-Forwarded-For`` (a 64-character hash fits inside the cap below
+       intact, so truncation alone would not stop it);
+    2. everything outside printable ASCII is dropped, so no newline,
+       carriage return or terminal escape can forge a second log line or
+       rewrite the operator's console;
+    3. the result is truncated.
+
+    Redaction runs before truncation so a secret cannot survive by sitting
+    across the cut.
+    """
+    if not value:
+        return ""
+    redacted = _SECRET_SHAPED_RUN.sub("[redacted]", value)
+    printable = "".join(c for c in redacted if " " <= c <= "~")
+    return printable[:_LOGGED_AGENT_CHARS]
+
+
+def _deny_refresh(
+    request: Request,
+    reason: str,
+    detail: str,
+    *,
+    claims: Optional[dict] = None,
+) -> AuthenticationError:
+    """Log a refresh refusal at WARNING and return the 401 to raise.
+
+    Used as ``raise _deny_refresh(...)`` so every refusal path in
+    :func:`refresh_tokens` emits exactly one line carrying its own reason
+    code (bead yhk3r). Before this, the endpoint refused in complete silence:
+    38 hours of container logs held zero refresh lines of any kind, which is
+    why bead upkp1 had to be diagnosed from a browser's error body instead of
+    from the server that produced the 401.
+
+    What is logged, and what is not: the reason code, the subject and ``jti``
+    from claims that already passed the signature check, the client address
+    and a truncated User-Agent. NEVER the presented credential and never the
+    stored hash of one. The ``jti`` names the token without being usable as
+    one, and a full hash in a log line would additionally be a CodeQL finding.
+
+    That guarantee has to survive the two caller-supplied fields as well, or
+    it is only a guarantee about the arguments this function happens to pass:
+    an unauthenticated caller who put a token or its hash in ``X-Forwarded-For``
+    or ``User-Agent`` would otherwise have written it into the log itself.
+    :func:`_client_address` and :func:`_log_safe_agent` are what close that,
+    and property 19 asserts it over both headers.
+    """
+    client = _client_address(request)
+    subject = None
+    jti = None
+    if claims:
+        subject = claims.get("sub")
+        jti = claims.get("jti")
+    agent = _log_safe_agent(request.headers.get("User-Agent"))
+
+    skipped = _refresh_denials_skipped_since_last(reason, client)
+    if skipped is None:
+        logger.debug(
+            "[AUTH] Refresh refused (%s) for client=%s, deduped within the "
+            "%.0fs refusal-logging interval",
+            reason,
+            client,
+            _REFRESH_DENIAL_LOG_INTERVAL_SECONDS,
+        )
+    elif reason == _REFRESH_DENIAL_UNKNOWN_SESSION:
+        logger.warning(
+            "[AUTH] Refresh refused (%s): valid signature, but the presented "
+            "credential matches no live session, current or predecessor. "
+            "Either a superseded token was replayed, or the client is holding "
+            "a stale cookie from a deleted session, an earlier install or a "
+            "secret rotation. user_id=%s jti=%s client=%s agent=%s "
+            "skipped_since_last=%d",
+            reason,
+            subject,
+            jti,
+            client,
+            agent,
+            skipped,
+        )
+    else:
+        logger.warning(
+            "[AUTH] Refresh refused (%s): user_id=%s jti=%s client=%s "
+            "agent=%s skipped_since_last=%d",
+            reason,
+            subject,
+            jti,
+            client,
+            agent,
+            skipped,
+        )
+
+    return AuthenticationError(detail)
+
+
+def _refresh_via_predecessor(
     session: Session,
+    request: Request,
     response: Response,
     token_hash: str,
     user_id: int,
+    claims: dict,
 ) -> RefreshResponse:
     """Answer a refresh presented with the immediately-prior refresh token.
 
-    Cross-tab rotation race (bd-x67qe): two tabs of one session can POST
-    /auth/refresh with the same pre-rotation cookie near-simultaneously. The
-    winner rotates; the loser lands here. Inside a short grace window the
-    loser gets an idempotent answer — a fresh access token bound to the SAME
-    session — instead of a hard-logout 401.
+    ROTATION CONFIRMATION (bead upkp1). The predecessor stays acceptable
+    until its successor is actually used, replacing the 10-second wall-clock
+    grace window this path shipped with (bd-x67qe). A client whose rotated
+    response never arrived, because the tab navigated or the request was
+    aborted mid-flight, used to be locked out ten seconds later with no
+    non-interactive way back.
+
+    Why no ``successor_used`` flag is needed, and why the rule is "the
+    successor was ACCEPTED" rather than "the successor was presented": the
+    guarded UPDATE in :func:`refresh_tokens` writes the presented hash into
+    ``prior_refresh_token_hash`` in the same statement that installs the
+    successor's hash as current. The instant a successor is accepted, the
+    predecessor's hash is overwritten out of the row and can never match
+    again, so "valid until the successor is used" IS "valid until it is
+    overwritten". A presentation that fails any check never reaches that
+    UPDATE and therefore cannot confirm anything. The row is the sole
+    authority; a separate flag would be a second source of truth that can
+    disagree with the hashes, and it would cost a migration to say nothing
+    new.
+
+    Acceptance conditions, in the order enforced below. All five must hold;
+    this list is the authority on how many there are, because a pre-merge
+    review of an earlier draft found a normative "four conditions and nothing
+    else" phrasing that omitted the last one while a required test demanded
+    it:
+
+    1. the row's ``prior_refresh_token_hash`` matches the presented token,
+    2. the row belongs to the ``sub`` in the verified claims,
+    3. the row is not revoked,
+    4. the row's ``expires_at`` is still in the future,
+    5. the user the row belongs to still exists and is still active.
+
+    (5) is not redundant with the others. Deactivating an account has to take
+    effect on this path too, or a stranded client would keep collecting
+    access tokens for a disabled user until the session expired on its own,
+    and nothing else here consults the user row for anything but the username
+    on the minted token.
 
     Security invariants:
-    - Only the LATEST predecessor is honored, one generation deep — a normal
-      rotation overwrites ``prior_refresh_token_hash``, so graced tokens
-      cannot chain.
-    - NO second rotation and NO refresh cookie: the browser jar keeps the
-      winner's rotated refresh token.
-    - ``expires_at`` is untouched — grace never extends session lifetime.
-    - Revoked sessions are excluded — logout kills grace immediately.
+    - Only the LATEST predecessor is honored, one generation deep. A normal
+      rotation overwrites ``prior_refresh_token_hash``, so predecessors never
+      chain and exactly one superseded token is live per session.
+    - NO second rotation and NO refresh cookie. The jar keeps the successor's
+      refresh token. Minting a fresh one here would fork the chain: the
+      server does not hold the plaintext successor, so it could only install
+      a NEW one and strand whoever legitimately received the real successor.
+    - ``expires_at`` is untouched, so this path never extends session
+      lifetime. That asymmetry is the outer bound the removed window used to
+      provide: a healthy client rotates and slides its session forward, while
+      a client living on predecessor answers is guaranteed back through
+      interactive login at the original expiry.
+    - The presented JWT's own ``exp`` is enforced before any DB lookup.
+    - Revoked sessions are excluded, so logout kills the predecessor at once.
 
     Raises:
-        AuthenticationError: when no grace applies.
+        AuthenticationError: when the predecessor is not acceptable.
     """
-    graced_session = session.query(UserSession).filter(
+    prior_session = session.query(UserSession).filter(
         UserSession.prior_refresh_token_hash == token_hash,
         UserSession.user_id == user_id,
         UserSession.is_revoked == False,
     ).first()
 
     now = datetime.utcnow()
-    if (
-        not graced_session
-        or graced_session.rotated_at is None
-        or (now - graced_session.rotated_at).total_seconds()
-        > REFRESH_ROTATION_GRACE_SECONDS
-    ):
-        raise AuthenticationError("Session not found or revoked")
+    if not prior_session:
+        raise _deny_refresh(
+            request,
+            _REFRESH_DENIAL_UNKNOWN_SESSION,
+            "Session not found or revoked",
+            claims=claims,
+        )
 
-    if graced_session.expires_at < now:
-        raise AuthenticationError("Session expired")
+    # ``<=``, not ``<``: the rule is that the session is live while
+    # ``expires_at > now``, so an instant that lands exactly on the expiry is
+    # already outside it. Matches the current-token check in
+    # :func:`refresh_tokens`.
+    if prior_session.expires_at <= now:
+        raise _deny_refresh(
+            request,
+            "predecessor_session_expired",
+            "Session expired",
+            claims=claims,
+        )
 
     user = session.query(User).filter(User.id == user_id).first()
     if not user or not user.is_active:
-        raise AuthenticationError("User not found or disabled")
+        raise _deny_refresh(
+            request,
+            "predecessor_user_inactive",
+            "User not found or disabled",
+            claims=claims,
+        )
 
-    access_token = create_access_token(user_id=user.id, username=user.username)
-    _set_access_cookie(response, access_token)
+    access_token = create_access_token(
+        user_id=user.id, username=user.username, auth_epoch=user.auth_epoch
+    )
+    _set_access_cookie(response, access_token, request)
 
-    # last_used_at only — never expires_at (see invariants above).
-    graced_session.last_used_at = now
+    rotated_at = prior_session.rotated_at
+    # last_used_at only. Never expires_at, never either hash, never
+    # rotated_at (see invariants above).
+    prior_session.last_used_at = now
     session.commit()
 
+    # rotated_at no longer gates acceptance; it survives as forensic state so
+    # an operator can see a client stuck on the predecessor for days.
+    age = (
+        "%ds" % int((now - rotated_at).total_seconds())
+        if rotated_at is not None
+        else "unknown"
+    )
     logger.info(
-        "[AUTH] Refresh honored within rotation grace window for user: %s",
+        "[AUTH] Refresh answered from the predecessor token for user %s "
+        "(session_id=%s, age_since_rotation=%s, successor not used yet)",
         user.username,
+        prior_session.id,
+        age,
     )
     return RefreshResponse(
         message="Token refreshed",
@@ -779,31 +1529,51 @@ async def refresh_tokens(
     Refresh access token using refresh token.
 
     Sets new httpOnly cookies with fresh access and refresh tokens. A refresh
-    presented with the immediately-prior token inside the rotation grace
-    window is answered idempotently (bd-x67qe) — see
-    :func:`_refresh_via_rotation_grace`.
+    presented with the immediately-prior token is answered idempotently until
+    that token's successor is actually used (rotation confirmation, bead
+    upkp1) - see :func:`_refresh_via_predecessor`.
+
+    CONCURRENCY CONSTRAINT: this body must contain NO ``await``, and adding
+    one is an escalation rather than a judgment call. Every Session in this
+    application shares one sqlite connection (``poolclass=StaticPool``) and
+    therefore one transaction, so a second request that interleaved between
+    the read below and its commit could durably commit this request's
+    half-finished rotation. What makes that impossible today is that the body
+    runs straight through without yielding the event loop, which is what lets
+    the compare-and-swap below be decided from ``rowcount`` alone.
     """
+    _require_secure_session_transport(request)
+
     refresh_token = get_refresh_token_from_request(request)
     if not refresh_token:
-        raise AuthenticationError("No refresh token provided")
+        raise _deny_refresh(request, "no_credential", "No refresh token provided")
 
     try:
         # Decode and validate refresh token
         try:
             claims = decode_token(refresh_token)
         except TokenRevokedError:
-            # A rotated-away predecessor's jti is blacklisted in-process the
-            # moment the winner rotates, but the token may still be inside
-            # the rotation grace window. Re-validate signature + expiry only
-            # and let the DB-side grace check below decide (bd-x67qe).
+            # LOAD-BEARING, NOT AN EDGE CASE (bead upkp1). Rotation adds the
+            # presented jti to the in-process blacklist, so a predecessor's
+            # jti is blacklisted the instant its successor is minted. Under
+            # rotation confirmation the predecessor stays valid for the rest
+            # of the session's life, so EVERY predecessor acceptance now
+            # depends on this fallback. Re-validate signature and expiry only
+            # and let the DB decide: the row, not the in-process set, is the
+            # revocation authority. Narrowing or removing this reintroduces
+            # the stranding bug wholesale.
             claims = decode_token(refresh_token, ignore_revocation=True)
 
         if claims.get("type") != "refresh":
-            raise AuthenticationError("Invalid token type")
+            raise _deny_refresh(
+                request, "wrong_credential_type", "Invalid token type", claims=claims
+            )
 
         user_id = claims.get("sub")
         if user_id is None:
-            raise AuthenticationError("Invalid token payload")
+            raise _deny_refresh(
+                request, "no_subject", "Invalid token payload", claims=claims
+            )
 
         # Verify session exists and is valid
         token_hash = hash_token(refresh_token)
@@ -813,27 +1583,43 @@ async def refresh_tokens(
         ).first()
 
         if not user_session:
-            # Not the current token — maybe the immediately-prior one inside
-            # the rotation grace window (cross-tab refresh race, bd-x67qe).
-            return _refresh_via_rotation_grace(
-                session, response, token_hash, int(user_id)
+            # Not the current token. It may be the immediately-prior one,
+            # whose successor has not been used yet (bead upkp1).
+            return _refresh_via_predecessor(
+                session, request, response, token_hash, int(user_id), claims
             )
 
-        if user_session.expires_at < datetime.utcnow():
-            raise AuthenticationError("Session expired")
+        # ``<=``, not ``<``: a session is live while ``expires_at > now``, so
+        # the expiry instant itself is outside the session. Same predicate on
+        # the predecessor path in :func:`_refresh_via_predecessor`.
+        if user_session.expires_at <= datetime.utcnow():
+            raise _deny_refresh(
+                request, "session_expired", "Session expired", claims=claims
+            )
 
         # Get user
         user = session.query(User).filter(User.id == user_id).first()
         if not user or not user.is_active:
-            raise AuthenticationError("User not found or disabled")
+            raise _deny_refresh(
+                request, "user_inactive", "User not found or disabled", claims=claims
+            )
 
-        # Rotate tokens
-        new_access_token, new_refresh_token = rotate_refresh_token(refresh_token)
+        # Rotate tokens. Pass the real username so the refreshed access
+        # token keeps identifying the account rather than a ``user_<id>``
+        # placeholder (bd-suuoh) — that claim is what main.py's
+        # deprecated-admin-router warning logs as the acting operator.
+        new_access_token, new_refresh_token = rotate_refresh_token(
+            refresh_token, username=user.username, auth_epoch=user.auth_epoch
+        )
 
         # Guarded rotation (bd-x67qe): the UPDATE only applies while the row
         # still holds the pre-rotation hash, so exactly ONE of two racing
-        # requests can rotate. Recording the predecessor hash + rotation time
-        # opens the grace window for the loser.
+        # requests can rotate. Writing the presented hash into
+        # ``prior_refresh_token_hash`` is also what CONFIRMS a rotation for
+        # bead upkp1: it hands the loser an idempotent answer, and it
+        # atomically overwrites the previous predecessor out of the row, which
+        # is what ends that token's life. Rotating twice therefore refuses the
+        # oldest token, with no window and no flag involved.
         settings = get_auth_settings()
         now = datetime.utcnow()
         rotated = session.query(UserSession).filter(
@@ -855,17 +1641,21 @@ async def refresh_tokens(
 
         if not rotated:
             # Photo-finish: another request rotated this session between our
-            # read and write. Fall through to the grace path instead of
-            # clobbering the winner's rotation.
-            return _refresh_via_rotation_grace(
-                session, response, token_hash, int(user_id)
+            # read and write. Fall through to the predecessor path instead of
+            # clobbering the winner's rotation. The successor minted just
+            # above is discarded on purpose: acceptance is decided by the
+            # stored hash, so a token that never reached the row is not a
+            # credential. Storing or returning it would install a second
+            # current token.
+            return _refresh_via_predecessor(
+                session, request, response, token_hash, int(user_id), claims
             )
 
         # Clean up expired sessions for this user
         _cleanup_expired_sessions(session, int(user_id))
 
         # Set new cookies
-        _set_auth_cookies(response, new_access_token, new_refresh_token)
+        _set_auth_cookies(response, new_access_token, new_refresh_token, request)
 
         logger.info("[AUTH] Token refreshed for user: %s", user.username)
         return RefreshResponse(
@@ -874,11 +1664,13 @@ async def refresh_tokens(
         )
 
     except TokenExpiredError:
-        raise AuthenticationError("Refresh token expired")
+        raise _deny_refresh(request, "jwt_expired", "Refresh token expired")
     except TokenRevokedError:
-        raise AuthenticationError("Refresh token revoked")
+        raise _deny_refresh(request, "jwt_revoked", "Refresh token revoked")
     except InvalidTokenError as e:
-        raise AuthenticationError(f"Invalid refresh token: {str(e)}")
+        raise _deny_refresh(
+            request, "jwt_invalid", f"Invalid refresh token: {str(e)}"
+        )
 
 
 @router.post("/logout", response_model=LogoutResponse)
@@ -894,9 +1686,11 @@ async def logout(
     Always returns success even if not logged in (idempotent).
     """
     # Try to revoke the session if we have a refresh token. Also match the
-    # immediately-prior (graced) token hash (bd-x67qe): a stale tab logging
-    # out with the pre-rotation cookie must still kill the session — logout
-    # always beats the rotation grace window.
+    # immediately-prior token's hash (bd-x67qe): a stale tab logging out with
+    # the pre-rotation cookie must still kill the session. Revocation beats
+    # predecessor acceptance, which is what bounds bead upkp1's longer-lived
+    # predecessor: one row is the whole chain, so revoking it refuses the
+    # current token and its predecessor together.
     refresh_token = get_refresh_token_from_request(request)
     if refresh_token:
         try:
@@ -916,7 +1710,7 @@ async def logout(
             logger.warning("[AUTH] Error revoking session: %s", e)
 
     # Always clear cookies
-    _clear_auth_cookies(response)
+    _clear_auth_cookies(response, request)
 
     return LogoutResponse(message="Logged out successfully")
 
@@ -967,6 +1761,7 @@ async def change_password(
 
 
 @router.post("/forgot-password", response_model=ForgotPasswordResponse)
+@limiter.limit(RESET_ISSUE_RATE)
 async def forgot_password(
     forgot_request: ForgotPasswordRequest,
     request: Request,
@@ -981,9 +1776,45 @@ async def forgot_password(
     user = session.query(User).filter(User.email == forgot_request.email).first()
 
     if user and user.is_active and user.auth_provider == "local":
+        now = datetime.utcnow()
+        session.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            or_(
+                PasswordResetToken.used_at.is_not(None),
+                PasswordResetToken.expires_at <= now,
+            ),
+        ).delete(synchronize_session=False)
+        active_token = session.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > now,
+        ).order_by(PasswordResetToken.created_at.desc()).first()
+
+        # The response is deliberately identical to a fresh issuance. This
+        # account-level cooldown bounds token hashing, database writes and
+        # outbound email even when requests are distributed across clients.
+        if (
+            active_token
+            and active_token.created_at > now - PASSWORD_RESET_ACCOUNT_COOLDOWN
+        ):
+            session.commit()
+            return ForgotPasswordResponse()
+
+        if active_token:
+            superseded = session.query(PasswordResetToken).filter(
+                PasswordResetToken.id == active_token.id,
+                PasswordResetToken.used_at.is_(None),
+            ).update(
+                {PasswordResetToken.used_at: now},
+                synchronize_session=False,
+            )
+            session.commit()
+            if superseded != 1:
+                return ForgotPasswordResponse()
+
         # Generate reset token
         raw_token = secrets.token_urlsafe(32)
-        token_hash = hash_password(raw_token)  # Use bcrypt for token hash
+        token_hash = hash_token(raw_token)
 
         # Create reset token record (expires in 1 hour)
         reset_token = PasswordResetToken(
@@ -992,29 +1823,72 @@ async def forgot_password(
             expires_at=datetime.utcnow() + timedelta(hours=1),
         )
         session.add(reset_token)
+        try:
+            session.commit()
+        except IntegrityError:
+            # The partial unique index is the cross-worker account limiter.
+            # A concurrent request won issuance; preserve the generic response
+            # and do not send a second email.
+            session.rollback()
+            return ForgotPasswordResponse()
+
+        session.query(PasswordResetToken).filter(
+            PasswordResetToken.user_id == user.id,
+            PasswordResetToken.id != reset_token.id,
+        ).delete(synchronize_session=False)
         session.commit()
 
-        # Build base URL from request
-        # Use X-Forwarded headers if behind a proxy, otherwise use request URL
-        forwarded_proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
-        forwarded_host = request.headers.get("X-Forwarded-Host", request.url.netloc)
-        base_url = f"{forwarded_proto}://{forwarded_host}"
+        # Build the origin the emailed reset link points at.
+        #
+        # Bead ...-qsqfv (P1). When the operator has configured a public base
+        # URL it is used VERBATIM and the request is not consulted at all: the
+        # link goes into an email ECM sends to a third party, so nothing the
+        # caller supplies may influence where that link points. X-Forwarded-Host
+        # is caller-supplied, X-Forwarded-Proto is caller-supplied, and the old
+        # request.url.netloc fallback is just the Host header, so all three let
+        # an unauthenticated caller who knows a victim's email address have a
+        # genuine ECM email deliver a live reset token to a host they control.
+        #
+        # The unconfigured fallback below is that same unsafe construction,
+        # kept deliberately (PO decision 2026-08-15) so upgrading does not
+        # break the reset email on installs that never set the value.
+        # get_public_base_url() warns once per process while it is unset.
+        base_url = get_public_base_url()
+        if not base_url:
+            forwarded_proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+            forwarded_host = request.headers.get("X-Forwarded-Host", request.url.netloc)
+            base_url = f"{forwarded_proto}://{forwarded_host}"
 
         # Send the password reset email
         email_sent = send_password_reset_email(user.email, raw_token, base_url)
         if email_sent:
-            logger.info("[AUTH] Password reset email sent to: %s", user.email)
+            # NEVER log user.email here. This is the same log operators paste
+            # into GitHub issues, and a subscriber's address is PII that the
+            # user id identifies just as well for every operational purpose.
+            # One line per event, in the ``user_id=`` shape every other [AUTH]
+            # line in this file uses: bead cb1e1 moved the failure branch
+            # below, bead 5u5h9 moved this one and removed the duplicate the
+            # send helper emitted for the same event.
+            logger.info("[AUTH] Password reset email sent for user_id=%s", user.id)
         else:
-            # Still log the token for debugging if email fails
-            logger.warning("[AUTH] Password reset email failed for %s, token: %s", user.email, raw_token)
+            # NEVER log raw_token on this branch. It is a live, working
+            # password-reset credential, and an email outage is an ordinary
+            # operational failure, so anyone reading the log could reset this
+            # user's password. Log the user id only. An operator whose SMTP is
+            # down still has two recovery paths that do not depend on this
+            # line: PATCH /api/admin/users/{user_id} with a password (admin
+            # only) and the reset_password.py CLI. See bead cb1e1.
+            logger.warning("[AUTH] Password reset email failed for user_id=%s", user.id)
 
     # Always return success for security
     return ForgotPasswordResponse()
 
 
 @router.post("/reset-password", response_model=ResetPasswordResponse)
+@limiter.limit(RESET_VALIDATE_RATE)
 async def reset_password(
     reset_request: ResetPasswordRequest,
+    request: Request,
     session: Session = Depends(get_session),
 ):
     """
@@ -1022,17 +1896,13 @@ async def reset_password(
 
     Token must be valid and not expired (1 hour expiry).
     """
-    # Find valid reset token
-    # We need to check all tokens since we hash them
-    reset_tokens = session.query(PasswordResetToken).filter(
+    now = datetime.utcnow()
+    token_hash = hash_token(reset_request.token)
+    valid_token = session.query(PasswordResetToken).filter(
+        PasswordResetToken.token_hash == token_hash,
         PasswordResetToken.used_at.is_(None),
-    ).all()
-
-    valid_token = None
-    for token_record in reset_tokens:
-        if verify_password(reset_request.token, token_record.token_hash):
-            valid_token = token_record
-            break
+        PasswordResetToken.expires_at > now,
+    ).first()
 
     if not valid_token:
         raise HTTPException(
@@ -1040,11 +1910,22 @@ async def reset_password(
             detail="Invalid or expired reset token",
         )
 
-    # Check if token is expired
-    if valid_token.expires_at < datetime.utcnow():
+    # Persist the per-account/token attempt budget independently of password
+    # validation. Otherwise every rejected weak password would roll the budget
+    # back with its 422 response and the limit would never become effective.
+    attempt_claimed = session.query(PasswordResetToken).filter(
+        PasswordResetToken.id == valid_token.id,
+        PasswordResetToken.used_at.is_(None),
+        PasswordResetToken.attempt_count < PASSWORD_RESET_MAX_ATTEMPTS,
+    ).update(
+        {PasswordResetToken.attempt_count: PasswordResetToken.attempt_count + 1},
+        synchronize_session=False,
+    )
+    session.commit()
+    if attempt_claimed != 1:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Reset token has expired",
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many password reset attempts. Request a new reset link.",
         )
 
     # Get user
@@ -1063,12 +1944,25 @@ async def reset_password(
             detail=password_result.error,
         )
 
-    # Update password
-    user.password_hash = hash_password(reset_request.new_password)
-    user.updated_at = datetime.utcnow()
+    new_password_hash = hash_password(reset_request.new_password)
+    consumed_at = datetime.utcnow()
+    if not _consume_reset_token(session, valid_token.id, consumed_at):
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset token",
+        )
 
-    # Mark token as used
-    valid_token.used_at = datetime.utcnow()
+    # Token consumption, password mutation and session revocation commit as a
+    # single transaction. A racing consumer that loses the conditional UPDATE
+    # changes none of them.
+    user.password_hash = new_password_hash
+    user.updated_at = consumed_at
+    user.auth_epoch += 1
+    session.query(UserSession).filter(
+        UserSession.user_id == user.id,
+        UserSession.is_revoked.is_(False),
+    ).update({UserSession.is_revoked: True}, synchronize_session=False)
 
     session.commit()
 
@@ -1158,6 +2052,8 @@ async def dispatcharr_login(
     Validates credentials against Dispatcharr and creates/updates local user.
     Sets httpOnly cookies with access and refresh tokens.
     """
+    _require_secure_session_transport(request)
+
     from auth.providers.dispatcharr import (
         DispatcharrClient,
         DispatcharrAuthenticationError,
@@ -1182,7 +2078,7 @@ async def dispatcharr_login(
                 login_request.password,
             )
     except DispatcharrRateLimitError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.warning("[AUTH] Dispatcharr rate-limited login for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -1190,14 +2086,14 @@ async def dispatcharr_login(
             headers={"Retry-After": "60"},
         )
     except DispatcharrNetworkPolicyError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.error("[AUTH] Dispatcharr network policy rejected login for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=str(e),
         )
     except DispatcharrAuthenticationError as e:
-        client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+        client_ip = _client_address(request)
         logger.warning("[AUTH] Dispatcharr auth failed for user: %s from %s", login_request.username, client_ip)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1292,7 +2188,9 @@ async def dispatcharr_login(
         )
 
     # Create tokens
-    access_token = create_access_token(user_id=user.id, username=user.username)
+    access_token = create_access_token(
+        user_id=user.id, username=user.username, auth_epoch=user.auth_epoch
+    )
     refresh_token = create_refresh_token(user_id=user.id)
 
     # Create session record
@@ -1313,7 +2211,7 @@ async def dispatcharr_login(
     session.refresh(user)
 
     # Set cookies
-    _set_auth_cookies(response, access_token, refresh_token)
+    _set_auth_cookies(response, access_token, refresh_token, request)
 
     logger.info("[AUTH] Dispatcharr user logged in: %s", user.username)
 
@@ -1925,4 +2823,3 @@ async def unlink_identity(
     logger.info("[AUTH] User %s unlinked %s identity: %s", current_user.username, provider, identifier)
 
     return UnlinkIdentityResponse(message="Identity unlinked successfully")
-

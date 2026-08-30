@@ -18,7 +18,7 @@ Security (bead 0i2vt.8):
 * **Stream from disk.** ``upload_file`` streams the artifact from the on-disk
   path — it never reads the whole file into RAM (HARD AC #2).
 * **Credential masking.** Logged/surfaced error strings are passed through
-  :func:`cloud_storage.upload_security.mask_secrets` so access keys, secret
+  :func:`cloud_storage.upload_security.redact_secrets` so access keys, secret
   keys, and X-Amz-Signature query strings never reach the logs (HARD AC #5).
 """
 import asyncio
@@ -27,7 +27,7 @@ import time
 from pathlib import Path
 
 from cloud_storage.types import CloudStorageAdapter, UploadResult, ConnectionTestResult
-from cloud_storage.upload_security import SSRFError, mask_secrets, preresolve_endpoint
+from cloud_storage.upload_security import SSRFError, redact_secrets, preresolve_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -115,11 +115,11 @@ class S3Adapter(CloudStorageAdapter):
             # is surfaced via UploadResult.error (a non-logging sink) so no
             # credential-derived string reaches the logger.
             logger.warning("[S3] Upload to bucket %s refused by SSRF policy", self.bucket)
-            return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
+            return UploadResult(success=False, error=redact_secrets(str(e)), duration_ms=duration_ms)
         except Exception as e:
             duration_ms = int((time.time() - start) * 1000)
             logger.warning("[S3] Upload to bucket %s path %s failed", self.bucket, remote_path)
-            return UploadResult(success=False, error=mask_secrets(str(e)), duration_ms=duration_ms)
+            return UploadResult(success=False, error=redact_secrets(str(e)), duration_ms=duration_ms)
 
     async def test_connection(self) -> ConnectionTestResult:
         try:
@@ -135,10 +135,10 @@ class S3Adapter(CloudStorageAdapter):
             )
         except SSRFError as e:
             logger.warning("[S3] Connection to bucket %s refused by SSRF policy", self.bucket)
-            return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
+            return ConnectionTestResult(success=False, message=redact_secrets(str(e)))
         except Exception as e:
             logger.warning("[S3] Connection test to bucket %s failed", self.bucket)
-            return ConnectionTestResult(success=False, message=mask_secrets(str(e)))
+            return ConnectionTestResult(success=False, message=redact_secrets(str(e)))
 
     async def delete(self, remote_path: str) -> bool:
         try:

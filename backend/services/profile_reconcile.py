@@ -67,13 +67,15 @@ not fight this.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import re
-from contextlib import AsyncExitStack, asynccontextmanager
 
 from services.event_sync_preflight import resolve_effective_master_group_id
+from services.m3u_group_state import (
+    acquire_effective_group_locks,
+    coerce_profile_id,
+    effective_group_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +97,6 @@ logger = logging.getLogger(__name__)
 # SCOPE at this tier and DEFERRED to bead nq3ed. The design assumption here is a
 # single operator making one change at a time.
 #
-# Lock creation is a single synchronous dict get/set (no await between), so it
-# needs no guard lock.
-_group_locks: dict[int, asyncio.Lock] = {}
 # Bound on lock re-acquisition when a concurrent override retarget keeps moving
 # the effective group under us (Should-Fix 2) — avoids a pathological flip-flop.
 _LOCK_REACQUIRE_MAX = 3
@@ -110,36 +109,6 @@ _LOCK_REACQUIRE_MAX = 3
 # trailing-pass loop was unbounded + false-success and has been removed.)
 _sweep_in_progress = False
 
-
-def _get_group_lock(effective_gid: int) -> asyncio.Lock:
-    lock = _group_locks.get(effective_gid)
-    if lock is None:
-        lock = asyncio.Lock()
-        _group_locks[effective_gid] = lock
-    return lock
-
-
-def effective_group_lock(effective_gid: int) -> asyncio.Lock:
-    """Public accessor for the per-effective-group lock registry (Finding 4).
-
-    The Channel Pipeline's assign_channel_profile write acquires the SAME lock
-    the reconcile uses so a pipeline membership write and a group reconcile do
-    not touch the same effective group's channels concurrently WITHIN THIS
-    PROCESS. Cross-process serialization is out of scope (see bead nq3ed). Same
-    registry, same key resolution (``resolve_effective_master_group_id``)."""
-    return _get_group_lock(effective_gid)
-
-
-@asynccontextmanager
-async def acquire_effective_group_locks(effective_gids):
-    """Acquire the per-effective-group locks for a SET of groups in a
-    deadlock-free (sorted) order — the enforced-global cascade / normalize hold
-    several at once while every reconcile holds exactly one, so a global sort
-    order prevents any cycle."""
-    async with AsyncExitStack() as stack:
-        for gid in sorted(set(effective_gids)):
-            await stack.enter_async_context(_get_group_lock(gid))
-        yield
 
 # Provenance marker (decision 2b). Written into a channel's Dispatcharr
 # ``custom_properties`` by the pipeline ``assign_channel_profile`` action; read
@@ -164,34 +133,6 @@ _MAX_CHANNEL_PAGES = 1000
 # "resolve it yourself from the DB". Explicit None means "resolution failed /
 # unknown — treat every marker conservatively as still-owned".
 _UNSET = object()
-
-
-def coerce_profile_id(value):
-    """Coerce a single profile id to ``int``, or return ``None`` if it is not a
-    valid integer id. NEVER raises.
-
-    Canonical type is INTEGER (Blocker 1). For legacy back-compat we also accept
-    a NUMERIC STRING (``"12"`` -> ``12``) — early builds of the Auto-Sync modal
-    stored the selection as strings. ``bool`` is rejected (int subclass, not a
-    profile id).
-
-    Finding 1: parse strings with a STRICT ASCII integer regex
-    (``-?[0-9]+``) rather than ``str.isdigit()``/``lstrip``. ``str.isdigit()``
-    accepts unicode digits (``"➂"``, ``"²"``, Arabic-Indic ``"٣"``), and
-    ``lstrip("-")`` lets ``"--5"`` through — both then reach ``int()``, which
-    either RAISES (``"--5"``, ``"➂"``) or silently mis-accepts (``int("٣") == 3``).
-    ``[0-9]`` is ASCII-only and the fullmatch rejects empty/sign-only strings, so
-    ``int()`` is always safe.
-    """
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str):
-        s = value.strip()
-        if re.fullmatch(r"-?[0-9]+", s):
-            return int(s)
-    return None
 
 
 def _selection_from_setting(setting: dict | None) -> list[int] | None:
@@ -422,7 +363,7 @@ def _result(status: str, group_id: int, *, effective_gid=None, scoped=0,
     """Build a uniform reconcile result dict so every caller can rely on the
     same keys (status, counts, failed_profile_ids, conflict, error).
 
-    ``status`` vocabulary: ``no_selection`` | ``no_channels`` |
+    ``status`` vocabulary: ``no_selection`` | ``no_channels`` | ``conflict`` |
     ``stale_selection`` | ``reconciled`` | ``partial_failure`` | ``degraded``
     (enables applied but exclusivity could NOT be enforced — universe fetch
     failed) | ``error`` (setup/exception before any per-group apply)."""
@@ -486,7 +427,7 @@ async def reconcile_group_profiles(
     # overwrite newer desired state.
     for _attempt in range(_LOCK_REACQUIRE_MAX):
         lock_key = resolve_effective_master_group_id(all_settings, group_id)
-        async with _get_group_lock(lock_key):
+        async with effective_group_lock(lock_key):
             if settings_provider is not None:
                 try:
                     all_settings = await settings_provider()
@@ -503,6 +444,23 @@ async def reconcile_group_profiles(
             effective_gid = resolve_effective_master_group_id(all_settings, group_id)
             if effective_gid == lock_key:
                 try:
+                    setting = all_settings.get(group_id)
+                    if isinstance(setting, dict) and setting.get(
+                        "_ecm_channel_profile_conflict"
+                    ):
+                        try:
+                            from services.profile_conflict_review import (
+                                ensure_profile_conflict_review_under_lock,
+                            )
+                            await ensure_profile_conflict_review_under_lock(
+                                client, all_settings, effective_gid
+                            )
+                        except Exception as e:  # noqa: BLE001 - freeze still wins
+                            logger.warning(
+                                "[PROFILE-RECONCILE] effective=%s: could not "
+                                "reconcile conflict review queue: %s",
+                                effective_gid, e,
+                            )
                     return await _reconcile_group_locked(
                         client, all_settings, group_id, effective_gid,
                         live_rule_ids, cancel_check,
@@ -542,6 +500,16 @@ async def _reconcile_group_locked(
     setting = all_settings.get(group_id)
     selection = _selection_from_setting(setting)
     conflict = bool(isinstance(setting, dict) and setting.get("_ecm_channel_profile_conflict"))
+    if conflict:
+        logger.warning(
+            "[PROFILE-RECONCILE] group=%s effective=%s: profile selections "
+            "conflict; membership is frozen pending operator review",
+            group_id, effective_gid,
+        )
+        return _result(
+            "conflict", group_id, effective_gid=effective_gid, conflict=True,
+            error="channel-profile membership is frozen pending review",
+        )
     if selection is None:
         # Decision 1a: absent/unset selection is a read-only no-op.
         return _result("no_selection", group_id, conflict=conflict)
@@ -831,14 +799,16 @@ def dedupe_gids_by_effective_group(all_settings: dict, gids) -> list[int]:
     reconcile the SAME channels — order-dependent last-writer-wins. Keep one gid
     per effective id, preferring the TARGET group's own selection (the group
     whose channels physically live there outranks a source redirecting into
-    it). Order-independent: the target wins regardless of iteration order.
+    it). When no target row carries a selection, the lowest source group id is
+    the deterministic representative. Representatives only remove duplicate
+    work; conflicted effective groups are refused before any membership write.
     """
     effective_to_gid: dict[int, int] = {}
-    for gid in gids:
+    for gid in sorted(set(gids)):
         eff = resolve_effective_master_group_id(all_settings, gid)
         if eff not in effective_to_gid or gid == eff:
             effective_to_gid[eff] = gid
-    return list(effective_to_gid.values())
+    return [effective_to_gid[eff] for eff in sorted(effective_to_gid)]
 
 
 def resolve_save_reconcile_targets(all_settings: dict, edited_gids) -> list[int]:
@@ -888,6 +858,8 @@ async def normalize_group_selections(client, all_settings: dict, cancel_check=No
     """
     winning: dict[int, list[int]] = {}
     for gid, setting in all_settings.items():
+        if isinstance(setting, dict) and setting.get("_ecm_channel_profile_conflict"):
+            continue
         sel = _selection_from_setting(setting)
         if sel:
             winning[gid] = sorted(set(sel))
@@ -1011,9 +983,16 @@ async def _run_selected_group_sweep(
             return {
                 "groups_reconciled": 0, "groups_partial_failure": 0,
                 "groups_degraded": 0, "groups_errored": 1,
+                "groups_conflicted": 0,
                 "accounts_normalized": 0, "accounts_normalize_failed": 0,
                 "groups_with_selection": 0, "channels_scoped": 0,
             }
+
+    try:
+        from services.profile_conflict_review import reconcile_profile_conflict_reviews
+        await reconcile_profile_conflict_reviews(client, all_settings)
+    except Exception as e:  # noqa: BLE001 - review queue must not abort membership sweep
+        logger.warning("[PROFILE-RECONCILE] conflict review queue pass failed: %s", e)
 
     # Blocker 3b: normalize divergent sibling rows FIRST (durable convergence),
     # so the membership reconcile below sees converged per-account selections.
@@ -1039,6 +1018,7 @@ async def _run_selected_group_sweep(
     groups_partial_failure = 0
     groups_degraded = 0
     groups_errored = 0
+    groups_conflicted = 0
     channels_scoped = 0
     for gid in reconcile_gids:
         if cancel_check is not None and cancel_check():
@@ -1064,6 +1044,8 @@ async def _run_selected_group_sweep(
                 channels_scoped += result.get("channels_scoped", 0)
             elif status == "error":
                 groups_errored += 1
+            elif status == "conflict":
+                groups_conflicted += 1
         except Exception as e:  # noqa: BLE001 - isolate per-group failures
             # Should-Fix 3: a per-group EXCEPTION (e.g. get_channels raising)
             # must count as an error so the monitor's warning aggregation sees
@@ -1077,9 +1059,9 @@ async def _run_selected_group_sweep(
         logger.info(
             "[PROFILE-RECONCILE] swept %d group(s) with a selection (%d after "
             "effective-group dedupe), reconciled %d, partial_failure %d, "
-            "degraded %d, errored %d, scoped %d channel(s)",
+            "degraded %d, conflicted %d, errored %d, scoped %d channel(s)",
             len(target_gids), len(reconcile_gids), groups_reconciled,
-            groups_partial_failure, groups_degraded, groups_errored,
+            groups_partial_failure, groups_degraded, groups_conflicted, groups_errored,
             channels_scoped,
         )
     return {
@@ -1087,6 +1069,7 @@ async def _run_selected_group_sweep(
         "groups_partial_failure": groups_partial_failure,
         "groups_degraded": groups_degraded,
         "groups_errored": groups_errored,
+        "groups_conflicted": groups_conflicted,
         # Account-domain normalize counters kept SEPARATE from the group-domain
         # counters above so the caller never conflates the two (Finding: counter
         # semantics).

@@ -27,23 +27,36 @@
   gap: 0.75rem;
 }
 
-.norm-engine-icon {
-  font-size: 1.5rem;
+/* Status icon role. Was 24px; it now sits beside a 15px heading, and 18px is
+   what every other panel-header glyph in Settings uses.
+
+   Scoped through the title wrapper. Bare, this tied index.css's base
+   `.material-icons { font-size: 24px }` at 0-1-0 and lost on source order —
+   the rule read 18px and the browser painted 24px
+   (bead enhancedchannelmanager-7bsxj). */
+.norm-engine-title-wrapper .norm-engine-icon {
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
+/* Section role. Card and panel titles across the product rendered at 14, 15,
+   16, 18 and 20px. They are all the same thing — a heading inside a page — so
+   they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299). This one was 20px. */
 .norm-engine-title {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
 .norm-engine-subtitle {
   margin: 0 0 1rem 0;
   color: var(--text-secondary);
-  font-size: 0.875rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* .loading-state, .error-banner, .empty-state, .spinning → shared/common.css */
@@ -65,17 +78,24 @@
   gap: 0.25rem;
 }
 
+/* Metric + micro — this is the shared metric-tile pattern
+   (shared/common.css § 28) written under private names, so it takes the same
+   two roles rather than moving out of the file. */
 .norm-engine-stat-value {
-  font-size: 1.25rem;
-  font-weight: 600;
+  font-size: var(--type-metric-size);
+  font-weight: var(--type-metric-weight);
+  line-height: var(--type-metric-line-height);
   color: var(--accent-primary);
 }
 
+/* --text-secondary, not --text-muted: --text-muted measures 2.61:1 on
+   --bg-secondary in the light theme, below the AA floor. */
 .norm-engine-stat-label {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 
@@ -120,7 +140,7 @@
   align-items: center;
   justify-content: center;
   cursor: grab;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   padding: 0.5rem 0.25rem;
   touch-action: none;
   flex-shrink: 0;
@@ -136,7 +156,7 @@
 }
 
 .norm-engine-group-drag-handle .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .norm-engine-group-header {
@@ -162,9 +182,13 @@
   outline-offset: -2px;
 }
 
-.norm-engine-expand {
-  font-size: 1.25rem;
-  color: var(--text-muted);
+/* Disclosure chevron — a state glyph, so --icon-status. Scoped to the section
+   for the same reason as `.norm-engine-icon` above: bare, it lost the 0-1-0
+   tie with index.css's base `.material-icons` and rendered at 24px
+   (bead enhancedchannelmanager-7bsxj). */
+.norm-engine-section .norm-engine-expand {
+  font-size: var(--icon-status);
+  color: var(--text-secondary);
   transition: transform 0.2s;
 }
 
@@ -180,8 +204,13 @@
   min-width: 0;
 }
 
+/* Item title. Had no font-size at all, so the group's name rendered at the UA
+   default 16px — the same defect the f4yc7 pilot found in `.account-name`
+   (bead enhancedchannelmanager-6z299.4). */
 .norm-engine-group-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -189,15 +218,22 @@
 }
 
 .norm-engine-group-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
+/* Badge role — already 10px; weight stays 600 because it is uppercase, and
+   the tracking takes the micro role's 0.08em for the same reason
+   (`.type-badge`, shared/common.css § 23). */
 .norm-engine-badge {
-  font-size: 0.625rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
   font-weight: 600;
   text-transform: uppercase;
+  letter-spacing: var(--type-micro-tracking);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-sm);
   white-space: nowrap;
@@ -217,7 +253,9 @@
 .norm-engine-group-description {
   margin: 0;
   padding: 0.5rem 1rem 0.75rem 2.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
   border-bottom: 1px solid var(--border-secondary);
 }
@@ -260,15 +298,21 @@
   min-width: 0;
 }
 
+/* Item title — the name of a rule row. */
 .norm-engine-rule-name {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* Meta role. The monospace family stays — it is a regex preview — but the
+   size and colour are UI chrome, not content. */
 .norm-engine-rule-pattern {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   font-family: monospace;
 }
 
@@ -276,7 +320,9 @@
 .norm-engine-rule-match-badge {
   display: inline-block;
   margin-left: 0.5rem;
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   font-family: inherit;
   color: var(--accent-primary, #6c8ef5);
   background: color-mix(in srgb, var(--accent-primary, #6c8ef5) 15%, transparent);
@@ -295,7 +341,7 @@
   display: flex;
   align-items: center;
   cursor: grab;
-  color: var(--text-muted);
+  color: var(--text-secondary);
   padding: 0.25rem;
   margin-right: 0.25rem;
   border-radius: var(--radius-md);
@@ -312,7 +358,7 @@
 }
 
 .norm-engine-rule-drag-handle .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 /* Dragging state */
@@ -333,7 +379,7 @@
   border-radius: var(--radius-md);
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   transition: all 0.15s;
   width: 100%;
   justify-content: center;
@@ -346,7 +392,7 @@
 }
 
 .norm-engine-add-rule .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Toggle Switch */
@@ -423,9 +469,16 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: all 0.15s;
+}
+
+/* A glyph inside a labelled button is the --icon-action role. It had no rule
+   at all, so it fell through to index.css's base 24px and rendered half again
+   the size of the 13px label beside it (bead enhancedchannelmanager-7bsxj). */
+.norm-engine-btn .material-icons {
+  font-size: var(--icon-action);
 }
 
 .norm-engine-btn:hover {
@@ -465,9 +518,17 @@
   background: none;
   border: none;
   border-radius: var(--radius-md);
-  color: var(--text-muted);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
+}
+
+/* Icon-only row action (edit / delete) — the glyph IS the affordance, so
+   --icon-action, matching `.norm-engine-btn-icon.small` below. Only the
+   `.small` variant had a rule; the default variant rendered at the base 24px
+   (bead enhancedchannelmanager-7bsxj). */
+.norm-engine-btn-icon .material-icons {
+  font-size: var(--icon-action);
 }
 
 .norm-engine-btn-icon:hover {
@@ -480,7 +541,7 @@
 }
 
 .norm-engine-btn-icon.small .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .norm-engine-btn-icon.danger:hover {
@@ -519,19 +580,31 @@
   cursor: pointer;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 16px. */
 .norm-engine-test-header h4 {
   margin: 0;
-  font-size: 1rem;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   color: var(--text-primary);
 }
 
+/* Panel-header leading glyph ("science") -> --icon-status. This rule already
+   existed and set only `color`, so the size fell through to index.css's base
+   24px — the partial-redeclaration trap in docs/css_guidelines.md, caught by
+   measurement rather than by reading the rule (bead
+   enhancedchannelmanager-7bsxj). The chevron beside it keeps its own rule. */
 .norm-engine-test-header .material-icons {
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
 .norm-engine-test-header .norm-engine-expand {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .norm-engine-test-body {
@@ -572,10 +645,13 @@
   margin-top: 1rem;
 }
 
+/* Item title, not section: the panel's own h4 already carries the section
+   role, so an h5 caption nested inside it has to sit below that. */
 .norm-engine-test-results h5 {
   margin: 0 0 0.75rem 0;
-  font-size: 0.875rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-secondary);
 }
 
@@ -592,13 +668,19 @@
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
+/* Meta role. Sentence case is deliberate — "Original:" / "Normalized:" read
+   as inline row labels, not as the uppercase micro caption idiom. */
 .norm-engine-test-original .label,
 .norm-engine-test-normalized .label {
-  color: var(--text-muted);
-  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   min-width: 70px;
 }
 
@@ -617,11 +699,11 @@
   display: flex;
   justify-content: center;
   padding: 0.25rem 0;
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .norm-engine-test-arrow .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .norm-engine-test-transforms {
@@ -634,16 +716,21 @@
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   font-family: monospace;
   padding: 0.125rem 0;
 }
 
 .norm-engine-test-transform .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
 }
 
+/* Everything from here down styles the rule editor, apply-to-channels and
+   import modals — three ModalOverlay instances. Modals are out of scope for
+   the P1 content-pane sweep (bead enhancedchannelmanager-6z299.4). */
 /* Modal */
 .norm-engine-modal-overlay {
   position: fixed;
@@ -678,10 +765,12 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Modal-title role. 18px -> 18px. */
 .norm-engine-modal-header h3 {
   margin: 0;
-  font-size: 1.125rem;
-  font-weight: 600;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -704,14 +793,17 @@
   margin-bottom: 1rem;
 }
 
+/* Label role. 14px -> 13px. */
 .norm-engine-form-group label {
   display: block;
   margin-bottom: 0.375rem;
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .norm-engine-form-group input,
 .norm-engine-form-group select,
 .norm-engine-form-group textarea {
@@ -721,7 +813,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .norm-engine-form-group input:focus,
@@ -754,11 +846,12 @@
   margin-bottom: 1rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .norm-engine-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -777,21 +870,25 @@
   margin-top: 0.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .norm-engine-preview h5 {
   margin: 0 0 0.75rem 0;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-muted);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Body role. 14px -> 13px. */
 .norm-engine-preview-result {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   font-family: monospace;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-preview-result.matched .material-icons {
@@ -819,6 +916,7 @@
   color: var(--warning-text, #eab308);
 }
 
+/* Badge role. 12px -> 10px. */
 .norm-engine-preview-result .matched-tag {
   display: inline-flex;
   align-items: center;
@@ -828,23 +926,28 @@
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   color: var(--text-secondary);
 }
 
+/* Glyph beside meta text or inside a chip -> --icon-badge. 14px -> 14px. */
 .norm-engine-preview-result .matched-tag .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
   color: var(--text-muted);
 }
 
+/* Micro role — the tracked uppercase label idiom. 11px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .norm-engine-preview-result .else-badge {
   margin-left: 0.5rem;
   padding: 0.125rem 0.375rem;
   background: var(--warning-bg, rgba(234, 179, 8, 0.2));
   color: var(--warning-text, #eab308);
   border-radius: var(--radius-md);
-  font-size: 0.6875rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  letter-spacing: var(--type-micro-tracking);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
 }
 
@@ -859,9 +962,11 @@
   border-radius: var(--radius-lg);
 }
 
+/* Label role. 14px -> 13px. */
 .norm-engine-mode-label {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
@@ -874,12 +979,13 @@
   overflow: hidden;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .norm-engine-mode-btn {
   padding: 0.5rem 0.75rem;
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -909,9 +1015,11 @@
   margin-bottom: 1rem;
 }
 
+/* Label role. 14px -> 13px. */
 .norm-engine-compound-header label {
-  font-size: 0.875rem;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
@@ -919,21 +1027,23 @@
   min-width: 180px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .norm-engine-logic-select .custom-select-trigger {
   padding: 0.375rem 0.75rem;
   min-width: 180px;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .norm-engine-condition-type-select {
   min-width: 140px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .norm-engine-condition-type-select .custom-select-trigger {
   padding: 0.375rem 0.5rem;
   min-width: 140px;
   max-width: 140px;
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
 }
 
 .norm-engine-conditions-list {
@@ -959,6 +1069,7 @@
 }
 
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .norm-engine-condition-fields input {
   flex: 1;
   padding: 0.375rem 0.5rem;
@@ -966,7 +1077,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
   font-family: monospace;
 }
 
@@ -980,11 +1091,12 @@
   gap: 0.5rem;
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .norm-engine-condition-checkbox {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   color: var(--text-muted);
   cursor: pointer;
   padding: 0.25rem 0.375rem;
@@ -1003,6 +1115,7 @@
   accent-color: var(--accent-primary);
 }
 
+/* Body role. 13px -> 13px. */
 .norm-engine-add-condition {
   display: flex;
   align-items: center;
@@ -1015,7 +1128,9 @@
   border: 1px dashed var(--border-primary);
   border-radius: var(--radius-md);
   color: var(--text-muted);
-  font-size: 0.8125rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -1026,8 +1141,9 @@
   background: var(--accent-primary-transparent);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-add-condition .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 /* Else Branch Styles */
@@ -1073,9 +1189,12 @@
   gap: 1rem;
 }
 
+/* Meta role. 14px -> 11px. */
 .norm-engine-apply-count {
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .norm-engine-apply-table-wrap {
@@ -1085,10 +1204,13 @@
   border-radius: var(--radius-lg);
 }
 
+/* Body role. 14px -> 13px. */
 .norm-engine-apply-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-apply-table th,
@@ -1117,8 +1239,9 @@
   color: var(--warning);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-apply-collision .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 .norm-engine-apply-ok {
@@ -1157,8 +1280,9 @@
   outline: none;
 }
 
+/* Button/inline-action glyph -> --icon-action. 17.6px -> 16px. */
 .norm-engine-apply-trace-toggle .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
 }
 
 .norm-engine-apply-trace-row td {
@@ -1171,17 +1295,22 @@
   border-left: 3px solid var(--accent-50);
 }
 
+/* Section role. 13.6px -> 15px. */
 .norm-engine-apply-trace-heading {
-  font-weight: 600;
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   margin-bottom: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
 }
 
+/* Body role. 13.6px -> 13px. */
 .norm-engine-apply-trace-empty {
   color: var(--text-secondary);
   font-style: italic;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-apply-trace-list {
@@ -1190,17 +1319,21 @@
   list-style: none;
 }
 
+/* Body role. 13.6px -> 13px. */
 .norm-engine-apply-trace-item {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   padding: 0.2rem 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-apply-trace-item .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   color: var(--accent-50);
 }
 
@@ -1209,43 +1342,54 @@
   font-weight: 500;
 }
 
+/* Body role. 12.8px -> 13px. */
 .norm-engine-apply-trace-item code {
   background: var(--bg-primary);
   padding: 0.05rem 0.3rem;
   border-radius: var(--radius-sm);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .norm-engine-apply-rule-count {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
 }
 
+/* Micro role — the tracked uppercase label idiom. 11.2px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .norm-engine-apply-conflict-badge {
   display: inline-block;
   background: var(--warning);
   color: #fff;
-  font-size: 0.7rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   padding: 0.1rem 0.4rem;
   border-radius: var(--radius-sm);
   margin-right: 0.35rem;
   text-transform: uppercase;
-  letter-spacing: 0.02em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .norm-engine-apply-conflict-hint {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   color: var(--warning);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin-left: 0.75rem;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .norm-engine-apply-conflict-hint .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 .norm-engine-apply-table tr.apply-row-source-conflict {
@@ -1256,13 +1400,14 @@
   background: rgba(16, 185, 129, 0.1);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .norm-engine-apply-winner-radio {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   margin-left: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
 }
 
@@ -1270,11 +1415,16 @@
 .norm-engine-apply-confirm .modal-body p {
   margin: 0.5rem 0;
   color: var(--text-primary);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
+/* Body role. 14.4px -> 13px. */
 .norm-engine-apply-confirm-warning {
   color: var(--warning);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .norm-engine-apply-confirm-count {
@@ -1301,21 +1451,27 @@
   margin-bottom: 0.5rem;
 }
 
+/* Body role. 14.4px -> 13px. */
 .norm-engine-apply-summary-counts {
   display: flex;
   gap: 1.25rem;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
 .norm-engine-apply-summary-errors {
-  color: var(--error);
+  color: var(--danger-text);
   font-weight: 600;
 }
 
+/* Meta role. 12.8px -> 11px. */
 .norm-engine-apply-summary-hash {
   margin-top: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
@@ -1325,9 +1481,10 @@
   border-radius: var(--radius-sm);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .norm-engine-apply-summary-link {
   margin-top: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
 }
 

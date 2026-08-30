@@ -24,6 +24,7 @@ diagnostic to stderr otherwise.
 from __future__ import annotations
 
 import importlib
+import shutil
 import sys
 
 # Packages required by the backend test suite. Each is pinned in
@@ -38,31 +39,44 @@ REQUIRED_TEST_DEPS = [
     "httpx",
 ]
 
+REQUIRED_TEST_BINARIES = [
+    "jq",  # workflow changed-path transport/rename-source contract tests
+]
+
 
 def main() -> int:
-    missing: list[str] = []
+    missing_python: list[str] = []
+    missing_binaries: list[str] = []
     for mod in REQUIRED_TEST_DEPS:
         try:
             importlib.import_module(mod)
         except ImportError as e:
-            missing.append(f"{mod} ({e})")
+            missing_python.append(f"{mod} ({e})")
 
-    if missing:
-        print("FATAL: required test dependencies missing:", file=sys.stderr)
-        for m in missing:
-            print(f"  - {m}", file=sys.stderr)
-        print(
-            "\nThe backend test suite REQUIRES these packages. They are "
-            "pinned in backend/requirements.txt. The 'Install dependencies' "
-            "step in CI (or your local `pip install -r requirements.txt`) "
-            "must have failed silently. See bd-s8kq3.",
-            file=sys.stderr,
-        )
+    for binary in REQUIRED_TEST_BINARIES:
+        if shutil.which(binary) is None:
+            missing_binaries.append(binary)
+
+    if missing_python or missing_binaries:
+        if missing_python:
+            print("FATAL: required Python test packages missing:", file=sys.stderr)
+            for dependency in missing_python:
+                print(f"  - {dependency}", file=sys.stderr)
+            print("Install backend/requirements.txt before pytest.", file=sys.stderr)
+        if missing_binaries:
+            print("FATAL: required OS test binaries missing:", file=sys.stderr)
+            for binary in missing_binaries:
+                print(f"  - {binary}", file=sys.stderr)
+            print(
+                "Install jq with the host package manager (for example, "
+                "`apt-get install jq`) and ensure it is on PATH.",
+                file=sys.stderr,
+            )
         return 1
 
     print(
-        "All required test deps importable: "
-        + ", ".join(REQUIRED_TEST_DEPS)
+        "All required test deps available: "
+        + ", ".join(REQUIRED_TEST_DEPS + REQUIRED_TEST_BINARIES)
     )
     return 0
 

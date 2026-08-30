@@ -115,9 +115,9 @@ class SyncTarget(Base):
     it is excluded from the public OpenAPI surface by virtue of having no
     router. Do not add endpoints here until v0.18.1 (bead 0i2vt.4).
 
-    Mirrors CloudStorageTarget's credential-freshness contract:
-    ``credential_version`` bumps on every credentials write (same-txn, via the
-    listeners below) and ``token_revoked_at`` hard-stops a stale scheduled op.
+    ``credential_version`` is the server-side scheduled-authorization version.
+    It advances in the same transaction whenever credentials or destination
+    identity/security changes, and ``token_revoked_at`` hard-stops a stale op.
     """
     __tablename__ = "sync_targets"
 
@@ -156,6 +156,96 @@ class SyncTarget(Base):
     # Opt-in: include the stream floor in the sync and fuzzy-match streams on the
     # remote instead of requiring exact identity. Default False (exact matching).
     fuzzy_stream_matching = Column(Boolean, nullable=False, server_default=text("0"), default=False)
+    # Include the LOGO slice in this target's sync cycles.
+    #
+    # DEFAULT ON since bead ``…-2yq19`` (migration 0048). It shipped default
+    # OFF under bead ``7ipq2.1``, and the reason was COST, not correctness: the
+    # logos importer carries a destructive ``clear_existing`` bulk-delete plus a
+    # per-logo streaming upload that is wrong to pay every interval. ADR-013's
+    # 2026-08-22 governing principle does not disturb that mechanism decision —
+    # it disturbs the DEFAULT. An operator who never finds the toggle gets a
+    # replica with NO ARTWORK, which is the second half of the failure epic
+    # ``f5a5j`` is literally named for ("...has lost its guide data and its
+    # branding"). A silent omission is precisely what the principle forbids.
+    #
+    # The cost is handled by a SUB-INTERVAL rather than by omission — see
+    # ``logo_sync_interval_hours`` below. When the slice runs, it still streams
+    # missed logos one at a time (D8) and can still never bulk-delete B's logos
+    # (``clear_existing`` is hard-disabled in the sync logos step).
+    #
+    # NOT NULL add to a possibly-populated table, so it carries a
+    # server_default like fuzzy_stream_matching above. EXISTING ROWS KEEP THEIR
+    # STORED VALUE: migration 0048 changes what a NEW target defaults to and
+    # rewrites nobody's saved choice, because a stored ``False`` is
+    # indistinguishable from an operator who deliberately turned it off.
+    sync_logos = Column(Boolean, nullable=False, server_default=text("1"), default=True)
+    # How often the LOGO slice may run, in hours (bead ``…-2yq19``).
+    #
+    # This is the whole of the cost answer, and it is why the default above can
+    # be ON. Logos are not high-churn state: an operator adds artwork
+    # occasionally, and a replica that picks it up within a day is faithful in
+    # every sense an operator can observe. The config/channel slices stay on the
+    # cycle interval; only the expensive slice is throttled.
+    #
+    # ``0`` means "every cycle" — the pre-sub-interval behaviour, available to
+    # an operator who wants it and cheap to reason about. NOT NULL add to a
+    # possibly-populated table, so it carries a server_default.
+    logo_sync_interval_hours = Column(
+        Integer, nullable=False, server_default=text("24"), default=24
+    )
+    # When the LOGO slice last actually ran for this target (NULL == never).
+    #
+    # Nullable additive DDL with no server_default, matching the three
+    # persisted-state columns above: NULL is the correct "never ran" backfill,
+    # and it is also what makes the FIRST cycle after a target is created carry
+    # logos immediately rather than making the operator wait out a sub-interval
+    # for a replica that has no artwork at all.
+    last_logo_sync_at = Column(DateTime, nullable=True)
+    # Core-settings blobs THIS target's operator opted out of (bead …-10wnq).
+    #
+    # A JSON list of blob keys. Empty / NULL means "replicate every blob the
+    # engine's register allows", which is the faithful-copy default; this column
+    # exists only so the two blobs with a REAL functional risk behind them —
+    # ``proxy_settings`` (tuning copied onto different hardware) and
+    # ``backup_settings`` (two instances backing themselves up on one schedule,
+    # with B's retention bounded by B's storage) — can be declined individually
+    # instead of costing the operator every other setting with them. That is the
+    # ADR's own reading of both tensions: opt-out, not omission.
+    #
+    # It can only ever NARROW. ``NEVER_SYNC_CORE_SETTINGS_BLOBS`` is subtracted
+    # in the engine before this list is consulted, so naming ``network_access``
+    # here opts into nothing.
+    #
+    # Nullable additive DDL, no server_default — NULL is the correct "excludes
+    # nothing" backfill for every existing row.
+    core_settings_excluded = Column(Text, nullable=True)
+    # --- Schedules Direct password (PO ruling 2026-08-22) --------------------
+    # THE ONE CREDENTIAL THE OPERATOR TYPES, and they type it ONCE, ever.
+    #
+    # Every other provider credential is harvested off this instance's own
+    # records on every cycle and needs no input at all. Schedules Direct cannot
+    # be: Dispatcharr marks its password write-only, never returns it, and
+    # SHA1-hashes it at fetch, so the value never enters ECM's process and there
+    # is nothing on A to read. Absence is UNREADABLE, not unset.
+    #
+    # Stored Fernet-encrypted through the SAME ``cloud_storage.crypto`` path as
+    # this row's own ``credentials`` column, decrypted per cycle, and NEVER
+    # returned by any route — not even as ciphertext. :meth:`to_dict` emits a
+    # BOOLEAN; a stored credential blob has no business on a response, and a
+    # test that only checked "the plaintext is absent" was satisfied by echoing
+    # the ciphertext (found by mutation, 2026-08-22).
+    #
+    # Persisting it is the point: "request-scoped, never persisted" was the
+    # previous design and it is exactly the re-typing the ruling removes.
+    #
+    # WHAT THIS REPLACED. Two timestamp columns —
+    # ``credentials_provisioned_at`` and ``destination_credential_observed_at``
+    # — recorded whether a one-time provisioning action had run and whether a
+    # cycle had observed a credential on the replica. Both existed only to feed
+    # the S11 ``insecure`` refusal, which the PO removed. Migration 0047 drops
+    # them rather than leaving dead bookkeeping the next reader mistakes for a
+    # control.
+    schedules_direct_password = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
@@ -173,6 +263,16 @@ class SyncTarget(Base):
             "last_outcome": self.last_outcome,
             "last_source_fingerprint": self.last_source_fingerprint,
             "fuzzy_stream_matching": self.fuzzy_stream_matching,
+            "sync_logos": self.sync_logos,
+            "logo_sync_interval_hours": self.logo_sync_interval_hours,
+            "core_settings_excluded": self.core_settings_excluded,
+            "last_logo_sync_at": (
+                self.last_logo_sync_at.isoformat() + "Z"
+                if self.last_logo_sync_at
+                else None
+            ),
+            # PRESENCE, never the value and never the ciphertext.
+            "has_schedules_direct_password": bool(self.schedules_direct_password),
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
         }
@@ -189,7 +289,10 @@ def _sync_target_init_credential_version(mapper, connection, target):
 
 @event.listens_for(SyncTarget, "before_update")
 def _sync_target_bump_credential_version(mapper, connection, target):
-    """Same-txn credential_version bump on a credentials write (see CloudStorageTarget)."""
-    hist = sa_inspect(target).attrs.credentials.history
-    if hist.has_changes():
+    """Invalidate scheduled authorization on execution-sensitive changes."""
+    state = sa_inspect(target)
+    if any(
+        state.attrs[field].history.has_changes()
+        for field in ("credentials", "base_url", "insecure")
+    ):
         target.credential_version = (target.credential_version or 0) + 1

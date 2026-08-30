@@ -1,9 +1,12 @@
 import { useState, useEffect, useMemo, useCallback, memo } from 'react';
-import type { ChannelProfile, Channel, ChannelGroup } from '../types';
+import type { ChannelProfile, Channel, ChannelGroup, StagedSideEffects } from '../types';
+import { EMPTY_STAGED_SIDE_EFFECTS, profileMembershipKey } from '../types/editMode';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
+import { ImmediateActionNote } from './ImmediateActionNote';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ChannelProfilesListModal.css';
 
 interface ChannelProfilesListModalProps {
@@ -12,6 +15,22 @@ interface ChannelProfilesListModalProps {
   onSaved: () => void;
   channels: Channel[];
   channelGroups: ChannelGroup[];
+  /**
+   * Edit Mode changes what the two channel-assignment buttons do
+   * (bead enhancedchannelmanager-kz089, fix round 2). Membership is the same
+   * data the selection bar stages, so it stages here too rather than through a
+   * second, immediate path the change count never saw and Discard could not
+   * reach. Profile create / rename / delete stays immediate per the PO's
+   * 2026-08-15 decision — a staged membership operation needs a real profile id
+   * to reference — and says so in the list view instead.
+   */
+  isEditMode?: boolean;
+  stagedSideEffects?: StagedSideEffects;
+  onStageSetProfileMembership?: (
+    profileId: number, channelIds: number[], enabled: boolean, description: string,
+  ) => void;
+  onStartBatch?: (description: string) => void;
+  onEndBatch?: () => void;
 }
 
 interface ProfileWithState extends ChannelProfile {
@@ -27,7 +46,15 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   onSaved,
   channels,
   channelGroups,
+  isEditMode = false,
+  stagedSideEffects = EMPTY_STAGED_SIDE_EFFECTS,
+  onStageSetProfileMembership,
+  onStartBatch,
+  onEndBatch,
 }: ChannelProfilesListModalProps) {
+  /** True when membership edits stage rather than write. */
+  const stagesMembership = isEditMode && !!onStageSetProfileMembership;
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [profiles, setProfiles] = useState<ProfileWithState[]>([]);
   const [search, setSearch] = useState('');
@@ -176,12 +203,22 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
     // Create set of enabled channel IDs
     const enabledSet = new Set(selectedProfile.channels);
 
-    return channels.map(ch => ({
-      ...ch,
-      // Channel is enabled only if explicitly in the profile's channels list
-      enabled: enabledSet.has(ch.id),
-    }));
-  }, [channels, selectedProfile]);
+    return channels.map(ch => {
+      // Staged membership WINS over the server's value — that is this view's
+      // working copy. Without it a staged change was counted and summarised
+      // while this list carried on showing the channel as it was before, which
+      // is the failure mode that makes staging worse than the immediate write
+      // it replaced (bead …-kz089, fix round 2).
+      const staged = stagedSideEffects.profileMembership.get(
+        profileMembershipKey(selectedProfile.id, ch.id),
+      );
+      return {
+        ...ch,
+        // Channel is enabled only if explicitly in the profile's channels list
+        enabled: staged !== undefined ? staged : enabledSet.has(ch.id),
+      };
+    });
+  }, [channels, selectedProfile, stagedSideEffects]);
 
   // Filter channels
   const filteredChannels = useMemo(() => {
@@ -313,6 +350,32 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   const handleSaveChannelChanges = async () => {
     if (!selectedProfile || channelChanges.size === 0) return;
 
+    // In Edit Mode this stages, exactly as the selection bar's "Profile
+    // visibility" does — same data, same wire operation, one change count
+    // (bead …-kz089, fix round 2). It used to PATCH every changed membership
+    // the moment Save was pressed, from inside a mode whose whole promise is
+    // that nothing is real until Apply All.
+    if (stagesMembership) {
+      const enables = [...channelChanges.entries()].filter(([, on]) => on).map(([id]) => id);
+      const disables = [...channelChanges.entries()].filter(([, on]) => !on).map(([id]) => id);
+      const description =
+        `Stage ${channelChanges.size} channel visibility change` +
+        `${channelChanges.size !== 1 ? 's' : ''} in profile "${selectedProfile.name}"`;
+      onStartBatch?.(description);
+      if (enables.length > 0) {
+        onStageSetProfileMembership!(selectedProfile.id, enables, true, description);
+      }
+      if (disables.length > 0) {
+        onStageSetProfileMembership!(selectedProfile.id, disables, false, description);
+      }
+      onEndBatch?.();
+      // The pending-diff is now represented by the staged operations, which
+      // `channelsWithState` reads, so the local diff must be dropped or every
+      // row would count its change twice.
+      setChannelChanges(new Map());
+      return;
+    }
+
     setSavingChannels(true);
 
     try {
@@ -342,6 +405,22 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   // endpoint — separate from the pending-diff "Save Changes" flow above.
   const handleBulkApply = async (enabled: boolean) => {
     if (!selectedProfile || bulkSelectedIds.size === 0) return;
+
+    // Same staging rule as Save Changes above. This path used the BULK
+    // endpoint, which made it invisible to the change count by a second route
+    // (bead …-kz089, fix round 2).
+    if (stagesMembership) {
+      const channelIds = Array.from(bulkSelectedIds);
+      const description =
+        `${enabled ? 'Enable' : 'Disable'} ${channelIds.length} channel` +
+        `${channelIds.length !== 1 ? 's' : ''} in profile "${selectedProfile.name}"`;
+      onStartBatch?.(description);
+      onStageSetProfileMembership!(selectedProfile.id, channelIds, enabled, description);
+      onEndBatch?.();
+      setBulkSelectedIds(new Set());
+      return;
+    }
+
     setBulkApplying(true);
     try {
       await api.bulkUpdateProfileChannels(selectedProfile.id, Array.from(bulkSelectedIds), enabled);
@@ -380,18 +459,25 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg channel-profiles-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg channel-profiles-modal" ref={containerRef}>
         {viewMode === 'list' ? (
           <>
             <div className="modal-header">
-              <h2>Channel Profiles</h2>
+              <h2 id={titleId}>Channel Profiles</h2>
               <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
 
             <div className="modal-toolbar">
+              {isEditMode && (
+                <ImmediateActionNote
+                  what="Creating, renaming and deleting a profile"
+                  detail="Enabling or disabling channels in a profile does stage — open a profile to do that."
+                  testId="profile-admin-immediate-note"
+                />
+              )}
               <div className="modal-toolbar-row">
                 <div className="modal-search-box">
                   <span className="material-icons">search</span>
@@ -605,14 +691,14 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                       disabled={bulkApplying}
                       title="Apply this profile (enabled) to the selected channels — for channels already tracked by this profile"
                     >
-                      {bulkApplying ? 'Applying...' : 'Apply to Selected: Enable'}
+                      {bulkApplying ? 'Applying...' : `${stagesMembership ? 'Stage' : 'Apply'} to Selected: Enable`}
                     </button>
                     <button
                       className="modal-btn-small disable"
                       onClick={() => handleBulkApply(false)}
                       disabled={bulkApplying}
                     >
-                      {bulkApplying ? 'Applying...' : 'Apply to Selected: Disable'}
+                      {bulkApplying ? 'Applying...' : `${stagesMembership ? 'Stage' : 'Apply'} to Selected: Disable`}
                     </button>
                     <button
                       className="modal-btn-small"
@@ -710,7 +796,9 @@ export const ChannelProfilesListModal = memo(function ChannelProfilesListModal({
                 onClick={handleSaveChannelChanges}
                 disabled={savingChannels || channelChanges.size === 0}
               >
-                {savingChannels ? 'Saving...' : `Save Changes${channelChanges.size > 0 ? ` (${channelChanges.size})` : ''}`}
+                {savingChannels
+                  ? 'Saving...'
+                  : `${stagesMembership ? 'Stage Changes' : 'Save Changes'}${channelChanges.size > 0 ? ` (${channelChanges.size})` : ''}`}
               </button>
             </div>
           </>

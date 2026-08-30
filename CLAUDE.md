@@ -33,6 +33,24 @@ bd sync                       # Sync beads data only (NOT for code commits)
 - **NEVER chain `bd create` and `bd close`** — run them as separate commands
 - The `.git/beads-worktrees/dev` worktree is **only for beads issue tracking** (sparse checkout of `.beads/` only — no code files). Do NOT edit code there.
 
+## Close Every Bead Your Work Fulfills
+
+When work ships, it doesn't just close the bead it was filed under. Check whether it also fulfills other beads, and close those too, naming them and the evidence in the close reason. Watch for three patterns especially: children of an epic when the epic's work ships, sibling beads absorbed by a broader fix, and beads whose premise a refactor removes.
+
+A 2026-08-12 validity audit of all 194 open beads closed 44 of them, almost all already-shipped work that had simply never been closed. All 14 children of epic `gsnw0` sat open for weeks after one commit fulfilled them against the parent only. `t4d5w`'s own CHANGELOG entry says it absorbs bead `pb2s4`; `pb2s4` stayed open. `dfkbn`, a P1, was declared closed in CHANGELOG prose but never closed in beads. Three siblings (`2896r.16`, `2896r.17`, `70u0r`) were all described by one CHANGELOG entry and all stayed open. Net effect: the backlog overstated remaining work by roughly 17 percent, and it produced a real planning error, sequencing a batch around a docs-CI chain that had already shipped.
+
+## Verification Discipline: Check the Thing, Not a Proxy
+
+Four rules from a 2026-08-13 error retro (`~/retros/2026-08-13-19_(project-d-proxy-not-referent).md`). Twelve errors that session, and every judgment error among them was one substitution: checking something adjacent to the claim, then reporting the claim.
+
+**1. Smoke-test every instrument before you trust it.** Run any monitor, watch loop, or external-tool invocation against a known-good AND a known-bad input before arming it. Silence from a broken instrument is indistinguishable from silence from a healthy system, so this class of failure conceals itself. Four monitors failed this way in one session: a `gh pr checks --json` flag that does not exist (30 minutes of confident silence while the checks had already finished); a `|| echo '[]'` fallback that turned every error into "no results"; a `[0]` index on a branch-filtered API listing assumed to be newest-first, which reported on a six-week-old commit; and a 5-minute timeout on a ~15-minute publish. A `codex exec` call passed the prompt as an argument *and* piped stdin, so it blocked, did nothing, and exited 0. That exit status was very nearly read as "reviewed, no findings."
+
+**2. Report the check you ran, not the conclusion you drew.** Say "grepped `seven` across `docs/`", not "verified". If the reporting sentence is broader than the command, the command was too narrow, and that gap is invisible to the PO, who calibrates trust on the phrasing. A docs sweep for a stale required-check count grepped the word "seven", reported "none remain", and missed three files using the numeral `7`. `scripts/check_publish.py:573` already encodes this rule for the publish gate ("Claim only what actually ran"); it generalizes.
+
+**3. Never assert a handoff without opening the target.** Closing bead A because bead B covers it requires reading B. `rnzu0` was closed on the claim its fix "rides with `hmr0e`"; `hmr0e` is about removing an M3U Manager link and covered none of it. Four stale e2e assertions stayed live and the bead had to be reopened. The same rule covers "already fixed": *mechanism absent from current code* is not *defect fixed*, and the difference decides whether it can return.
+
+**4. Your own verification is not exempt from verification.** The rules above about agent-reported gates and shared-resource control apply to your own greps and closures too. The asymmetry is invisible from the inside: you cannot feel the difference between "I checked" and "I checked something adjacent". Two demonstrations from the retro session itself, both caught only by looking at the thing: an audit-closure count quoted from a same-day close total (46) when the real figure was 44, and a "TLS route with no auth dependency" that was an artifact of a 4-line `awk` window with the dependency on line 5. Prefer external adversarial review (Codex, a `persona-reviewer` agent) on your own judgment (closures, "verified" claims, recommendations), not only on the code. Hand the reviewer the repository, not a curated file list: curating backend routers only once produced a confident, wrong conclusion that the MCP tools did not exist. A mitigation phrased as an intention ("avoid biasing by omission") is not a mitigation.
+
 ## Invoking Personas (project-engineer, qa-engineer, sre, etc.)
 
 Personas are skills at `~/.claude/skills/<persona>/SKILL.md`, NOT subagent types. To spawn them — especially in parallel — use the Agent tool with `subagent_type: "general-purpose"` and load the persona identity in the prompt:
@@ -51,17 +69,21 @@ For multi-persona workflows (team-plan, team-review, spike, grooming, standup, r
 
 ## Worktree & Agent Isolation (this environment)
 
-The Claude Code worktree mechanism is unreliable here. Two harness-level bugs — NOT fixable in-repo (see bd-j8osn):
+The Claude Code worktree mechanism is unreliable here. Three harness-level bugs, NOT fixable in-repo (see bd-j8osn; the third is enhancedchannelmanager-2lwz3):
 
 - **cwd-trap:** a worktree-spawned agent's Bash cwd resets to the MAIN checkout between calls, while Read/Edit act on the literal absolute path given. An agent that doesn't make EVERY path worktree-absolute ends up editing `dev` directly — silently polluting the main checkout.
 - **Lock accumulation:** a finished agent's worktree stays locked and is never auto-cleaned; `git worktree remove` then needs `-f -f`.
+- **Stale-base:** a worktree is branched from `origin/main`, not `dev`, unless a start point is given explicitly. `origin/main` is the repo's default branch, so this is the silent default, not an edge case. Measured 2026-08-12: a worktree agent's branch reflog read `Created from origin/main` at `ae25ad70` (PR #748, 2026-07-26), while `dev` was 858 files and roughly 141k lines ahead at `eecd257a`. The agent's brief named a symbol added on `dev` by a later PR; that symbol did not exist on the worktree's base, and the agent only caught it mid-task. Nothing about this looks wrong from the outside: `git status` is clean, gates pass, and the diff against the worktree's own (stale) base looks small and correct. An agent that doesn't notice ships a branch written against an old API surface: the code it targeted has moved, so part of its fix can be missing or wrong, its gates passed against a tree that is not the one it will land in, and its conflicts are likelier and easy to mis-resolve toward the stale side.
+
+  The merge itself does NOT revert `dev`. An earlier version of this bullet said it "reverts everything `dev` gained since the stale base"; that is wrong. A three-way merge takes the stale commit as its merge base and keeps dev-only work on dev's side. That was verified empirically in a throwaway repo: branch from an old commit, advance the target four commits, then merge, and all target-side work and files survive. The damage is a quietly incomplete fix plus meaningless gate results, not mass reversion, and the distinction matters because it changes the remediation. Standing rule 4 below is unaffected: verify the merge-base regardless. Full evidence in enhancedchannelmanager-2lwz3.
 
 Standing defaults (these OVERRIDE the global "worktree-isolate every write agent" rule, which assumes a working mechanism):
 
 1. **Default: non-worktree, sequential engineers.** For typical small / single-domain changes, spawn the engineer WITHOUT `isolation: "worktree"` and brief it to work on a branch in the main checkout (do NOT create a worktree). No second tree ⇒ no cwd-trap, nothing left locked.
 2. **Worktrees only for genuinely parallel, independent write agents.** When used: brief the cwd-trap hard (every Read/Edit/Bash path worktree-absolute; verify `git -C <wt> branch --show-current` before any commit), and on return verify each agent's gates AND that the main checkout is clean (`git status` shows none of the agent's files).
 3. **Clean up on merge, every time.** `git worktree remove -f -f <path>` is part of the PR-merge step — never defer to a later sweep. Skip and flag any worktree with uncommitted tracked changes instead of force-removing it.
-4. **Trust nothing unverified.** Independently re-run the agent's claimed gates before merging — the agent's report is not the gate.
+4. **First action in every worktree agent: verify the base, then rebase onto `origin/dev`.** Before any other work, compare `git -C <worktree> merge-base HEAD origin/dev` against `git rev-parse origin/dev`. These agreeing is the pass condition; if they disagree, the worktree is stale and must be rebased onto `origin/dev` before the brief's actual task starts.
+5. **Trust nothing unverified.** Independently re-run the agent's claimed gates before merging, AND independently re-verify the branch's merge-base against `origin/dev` before merging: gates passing on a stale base proves nothing about the merge.
 
 Frontend tooling in a worktree (writable `.vite-temp`) is fixed in `scripts/worktree-bootstrap.sh`; full caveats in `docs/shipping.md` → "Worktree quirks".
 
@@ -187,6 +209,8 @@ dependent frontend is still live.
 ### Shipping (When User Says "Ship the Fix")
 
 Follow `docs/shipping.md`. The full PR-driven flow (branch from `origin/dev`, push, open PR via `gh pr create --base dev`, wait for the 5 required checks, then `gh pr merge --merge --delete-branch`) lives in `docs/shipping.md` §6 — do not duplicate it here.
+
+Run `gh pr create` from the checkout being shipped. The local preflight hook resolves the session cwd before Bash runs and cannot follow an inline `cd <other-checkout> && gh pr create ...`; that form is unsupported. Remove the branch worktree and check the branch out in the main checkout before opening its PR.
 
 **Non-negotiable rules:**
 - Work is NOT complete until the PR merges into `dev`

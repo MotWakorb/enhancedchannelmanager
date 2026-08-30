@@ -1,11 +1,11 @@
 # Runbook: ECM HTTP Latency
 
-> **Stub** — scaffolded by bd-dl1bd. Reconcile with bd-bwly4 runbook template
+> **Stub**: scaffolded by bd-dl1bd. Reconcile with bd-bwly4 runbook template
 > when that lands.
 
 **Alerts that route here:**
-- `ECMHTTPLatencyHighP95` (ticket) — p95 > 500ms for 10m
-- `ECMHTTPLatencyCriticalP95` (page) — p95 > 2s for 5m
+- `ECMHTTPLatencyHighP95` (ticket): p95 > 500ms for 10m
+- `ECMHTTPLatencyCriticalP95` (page): p95 > 2s for 5m
 
 **SLO:** [SLO-2 HTTP Request Latency](../sre/slos.md#slo-2-http-request-latency)
 
@@ -29,7 +29,7 @@
    ```
    Sort descending; one or two routes usually dominate.
 
-2. **Check readiness.** If `ecm_health_ready_ok == 0`, the latency is a downstream effect — go to [readiness runbook](./readiness_availability.md) first.
+2. **Check readiness.** If `ecm_health_ready_ok == 0`, the latency is a downstream effect. Go to [readiness runbook](./readiness_availability.md) first.
 
 3. **Grep access logs for slow requests.** Every request emits a structured `ecm.access` line with `duration_ms`:
    ```bash
@@ -38,7 +38,7 @@
      | jq 'select(.duration_ms > 1000)' \
      | head -50
    ```
-   The `trace_id` on each entry correlates to every other log line from that request — follow the thread to find what was slow.
+   The `trace_id` on each entry correlates to every other log line from that request: follow the thread to find what was slow.
 
 ## Common causes
 
@@ -55,7 +55,7 @@
 - Mitigation: usually a frontend bug; file bead and (short-term) rate-limit the offending view.
 
 ### Cold cache / first request after restart
-- Signals: Transient — resolves within a few minutes without intervention. Don't page over this.
+- Signals: Transient. Resolves within a few minutes without intervention. Don't page over this.
 
 ## Mitigation
 
@@ -66,5 +66,5 @@
 ## See also
 
 - [SLO document](../sre/slos.md)
-- [`backend/main.py`](../../backend/main.py) — observability middleware (search `_metric_path_label`)
+- [`backend/main.py`](../../backend/main.py): observability middleware (search `_metric_path_label`)
 - [Observability docs](../backend_architecture.md#observability)

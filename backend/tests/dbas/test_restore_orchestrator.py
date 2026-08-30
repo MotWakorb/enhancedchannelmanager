@@ -42,6 +42,7 @@ from dbas.restore_orchestrator import (
     run_restore,
     run_rollback,
 )
+from dbas.destination_read import DestinationReadError, ReadObservingClient
 
 _GOOD_MANIFEST = {"schema_version": 1}
 
@@ -270,6 +271,23 @@ async def test_rollback_404_counts_as_success(tmp_path):
     assert result.complete is True
     assert result.residue == []
     assert all(e.compensated for e in ledger.entries)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_rollback_opens_explicit_delete_compensation_scope(tmp_path):
+    inner = _client()
+    inner.get_m3u_accounts.side_effect = _http_error(503)
+    report = _report()
+    client = ReadObservingClient(inner, report, reject_mutations=True)
+    with pytest.raises(DestinationReadError):
+        await client.get_m3u_accounts()
+    ledger = _ledger("explicit-compensation")
+    ledger.record_created(EntityType.M3U_ACCOUNT, 901, "prov")
+
+    result = await run_rollback(ledger=ledger, client=client, ledger_dir=tmp_path)
+
+    assert result.complete is True
+    inner.delete_m3u_account.assert_awaited_once_with(901)
 
 
 # ---------------------------------------------------------------------------
@@ -591,15 +609,17 @@ def test_delete_dispatch_registers_epg_and_stream_profile():
 
 
 def test_compute_outcome_never_success_on_mixed_state():
-    # A report carrying a failure can NEVER yield SUCCESS, even if the caller
-    # somehow passes failure_occurred=False.
+    # A report carrying a failure can NEVER yield SUCCESS. With no abort and no
+    # rollback (``failure_occurred=False``) the honest state is
+    # COMPLETED_WITH_FAILURES (y65si) — the run finished, some rows did not, and
+    # nothing was undone. It is emphatically not SUCCESS.
     report = RestoreReport(is_dry_run=False)
     cat = report.category(EntityType.CHANNEL)
     cat.created = 3
     cat.failed = 1  # mixed state
     outcome = compute_outcome(report=report, failure_occurred=False, rollback=None)
     assert outcome != RestoreOutcome.SUCCESS
-    assert outcome == RestoreOutcome.FAILED_ROLLBACK_INCOMPLETE
+    assert outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
 
 
 def test_compute_outcome_clean_is_success():
@@ -688,13 +708,22 @@ def test_default_importer_steps_order_and_wiring():
 
     steps = default_importer_steps()
     order = [s.entity_type for s in steps]
-    # Hard dependency ordering.
-    assert order[0] == EntityType.M3U_ACCOUNT
+    # Hard dependency ordering. M3U leads every category that remaps an
+    # ``m3u_account`` FK; USER_AGENT leads M3U because an account's own
+    # ``user_agent`` FK remaps through that namespace (bead …-9h6cv), so this is
+    # pinned as a RELATION rather than as index 0.
+    assert order.index(EntityType.M3U_ACCOUNT) < order.index(EntityType.EPG_SOURCE)
+    assert order.index(EntityType.USER_AGENT) < order.index(EntityType.M3U_ACCOUNT)
     assert order.index(EntityType.EPG_SOURCE) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.CHANNEL_GROUP) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.CHANNEL_PROFILE) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.STREAM_PROFILE) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.USER_AGENT) < order.index(EntityType.CHANNEL)
+    # lvfwd — a stream profile's ``user_agent`` FK remaps through the USER_AGENT
+    # namespace, so user agents MUST be restored first. Reversing these two
+    # aborted the whole restore on a fresh Dispatcharr (400 "Invalid pk"). The
+    # M3U account carries the same FK (…-9h6cv), pinned above.
+    assert order.index(EntityType.USER_AGENT) < order.index(EntityType.STREAM_PROFILE)
     assert order.index(EntityType.SETTINGS) < order.index(EntityType.CHANNEL)
     assert order.index(EntityType.USER) < order.index(EntityType.CHANNEL)
     # A DVR rule's ``channel`` FK remaps through the CHANNEL namespace, so DVR
@@ -719,6 +748,11 @@ def test_dry_run_and_apply_registries_cover_the_same_categories():
     assert apply_order == dry_order
     # And the dry-run registry is fully wired too (no seam rows).
     assert all(s.importer is not None for s in dry_run_importer_steps())
+    # lvfwd — the FK ordering holds on the PREVIEW registry too, or the operator
+    # previews a stream-profile count the apply cannot deliver.
+    assert dry_order.index(EntityType.USER_AGENT) < dry_order.index(
+        EntityType.STREAM_PROFILE
+    )
 
 
 def test_delete_dispatch_registers_all_ledgerable_types():
@@ -835,6 +869,379 @@ async def test_rollback_without_applied_settings_has_no_settings_note(tmp_path):
     )
     assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
     assert not any("setting" in note.lower() for note in out.notes)
+
+
+@pytest.mark.asyncio
+async def test_rollback_notes_settings_dependency_unresolved_retry_wont_help(tmp_path):
+    # zt3kf (PO decision 2026-08-03, rollback policy): a settings-key
+    # DEPENDENCY_UNRESOLVED failure aborts the WHOLE restore and triggers full
+    # rollback exactly like any other failed category — no per-key
+    # skip-with-warning. But because this specific reason means "the archive
+    # references a settings key the destination does not have," a retry of
+    # the SAME restore against the SAME destination will fail identically.
+    # The operator-facing note must say so, so nobody burns a retry on it.
+    client = _client()
+
+    async def _settings_step(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.SETTINGS)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                label="some_setting_key",
+                message="setting key not found on destination",
+            )
+        )
+        return None
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[ImporterStep(EntityType.SETTINGS, _settings_step)],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    assert any(
+        "retry" in note.lower() and ("will fail" in note.lower() or "cannot" in note.lower() or "won't" in note.lower() or "will not" in note.lower())
+        for note in out.notes
+    )
+    # Points the operator at the actual remediation, not just "it failed".
+    assert any(
+        "category selection" in note.lower() or "destination" in note.lower()
+        for note in out.notes
+    )
+
+
+@pytest.mark.asyncio
+async def test_rollback_notes_other_category_dependency_unresolved_no_settings_retry_note(tmp_path):
+    """The settings-key retry-guidance note is SETTINGS-specific — a FK-target
+    DEPENDENCY_UNRESOLVED failure on an unrelated category (a different
+    failure shape: an id, not a settings key) must not get the same wording."""
+    client = _client()
+
+    async def _failing_step(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.CHANNEL_GROUP)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                label="some_group",
+                message="FK target missing",
+            )
+        )
+        return None
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[ImporterStep(EntityType.CHANNEL_GROUP, _failing_step)],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    assert not any("settings key" in note.lower() for note in out.notes)
+
+
+# ---------------------------------------------------------------------------
+# 9d. NON-FATAL categories (bead enhancedchannelmanager-y65si)
+#
+# A dispatcharr_users row that upstream refuses must NOT cost the operator their
+# channels, groups, profiles and settings. It is counted as a failure and the
+# restore runs to completion instead of rolling the whole instance back.
+# ---------------------------------------------------------------------------
+
+
+def _user_failure_step():
+    """A USER step that reports one per-row create failure (no raise)."""
+
+    async def _importer(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.USER)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.UPSTREAM_API_ERROR,
+                label="drilladmin",
+                message="User creation failed: 500 - Server Error (500)",
+            )
+        )
+        return None
+
+    return ImporterStep(EntityType.USER, _importer)
+
+
+@pytest.mark.asyncio
+async def test_user_category_failure_does_not_roll_back_the_restore(tmp_path):
+    """y65si: a user-create failure is COUNTED but never fatal.
+
+    The drill lost an entire restore — M3U account, EPG source, two channel
+    groups, a channel profile — because one archived Dispatcharr user could not
+    be created on a rebuilt instance. Everything created before AND after the
+    failing user category must survive, and no compensating DELETE may fire.
+    """
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _user_failure_step(),
+        _creating_step(EntityType.CHANNEL, 501),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+
+    # The failure is VISIBLE and COUNTED, not swallowed.
+    assert out.category(EntityType.USER).failed == 1
+    assert out.category(EntityType.USER).failure_details[0].label == "drilladmin"
+    # …and the restore ran to completion: the step AFTER users still applied.
+    assert out.category(EntityType.CHANNEL).created == 1
+    assert out.category(EntityType.M3U_ACCOUNT).created == 1
+    # NOTHING was compensated — the ledger entries are intact and untouched.
+    client.delete_m3u_account.assert_not_called()
+    client.delete_channel.assert_not_called()
+    assert [e.destination_id for e in ledger.entries] == [901, 501]
+    assert all(not e.compensated for e in ledger.entries)
+    # Honest outcome: completed, but NOT a clean success.
+    assert out.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert out.outcome != RestoreOutcome.SUCCESS
+    assert not any("rollback" in note.lower() for note in out.notes)
+    # The operator is told which category degraded and that nothing was undone.
+    assert any("user" in note.lower() for note in out.notes)
+
+
+@pytest.mark.asyncio
+async def test_non_fatal_set_is_exactly_the_leaf_categories(tmp_path):
+    """Guard: only the LEAF categories are non-fatal; the rest still roll back.
+
+    Every member passes the same admission test — nothing else in the restore
+    holds a hard FK into it, so a row that does not come back degrades only
+    itself. Widening this set silently is the failure this guard exists to catch,
+    so it is an equality assertion, not a membership one.
+
+    ``UPCOMING_RECORDING`` joined it with bead ``…-ciabe``: a recording is
+    referenced by nothing (a channel does not know its recordings, and a DVR
+    rule finds its own by querying rather than by reference), and the refusal it
+    most plausibly meets is a stale timestamp, which is a property of the
+    archive's age — a retry cannot fix it and a rollback would cost the operator
+    every other category for it. The reasoning per member is on the constant.
+
+    THE DEFAULT IS THE ARCHIVE-RESTORE CONTRACT and it does not move. In
+    particular it still carries the PO's 2026-08-03 ruling on bead ``…-zt3kf``:
+    a settings-key ``DEPENDENCY_UNRESOLVED`` aborts the whole restore and rolls
+    back. A per-run widening exists for cross-instance sync (see the test
+    below), and it is a PARAMETER precisely so it cannot reach this default.
+    """
+    from dbas.restore_orchestrator import NON_FATAL_FAILURE_CATEGORIES
+
+    assert NON_FATAL_FAILURE_CATEGORIES == frozenset(
+        {EntityType.USER, EntityType.LOGO, EntityType.UPCOMING_RECORDING}
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_run_may_widen_the_non_fatal_set_without_touching_the_default(
+    tmp_path,
+):
+    """``non_fatal_categories`` is per-run (bead ``…-10wnq``).
+
+    Cross-instance sync widens it to include SETTINGS, because a replica that
+    deletes every entity it just created over one unreadable
+    ``GET /api/core/settings/`` is the ``…-d0agi`` trade in a category that is
+    never ledgered and therefore cannot be rolled back anyway. The archive
+    restore keeps the zt3kf ruling. Asserted by BEHAVIOUR — the created entity
+    survives — rather than by reading the constant back, because the constant
+    being right proves nothing about the branch that consumes it.
+    """
+    client = _client()
+
+    async def _settings_step(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.SETTINGS)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.DEPENDENCY_UNRESOLVED,
+                label="some_setting_key",
+                message="setting key not found on destination",
+            )
+        )
+        return None
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[
+            _creating_step(EntityType.M3U_ACCOUNT, 901),
+            ImporterStep(EntityType.SETTINGS, _settings_step),
+        ],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+        non_fatal_categories=frozenset(
+            {EntityType.USER, EntityType.LOGO, EntityType.SETTINGS}
+        ),
+    )
+    # Counted and surfaced — nothing goes silent…
+    assert out.category(EntityType.SETTINGS).failed == 1
+    assert out.outcome != RestoreOutcome.SUCCESS
+    # …but the account this run created was NOT deleted around it.
+    assert out.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert not any(c.args[0] == 901 for c in client.delete_m3u_account.call_args_list)
+
+
+@pytest.mark.asyncio
+async def test_non_user_category_failure_still_rolls_back(tmp_path):
+    """The same failure shape on a load-bearing category is STILL fatal."""
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _reporting_failure_step(EntityType.CHANNEL_GROUP, 761),
+        _creating_step(EntityType.CHANNEL, 501),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=_report(),
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    # The step AFTER the failing category never ran.
+    assert out.category(EntityType.CHANNEL).created == 0
+    client.delete_m3u_account.assert_awaited_once_with(901)
+
+
+@pytest.mark.asyncio
+async def test_user_step_that_RAISES_is_still_fatal(tmp_path):
+    """Non-fatal covers a REPORTED per-row failure, not an importer that blew up.
+
+    ``UsersCapabilityError`` (the fail-closed schema guard) surfaces as a raise;
+    that is a "we cannot reason about this destination" signal, not one bad row,
+    and must keep its rollback.
+    """
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=[
+            _creating_step(EntityType.M3U_ACCOUNT, 901),
+            _raising_step(EntityType.USER),
+        ],
+        report=_report(),
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.PARTIAL_FAILED_ROLLED_BACK
+    client.delete_m3u_account.assert_awaited_once_with(901)
+
+
+def test_compute_outcome_never_reports_success_on_a_non_fatal_failure():
+    """Direct contract check: a counted failure forbids SUCCESS even when nothing
+    was rolled back."""
+    report = _report()
+    report.category(EntityType.USER).failed = 1
+    assert (
+        compute_outcome(report=report, failure_occurred=False, rollback=None)
+        == RestoreOutcome.COMPLETED_WITH_FAILURES
+    )
+
+
+def _logo_failure_step():
+    """A LOGO step that reports one per-row failure and a counted logo miss.
+
+    This is the exact shape the logos importer produces for a logo it cannot
+    restore: a VALIDATION_ERROR row plus a logo_misses increment, which is what
+    the importer's own comments describe as "an honest miss ... reported instead
+    of silent".
+    """
+
+    async def _importer(ctx: ApplyContext):
+        cat = ctx.report.category(EntityType.LOGO)
+        cat.failed += 1
+        cat.failure_details.append(
+            FailureDetail(
+                reason=FailureReason.VALIDATION_ERROR,
+                label="Drill Uploaded Logo",
+                message="unsafe or empty logo filename",
+            )
+        )
+        ctx.report.logo_misses += 1
+        return None
+
+    return ImporterStep(EntityType.LOGO, _importer)
+
+
+@pytest.mark.asyncio
+async def test_logo_category_failure_does_not_roll_back_the_restore(tmp_path):
+    """d0agi: one image that cannot be written must not destroy the restore.
+
+    Drill run 2026-08-04-run2: a restore that had already created 44 entities
+    reported ``partial_failed_rolled_back`` and compensated all 44 away because
+    ONE logo failed. Logos run LAST in the hard ordering, so everything the
+    rollback destroyed had already succeeded.
+    """
+    client = _client()
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    ledger = _ledger()
+    steps = [
+        _creating_step(EntityType.M3U_ACCOUNT, 901),
+        _creating_step(EntityType.CHANNEL, 501),
+        _logo_failure_step(),
+    ]
+    out = await run_restore(
+        plan=plan,
+        client=client,
+        steps=steps,
+        report=report,
+        ledger=ledger,
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        ledger_dir=tmp_path,
+    )
+
+    # The failure is VISIBLE, COUNTED, and named.
+    assert out.category(EntityType.LOGO).failed == 1
+    assert out.category(EntityType.LOGO).failure_details[0].label == "Drill Uploaded Logo"
+    assert out.logo_misses == 1
+    # Every other category survives; nothing was compensated.
+    assert out.category(EntityType.M3U_ACCOUNT).created == 1
+    assert out.category(EntityType.CHANNEL).created == 1
+    client.delete_m3u_account.assert_not_called()
+    client.delete_channel.assert_not_called()
+    assert [e.destination_id for e in ledger.entries] == [901, 501]
+    assert all(not e.compensated for e in ledger.entries)
+    # Honest outcome: completed, but NOT a clean success, and no rollback note.
+    assert out.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    assert not any("rollback" in note.lower() for note in out.notes)
+    assert any("logo" in note.lower() for note in out.notes)
 
 
 # ---------------------------------------------------------------------------
@@ -969,3 +1376,78 @@ async def test_epg_wait_skipped_on_dry_run_and_when_nothing_created(tmp_path):
     )
     client2.refresh_epg_source.assert_not_awaited()
     client2.get_epg_source.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Deferred-phase note accuracy (bead 7ipq2.2 — live validation finding)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_deferred_note_reflects_what_the_apply_fn_actually_applied(tmp_path):
+    """The 'deferred auto-sync applied' note must count what the apply fn
+    RETURNED (per-account summaries), not what was queued. On the sync path the
+    injected apply fn (``tasks.dbas_sync_engine._no_deferred_apply``, ADR-013
+    S9) suppresses the deferred phase and returns ``[]`` — the live-validation
+    run showed the report still claimed 'deferred auto-sync applied for 1
+    account(s)', a false statement in an operator-facing audit surface."""
+
+    def _creating_step(entity_type, dest_id, defers=None):
+        async def _importer(ctx):
+            cat = ctx.report.category(entity_type)
+            cat.created += 1
+            ctx.ledger.record_created(entity_type, dest_id, "x")
+            return defers
+
+        return ImporterStep(entity_type, _importer)
+
+    async def _suppressing_apply(*, deferred, client):
+        return []  # sync-path posture: drop the deferred settings on the floor
+
+    plan = _plan(_cat(EntityType.M3U_ACCOUNT, [{"id": 1, "name": "Prov"}]))
+    report = _report()
+    out = await run_restore(
+        plan=plan,
+        client=_client(),
+        steps=[
+            _creating_step(
+                EntityType.M3U_ACCOUNT,
+                901,
+                defers=[{"m3u_account_id": 901, "settings": {}}],
+            )
+        ],
+        report=report,
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        deferred_apply_fn=_suppressing_apply,
+        ledger_dir=tmp_path,
+    )
+    assert out.outcome == RestoreOutcome.SUCCESS
+    assert not any("deferred auto-sync applied" in n for n in out.notes)
+
+    # And an apply fn that DID apply reports the applied count.
+    async def _applying_apply(*, deferred, client):
+        return [{"m3u_account_id": e["m3u_account_id"]} for e in deferred]
+
+    report2 = _report()
+    out2 = await run_restore(
+        plan=plan,
+        client=_client(),
+        steps=[
+            _creating_step(
+                EntityType.M3U_ACCOUNT,
+                902,
+                defers=[{"m3u_account_id": 902, "settings": {}}],
+            )
+        ],
+        report=report2,
+        ledger=_ledger(),
+        remap=IdRemapTable(),
+        confirm_apply=True,
+        deferred_apply_fn=_applying_apply,
+        ledger_dir=tmp_path,
+    )
+    assert any(
+        "deferred auto-sync applied for 1 account(s)" in n for n in out2.notes
+    )

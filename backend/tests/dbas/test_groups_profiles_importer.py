@@ -15,19 +15,23 @@ For EACH category the same behaviours are exercised:
   EntityType) and the create is recorded in the RollbackLedger.
 * Collision skip + remap-to-existing — an archived row whose identity (name,
   case-insensitive/trimmed) already exists on the destination is skipped
-  ALREADY_EXISTS_IDENTICAL and its source id is remapped to the EXISTING dest id
-  (so a later FK reference resolves) — never blind delete-all.
+  with the category's name-match reason (ALREADY_EXISTS_NAME_MATCH for channel
+  groups, ALREADY_EXISTS_IDENTICAL for the two profile categories — bead
+  …-3t74w) and its source id is remapped to the EXISTING dest id (so a later FK
+  reference resolves) — never blind delete-all.
 * Opt-in off -> no-op — nothing is created; every row is EXCLUDED_BY_OPERATOR.
 * Dry-run -> zero creates + zero ledger; reports would_create.
 * CONFLICT vs UPSTREAM_API_ERROR — a create that races into a uniqueness
   conflict is failed CONFLICT; a non-conflict error is UPSTREAM_API_ERROR.
 
-FK remap + DEPENDENCY_UNRESOLVED: the three real Dispatcharr categories are
-leaf dependencies (a group/profile has no outbound FK to another remapped
-entity — channels point at THEM, not the reverse). The generic FK-remap path is
-still exercised via a synthetic category config that declares a remappable FK,
-proving an unresolvable FK is skipped DEPENDENCY_UNRESOLVED rather than created
-with a stale archive id.
+FK remap + DEPENDENCY_UNRESOLVED: channel groups and channel profiles are leaf
+dependencies (no outbound FK to another remapped entity — channels point at
+THEM, not the reverse). STREAM PROFILES ARE NOT: a Dispatcharr stream profile
+carries a ``user_agent`` FK (bead ``enhancedchannelmanager-lvfwd``), so its
+config declares that remap and the tests below pin it. The generic FK-remap path
+is additionally exercised via a synthetic category config, proving an
+unresolvable FK is skipped DEPENDENCY_UNRESOLVED rather than created with a
+stale archive id.
 
 The Dispatcharr client is mocked at the importer module level
 (``dbas.importers.groups_profiles``); the importer is exercised with an
@@ -107,6 +111,18 @@ def _client(*, groups=None, channel_profiles=None, stream_profiles=None):
 # The three real categories, parametrized so each behavioural test runs once per
 # category. ``fn`` is the per-category entry, ``etype`` its EntityType, ``getter``
 # / ``creator`` the client method names, ``existing_kw`` the _client kwarg.
+# What a NAME match reports, per category (bead …-3t74w). Channel groups adopt on
+# a name and compare NOTHING else — their contents live on the channels, restored
+# later — so they say ``already_exists_name_match``. The two profile categories
+# keep ``already_exists_identical``. Read off the importer's own config table so
+# this suite cannot drift from the shipped behaviour.
+def _name_match_reason(entity_type):
+    for config in _CATEGORY_CONFIGS.values():
+        if config.entity_type == entity_type:
+            return config.name_match_skip_reason
+    raise AssertionError("no config for %r" % entity_type)
+
+
 _CATEGORIES = [
     pytest.param(
         import_channel_groups,
@@ -260,9 +276,13 @@ async def test_profile_create_strips_source_id_and_readonly_fields():
 @pytest.mark.parametrize("fn, etype, creator, existing_kw", _CATEGORIES)
 async def test_existing_by_name_skipped_and_remapped(fn, etype, creator, existing_kw):
     """An archived row whose name already exists on the destination
-    (case-insensitive / trimmed) is skipped ALREADY_EXISTS_IDENTICAL and its
-    source id is remapped to the EXISTING dest id (so a later FK resolves).
-    No create, no ledger entry — never blind delete-all."""
+    (case-insensitive / trimmed) is SKIPPED and its source id is remapped to the
+    EXISTING dest id (so a later FK resolves). No create, no ledger entry — never
+    blind delete-all.
+
+    The skip REASON is per-category (bead …-3t74w): channel groups report
+    ``ALREADY_EXISTS_NAME_MATCH`` because nothing beyond the name was compared;
+    channel profiles and stream profiles keep ``ALREADY_EXISTS_IDENTICAL``."""
     client = _client(**{existing_kw: [{"id": 700, "name": "Sports"}]})
     report = _report()
     ledger = _ledger()
@@ -280,7 +300,7 @@ async def test_existing_by_name_skipped_and_remapped(fn, etype, creator, existin
     getattr(client, creator).assert_not_called()
     cat = report.category(etype)
     assert cat.skipped == 1
-    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.skip_details[0].reason == _name_match_reason(etype)
     assert remap.resolve(etype, 5) == 700
     assert len(ledger.entries) == 0
 
@@ -339,7 +359,7 @@ async def test_dry_run_existing_reports_would_skip(fn, etype, creator, existing_
     getattr(client, creator).assert_not_called()
     cat = report.category(etype)
     assert cat.would_skip == 1
-    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.skip_details[0].reason == _name_match_reason(etype)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +396,341 @@ async def test_create_conflict_recorded_as_failure_conflict(fn, etype, creator, 
     assert cat.failure_details[0].reason == FailureReason.CONFLICT
     assert len(ledger.entries) == 0
     assert remap.resolve(etype, 5) is None
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_adopts_ingested_groups_and_follow_up_is_idempotent():
+    """A destination ingest can create groups after the importer's first list.
+
+    The observed Dispatcharr 0.29.0 uniqueness response must trigger a re-list,
+    exact-name adoption, and remap population. A complete follow-up import
+    then adopts the same rows from its initial list without another create.
+    """
+    ingested_groups = [
+        {"id": 701, "name": "Northwind Local"},
+        {"id": 702, "name": "Northwind Regional"},
+    ]
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_with_ingest(name):
+        destination_groups.extend(ingested_groups)
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(side_effect=_create_races_with_ingest)
+    archive_rows = [
+        {"id": 11, "name": "Northwind Local"},
+        {"id": 12, "name": "Northwind Regional"},
+    ]
+
+    first_report = _report()
+    first_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=first_report,
+        ledger=_ledger(),
+        remap=first_remap,
+    )
+
+    first = first_report.category(EntityType.CHANNEL_GROUP)
+    assert first.failed == 0
+    assert first.created == 0
+    assert first.skipped == 2
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 701
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 702
+    client.create_channel_group.assert_awaited_once_with("Northwind Local")
+
+    follow_up_report = _report()
+    follow_up_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=follow_up_report,
+        ledger=_ledger(),
+        remap=follow_up_remap,
+    )
+
+    follow_up = follow_up_report.category(EntityType.CHANNEL_GROUP)
+    assert follow_up.failed == 0
+    assert follow_up.created == 0
+    assert follow_up.skipped == 2
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 701
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 702
+    assert client.create_channel_group.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_adopts_exact_conflicting_case_variant():
+    """Dispatcharr's unique TextField compares the submitted raw name.
+
+    A differently-cased row can coexist and cannot own the create conflict.
+    """
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_with_case_variant(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(side_effect=_create_races_with_case_variant)
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "Sports"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 2
+    client.create_channel_group.assert_awaited_once_with("Sports")
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_adopts_trimmed_case_preserving_owner():
+    """Dispatcharr trims a group name before unique validation and persistence."""
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_after_serializer_trim(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name.strip()},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(
+        side_effect=_create_races_after_serializer_trim
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "  Sports  "}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.created == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    client.create_channel_group.assert_awaited_once_with("  Sports  ")
+
+
+@pytest.mark.asyncio
+async def test_channel_group_retry_keeps_trimmed_race_owner_with_case_variant():
+    """A retry adopts the same trimmed owner selected during race recovery."""
+    client = _client(
+        groups=[
+            {"id": 100, "name": "sports"},
+            {"id": 200, "name": "Sports"},
+        ]
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "  Sports  "}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 0
+    assert cat.created == 0
+    assert cat.skipped == 1
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) == 200
+    assert len(ledger.entries) == 0
+    client.create_channel_group.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_preserves_exact_case_matches_in_batch_and_follow_up():
+    """A raced exact adoption must not replace another raw name's cache entry."""
+    destination_groups = []
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=lambda: [dict(row) for row in destination_groups]
+    )
+
+    async def _create_races_with_case_variants(name):
+        destination_groups.extend(
+            [
+                {"id": 100, "name": "sports"},
+                {"id": 200, "name": name},
+            ]
+        )
+        raise RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+
+    client.create_channel_group = AsyncMock(side_effect=_create_races_with_case_variants)
+    archive_rows = [
+        {"id": 11, "name": "Sports"},
+        {"id": 12, "name": "sports"},
+    ]
+
+    first_report = _report()
+    first_ledger = _ledger()
+    first_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=first_report,
+        ledger=first_ledger,
+        remap=first_remap,
+    )
+
+    first = first_report.category(EntityType.CHANNEL_GROUP)
+    assert first.failed == 0
+    assert first.created == 0
+    assert first.skipped == 2
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 200
+    assert first_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 100
+    assert len(first_ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 2
+    client.create_channel_group.assert_awaited_once_with("Sports")
+
+    follow_up_report = _report()
+    follow_up_ledger = _ledger()
+    follow_up_remap = _remap()
+    await import_channel_groups(
+        archive_rows=archive_rows,
+        client=client,
+        selected=True,
+        report=follow_up_report,
+        ledger=follow_up_ledger,
+        remap=follow_up_remap,
+    )
+
+    follow_up = follow_up_report.category(EntityType.CHANNEL_GROUP)
+    assert follow_up.failed == 0
+    assert follow_up.created == 0
+    assert follow_up.skipped == 2
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 11) == 200
+    assert follow_up_remap.resolve(EntityType.CHANNEL_GROUP, 12) == 100
+    assert len(follow_up_ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 3
+    assert client.create_channel_group.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_remains_fatal_when_exact_owner_is_ambiguous():
+    """Multiple canonical rows cannot be attributed safely."""
+    client = _client()
+    client.get_channel_groups = AsyncMock(
+        side_effect=[
+            [],
+            [
+                {"id": 100, "name": "Sports"},
+                {"id": 200, "name": " Sports "},
+            ],
+        ]
+    )
+    client.create_channel_group = AsyncMock(
+        side_effect=RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+    )
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "Sports"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 1
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) is None
+    assert len(ledger.entries) == 0
+    assert client.get_channel_groups.await_count == 2
+    client.create_channel_group.assert_awaited_once_with("Sports")
+
+
+@pytest.mark.asyncio
+async def test_channel_group_create_race_remains_fatal_when_relist_cannot_find_group():
+    """The uniqueness response is not a non-fatal result without a row to adopt."""
+    client = _client()
+    client.create_channel_group = AsyncMock(
+        side_effect=RuntimeError(
+            'Channel group creation failed: 400 - '
+            '{"name":["channel group with this name already exists."]}'
+        )
+    )
+    report = _report()
+    remap = _remap()
+
+    await import_channel_groups(
+        archive_rows=[{"id": 5, "name": "Sports"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.CHANNEL_GROUP)
+    assert cat.failed == 1
+    assert cat.failure_details[0].reason == FailureReason.CONFLICT
+    assert remap.resolve(EntityType.CHANNEL_GROUP, 5) is None
 
 
 @pytest.mark.asyncio
@@ -585,15 +940,156 @@ async def test_import_groups_profiles_defaults_selection_to_off():
 # ---------------------------------------------------------------------------
 
 
-def test_category_configs_cover_the_three_entity_types():
-    """The module's canonical config table covers exactly the three leaf
-    categories, each with NO outbound remappable FK (they are leaf dependencies
-    that channels point at — the FK direction is owned by the Channels importer)."""
+def test_category_configs_cover_the_four_entity_types():
+    """The module's canonical config table covers exactly the four categories.
+
+    Channel groups, channel profiles and SERVER GROUPS (bead ``…-tyrg1``) are
+    genuine leaf dependencies with NO outbound remappable FK — a Dispatcharr
+    ServerGroup is a unique ``name`` and nothing else (0.29.0
+    ``apps/m3u/models.py:216``). STREAM PROFILES ARE NOT (bead
+    ``enhancedchannelmanager-lvfwd``): a Dispatcharr stream profile carries a
+    ``user_agent`` FK, so its config MUST declare that remap.
+    """
     etypes = {c.entity_type for c in _CATEGORY_CONFIGS.values()}
     assert etypes == {
         EntityType.CHANNEL_GROUP,
         EntityType.CHANNEL_PROFILE,
+        EntityType.SERVER_GROUP,
         EntityType.STREAM_PROFILE,
     }
-    for config in _CATEGORY_CONFIGS.values():
-        assert config.remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["channel_groups"].remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["channel_profiles"].remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["server_groups"].remappable_fk_fields == {}
+    assert _CATEGORY_CONFIGS["stream_profiles"].remappable_fk_fields == {
+        "user_agent": EntityType.USER_AGENT
+    }
+
+
+# ---------------------------------------------------------------------------
+# lvfwd — the stream-profile -> user-agent FK (the SILENT WRONG-BINDING defect)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_user_agent_fk_is_remapped_not_passed_through():
+    """A stream profile's ``user_agent`` id is rewritten through the remap.
+
+    Bead ``enhancedchannelmanager-lvfwd`` defect 2. The archived SOURCE id must
+    never reach the destination: a restore reassigns ids, so posting the source
+    id either 400s (id absent) or — far worse — SUCCEEDS and silently binds a
+    completely unrelated user agent that happens to occupy that id on the target.
+    """
+    client = _client()
+    remap = _remap()
+    remap.add(EntityType.USER_AGENT, 4, 77)  # archived UA 4 -> dest 77
+    report = _report()
+
+    await import_stream_profiles(
+        archive_rows=[{"id": 9, "name": "Drill Profile", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=remap,
+    )
+
+    payload = client.create_stream_profile.await_args.args[0]
+    assert payload["user_agent"] == 77, "source user_agent id was passed through raw"
+    assert report.category(EntityType.STREAM_PROFILE).created == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_with_unresolvable_user_agent_is_skipped():
+    """An unresolvable ``user_agent`` skips the profile DEPENDENCY_UNRESOLVED.
+
+    Never create it with a stale archive id — that is the exact silent
+    wrong-binding path bead ``…-lvfwd`` found.
+    """
+    client = _client()
+    report = _report()
+
+    await import_stream_profiles(
+        archive_rows=[{"id": 9, "name": "Drill Profile", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),  # empty — nothing to resolve 4 against
+    )
+
+    client.create_stream_profile.assert_not_called()
+    cat = report.category(EntityType.STREAM_PROFILE)
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.DEPENDENCY_UNRESOLVED
+
+
+@pytest.mark.asyncio
+async def test_locked_builtin_stream_profile_is_skipped_never_updated():
+    """A ``locked`` built-in profile is skipped + remapped — NEVER updated.
+
+    Verified against the Dispatcharr 0.28.2 image source. ``StreamProfile.save()``
+    (``/app/core/models.py`` lines 78-101) refuses any change to a locked profile:
+    it iterates ``self._meta.fields`` comparing ``field.name`` against
+    ``allowed_fields = {"user_agent_id"}``, and a ForeignKey's ``field.name`` is
+    ``"user_agent"`` — so even the one field the comment says is permitted
+    raises ``Cannot modify user_agent on a protected profile.`` over the REST
+    API (``StreamProfileViewSet`` is a plain ModelViewSet, so a PATCH lands in
+    ``save()``, not the ``update()`` classmethod).
+
+    This importer is create-or-skip by construction — it reaches exactly two
+    client methods, ``config.getter`` and ``config.creator`` — so the locked
+    guard is unreachable today. This test pins that: adding an update path here
+    would have to reckon with ``locked`` first. Dispatcharr ships ``ffmpeg``,
+    ``Proxy``, ``Redirect`` and ``streamlink`` locked, so this is the common case
+    on every restore, not a corner case.
+    """
+    client = _client(
+        stream_profiles=[
+            {"id": 1, "name": "ffmpeg", "locked": True, "user_agent": 2},
+        ]
+    )
+    remap = _remap()
+    remap.add(EntityType.USER_AGENT, 4, 77)
+    report = _report()
+
+    await import_stream_profiles(
+        # The archive's copy carries a DIFFERENT user agent than the target's.
+        archive_rows=[{"id": 9, "name": "ffmpeg", "locked": True, "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=remap,
+    )
+
+    cat = report.category(EntityType.STREAM_PROFILE)
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.updated == 0
+    client.create_stream_profile.assert_not_called()
+    # The ONLY upstream call was the list read — no create, no update, no patch.
+    assert {name for name, _, _ in client.mock_calls} == {"get_stream_profiles"}
+    # The source id still resolves, to the EXISTING destination row.
+    assert remap.resolve(EntityType.STREAM_PROFILE, 9) == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_profile_without_user_agent_still_creates():
+    """A profile carrying no ``user_agent`` (or an explicit null) is unaffected by
+    the FK remap — the built-in Dispatcharr profiles look like this."""
+    client = _client()
+    report = _report()
+
+    await import_stream_profiles(
+        archive_rows=[
+            {"id": 9, "name": "Direct"},
+            {"id": 10, "name": "Proxy", "user_agent": None},
+        ],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.category(EntityType.STREAM_PROFILE).created == 2

@@ -3,27 +3,27 @@
   flex-direction: column;
   height: 100%;
   background-color: var(--bg-primary);
+  min-width: 0;
+  overflow: hidden;
 }
 
-.pane-header {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-primary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  height: 56px;
-  box-sizing: border-box;
-}
+/* `.pane-header` is owned by shared/common.css § 14 PANE HEADERS. This copy
+   was eager and bare, as was ChannelsPane.css's, so common.css — emitted last
+   in the eager bundle — already won the box while this rule contributed only
+   the strip height, `box-sizing`, `min-width` and `gap`. Those four moved to
+   common.css unchanged; the `padding: 1rem` here never rendered
+   (bead enhancedchannelmanager-87o0c). */
 
+/* Typography is owned by shared/common.css § 14 PANE HEADERS. The 1.1rem
+   this file declared never rendered: common.css is emitted last inside the
+   eager bundle, so its 0.75rem/600 rule has been winning at equal
+   specificity all along. Only the flex row, which this header needs for the
+   badge beside the title, is local (bead enhancedchannelmanager-6z299). */
 .pane-header h2 {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 1.1rem;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0;
+  min-width: 0;
 }
 
 .refresh-streams-btn {
@@ -50,7 +50,7 @@
 }
 
 .refresh-streams-btn .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
 }
 
 /* .spinning is defined in shared/common.css (counter-clockwise) */
@@ -65,7 +65,7 @@
   color: var(--button-text);
   padding: 0.375rem 0.75rem;
   border-radius: var(--radius-md);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
@@ -86,7 +86,7 @@
   color: var(--button-primary-text);
   padding: 0.375rem 0.75rem;
   border-radius: var(--radius-md);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
@@ -97,7 +97,7 @@
 }
 
 .create-channels-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .streams-pane-filters {
@@ -110,6 +110,7 @@
   flex-shrink: 0;
   position: relative;
   z-index: var(--z-raised);
+  min-width: 0;
 }
 
 /* Hide mapped streams toggle button */
@@ -124,7 +125,7 @@
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s;
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   white-space: nowrap;
 }
 
@@ -141,7 +142,7 @@
 }
 
 .hide-mapped-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .hide-mapped-label {
@@ -157,7 +158,7 @@
   width: 100%;
 }
 
-.streams-filter-row .filter-select {
+.streams-filter-row .streams-filter-select {
   flex: 1;
 }
 
@@ -182,22 +183,31 @@
 }
 
 .clear-filters-btn .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
 }
 
-.search-input,
-.filter-select {
+/* `.search-input` used to be in this selector list, and in its `:focus`
+   partner below. Both were dead: shared/common.css § 11 declares the same
+   class bare with the same seven properties, and it is emitted last inside
+   the eager bundle (byte ~256,447 against this file's ~158,000), so its
+   values — including a --radius-lg corner where this said --radius-md — have
+   been the live ones all along. Deleted rather than reconciled; § 11 is the
+   owner (bead enhancedchannelmanager-6z299.5).
+
+   The stream filters now own their box chrome explicitly; Journal and M3U
+   Changes preserve their frozen-header chrome in their own lazy chunks
+   (bead enhancedchannelmanager-8epq2). */
+.streams-filter-select {
   width: 100%;
   padding: 0.5rem;
   background-color: var(--input-bg);
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
-.search-input:focus,
-.filter-select:focus {
+.streams-filter-select:focus {
   outline: none;
   border-color: var(--accent-primary);
 }
@@ -208,6 +218,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  min-width: 0;
 }
 
 /* Category headers grouping stream groups by naming-convention prefix
@@ -247,21 +258,28 @@
   outline-offset: -2px;
 }
 
+/* Chevron glyph, not text — it keeps --text-muted, which the colour rule
+   exempts for decorative glyphs. */
 .stream-category-header .expand-icon {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
   color: var(--text-muted);
 }
 
+/* The name of a row in a list — item title. */
 .stream-category-header .category-name {
   flex: 1;
-  font-size: 0.9rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
+/* --text-secondary, not --text-muted: 2.61:1 on --bg-secondary in light. */
 .stream-category-header .category-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
   border-radius: var(--radius-2xl);
@@ -308,6 +326,12 @@
   cursor: grabbing;
 }
 
+/* Sole owner of `.group-drag-handle`. ChannelsPane.css declared it bare too;
+   both files are eager and this one is emitted later, so it won every property
+   they shared and ChannelsPane's handle already rendered this box. The two
+   properties only ChannelsPane declared — `user-select` and the 1.2rem size —
+   are folded in below so its copy could be deleted without moving a pixel
+   (bead enhancedchannelmanager-87o0c). */
 .group-drag-handle {
   display: flex;
   align-items: center;
@@ -316,6 +340,11 @@
   cursor: grab;
   transition: color 0.15s;
   margin-right: 0.25rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  user-select: none;
+  font-size: 1.2rem;
 }
 
 .group-drag-handle .material-icons {
@@ -329,6 +358,72 @@
 .stream-group-header[draggable="true"]:active .group-drag-handle {
   cursor: grabbing;
   color: var(--drag-handle-hover);
+}
+
+/* `.drag-handle` is owned by shared/common.css § 10 DRAG HANDLES. This bare
+   copy's button reset moved there verbatim; only `color: inherit` was
+   contended and common.css already won it, so nothing here rendered that the
+   fold does not reproduce (bead enhancedchannelmanager-87o0c). */
+
+.group-drag-handle:focus-visible,
+.drag-handle:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.keyboard-drag-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.keyboard-drag-destinations {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 950;
+  width: min(22rem, calc(100vw - 2rem));
+  max-height: min(28rem, calc(100vh - 2rem));
+  overflow-y: auto;
+  padding: 0.375rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+}
+
+.keyboard-drag-destinations-title {
+  padding: 0.5rem 0.625rem;
+  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
+}
+
+.keyboard-drag-destinations button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 0.625rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.keyboard-drag-destinations button:hover,
+.keyboard-drag-destinations button:focus-visible {
+  background: var(--accent-10);
 }
 
 button.group-selection-checkbox {
@@ -363,28 +458,13 @@ button.group-selection-checkbox {
    matching comment in ChannelsPane.css's .group-toggle-btn. `flex: 1`
    reproduces exactly what `.group-name`'s own `flex: 1` did when it was a
    direct child of `.stream-group-header`. */
-.group-toggle-btn {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  min-width: 0;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-  cursor: pointer;
-}
-
-.group-toggle-btn:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: -2px;
-}
+/* `.group-toggle-btn` and its `:focus-visible` are owned by
+   shared/common.css § 3 BUTTONS. This copy and ChannelsPane.css's were
+   byte-identical — one class with two owners, which is how two copies of a
+   rule drift apart (bead enhancedchannelmanager-6z299.2). */
 
 .group-selection-checkbox .material-icons {
-  font-size: 1.2rem;
+  font-size: var(--icon-status);
 }
 
 .group-selection-checkbox:hover {
@@ -406,16 +486,17 @@ button.group-selection-checkbox {
   width: 1rem;
 }
 
+/* Type and colour for `.group-name` come from shared/common.css § 27 GROUP
+   ROWS. Only `flex: 1`, which this header needs to push the count and the
+   bulk-create button right, is local — the same shape ChannelsPane.css uses
+   (bead enhancedchannelmanager-6z299.5). */
 .stream-group-header .group-name {
   flex: 1;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--button-text);
 }
 
+/* Type and colour for `.group-count` also come from § 27; the pill this pane
+   draws around it is local. */
 .stream-group-header .group-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
   border-radius: var(--radius-2xl);
@@ -428,7 +509,9 @@ button.group-selection-checkbox {
   display: inline-flex;
   align-items: center;
   gap: 0.125rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--warning-text);
   background-color: var(--warning-bg);
   padding: 0.125rem 0.5rem;
@@ -436,8 +519,9 @@ button.group-selection-checkbox {
   cursor: help;
 }
 
+/* Glyph inside a chip — the badge icon, which is the 14px this already was. */
 .group-stale-count .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
 }
 
 .stream-group-items {
@@ -449,7 +533,9 @@ button.group-selection-checkbox {
 }
 
 .stream-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 0.75rem;
   align-items: center;
   padding: 0.5rem;
   content-visibility: auto;
@@ -458,6 +544,15 @@ button.group-selection-checkbox {
   border-radius: var(--radius-md);
   cursor: default;
   transition: background-color 0.15s, transform 0.15s;
+}
+
+.stream-item.edit-mode {
+  grid-template-columns: auto auto 32px minmax(0, 1fr) auto;
+}
+
+.stream-artwork-slot {
+  width: 32px;
+  height: 32px;
 }
 
 .stream-item:hover {
@@ -524,7 +619,7 @@ button.group-selection-checkbox {
 }
 
 .selection-checkbox .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 .selection-checkbox:hover {
@@ -568,9 +663,16 @@ button.group-selection-checkbox {
   width: 32px;
   height: 32px;
   object-fit: contain;
-  margin-right: 0.75rem;
   border-radius: var(--radius-md);
   background-color: var(--bg-tertiary);
+}
+
+.stream-actions,
+.inline-stream-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .stream-info {
@@ -580,15 +682,21 @@ button.group-selection-checkbox {
   min-width: 0;
 }
 
+/* The name of a row in a list — item title. */
 .stream-name {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Supporting detail under the item title — meta. The monospace face stays:
+   it is a URL, and reading it character by character is the point. */
 .stream-url {
-  font-size: 0.7rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   margin-top: 0.125rem;
   font-family: monospace;
@@ -598,8 +706,10 @@ button.group-selection-checkbox {
 }
 
 .stream-provider {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   margin-top: 0.125rem;
 }
 
@@ -607,22 +717,32 @@ button.group-selection-checkbox {
 /* Component-specific: show on hover */
 .stream-item:hover .copy-url-btn,
 .stream-item:hover .vlc-btn,
-.stream-item:hover .preview-btn {
+.stream-item:hover .preview-btn,
+.stream-item:focus-within .copy-url-btn,
+.stream-item:focus-within .vlc-btn,
+.stream-item:focus-within .preview-btn {
   opacity: 1;
 }
 
 /* Filter dropdown - base styles in shared/common.css */
-/* Component-specific overrides */
-.filter-dropdown-menu {
-  background-color: var(--input-bg);
-}
+/* This file's `.filter-dropdown-menu { background-color: var(--input-bg) }`
+   was not an override at all: it was bare and eager, and common.css is emitted
+   after it, so `var(--bg-secondary)` has always won. Deleted rather than
+   scoped — reviving it would repaint the menu
+   (bead enhancedchannelmanager-87o0c). */
 
+/* Remapped in place rather than pointed at `.empty-inline`, because this
+   class is also rendered by GroupMultiSelectDropdown.tsx — a different chunk
+   — and this eager rule is its only owner. The values are `.empty-inline`'s
+   (shared/common.css § 7) so the two idioms read the same; the italic goes,
+   for the reason recorded there. */
 .filter-dropdown-empty {
   padding: 1rem;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  font-style: italic;
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
 .filter-dropdown-options {
@@ -631,7 +751,8 @@ button.group-selection-checkbox {
 
 .filter-option-name {
   flex: 1;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -662,23 +783,16 @@ button.group-selection-checkbox {
 }
 
 .bulk-create-btn .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
-/* Modal Overlay */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: var(--z-overlay);
-}
+/* The modal chassis — `.modal-overlay`, `.modal-header`, `.modal-body`,
+   `.modal-footer` — is owned by ModalBase.css. This file's bare copies were
+   eager and emitted after ModalBase, so they were setting the chrome for every
+   modal in the app, not just this pane's bulk-create modal. The values they
+   won are now ModalBase's token defaults, so deleting them here changes
+   nothing on screen (bead enhancedchannelmanager-87o0c). */
 
 /* Bulk Create Modal */
 .bulk-create-modal {
@@ -693,27 +807,16 @@ button.group-selection-checkbox {
   box-shadow: var(--shadow-xl);
 }
 
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 1rem 1.25rem;
-  border-bottom: 1px solid var(--border-primary);
-}
-
+/* Modal-title role. 17.6px -> 18px. */
 .modal-header h3 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
 /* modal-close-btn styles are in ModalBase.css */
-
-.modal-body {
-  padding: 1.25rem;
-  overflow-y: auto;
-  flex: 1;
-}
 
 /* Multi-group option */
 .multi-group-option {
@@ -731,24 +834,29 @@ button.group-selection-checkbox {
   margin-bottom: 1rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .multi-group-info .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: #22d3ee;
   flex-shrink: 0;
 }
 
+/* Body role. 13.6px -> 13px. */
 .multi-group-info span {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--button-text);
-  line-height: 1.4;
+  line-height: var(--type-body-line-height);
 }
 
+/* Label role. 13.6px -> 13px. */
 .multi-group-option .form-label {
   display: block;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
-  font-weight: 500;
+  font-weight: var(--type-label-weight);
 }
 
 .bulk-create-info {
@@ -762,18 +870,25 @@ button.group-selection-checkbox {
   margin-bottom: 1.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .bulk-create-info .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--accent-primary);
 }
 
+/* Body role. 14.4px -> 13px. */
 .bulk-create-info span {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--button-text);
 }
 
+/* Body role. 12.8px -> 13px. */
 .bulk-create-info .duplicate-info {
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: #22d3ee;
   font-style: italic;
 }
@@ -785,36 +900,32 @@ button.group-selection-checkbox {
   margin-bottom: 1.25rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .bulk-create-modal .form-group > label {
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .number-range-preview {
   margin-top: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
 }
 
-.radio-group {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.radio-option {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  cursor: pointer;
-  color: var(--button-text);
-  font-size: 0.9rem;
-}
+/* `.radio-group` and `.radio-option` are owned by shared/common.css § 20. Both
+   copies here were bare and eager, and common.css is emitted after this file:
+   it won `.radio-group` outright (the 0.75rem gap never rendered — 0.5rem
+   did), and on `.radio-option` only this file's colour and size survived.
+   Those two moved to common.css, so the rows are unchanged
+   (bead enhancedchannelmanager-87o0c). */
 
 .radio-option input[type="radio"] {
-  width: 16px;
-  height: 16px;
   margin-right: 0.25rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
@@ -833,8 +944,11 @@ button.group-selection-checkbox {
   width: calc(100% - 1.5rem);
 }
 
+/* Badge role. 11.2px -> 10px. */
 .group-exists-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   padding: 0.125rem 0.375rem;
   background-color: var(--bg-hover);
   border-radius: var(--radius-md);
@@ -842,8 +956,11 @@ button.group-selection-checkbox {
   margin-left: 0.5rem;
 }
 
+/* Badge role. 11.2px -> 10px. */
 .group-new-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   padding: 0.125rem 0.375rem;
   background-color: var(--success)33;
   border-radius: var(--radius-md);
@@ -858,24 +975,28 @@ button.group-selection-checkbox {
   border-top: 1px solid var(--border-primary);
 }
 
+/* Label role. 13.6px -> 13px. */
 .multi-group-names .form-label {
   display: block;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
-  font-weight: 500;
+  font-weight: var(--type-label-weight);
 }
 
+/* Micro role — the tracked uppercase label idiom. 11.2px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .group-name-list-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0;
   margin-bottom: 0.25rem;
-  font-size: 0.7rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .group-name-list-header .header-streams {
@@ -913,8 +1034,11 @@ button.group-selection-checkbox {
   gap: 0.5rem;
 }
 
+/* Meta role. 12px -> 11px. */
 .group-stream-count {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   background-color: var(--bg-hover);
   padding: 0.25rem 0.5rem;
@@ -948,60 +1072,60 @@ button.group-selection-checkbox {
   text-align: center;
 }
 
+/* Meta role. 12px -> 11px. */
 .group-start-hint {
   display: flex;
   align-items: center;
   gap: 0.25rem;
   margin-top: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .group-start-hint .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
 }
 
 .bulk-create-preview {
   margin-top: 1rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .bulk-create-preview > label {
   display: block;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
-  font-weight: 500;
+  font-weight: var(--type-label-weight);
 }
 
-.preview-list {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-primary);
-  border-radius: var(--radius-lg);
-  max-height: 180px;
-  overflow-y: auto;
-}
+/* `.preview-list`, `.preview-item` and `.preview-item:last-child` are owned by
+   shared/common.css § 17 PREVIEW LISTS. All three copies here were bare and
+   eager, and common.css is emitted after this file, so it already won every
+   property they declared — these rules rendered nothing. In particular the
+   180px `max-height` authored here has never been the live value; the list has
+   always been common.css's 300px. Deleted rather than revived, because
+   reviving it would be a change nobody has seen
+   (bead enhancedchannelmanager-87o0c). */
 
-.preview-item {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--input-bg);
-}
-
-.preview-item:last-child {
-  border-bottom: none;
-}
-
+/* Body role. 13.6px -> 13px. */
 .preview-number {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--accent-primary);
-  font-weight: 500;
+  font-weight: var(--type-body-weight);
   min-width: 3rem;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .preview-name {
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--button-text);
   white-space: nowrap;
   overflow: hidden;
@@ -1009,8 +1133,11 @@ button.group-selection-checkbox {
   flex: 1;
 }
 
+/* Meta role. 12px -> 11px. */
 .preview-stream-count {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   padding: 0.125rem 0.375rem;
   background-color: #22d3ee22;
   border-radius: var(--radius-md);
@@ -1019,8 +1146,11 @@ button.group-selection-checkbox {
   cursor: help;
 }
 
+/* Badge role. 11.2px -> 10px. */
 .preview-merge-badge {
-  font-size: 0.7rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
   padding: 0.1rem 0.35rem;
   background-color: #22d3ee22;
   border-radius: var(--radius-md);
@@ -1041,25 +1171,35 @@ button.group-selection-checkbox {
   margin-bottom: 0.75rem;
 }
 
+/* Status/panel glyph -> --icon-status. 17.6px -> 18px. */
 .timezone-info .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
   color: var(--warning);
 }
 
+/* Body role. 13.6px -> 13px. */
 .timezone-info span {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--button-text);
 }
 
+/* Meta role. 12px -> 11px. */
 .timezone-hint {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   margin-left: 0.5rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .timezone-excluded {
   margin-top: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--warning);
   font-style: italic;
 }
@@ -1076,13 +1216,17 @@ button.group-selection-checkbox {
   margin-bottom: 0.75rem;
 }
 
+/* Status/panel glyph -> --icon-status. 17.6px -> 18px. */
 .profiles-info .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
   color: #818cf8;
 }
 
+/* Body role. 13.6px -> 13px. */
 .profiles-info span {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--button-text);
 }
 
@@ -1106,12 +1250,16 @@ button.group-selection-checkbox {
   background-color: var(--border-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .profile-channel-count {
   margin-left: auto;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .btn-clear-profiles {
   margin-top: 0.5rem;
   padding: 0.375rem 0.75rem;
@@ -1119,7 +1267,7 @@ button.group-selection-checkbox {
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-md);
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -1130,20 +1278,16 @@ button.group-selection-checkbox {
   color: var(--text-primary);
 }
 
-.checkbox-option {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
-  cursor: pointer;
-  color: var(--button-text);
-  font-size: 0.9rem;
-}
+/* `.checkbox-option` is owned by shared/common.css § 20. This bare eager copy
+   lost display/align-items/gap/cursor to common.css (identical values) and
+   contributed the wrap, padding, colour and size on top — a merge every
+   checkbox row in the app was already rendering, including the pipeline tab's.
+   All four moved to common.css (bead enhancedchannelmanager-87o0c). Two of
+   them, the wrap and the padding, were then deleted outright so checkbox rows
+   sit at the same 24px as radio rows
+   (bead enhancedchannelmanager-4nn2o). */
 
 .checkbox-option input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin-right: 0.25rem;
   accent-color: var(--accent-primary);
   cursor: pointer;
@@ -1156,9 +1300,10 @@ button.group-selection-checkbox {
   width: 1rem;
 }
 
-.collapsible-title {
-  color: var(--button-text);
-}
+/* `.collapsible-title` is owned by shared/common.css § 9. The
+   `color: var(--button-text)` this file declared was bare and eager and
+   common.css is emitted after it, so `var(--text-primary)` has always been the
+   rendered colour (bead enhancedchannelmanager-87o0c). */
 
 .collapsible-content {
   overflow: visible;
@@ -1196,10 +1341,12 @@ button.group-selection-checkbox {
   width: 1rem;
 }
 
+/* Section role. 14.4px -> 15px. */
 .naming-options-title {
-  font-weight: 500;
+  font-weight: var(--type-section-weight);
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
 }
 
 .naming-options-content {
@@ -1224,9 +1371,12 @@ button.group-selection-checkbox {
   margin-bottom: 0.5rem;
 }
 
+/* Meta role. 12px -> 11px. */
 .option-hint {
   display: block;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
   margin-left: 1.5rem;
   margin-top: 0.25rem;
@@ -1244,11 +1394,13 @@ button.group-selection-checkbox {
   border-top: 1px solid var(--border-primary);
 }
 
+/* Label role. 14.4px -> 13px. */
 .prefix-order-label {
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
   color: var(--button-text);
   margin-bottom: 0.5rem;
-  font-weight: 500;
+  font-weight: var(--type-label-weight);
 }
 
 .prefix-order-options {
@@ -1263,41 +1415,26 @@ button.group-selection-checkbox {
   margin-top: 0.5rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .separator-label {
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
-.separator-btn {
-  padding: 0.375rem 0.75rem;
-  border: 1px solid var(--border-secondary);
-  border-radius: var(--radius-md);
-  background-color: var(--input-bg);
-  color: var(--button-text);
-  font-size: 0.9rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-  min-width: 2rem;
-}
+/* `.separator-btn` is owned by shared/common.css § 3 BUTTONS. This copy and
+   SettingsTab.css's were byte-identical in the base; the active state here
+   said `background-color: var(--accent-primary)22`, which is not valid CSS
+   and was being dropped by the parser, so the active separator had no
+   background at all. It now gets SettingsTab's valid `--accent-15`
+   (bead enhancedchannelmanager-6z299). */
 
-.separator-btn:hover {
-  background-color: var(--bg-hover);
-  border-color: var(--border-secondary);
-}
-
-.separator-btn.active {
-  border-color: var(--accent-primary);
-  background-color: var(--accent-primary)22;
-  color: var(--accent-primary);
-}
-
-.preview-more {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
+/* `.preview-more` moved to shared/common.css § 17 PREVIEW LISTS. It was
+   declared bare here and in CSVImportModal.css, both eager; this file won
+   padding, size and colour and CSVImportModal's background and centring
+   survived on top, so both render sites were showing a merge. The merged rule
+   is now in common.css verbatim (bead enhancedchannelmanager-87o0c). */
 
 .preview-group {
   margin-bottom: 0.75rem;
@@ -1307,9 +1444,11 @@ button.group-selection-checkbox {
   margin-bottom: 0;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .preview-group-header {
-  font-size: 0.85rem;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--accent-primary);
   padding: 0.375rem 0.75rem;
   background-color: var(--bg-hover);
@@ -1317,16 +1456,12 @@ button.group-selection-checkbox {
   margin-bottom: 0.25rem;
 }
 
-.modal-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.75rem;
-  padding: 1rem 1.25rem;
-  border-top: 1px solid var(--border-primary);
-}
+/* `.modal-footer` is owned by ModalBase.css — see the chassis note above the
+   bulk-create modal. */
 
 /* .btn-cancel is defined in shared/common.css */
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .btn-create {
   display: flex;
   align-items: center;
@@ -1336,7 +1471,7 @@ button.group-selection-checkbox {
   border: none;
   border-radius: var(--radius-lg);
   color: var(--button-primary-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s;
@@ -1351,8 +1486,9 @@ button.group-selection-checkbox {
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 17.6px -> 16px. */
 .btn-create .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
 }
 
 /* .spinning is defined in shared/common.css */
@@ -1379,16 +1515,20 @@ button.group-selection-checkbox {
   border-color: var(--accent-primary);
 }
 
+/* Body role. 14.4px -> 13px. */
 .searchable-dropdown .dropdown-value {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .searchable-dropdown .dropdown-arrow {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -1448,17 +1588,19 @@ button.group-selection-checkbox {
   background-color: var(--bg-tertiary);
 }
 
+/* Status/panel glyph -> --icon-status. 17.6px -> 18px. */
 .searchable-dropdown .dropdown-search .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .searchable-dropdown .dropdown-search input {
   flex: 1;
   background: transparent;
   border: none;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   outline: none;
 }
 
@@ -1483,8 +1625,9 @@ button.group-selection-checkbox {
   color: var(--text-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .searchable-dropdown .dropdown-search .clear-search .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 .searchable-dropdown .dropdown-options {
@@ -1492,9 +1635,12 @@ button.group-selection-checkbox {
   overflow-y: auto;
 }
 
+/* Body role. 14.4px -> 13px. */
 .searchable-dropdown .dropdown-option {
   padding: 0.5rem 0.75rem;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
   cursor: pointer;
   transition: background-color 0.15s;
@@ -1509,16 +1655,20 @@ button.group-selection-checkbox {
   color: var(--accent-primary);
 }
 
+/* Body role. 13.6px -> 13px. */
 .searchable-dropdown .dropdown-no-results {
   padding: 0.75rem;
   text-align: center;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   font-style: italic;
 }
 
 
 /* Normalization Rules Section */
+/* Body role. 13.6px -> 13px. */
 .normalization-info {
   display: flex;
   align-items: center;
@@ -1527,12 +1677,15 @@ button.group-selection-checkbox {
   margin-bottom: 0.75rem;
   background-color: var(--bg-tertiary);
   border-radius: var(--radius-md);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .normalization-info .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
@@ -1548,21 +1701,28 @@ button.group-selection-checkbox {
   border: 1px solid var(--border-primary);
 }
 
+/* Body role. 13.6px -> 13px. */
 .normalization-loading {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .normalization-loading .material-icons.spinning {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   /* Animation handled by .spinning in shared/common.css (counter-clockwise) */
 }
 
+/* Body role. 13.6px -> 13px. */
 .normalization-summary {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
 }
@@ -1573,11 +1733,14 @@ button.group-selection-checkbox {
   gap: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .normalization-change-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   padding: 0.375rem 0.5rem;
   background-color: var(--bg-secondary);
   border-radius: var(--radius-md);
@@ -1593,8 +1756,9 @@ button.group-selection-checkbox {
   white-space: nowrap;
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .normalization-change-item .arrow-icon {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -1608,22 +1772,48 @@ button.group-selection-checkbox {
   white-space: nowrap;
 }
 
+/* Body role. 12.8px -> 13px. */
 .normalization-more {
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-muted);
   font-style: italic;
   padding-left: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .normalization-no-changes {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .normalization-no-changes .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-status);
   color: var(--success);
+}
+
+/* Preview could not be fetched. Deliberately NOT styled like
+   .normalization-no-changes: the two used to look identical because a failed
+   preview fell back to "no names will change"
+   (bead enhancedchannelmanager-e9e5o). */
+.normalization-preview-failed {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--error);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
+}
+
+.normalization-preview-failed .material-icons {
+  font-size: var(--icon-status);
+  color: var(--error);
 }

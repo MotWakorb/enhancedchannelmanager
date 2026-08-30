@@ -51,8 +51,9 @@ import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import NamedTuple, Optional
 
+from dbas.restore_contracts import ChannelReattachMode
 from task_registry import register_task
 from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskScheduler
 
@@ -81,6 +82,34 @@ _STAGE_KEYS: tuple[str, ...] = (
 _TOTAL_STAGES = len(_STAGE_KEYS)
 
 
+class RestoreCounts(NamedTuple):
+    """Per-run item counts summed from ``RestoreReport.categories``.
+
+    Mirrors ``tasks.dbas_sync.SyncCounts`` (enhancedchannelmanager-tyei5):
+    the ``TaskResult`` numeric badges (Task History UI, and
+    ``task_engine.py``'s ``elif result.failed_count > 0`` "Completed with
+    Warnings" branch) must reflect the REAL per-category sums, not the
+    task-level stage count (``_TOTAL_STAGES``) previously hardcoded into
+    ``total_items``/``success_count`` here.
+
+    * ``total_items`` — success_count + skipped_count + failed_count.
+    * ``success_count`` — dry-run: would_create + would_update; apply:
+      created + updated.
+    * ``failed_count`` — sum of ``category.failed`` on BOTH dry-run and
+      apply. A dry-run plan cannot FAIL an apply attempt, but ``cat.failed``
+      also carries per-item CONFLICTs an importer surfaces unconditionally
+      (see ``EntityCategoryReport.failed``'s docstring) — those are facts
+      about the source data, populated on a dry-run preview too, so this
+      bucket is identical in both branches.
+    * ``skipped_count`` — dry-run: would_skip; apply: skipped.
+    """
+
+    total_items: int
+    success_count: int
+    failed_count: int
+    skipped_count: int
+
+
 @register_task
 class DbasRestoreTask(TaskScheduler):
     """Run a new-format DBAS artifact restore as an async, progress-emitting task.
@@ -96,6 +125,12 @@ class DbasRestoreTask(TaskScheduler):
       ``True`` against an unsupported plan still degrades safely to a dry-run.
     - ``cleanup_artifact``: bool — delete the temp artifact on completion
       (default ``True``).
+    - ``channel_reattach_mode``: ``"preserve"`` or ``"overwrite"``, what the
+      post-create reattach passes do to channels this restore did NOT create
+      (bead …-dfkbn, PR review W1). ``"preserve"`` is the default and is what an
+      absent or unrecognised value resolves to, so an OLD client that does not
+      send the field can never silently start overwriting an operator's live EPG
+      links and logos.
     """
 
     task_id = "dbas_restore"
@@ -119,6 +154,10 @@ class DbasRestoreTask(TaskScheduler):
         self.artifact_path: Optional[str] = None
         self.confirm_apply: bool = False
         self.cleanup_artifact: bool = True
+        # PRESERVE unless the operator explicitly chose otherwise (…-dfkbn W1).
+        # A PER-RUN transient on a SINGLETON task instance, and therefore reset
+        # in execute()'s finally — see _reset_run_transients.
+        self.channel_reattach_mode: ChannelReattachMode = ChannelReattachMode.PRESERVE
         # Operator passphrase for an encrypted artifact (ADR-012 D12 / u81kh).
         # None for a plain artifact. NEVER logged or echoed in any TaskResult.
         self.passphrase: Optional[str] = None
@@ -130,6 +169,7 @@ class DbasRestoreTask(TaskScheduler):
             "artifact_path": self.artifact_path,
             "confirm_apply": self.confirm_apply,
             "cleanup_artifact": self.cleanup_artifact,
+            "channel_reattach_mode": self.channel_reattach_mode.value,
         }
 
     def update_config(self, config: dict) -> None:
@@ -143,6 +183,10 @@ class DbasRestoreTask(TaskScheduler):
         if "passphrase" in config:
             val = config["passphrase"]
             self.passphrase = str(val) if val else None
+        if "channel_reattach_mode" in config:
+            self.channel_reattach_mode = ChannelReattachMode.coerce(
+                config["channel_reattach_mode"]
+            )
 
     # -- progress helpers ----------------------------------------------------
 
@@ -159,7 +203,44 @@ class DbasRestoreTask(TaskScheduler):
             skipped_count=skipped,
         )
 
+    def _reset_run_transients(self) -> None:
+        """Return the per-run restore transients to their SAFE defaults.
+
+        The ``cytzj`` shape, one bead old and re-created here (PR review round 2,
+        finding 5). ``get_task_instance()`` hands back a SINGLETON, and
+        :meth:`update_config` only assigns a field when its key is PRESENT, so a
+        bare ``POST /api/tasks/dbas_restore/run`` with no parameters re-runs with
+        whatever the PREVIOUS run left behind. For ``channel_reattach_mode`` that
+        means a run where the option is absent would silently inherit
+        ``overwrite`` — precisely the "absent resolves to preserve" guarantee the
+        rest of this changeset is built on, defeated by process state.
+
+        ``confirm_apply`` gets the same treatment for the same reason, and it is
+        the more dangerous of the two: a stale ``True`` arms a DESTRUCTIVE apply
+        on a run the operator asked nothing of.
+
+        ``cleanup_artifact`` is the fifth, and it defaults back to ``True``
+        rather than to its last value: ``/restore-dbas-saved`` sets it ``False``
+        DELIBERATELY, because the artifact there is the operator's own saved
+        backup and must survive the restore. Left sticky on the singleton, that
+        ``False`` governs whether a LATER run deletes the file it was handed.
+
+        Called from execute()'s ``finally`` so it runs on EVERY exit path.
+        """
+        self.channel_reattach_mode = ChannelReattachMode.PRESERVE
+        self.confirm_apply = False
+        self.artifact_path = None
+        self.passphrase = None
+        self.cleanup_artifact = True
+
     async def execute(self) -> TaskResult:
+        """Run one restore, then unconditionally disarm the per-run transients."""
+        try:
+            return await self._execute_run()
+        finally:
+            self._reset_run_transients()
+
+    async def _execute_run(self) -> TaskResult:
         started_at = datetime.now(timezone.utc)
         self._set_progress(
             total=_TOTAL_STAGES, current=0, status="starting",
@@ -256,8 +337,9 @@ class DbasRestoreTask(TaskScheduler):
         # Local imports keep the heavy backup router / orchestrator off this
         # module's import-time path (mirrors DbasBackupTask's deferred imports).
         from dispatcharr_client import get_client
+        from dbas.destination_read import ReadObservingClient, destination_read_reason
         from routers.backup import validate_artifact_manifest
-        from dbas.restore_artifact import decode_artifact_to_plan
+        from dbas.restore_artifact import decode_artifact_to_plan, logo_content_provider
         from dbas.restore_orchestrator import run_dry_run, run_restore, new_restore_id
         from dbas.restore_contracts import IdRemapTable, RestoreReport, RollbackLedger
         from dbas.restore_orchestrator import default_importer_steps
@@ -272,19 +354,43 @@ class DbasRestoreTask(TaskScheduler):
         # SHA-256, BEFORE any decode or importer. A refusal here means ZERO
         # mutation ever happened.
         self._stage("preflight")
+        zf = None
         try:
-            with zipfile.ZipFile(artifact_path, "r") as zf:
-                validate_artifact_manifest(zf)   # .17 — raises HTTPException(400) on refusal
-                plan = decode_artifact_to_plan(zf)  # decode the validated ZIP
+            zf = zipfile.ZipFile(artifact_path, "r")
+            manifest = validate_artifact_manifest(zf)  # .17 — raises HTTPException(400)
+            plan = decode_artifact_to_plan(zf, manifest=manifest)
         except zipfile.BadZipFile:
+            if zf is not None:
+                zf.close()
             return self._fail(started_at, "Uploaded artifact is not a valid archive")
         except HTTPException as exc:
+            if zf is not None:
+                zf.close()
             # .17 refused (version/integrity). NO importer ran. Surface the
             # sanitized message; never leak schema internals.
             return self._fail(started_at, str(exc.detail))
+        except Exception:
+            if zf is not None:
+                zf.close()
+            raise
+
+        assert zf is not None
 
         is_apply = bool(self.confirm_apply)
         client = get_client()
+
+        # Every importer count is a claim about the destination. Prove it can be
+        # read before either preview or apply reaches the orchestrator, then keep
+        # observing every get_* call in case readability is lost mid-run.
+        unread_reason = await destination_read_reason(client)
+        if unread_reason is not None:
+            return self._fail(
+                started_at,
+                "Restore refused because the destination could not be read: %s"
+                % unread_reason,
+            )
+        report = RestoreReport(is_dry_run=not is_apply)
+        client = ReadObservingClient(client, report, reject_mutations=True)
 
         try:
             if is_apply:
@@ -292,16 +398,36 @@ class DbasRestoreTask(TaskScheduler):
                     plan=plan,
                     client=client,
                     steps=default_importer_steps(),
-                    report=RestoreReport(is_dry_run=False),
+                    report=report,
                     ledger=RollbackLedger(restore_id=new_restore_id()),
                     remap=plan.existing_remap or IdRemapTable(),
                     confirm_apply=True,
+                    channel_reattach_mode=self.channel_reattach_mode,
+                    # STATED, not inherited (bead …-efvyg). The archive-restore
+                    # path matches on the FULL 4-tier ladder: this is the value
+                    # ``import_channels`` already runs under here, and the
+                    # post-create rebind is where a restore does essentially all
+                    # of its matching (the destination has no provider streams
+                    # yet at channel-import time). The Tier-3 floor belongs to
+                    # the cross-instance SYNC path (ruling 1b), not to this one.
+                    allow_fuzzy_stream_match=True,
+                    logo_content_provider=logo_content_provider(zf),
                 )
             else:
-                report = await run_dry_run(plan=plan, client=client)
+                # The preview MUST run under the SAME mode the apply will, or it
+                # mispredicts the one number the mode exists to control.
+                report = await run_dry_run(
+                    plan=plan,
+                    client=client,
+                    report=report,
+                    channel_reattach_mode=self.channel_reattach_mode,
+                    logo_content_provider=logo_content_provider(zf),
+                )
         except Exception as exc:  # noqa: BLE001 - any orchestration error is a sanitized failure
             logger.exception("[DBAS-RESTORE] Restore orchestration failed: %s", exc)
             return self._fail(started_at, "Restore failed during orchestration")
+        finally:
+            zf.close()
 
         # --- Per-category stages: emit one tick per restoreStages key with the
         #     category's realized (apply) or planned (dry-run) counts. ---------
@@ -317,13 +443,17 @@ class DbasRestoreTask(TaskScheduler):
             "[DBAS-RESTORE] Restore task complete (mode=%s, outcome=%s, %d categories)",
             mode, outcome, len(report.categories),
         )
+        counts = self._counts_from_report(report, is_apply)
         return TaskResult(
             success=self._report_succeeded(report, is_apply),
+            completed_degraded=self._degraded_not_failed(report, is_apply),
             message=self._summary_message(report, is_apply),
             started_at=started_at,
             completed_at=datetime.now(timezone.utc),
-            total_items=_TOTAL_STAGES,
-            success_count=_TOTAL_STAGES,
+            total_items=counts.total_items,
+            success_count=counts.success_count,
+            failed_count=counts.failed_count,
+            skipped_count=counts.skipped_count,
             details={
                 "is_dry_run": report.is_dry_run,
                 "outcome": outcome,
@@ -373,23 +503,357 @@ class DbasRestoreTask(TaskScheduler):
         """A dry-run always 'succeeds' (it produced a plan); an apply succeeds
         only on a clean SUCCESS outcome (never on a rolled-back/incomplete state)."""
         from dbas.restore_contracts import RestoreOutcome
+        if report.destination_unreadable is not None:
+            return False
 
         if not is_apply or report.is_dry_run:
             return True
         return report.outcome == RestoreOutcome.SUCCESS
 
     @staticmethod
+    def _degraded_not_failed(report, is_apply: bool) -> bool:
+        """True when the restore RAN TO COMPLETION and rolled nothing back.
+
+        Beads ``…-daziw`` (PO decision 2) and ``…-cwmid``. Such a run is a
+        WARNING, not a red "Task Failed": the applied state is real and kept, and
+        the summary names the shortfall. The task declares that state here;
+        ``task_engine`` maps it to the alert severity
+        (:attr:`task_scheduler.TaskResult.completed_degraded`).
+
+        The condition is the OUTCOME, not the particular category that degraded.
+        :class:`dbas.restore_contracts.RestoreOutcome.COMPLETED_WITH_FAILURES`
+        already means exactly "ran to completion and NOTHING was rolled back",
+        for either of its two triggers — a non-fatal category's failed row, or a
+        channel left with no playable stream. The test is
+        :attr:`~dbas.restore_contracts.RestoreOutcome.is_degraded_not_failed`,
+        SHARED with ``tasks.dbas_sync``: the cross-instance sync builds its own
+        TaskResult from the same reports, and a second copy of this rule is how
+        it came to announce "Task Failed" for a run this one calls a warning.
+
+        daziw's original form keyed on ``channels_with_no_playable_stream`` and
+        excluded any run with a failed row, which inverted the severity ordering
+        for triage (bead ``…-cwmid``, drill run 2026-08-06-run9): a restore in
+        which 12 of 12 channels could not play alerted as a ``warning`` while one
+        unwritable logo — on a category deliberately made NON-FATAL — alerted as
+        ``error`` / "Task Failed". "Task Failed" was also untrue, and the
+        published docs warn that re-running a restore after a failed attempt
+        starts from an unknown state.
+
+        ``error`` is reserved for what it describes: the two rolled-back /
+        indeterminate outcomes, an orchestration error, and any dry run's
+        failure mode.
+        """
+        if not is_apply or report.is_dry_run or report.outcome is None:
+            return False
+        return report.outcome.is_degraded_not_failed
+
+    @staticmethod
+    def _counts_from_report(report, is_apply: bool) -> RestoreCounts:
+        """Sum the REAL per-category item counts across ``report.categories``.
+
+        Mirrors ``tasks.dbas_sync.DbasSyncTask._counts_from_report`` — same
+        underlying counts as :meth:`_summary_message`, so the human-readable
+        message and the numeric ``TaskResult`` badges never disagree.
+        """
+        failed_count = sum(c.failed for c in report.categories)
+        if report.is_dry_run or not is_apply:
+            success_count = sum(
+                c.would_create + c.would_update for c in report.categories
+            )
+            skipped_count = sum(c.would_skip for c in report.categories)
+        else:
+            success_count = sum(c.created + c.updated for c in report.categories)
+            skipped_count = sum(c.skipped for c in report.categories)
+        total_items = success_count + skipped_count + failed_count
+        return RestoreCounts(
+            total_items=total_items,
+            success_count=success_count,
+            failed_count=failed_count,
+            skipped_count=skipped_count,
+        )
+
+    @staticmethod
+    def stream_reattach_phrases(report) -> list[str]:
+        """Name the placeholder populations WITHOUT overstating either (…-daziw).
+
+        PUBLIC, unlike its sibling builders: ``tasks.dbas_sync`` renders the same
+        two counters into the cross-instance sync's summary, and one wording for
+        one pair of counters is the point — a second copy is how the two paths
+        came to describe the same run differently in the first place.
+
+        Two different facts, previously reported as one:
+
+        * ``channels_with_no_playable_stream`` — not one URL-bearing stream is
+          left on the channel. It CANNOT PLAY. This is the claim the old wording
+          made on behalf of the other counter, which could not support it.
+        * ``channels_needing_stream_reattach`` — the channel holds at least one
+          placeholder slot. It is a SUPERSET of the above, and most of its
+          members play fine (the ``…-ixdaw`` fix produces exactly that shape).
+
+        Rendered as one clause when the two counts agree (every holder is dead)
+        and as one combined clause when they differ, so the summary never reads
+        as two unrelated problems or double-counts the same channels.
+        """
+        unplayable = getattr(report, "channels_with_no_playable_stream", 0) or 0
+        holding = getattr(report, "channels_needing_stream_reattach", 0) or 0
+        if unplayable and holding > unplayable:
+            return [
+                "%d channel(s) have NO playable stream (of %d still holding a "
+                "placeholder stream)" % (unplayable, holding)
+            ]
+        if unplayable:
+            return ["%d channel(s) have NO playable stream" % unplayable]
+        if holding:
+            return ["%d channel(s) still hold a placeholder stream" % holding]
+        return []
+
+    @staticmethod
+    def _channel_group_drift_phrases(report, *, is_preview: bool = False) -> list[str]:
+        """Say whether the drifted channels were REGROUPED or merely reported (…-r1ei7).
+
+        One counter, two outcomes: under the default relink mode the restore
+        reports the divergence and leaves the operator's grouping alone, and
+        under ``replace`` it also moves each channel into the archive's group.
+        A single template would have to describe both, so the clause is built
+        from the detail rows' ``moved`` flag instead — the same reason the two
+        placeholder populations get their own builder.
+
+        THIRD OUTCOME: the check did not run at all, because the operator
+        deselected the channel-groups category. The counter is ``0`` then for a
+        reason that has nothing to do with the lineup, and a suffix that stays
+        silent lets that zero pass for a clean bill of health — so the report's
+        ``channel_group_drift_note`` is emitted verbatim instead. It is the only
+        clause here that is a sentence rather than a count phrase, which is
+        correct: it is a caveat, not an action item.
+        """
+        note = getattr(report, "channel_group_drift_note", None)
+        if note:
+            return [note]
+        total = getattr(report, "channel_group_drift", 0) or 0
+        if not total:
+            return []
+        details = getattr(report, "channel_group_drift_details", None) or []
+        moved = sum(1 for d in details if getattr(d, "moved", False))
+        if moved >= total:
+            return [
+                "%d channel(s) %s into the group the backup assigns them"
+                % (total, "would be moved" if is_preview else "were moved")
+            ]
+        if moved:
+            return [
+                "%d channel(s) are in a different group than the backup "
+                "(%d %s, the rest left as they are)"
+                % (total, moved, "would be moved" if is_preview else "moved")
+            ]
+        return [
+            "%d channel(s) are in a different group than the backup; left as they are"
+            % total
+        ]
+
+    # Post-restore action items, as ``(attribute, apply_template,
+    # preview_template)``. A PREVIEW makes no changes, so its clause must be in
+    # the FUTURE tense (bead ``enhancedchannelmanager-juu3c``): PR #784 made
+    # these counters genuinely PREDICTED on a dry run, and rendering a real
+    # prediction as "N profile membership(s) corrected" reads as though the
+    # restore already happened — which is exactly the trust the preview exists
+    # to earn. The counters and the summary structure are identical either way;
+    # only the verb moves.
+    _ACTION_ITEM_TEMPLATES = (
+        (
+            "logo_misses",
+            "%d logo(s) could not be reinstated",
+            "%d logo(s) would not be reinstated",
+        ),
+        (
+            "epg_links_unrestored",
+            "%d channel(s) restored without an EPG link",
+            "%d channel(s) would be restored without an EPG link",
+        ),
+        # Bead …-msqf7. An Xtream Codes stream URL carries the provider's
+        # username and password in its PATH, so the address cannot be carried
+        # without them: the credential segments are replaced and the stream
+        # lands naming where it pointed but unable to play. The operator's next
+        # action is to give the destination its own provider account — which is
+        # not the same action as re-typing a password into an empty field, so it
+        # is not the same clause.
+        (
+            "stream_urls_redacted",
+            "%d stream(s) restored without a playable URL "
+            "(it carried the provider's credentials)",
+            "%d stream(s) would be restored without a playable URL "
+            "(it carried the provider's credentials)",
+        ),
+        (
+            "profile_membership_drift",
+            "%d profile membership(s) corrected",
+            "%d profile membership(s) would be corrected",
+        ),
+        # Bead …-4mkoe. The entity was not created at all, because something it
+        # references is not on the destination — a degraded backup that lost the
+        # dependency's whole category, a collision that stopped it being created,
+        # or a selection that left it out while its dependants were kept. The
+        # clause names the shape rather than the entity type because every
+        # importer can produce it; the per-category ``skip_details`` name which
+        # rows they were. A skip whose dependency the operator DESELECTED is
+        # recorded ``DEPENDENCY_DESELECTED``, never counted here, and never
+        # reaches this clause.
+        (
+            "entities_blocked_by_dependency",
+            "%d archived item(s) were not restored — something they depend on is "
+            "not on the destination",
+            "%d archived item(s) would not be restored — something they depend on "
+            "is not on the destination",
+        ),
+        # Bead …-avrix. A provider account's per-group ENABLE selection is what
+        # decides WHAT THAT ACCOUNT INGESTS — on the measured account, 2 groups
+        # of 777 is the difference between 316 channels and 53,661 streams. A
+        # destination account that did not receive it will not ingest what the
+        # source ingests, and none of the counts above can say so: every row
+        # succeeded. The clause names the consequence, not the table.
+        (
+            "provider_group_selection_unapplied",
+            "%d provider group selection(s) did not reach the destination's M3U "
+            "account — it will not ingest the same content as this instance",
+            "%d provider group selection(s) would not reach the destination's M3U "
+            "account — it would not ingest the same content as this instance",
+        ),
+    )
+
+    # Credential FIELD NAMES that carry the ADDRESS as well as the secret, so
+    # losing one costs the operator something a password prompt cannot recover
+    # (bead ``enhancedchannelmanager-v7d37``). An Xtream Codes guide URL
+    # authenticates by ``?username=…&password=…``, so the redactor — which
+    # cannot separate the secret from the address — strips the WHOLE value and
+    # the destination source is left with nowhere to point. Measured on 0.29.0:
+    # 53 of 59 replica channels arrived with no EPG link because of exactly this,
+    # while the 6 channels behind a credential-free guide URL kept theirs.
+    #
+    # "N account(s) need credentials re-entered" is the WRONG sentence for that
+    # entity — there is no password field to fill in, and the operator cannot
+    # even see what the source used to point at. These field names get their own
+    # clause naming the address as the thing to restore.
+    _ADDRESS_CREDENTIAL_FIELDS = frozenset({"url", "server_url"})
+
+    @staticmethod
+    def _credential_reentry_phrases(report) -> list[str]:
+        """Split the credential action item by WHAT the entity actually lost.
+
+        Two clauses, because the operator's next action differs: a stripped
+        ``password`` is re-typed into a field that is visibly empty, while a
+        stripped ``url`` leaves nothing on screen to re-type INTO and no record
+        of the address (bead ``…-v7d37``).
+
+        The split reads :attr:`RestoreReport.credential_reentry_details` — the
+        only structure that knows which FIELD was lost — but the count it must
+        add up to is the top-level ``credentials_needing_reentry`` aggregate, so
+        entities the aggregate counts without a detail row still get described.
+        Whatever the details do not explain falls to the generic clause rather
+        than off the message: under-reporting is the defect this whole suffix
+        exists to prevent.
+
+        Both clauses are tense-neutral (bead ``…-juu3c``): each states work the
+        operator still has to do, which is equally true of a preview and of an
+        apply.
+
+        Args:
+            report: The :class:`RestoreReport` to summarize.
+
+        Returns:
+            Zero, one, or two clauses, address-first.
+        """
+        total = getattr(report, "credentials_needing_reentry", 0) or 0
+        if total <= 0:
+            return []
+        details = getattr(report, "credential_reentry_details", None) or []
+        address = sum(
+            1
+            for detail in details
+            if any(
+                str(field).lower() in DbasRestoreTask._ADDRESS_CREDENTIAL_FIELDS
+                for field in (getattr(detail, "fields", None) or [])
+            )
+        )
+        address = min(address, total)
+        phrases: list[str] = []
+        if address:
+            phrases.append(
+                "%d source(s) need their URL re-entered (the address carried "
+                "the credentials, so it could not be copied)" % address
+            )
+        if total - address:
+            phrases.append(
+                "%d account(s) need credentials re-entered" % (total - address)
+            )
+        return phrases
+
+    @staticmethod
+    def _credential_reentry_suffix(report, *, is_preview: bool = False) -> str:
+        """Name every post-restore ACTION ITEM in the one-line summary.
+
+        The task-history row and the MCP tool result are the ONLY surfaces an
+        operator who did not use the restore modal ever sees. Each item below is
+        state the operator HAD before the backup and does NOT have after the
+        restore — none of them is a failure, so none of them moves the counts,
+        which is exactly how the drill's ``Restore success: created 32, failed 0``
+        described an instance where not one channel could play, every logo and
+        EPG link was gone, and a channel profile had silently widened
+        (beads …-6pilh / …-2o0cz / …-dfkbn). They belong in the message itself,
+        not only in ``details``.
+
+        Args:
+            report: The :class:`RestoreReport` to summarize.
+            is_preview: Whether this suffix is being appended to a DRY-RUN
+                summary. When true the action items are rendered in the future
+                tense, because a preview changed nothing (bead ``…-juu3c``).
+                The credential clauses are unaffected — both
+                :meth:`_credential_reentry_phrases` renders are already
+                is/will-be statements, true of a preview and an apply alike.
+        """
+        parts: list[str] = []
+        parts.extend(DbasRestoreTask._credential_reentry_phrases(report))
+        # The two placeholder populations need each other's counts to read
+        # correctly, so they are rendered together rather than as two rows of the
+        # generic table below. They are NULL (not predicted) on a preview, so the
+        # tense question does not arise for them.
+        parts.extend(DbasRestoreTask.stream_reattach_phrases(report))
+        # Channel->group drift reads differently depending on whether the mode
+        # also reconciled it, so it too gets a builder rather than a template.
+        parts.extend(
+            DbasRestoreTask._channel_group_drift_phrases(report, is_preview=is_preview)
+        )
+        for attribute, applied, predicted in DbasRestoreTask._ACTION_ITEM_TEMPLATES:
+            count = getattr(report, attribute, 0) or 0
+            if count > 0:
+                parts.append((predicted if is_preview else applied) % count)
+        if not parts:
+            return ""
+        return "; " + "; ".join(parts)
+
+    @staticmethod
     def _summary_message(report, is_apply: bool) -> str:
+        if report.destination_unreadable is not None:
+            return (
+                "Restore failed because the destination could not be read safely: %s"
+                % report.destination_unreadable
+            )
         if report.is_dry_run or not is_apply:
             total_create = sum(c.would_create for c in report.categories)
             total_update = sum(c.would_update for c in report.categories)
             total_skip = sum(c.would_skip for c in report.categories)
+            # `failed` is populated on a dry-run preview by the per-item
+            # conflict paths (source-side duplicate name, ambiguous
+            # null-channel-number collision) — surface it here too so this
+            # message never disagrees with the numeric failed_count badge.
+            # Mirrors tasks.dbas_sync.DbasSyncTask._summary_message's dry-run
+            # branch (enhancedchannelmanager-tyei5).
+            total_conflict = sum(c.failed for c in report.categories)
             return (
-                "Dry-run complete: would create %d, update %d, skip %d "
-                "across %d categories" % (
-                    total_create, total_update, total_skip, len(report.categories),
+                "Dry-run complete: would create %d, update %d, skip %d, "
+                "%d conflict(s) across %d categories" % (
+                    total_create, total_update, total_skip, total_conflict,
+                    len(report.categories),
                 )
-            )
+            ) + DbasRestoreTask._credential_reentry_suffix(report, is_preview=True)
         outcome = report.outcome.value if report.outcome else "unknown"
         total_created = sum(c.created for c in report.categories)
         total_failed = sum(c.failed for c in report.categories)
@@ -397,7 +861,7 @@ class DbasRestoreTask(TaskScheduler):
             "Restore %s: created %d, failed %d across %d categories" % (
                 outcome, total_created, total_failed, len(report.categories),
             )
-        )
+        ) + DbasRestoreTask._credential_reentry_suffix(report)
 
     def _fail(self, started_at: datetime, message: str) -> TaskResult:
         """Build a failed TaskResult and mark progress failed (sanitized message)."""

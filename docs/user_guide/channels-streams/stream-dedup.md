@@ -1,9 +1,5 @@
 # Stream Deduplication
 
-> **Audience:** Operator managing a channel lineup. You have streams arriving from M3U sources and want to prevent or resolve duplicate channels.
->
-> **Feature version:** v0.17.1 (ADR-008)
-
 ## What the dedup feature does
 
 When a stream's name is similar to an existing channel in the same group, ECM intercepts the "create a new channel" action and asks you whether to **merge into the existing channel** instead of creating a new one. A confidence score (0–100%) shows how closely the incoming stream name matches the candidate channel.
@@ -12,11 +8,25 @@ The feature fires on three trigger paths:
 
 | Trigger | When it fires |
 |-|-|
-| Drag-drop | You drag a stream from the Streams pane onto a channel group |
-| Create in… menu | In Edit Mode, you select a single channel-less stream and use the selection strip's **Create in…** menu to pick a target channel group |
+| Drag-drop | You drag a **single** stream from the Streams pane onto a channel group |
+| Create in… menu | In Edit Mode, you select a **single** channel-less stream and use the selection strip's **Create in…** menu to pick a target channel group |
 | Bulk M3U refresh | ECM's Channel Pipeline processes an M3U import and finds candidate matches |
 
 Each trigger path routes to the same dedup decision surface: the **StreamDedupModal** (for interactive triggers) or the **Pending Merges queue** (for the bulk M3U path).
+
+### Where the dedup check does not run
+
+This is the other half of the table, and it is the half that generates support questions. None of these surfaces creates channels through the interactive matcher, so none of them will ever raise a merge prompt, no matter how closely the names match:
+
+| Surface | Why not |
+|-|-|
+| The plain **Create** button in the Streams panel selection strip | It opens the Create Channels dialog directly. It is not a dedup trigger and never has been. Use **Create in…** if you want the check |
+| A multi-stream selection or a multi-stream drop | The check runs on a single stream only. Bulk duplicate handling is the Pending Merges queue, which is fed by M3U refresh, not by the panel |
+| Dropping a stream onto an existing **channel row** | You have already told ECM which channel you mean, so there is nothing to disambiguate |
+| **Run Pipeline** and **Run Rule** (manual Channel Pipeline runs) | The dedup hook is gated to the M3U refresh trigger. A manual run reports itself as an API-triggered run, and the hook is bypassed for it entirely. Channels are created without a duplicate check |
+| CSV import (`POST /api/channels/import-csv`) | The import path never reaches the matcher |
+
+The two interactive surfaces that *do* run the check now say so when the check did not produce a prompt. See [What ECM tells you when there is no prompt](#what-ecm-tells-you-when-there-is-no-prompt).
 
 > **Terminology note:** "merge into existing channel" in this guide means routing the stream into an existing Dispatcharr channel. This is distinct from the two-channel merge in the "Merge channels" editing surface, which combines two full channels. The dedup feature only ever touches one incoming stream and one candidate channel.
 
@@ -27,14 +37,20 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 ### Drag-drop
 
 1. Select a stream in the Streams pane.
-2. Drag it onto a channel group header or an existing channel row.
-3. If ECM finds a candidate channel — a channel whose name is at or above the configured dedup threshold — the **StreamDedupModal** appears.
+2. Drag it onto a channel group header. (Dropping onto an existing channel row adds the stream to that channel and runs no dedup check.)
+3. If ECM finds a candidate channel (a channel whose name is at or above the configured dedup threshold), the **StreamDedupModal** appears.
+4. If it does not, ECM tells you which of the three non-prompt outcomes happened. See [What ECM tells you when there is no prompt](#what-ecm-tells-you-when-there-is-no-prompt).
+
+Dragging more than one stream at once skips the check. ECM says so rather than dropping the streams in silently.
 
 ### Create in… menu (create channel in a chosen group)
 
 1. Enter **Edit Mode** and select a single channel-less stream in the Streams pane (its row checkbox).
 2. In the selection strip at the top of the pane, open the **Create in…** menu and choose an enabled channel group (type to filter the list).
 3. If ECM finds a candidate channel in the target group, the **StreamDedupModal** appears.
+4. If it does not, ECM tells you which of the three non-prompt outcomes happened. See [What ECM tells you when there is no prompt](#what-ecm-tells-you-when-there-is-no-prompt).
+
+The neighbouring plain **Create** button is not this button. It opens the Create Channels dialog with no dedup check at all. If you want the check, use **Create in…**.
 
 > Before build 0161 this trigger lived on a right-click context menu
 > ("Create channel(s) in group"). The menu was replaced by the keyboard-
@@ -42,16 +58,29 @@ Each trigger path routes to the same dedup decision surface: the **StreamDedupMo
 
 ### What the StreamDedupModal shows
 
-The modal presents:
+The modal opens titled **"Stream matches an existing channel"** and presents:
 
 - The incoming **stream name**.
-- The **candidate channel** — the best matching existing channel — with its name and confidence score.
-- Two primary actions:
-  - **Merge into existing channel** — routes the stream into the candidate channel. The stream becomes part of the existing channel; no new channel is created.
-  - **Create new channel** — bypasses the dedup check and creates a new channel as usual.
-- A dismiss (close) action — leaves the stream unassigned and closes the modal.
+- The **candidate channel** (the best matching existing channel), with its name and a confidence score. For a 100% match, the score renders as the words **"Exact match"** instead of a percentage.
+- Three buttons:
+  - **Merge**: routes the stream into the candidate channel. The stream becomes part of the existing channel; no new channel is created.
+  - **Create New**: bypasses the dedup check and creates a new channel as usual.
+  - **Cancel**: leaves the stream unassigned and closes the modal.
 
-ECM only shows a candidate when the confidence score is at or above your configured threshold (default 80%). If no candidate meets the threshold, the dedup check is silent and a new channel is created as normal.
+ECM only shows a candidate when the confidence score is at or above your configured threshold (default 80%).
+
+### What ECM tells you when there is no prompt
+
+An absent merge prompt used to mean nothing in particular. It covered three different outcomes, and the one operators most often read it as ("nothing in the group was similar enough") was frequently not the one that had happened. Both interactive paths, drag-drop and **Create in…**, now name the outcome in the same words, so what you learn on one path holds on the other.
+
+| Notification | What happened | What to do |
+|-|-|-|
+| *(no notification)* | A candidate cleared the threshold and the **StreamDedupModal** is on screen | Answer the modal |
+| **No duplicate found** | The check ran against the target group and nothing was close enough. A new channel is being created | Nothing, unless you expected a prompt. If you did, lower the dedup confidence threshold in Settings |
+| **Duplicate check unavailable** | The lookup itself failed. The channel is being created **without** a duplicate check | Check that ECM can reach its backend, then review the group for a duplicate by hand |
+| **Duplicate check skipped** | The check never ran: you selected or dropped more than one stream, or ECM could not read the stream's name | Retry with a single stream if you want the check |
+
+A found candidate stays quiet on purpose: the modal is the message, and a toast repeating it would only be noise.
 
 ---
 
@@ -68,15 +97,17 @@ Each pending merge row records:
 - The confidence score at the time of queuing.
 - The trigger context (`m3u_refresh`).
 
-The same `(stream_name, candidate_channel)` pair can only appear once in the pending queue — repeat M3U refreshes of the same stream against the same candidate produce one row, not duplicates.
+The same `(stream_name, candidate_channel)` pair can only appear once in the pending queue. Repeat M3U refreshes of the same stream against the same candidate produce one row, not duplicates.
 
-After the bulk M3U refresh completes, ECM shows a toast notification indicating how many pending merges were queued (e.g., "Auto-Creation: 0 created, 3 pending merges queued"). You can suppress this toast in Settings if you prefer to check the page on your own schedule — see [Settings](#settings-stream-deduplication).
+After the bulk M3U refresh completes, ECM shows a toast notification indicating how many pending merges were queued (e.g., "Auto-Creation: 0 created, 3 pending merges queued"). You can suppress this toast in Settings if you prefer to check the page on your own schedule. See [Settings](#settings-stream-deduplication).
 
 ### Navigating to the Pending Merges page
 
-1. Open the **Channel Manager** tab.
-2. The subnav bar shows a **Pending Merges** item with a count badge (e.g., "Pending Merges (3)") when rows are waiting for a decision.
+1. Under **Operations**, open **Channel Manager**.
+2. The subnav bar shows a **Pending Merges** item with a count badge next to it.
 3. Click **Pending Merges** to open the page.
+
+> **The subnav is not always there.** It renders only when the pending count is above zero, or when you are already on the Pending Merges page. With an empty queue there is no subnav bar at all, not a **Pending Merges** item showing zero, so "I cannot find the Pending Merges link" almost always means "there is nothing pending". The count polls every 30 seconds, so a queue filled by an M3U refresh that just finished can take up to that long to appear. Resolving the last row leaves the subnav on screen while you are still on the page, so you always have a way back to **Channels & Streams**. (`frontend/src/components/tabs/ChannelManagerTab.tsx`: the condition is at line 480 and gates the whole `<nav>` at line 517.)
 
 The page lists all pending rows with:
 
@@ -90,9 +121,64 @@ The page lists all pending rows with:
 
 **Merge** (merge into existing channel)
 
-Clicking **Merge** for a row triggers the same Dispatcharr-side operation as the interactive modal. The stream is added to the candidate channel. The row transitions from `pending` to `merged` and is removed from the active queue.
+Clicking **Merge** for a row triggers the same Dispatcharr-side operation as the interactive modal. ECM looks the stream up in Dispatcharr by name and adds it to the candidate channel. **When that works**, the row transitions from `pending` to `merged` and is removed from the active queue.
+
+**When it does not work, the row stays where it is.** Those are two separate things: resolving the queue row is ECM's own bookkeeping, and adding the stream is a write to Dispatcharr that depends on ECM finding exactly one stream with that name. When it cannot find one, the merge did not happen, so the row is not finished business and does not leave the list. It stays in place, flagged **Not applied**, carrying the reason on the row itself, and pressing **Merge** again once the cause has cleared is an ordinary retry. Your decision is still recorded either way, because your decision is a fact about you and it stays true. What ECM no longer does is let that be mistaken for the merge having happened. See [What happens when a merge is recorded but not applied](#what-happens-when-a-merge-is-recorded-but-not-applied).
 
 If the candidate channel was deleted in Dispatcharr between when the row was queued and when you click **Merge**, ECM returns an error: "Target channel no longer exists — dismiss this pending merge and refresh." Click **Create New** or dismiss the row, then re-run the M3U refresh to get a fresh candidate.
+
+### What happens when a merge is recorded but not applied
+
+Accepting a merge ends in one of three states, and only the first is finished business.
+
+| State | What you see | Is anything left to do |
+|-|-|-|
+| Applied | Nothing. The row disappears | No |
+| Recorded, not applied | The row **stays in the list** with a **Not applied** badge and the reason underneath it, plus a warning notice above the list: *"N merges were recorded but not applied to Dispatcharr. They stay in the list below, flagged as not applied"* | Yes, and you can do it from here. Retry the row |
+| Outcome unknown | A separate informational notice: *"N merges were already resolved by earlier requests, so this run could not tell whether Dispatcharr was updated."* Nothing is left in the list | Probably not, but check |
+
+#### The "Not applied" badge, and retrying
+
+A row ECM could not apply is not a row nobody has touched, and the badge is what says so. You will see, on the row itself:
+
+- A **Not applied** badge next to the confidence score.
+- The reason underneath the row, in the same words the notice uses, ending with "Retry the merge once that has cleared."
+
+The reason travels with the row, so it survives a page reload, a move to another page of the queue, and the end of your session. The row also stays counted by the **Pending Merges** badge in the subnav, and it keeps its place against a later M3U refresh queuing a second row for the same stream and channel, so you get one row to deal with rather than a growing pile.
+
+**To retry, press Merge on that row again.** It is an ordinary accept: ECM looks the stream up afresh, and if it resolves this time the row merges, leaves the queue, and the flag goes with it. If it still cannot resolve, the row stays and the reason is rewritten to whatever is true now. There is no separate retry control and no limit on attempts. If the cause is one you cannot clear (duplicate stream names you do not want to rename, for instance), add the stream to the channel by hand in Dispatcharr and then use **Create New** to take the row out of the queue.
+
+#### About the notices
+
+Both notices list the affected stream names with the reason for each, and both have a **Dismiss** button. **The notice is a summary of what your last click or bulk run did**, which is why it names the streams: after **Merge all** over a long queue the flagged rows are not necessarily on the page you are looking at. Dismissing a notice only clears it from the screen. It changes nothing about the rows, which stay flagged until you retry them, and the record outlives both, in the Journal under **Merge Not Applied**.
+
+The "outcome unknown" notice is the one exception, and it is the reason the two notices are separate rather than combined. A replay is a second accept of a merge that already resolved, so there is no row left in the list to flag and the notice is the only place its explanation can live.
+
+#### "Recorded but not applied"
+
+ECM could not resolve the stream name to exactly one Dispatcharr stream, so it wrote nothing upstream. Five reasons, and the notice names the one that applies:
+
+| Reason | What to do |
+|-|-|
+| No Dispatcharr stream carries that name | The stream was probably renamed or removed since the row was queued. Nothing to recover; re-run the M3U refresh if you expect it back |
+| Several streams carry that name | ECM cannot tell which one you meant. Add the right one to the channel by hand, or rename the duplicates and re-run the refresh |
+| The lookup itself could not be completed | Dispatcharr was unreachable. **This is not evidence that the stream is missing.** Retry once Dispatcharr is reachable |
+| The search filled its single page of results | ECM never saw the whole catalogue, so it cannot promise the match it found is the only one. Narrow the stream's name, or add it to the channel by hand |
+| The one match carries no usable id | A gap on ECM's side, not in your catalogue. Add the stream to the channel by hand |
+
+The fourth is the one that surprises people. The search can end with exactly one exact match visible and still refuse, because a full page means further matches may sit on pages nobody asked for, and adding one of several possible streams is not the merge you asked for.
+
+#### "Outcome unknown"
+
+This one is deliberately not folded into the notice above, because it says something different. The merge had already been resolved by an earlier request (a double-click, a retry after a flaky network, two people working the queue at once). Your request replayed that result without contacting Dispatcharr at all, so it has **no evidence either way** about whether the stream was added.
+
+Telling you "not applied" here would send you off to add a stream that is very likely already on the channel. What to do instead: look at the Journal against that channel, where the *original* request recorded what it did.
+
+#### In a bulk run
+
+**Merge all** and **Merge selected** count these separately from failures, because nothing failed. Three counters, not one: the progress line reads, for example, "Completed 40 of 40 and 3 not applied to Dispatcharr." on a run with no failures, and adds "with N failures" ahead of it when there were any. The notices above the list then name every affected stream.
+
+**The rows that were not applied are still in the queue when the run ends**, flagged, so a **Merge all** over 200 rows that could apply 197 of them leaves you a list of 3 to work through rather than an empty list and a notice you have to act on before you lose it. Re-running **Merge all** retries them along with anything new.
 
 **Create New**
 
@@ -119,7 +205,7 @@ If a **Merge** action fails, an error message appears inline next to the row. Th
 | Target channel no longer exists | Candidate channel was deleted after the row was queued | Dismiss the row; re-run M3U refresh |
 | Invalid state | Row was already resolved (merged or dismissed) by another session | Refresh the page |
 
-Resolved rows (merged or dismissed) are retained in ECM's audit log indefinitely and are accessible via the API (`GET /api/channel-merges?status=merged` or `?status=dismissed`) for historical review.
+Resolved rows (merged or dismissed) are retained in ECM's audit log indefinitely as a historical record; there is currently no UI that lists them. An accept that did not reach Dispatcharr is **not** a resolved row: it is still in the pending queue, flagged, and visible on this page. It also writes a Journal row under **Merge Not Applied**, which is what makes it findable after you eventually retry it and the queue row goes.
 
 ---
 
@@ -162,6 +248,8 @@ If you use the ECM MCP server with an AI agent, the dedup surface is exposed thr
 
 MCP-driven accepts and dismisses are recorded in the audit log with `trigger_context='mcp_tool'` and attributed to the MCP token, so the journal distinguishes AI-agent decisions from operator decisions.
 
+**An agent has to read two more fields than it used to before reporting a merge as done.** `accept_channel_merge` returns `dispatcharr_updated` alongside the rest of the outcome, and `status` is no longer always `'merged'`. `status` describes the ECM queue row: `'merged'` when the merge applied and the row left the queue, `'pending'` when it did not and the row stayed, flagged. `dispatcharr_updated` is what says whether the stream actually reached the channel. It is `false` for the five unresolvable-name cases above, with `unapplied_reason` carrying the same operator-actionable sentence the notice shows, and `null` on a replay of a merge an earlier request already resolved. **A `'pending'` result is retryable**: calling `accept_channel_merge` on that id again once the cause has cleared is a fresh accept, not a no-op, and `list_pending_channel_merges` returns the row with its `unapplied_reason` set so an agent can find its own unfinished work. The tool's own docstring instructs the agent to relay the reason rather than report success, but an agent driving the REST API directly should check the fields itself. Field-by-field semantics are in [`docs/api.md`](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/api.md#post-apichannel-mergesidaccept).
+
 ---
 
 ## Frequently asked questions
@@ -176,7 +264,7 @@ Not in v0.17.1. The threshold is a single global setting. Per-group overrides ar
 
 **What happens to merged and dismissed rows?**
 
-They are retained indefinitely in ECM's database as an audit trail. You can view them via the API (`GET /api/channel-merges?status=merged` or `?status=dismissed`). No automatic pruning occurs in v0.17.1.
+They are retained indefinitely in ECM's database as an audit trail; there is currently no UI that lists them. No automatic pruning occurs in v0.17.1.
 
 **Does the dedup feature affect the Channel Pipeline feature's own collision detection?**
 
@@ -184,4 +272,12 @@ No. The Channel Pipeline feature has its own unattended collision detection (`ma
 
 **What does the confidence score represent?**
 
-It is a fuzzy string similarity score (0–100%) computed by RapidFuzz `token_set_ratio` against the stream name and the candidate channel name. Higher is a closer match. ECM normalizes both names before scoring, so variations in spacing, punctuation, and common suffix patterns are factored in.
+It is a fuzzy string similarity score (0–100%) computed by RapidFuzz `token_set_ratio` against the stream name and the candidate channel name. Higher is a closer match. The matcher cleans both names before scoring, so variations in spacing, letter case, and Dispatcharr's channel-number prefix are factored in. That cleaner is the matcher's own and is not the normalization engine; see the next question.
+
+**Does turning off "Normalization Rules" weaken the duplicate check?**
+
+No. The two are independent, which is worth stating plainly now that the **Normalization Rules** toggle in the Create Channels dialog genuinely decides whether names are normalized. A control that real is easy to assume governs everything downstream of it, and this is one thing it does not.
+
+The duplicate check receives the **raw provider name**, before the Create Channels dialog exists, and applies its own cleaner to both that name and every candidate channel name: NFC Unicode normalization, then stripping a leading `N | ` channel-number prefix (Dispatcharr renders channel numbers that way), then lowercasing, then trimming. `US: CNN` and `CNN` therefore still score 100% against each other whether the **Normalization Rules** toggle is on or off, and the same candidate is offered either way.
+
+What the toggle *does* change is the name the resulting channel is created with, and, because that resolved name is also the key the bulk create merges streams on, how many channels a multi-stream create produces. See [Normalization](../normalization/index.md) and [Assign Streams to Channels](assign-streams-to-channels.md).

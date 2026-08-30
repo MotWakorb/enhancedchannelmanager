@@ -101,7 +101,7 @@ class TestListTasksEffectiveEnabled:
 class TestDebugBundleEffectiveEnabled:
     @pytest.mark.asyncio
     async def test_task_schedules_json_annotates_parent_and_effective_enabled(
-        self, async_client, test_session
+        self, async_client, test_session, debug_bundle_admin
     ):
         # auto_creation: parent DISABLED, child enabled (the reported trap).
         _seed_scheduled_task(test_session, "auto_creation", enabled=False)
@@ -124,9 +124,16 @@ class TestDebugBundleEffectiveEnabled:
             assert enqueue.status_code == 202
             job_id = enqueue.json()["job_id"]
             import asyncio as _asyncio
-            for _ in range(80):
-                await _asyncio.sleep(0)
-            response = await async_client.get(f"/api/auto-creation/debug-bundle/{job_id}")
+            for _ in range(100):
+                response = await async_client.get(
+                    f"/api/auto-creation/debug-bundle/{job_id}"
+                )
+                if response.headers["content-type"].startswith("application/gzip"):
+                    break
+                assert response.json()["status"] == "running"
+                await _asyncio.sleep(0.05)
+            else:
+                pytest.fail("debug bundle did not complete within 5 seconds")
             assert response.status_code == 200
 
         with tarfile.open(fileobj=io.BytesIO(response.content), mode="r:gz") as tf:

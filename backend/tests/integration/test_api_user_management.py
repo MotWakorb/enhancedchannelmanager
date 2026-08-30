@@ -78,13 +78,13 @@ def test_user(test_session):
 def password_reset_token(test_session, test_user):
     """Create a valid password reset token for testing."""
     from models import PasswordResetToken
-    from auth.password import hash_password
+    from auth.tokens import hash_token
 
     # Use a known raw token
     raw_token = "valid-reset-token"
     token = PasswordResetToken(
         user_id=test_user.id,
-        token_hash=hash_password(raw_token),
+        token_hash=hash_token(raw_token),
         expires_at=datetime.utcnow() + timedelta(hours=1),
     )
     test_session.add(token)
@@ -96,12 +96,12 @@ def password_reset_token(test_session, test_user):
 def expired_reset_token(test_session, test_user):
     """Create an expired password reset token for testing."""
     from models import PasswordResetToken
-    from auth.password import hash_password
+    from auth.tokens import hash_token
 
     raw_token = "expired-reset-token"
     token = PasswordResetToken(
         user_id=test_user.id,
-        token_hash=hash_password(raw_token),
+        token_hash=hash_token(raw_token),
         expires_at=datetime.utcnow() - timedelta(hours=2),  # Expired 2 hours ago
     )
     test_session.add(token)
@@ -305,3 +305,132 @@ class TestPasswordManagement:
             },
         )
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_forgot_password_send_failure_never_logs_the_raw_token(
+        self, async_client, test_user, caplog, monkeypatch,
+    ):
+        """The email-failure branch must not log the live reset token (cb1e1).
+
+        The token minted by /api/auth/forgot-password is a working credential:
+        whoever reads it can reset that account's password. An email outage is
+        an ordinary operational failure, and ECM logs get pasted into GitHub
+        issues, so the failure branch may record the failure and the user id
+        and nothing else.
+
+        The assertion is a negative over the log records the request actually
+        emitted, not over the arguments of the logging call. The positive
+        user_id assertion at the end is what keeps it from passing vacuously:
+        if the branch never ran, or caplog captured nothing, that one fails.
+        """
+        import logging
+
+        import auth.routes as auth_routes
+
+        minted = {}
+
+        def fail_to_send(to_email, reset_token, base_url):
+            minted["token"] = reset_token
+            return False
+
+        monkeypatch.setattr(auth_routes, "send_password_reset_email", fail_to_send)
+
+        with caplog.at_level(logging.DEBUG):
+            response = await async_client.post(
+                "/api/auth/forgot-password",
+                json={"email": test_user.email},
+            )
+
+        assert response.status_code == 200
+        # The endpoint really did mint a token and really did take the failure
+        # branch, so there was a live credential available to leak.
+        assert len(minted.get("token", "")) > 20
+
+        emitted = " ".join(
+            f"{record.getMessage()} {record.msg!r} {record.args!r}"
+            for record in caplog.records
+        )
+        assert minted["token"] not in emitted
+        # The operator still learns that the send failed, and for whom.
+        assert f"user_id={test_user.id}" in emitted
+
+    @pytest.mark.asyncio
+    async def test_forgot_password_success_never_logs_the_account_email(
+        self, async_client, test_session, caplog, monkeypatch,
+    ):
+        """A successful reset must not write the subscriber's address (5u5h9).
+
+        Bead cb1e1 moved the FAILURE branch of this flow to a ``user_id=``
+        shape and deliberately left the success branch alone, because at the
+        time the same event was ALSO logged inside
+        ``send_password_reset_email``: changing one while the other still named
+        the address would have made the pair more confusing, not less. So a
+        successful reset wrote the address into the log twice, in the same log
+        operators paste into GitHub issues, and it made one send read as two to
+        anyone counting the line.
+
+        The whole flow runs for real, down to ``smtplib.SMTP.sendmail``, so the
+        helper's own logging is exercised rather than mocked away: patching
+        ``send_password_reset_email`` would have proved only the handler's half
+        and left the duplicate line invisible. The assertion is a negative over
+        every record the request emitted, and the positive ``user_id``
+        assertions after it are what keep it from passing vacuously.
+        """
+        import logging
+        from unittest.mock import MagicMock, patch
+
+        from config import DispatcharrSettings
+        from models import User
+        from auth.password import hash_password
+
+        # Distinctive enough that a leak anywhere in the log is findable, and
+        # unlike ``test_user``'s address it cannot be emitted by anything else.
+        subscriber_email = "subscriber-5u5h9-distinctive@example.com"
+        user = User(
+            username="5u5h9-subscriber",
+            email=subscriber_email,
+            password_hash=hash_password("<synthetic-5u5h9-user-password>"),
+            auth_provider="local",
+            is_admin=False,
+            is_active=True,
+        )
+        test_session.add(user)
+        test_session.commit()
+        test_session.refresh(user)
+
+        smtp_settings = DispatcharrSettings(
+            smtp_host="smtp.5u5h9-mail.example.com",
+            smtp_from_email="ecm@example.com",
+        )
+        monkeypatch.setattr(
+            "auth.routes.get_settings", lambda: smtp_settings, raising=True
+        )
+
+        sent = {}
+        server = MagicMock()
+        server.sendmail.side_effect = lambda *args: sent.update(delivered=True)
+
+        with patch("auth.routes.smtplib.SMTP", return_value=server), \
+                caplog.at_level(logging.DEBUG):
+            response = await async_client.post(
+                "/api/auth/forgot-password",
+                json={"email": subscriber_email},
+            )
+
+        assert response.status_code == 200
+        # The send really succeeded, so the success branch really ran and there
+        # was an address available to leak.
+        assert sent.get("delivered") is True
+
+        emitted = [
+            f"{record.getMessage()} {record.msg!r} {record.args!r}"
+            for record in caplog.records
+        ]
+        joined = " ".join(emitted)
+        assert subscriber_email not in joined
+        # One line for one event, not two, so the log is not also a wrong count.
+        success_lines = [
+            line for line in emitted if "Password reset email sent" in line
+        ]
+        assert len(success_lines) == 1, success_lines
+        assert f"user_id={user.id}" in success_lines[0]

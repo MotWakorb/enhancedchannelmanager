@@ -3,6 +3,7 @@ import type { Channel, ChannelGroup } from '../types';
 import './ModalBase.css';
 import './PrintGuideModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 // Clean channel name by removing channel number prefix
 // e.g., "2.1 | ABC News" -> "ABC News", "102 - ESPN" -> "ESPN"
@@ -77,6 +78,7 @@ function PrintGuideModalInner({
   channels,
   title = 'TV Channel Guide',
 }: Omit<PrintGuideModalProps, 'isOpen'>) {
+  const { titleId, containerRef } = useOwnedDialog();
   // Empty-slot placeholder toggle — on by default so the printed guide shows
   // the full intended channel-number layout (bd-w532y).
   const [showEmptySlots, setShowEmptySlots] = useState(true);
@@ -299,10 +301,10 @@ function PrintGuideModalInner({
   // isOpen gating handled by outer wrapper.
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md print-guide-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md print-guide-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Print Channel Guide</h2>
+          <h2 id={titleId}>Print Channel Guide</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
@@ -355,12 +357,21 @@ function PrintGuideModalInner({
                   key={group.id}
                   className={`group-item ${settings.selected ? 'selected' : ''}`}
                 >
-                  <div className="group-checkbox-area" onClick={() => toggleGroup(group.id)}>
+                  {/* A <label>, not a <div> with onClick: the row already
+                      behaved as the hit area, but the checkbox had no
+                      accessible name at all and announced as a bare
+                      "checkbox" (bead enhancedchannelmanager-m26f8). The
+                      label associates the group's own text with the control,
+                      which is the shape DeleteOrphanedGroupsModal's
+                      `label.group-item` already uses for the same row. The
+                      manual onClick pair goes with it — the label's native
+                      activation replaces both, so there is nothing left to
+                      double-fire. */}
+                  <label className="group-checkbox-area">
                     <input
                       type="checkbox"
                       checked={settings.selected}
                       onChange={() => toggleGroup(group.id)}
-                      onClick={(e) => e.stopPropagation()}
                     />
                     <div
                       className="group-color-swatch"
@@ -376,7 +387,7 @@ function PrintGuideModalInner({
                             : 'No channels in range'}
                       </span>
                     </div>
-                  </div>
+                  </label>
 
                   <div className="group-item-controls">
                     {/* Per-group From/To range inputs */}

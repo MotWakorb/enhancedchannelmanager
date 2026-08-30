@@ -18,11 +18,77 @@ import journal
 import safe_regex
 
 import httpx
+from security.ssrf import SchemeDowngrade, SSRFError
+from security.stream_outbound import (
+    stream_request,
+    validated_subprocess_input,
+)
 
 from database import get_session
 from models import StreamStats
 
 logger = logging.getLogger(__name__)
+
+PROBE_NETWORK_ROUTE_GUIDANCE = (
+    "Provider connection failed from the ECM container. Raw stream probes do "
+    "not use Dispatcharr's proxy; give ECM the same VPN or network route."
+)
+
+
+NETWORK_FAILURE_MARKERS = (
+    "timed out", "timeout", "connection refused", "connection to",
+    "network is unreachable", "no route to host", "name or service not known",
+)
+
+
+class ProbeNetworkRouteError(RuntimeError):
+    """An upstream connection failure whose raw diagnostic must stay private."""
+
+
+# Bead enhancedchannelmanager-iyvl9. XC providers 302 an
+# https://<portal>/live/<user>/<pass>/<id>.ts request onto a plain-HTTP edge
+# node and serve the video over HTTP there regardless, so the media is already
+# unencrypted in transit and the redirect target's opaque-token path carries no
+# credentials. Refusing the hop cost the operator every probe against such a
+# provider and bought no confidentiality, so the PROBE PATH -- and only the
+# probe path -- waives the scheme-downgrade clause. Everything else in the SSRF
+# guard (denylist, resolve-then-connect-by-IP, redirect depth cap, origin
+# pinning) still applies here unchanged.
+#
+# This constant is the single place the prober names the waiver; the three probe
+# call sites below reference it, and no other module in the backend may pass
+# SchemeDowngrade.ALLOW_STREAM_PROBE (enforced by
+# tests/security/test_probe_scheme_downgrade.py).
+PROBE_SCHEME_DOWNGRADE = SchemeDowngrade.ALLOW_STREAM_PROBE
+
+
+# Exception types ECM RAISES ITSELF whose message is a fixed string we wrote and
+# is therefore safe to show an operator (bead enhancedchannelmanager-3dn59).
+#
+# Classification is by exception ORIGIN, never by string-matching or scrubbing a
+# message: subprocess diagnostics from ffmpeg/ffprobe can embed the provider URL
+# with its credentials, so anything not on this list is reported by type only.
+# Membership is tested by EXACT type rather than isinstance, so a subclass
+# defined elsewhere cannot inherit the allowance on the strength of its base
+# class. If a guard message ever needs to name a host, that is a deliberate
+# decision at the raise site -- tests/security/test_probe_failure_diagnostics.py
+# fails if one starts interpolating a URL.
+OPERATOR_SAFE_EXCEPTION_TYPES: tuple = (
+    SSRFError,               # ECM's own SSRF chokepoint -- fixed guard messages
+    ProbeNetworkRouteError,  # raised here, with a fixed message
+)
+
+
+def operator_safe_detail(exc: BaseException) -> Optional[str]:
+    """Return ``exc``'s message iff its EXACT type is operator-safe, else None.
+
+    See :data:`OPERATOR_SAFE_EXCEPTION_TYPES`. Returning ``None`` means the
+    caller must log the exception CLASS only.
+    """
+    if type(exc) in OPERATOR_SAFE_EXCEPTION_TYPES:
+        return str(exc).strip() or None
+    return None
+
 
 # Default configuration
 DEFAULT_PROBE_TIMEOUT = 30  # seconds
@@ -40,6 +106,7 @@ BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 # (GH-106). Neither is a URL scheme an attacker can specify directly — they are
 # internal demuxers activated by https:// / hls variants.
 FFPROBE_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
+RELAY_PROTOCOL_WHITELIST = "http,tcp,crypto"
 
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
@@ -748,7 +815,17 @@ class StreamProber:
             if black or low:
                 message += f" ({black} black screen, {low} low FPS)"
 
+            # Name the dominant failure cause instead of leaving the operator a
+            # bare count (bead enhancedchannelmanager-3dn59). Reasons are the
+            # operator-safe strings chosen in probe_stream, never subprocess
+            # text.
+            failure_breakdown = self._failure_breakdown()
+            if failed and failure_breakdown:
+                top = failure_breakdown[0]
+                message += f" — most common failure: {top['reason']} ({top['count']})"
+
             metadata = {
+                "failure_breakdown": failure_breakdown,
                 "progress": {
                     "current": self._probe_progress_total,
                     "total": self._probe_progress_total,
@@ -783,6 +860,7 @@ class StreamProber:
                     "low_fps_detections": self._probe_progress_low_fps_count,
                     # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
                     "failed_count": failed,
+                    "failure_breakdown": failure_breakdown,
                 }
                 await send_alert(
                     title="Stream Probe",
@@ -1042,46 +1120,88 @@ class StreamProber:
                 name,
                 None,
                 "timeout",
-                f"Probe timed out after {self.probe_timeout}s"
+                PROBE_NETWORK_ROUTE_GUIDANCE
             )
         except Exception as e:
-            logger.error("[STREAM-PROBE] Stream %s probe failed: %s", stream_id, e)
-            # Return generic error to client; details stay in server logs
-            return self._save_probe_result(stream_id, name, None, "failed", "Probe failed")
+            # FFmpeg/ffprobe diagnostics can contain the provider URL (including
+            # embedded credentials) or a redirect target, so subprocess text is
+            # never copied into logs or persisted state. An exception ECM's OWN
+            # guard raised is a different kind of value: its message is a fixed
+            # string we wrote, and it is exactly the one line the operator needs.
+            # Classify by ORIGIN (operator_safe_detail), not by inspecting the
+            # message. Bead enhancedchannelmanager-3dn59.
+            detail = operator_safe_detail(e)
+            if detail is not None:
+                logger.error(
+                    "[STREAM-PROBE] Stream %s probe failed (%s): %s",
+                    stream_id,
+                    type(e).__name__,
+                    detail,
+                )
+            else:
+                logger.error(
+                    "[STREAM-PROBE] Stream %s probe failed (%s)",
+                    stream_id,
+                    type(e).__name__,
+                )
+            if isinstance(e, ProbeNetworkRouteError):
+                public_error = PROBE_NETWORK_ROUTE_GUIDANCE
+            elif detail is not None:
+                # Surfaced in the run report's failure breakdown, so a wholesale
+                # guard rejection reads as one named cause instead of N nameless
+                # failures.
+                public_error = detail
+            else:
+                public_error = "Probe failed"
+            return self._save_probe_result(stream_id, name, None, "failed", public_error)
 
     async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
         """Run ffprobe and parse JSON output."""
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",  # Show errors in stderr (was "quiet" which suppressed everything)
-            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",  # Mimic VLC to avoid server rejections
-            "-timeout",
-            str(self.probe_timeout * 1000000),  # microseconds
-            url,
-        ]
+        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+        async with validated_subprocess_input(
+            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+        ) as subprocess_input:
+            cmd = [
+                "ffprobe",
+                "-v",
+                "error",  # Show errors in stderr (was "quiet" which suppressed everything)
+                "-protocol_whitelist", (
+                    RELAY_PROTOCOL_WHITELIST
+                    if subprocess_input.is_http_relay
+                    else FFPROBE_PROTOCOL_WHITELIST
+                ),
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                "-timeout",
+                str(self.probe_timeout * 1000000),  # microseconds
+                subprocess_input.argument,
+            ]
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=self.probe_timeout + 5
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            raise
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self.probe_timeout + 5
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                raise
 
         if process.returncode != 0:
-            error_text = stderr.decode().strip()[:500] if stderr else ""
+            # Classify the complete diagnostic only after removing the exact
+            # input URL. URLs may themselves contain words such as
+            # "connection to", and truncating before redaction can both create
+            # false network classifications and hide a real marker that comes
+            # after a long credential-bearing URL.
+            error_text = stderr.decode(errors="replace").strip() if stderr else ""
+            error_text = error_text.replace(url, "[REDACTED stream URL]")
             if not error_text:
                 error_text = f"Exit code {process.returncode} (no stderr output)"
 
@@ -1091,11 +1211,13 @@ class StreamProber:
             # waste semaphore time.
             transient_patterns = ("5XX", "500", "502", "503", "520", "Input/output error", "Stream ends prematurely", "Connection reset", "Broken pipe")
             if any(p in error_text for p in transient_patterns) and "404" not in error_text and _retry_attempt < self.probe_retry_count:
-                logger.info("[STREAM-PROBE] Transient error — retry %s/%s in %ss: %s...", _retry_attempt + 1, self.probe_retry_count, self.probe_retry_delay, url[:80])
+                logger.info("[STREAM-PROBE] Transient provider error — retry %s/%s in %ss", _retry_attempt + 1, self.probe_retry_count, self.probe_retry_delay)
                 await asyncio.sleep(self.probe_retry_delay)
                 return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
 
-            raise RuntimeError(f"ffprobe failed: {error_text}")
+            if any(marker in error_text.lower() for marker in NETWORK_FAILURE_MARKERS):
+                raise ProbeNetworkRouteError("Provider connection failed")
+            raise RuntimeError("ffprobe failed: [REDACTED diagnostic]")
 
         output = stdout.decode()
         if not output.strip():
@@ -1125,18 +1247,22 @@ class StreamProber:
             )
 
             headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True, headers=headers) as client:
-                async with client.stream("GET", url) as response:
-                    response.raise_for_status()
+            async with stream_request(
+                url,
+                timeout=timeout,
+                headers=headers,
+                scheme_downgrade=PROBE_SCHEME_DOWNGRADE,
+            ) as response:
+                response.raise_for_status()
 
-                    # Download stream data for the sample duration
-                    async for chunk in response.aiter_bytes(chunk_size=65536):  # 64KB chunks
-                        bytes_downloaded += len(chunk)
-                        elapsed = time.time() - start_time
+                # Download stream data for the sample duration
+                async for chunk in response.aiter_bytes(chunk_size=65536):  # 64KB chunks
+                    bytes_downloaded += len(chunk)
+                    elapsed = time.time() - start_time
 
-                        # Stop after sample duration
-                        if elapsed >= self.bitrate_sample_duration:
-                            break
+                    # Stop after sample duration
+                    if elapsed >= self.bitrate_sample_duration:
+                        break
 
             elapsed = time.time() - start_time
 
@@ -1156,7 +1282,22 @@ class StreamProber:
             logger.warning("[STREAM-PROBE] Timeout during bitrate measurement")
             return None
         except Exception as e:
-            logger.warning("[STREAM-PROBE] Failed to measure bitrate: %s", e)
+            # Client exceptions can include the requested URL or a redirect
+            # target. Keep diagnostics useful without exposing either value --
+            # except for ECM's own guard exceptions, whose messages are fixed
+            # strings we wrote (bead enhancedchannelmanager-3dn59).
+            detail = operator_safe_detail(e)
+            if detail is not None:
+                logger.warning(
+                    "[STREAM-PROBE] Failed to measure bitrate (%s): %s",
+                    type(e).__name__,
+                    detail,
+                )
+            else:
+                logger.warning(
+                    "[STREAM-PROBE] Failed to measure bitrate (%s)",
+                    type(e).__name__,
+                )
             return None
 
     # YAVG brightness threshold for dark/black screen detection.
@@ -1187,52 +1328,60 @@ class StreamProber:
         wait_for a generous grace window so cold-start false-timeouts don't
         flip streams to "clean".
         """
-        cmd = [
-            "ffmpeg",
-            "-protocol_whitelist", FFPROBE_PROTOCOL_WHITELIST,
-            "-user_agent", "VLC/3.0.20 LibVLC/3.0.20",
-            # Network stall guard (microseconds). If the upstream stops
-            # delivering data for this long, ffmpeg bails on its own rather
-            # than hanging until the asyncio wait_for budget runs out.
-            "-timeout", "15000000",
-            "-i", url,
-            "-t", str(self.black_screen_sample_duration),
-            "-vf", "signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG",
-            "-an", "-f", "null", "-",
-        ]
+        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
         # Grace window: sample duration + ample headroom for cold-start
         # buffering, connection setup, and ffmpeg startup. The previous 15-s
         # grace was too tight for cold scans and caused every timeout to be
         # silently treated as a clean stream.
         total_timeout = self.black_screen_sample_duration + 30
 
-        process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        try:
-            _, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=total_timeout
+        async with validated_subprocess_input(
+            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+        ) as subprocess_input:
+            cmd = [
+                "ffmpeg",
+                "-protocol_whitelist", (
+                    RELAY_PROTOCOL_WHITELIST
+                    if subprocess_input.is_http_relay
+                    else FFPROBE_PROTOCOL_WHITELIST
+                ),
+                # Network stall guard (microseconds). If the upstream stops
+                # delivering data for this long, ffmpeg bails on its own.
+                "-timeout", "15000000",
+                "-i", subprocess_input.argument,
+                "-t", str(self.black_screen_sample_duration),
+                "-vf", "signalstats,metadata=mode=print:key=lavfi.signalstats.YAVG",
+                "-an", "-f", "null", "-",
+            ]
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.warning(
-                "[STREAM-PROBE] Black screen detection timed out after %ss: %s",
-                total_timeout, url[:80],
-            )
-            return None
+            try:
+                _, stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=total_timeout
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                logger.warning(
+                    "[STREAM-PROBE] Black screen detection timed out after %ss",
+                    total_timeout,
+                )
+                return None
         output = stderr.decode()
         yavg_values = re.findall(r'lavfi\.signalstats\.YAVG=([\d.]+)', output)
         if not yavg_values:
-            logger.debug("[STREAM-PROBE] No YAVG data from signalstats: %s", url[:80])
+            logger.debug("[STREAM-PROBE] No YAVG data from signalstats")
             return None
         avg_brightness = sum(float(v) for v in yavg_values) / len(yavg_values)
         is_dark = avg_brightness < self.BLACK_SCREEN_YAVG_THRESHOLD
         if is_dark:
-            logger.warning("[STREAM-PROBE] Dark screen detected (YAVG=%.1f, threshold=%d): %s",
-                           avg_brightness, self.BLACK_SCREEN_YAVG_THRESHOLD, url[:80])
+            logger.warning("[STREAM-PROBE] Dark screen detected (YAVG=%.1f, threshold=%d)",
+                           avg_brightness, self.BLACK_SCREEN_YAVG_THRESHOLD)
         else:
-            logger.debug("[STREAM-PROBE] Screen brightness OK (YAVG=%.1f): %s", avg_brightness, url[:80])
+            logger.debug("[STREAM-PROBE] Screen brightness OK (YAVG=%.1f)", avg_brightness)
         return is_dark
 
     def _save_probe_result(
@@ -1844,11 +1993,15 @@ class StreamProber:
         # log with a pattern sha256 + excerpt. That sentinel is the correct
         # fallback here: an unrewritten URL probes directly against the
         # source, which is safer than blocking the probe entirely.
-        rewritten = safe_regex.sub(search_pattern, replace_pattern, original_url)
+        rewritten = safe_regex.sub(
+            search_pattern,
+            replace_pattern,
+            original_url,
+            diagnostic_mode="metadata_only",
+        )
         if rewritten != original_url:
-            logger.debug("[STREAM-PROBE] Profile %s: rewrote URL "
-                       "(pattern: %s -> %s)",
-                       profile['id'], search_pattern, replace_pattern)
+            # Rewrite patterns may themselves contain provider credentials.
+            logger.debug("[STREAM-PROBE] Profile %s: rewrote URL", profile['id'])
         return rewritten
 
     async def _auto_reorder_channels(self, channel_groups_override: list[str] = None, stream_to_channels: dict = None) -> list[dict]:
@@ -2461,20 +2614,19 @@ class StreamProber:
                     if selected_profile:
                         stream_url = self._rewrite_url_for_profile(stream_url, selected_profile)
 
-                    # Log probe details for traceability
+                    # Log probe decisions without provider URLs, which may embed
+                    # account identifiers or credentials.
                     if selected_profile:
                         logger.debug("[STREAM-PROBE] Stream %s (%s): "
                                      "strategy=%s, "
-                                     "profile=%s ('%s'), "
-                                     "url=%s",
+                                     "profile=%s ('%s')",
                                      stream_id, stream_name,
                                      self.profile_distribution_strategy,
-                                     selected_profile['id'], selected_profile.get('name', 'unnamed'),
-                                     stream_url)
+                                     selected_profile['id'], selected_profile.get('name', 'unnamed'))
                     else:
                         logger.debug("[STREAM-PROBE] Stream %s (%s): "
-                                     "no profile (direct URL), url=%s",
-                                     stream_id, stream_name, stream_url)
+                                     "no profile (direct provider connection)",
+                                     stream_id, stream_name)
 
                     # Acquire global semaphore to limit total concurrent probes
                     async with global_probe_semaphore:
@@ -3151,6 +3303,32 @@ class StreamProber:
             "max_backoff_remaining": round(max_hold, 1) if max_hold > 0 else 0,
         }
 
+    def _failure_breakdown(self) -> list:
+        """Group the last run's failures by cause, most common first.
+
+        Bead enhancedchannelmanager-3dn59. The operator previously saw only a
+        failure COUNT, so "every probe against this provider is being refused by
+        our own SSRF guard" was indistinguishable from scattered provider
+        errors -- which is what turned a one-line answer into an incident.
+
+        Reasons are the per-stream ``error`` already stored on
+        ``_probe_failed_streams``: a fixed operator-safe string chosen in
+        ``probe_stream`` (see :data:`OPERATOR_SAFE_EXCEPTION_TYPES`), never
+        subprocess text.
+
+        Returns:
+            A list of ``{"reason": str, "count": int}`` sorted by descending
+            count then reason, so the ordering is deterministic.
+        """
+        counts: dict = {}
+        for info in self._probe_failed_streams:
+            reason = (info.get("error") or "").strip() or "Unknown error"
+            counts[reason] = counts.get(reason, 0) + 1
+        return [
+            {"reason": reason, "count": count}
+            for reason, count in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+
     def get_probe_results(self) -> dict:
         """Get detailed results of the last probe all streams operation."""
         return {
@@ -3163,7 +3341,10 @@ class StreamProber:
             "failed_count": len(self._probe_failed_streams),
             "skipped_count": len(self._probe_skipped_streams),
             "black_screen_count": len(self._probe_black_screen_streams),
-            "low_fps_count": len(self._probe_low_fps_streams)
+            "low_fps_count": len(self._probe_low_fps_streams),
+            # Cause breakdown, not just a count (bead
+            # enhancedchannelmanager-3dn59).
+            "failure_breakdown": self._failure_breakdown(),
         }
 
     def _save_probe_history(self, start_time: datetime, total: int, error: str = None, reordered_channels: list = None):
@@ -3183,6 +3364,9 @@ class StreamProber:
             "error": error,
             "success_streams": list(self._probe_success_streams),  # Copy the list
             "failed_streams": list(self._probe_failed_streams),    # Copy the list
+            # Why the failures happened, not just how many (bead
+            # enhancedchannelmanager-3dn59).
+            "failure_breakdown": self._failure_breakdown(),
             "skipped_streams": list(self._probe_skipped_streams),  # Copy the list
             "black_screen_count": self._probe_progress_black_screen_count,
             "black_screen_streams": list(self._probe_black_screen_streams),  # Copy the list
@@ -3210,6 +3394,19 @@ class StreamProber:
                    len(history_entry['success_streams']),
                    len(history_entry['failed_streams']),
                    len(history_entry['skipped_streams']))
+        # Top causes only. A guard message can name a host, so a run spread over
+        # many hosts could otherwise emit one line per host; the breakdown is
+        # complete in the run report either way.
+        breakdown = history_entry["failure_breakdown"]
+        for entry in breakdown[:10]:
+            logger.info(
+                "[STREAM-PROBE] Failure cause: %s x%s", entry["reason"], entry["count"]
+            )
+        if len(breakdown) > 10:
+            logger.info(
+                "[STREAM-PROBE] ... and %s further failure cause(s); see the probe "
+                "run report for the full breakdown", len(breakdown) - 10
+            )
 
         # Persist to disk
         self._persist_probe_history()

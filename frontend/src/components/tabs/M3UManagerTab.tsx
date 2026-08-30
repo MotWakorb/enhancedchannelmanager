@@ -13,10 +13,15 @@ import { M3UProfileModal } from '../M3UProfileModal';
 import { CustomSelect } from '../CustomSelect';
 import { CatchupBadge } from '../CatchupBadge';
 import { PageHeader } from '../PageHeader';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import { classifySourceLoadError, type SourceLoadState } from '../sourceLoadState';
 import { OverflowMenu } from '../OverflowMenu';
 import type { OverflowMenuItem } from '../OverflowMenu';
+import { DenseToolbar } from '../DenseToolbar';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatDateTime } from '../../utils/formatting';
+import { isHDHomerunAccount } from '../../utils/hdhomerun';
 import './M3UManagerTab.css';
 
 interface M3UManagerTabProps {
@@ -117,14 +122,52 @@ function M3UAccountRow({
     }
   };
 
-  const getAccountTypeLabel = (type: M3UAccount['account_type']) => {
-    return type === 'XC' ? 'XtreamCodes' : 'Standard M3U';
-  };
+  // Connection type shown on the meta line. HDHomeRun has no stored account
+  // type — a tuner is a plain `STD` account pointed at the device's lineup
+  // endpoint — so it is inferred from the URL by the shared helper in
+  // utils/hdhomerun (bead enhancedchannelmanager-sccol). The returned key
+  // doubles as the chip's modifier class.
+  const accountTypeChip = isHDHomerunAccount(account)
+    ? { key: 'hdhr', label: 'HDHomeRun' }
+    : account.account_type === 'XC'
+      ? { key: 'xc', label: 'XtreamCodes' }
+      : { key: 'std', label: 'Standard M3U' };
 
   // Count enabled groups and auto-sync groups
   const enabledGroupCount = account.channel_groups.filter(g => g.enabled).length;
   const totalGroupCount = account.channel_groups.length;
   const autoSyncGroupCount = account.channel_groups.filter(g => g.auto_channel_sync).length;
+
+  // Per-account setup actions, collapsed into the row's kebab so the visible
+  // action buttons fit the 180px actions column at their declared 32px box
+  // (bead enhancedchannelmanager-xh33o). Refresh VOD is XtreamCodes-only, so
+  // it is filtered out rather than shown disabled for other account types.
+  const rowMenuItems: OverflowMenuItem[] = [
+    ...(account.account_type === 'XC'
+      ? [{
+          label: isRefreshingVod ? 'Refreshing VOD...' : 'Refresh VOD',
+          icon: isRefreshingVod ? 'sync' : 'video_library',
+          onClick: () => onRefreshVod(account),
+          disabled: !account.is_active || isRefreshingVod || account.locked,
+          title: 'Refresh VOD content',
+        }]
+      : []),
+    {
+      label: 'Manage Groups',
+      icon: 'folder',
+      onClick: () => onManageGroups(account),
+    },
+    {
+      label: 'Manage Account Profiles',
+      icon: 'account_circle',
+      onClick: () => onManageProfiles(account),
+    },
+    {
+      label: 'Manage Filters',
+      icon: 'filter_alt',
+      onClick: () => onManageFilters(account),
+    },
+  ];
 
   return (
     <div className={`m3u-account-row ${!account.is_active ? 'inactive' : ''}`}>
@@ -132,7 +175,7 @@ function M3UAccountRow({
         <span className={`material-icons ${isRefreshing ? 'spinning' : ''}`}>
           {getStatusIcon(account.status)}
         </span>
-        <span className="status-label">{getStatusLabel(account.status)}</span>
+        <span className="status-label micro-label">{getStatusLabel(account.status)}</span>
       </div>
 
       <div className="account-info">
@@ -155,6 +198,17 @@ function M3UAccountRow({
               <span className="profile-count">{account.profiles.length - 1}</span>
             </span>
           )}
+        </div>
+        <div className="account-details">
+          <span className={`account-type ${accountTypeChip.key}`}>
+            {accountTypeChip.label}
+          </span>
+          {/* Sits beside the connection type, not up on the name line: both
+              chips answer "what kind of feed is this" (bead
+              enhancedchannelmanager-sccol). The badge carries its own
+              title/aria-label, so it still reads as "Provider supports
+              catch-up ..." rather than borrowing context from the account
+              name it used to sit next to. */}
           <CatchupBadge
             isCatchup={hasCatchup}
             catchupDays={catchupDays}
@@ -164,11 +218,6 @@ function M3UAccountRow({
                 : 'Provider supports catch-up'
             }
           />
-        </div>
-        <div className="account-details">
-          <span className={`account-type ${account.account_type.toLowerCase()}`}>
-            {getAccountTypeLabel(account.account_type)}
-          </span>
           {account.server_url && !hideM3uUrls && (
             <span className="account-url" title={account.server_url}>
               {account.server_url}
@@ -229,6 +278,13 @@ function M3UAccountRow({
         <span className="updated-time">{formatDateTime(account.updated_at)}</span>
       </div>
 
+      {/* Four primary actions plus the kebab is exactly what the 180px actions
+          column holds at the declared 32px box (bead
+          enhancedchannelmanager-xh33o). The setup actions below it are the
+          ones an operator reaches for once per account rather than per
+          refresh, which is the split docs/css_guidelines.md
+          § "Collapse-to-kebab" describes. Refresh VOD is XC-only and lives in
+          the kebab, so the visible count does not vary by account type. */}
       <div className="account-actions">
         <button
           className={`action-btn toggle ${account.is_active ? 'active' : ''}`}
@@ -250,43 +306,6 @@ function M3UAccountRow({
         >
           <span className="material-icons" aria-hidden="true">refresh</span>
         </button>
-        {account.account_type === 'XC' && (
-          <button
-            className="action-btn"
-            onClick={() => onRefreshVod(account)}
-            title="Refresh VOD"
-            aria-label="Refresh VOD content"
-            disabled={!account.is_active || isRefreshingVod || account.locked}
-          >
-            <span className={`material-icons ${isRefreshingVod ? 'spinning' : ''}`} aria-hidden="true">
-              {isRefreshingVod ? 'sync' : 'video_library'}
-            </span>
-          </button>
-        )}
-        <button
-          className="action-btn"
-          onClick={() => onManageGroups(account)}
-          title="Manage Groups"
-          aria-label="Manage Groups"
-        >
-          <span className="material-icons" aria-hidden="true">folder</span>
-        </button>
-        <button
-          className="action-btn"
-          onClick={() => onManageProfiles(account)}
-          title="Manage Account Profiles"
-          aria-label="Manage Account Profiles"
-        >
-          <span className="material-icons" aria-hidden="true">account_circle</span>
-        </button>
-        <button
-          className="action-btn"
-          onClick={() => onManageFilters(account)}
-          title="Manage Filters"
-          aria-label="Manage Filters"
-        >
-          <span className="material-icons" aria-hidden="true">filter_alt</span>
-        </button>
         <button
           className="action-btn"
           onClick={() => onEdit(account)}
@@ -305,6 +324,7 @@ function M3UAccountRow({
         >
           <span className="material-icons" aria-hidden="true">delete</span>
         </button>
+        <OverflowMenu items={rowMenuItems} label={`More actions for ${account.name}`} />
       </div>
     </div>
   );
@@ -327,6 +347,8 @@ export function M3UManagerTab({
   const [catchupStatus, setCatchupStatus] = useState<Record<string, api.ProviderCatchupStatus>>({});
   const [serverGroups, setServerGroups] = useState<ServerGroup[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sourceLoadState, setSourceLoadState] = useState<SourceLoadState>('loading');
+  const [hasLoadedSourceData, setHasLoadedSourceData] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<M3UAccount | null>(null);
   const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -368,6 +390,8 @@ export function M3UManagerTab({
   const [refreshingVodIds, setRefreshingVodIds] = useState<Set<number>>(new Set());
 
   const loadData = useCallback(async () => {
+    setLoading(true);
+    setSourceLoadState('loading');
     try {
       const [accountsData, serverGroupsData, settings] = await Promise.all([
         api.getM3UAccounts(),
@@ -380,7 +404,10 @@ export function M3UManagerTab({
       const priorities = settings.m3u_account_priorities ?? {};
       setM3uAccountPriorities(priorities);
       setPendingPriorities(priorities);
+      setHasLoadedSourceData(true);
+      setSourceLoadState('success');
     } catch (err) {
+      setSourceLoadState(classifySourceLoadError(err));
       notifications.error(err instanceof Error ? err.message : 'Failed to load M3U accounts', 'M3U Manager');
     } finally {
       setLoading(false);
@@ -489,9 +516,15 @@ export function M3UManagerTab({
     }
 
     try {
-      await api.deleteM3UAccount(account.id);
+      const result = await api.deleteM3UAccount(account.id);
       await loadData();
       onAccountsChange?.();  // Notify parent to reload providers
+      if (result.linked_settings_cleanup === 'failed') {
+        notifications.warning(
+          result.message ?? 'The account was deleted, but linked-settings cleanup failed. This DELETE must not be retried.',
+          'M3U account deleted with cleanup warning',
+        );
+      }
     } catch (err) {
       logger.error('M3UManagerTab: failed to delete M3U account', err);
       notifications.error('Failed to delete M3U account', 'M3U Manager');
@@ -774,6 +807,9 @@ export function M3UManagerTab({
         return naturalCompare(a.name, b.name);
       });
   }, [accounts, filterServerGroup]);
+  const visibleAccountCount = accounts.filter(
+    account => account.name.toLowerCase() !== 'custom',
+  ).length;
 
   // Setup/admin actions surfaced through the header kebab (bead 09x38.2).
   const adminMenuItems: OverflowMenuItem[] = [
@@ -805,9 +841,27 @@ export function M3UManagerTab({
     },
   ];
 
-  if (loading) {
+  if (loading && !hasLoadedSourceData) {
     return (
       <div className="m3u-manager-tab">
+        <RouteHeaderSlot name="controls">
+          <DenseToolbar
+            label="M3U account controls"
+            secondaryActions={(
+              <button className="btn-secondary" type="button" disabled>
+                <span className="material-icons spinning">sync</span>
+                Loading accounts
+              </button>
+            )}
+          />
+        </RouteHeaderSlot>
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="provider accounts"
+            successText=""
+          />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading M3U accounts...</p>
@@ -815,65 +869,117 @@ export function M3UManagerTab({
       </div>
     );
   }
+  if (sourceLoadState === 'permission' || (sourceLoadState === 'error' && !hasLoadedSourceData)) {
+    return (
+      <div className="m3u-manager-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="provider accounts"
+            successText=""
+            onRetry={loadData}
+          />
+        </RouteHeaderSlot>
+        <div className="tab-load-unavailable">
+          <SourceLoadStatus
+            state={sourceLoadState}
+            sourceName="provider accounts"
+            successText=""
+            announce={false}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="m3u-manager-tab">
-      <PageHeader
-        className="m3u-header"
-        title="M3U Accounts"
-        description="Manage your M3U playlist sources and XtreamCodes accounts."
-        actions={(
-          <>
-            <button
-              className="btn-primary save-priorities-btn"
-              onClick={handleSavePriorities}
-              disabled={savingPriorities || !hasPriorityChanges}
-              title={hasPriorityChanges ? "Save priority changes" : "No priority changes to save"}
-            >
-              <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
-                {savingPriorities ? 'sync' : 'save'}
-              </span>
-              {savingPriorities ? 'Saving...' : 'Save Priorities'}
-            </button>
-            {serverGroups.length > 0 && (
-              <CustomSelect
-                className="server-group-filter"
-                value={filterServerGroup?.toString() ?? ''}
-                onChange={(val) => setFilterServerGroup(val ? Number(val) : null)}
-                options={[
-                  { value: '', label: 'All Server Groups' },
-                  ...serverGroups.map(sg => ({
-                    value: sg.id.toString(),
-                    label: sg.name,
-                  })),
-                ]}
+      <RouteHeaderSlot name="primary-action">
+        <button className="btn-primary" onClick={handleAddAccount}>
+          <span className="material-icons">add</span>
+          Add M3U Account
+        </button>
+      </RouteHeaderSlot>
+      {/* A healthy, loaded M3U Manager says nothing here. The slot used to
+          carry "N provider accounts"; the accounts are listed directly below
+          it, so the count restated what the page already showed (bead
+          enhancedchannelmanager-tygwm). What remains is only the states the
+          list itself cannot express: a refresh in flight, and a stale list
+          behind a failed reload with its scoped Retry. Rendering the slot
+          conditionally rather than rendering an empty one keeps the header's
+          meta row collapsible — see PageHeader.css. */}
+      {(anyRefreshing || sourceLoadState !== 'success') && (
+        <RouteHeaderSlot name="status">
+          {anyRefreshing
+            ? <span>Provider refresh in progress</span>
+            : (
+              <SourceLoadStatus
+                state={sourceLoadState}
+                sourceName="provider accounts"
+                successText=""
+                stale={sourceLoadState === 'error'}
+                onRetry={loadData}
               />
             )}
+        </RouteHeaderSlot>
+      )}
+      <RouteHeaderSlot name="controls">
+        <DenseToolbar
+          label="M3U account controls"
+          filters={serverGroups.length > 0 ? <CustomSelect
+            className="server-group-filter"
+            value={filterServerGroup?.toString() ?? ''}
+            onChange={(val) => setFilterServerGroup(val ? Number(val) : null)}
+            options={[
+              { value: '', label: 'All Server Groups' },
+              ...serverGroups.map(sg => ({ value: sg.id.toString(), label: sg.name })),
+            ]}
+          /> : undefined}
+          sortView={<button
+            className="btn-secondary save-priorities-btn"
+            onClick={handleSavePriorities}
+            disabled={savingPriorities || !hasPriorityChanges}
+            title={hasPriorityChanges ? 'Save priority changes' : 'No priority changes to save'}
+          >
+            <span className={`material-icons ${savingPriorities ? 'spinning' : ''}`}>
+              {savingPriorities ? 'sync' : 'save'}
+            </span>
+            {savingPriorities ? 'Saving...' : 'Save Priorities'}
+          </button>}
+          secondaryActions={<>
             <button className="btn-secondary" onClick={handleRefreshAll} disabled={anyRefreshing}>
               <span className={`material-icons ${anyRefreshing ? 'spinning' : ''}`}>sync</span>
               {anyRefreshing ? 'Refreshing...' : 'Refresh All'}
-            </button>
-            <button className="btn-primary" onClick={handleAddAccount}>
-              <span className="material-icons">add</span>
-              Add M3U Account
             </button>
             {/* Setup/admin actions collapse into a kebab so the 7-button
                 toolbar no longer squeezes the title column at 1280 (bead
                 09x38.2). Refresh All + Add M3U Account stay primary. */}
             <OverflowMenu items={adminMenuItems} label="M3U setup actions" />
-          </>
-        )}
-      />
+          </>}
+        />
+      </RouteHeaderSlot>
+
+      {/* The pane used to open on an unlabelled table — route title,
+          description, then straight into the accounts list (bead
+          enhancedchannelmanager-7dxx0). Rendered through PageHeader rather
+          than a local h2 so it takes the same section role
+          (`.header-title h2`, 15px/600/1.3) as EPG Manager's headings,
+          automatically. Unconditional: the heading names the section, not the
+          rows, and keeping it over the empty state also stops the outline
+          skipping from the route h1 to the empty state's h3. */}
+      <PageHeader className="page-header-heading-only" title="M3U Accounts" />
 
       {filteredAccounts.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">playlist_play</span>
-          <h3>No M3U Accounts</h3>
-          <p>Add an M3U account to start importing streams.</p>
-          <button className="btn-primary" onClick={handleAddAccount}>
-            <span className="material-icons">add</span>
-            Add M3U Account
-          </button>
+          <h3>{visibleAccountCount > 0 ? 'No matching M3U accounts' : 'No M3U Accounts'}</h3>
+          <p>{visibleAccountCount > 0 ? 'No accounts belong to the selected server group.' : 'Add an M3U account to start importing streams.'}</p>
+          {visibleAccountCount > 0
+            ? <button className="btn-secondary" onClick={() => setFilterServerGroup(null)}>Clear filters</button>
+            : <button className="btn-primary" onClick={handleAddAccount}>
+                <span className="material-icons">add</span>
+                Add M3U Account
+              </button>}
         </div>
       ) : (
         <div className="m3u-accounts-list">

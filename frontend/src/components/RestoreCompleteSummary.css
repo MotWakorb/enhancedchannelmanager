@@ -33,6 +33,11 @@
   border-left-color: var(--success);
 }
 
+.rcs-tone-warning {
+  background-color: var(--warning-bg);
+  border-left-color: var(--warning);
+}
+
 .rcs-tone-error {
   background-color: var(--error-bg);
   border-left-color: var(--error);
@@ -47,8 +52,12 @@
   color: var(--success);
 }
 
+.rcs-tone-warning .rcs-outcome-icon {
+  color: var(--warning-text);
+}
+
 .rcs-tone-error .rcs-outcome-icon {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .rcs-outcome-text {
@@ -85,7 +94,7 @@
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .rcs-residue-list {
@@ -165,6 +174,27 @@
   color: var(--text-muted);
 }
 
+/* A preview category the backend could not predict (bead tddmw). Deliberately
+   muted rather than alarming: "not predicted" is an honest gap, not a problem
+   with the restore, and it stands where the four count cells otherwise sit. */
+.rcs-not-predicted {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Why a category's counts may not match what the apply does. Full-width under
+   the header so a sentence wraps instead of squeezing the counts. */
+.rcs-category-caveat {
+  margin: 0.375rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
 /* --- Expandable reason lists --------------------------------------------- */
 
 .rcs-detail-block {
@@ -187,7 +217,7 @@
 }
 
 .rcs-detail-toggle.is-failure {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .rcs-detail-toggle .material-icons {

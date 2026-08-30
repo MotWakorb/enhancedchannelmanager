@@ -163,10 +163,6 @@ export function UserManagementSection({ isAdmin, currentUserId }: Props) {
 
   return (
     <div className="user-management-section">
-      <div className="settings-page-header">
-        <h2>Users</h2>
-        <p>Manage user accounts and permissions.</p>
-      </div>
 
       {error && (
         <div className="error-banner">

@@ -18,6 +18,9 @@ tsfv0 (live-confirmed vs Dispatcharr 0.26.0):
 Mocking pattern follows test_dispatcharr_client_stream_crud.py: construct a real
 ``DispatcharrClient`` and ``patch.object(client, "_request", AsyncMock(...))``.
 """
+import json
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -25,6 +28,12 @@ import httpx
 
 from config import DispatcharrSettings
 from dispatcharr_client import DispatcharrClient
+
+_RECORDED_OPENAPI = json.loads(
+    (
+        Path(__file__).parent.parent / "fixtures" / "dispatcharr_openapi_recorded.json"
+    ).read_text()
+)
 
 
 def _response(status_code: int, json_body=None, text: str = ""):
@@ -276,6 +285,58 @@ async def test_get_user_schema_write_fields_extracts_writable_request_props():
         assert "password" in fields
         assert "is_superuser" in fields
         assert "id" not in fields
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_user_schema_write_fields_requests_json_rendering():
+    """The schema fetch must ask for the JSON rendering explicitly.
+
+    Regression pin for enhancedchannelmanager-q6xjl: drf-spectacular's default
+    renderer is YAML (``application/vnd.oai.openapi``), so a bare
+    ``GET /api/schema/`` body cannot be ``.json()``-parsed. That raised
+    ``Expecting value: line 1 column 1 (char 0)`` and failed the whole
+    dispatcharr_users category CLOSED on every restore.
+    """
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(return_value=_response(200, {"paths": {}}))
+        with patch.object(client, "_request", request_mock):
+            await client.get_user_schema_write_fields()
+        method, path = request_mock.await_args.args
+        assert (method, path) == ("GET", "/api/schema/")
+        assert request_mock.await_args.kwargs["params"] == {"format": "json"}
+    finally:
+        await client._client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_user_schema_write_fields_parses_recorded_dispatcharr_schema():
+    """The extraction logic runs against a RECORDED slice of the real Dispatcharr
+    0.28.2 OpenAPI document, not a hand-invented shape.
+
+    Proves the ``$ref`` hop into ``components.schemas.User`` resolves against the
+    real document and yields a NON-EMPTY write-field set — the condition the
+    Users capability check requires to not fail closed.
+    """
+    client = _make_client()
+    try:
+        request_mock = AsyncMock(
+            return_value=_response(200, _RECORDED_OPENAPI["schema"])
+        )
+        with patch.object(client, "_request", request_mock):
+            fields = await client.get_user_schema_write_fields()
+
+        assert fields, "recorded real schema must yield a non-empty write-field set"
+        # Real writable fields present.
+        assert {"username", "password", "email", "is_superuser"} <= fields
+        # Real readOnly fields excluded.
+        assert "id" not in fields
+        assert "api_key" not in fields
+        # Dispatcharr 0.28.2 exposes NO pre-hashed-password write field, so the
+        # capability check passes rather than failing the category closed.
+        assert "password_hash" not in fields
     finally:
         await client._client.aclose()
 

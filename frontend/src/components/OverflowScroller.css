@@ -1,0 +1,67 @@
+.overflow-scroller {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.overflow-scroller-viewport {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* The arrows are the affordance; a scrollbar under a single line of figures
+   adds height and noise. Keyboard and trackpad panning still work. */
+.overflow-scroller-viewport::-webkit-scrollbar {
+  display: none;
+}
+
+.overflow-scroller-viewport:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-md, 6px);
+}
+
+.overflow-scroller-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border-primary);
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color 120ms, border-color 120ms, opacity 120ms;
+}
+
+.overflow-scroller-arrow:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--text-muted);
+}
+
+.overflow-scroller-arrow:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+/* Kept in the layout when spent rather than removed, so reaching the end does
+   not shift every figure sideways. */
+.overflow-scroller-arrow:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.overflow-scroller-arrow .material-icons {
+  font-size: 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .overflow-scroller-viewport {
+    scroll-behavior: auto;
+  }
+}

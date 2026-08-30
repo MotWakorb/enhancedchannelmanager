@@ -2,6 +2,7 @@ import { useState, useMemo, memo } from 'react';
 import type { M3UAccount } from '../types';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './M3ULinkedAccountsModal.css';
 
@@ -20,6 +21,7 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
   accounts,
   linkGroups: initialLinkGroups,
 }: M3ULinkedAccountsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const [linkGroups, setLinkGroups] = useState<number[][]>(initialLinkGroups);
   const [editingGroupIndex, setEditingGroupIndex] = useState<number | null>(null);
   const [selectedAccountIds, setSelectedAccountIds] = useState<Set<number>>(new Set());
@@ -139,10 +141,10 @@ export const M3ULinkedAccountsModal = memo(function M3ULinkedAccountsModal({
   const isEditing = editingGroupIndex !== null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md m3u-linked-accounts-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md m3u-linked-accounts-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Manage Linked Accounts</h2>
+          <h2 id={titleId}>Manage Linked Accounts</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

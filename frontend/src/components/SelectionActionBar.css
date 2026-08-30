@@ -6,16 +6,33 @@
    dependency on ChannelsPane's stylesheet.
    Shared classes consumed: none (theme tokens from index.css only). */
 
-.selection-action-bar {
+/* The fixed positioning lives on the shell so the bar can carry a full-width
+   line above it (the probe immediacy note) without the bar itself having to
+   wrap — it is a single nowrap row of controls by design. */
+.selection-action-bar-shell {
   position: fixed;
   bottom: 12px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 900; /* above pane content/sticky (500), below modal overlays (--z-overlay: 1000) */
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+}
+
+.selection-action-bar-shell > .immediate-action-note {
+  max-width: 100%;
+  background-color: var(--bg-secondary);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+
+.selection-action-bar {
+  display: flex;
   align-items: center;
   gap: 2px;
-  max-width: calc(100vw - 24px);
+  max-width: 100%;
   padding: 6px 10px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
@@ -24,15 +41,21 @@
   white-space: nowrap;
 }
 
+/* Item-title role, SIZE only — the "N selected" count is the heaviest thing in
+   the bar and already carries 600. 0.85rem -> 13px
+   (bead enhancedchannelmanager-haf9e). */
 .selection-action-bar-count {
   padding: 0 10px 0 4px;
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
   font-weight: 600;
   color: var(--text-primary);
   border-right: 1px solid var(--border-primary);
   margin-right: 6px;
 }
 
+/* Body role, SIZE only — a control keeps its authored weight. This is an OUTER
+   rule: the bare `<span>` labels inside each button inherit from it.
+   0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .selection-bar-btn {
   display: inline-flex;
   align-items: center;
@@ -42,7 +65,7 @@
   border: none;
   border-radius: 6px;
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s;
 }
@@ -107,6 +130,8 @@
   white-space: normal;
 }
 
+/* Body role, SIZE only. OUTER rule of a nested pair — `--sub` below overrides
+   it for the indented rows. 0.85rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .selection-bar-menu-item {
   display: flex;
   align-items: center;
@@ -118,7 +143,7 @@
   color: var(--text-primary);
   cursor: pointer;
   transition: background-color 0.15s;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   text-align: left;
 }
 
@@ -155,9 +180,15 @@
   overflow-y: auto;
 }
 
+/* Body role, SIZE only. This rule existed ONLY to make sub-rows one step
+   smaller than their parent row (12.8px under 13.6px); the scale has no step
+   between body and meta, and an indented ACTION is still an action, so both now
+   render 13px and the indent alone carries the hierarchy. The size declaration
+   is kept rather than deleted so the intent stays visible at the call site.
+   0.8rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .selection-bar-menu-item--sub {
   padding-left: 1.25rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
 /* Move-to-group type-to-filter (bead hzzcv) — mirrors .group-filter-search*
@@ -168,6 +199,7 @@
   border-bottom: 1px solid var(--border-primary);
 }
 
+/* Body role, SIZE only. 0.8rem -> 13px (bead enhancedchannelmanager-haf9e). */
 .selection-bar-move-filter-input {
   width: 100%;
   padding: 0.4rem 1.75rem 0.4rem 0.5rem;
@@ -175,7 +207,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
 .selection-bar-move-filter-input:focus-visible {
@@ -252,9 +284,12 @@
   margin: 0.25rem 0;
 }
 
+/* Micro role, SIZE only — uppercase with tracking, which is precisely what the
+   micro role names; the authored 0.05em tracking and the transform are kept.
+   0.7rem -> 10px (bead enhancedchannelmanager-haf9e). */
 .selection-bar-menu-section-label {
   padding: 0.25rem 0.75rem;
-  font-size: 0.7rem;
+  font-size: var(--type-micro-size);
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.05em;

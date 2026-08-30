@@ -24,10 +24,22 @@
   margin-bottom: 12px;
 }
 
+/* Section role. Card and panel titles across the product rendered at 14,
+   15, 16 and 18px. They are all the same thing — a heading inside a page
+   — so they all take the 15px section role now (PO decision, bead
+   enhancedchannelmanager-6z299).
+   This one was 18px.
+   `text-transform` / `letter-spacing` are reset explicitly: until this bead
+   they came from StatsTab.css's bare `.section-title`, so every panel title
+   was rendering 15px/600 UPPERCASE — the section role's size with that
+   rule's case (bead enhancedchannelmanager-6z299.4). */
 .user-stats-panel .section-title {
   margin: 0;
-  font-size: 18px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
+  text-transform: none;
+  letter-spacing: normal;
   color: var(--text-primary);
 }
 
@@ -43,8 +55,11 @@
   gap: 8px;
 }
 
+/* Label role (13px/500) — the caption that names a control. */
 .user-stats-panel .range-label {
-  font-size: 13px;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-primary);
 }
 
@@ -54,7 +69,9 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   min-width: 140px;
 }
 
@@ -78,10 +95,14 @@
   margin-bottom: 8px;
 }
 
+/* Item title, not section — a chart heading sits one step below the panel's
+   own `.section-title`. See the same call in ProvidersPanel.css
+   (bead enhancedchannelmanager-6z299.4). */
 .user-stats-panel .chart-title {
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
@@ -91,7 +112,9 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   cursor: pointer;
 }
 
@@ -110,9 +133,10 @@
  * the UTC-vs-local-tz aggregation. Operators glance at this once. */
 .user-stats-panel .chart-caption {
   margin: 6px 0 0 0;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
-  line-height: 1.4;
 }
 
 /* In-progress marker for "today" in the data-table fallback. Yellow tag
@@ -123,8 +147,9 @@
   border-radius: 3px;
   background: rgba(204, 187, 68, 0.18); /* #ccbb44 at 18% */
   color: var(--text-primary);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   white-space: nowrap;
 }
 
@@ -134,7 +159,9 @@
   width: 100%;
   border-collapse: collapse;
   margin-top: 8px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
 }
 
@@ -157,20 +184,13 @@
   color: var(--text-primary);
 }
 
-/* WCAG-compliant visually-hidden utility — visible to screen readers,
- * removed from visual flow. (clip + width 1px is the modern recipe;
- * `clip-path: inset(50%)` is the newer alternative.) */
-.visually-hidden {
-  position: absolute !important;
-  width: 1px !important;
-  height: 1px !important;
-  padding: 0 !important;
-  margin: -1px !important;
-  overflow: hidden !important;
-  clip: rect(0, 0, 0, 0) !important;
-  white-space: nowrap !important;
-  border: 0 !important;
-}
+/* `.visually-hidden` is owned by shared/common.css § 2 COMMON UTILITIES.
+ * Three identical copies of this a11y primitive existed — here, in
+ * TabNavigation.css and in StatsTab.css — declared bare in three
+ * different chunks, so which one applied depended on visit order. The claim
+ * in the comment that used to sit here, that "each panel scopes its own
+ * copy", was not true: none of the three was scoped
+ * (bead enhancedchannelmanager-6z299). */
 
 /* Tables ------------------------------------------------------------------ */
 
@@ -181,8 +201,9 @@
 
 .user-stats-panel .breakdown-title {
   margin: 0 0 8px 0;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
 }
 
@@ -190,7 +211,9 @@
 .user-stats-panel .channel-breakdown-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
 }
 
@@ -219,7 +242,9 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   cursor: pointer;
 }
 
@@ -234,7 +259,9 @@
 .user-stats-panel .admin-only-state {
   padding: 12px;
   color: var(--text-secondary);
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   text-align: center;
   background: var(--bg-primary);
   border: 1px solid var(--border-primary);
@@ -247,7 +274,9 @@
   background: var(--danger-bg);
   border: 1px solid var(--danger-text);
   border-radius: 6px;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   margin-bottom: 12px;
 }
 

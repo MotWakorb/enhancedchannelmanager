@@ -7,12 +7,16 @@ Mocks: get_settings(), get_engine(), close_db(), init_db(), clear_settings_cache
 """
 import io
 import json
+import sqlite3
+import tempfile
 import zipfile
+from pathlib import Path
 
 import pytest
 import yaml
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import config as config_mod
 from models import (
     ChannelPipelineRule,
     DummyEPGProfile,
@@ -25,6 +29,51 @@ from models import (
     TagGroup,
     Tag,
 )
+
+
+def _write_empty_journal_db(path):
+    """A REAL, empty SQLite database at ``path``.
+
+    The magic-byte stub these tests used to write is not a database — sqlite3
+    opens it and then fails on the first query. That was invisible while the
+    journal.db scrub failed OPEN and shipped the raw copy; it fails the backup
+    now (bead …-gi4zn, finding A-3), and a live instance always has a real
+    database here, so the faithful fixture is the one that matches production.
+
+    ZIP restore fixtures use the minimal historical schema because admission
+    now verifies SQLite structure rather than trusting magic bytes.
+    """
+    sqlite3.connect(str(path)).close()
+
+
+def _add_legacy_baseline_tables(path):
+    """Add the tables present throughout the legacy ZIP backup era."""
+    connection = sqlite3.connect(str(path))
+    try:
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS journal_entries "
+            "(id INTEGER PRIMARY KEY, timestamp TEXT, category TEXT, action_type TEXT, "
+            "entity_name TEXT, description TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS scheduled_tasks "
+            "(id INTEGER PRIMARY KEY, task_id TEXT, task_name TEXT, enabled INTEGER, schedule_type TEXT)"
+        )
+        connection.execute(
+            "CREATE TABLE IF NOT EXISTS auto_creation_rules "
+            "(id INTEGER PRIMARY KEY, name TEXT, enabled INTEGER, priority INTEGER, "
+            "conditions TEXT, actions TEXT)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _minimal_journal_db_bytes() -> bytes:
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "journal.db"
+        _add_legacy_baseline_tables(path)
+        return path.read_bytes()
 
 
 def _make_backup_zip(
@@ -46,8 +95,7 @@ def _make_backup_zip(
             files.append("settings.json")
 
         if include_db:
-            # SQLite magic bytes
-            content = db_content or (b"SQLite format 3\x00" + b"\x00" * 100)
+            content = db_content if db_content is not None else _minimal_journal_db_bytes()
             zf.writestr("journal.db", content)
             files.append("journal.db")
 
@@ -78,7 +126,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{"url": "http://test:9191"}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 100)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_conn = MagicMock()
@@ -115,7 +163,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{"url": "test"}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         # Create logo directory with a file
         logos_dir = tmp_path / "uploads" / "logos"
@@ -144,7 +192,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_conn = MagicMock()
@@ -165,7 +213,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         mock_engine = MagicMock()
         mock_engine.connect.side_effect = Exception("WAL error")
@@ -197,7 +245,7 @@ class TestCreateBackup:
         settings_file = tmp_path / "settings.json"
         settings_file.write_text('{}')
         db_file = tmp_path / "journal.db"
-        db_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 50)
+        _write_empty_journal_db(db_file)
 
         # Mock the engine.connect() chain so the PRAGMA returns (1, 0, 0).
         mock_engine = MagicMock()
@@ -464,6 +512,412 @@ class TestRestoreInitial:
         assert "not a valid zip" in response.json()["detail"]
 
 
+class TestRestoreInitialIdentityGate:
+    """POST /api/backup/restore-initial must gate on AUTH state, not Dispatcharr config.
+
+    Bead enhancedchannelmanager-lf29s. The endpoint sat in
+    ``main.AUTH_EXEMPT_PATHS`` with no auth dependency at all; its only guard
+    was ``settings.is_configured()``, which reports whether a Dispatcharr URL
+    and credentials are present. That is a Dispatcharr-configuration check
+    standing in for an authentication check, and the two conditions are
+    unrelated: any instance whose Dispatcharr connection was not yet configured
+    accepted an anonymous ZIP that overwrites ``journal.db`` (the ``users``
+    table, admin password hashes included) and the ``tls`` directory.
+
+    The gate deliberately does NOT key on ``auth_settings.setup_complete``
+    alone. A user row is durable instance state and remains authoritative if
+    configuration persistence is interrupted or damaged.
+    """
+
+    @staticmethod
+    def _auth_settings(require_auth=True, setup_complete=False):
+        stub = MagicMock()
+        stub.require_auth = require_auth
+        stub.setup_complete = setup_complete
+        return stub
+
+    @staticmethod
+    def _admin_user(is_admin=True):
+        from models import User
+
+        return User(
+            id=9001,
+            username="operator",
+            is_admin=is_admin,
+            is_active=True,
+            auth_provider="local",
+        )
+
+    @staticmethod
+    def _seed_user(session, username="operator"):
+        from models import User
+
+        session.add(
+            User(
+                username=username,
+                email="%s@example.com" % username,
+                is_admin=True,
+                is_active=True,
+                auth_provider="local",
+            )
+        )
+        session.commit()
+
+    @pytest.mark.asyncio
+    async def test_rejects_anonymous_when_a_user_row_exists(self, async_client, test_session):
+        """The core regression: an instance with an admin refuses an anonymous restore.
+
+        ``setup_complete`` is left False here on purpose — that is the qg14z
+        state of every instance that ran the setup wizard, and the state in
+        which the live reproduction achieved a full admin takeover.
+        """
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_rejects_anonymous_when_setup_complete_without_user_rows(
+        self, async_client, test_session
+    ):
+        """``setup_complete`` is honoured as a second, independent refusal signal."""
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch(
+                 "auth.dependencies.get_auth_settings",
+                 return_value=self._auth_settings(setup_complete=True),
+             ):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_allows_genuine_first_run_with_auth_enabled(
+        self, async_client, test_session, tmp_path
+    ):
+        """A genuinely empty instance still restores — that is the endpoint's purpose.
+
+        No user rows, ``setup_complete`` False, ``require_auth`` True: the
+        disaster-recovery rebuild sitting empty waiting for its restore.
+        """
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
+             patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", tmp_path / "settings.json"), \
+             patch("routers.backup.JOURNAL_DB_FILE", tmp_path / "journal.db"), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_allows_authenticated_admin_when_a_user_row_exists(
+        self, async_client, test_session, tmp_path
+    ):
+        """The legitimate first-run restore path: the operator has signed in.
+
+        ``POST /api/auth/setup`` issues no session cookie, so this branch is
+        reached only after the operator has been through the login page. What
+        sends them there is ``ProtectedRoute.handleSetupComplete`` re-reading
+        ``GET /api/auth/status`` when the setup wizard finishes: the status
+        cached at mount still says ``setup_complete`` is False even though
+        setup has just persisted the flag (bead enhancedchannelmanager-qg14z).
+
+        That re-read is part of this bead's fix. Until it existed the frontend
+        rendered the app on the stale status with no session, and the Settings
+        modal's "restore from backup" button called this endpoint anonymously
+        and took the 403 above. A page reload hid it, because the reload fetched
+        fresh status. Both the failure and the fix were
+        reproduced in a browser against a disposable instance with no reload
+        between finishing setup and clicking restore.
+        """
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
+             patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
+             patch(
+                 "routers.backup.get_current_user",
+                 new=AsyncMock(return_value=self._admin_user()),
+             ), \
+             patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", tmp_path / "settings.json"), \
+             patch("routers.backup.JOURNAL_DB_FILE", tmp_path / "journal.db"), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "ok"
+
+    @pytest.mark.asyncio
+    async def test_rejects_authenticated_non_admin(self, async_client, test_session):
+        """A signed-in ordinary user cannot rewrite the user table."""
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
+             patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
+             patch(
+                 "routers.backup.get_current_user",
+                 new=AsyncMock(return_value=self._admin_user(is_admin=False)),
+             ):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_rejects_mcp_service_principal(self, async_client, test_session):
+        """Parity with POST /api/backup/restore, which uses RequireHumanAdminIfEnabled.
+
+        The static MCP key carries ``is_admin=True`` but is an automation
+        credential, not an operator identity (bead 6n76m). Restore rewrites the
+        settings blob wholesale, so it must be driven by a human admin.
+        """
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
+             patch("routers.backup.get_token_from_request", return_value="the-mcp-key"), \
+             patch(
+                 "routers.backup.get_current_user",
+                 new=AsyncMock(return_value=self._admin_user()),
+             ), \
+             patch("routers.backup.is_mcp_service_principal", return_value=True):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_token_when_a_user_row_exists(
+        self, async_client, test_session
+    ):
+        """A rejected token is an anonymous caller, not a bypass."""
+        from auth.dependencies import AuthenticationError
+
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
+             patch("routers.backup.get_token_from_request", return_value="forged"), \
+             patch(
+                 "routers.backup.get_current_user",
+                 new=AsyncMock(side_effect=AuthenticationError("Invalid token")),
+             ):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_refuses_anonymous_when_operator_disabled_auth(
+        self, async_client, test_session
+    ):
+        """bead jy006, PO decision 2026-08-13 — REVERSED from what shipped here.
+
+        This test asserted 200 until bead jy006. The reasoning then was that
+        ``RequireAdminIfEnabled`` already serves anonymous callers on an
+        auth-disabled instance, so refusing only here would break the
+        operator's own restore without closing anything.
+
+        The PO decided that question the other way. ``require_auth: false``
+        stays open for ordinary data and configuration routes, but this one is
+        an IDENTITY PRIMITIVE: the ZIP replaces ``journal.db`` wholesale, the
+        ``users`` table and every admin password hash with it, so an anonymous
+        caller who lands one owns the instance afterwards — including after the
+        operator turns authentication back on. That is categorically unlike
+        POST /api/settings, which is merely open while the mode is on.
+
+        The paired positive control is
+        ``test_allows_admin_when_operator_disabled_auth``: the operator with a
+        session still restores, so this is a refusal of anonymity, not of the
+        mode.
+        """
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch(
+                 "auth.dependencies.get_auth_settings",
+                 return_value=self._auth_settings(require_auth=False),
+             ):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+        assert "admin" in response.json()["detail"].lower()
+
+    @pytest.mark.asyncio
+    async def test_allows_admin_when_operator_disabled_auth(
+        self, async_client, test_session, tmp_path
+    ):
+        """The positive control for the refusal above (bead jy006).
+
+        ``get_current_user`` has no ``require_auth`` short-circuit of any kind,
+        so an operator holding a session cookie authenticates normally on an
+        auth-disabled instance and reaches the handler. Without this case the
+        refusal above could not be distinguished from a hard lockout.
+        """
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch(
+                 "auth.dependencies.get_auth_settings",
+                 return_value=self._auth_settings(require_auth=False),
+             ), \
+             patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
+             patch(
+                 "routers.backup.get_current_user",
+                 new=AsyncMock(return_value=self._admin_user()),
+             ), \
+             patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", tmp_path / "settings.json"), \
+             patch("routers.backup.JOURNAL_DB_FILE", tmp_path / "journal.db"), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_allows_anonymous_when_auth_disabled_and_no_identity(
+        self, async_client, test_session, tmp_path
+    ):
+        """The carve-out that keeps bead jy006 from being a lockout.
+
+        A headless auth-disabled deployment that never created a user has
+        nothing for a caller to take over, and refusing here would leave it no
+        in-band way to restore at all — the only route to an admin would be the
+        setup wizard, which changes the very posture the operator chose.
+        """
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = False
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch(
+                 "auth.dependencies.get_auth_settings",
+                 return_value=self._auth_settings(require_auth=False),
+             ), \
+             patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", tmp_path / "settings.json"), \
+             patch("routers.backup.JOURNAL_DB_FILE", tmp_path / "journal.db"), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_configured_instance_still_refuses_outright(
+        self, async_client, test_session
+    ):
+        """``is_configured()`` stays an independent refusal, not a replaced one."""
+        self._seed_user(test_session)
+        backup = _make_backup_zip()
+        mock_settings = MagicMock()
+        mock_settings.is_configured.return_value = True
+
+        with patch("routers.backup.get_settings", return_value=mock_settings), \
+             patch("auth.dependencies.get_auth_settings", return_value=self._auth_settings()), \
+             patch("routers.backup.get_token_from_request", return_value="a-valid-token"), \
+             patch(
+                 "routers.backup.get_current_user",
+                 new=AsyncMock(return_value=self._admin_user()),
+             ):
+            response = await async_client.post(
+                "/api/backup/restore-initial",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 403
+        assert "already configured" in response.json()["detail"]
+
+    def test_path_is_no_longer_globally_auth_exempt(self):
+        """The middleware allowlist no longer carries a wholesale-DB-rewrite path.
+
+        Removing it costs nothing: the middleware only enforces when
+        ``require_auth and setup_complete`` are both true, and the handler gate
+        already refuses an anonymous caller whenever ``setup_complete`` is true.
+        What it buys is that the anonymous multipart upload is turned away
+        before FastAPI spools an attacker-controlled ZIP to disk. First-run
+        reachability is unaffected because a genuine first run has
+        ``setup_complete`` False, so the middleware does not engage at all.
+        """
+        from main import AUTH_EXEMPT_PATHS
+
+        assert "/api/backup/restore-initial" not in AUTH_EXEMPT_PATHS
+
+
 class TestExportYaml:
     """Tests for GET /api/backup/export."""
 
@@ -499,7 +953,16 @@ class TestExportYaml:
 
     @pytest.mark.asyncio
     async def test_redacts_passwords(self, async_client, test_session):
-        """Export redacts sensitive fields from settings."""
+        """Export redacts sensitive fields from settings.
+
+        ``username`` used to be asserted PRESENT here, which recorded the
+        defect bead …-gi4zn fixes rather than a decision: it is the identity
+        half of the Dispatcharr connection credential whose secret half two
+        lines above is redacted, and the debug-bundle redactor
+        (``routers/channel_pipeline.py``) had already been redacting it for the
+        whole time this assertion said it should survive. The export is
+        described to operators as redacted, so it carries neither half.
+        """
         mock_settings = MagicMock()
         mock_settings.model_dump.return_value = {
             "url": "http://test:9191",
@@ -516,7 +979,9 @@ class TestExportYaml:
         data = yaml.safe_load(response.text)
         assert data["settings"]["password"] == "***REDACTED***"
         assert data["settings"]["smtp_password"] == "***REDACTED***"
-        assert data["settings"]["username"] == "admin"
+        assert data["settings"]["username"] == "***REDACTED***"
+        # Not a credential, and the operator needs it to reconnect.
+        assert data["settings"]["url"] == "http://test:9191"
 
     @pytest.mark.asyncio
     async def test_exports_db_tables(self, async_client, test_session):
@@ -585,6 +1050,14 @@ class TestExportYaml:
 
         mock_client = AsyncMock()
         mock_client.get_m3u_accounts.side_effect = Exception("Connection refused")
+        # Siblings requested in the SAME export call must still fetch normally
+        # (isolation contract, enhancedchannelmanager-zt3kf) — configure them
+        # with real data so the test can prove m3u_accounts degrading does not
+        # blast-radius the rest of the dispatcharr blob.
+        mock_client.get_epg_sources.return_value = [{"id": 1, "name": "EPG1", "url": "http://epg"}]
+        mock_client.get_channel_groups.return_value = [{"id": 1, "name": "News"}]
+        mock_client.get_channel_profiles.return_value = [{"id": 1, "name": "HD"}]
+        mock_client.get_stream_profiles.return_value = [{"id": 1, "name": "Default"}]
 
         with patch("routers.backup.get_settings", return_value=mock_settings), \
              patch("routers.backup.get_client", return_value=mock_client):
@@ -593,8 +1066,16 @@ class TestExportYaml:
         assert response.status_code == 200
         data = yaml.safe_load(response.text)
         dispatcharr = data.get("dispatcharr", {})
-        assert "_warning" in dispatcharr
-        assert "Connection refused" in dispatcharr["_warning"]
+        # The failing category is stubbed UNDER ITS OWN KEY, not at the top of
+        # the dispatcharr blob (zt3kf — explicit per-category isolation, not a
+        # shared connectivity-style failure).
+        assert "_warning" in dispatcharr["m3u_accounts"]
+        assert "Connection refused" in dispatcharr["m3u_accounts"]["_warning"]
+        # Sibling categories requested in the SAME call are unaffected.
+        assert dispatcharr["epg_sources"] == [{"id": 1, "name": "EPG1", "url": "http://epg"}]
+        assert dispatcharr["channel_groups"] == [{"id": 1, "name": "News"}]
+        assert dispatcharr["channel_profiles"] == [{"id": 1, "name": "HD"}]
+        assert dispatcharr["stream_profiles"] == [{"id": 1, "name": "Default"}]
 
     @pytest.mark.asyncio
     async def test_export_metadata(self, async_client, test_session):
@@ -1258,6 +1739,134 @@ class TestRestoreYaml:
         assert test_session.query(TagGroup).count() == 1
 
     @pytest.mark.asyncio
+    async def test_settings_storage_failure_is_section_local_and_restore_continues(
+        self, async_client, test_session
+    ):
+        content = _make_yaml_export()
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {
+            "url": "",
+            "username": "",
+            "password": "existing_pass",
+            "smtp_password": "existing_smtp",
+        }
+
+        with patch(
+            "routers.backup.get_settings", return_value=mock_settings
+        ), patch(
+            "routers.backup.save_settings",
+            side_effect=config_mod.MCPApiKeyStorageError("untrusted authority"),
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={
+                    "sections": json.dumps(
+                        ["tag_groups", "settings", "scheduled_tasks"]
+                    )
+                },
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["sections_restored"] == ["tag_groups", "scheduled_tasks"]
+        assert body["sections_failed"] == ["settings"]
+        assert test_session.query(TagGroup).count() == 1
+        assert test_session.query(ScheduledTask).count() == 1
+        assert any("settings" in error.lower() for error in body["errors"])
+        assert all("untrusted authority" not in error for error in body["errors"])
+
+    @pytest.mark.parametrize(
+        "settings_failure",
+        [
+            config_mod.MCPApiKeyStorageError("untrusted authority"),
+            OSError("settings write failed"),
+        ],
+        ids=["mcp-storage", "generic-write"],
+    )
+    @pytest.mark.asyncio
+    async def test_settings_failure_blocks_dispatcharr_restore_but_local_restore_continues(
+        self, async_client, test_session, settings_failure
+    ):
+        content = _make_yaml_export()
+        mock_settings = MagicMock()
+        mock_settings.model_dump.return_value = {
+            "url": "http://old:9191",
+            "username": "old_user",
+            "password": "existing_pass",
+            "smtp_password": "existing_smtp",
+        }
+        restore_m3u_accounts = AsyncMock(return_value={"warnings": []})
+
+        with patch(
+            "routers.backup.get_settings", return_value=mock_settings
+        ), patch(
+            "routers.backup.save_settings",
+            side_effect=settings_failure,
+        ), patch.dict(
+            "routers.backup._DISPATCHARR_RESTORERS",
+            {"m3u_accounts": restore_m3u_accounts},
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={
+                    "sections": json.dumps(
+                        ["m3u_accounts", "settings", "scheduled_tasks"]
+                    )
+                },
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["sections_restored"] == ["scheduled_tasks"]
+        assert body["sections_failed"] == ["settings", "m3u_accounts"]
+        assert any(
+            "m3u_accounts: settings restore failed" in error
+            for error in body["errors"]
+        )
+        assert test_session.query(ScheduledTask).count() == 1
+        restore_m3u_accounts.assert_not_awaited()
+
+    @pytest.mark.parametrize("settings_mode", ["missing", "empty"])
+    @pytest.mark.asyncio
+    async def test_invalid_selected_settings_block_dispatcharr_restore(
+        self, async_client, test_session, settings_mode
+    ):
+        export_data = yaml.safe_load(_make_yaml_export())
+        if settings_mode == "missing":
+            export_data.pop("settings", None)
+        else:
+            export_data["settings"] = {}
+        content = yaml.dump(export_data, default_flow_style=False).encode()
+        restore_m3u_accounts = AsyncMock(return_value={"warnings": []})
+
+        with patch("routers.backup.get_settings") as get_settings, patch.dict(
+            "routers.backup._DISPATCHARR_RESTORERS",
+            {"m3u_accounts": restore_m3u_accounts},
+        ):
+            response = await async_client.post(
+                "/api/backup/restore-yaml",
+                data={
+                    "sections": json.dumps(
+                        ["m3u_accounts", "settings", "scheduled_tasks"]
+                    )
+                },
+                files={"file": ("export.yaml", content, "text/yaml")},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is False
+        assert body["sections_restored"] == ["scheduled_tasks"]
+        assert body["sections_failed"] == ["settings", "m3u_accounts"]
+        assert test_session.query(ScheduledTask).count() == 1
+        get_settings.assert_not_called()
+        restore_m3u_accounts.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_channel_groups_restore_upserts_by_name(self):
         """Channel groups restore must NOT delete existing groups — channels and
         streams reference them by ID, so deleting would orphan those FKs. Only
@@ -1348,6 +1957,7 @@ def _create_journal_db_with_alert_methods(path, rows):
     and the supplied rows. Each row is a dict with at least name, method_type,
     config (dict — will be JSON-encoded for storage)."""
     import sqlite3
+    _add_legacy_baseline_tables(path)
     conn = sqlite3.connect(str(path))
     try:
         conn.execute(
@@ -1403,6 +2013,13 @@ class TestZipExportRedaction:
         ``dispatcharr_api_key`` (canonical) was added in v0.17.1. The legacy
         ``api_key`` stays in the seed dict so the back-compat mirror in
         ``save_settings()`` is also covered.
+
+        bead …-9kwzp.9: extended to 8 when the tuple started DERIVING
+        ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``. The seed dict has to keep
+        pace with the tuple or this docstring's "every credential field" claim
+        goes quietly false, which is precisely how the two missing fields
+        stayed invisible. The dedicated derivation tests live in
+        ``test_9kwzp9_backup_settings_read_parity.py``.
         """
         settings_file = tmp_path / "settings.json"
         # Distinctive values so we can search the ZIP for raw leaks.
@@ -1413,6 +2030,8 @@ class TestZipExportRedaction:
             "smtp_password": "raw-smtp-VOLTUM",
             "telegram_bot_token": "raw-tg-bot-NIXAR",
             "mcp_api_key": "raw-mcp-MERLIN",
+            "discord_webhook_url": "https://discord.com/api/webhooks/1/raw-KELVAR",
+            "telegram_chat_id": "raw-tg-chat-OSMIRE",
         }
         settings_dict = {"url": "http://test:9191", "username": "admin", **raw_creds}
         # File must exist for the CONFIG_FILE.exists() guard, but the actual
@@ -1534,14 +2153,21 @@ class TestZipExportRedaction:
         assert configs[1]["host"] == "smtp.example.com"  # non-cred preserved
         assert configs[2]["webhook_url"] == "***REDACTED***"
         assert configs[3]["bot_token"] == "***REDACTED***"
-        assert configs[3]["chat_id"] == "1234"  # non-cred preserved
+        # ``chat_id`` was asserted here as "non-cred preserved". Bead …-gi4zn
+        # reclassifies it: a Telegram chat id is a bearer capability to post
+        # into a chat, which is why the SETTINGS-level ``telegram_chat_id`` is
+        # already in ``config.ADMIN_ONLY_READ_REDACTED_FIELDS`` and withheld
+        # from a non-admin read. The identical value nested inside
+        # alert_methods.config was the unprotected half of that pair.
+        assert configs[3]["chat_id"] == "***REDACTED***"
 
 
 class TestZipRestoreRedactionAware:
     """ZIP restore must preserve existing creds when the ZIP contains the
     REDACTED sentinel — both for settings.json and for alert_methods.config.
 
-    Backward compat: a legacy ZIP with raw values must still restore as-is.
+    Backward compat: legacy raw credentials still restore, except mcp_api_key,
+    which always remains bound to the destination instance.
     """
 
     @pytest.mark.asyncio
@@ -1561,6 +2187,9 @@ class TestZipRestoreRedactionAware:
             "mcp_api_key": "EXISTING-MCP-9999",
         }
         settings_file.write_text(json.dumps(existing))
+        authority_file = tmp_path / "api-key"
+        authority_file.write_text("EXISTING-MCP-9999\n")
+        authority_file.chmod(0o600)
         db_file = tmp_path / "journal.db"
 
         # Build a ZIP whose settings.json carries the redacted sentinels and a
@@ -1580,6 +2209,7 @@ class TestZipRestoreRedactionAware:
         with patch("routers.backup.CONFIG_DIR", tmp_path), \
              patch("routers.backup.CONFIG_FILE", settings_file), \
              patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch.object(config_mod, "MCP_KEY_FILE", authority_file), \
              patch("routers.backup.close_db"), \
              patch("routers.backup.init_db"), \
              patch("routers.backup.clear_settings_cache"), \
@@ -1683,16 +2313,20 @@ class TestZipRestoreRedactionAware:
         assert by_id[2][1]["webhook_url"] == existing_webhook
 
     @pytest.mark.asyncio
-    async def test_zip_restore_legacy_non_redacted_still_works(
+    async def test_zip_restore_legacy_non_redacted_preserves_only_destination_mcp_key(
         self, async_client, tmp_path
     ):
         """Backward-compat smoke: a legacy ZIP with raw credential values
-        (no ***REDACTED*** sentinels) must restore values as-is."""
+        restores them as-is except for the destination's MCP bearer key."""
         settings_file = tmp_path / "settings.json"
         settings_file.write_text(json.dumps({
             "url": "http://existing:9191",
             "password": "should-be-overwritten",
+            "mcp_api_key": "destination-mcp-key",
         }))
+        authority_file = tmp_path / "api-key"
+        authority_file.write_text("destination-mcp-key\n")
+        authority_file.chmod(0o600)
         db_file = tmp_path / "journal.db"
 
         legacy_settings = json.dumps({
@@ -1700,12 +2334,14 @@ class TestZipRestoreRedactionAware:
             "username": "restored_user",
             "password": "raw-restored-pass",
             "smtp_password": "raw-restored-smtp",
+            "mcp_api_key": "hostile-legacy-mcp-key",
         })
         backup = _make_backup_zip(settings_content=legacy_settings)
 
         with patch("routers.backup.CONFIG_DIR", tmp_path), \
              patch("routers.backup.CONFIG_FILE", settings_file), \
              patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch.object(config_mod, "MCP_KEY_FILE", authority_file), \
              patch("routers.backup.close_db"), \
              patch("routers.backup.init_db"), \
              patch("routers.backup.clear_settings_cache"), \
@@ -1717,8 +2353,10 @@ class TestZipRestoreRedactionAware:
 
         assert response.status_code == 200
         restored = json.loads(settings_file.read_text())
-        # All values came from the ZIP, raw, including credentials.
+        # Legacy credentials still come from the ZIP, except the instance-bound
+        # MCP bearer key, which cannot be imported from an untrusted artifact.
         assert restored["url"] == "http://restored:9191"
         assert restored["username"] == "restored_user"
         assert restored["password"] == "raw-restored-pass"
         assert restored["smtp_password"] == "raw-restored-smtp"
+        assert restored["mcp_api_key"] == "destination-mcp-key"

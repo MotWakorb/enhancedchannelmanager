@@ -713,10 +713,10 @@ async def test_concurrent_opposing_saves_converge_no_divergent_interim():
     group lock (primary PATCH + cascade atomic), so after both, EVERY account
     row carries the SAME selection — no contradictory interim rows."""
     import asyncio
-    import services.profile_reconcile as pr
+    import services.m3u_group_state as group_state
     from routers.m3u import _apply_enforced_global_save
 
-    pr._group_locks.clear()
+    group_state._group_locks.clear()
 
     class _CascadeClient:
         def __init__(self):
@@ -752,7 +752,7 @@ async def test_concurrent_opposing_saves_converge_no_divergent_interim():
 
     await asyncio.gather(_save(1, [1]), _save(2, [2]))
 
-    pr._group_locks.clear()
+    group_state._group_locks.clear()
     # Converged: both account rows carry the SAME selection (last-writer-wins),
     # never one [1] and the other [2].
     assert client.stored[1][100] == client.stored[2][100]

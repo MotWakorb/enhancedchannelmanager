@@ -28,6 +28,7 @@ import * as api from '../services/api';
 import type { OutboundPolicyMode } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { logger } from '../utils/logger';
 import './SecurityFirstRunModal.css';
 
@@ -55,6 +56,7 @@ interface SecurityFirstRunModalProps {
 }
 
 export function SecurityFirstRunModal({ onClose }: SecurityFirstRunModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const notifications = useNotifications();
   const [selected, setSelected] = useState<OutboundPolicyMode>(DEFAULT_MODE);
   const [saving, setSaving] = useState(false);
@@ -96,17 +98,18 @@ export function SecurityFirstRunModal({ onClose }: SecurityFirstRunModalProps) {
       onClose={handleDismiss}
       onClick={handleDismiss}
       data-testid="security-first-run-modal"
-      aria-labelledby="security-first-run-title"
-    >
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}>
       <div
         className="modal-container modal-md security-first-run"
         onClick={(e) => {
           // Clicks inside the dialog must not trigger the backdrop dismiss.
           e.stopPropagation();
         }}
-      >
+       ref={containerRef}>
         <div className="modal-header">
-          <h2 id="security-first-run-title">Where can ECM send backups?</h2>
+          <h2 id={titleId}>Where can ECM send backups?</h2>
         </div>
 
         <div className="modal-body">

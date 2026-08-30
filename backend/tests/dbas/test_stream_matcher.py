@@ -393,6 +393,148 @@ def test_allow_fuzzy_default_is_true_preserves_restore_behavior():
 
 
 # ---------------------------------------------------------------------------
+# RAW-NAME PREFERENCE inside the exact-name tiers (bead …-ixdaw, drill run 4).
+#
+# ``_normalized_name`` case-folds, so a destination pair differing ONLY in
+# capitalisation is one match to Tiers 2 and 3 and the lowest-id tie-break used
+# to hand BOTH archived slots the same id — leaving the byte-identical stream
+# unused and (downstream) either losing the channel a stream or PATCHing a
+# duplicate id that Dispatcharr rejects with ``unique_channel_stream``.
+#
+# The drill's real data: destination ids 101 ``'TX | Dallas | PBS KERA'`` and
+# 102 ``'TX | DALLAS | PBS KERA'``, both on provider ``m3u_account=2``, both
+# URL-bearing. The archived streams' URLs were rotated away by the provider, so
+# the ladder falls to Tier 2 exactly as measured on the live stack.
+# ---------------------------------------------------------------------------
+
+# Ordered lowest-id-first so a regression cannot be masked by list order — the
+# pre-fix tie-break would return 101 for BOTH archived names.
+_KERA_DESTINATION = [
+    _stream(id_=101, name="TX | Dallas | PBS KERA", url="http://p/live/101", m3u_account=2),
+    _stream(id_=102, name="TX | DALLAS | PBS KERA", url="http://p/live/102", m3u_account=2),
+]
+
+
+def test_case_differing_pair_resolves_to_two_distinct_ids():
+    """THE ixdaw FIX: each archived name takes the stream that IS its name.
+
+    Drill run 4 measured both archived slots resolving to ``101``; ``102`` — a
+    byte-identical name match for the uppercase slot — sat unused. Two distinct
+    ids is the whole point: it is what lets the channel keep all three of its
+    streams, in archived order, with no duplicate in the PATCH.
+    """
+    upper = _stream(name="TX | DALLAS | PBS KERA", m3u_account=2)
+    mixed = _stream(name="TX | Dallas | PBS KERA", m3u_account=2)
+
+    upper_tier, upper_id = match_stream(upper, _KERA_DESTINATION)
+    mixed_tier, mixed_id = match_stream(mixed, _KERA_DESTINATION)
+
+    assert upper_id == 102
+    assert mixed_id == 101
+    assert upper_id != mixed_id, "the case-differing pair must not collapse onto one id"
+    # The tier NUMBER is unchanged — an exact-raw hit inside Tier 2 is still
+    # Tier 2. The ladder's tier integers are public contract.
+    assert upper_tier == MatchTier.EXACT_NAME_SAME_PROVIDER == 2
+    assert mixed_tier == MatchTier.EXACT_NAME_SAME_PROVIDER == 2
+
+
+def test_raw_name_preference_is_order_independent():
+    """Shuffling the destination list cannot change either resolution."""
+    upper = _stream(name="TX | DALLAS | PBS KERA", m3u_account=2)
+    mixed = _stream(name="TX | Dallas | PBS KERA", m3u_account=2)
+    reversed_dest = list(reversed(_KERA_DESTINATION))
+
+    assert match_stream(upper, _KERA_DESTINATION) == match_stream(upper, reversed_dest)
+    assert match_stream(mixed, _KERA_DESTINATION) == match_stream(mixed, reversed_dest)
+    assert match_stream(upper, reversed_dest) == (MatchTier.EXACT_NAME_SAME_PROVIDER, 102)
+    assert match_stream(mixed, reversed_dest) == (MatchTier.EXACT_NAME_SAME_PROVIDER, 101)
+
+
+def test_no_exact_raw_match_still_matches_case_insensitively():
+    """FALLBACK UNCHANGED: with no byte-identical candidate, case-folding still wins.
+
+    This is the guarantee that makes the fix strictly an improvement — when no
+    candidate is a raw-name match the selected set is the pre-fix set, so the
+    result is byte-identical to the old behaviour.
+    """
+    stream = _stream(name="TX | DALLAS | PBS KERA", m3u_account=2)
+    candidates = [
+        _stream(id_=101, name="TX | Dallas | PBS KERA", url="http://p/live/101", m3u_account=2),
+    ]
+    assert match_stream(stream, candidates) == (MatchTier.EXACT_NAME_SAME_PROVIDER, 101)
+
+
+def test_raw_name_preference_keeps_the_lowest_id_tiebreak():
+    """Several candidates sharing the IDENTICAL raw name → lowest id still wins.
+
+    The preference only NARROWS the candidate set; the deterministic tie-break
+    runs inside whichever set was selected.
+    """
+    stream = _stream(name="TX | DALLAS | PBS KERA", m3u_account=2)
+    candidates = [
+        _stream(id_=205, name="TX | DALLAS | PBS KERA", url="http://p/a", m3u_account=2),
+        _stream(id_=103, name="TX | DALLAS | PBS KERA", url="http://p/b", m3u_account=2),
+        # A case-folded-only match at the LOWEST id must not win over them.
+        _stream(id_=12, name="TX | Dallas | PBS KERA", url="http://p/c", m3u_account=2),
+    ]
+    assert match_stream(stream, candidates) == (MatchTier.EXACT_NAME_SAME_PROVIDER, 103)
+
+
+def test_raw_name_preference_never_crosses_the_provider_boundary():
+    """Tier 2 admits only same-provider candidates; the preference cannot widen that.
+
+    A byte-identical name on a DIFFERENT provider is not a Tier-2 candidate, so
+    the same-provider case-folded match still takes Tier 2.
+    """
+    stream = _stream(name="TX | DALLAS | PBS KERA", m3u_account=2)
+    candidates = [
+        # Byte-identical name — but the WRONG provider, so not a Tier-2 candidate.
+        _stream(id_=300, name="TX | DALLAS | PBS KERA", url="http://q/a", m3u_account=99),
+        # Case-folded match on the RIGHT provider — the Tier-2 answer.
+        _stream(id_=101, name="TX | Dallas | PBS KERA", url="http://p/b", m3u_account=2),
+    ]
+    assert match_stream(stream, candidates) == (MatchTier.EXACT_NAME_SAME_PROVIDER, 101)
+
+
+def test_tier3_prefers_the_exact_raw_name_across_providers():
+    """The SAME preference on Tier 3 (any provider) — the cross-provider restore.
+
+    Neither candidate is on the archived stream's provider, so Tier 2 cannot
+    fire; Tier 3 must still hand each archived name the stream that IS its name.
+    """
+    upper = _stream(name="TX | DALLAS | PBS KERA", m3u_account=7)
+    mixed = _stream(name="TX | Dallas | PBS KERA", m3u_account=7)
+    candidates = [
+        _stream(id_=101, name="TX | Dallas | PBS KERA", url="http://q/101", m3u_account=88),
+        _stream(id_=102, name="TX | DALLAS | PBS KERA", url="http://r/102", m3u_account=99),
+    ]
+    assert match_stream(upper, candidates) == (MatchTier.EXACT_NORMALIZED_NAME, 102)
+    assert match_stream(mixed, candidates) == (MatchTier.EXACT_NORMALIZED_NAME, 101)
+
+
+def test_raw_name_preference_never_outranks_an_exact_url():
+    """Tier 1 is untouched: an exact URL still beats a byte-identical name.
+
+    The preference operates INSIDE a tier; it must never promote a Tier-2/3
+    candidate over the canonical stream identity.
+    """
+    stream = _stream(name="TX | DALLAS | PBS KERA", url="http://p/live/101", m3u_account=2)
+    assert match_stream(stream, _KERA_DESTINATION) == (MatchTier.EXACT_URL, 101)
+
+
+def test_raw_name_preference_does_not_mutate_inputs():
+    """The tier stays PURE — the module's determinism contract."""
+    stream = _stream(name="TX | DALLAS | PBS KERA", m3u_account=2)
+    stream_before = copy.deepcopy(stream)
+    candidates_before = copy.deepcopy(_KERA_DESTINATION)
+
+    match_stream(stream, _KERA_DESTINATION)
+
+    assert stream == stream_before
+    assert _KERA_DESTINATION == candidates_before
+
+
+# ---------------------------------------------------------------------------
 # Derived-tier-order lock tests (bead 1zwmr: confirm ordering is correct and
 # add regression guards so tier precedence can't silently change).
 #

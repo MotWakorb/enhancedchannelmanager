@@ -293,6 +293,142 @@ async def test_non_remappable_fk_fields_dropped_not_sent_stale():
 
 
 @pytest.mark.asyncio
+async def test_resolved_epg_natural_key_is_archive_metadata_not_a_create_field():
+    """``epg_data_tvg_id`` is stripped from the create payload but SURVIVES.
+
+    Bead …-dfkbn: the backup producer resolves the EPG link's natural key off
+    the source's guide row and stamps it on the archived channel. It is ARCHIVE
+    metadata for the post-create reattach pass, not a Dispatcharr channel field.
+    Sending it upstream would push an unknown key into the channel create. The
+    archive record itself must not be mutated: the reattach pass reads the same
+    list AFTER this importer runs.
+    """
+    from dbas.channel_reattach import ARCHIVE_EPG_TVG_ID_KEY
+
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+    remap = _remap()
+
+    archive_channel = {
+        "id": 5,
+        "name": "FOX News",
+        "tvg_id": None,
+        "epg_data_id": 2078,
+        ARCHIVE_EPG_TVG_ID_KEY: "fox.news.us",
+    }
+
+    await import_channels(
+        archive_channels=[archive_channel],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    payload = client.create_channel.await_args.args[0]
+    assert ARCHIVE_EPG_TVG_ID_KEY not in payload
+    assert "epg_data_id" not in payload
+    # Still on the archive record for dbas.channel_reattach.reattach_epg_links.
+    assert archive_channel[ARCHIVE_EPG_TVG_ID_KEY] == "fox.news.us"
+    assert report.category(EntityType.CHANNEL).created == 1
+
+
+@pytest.mark.asyncio
+async def test_create_payload_strips_live_gather_provenance_and_derived_keys():
+    """LIVE-GATHER shape (bead 7ipq2.2, live two-instance validation): a channel
+    row read from Dispatcharr's live GET /api/channels/channels/ carries fields
+    the DBAS archive shape never had — A-side provenance (``auto_created``,
+    ``auto_created_by``, ``auto_created_by_name``), derived echoes
+    (``source_stream``, ``override``, every ``effective_*`` key) and the
+    destination-assigned ``uuid``. Forwarding ``auto_created_by`` (an A-local
+    pk) made EVERY channel create fail 400 on a real Dispatcharr-B
+    (``{"auto_created_by": ["Invalid pk \"17\" - object does not exist."]}``),
+    and ``auto_created=true`` would mark B's replica channels for B's own
+    auto-created garbage collection. All of these must be stripped from the
+    create payload; portable scalars (user_level, is_adult, catchup_days, ...)
+    still pass through.
+
+    The fixture below is a REAL record captured from a live Dispatcharr 0.28.2
+    instance on 2026-07-27 (names/ids representative, structure verbatim).
+    """
+    client = _client()
+    report = _report()
+    ledger = _ledger()
+    remap = _remap(channel_group={3195: 42}, stream_profile={3: 7})
+
+    live_channel = {
+        "id": 12411,
+        "channel_number": 50.0,
+        "name": "FloRacing 24/7 (FloRacing 247)",
+        "channel_group_id": 3195,
+        "tvg_id": "",
+        "tvc_guide_stationid": None,
+        "epg_data_id": None,
+        "streams": [],
+        "stream_profile_id": 3,
+        "uuid": "08f14609-a078-4af9-9af1-81b1c7d3fff3",
+        "logo_id": 2950,
+        "user_level": 0,
+        "is_adult": False,
+        "is_catchup": False,
+        "catchup_days": 0,
+        "hidden_from_output": False,
+        "auto_created": True,
+        "auto_created_by": 17,
+        "auto_created_by_name": "Infinity",
+        "override": None,
+        "source_stream": {
+            "id": 39491,
+            "name": "FloRacing 24/7 (FloRacing 247)",
+            "account_id": 17,
+            "account_name": "Infinity",
+        },
+        "effective_name": "FloRacing 24/7 (FloRacing 247)",
+        "effective_channel_number": 50.0,
+        "effective_channel_group_id": 3195,
+        "effective_logo_id": 2950,
+        "effective_tvg_id": "",
+        "effective_tvc_guide_stationid": None,
+        "effective_epg_data_id": None,
+        "effective_stream_profile_id": 3,
+    }
+
+    await import_channels(
+        archive_channels=[live_channel],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    payload = client.create_channel.await_args.args[0]
+    # A-side provenance — never forwarded (the 400 + GC hazard above).
+    assert "auto_created" not in payload
+    assert "auto_created_by" not in payload
+    assert "auto_created_by_name" not in payload
+    # Derived read-only echoes a live GET carries.
+    assert "source_stream" not in payload
+    assert "override" not in payload
+    assert not any(k.startswith("effective_") for k in payload)
+    # Destination-assigned identity, same class as id/pk.
+    assert "uuid" not in payload
+    # Portable scalars still pass through untouched.
+    assert payload["name"] == "FloRacing 24/7 (FloRacing 247)"
+    assert payload["channel_number"] == 50.0
+    assert payload["user_level"] == 0
+    assert payload["is_adult"] is False
+    assert payload["catchup_days"] == 0
+    assert payload["hidden_from_output"] is False
+    # FK remap still applies on the live shape.
+    assert payload["channel_group_id"] == 42
+    assert payload["stream_profile_id"] == 7
+    assert report.category(EntityType.CHANNEL).created == 1
+
+
+@pytest.mark.asyncio
 async def test_streams_stripped_from_create_payload():
     """The embedded ``streams`` payload is never part of the channel CREATE body —
     the destination assigns the channel its own id, then streams are attached

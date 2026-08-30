@@ -26,6 +26,8 @@ import type { ChannelPipelineRule, CreateRuleData, Condition, Action, ConditionT
 import type { RuleAnalyzerFinding } from '../../types/channelPipeline';
 import { ConditionEditor } from './ConditionEditor';
 import { ActionEditor } from './ActionEditor';
+import { ActionFieldValidityContext } from './actionFieldValidity';
+import type { ActionFieldValidityRegistry } from './actionFieldValidity';
 import { CustomSelect } from '../CustomSelect';
 import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { ModalOverlay } from '../ModalOverlay';
@@ -52,6 +54,34 @@ interface ValidationErrors {
   activeWindow?: string;
   conditions?: string;
   actions?: string;
+  /**
+   * DOM id of the first action field whose entry the operator must fix
+   * (bead `enhancedchannelmanager-ay3iq`). A VALUE, not a message: unlike the
+   * other keys nothing renders this one, because the field is already showing
+   * its own `.field-error` sentence and repeating that sentence as a section
+   * error would put the same text in the DOM twice. Its job is to block the
+   * save and tell `handleSave` which field to focus.
+   */
+  invalidActionFieldId?: string;
+}
+
+/**
+ * The first of `fieldIds` in document order, or `null` if none of them is in
+ * the document. Used only to pick which field to focus when a save is blocked;
+ * the block itself does not depend on it.
+ */
+function firstFieldInDocumentOrder(fieldIds: string[]): string | null {
+  let bestId: string | null = null;
+  let best: HTMLElement | null = null;
+  for (const fieldId of fieldIds) {
+    const el = document.getElementById(fieldId);
+    if (!el) continue;
+    if (!best || (best.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
+      best = el;
+      bestId = fieldId;
+    }
+  }
+  return bestId;
 }
 
 /** Debounce for the advisory analyzer call (home-lab: 250-500ms is plenty). */
@@ -156,7 +186,12 @@ export function RuleBuilder({
   const [sortOrder, setSortOrder] = useState(rule?.sort_order || 'asc');
   const [probeOnSort, setProbeOnSort] = useState(rule?.probe_on_sort ?? false);
   const [sortRegex, setSortRegex] = useState(rule?.sort_regex || '');
-  const [streamSortField, setStreamSortField] = useState(rule?.stream_sort_field ?? 'smart_sort');
+  // New rules opt into the product default.  An existing rule's persisted
+  // NULL, however, is the explicit "No sorting" choice and must not be
+  // collapsed back to Smart Sort when the editor reopens (GH #833).
+  const [streamSortField, setStreamSortField] = useState(
+    rule ? (rule.stream_sort_field ?? '') : 'smart_sort',
+  );
   const [streamSortOrder, setStreamSortOrder] = useState(rule?.stream_sort_order || 'asc');
   const [qualityTieBreakOrder, setQualityTieBreakOrder] = useState<'asc' | 'desc'>(
     (rule?.quality_tie_break_order as 'asc' | 'desc') || 'desc'
@@ -172,7 +207,36 @@ export function RuleBuilder({
   const [allowManualChannelMerge, setAllowManualChannelMerge] = useState(rule?.allow_manual_channel_merge ?? false);
   const [foldMatchKey, setFoldMatchKey] = useState(rule?.fold_match_key ?? false);
   const [conditions, setConditions] = useState<Condition[]>(rule?.conditions || []);
-  const [actions, setActions] = useState<Action[]>(rule?.actions || []);
+
+  // The actions, each carrying a stable client-side identity
+  // (bead `enhancedchannelmanager-ay3iq`). The key is what `ActionEditor` is
+  // keyed by, so an editor INSTANCE follows its action through insertions,
+  // deletions and reorders instead of following an array slot.
+  //
+  // Why this matters beyond tidiness: `ActionEditor` holds several things in
+  // per-instance state that the `Action` object cannot represent — a refused
+  // starting-number entry, the Auto/Starting-from choice, the name-transform
+  // toggle — and reports its refusals into `invalidActionFieldsRef` under DOM
+  // ids built from its own `useId`. Keying by array index re-pointed surviving
+  // instances at different actions on every list edit: deleting the FIRST of
+  // two actions kept the index-0 instance (still showing the deleted action's
+  // values) and unmounted the index-1 instance, which released the only refusal
+  // entry. The red error vanished, Save was unblocked, and the surviving Create
+  // Channel action saved with no `channel_number` at all — automatic numbering
+  // instead of the start the operator typed, silently. Exactly the defect class
+  // the refusal exists to close.
+  //
+  // Identity is deliberately client-side only: nothing about it is persisted,
+  // and `buildConfig` still sends plain `Action` objects, so the rule schema is
+  // untouched and actions arriving from the API without any id are fine.
+  const nextActionKey = useRef(0);
+  const makeActionKey = () => `action-${nextActionKey.current++}`;
+  const [keyedActions, setKeyedActions] = useState<{ key: string; action: Action }[]>(
+    () => (rule?.actions || []).map(action => ({ key: makeActionKey(), action }))
+  );
+  // One state, one order: the plain action list every consumer below reads is
+  // derived from the keyed list, so the two cannot drift apart.
+  const actions = useMemo(() => keyedActions.map(entry => entry.action), [keyedActions]);
 
   const [availableNormGroups, setAvailableNormGroups] = useState<{id: number; name: string; enabled: boolean}[]>([]);
   const [availableChannelGroups, setAvailableChannelGroups] = useState<{id: number; name: string}[]>([]);
@@ -180,6 +244,8 @@ export function RuleBuilder({
   const [saving, setSaving] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [analyzerFindings, setAnalyzerFindings] = useState<RuleAnalyzerFinding[]>([]);
+  /** DOM id of the field a blocked save must focus once its step has rendered. */
+  const [pendingFocusFieldId, setPendingFocusFieldId] = useState<string | null>(null);
 
   // True step-at-a-time wizard (bead 09x38.10): exactly one step renders at a
   // time; Back/Next and the numbered pills drive `currentStep`. The persistent
@@ -224,6 +290,25 @@ export function RuleBuilder({
     headingRef.current?.focus();
   }, [currentStep]);
 
+  // Focus the field a blocked save wants fixed, AFTER the step holding it has
+  // rendered (bead `enhancedchannelmanager-ay3iq`). `handleSave` routes back to
+  // the Logic step, but `setCurrentStep(1)` only SCHEDULES that render: focusing
+  // in the same tick aimed at an input still inside a `hidden` container, which
+  // the browser will not focus or scroll to, so pressing Save from Targeting or
+  // Output left focus on the Save button with the red error off screen. Blocking
+  // the save is only half the job; the other half is landing the operator on the
+  // thing they have to fix.
+  //
+  // Declared AFTER the step-heading effect above deliberately: both run in the
+  // same commit when the step changes, effects run in declaration order, and
+  // this one has to win. State rather than a ref, because the whole point is to
+  // run an effect after the commit that revealed the field.
+  useEffect(() => {
+    if (pendingFocusFieldId === null) return;
+    document.getElementById(pendingFocusFieldId)?.focus();
+    setPendingFocusFieldId(null);
+  }, [pendingFocusFieldId]);
+
   const handleReorderCondition = (fromIndex: number, newPosition: number) => {
     const toIndex = newPosition - 1;
     if (toIndex === fromIndex || toIndex < 0 || toIndex >= conditions.length) return;
@@ -235,11 +320,13 @@ export function RuleBuilder({
 
   const handleReorderAction = (fromIndex: number, newPosition: number) => {
     const toIndex = newPosition - 1;
-    if (toIndex === fromIndex || toIndex < 0 || toIndex >= actions.length) return;
-    const newActions = [...actions];
-    const [moved] = newActions.splice(fromIndex, 1);
-    newActions.splice(toIndex, 0, moved);
-    setActions(newActions);
+    if (toIndex === fromIndex || toIndex < 0 || toIndex >= keyedActions.length) return;
+    setKeyedActions(prev => {
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
   };
 
   // The full rule config as currently authored. This is the single source of
@@ -320,6 +407,29 @@ export function RuleBuilder({
     };
   }, [buildConfig]);
 
+  // Action fields that are currently REFUSING what the operator typed, keyed by
+  // the field's DOM id (bead `enhancedchannelmanager-ay3iq`). `ActionEditor`
+  // holds such an entry as local text and leaves the action's field empty, so
+  // without this the builder saw a perfectly valid action and saved it, and the
+  // operator got automatic numbering or the group's current lowest instead of
+  // the start they typed, while looking at the red error that said so.
+  //
+  // A ref, not state: `validate` reads it at save time, and re-rendering the
+  // builder on every keystroke in an action field would buy nothing. Held here
+  // rather than in `ActionEditor` because the save seam is here; see
+  // `actionFieldValidity.ts` for why this is a registry and not a check for
+  // these two fields.
+  const invalidActionFieldsRef = useRef(new Map<string, string>());
+  const actionFieldValidity = useMemo<ActionFieldValidityRegistry>(() => ({
+    report: (fieldId, message) => {
+      if (message) invalidActionFieldsRef.current.set(fieldId, message);
+      else invalidActionFieldsRef.current.delete(fieldId);
+    },
+    release: fieldId => {
+      invalidActionFieldsRef.current.delete(fieldId);
+    },
+  }), []);
+
   const validate = useCallback((): ValidationErrors | null => {
     const newErrors: ValidationErrors = {};
 
@@ -359,6 +469,17 @@ export function RuleBuilder({
       }
     }
 
+    // An action field refusing its entry blocks the save no matter what the
+    // action objects look like: the whole point is that a refused entry is
+    // INVISIBLE in them. The id is only for focusing; fall back to any key so a
+    // field that has left the document still blocks rather than slipping
+    // through.
+    const invalidFieldIds = [...invalidActionFieldsRef.current.keys()];
+    if (invalidFieldIds.length > 0) {
+      newErrors.invalidActionFieldId =
+        firstFieldInDocumentOrder(invalidFieldIds) ?? invalidFieldIds[0];
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0 ? null : newErrors;
   }, [name, activeFrom, activeUntil, conditions, actions]);
@@ -384,8 +505,17 @@ export function RuleBuilder({
       // error is visible from whichever step Save was pressed, then focus the
       // first offending field.
       setCurrentStep(1);
+      // Both routes queue the focus rather than taking it here, because the
+      // step this render reveals has not been committed yet; see the effect on
+      // `pendingFocusFieldId`.
       if (validationErrors.name) {
-        document.getElementById(`${id}-name`)?.focus();
+        setPendingFocusFieldId(`${id}-name`);
+      } else if (validationErrors.invalidActionFieldId) {
+        // Nothing renders this one as a section error (see ValidationErrors);
+        // the field's own `.field-error` is the message. Focus it so the
+        // operator lands on the entry they have to fix, scrolled into view,
+        // rather than on a Save button that appeared to do nothing.
+        setPendingFocusFieldId(validationErrors.invalidActionFieldId);
       }
       return;
     }
@@ -440,18 +570,22 @@ export function RuleBuilder({
   };
 
   const handleAddAction = () => {
-    const newAction: Action = { type: '' as ActionType };
-    setActions([...actions, newAction]);
+    // The key is minted OUTSIDE the updater: an updater must be pure, and
+    // React may invoke it more than once for a single update.
+    const entry = { key: makeActionKey(), action: { type: '' as ActionType } as Action };
+    setKeyedActions(prev => [...prev, entry]);
   };
 
   const handleUpdateAction = (index: number, updated: Action) => {
-    const newActions = [...actions];
-    newActions[index] = updated;
-    setActions(newActions);
+    // The key is kept: editing an action is not replacing it, and the editor
+    // instance showing it must not be torn down mid-edit.
+    setKeyedActions(prev =>
+      prev.map((entry, i) => (i === index ? { ...entry, action: updated } : entry))
+    );
   };
 
   const handleRemoveAction = (index: number) => {
-    setActions(actions.filter((_, i) => i !== index));
+    setKeyedActions(prev => prev.filter((_, i) => i !== index));
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -735,21 +869,34 @@ export function RuleBuilder({
                   <div className="section-error" role="alert">{errors.actions}</div>
                 )}
 
+                {/*
+                  Every ActionEditor reports its refused field entries into this
+                  registry, which `validate` reads to block the save (bead
+                  `enhancedchannelmanager-ay3iq`). Registry keys are per-instance
+                  DOM ids from the editor's `useId`, so an entry follows the
+                  component instance that is showing it — which is only useful
+                  if the instance follows its ACTION. Hence the stable
+                  `entry.key` below rather than the array index: see
+                  `keyedActions` above for the save-unblocking defect that
+                  index keys caused.
+                */}
                 <div className="actions-list">
-                  {actions.map((action, index) => (
-                    <ActionEditor
-                      key={index}
-                      action={action}
-                      onChange={updated => handleUpdateAction(index, updated)}
-                      onRemove={() => handleRemoveAction(index)}
-                      showValidation={Object.keys(errors).length > 0}
-                      showPreview
-                      previousActions={actions.slice(0, index)}
-                      orderNumber={index + 1}
-                      totalItems={actions.length}
-                      onReorder={newPos => handleReorderAction(index, newPos)}
-                    />
-                  ))}
+                  <ActionFieldValidityContext.Provider value={actionFieldValidity}>
+                    {keyedActions.map(({ key, action }, index) => (
+                      <ActionEditor
+                        key={key}
+                        action={action}
+                        onChange={updated => handleUpdateAction(index, updated)}
+                        onRemove={() => handleRemoveAction(index)}
+                        showValidation={Object.keys(errors).length > 0}
+                        showPreview
+                        previousActions={actions.slice(0, index)}
+                        orderNumber={index + 1}
+                        totalItems={actions.length}
+                        onReorder={newPos => handleReorderAction(index, newPos)}
+                      />
+                    ))}
+                  </ActionFieldValidityContext.Provider>
                 </div>
 
                 <div className="add-item-wrapper">
@@ -1298,9 +1445,9 @@ export function RuleBuilder({
           onClose={() => setShowCancelConfirm(false)}
           data-testid="rule-discard-dialog"
         >
-          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true">
+          <div className="modal-container modal-sm" role="alertdialog" aria-modal="true" aria-labelledby={`${id}-discard-title`}>
             <div className="modal-header">
-              <h2>Unsaved Changes</h2>
+              <h2 id={`${id}-discard-title`}>Unsaved Changes</h2>
             </div>
             <div className="modal-body">
               <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: '14px', lineHeight: 1.5 }}>You have unsaved changes. Are you sure you want to discard them?</p>

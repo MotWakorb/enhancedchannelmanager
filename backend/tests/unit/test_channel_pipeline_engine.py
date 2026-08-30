@@ -1593,6 +1593,29 @@ class TestSortChannelGroupsPass:
         assert action["success"] is True
         assert "Sports" in action["description"]
 
+    def test_live_sort_group_preserves_numeric_brand_for_natural_ordering(self):
+        """GH #838: exercise the real Pass 3.6 client write, not only its helper."""
+        channels = [
+            {"id": 1, "name": "360Tunebox", "channel_group_id": 5, "channel_number": 1},
+            {"id": 2, "name": "Alpha", "channel_group_id": 5, "channel_number": 2},
+            {"id": 3, "name": "10 Sports", "channel_group_id": 5, "channel_number": 3},
+            {"id": 4, "name": "360 Tunebox", "channel_group_id": 5, "channel_number": 4},
+            {"id": 5, "name": "2 Sports", "channel_group_id": 5, "channel_number": 5},
+        ]
+        executor = ActionExecutor(
+            self.client, existing_channels=channels, existing_groups=self.groups,
+        )
+        results = {"execution_log": [], "dry_run_results": []}
+        requests = {5: {"order": "asc", "starting_number": 1, "strip_numbers": True, "ignore_country": False}}
+
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._sort_channel_groups(
+                requests, executor, results, dry_run=False, settings=self.settings,
+            )
+        )
+
+        self.client.assign_channel_numbers.assert_awaited_once_with([5, 3, 4, 1, 2], 1)
+
     def test_live_sorts_descending(self):
         results = {"execution_log": [], "dry_run_results": []}
         requests = {5: {"order": "desc", "starting_number": 100, "strip_numbers": True, "ignore_country": False}}
@@ -3203,6 +3226,7 @@ class TestOrphanCleanupRenumberFailureRunStatus:
 
     def test_orphan_cleanup_renumber_failure_finalizes_completed_with_errors(self):
         rule = self._make_rule()
+        rule.sort_field = "stream_name"
         # One NEW stream => creates channel 1000 (current), so 999 (previous)
         # becomes an orphan; after deleting it the remaining [1000] is renumbered.
         streams = [
@@ -3245,6 +3269,41 @@ class TestOrphanCleanupRenumberFailureRunStatus:
         managed = set(rule.get_managed_channel_ids())
         assert 999 not in managed
         assert 1000 in managed
+
+    def test_no_sort_preserves_existing_manual_numbers_during_orphan_cleanup(self):
+        """GH #833: cleanup may delete debt, but no-sort must not renumber survivors.
+
+        Drive the real executor/pipeline path: a fixed-number create action still
+        allocates the genuinely new channel, while the pre-existing managed
+        channel keeps its manually assigned number because no channel sort was
+        requested.
+        """
+        existing = {
+            "id": 1000,
+            "name": "Existing",
+            "channel_group_id": 5,
+            "channel_number": 777,
+            "streams": [601],
+        }
+        self.client.get_channels = AsyncMock(
+            return_value={"count": 2, "results": [self._orphan, existing]}
+        )
+        self.client.assign_channel_numbers = AsyncMock()
+        rule = self._make_rule()
+        rule.sort_field = None
+        rule.set_managed_channel_ids([999, 1000])
+        streams = [
+            StreamContext(stream_id=601, stream_name="Existing", m3u_account_id=1),
+            StreamContext(stream_id=602, stream_name="New", m3u_account_id=1),
+        ]
+
+        result = self._run(rule, streams, dry_run=False)
+
+        assert result["success"] is True
+        self.client.delete_channel.assert_awaited_with(999)
+        self.client.assign_channel_numbers.assert_not_awaited()
+        created_payloads = [call.args[0] for call in self.client.create_channel.await_args_list]
+        assert any(payload.get("channel_number") == 100 for payload in created_payloads)
 
 
 class TestRunLevelFailureAggregationFullCoverage:

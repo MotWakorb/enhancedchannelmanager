@@ -1,21 +1,35 @@
 import { defineConfig, devices } from '@playwright/test'
+import { resolveE2EBaseURL } from './playwright-base-url.mjs'
 
 /**
  * Playwright E2E test configuration.
  *
  * Environment variables:
- *   E2E_BASE_URL - Base URL for tests (default: http://localhost:6100)
- *   E2E_START_SERVER - Set to 'true' to auto-start dev server (default: false)
+ *   E2E_BASE_URL - Base URL for tests. REQUIRED unless E2E_EXACT_BUILD=true.
+ *                  There is no default: this variable used to default to
+ *                  http://localhost:6100, the product owner's LIVE ECM
+ *                  instance holding real channel data, so an unset variable
+ *                  silently pointed write-capable specs at production. Config
+ *                  load now throws immediately (see playwright-base-url.mjs)
+ *                  if it is unset and E2E_EXACT_BUILD is not 'true'.
+ *   E2E_START_SERVER - Set to 'true' to auto-start a dev/preview server
+ *                     (default: false)
+ *   E2E_EXACT_BUILD - Build and serve the checked-out source on an isolated
+ *                     preview port (127.0.0.1:4173) instead of using a
+ *                     possibly stale dev server or an external instance. This
+ *                     mode supplies its own base URL, so E2E_BASE_URL is not
+ *                     required when it is set.
  *
  * Usage:
- *   npx playwright test                              # Test against running app at :6100
- *   E2E_BASE_URL=http://localhost:5173 npx playwright test  # Test against dev server
- *   E2E_START_SERVER=true npx playwright test        # Auto-start dev server
+ *   E2E_BASE_URL=http://localhost:6100 npx playwright test   # Explicit opt-in to the live instance
+ *   E2E_BASE_URL=http://localhost:5173 npx playwright test   # Test against a dev server you started
+ *   E2E_START_SERVER=true E2E_EXACT_BUILD=true npx playwright test  # Build + serve the tree itself, no E2E_BASE_URL needed
  *
  * @see https://playwright.dev/docs/test-configuration
  */
 
-const baseURL = process.env.E2E_BASE_URL || 'http://localhost:6100'
+const exactBuild = process.env.E2E_EXACT_BUILD === 'true'
+const baseURL = resolveE2EBaseURL(exactBuild, process.env.E2E_BASE_URL)
 const startServer = process.env.E2E_START_SERVER === 'true'
 
 export default defineConfig({
@@ -100,10 +114,12 @@ export default defineConfig({
   // Web server configuration - only starts if E2E_START_SERVER=true
   ...(startServer && {
     webServer: {
-      command: 'npm run dev',
+      command: exactBuild
+        ? 'npm run build && npm run preview -- --host 127.0.0.1 --port 4173'
+        : 'npm run dev',
       cwd: './frontend',
-      url: 'http://localhost:5173',
-      reuseExistingServer: !process.env.CI,
+      url: exactBuild ? 'http://127.0.0.1:4173' : 'http://localhost:5173',
+      reuseExistingServer: exactBuild ? false : !process.env.CI,
       timeout: 120 * 1000,
     },
   }),

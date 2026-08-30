@@ -37,6 +37,7 @@ import logging
 import pytest
 from unittest.mock import AsyncMock
 
+from credential_sentinel import REDACTION_SENTINEL
 from dbas.importers.epg_sources import import_epg_sources
 from dbas.restore_contracts import (
     EntityType,
@@ -684,3 +685,107 @@ async def test_wait_covers_every_source_id():
     assert [s["epg_source_id"] for s in summaries] == [21, 22, 23]
     assert all(s["completed"] for s in summaries)
     assert client.refresh_epg_source.await_count == 3
+
+
+# ---------------------------------------------------------------------------
+# Redaction-sentinel handling on restore (bead …-6pilh)
+# ---------------------------------------------------------------------------
+#
+# Dispatcharr 0.28.2's EPGSourceSerializer marks ``password`` write_only with no
+# admin re-add (unlike M3UAccountSerializer, which re-adds it for user_level>=10),
+# so a live gather does not normally carry an EPG password at all. The importer
+# still refuses the sentinel by VALUE rather than relying on that upstream
+# behaviour: an artifact built by a future/other Dispatcharr, or a
+# ``custom_properties`` credential, must never be written through as a
+# placeholder.
+
+
+@pytest.mark.asyncio
+async def test_redacted_password_is_never_written_to_the_destination():
+    captured = {}
+
+    async def _create(payload):
+        captured["payload"] = payload
+        return {"id": 801, **payload}
+
+    client = _client()
+    client.create_epg_source = AsyncMock(side_effect=_create)
+
+    await import_epg_sources(
+        archive_sources=[{
+            "id": 3,
+            "name": "SD Sports",
+            "source_type": "schedules_direct",
+            "username": "sduser",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    payload = captured["payload"]
+    assert payload.get("password") != REDACTION_SENTINEL
+    assert "password" not in payload
+    assert payload["username"] == "sduser"
+
+
+@pytest.mark.asyncio
+async def test_redacted_credential_is_a_counted_post_restore_action_item():
+    report = _report()
+
+    await import_epg_sources(
+        archive_sources=[{
+            "id": 3,
+            "name": "SD Sports",
+            "source_type": "schedules_direct",
+            "username": "sduser",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 1
+    detail = report.credential_reentry_details[0]
+    assert detail.entity_type == EntityType.EPG_SOURCE
+    assert detail.label == "SD Sports"
+    assert detail.fields == ["password"]
+    assert detail.source_export_id == 3
+    assert detail.destination_id == 801
+
+
+@pytest.mark.asyncio
+async def test_credential_bearing_artifact_still_restores_the_real_password():
+    captured = {}
+
+    async def _create(payload):
+        captured["payload"] = payload
+        return {"id": 801, **payload}
+
+    client = _client()
+    client.create_epg_source = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_epg_sources(
+        archive_sources=[{
+            "id": 3,
+            "name": "SD Sports",
+            "source_type": "schedules_direct",
+            "username": "sduser",
+            "password": "realsdpass",
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert captured["payload"]["password"] == "realsdpass"
+    assert report.credentials_needing_reentry == 0

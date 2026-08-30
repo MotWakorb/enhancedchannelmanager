@@ -12,14 +12,20 @@
   gap: 0.25rem;
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .auto-sync-settings-modal .header-info h2 {
   margin: 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
+/* Item-title role. 14px -> 13px. */
 .auto-sync-settings-modal .group-name-display {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-secondary);
 }
 
@@ -43,8 +49,11 @@
   gap: 0.5rem;
 }
 
+/* Label role. 12.8px -> 13px. */
 .auto-sync-settings-modal .input-with-label .input-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   min-width: 60px;
 }

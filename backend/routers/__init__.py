@@ -23,12 +23,12 @@ from routers.channels import router as channels_router
 from routers.channel_groups import router as channel_groups_router
 from routers.channel_merges import router as channel_merges_router
 from routers.event_sync_reviews import router as event_sync_reviews_router
+from routers.profile_conflict_reviews import router as profile_conflict_reviews_router
 from routers.event_sync_exclusions import router as event_sync_exclusions_router
 from routers.dummy_epg import router as dummy_epg_router
 from routers.cloud_targets import router as cloud_targets_router
 from routers.sync_targets import router as sync_targets_router
 from routers.backup import router as backup_router
-from routers.lookup_tables import router as lookup_tables_router
 from routers.client_errors import router as client_errors_router
 from routers.session_starts import router as session_starts_router
 from routers.emby import router as emby_router
@@ -57,12 +57,12 @@ all_routers = [
     channel_groups_router,
     channel_merges_router,
     event_sync_reviews_router,
+    profile_conflict_reviews_router,
     event_sync_exclusions_router,
     dummy_epg_router,
     cloud_targets_router,
     sync_targets_router,
     backup_router,
-    lookup_tables_router,
     client_errors_router,
     session_starts_router,
     emby_router,

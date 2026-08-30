@@ -12,6 +12,7 @@ import { getEPGLcnBatch, type LCNLookupItem } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './BulkLCNFetchModal.css';
 
 export interface LCNAssignment {
@@ -47,6 +48,7 @@ function BulkLCNFetchModalInner({
   onClose,
   onAssign,
 }: Omit<BulkLCNFetchModalProps, 'isOpen'>) {
+  const { titleId, containerRef } = useOwnedDialog();
   const notifications = useNotifications();
   const [phase, setPhase] = useState<Phase>('fetching');
   const [results, setResults] = useState<ChannelLCNResult[]>([]);
@@ -273,10 +275,10 @@ function BulkLCNFetchModalInner({
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg bulk-lcn-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg bulk-lcn-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Fetch Gracenote IDs</h2>
+          <h2 id={titleId}>Fetch Gracenote IDs</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

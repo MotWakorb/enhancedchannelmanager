@@ -48,7 +48,17 @@ class TestPrivilegedTaskRunGate:
             {"dbas_restore", "dbas_backup", "dbas_sync"}
         )
 
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
+    async def test_per_target_sync_prefix_is_privileged(self):
+        """7ipq2.3: sync tasks are registered per target (dbas_sync_<id>), so
+        the gate matches the prefix family too — the outbound-write surface
+        did not stop being privileged because the id grew a suffix."""
+        from routers.tasks import is_privileged_task_id
+
+        assert is_privileged_task_id("dbas_sync_1")
+        assert is_privileged_task_id("dbas_sync_12345")
+        assert not is_privileged_task_id("cleanup")
+
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync", "dbas_sync_7"])
     async def test_non_admin_run_privileged_task_forbidden(self, async_client, task_id):
         from main import app
 
@@ -65,7 +75,7 @@ class TestPrivilegedTaskRunGate:
         # The engine must never have been reached for a refused privileged task.
         engine.run_task.assert_not_called()
 
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync", "dbas_sync_7"])
     async def test_admin_run_privileged_task_allowed(self, async_client, task_id):
         from main import app
 
@@ -118,7 +128,7 @@ class TestPrivilegedTaskRunGate:
 
 @pytest.mark.asyncio
 class TestPrivilegedTaskCancelGate:
-    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync"])
+    @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync", "dbas_sync_7"])
     async def test_non_admin_cancel_privileged_task_forbidden(self, async_client, task_id):
         from main import app
 
@@ -163,3 +173,119 @@ class TestPrivilegedTaskCancelGate:
 
         assert resp.status_code == 200
         engine.cancel_task.assert_called_once()
+
+
+@pytest.mark.asyncio
+class TestPrivilegedTaskScheduleGate:
+    async def test_non_admin_cannot_enable_privileged_parent(self, async_client):
+        from main import app
+
+        cleanup = _override_admin(app, is_admin=False)
+        registry = MagicMock()
+        try:
+            with patch("task_registry.get_registry", return_value=registry):
+                response = await async_client.patch(
+                    "/api/tasks/dbas_sync_7", json={"enabled": True}
+                )
+        finally:
+            cleanup()
+
+        assert response.status_code == 403
+        registry.update_task_config.assert_not_called()
+
+    async def test_non_admin_cannot_create_privileged_schedule(self, async_client):
+        from main import app
+
+        cleanup = _override_admin(app, is_admin=False)
+        try:
+            response = await async_client.post(
+                "/api/tasks/dbas_sync_7/schedules",
+                json={
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {"confirm_apply": True},
+                },
+            )
+        finally:
+            cleanup()
+
+        assert response.status_code == 403
+
+    async def test_non_admin_cannot_update_privileged_schedule(self, async_client):
+        from main import app
+
+        cleanup = _override_admin(app, is_admin=False)
+        try:
+            response = await async_client.patch(
+                "/api/tasks/dbas_sync_7/schedules/1",
+                json={"enabled": True, "parameters": {"confirm_apply": True}},
+            )
+        finally:
+            cleanup()
+
+        assert response.status_code == 403
+
+    async def test_non_admin_ordinary_schedule_write_is_unchanged(
+        self, async_client, test_session
+    ):
+        from main import app
+        from models import ScheduledTask
+
+        test_session.add(ScheduledTask(
+            task_id="stream_probe",
+            task_name="Stream Probe",
+            description="Probe streams",
+            enabled=True,
+            schedule_type="manual",
+        ))
+        test_session.commit()
+        cleanup = _override_admin(app, is_admin=False)
+        try:
+            response = await async_client.post(
+                "/api/tasks/stream_probe/schedules",
+                json={"schedule_type": "daily", "schedule_time": "06:00"},
+            )
+        finally:
+            cleanup()
+
+        assert response.status_code == 200
+
+    async def test_auth_disabled_privileged_schedule_write_is_allowed(
+        self, async_client, test_session
+    ):
+        from export_models import SyncTarget
+        from models import ScheduledTask
+        from tasks.dbas_sync import make_sync_task_class
+
+        test_session.add(ScheduledTask(
+            task_id="dbas_sync_7",
+            task_name="Cross-Instance Sync",
+            description="Sync",
+            enabled=True,
+            schedule_type="manual",
+        ))
+        test_session.add(SyncTarget(
+            id=7,
+            name="Replica",
+            base_url="https://replica.example.com",
+            credentials="{}",
+            enabled=True,
+            credential_version=3,
+            insecure=False,
+        ))
+        test_session.commit()
+        registry = MagicMock()
+        registry.get_task_class.return_value = make_sync_task_class(7, "Replica")
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.post(
+                "/api/tasks/dbas_sync_7/schedules",
+                json={
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {"confirm_apply": True},
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"]["cloud_credential_version"] == 3

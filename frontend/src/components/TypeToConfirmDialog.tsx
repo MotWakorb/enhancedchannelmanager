@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import { ModalOverlay } from './ModalOverlay';
+import { useModalFocusLifecycle } from '../hooks/useModalFocusLifecycle';
 import './ModalBase.css';
 import './TypeToConfirmDialog.css';
 
@@ -36,12 +37,33 @@ export function TypeToConfirmDialog({
 }: TypeToConfirmDialogProps) {
   const [typed, setTyped] = useState('');
   const canConfirm = typed === confirmText && !busy;
+  const instanceId = useId();
+  const titleId = `${instanceId}-title`;
+  // The warning body is the only place the dialog says what it is about to
+  // destroy, and focus lands on the confirmation input rather than on the
+  // body — so without aria-describedby a screen-reader user hears the title
+  // and the input label and never the warning (bead
+  // enhancedchannelmanager-04c0u.12). `useId` keeps it distinct when dialogs
+  // stack.
+  const messageId = `${instanceId}-message`;
+  const inputId = `${instanceId}-confirmation`;
+  const containerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useModalFocusLifecycle({ containerRef, initialFocusRef: inputRef });
 
   return (
-    <ModalOverlay onClose={busy ? () => {} : onCancel}>
-      <div className="modal-container modal-sm type-to-confirm-dialog">
+    <ModalOverlay
+      onClose={busy ? () => {} : onCancel}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={titleId}
+      aria-describedby={messageId}
+    >
+      <div ref={containerRef} className="modal-container modal-sm type-to-confirm-dialog">
         <div className="modal-header">
-          <h3 className="modal-title">{title}</h3>
+          <h3 id={titleId} className="modal-title">
+            {title}
+          </h3>
           {!busy && (
             <button className="modal-close-btn" onClick={onCancel} aria-label="Close" title="Close">
               <span className="material-icons" aria-hidden="true">close</span>
@@ -50,18 +72,18 @@ export function TypeToConfirmDialog({
         </div>
 
         <div className="modal-body">
-          <div className="type-to-confirm-message">{message}</div>
-          <label className="type-to-confirm-label" htmlFor="type-to-confirm-input">
+          <div id={messageId} className="type-to-confirm-message">{message}</div>
+          <label className="type-to-confirm-label" htmlFor={inputId}>
             Type <strong>{confirmText}</strong> to confirm
           </label>
           <input
-            id="type-to-confirm-input"
+            ref={inputRef}
+            id={inputId}
             type="text"
             className="type-to-confirm-input"
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             disabled={busy}
-            autoFocus
             autoComplete="off"
             onKeyDown={(e) => {
               if (e.key === 'Enter' && canConfirm) onConfirm();
@@ -70,11 +92,11 @@ export function TypeToConfirmDialog({
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn-secondary" onClick={onCancel} disabled={busy}>
+          <button className="modal-btn modal-btn-secondary" onClick={onCancel} disabled={busy}>
             Cancel
           </button>
           <button
-            className="modal-btn-danger"
+            className="modal-btn modal-btn-danger"
             onClick={onConfirm}
             disabled={!canConfirm}
           >

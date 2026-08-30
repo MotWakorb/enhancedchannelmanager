@@ -94,9 +94,6 @@ vi.mock('../settings/BackupRestoreSection', () => ({
 vi.mock('../settings/MCPSettingsSection', () => ({
   MCPSettingsSection: () => <div data-testid="stub-mcp" />,
 }));
-vi.mock('../settings/LookupTableSection', () => ({
-  LookupTableSection: () => <div data-testid="stub-lookup" />,
-}));
 vi.mock('../ScheduledTasksSection', () => ({
   ScheduledTasksSection: () => <div data-testid="stub-scheduled-tasks" />,
 }));
@@ -194,6 +191,7 @@ const settingsBase = {
   strike_threshold: 3,
   normalize_on_channel_create: false,
   smtp_configured: true,
+  public_base_url: '',
   smtp_host: 'smtp.test',
   smtp_port: 587,
   smtp_user: '',

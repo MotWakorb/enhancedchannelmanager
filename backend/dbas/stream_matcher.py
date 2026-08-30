@@ -39,13 +39,17 @@ is the same upstream stream the archive recorded":
   common case where a provider rotated its stream URLs (token refresh, CDN
   hostname change) but kept the channel line-up stable: the URL no longer
   matches (Tier 1 missed) but "same name from the same provider" is a high-
-  confidence same-stream signal.
+  confidence same-stream signal. Among the candidates that satisfy the tier, a
+  candidate whose RAW ``name`` is byte-identical to the archived stream's RAW
+  ``name`` is PREFERRED over one that only matches after case-folding — see
+  "RAW-NAME PREFERENCE" below.
 
 * **Tier 3 — EXACT NORMALIZED NAME (any provider).** Same normalized display
   name, regardless of provider. Covers a cross-provider migration (the operator
   restored onto an instance whose M3U accounts are different ids / different
   providers, but carry an equivalently-named stream). Looser than Tier 2 — the
-  provider is not pinned — so it sits below it.
+  provider is not pinned — so it sits below it. Carries the same RAW-NAME
+  PREFERENCE as Tier 2.
 
 * **Tier 4 — FUZZY NORMALIZED NAME.** ``token_set_ratio`` of the normalized
   names ≥ :data:`STREAM_FUZZY_FLOOR`. Last resort before giving up: catches
@@ -59,6 +63,77 @@ is the same upstream stream the archive recorded":
   takes over: it synthesizes a custom-stream M3U account for the orphan and
   logs a WARN so operators see when the heuristic fires. That synthesis is NOT
   this bead — this bead only *reports* the miss.
+
+----------------------------------------------------------------------------
+RAW-NAME PREFERENCE INSIDE THE EXACT-NAME TIERS (bead ``…-ixdaw``, drill run 4)
+----------------------------------------------------------------------------
+
+:func:`_normalized_name` case-folds, so two destination streams whose names
+differ ONLY in capitalisation are indistinguishable to Tiers 2 and 3. Drill run
+4 (2026-08-05) measured the consequence on a real channel seeded with
+
+    ``'TX | DALLAS | PBS KERA'`` (id 102) and ``'TX | Dallas | PBS KERA'`` (id 101)
+
+on the same provider: BOTH archived slots satisfied Tier 2 against BOTH
+candidates, the lowest-id tie-break handed both of them **101**, and id 102 — a
+byte-identical name match for the first slot — sat unused. Downstream that costs
+the channel a stream, or (unguarded) a duplicate id in the channel PATCH that
+Dispatcharr rejects with ``unique_channel_stream``.
+
+So, WITHIN each exact-name tier: among the candidates that already satisfy that
+tier's predicate (for Tier 2 that includes the same-provider condition), if any
+have ``candidate["name"] == stream["name"]`` EXACTLY, the selection is restricted
+to those. The lowest-id tie-break then applies inside whichever set was selected.
+
+This is strictly an improvement, never a behaviour change:
+
+* no candidate is a raw-name match → the selected set is unchanged and the
+  result is byte-identical to the pre-fix behaviour;
+* exactly one is → it is unambiguously the right stream;
+* several are → the existing lowest-id tie-break still decides, so the function
+  stays deterministic and order-independent.
+
+The tier NUMBER is unaffected: a raw-name hit inside Tier 2 is still Tier 2. The
+ladder's tier integers are public contract and are asserted by the tests.
+
+----------------------------------------------------------------------------
+A REDACTED URL IS NOT AN IDENTITY (bead ``…-1td94``, live on 0.29.0 2026-08-20)
+----------------------------------------------------------------------------
+
+The ladder's first principle — "a stream IS a playable URL" — has a corollary the
+original ladder did not state, and a credential redactor then walked straight
+into. Bead ``…-msqf7`` rewrites the credential PATH SEGMENTS of an Xtream Codes
+stream URL rather than dropping the address, so what the archive carries is::
+
+    http://provider:9191/live/***REDACTED***/***REDACTED***/53.ts
+
+That string is not a weaker identity. It is the RECORD THAT AN IDENTITY WAS
+REMOVED — and two records of an absence are byte-equal to each other. The
+placeholder ``custom_stream_fallback`` synthesizes from the archived record
+inherits the same string, so the placeholder became a perfect Tier-1 match for
+the record that produced it, permanently outranking the real stream that arrives
+later once the operator re-credentials the replica::
+
+    archived RAW url       -> tier=1 match_id=118   (real stream)
+    archived REDACTED url  -> tier=1 match_id=7     (the placeholder itself)
+
+53 of the replica's 59 channels sat on match_id=7 and fetched HTTP 404. Closing
+Tier 1 alone only moved the wrong answer one rung down: Tiers 2–4 admitted both
+rows on an identical name and the lowest-id tie-break still chose the dead one,
+because the placeholder was created first. So the rule is stated in two places
+and both are needed:
+
+* a SENTINEL-BEARING archived url does not participate in Tier 1 at all;
+* inside EVERY tier, a candidate that can serve outranks one that cannot
+  (:func:`_select_in_tier`) — deprioritized, never excluded, so a cycle with no
+  live stream yet still re-finds its own placeholder instead of synthesizing a
+  second one beside it.
+
+Neither changes which tier fires, so spike ``xp6mp`` ruling 1b and bead
+``…-efvyg``'s Tier-3 floor for sync are untouched. "Can serve" is
+:func:`credential_sentinel.url_can_serve`, the one predicate every site in this
+subsystem asks the question through; the sentinel string itself is ``…-msqf7``'s
+to define and is never spelled out here.
 
 SOURCING NOTE (read the report / bead comment for the full provenance trail):
 the repo has **no pre-written 4-tier *stream* ladder** to copy — ``0i2vt.14``
@@ -82,7 +157,9 @@ DETERMINISM CONTRACT
   the candidate with the **lowest integer ``id``** wins. Mirrors the ADR-008
   dedup matcher's lowest-id rule (there the id is a UUID string; here a
   Dispatcharr stream id is an int, so it is a numeric min). Same inputs always
-  produce the same ``(tier, id)`` regardless of candidate list order.
+  produce the same ``(tier, id)`` regardless of candidate list order. In the
+  exact-name tiers the tie-break runs over the raw-name-preferred subset when
+  one exists (see RAW-NAME PREFERENCE) — still a pure, order-independent min.
 
 Conventions (``docs/style_guide.md``): ``int, Enum`` with self-describing
 values; ``snake_case``; Google-style docstrings; lazy ``%`` logging; no bare
@@ -104,6 +181,7 @@ from enum import IntEnum
 # matcher cannot drift on normalization or scoring.
 from rapidfuzz import fuzz
 
+from credential_sentinel import url_can_serve
 from services.dedup_matcher import NameCleanMode, _normalize
 
 logger = logging.getLogger(__name__)
@@ -237,8 +315,14 @@ def match_stream(
     # docstring "SOURCING NOTE") and locked by unit tests in tests/dbas/test_stream_matcher.py.
 
     # ---- Tier 1: EXACT URL (case-sensitive — a URL is case-significant). ----
+    # A REDACTED url is excluded here, and that exclusion is the whole of bead
+    # ``…-1td94``'s identity half: it is not a weaker identity, it is the ABSENCE
+    # of one, and comparing two absences for equality manufactures a perfect
+    # match out of nothing. See "A REDACTED URL IS NOT AN IDENTITY" above. The
+    # candidate side needs no guard: ``stream_url`` is servable here, so a
+    # sentinel-bearing candidate cannot be equal to it.
     stream_url = stream.get("url")
-    if isinstance(stream_url, str) and stream_url:
+    if isinstance(stream_url, str) and url_can_serve(stream_url):
         match_id = _lowest_id_where(
             candidates,
             lambda c: c.get("url") == stream_url,
@@ -254,23 +338,32 @@ def match_stream(
     if not norm_stream_name:
         return (MatchTier.MISS, None)
 
+    # The archived stream's RAW (un-normalized) name. Within the exact-name
+    # tiers a candidate carrying this name byte-for-byte beats one that only
+    # matches after case-folding — see the module docstring's "RAW-NAME
+    # PREFERENCE" section (bead …-ixdaw). ``norm_stream_name`` is non-empty here,
+    # so ``name`` is necessarily a non-empty ``str``.
+    raw_stream_name = stream.get("name")
+
     # ---- Tier 2: EXACT NORMALIZED NAME + SAME PROVIDER. ----
     stream_provider = _provider_id(stream)
     if stream_provider is not None:
-        match_id = _lowest_id_where(
+        match_id = _select_in_tier(
             candidates,
             lambda c: (
                 _provider_id(c) == stream_provider
                 and _normalized_name(c) == norm_stream_name
             ),
+            raw_name=raw_stream_name,
         )
         if match_id is not None:
             return (MatchTier.EXACT_NAME_SAME_PROVIDER, match_id)
 
     # ---- Tier 3: EXACT NORMALIZED NAME (any provider). ----
-    match_id = _lowest_id_where(
+    match_id = _select_in_tier(
         candidates,
         lambda c: _normalized_name(c) == norm_stream_name,
+        raw_name=raw_stream_name,
     )
     if match_id is not None:
         return (MatchTier.EXACT_NORMALIZED_NAME, match_id)
@@ -282,15 +375,50 @@ def match_stream(
     if not allow_fuzzy:
         return (MatchTier.MISS, None)
 
-    # Iterate explicitly so we can apply the lowest-id tie-break across the BEST
-    # fuzzy score: pick the highest score, breaking ties on lowest id. This is
-    # the only tier where candidates can score *differently*, so the helper
-    # (which only filters) is not enough — we track best (score, id) here.
+    # SERVABLE FIRST, same rule as :func:`_select_in_tier` applies to Tiers 2–3:
+    # a dead candidate is considered only when nothing that can actually stream
+    # reaches the floor. Expressed as two passes rather than folded into the
+    # scoring, because servability is not a better SCORE — it is a filter applied
+    # ahead of the score, and mixing the two would let a barely-admissible live
+    # name beat a much closer live one.
+    best_id = _best_fuzzy_id(candidates, norm_stream_name, servable_only=True)
+    if best_id is None:
+        best_id = _best_fuzzy_id(candidates, norm_stream_name, servable_only=False)
+    if best_id is not None:
+        return (MatchTier.FUZZY_NORMALIZED_NAME, best_id)
+
+    return (MatchTier.MISS, None)
+
+
+def _best_fuzzy_id(
+    candidates: Sequence[Mapping],
+    norm_stream_name: str,
+    *,
+    servable_only: bool,
+) -> int | None:
+    """Highest-scoring Tier-4 candidate at or above the floor, lowest id on a tie.
+
+    Iterates explicitly rather than reusing the filtering helpers: this is the
+    only tier where candidates can score *differently*, so the winner is a best
+    ``(score, id)`` rather than a min over an admitted set.
+
+    Args:
+        candidates: The destination streams to scan (never mutated).
+        norm_stream_name: The archived stream's already-normalized name.
+        servable_only: When True, skip any candidate whose ``url`` cannot serve
+            (:func:`url_can_serve`) — the first of the two passes Tier 4 runs.
+
+    Returns:
+        The chosen ``id``, or ``None`` when no candidate reaches
+        :data:`STREAM_FUZZY_FLOOR`.
+    """
     best_score = STREAM_FUZZY_FLOOR
     best_id: int | None = None
     for candidate in candidates:
         cand_id = _stream_id(candidate)
         if cand_id is None:
+            continue
+        if servable_only and not url_can_serve(candidate.get("url")):
             continue
         norm_cand_name = _normalized_name(candidate)
         if not norm_cand_name:
@@ -303,10 +431,7 @@ def match_stream(
         ):
             best_score = score
             best_id = cand_id
-    if best_id is not None:
-        return (MatchTier.FUZZY_NORMALIZED_NAME, best_id)
-
-    return (MatchTier.MISS, None)
+    return best_id
 
 
 def _lowest_id_where(
@@ -335,3 +460,98 @@ def _lowest_id_where(
         if predicate(candidate) and (best is None or cand_id < best):
             best = cand_id
     return best
+
+
+def _select_in_tier(
+    candidates: Sequence[Mapping],
+    predicate,
+    *,
+    raw_name,
+) -> int | None:
+    """Choose one candidate from those a tier admits: SERVABLE first, then raw name.
+
+    The selection order inside a tier, strongest discriminator first:
+
+    1. **Can it serve?** A candidate whose ``url`` is absent or carries the
+       redaction sentinel cannot stream anything (:func:`url_can_serve`). If ANY
+       admitted candidate can serve, the choice is made among those alone.
+    2. **Byte-identical raw name** (bead ``…-ixdaw``), inside whichever set step
+       1 left.
+    3. **Lowest integer id**, inside whichever set step 2 left.
+
+    WHY SERVABILITY OUTRANKS THE RAW NAME. Both are tie-breaks among candidates
+    the tier already considers the same stream, so neither changes WHICH tier
+    fires. Between "spelled the same way" and "actually plays", playing wins:
+    matching a dead row over a live one costs the channel its content, while
+    matching the case-folded name of a live row costs nothing an operator can
+    see. Bead ``…-1td94`` measured the alternative — placeholder id 7 and real
+    stream id 118 both satisfied Tier 3, and the lowest-id rule handed back the
+    dead one on every cycle, permanently.
+
+    DEPRIORITIZED, NEVER EXCLUDED. When NOTHING admitted can serve, the dead
+    candidate is still returned. That fallback is load-bearing: on a cycle where
+    the operator has not yet re-entered their provider credentials there is no
+    live stream to match, and a MISS would send the archived stream to the
+    custom-stream fallback to synthesize a SECOND placeholder beside the first —
+    then a third, once per unattended run, forever.
+
+    Args:
+        candidates: The destination streams to scan (never mutated).
+        predicate: A callable ``Mapping -> bool`` — the tier's own admission test.
+        raw_name: The archived stream's un-normalized ``name``.
+
+    Returns:
+        The chosen ``id``, or ``None`` if no candidate satisfies ``predicate``.
+    """
+    servable = _lowest_id_preferring_raw_name(
+        candidates,
+        lambda candidate: predicate(candidate) and url_can_serve(candidate.get("url")),
+        raw_name=raw_name,
+    )
+    if servable is not None:
+        return servable
+    return _lowest_id_preferring_raw_name(candidates, predicate, raw_name=raw_name)
+
+
+def _lowest_id_preferring_raw_name(
+    candidates: Sequence[Mapping],
+    predicate,
+    *,
+    raw_name,
+) -> int | None:
+    """:func:`_lowest_id_where`, but a byte-identical raw name wins first.
+
+    The exact-name tiers (2 and 3) compare CASE-FOLDED names, so a destination
+    pair differing only in capitalisation is one match to them. This helper
+    resolves that ambiguity without touching the tier ladder: it scans the SAME
+    candidates the tier's ``predicate`` admits, and if any of them carry
+    ``raw_name`` byte-for-byte, the lowest id is taken from THAT subset only.
+    Otherwise the lowest id across the whole admitted set is returned — exactly
+    what :func:`_lowest_id_where` would have returned, so a run with no raw-name
+    match is bit-identical to the pre-fix behaviour (bead ``…-ixdaw``).
+
+    Args:
+        candidates: The destination streams to scan (never mutated).
+        predicate: A callable ``Mapping -> bool`` selecting matching candidates.
+        raw_name: The archived stream's un-normalized ``name``. A non-``str``
+            (or empty) value disables the preference and the helper degrades to
+            :func:`_lowest_id_where`.
+
+    Returns:
+        The chosen ``id``, or ``None`` if no candidate satisfies ``predicate``.
+    """
+    prefer = isinstance(raw_name, str) and bool(raw_name)
+    exact_best: int | None = None
+    any_best: int | None = None
+    for candidate in candidates:
+        cand_id = _stream_id(candidate)
+        if cand_id is None:
+            continue
+        if not predicate(candidate):
+            continue
+        if any_best is None or cand_id < any_best:
+            any_best = cand_id
+        if prefer and candidate.get("name") == raw_name:
+            if exact_best is None or cand_id < exact_best:
+                exact_best = cand_id
+    return exact_best if exact_best is not None else any_best

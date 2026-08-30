@@ -46,9 +46,13 @@ The Dispatcharr client is mocked at the importer module level
 (``dbas.importers.m3u_accounts``); the importer is exercised with an AsyncMock
 client.
 """
+import json
+from pathlib import Path
+
 import pytest
 from unittest.mock import AsyncMock
 
+from credential_sentinel import REDACTION_SENTINEL
 from dbas.importers.m3u_accounts import (
     apply_deferred_auto_sync,
     import_m3u_accounts,
@@ -105,6 +109,7 @@ def _remap(**kwargs):
     name_to_type = {
         "channel_group": EntityType.CHANNEL_GROUP,
         "m3u_account": EntityType.M3U_ACCOUNT,
+        "user_agent": EntityType.USER_AGENT,
     }
     for name, mapping in kwargs.items():
         for src, dest in mapping.items():
@@ -419,9 +424,18 @@ async def test_no_auto_sync_or_refresh_triggered_at_import():
 
 
 @pytest.mark.asyncio
-async def test_no_deferred_settings_when_account_has_no_auto_sync():
-    """An account with no auto_channel_sync-enabled groups contributes no deferred
-    entry (nothing to apply later)."""
+async def test_group_selection_is_deferred_even_without_auto_sync():
+    """An account with NO auto_channel_sync group still defers its group settings.
+
+    CORRECTED PREMISE (bead ``enhancedchannelmanager-2o0cz``). This test used to
+    assert the opposite — that an account with no ``auto_channel_sync`` group
+    contributes no deferred entry — and that assertion was the defect. The drill's
+    source account had ONE of 375 groups merely ENABLED and no auto-sync anywhere,
+    so nothing was deferred, the restored account came back at ``0 / 375`` groups
+    in PENDING SETUP, and its refresh ingested nothing while reporting ``No
+    streams returned from Xtream Codes provider``. The enabled-group SELECTION is
+    the load-bearing setting; auto-sync is an optional extra on top of it.
+    """
     async def _create(payload):
         return {"id": 901, **payload}
 
@@ -435,6 +449,35 @@ async def test_no_deferred_settings_when_account_has_no_auto_sync():
             "server_url": "http://p/a",
             "channel_groups": [{"channel_group": 10, "auto_channel_sync": False}],
         }],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    groups = result.deferred_auto_sync_settings[0]["settings"]["channel_groups"]
+    assert groups == [
+        {"channel_group": 10, "auto_channel_sync": False, "enabled": True}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_no_deferred_settings_when_account_has_no_groups():
+    """An account carrying no ``channel_groups`` at all defers nothing.
+
+    There is no selection to restore, so there is nothing for the deferred phase
+    to apply — the genuine "nothing to do" case the assertion above used to be
+    mistaken for.
+    """
+    async def _create(payload):
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+
+    result = await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_url": "http://p/a"}],
         client=client,
         selected=True,
         report=_report(),
@@ -467,11 +510,18 @@ async def test_apply_deferred_auto_sync_polls_until_stream_count_stable():
     async def _sleep(seconds):
         sleeps.append(seconds)
 
+    # The deferred group settings carry SOURCE group pks; the deferred phase is
+    # where they are rewritten to DESTINATION pks (bead …-2o0cz), so the apply
+    # needs the remap that the channel-groups importer populated earlier.
+    remap = _remap()
+    remap.add(EntityType.CHANNEL_GROUP, 110, 210)
+
     final = await apply_deferred_auto_sync(
         deferred=[{"m3u_account_id": 901, "settings": {"channel_groups": [
             {"channel_group": 110, "auto_channel_sync": True, "enabled": True}
         ]}}],
         client=client,
+        remap=remap,
         stream_count_fn=_stream_count,
         sleep_fn=_sleep,
         max_polls=10,
@@ -703,3 +753,759 @@ async def test_report_and_deferred_carry_no_credential_material():
     blob = report.model_dump_json() + ledger.model_dump_json() + repr(result.deferred_auto_sync_settings)
     for marker in secret_markers:
         assert marker not in blob
+
+
+# ---------------------------------------------------------------------------
+# Redaction-sentinel handling on restore (bead …-6pilh)
+# ---------------------------------------------------------------------------
+#
+# A STANDARD (non-encrypted, redact-by-default) artifact carries the literal
+# ``***REDACTED***`` in every credential-class field. Restoring that value
+# verbatim produced an XC account that LOOKED fully configured (populated
+# password field, every truthiness probe True) and could not authenticate — zero
+# streams, and a before/after credential-presence diff that reported the dead
+# account as byte-identical. The importer must therefore leave the credential
+# UNSET and TELL the operator which accounts need it re-entered.
+
+
+@pytest.mark.asyncio
+async def test_redacted_password_is_never_written_to_the_destination():
+    """THE regression: the sentinel must not reach create_m3u_account."""
+    captured = {}
+
+    async def _create(payload):
+        captured["payload"] = payload
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "account_type": "XC",
+            "username": "mot2",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    payload = captured["payload"]
+    assert payload.get("password") != REDACTION_SENTINEL
+    # Left UNSET (absent), not set to a placeholder — a blank field is visibly
+    # incomplete in the Dispatcharr UI and reads as absent to every check.
+    assert "password" not in payload
+    # Non-credential fields are untouched.
+    assert payload["name"] == "Infinity"
+    assert payload["username"] == "mot2"
+
+
+@pytest.mark.asyncio
+async def test_redacted_credential_is_a_counted_post_restore_action_item():
+    client = _client()
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "account_type": "XC",
+            "username": "mot2",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 1
+    assert len(report.credential_reentry_details) == 1
+    detail = report.credential_reentry_details[0]
+    assert detail.entity_type == EntityType.M3U_ACCOUNT
+    assert detail.label == "Infinity"
+    assert detail.fields == ["password"]
+    assert detail.source_export_id == 5
+    assert detail.destination_id == 901
+
+
+@pytest.mark.asyncio
+async def test_credential_reentry_detail_carries_no_secret_material():
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "server_url": "http://secret-provider/playlist.m3u",
+            "username": "secret-user",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    blob = report.model_dump_json()
+    assert "secret-provider" not in blob
+    assert "secret-user" not in blob
+    # The FIELD NAME is reported; the value never is.
+    assert report.credential_reentry_details[0].fields == ["password"]
+
+
+@pytest.mark.asyncio
+async def test_credential_bearing_artifact_still_restores_the_real_password():
+    """The encrypted + include_credentials path is unchanged — it works today."""
+    captured = {}
+
+    async def _create(payload):
+        captured["payload"] = payload
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "account_type": "XC",
+            "username": "mot2",
+            "password": "63832936",
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert captured["payload"]["password"] == "63832936"
+    assert report.credentials_needing_reentry == 0
+    assert report.credential_reentry_details == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_preview_names_the_accounts_that_will_need_credentials():
+    """The preview was byte-identical between the encrypted and redacted
+    artifacts; the operator had no way to tell which variant they were about to
+    apply. The dry-run now counts the same action item, with no destination id
+    (nothing was created)."""
+    client = _client()
+    report = _report(is_dry_run=True)
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "username": "mot2",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+        is_dry_run=True,
+    )
+
+    client.create_m3u_account.assert_not_awaited()
+    assert report.credentials_needing_reentry == 1
+    assert report.credential_reentry_details[0].destination_id is None
+    assert report.credential_reentry_details[0].fields == ["password"]
+
+
+@pytest.mark.asyncio
+async def test_an_already_existing_account_that_has_its_credential_is_not_an_action_item():
+    """A skipped account keeps whatever credential the destination already has.
+
+    This test's TITLE and DOCSTRING are the original ones; its FIXTURE is not.
+    It used to hand the importer a destination row carrying no ``password`` key
+    at all and assert ``0``, which made "the account was skipped" stand in for
+    "the destination has the credential" — two different facts, and bead
+    ``…-ukjx5`` is what happens when they are conflated. The destination row now
+    actually HAS the password, which is the only shape the claim above is true
+    of.
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(existing_accounts=[
+            {"id": 77, "name": "Infinity", "password": "<destination-own-secret>"},
+        ]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 0
+
+
+@pytest.mark.asyncio
+async def test_an_already_existing_account_still_missing_its_credential_is_reported():
+    """The skip is not the end of the action item (bead ``…-ukjx5``).
+
+    The account is on the destination and authenticates nowhere. Recording only
+    where the CREATE succeeded made this a count of what the cycle WROTE, so a
+    scheduled cross-instance sync named the account once and then went silent
+    forever while nothing about the destination changed.
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(existing_accounts=[{"id": 77, "name": "Infinity"}]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 1
+    detail = report.credential_reentry_details[0]
+    assert detail.fields == ["password"]
+    # The destination id is known here — unlike on the create path's preview —
+    # so the operator can be pointed at the row they have to edit.
+    assert detail.destination_id == 77
+
+
+@pytest.mark.asyncio
+async def test_a_destination_still_holding_ecms_own_placeholder_is_still_reported():
+    """``***REDACTED***`` in the destination's password field is NOT a credential.
+
+    The exact failure this module's sentinel exists for, met on the skip path.
+    A restore from before bead ``…-6pilh`` wrote the literal placeholder into the
+    field, so the account LOOKS configured — the UI shows a populated password
+    and every truthiness check says yes — and authenticates nowhere. Asking
+    ``credential_is_present`` rather than ``bool`` is what keeps the re-check
+    from being fooled by ECM's own handwriting.
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Infinity",
+            "password": REDACTION_SENTINEL,
+        }],
+        client=_client(existing_accounts=[
+            {"id": 77, "name": "Infinity", "password": REDACTION_SENTINEL},
+        ]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 1
+    assert report.credential_reentry_details[0].fields == ["password"]
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_account_the_source_never_had_a_credential_for_is_silent():
+    """Bead ``…-15g1j``'s faithful half, on the skip path.
+
+    Nothing was redacted, so nothing was lost, so there is no action item — on
+    this cycle or any later one. Without this the fix would trade permanent
+    silence for permanent noise.
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Infinity", "password": ""}],
+        client=_client(existing_accounts=[{"id": 77, "name": "Infinity"}]),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert report.credentials_needing_reentry == 0
+
+
+# ---------------------------------------------------------------------------
+# The ``user_agent`` FK (bead …-9h6cv). An M3U account's ``user_agent`` is a
+# FOREIGN KEY to a Dispatcharr user-agent row, whose id the destination assigns
+# itself. Forwarding A's raw pk made B answer
+# ``400 {"user_agent": ["Invalid pk \"4\" - object does not exist."]}``, and
+# because M3U_ACCOUNT is a FATAL failure category the whole apply rolled back
+# and nothing synced at all.
+#
+# INVARIANT under test: no source-side FK reaches the destination unresolved.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_user_agent_fk_is_rewritten_to_the_destination_id():
+    """The account's ``user_agent`` FK is resolved through the USER_AGENT remap
+    namespace; the wire payload carries B's id, never A's source pk."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://p/a",
+            "user_agent": 4,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(user_agent={4: 77}),
+    )
+
+    assert captured["user_agent"] == 77, (
+        "the raw source pk was forwarded instead of the remapped destination id"
+    )
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+
+
+@pytest.mark.asyncio
+async def test_null_user_agent_is_preserved_and_needs_no_remap():
+    """The overwhelmingly common shape — no custom agent — is untouched: the
+    field stays null, the account is created, and nothing is noted."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": None}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert captured["user_agent"] is None
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+    assert report.notes == []
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_user_agent_drops_the_field_and_still_creates():
+    """When the FK cannot be resolved the account is STILL created — with the
+    ``user_agent`` field DROPPED, never a stale source pk.
+
+    Deliberately different from the stream-profile sibling, which skips
+    DEPENDENCY_UNRESOLVED: a stream profile is a leaf, an M3U account is the ROOT
+    of the Phase-2 chain (EPG sources, groups, channels and streams all hang off
+    it), and Dispatcharr falls back to its default agent when the field is unset.
+    Skipping the account would cascade a whole-tree DEPENDENCY_UNRESOLVED for a
+    field the account works without."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),  # USER_AGENT namespace empty
+    )
+
+    assert "user_agent" not in captured, (
+        "an unresolvable FK must be dropped, never sent upstream as a stale pk"
+    )
+    cat = report.category(EntityType.M3U_ACCOUNT)
+    assert cat.created == 1
+    assert cat.failed == 0
+    assert cat.skipped == 0
+    assert not any(
+        d.reason == SkipReason.DEPENDENCY_UNRESOLVED for d in cat.skip_details
+    )
+
+
+@pytest.mark.asyncio
+async def test_dropped_user_agent_is_a_visible_operator_note():
+    """Dropping the field is a DEGRADATION, so it is reported — never silent."""
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": 4}],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert any(
+        "Provider A" in note and "user agent" in note.lower()
+        for note in report.notes
+    ), f"no operator note named the degraded account; notes={report.notes}"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_also_reports_the_unresolvable_user_agent():
+    """The PREVIEW must not promise what the apply will not deliver: the same
+    note appears on a dry-run, which creates nothing."""
+    report = _report(is_dry_run=True)
+    client = _client()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "user_agent": 4}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+        is_dry_run=True,
+    )
+
+    client.create_m3u_account.assert_not_awaited()
+    assert report.category(EntityType.M3U_ACCOUNT).would_create == 1
+    assert any("Provider A" in note for note in report.notes)
+
+
+@pytest.mark.asyncio
+async def test_user_agent_note_carries_no_credential_material():
+    """The degradation note names the account only — never a server_url,
+    username or password."""
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://provider/playlist?token=abc123",
+            "username": "operator",
+            "password": "hunter2",
+            "user_agent": 4,
+        }],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    blob = " ".join(report.notes)
+    assert "hunter2" not in blob
+    assert "operator" not in blob
+    assert "abc123" not in blob
+    assert "provider/playlist" not in blob
+
+
+# ---------------------------------------------------------------------------
+# The ``server_group`` FK (bead …-g8tyd). An M3U account's ``server_group`` is a
+# FOREIGN KEY to a Dispatcharr ``ServerGroup`` row, whose id the destination
+# assigns itself — the same shape as the ``user_agent`` defect (…-9h6cv), with
+# one difference that decides the fix: there is NO ServerGroup entity category
+# and NO ServerGroup importer, so there is no remap namespace to resolve
+# through. The FK is therefore DROPPED, never forwarded.
+#
+# Live on Dispatcharr 0.28.2, an account carrying A's ``server_group`` pk 20
+# made B answer
+# ``400 {"server_group": ["Invalid pk \"20\" - object does not exist."]}``, and
+# because M3U_ACCOUNT is a FATAL failure category the whole apply rolled back
+# (``partial_failed_rolled_back``) and nothing synced. The identical payload with
+# ``server_group`` removed answered ``201``.
+#
+# INVARIANT under test: no source-side FK reaches the destination unresolved —
+# every one is either remapped or deliberately dropped with a recorded reason.
+# ``server_group`` is one example of that property, not the specification.
+# ---------------------------------------------------------------------------
+
+_V0282_SERVER_GROUP_ACCOUNT = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "bd_g8tyd"
+    / "dispatcharr_v0282_m3u_account_server_group.json"
+)
+
+# Every FK an M3U account carries into another Dispatcharr table on the CREATE
+# payload, per 0.28.2's ``M3UAccountSerializer.Meta.fields``. ``user_agent`` is
+# remapped (…-9h6cv); ``server_group`` is dropped (…-g8tyd). A new FK added to
+# the payload without a disposition here fails the invariant test below.
+_ACCOUNT_FK_KEYS = ("user_agent", "server_group")
+
+
+@pytest.mark.asyncio
+async def test_server_group_fk_is_never_forwarded_to_the_destination():
+    """The account's ``server_group`` FK is DROPPED from the create payload.
+
+    A's ServerGroup ids mean nothing on B, and there is no ServerGroup remap
+    namespace to translate them through, so the only safe disposition is to omit
+    the field: Dispatcharr's column is nullable (``on_delete=SET_NULL``,
+    ``null=True, blank=True``) and the account works without it.
+    """
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://p/a",
+            # 20 is deliberately outside the destination's ServerGroup range —
+            # the live B has none at all. A pk that happened to alias an
+            # unrelated destination row would make this assertion pass against
+            # broken code (the …-9h6cv false-green).
+            "server_group": 20,
+        }],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert "server_group" not in captured, (
+        "source-side server_group pk %r was forwarded to the destination"
+        % captured.get("server_group")
+    )
+
+
+@pytest.mark.asyncio
+async def test_dropped_server_group_still_creates_the_account():
+    """DECISION (…-g8tyd), stated as a test: the account is created WITHOUT the
+    field rather than skipped ``DEPENDENCY_UNRESOLVED``.
+
+    Same reasoning as its ``user_agent`` sibling: an M3U account is the ROOT of
+    the Phase-2 chain, so skipping it cascades a whole-tree
+    ``DEPENDENCY_UNRESOLVED`` for one optional grouping label. Asserted on
+    ``created`` / ``failure_details`` / ``skip_details`` explicitly — this
+    subsystem records conditions in three different structures and asserting on
+    the wrong one passes against broken code.
+
+    The client VALIDATES the FK the way Dispatcharr 0.28.2 does. A permissive
+    mock would accept the stale pk and turn this test green against the broken
+    code — the create would succeed and ``created == 1`` either way.
+    """
+    async def _strict_create(payload):
+        if payload.get("server_group") is not None:
+            raise RuntimeError(
+                'Dispatcharr 400: {"server_group": ["Invalid pk \"%s\" - object '
+                'does not exist."]}' % payload["server_group"]
+            )
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_strict_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": 20}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    cat = report.category(EntityType.M3U_ACCOUNT)
+    assert cat.created == 1
+    assert cat.failed == 0
+    assert cat.failure_details == []
+    assert cat.skipped == 0
+    assert not any(
+        d.reason == SkipReason.DEPENDENCY_UNRESOLVED for d in cat.skip_details
+    )
+
+
+@pytest.mark.asyncio
+async def test_dropped_server_group_is_a_visible_operator_note():
+    """Dropping the field is a DEGRADATION, so it is reported — never silent.
+
+    Asserted on ``report.notes``, the idiom …-9h6cv established for this case
+    (NOT ``skip_details`` or ``failure_details``, which stay empty here).
+    """
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": 20}],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert any(
+        "Provider A" in note and "server group" in note.lower()
+        for note in report.notes
+    ), f"no operator note named the degraded account; notes={report.notes}"
+
+
+@pytest.mark.asyncio
+async def test_dry_run_also_reports_the_dropped_server_group():
+    """The PREVIEW must not promise what the apply will not deliver: the same
+    note appears on a dry-run, which creates nothing."""
+    report = _report(is_dry_run=True)
+    client = _client()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": 20}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+        is_dry_run=True,
+    )
+
+    client.create_m3u_account.assert_not_awaited()
+    assert report.category(EntityType.M3U_ACCOUNT).would_create == 1
+    assert any(
+        "Provider A" in note and "server group" in note.lower()
+        for note in report.notes
+    ), f"the preview stayed silent about the drop; notes={report.notes}"
+
+
+@pytest.mark.asyncio
+async def test_null_server_group_is_untouched_and_notes_nothing():
+    """The overwhelmingly common shape — no server group — is not a degradation:
+    the field stays null, the account is created, and nothing is noted."""
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, **payload}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{"id": 5, "name": "Provider A", "server_group": None}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    assert captured["server_group"] is None
+    assert report.category(EntityType.M3U_ACCOUNT).created == 1
+    assert report.notes == []
+
+
+@pytest.mark.asyncio
+async def test_server_group_note_carries_no_credential_material():
+    """The degradation note names the account only — never a server_url,
+    username or password."""
+    report = _report()
+
+    await import_m3u_accounts(
+        archive_accounts=[{
+            "id": 5,
+            "name": "Provider A",
+            "server_url": "http://provider/playlist?token=abc123",
+            "username": "operator",
+            "password": "hunter2",
+            "server_group": 20,
+        }],
+        client=_client(),
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        remap=_remap(),
+    )
+
+    # Guard the guard: an EMPTY notes list would satisfy every "not in" below
+    # while the degradation went entirely unreported.
+    assert any("Provider A" in note for note in report.notes), (
+        f"nothing was reported, so this scrub check proves nothing; "
+        f"notes={report.notes}"
+    )
+    blob = " ".join(report.notes)
+    assert "hunter2" not in blob
+    assert "operator" not in blob
+    assert "abc123" not in blob
+    assert "provider/playlist" not in blob
+
+
+@pytest.mark.asyncio
+async def test_no_source_side_fk_survives_into_a_real_0282_create_payload():
+    """THE INVARIANT, over a RECORDED Dispatcharr 0.28.2 response.
+
+    The fixture is the verbatim ``GET /api/m3u/accounts/4/`` body from the
+    disposable A instance — the exact shape that made B answer
+    ``400 {"server_group": ["Invalid pk \\"20\\" - object does not exist."]}``.
+    A hand-built dict cannot catch a field this importer has never heard of; a
+    recorded one can.
+
+    For EVERY foreign key an M3U account carries, the value that reaches the
+    destination is never the source-side pk: it is either absent, null, or a
+    destination id the remap produced.
+    """
+    archive_account = json.loads(_V0282_SERVER_GROUP_ACCOUNT.read_text())
+    assert archive_account["server_group"] == 20, "fixture lost its populated FK"
+
+    captured = {}
+
+    async def _create(payload):
+        captured.update(payload)
+        return {"id": 901, "name": payload.get("name")}
+
+    client = _client()
+    client.create_m3u_account = AsyncMock(side_effect=_create)
+
+    await import_m3u_accounts(
+        archive_accounts=[archive_account],
+        client=client,
+        selected=True,
+        report=_report(),
+        ledger=_ledger(),
+        # Empty: no namespace can resolve either FK, which is the worst case.
+        remap=_remap(),
+    )
+
+    for fk in _ACCOUNT_FK_KEYS:
+        source_pk = archive_account.get(fk)
+        if source_pk is None:
+            continue
+        assert captured.get(fk) != source_pk, (
+            "%s forwarded source pk %r to the destination — every FK must be "
+            "remapped or dropped" % (fk, source_pk)
+        )

@@ -3,7 +3,10 @@
 Covers ``tasks.dbas_sync.DbasSyncTask`` — the ``TaskScheduler`` wrapper that makes
 the cross-instance sync ENGINE (``tasks.dbas_sync_engine.run_sync``) OPERATOR-
 TRIGGERABLE: schedulable on an interval AND manually force-triggerable via the
-generic ``POST /api/tasks/dbas_sync/run`` endpoint.
+generic ``POST /api/tasks/dbas_sync_<target_id>/run`` endpoint (7ipq2.3: one
+registered task per SyncTarget; per-target concurrency semantics live in
+``test_dbas_sync_concurrency.py`` — this file tests the shared base behavior
+on direct, unbound instances).
 
 Two behavioral surfaces under test:
 
@@ -68,10 +71,17 @@ def _reset_metrics():
     observability.reset_for_tests()
 
 
-def _sync_counter_value(result_label: str) -> float:
-    """Read the current ecm_sync_runs_total value for a result label."""
+def _sync_counter_value(result_label: str, sync_target_id="unknown") -> float:
+    """Read ecm_sync_runs_total for one result label on one target's series.
+
+    ``sync_target_id`` defaults to the ``"unknown"`` catch-all series — the
+    label the no-target-selected failure path renders (PO-authorized
+    per-target counter attribution; see tasks/dbas_sync._bump_sync_metric).
+    """
     counter = observability.get_metric("sync_runs_total")
-    return counter.labels(result=result_label)._value.get()
+    return counter.labels(
+        result=result_label, sync_target_id=str(sync_target_id)
+    )._value.get()
 
 
 def _make_target(session, **overrides) -> SyncTarget:
@@ -192,14 +202,19 @@ def _apply_partial_report_with_categories() -> RestoreReport:
 # ---------------------------------------------------------------------------
 
 
-def test_task_is_registered():
-    """The task must be importable via the registry under its task_id."""
+def test_base_class_not_statically_registered_but_importable():
+    """7ipq2.3 / ADR-013 S6: sync tasks are registered ONE PER SyncTarget
+    (``dbas_sync_<target_id>``, see ``test_dbas_sync_concurrency.py``); the
+    shared parameterized ``dbas_sync`` id would bypass per-target locking, so
+    the base class must no longer self-register. It stays importable via the
+    tasks package (it is the behavior-carrying base for the bound subclasses)."""
     import tasks  # noqa: F401 — triggers @register_task side effects
     from task_registry import get_registry
+    from tasks.dbas_sync import DbasSyncTask
 
     registry = get_registry()
-    assert registry.is_registered("dbas_sync")
-    assert registry.get_task_class("dbas_sync").default_enabled is False
+    assert not registry.is_registered("dbas_sync")
+    assert DbasSyncTask.default_enabled is False
 
 
 def test_default_enabled_is_false():
@@ -298,7 +313,11 @@ async def test_execute_calls_run_sync_with_target_and_confirm_apply(_wire_db):
 
     with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync) as mock_run:
         task = DbasSyncTask()
-        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        task.update_config({
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        })
         result = await task.execute()
 
     assert mock_run.await_count == 1
@@ -307,6 +326,111 @@ async def test_execute_calls_run_sync_with_target_and_confirm_apply(_wire_db):
     assert captured["session_passed"] is True
     assert result.success is True
     assert result.details["outcome"] == "success"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_applies_only_with_explicit_confirmation(_wire_db):
+    """A recurring invocation is an apply operation, not a dry-run preview."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    captured = {}
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, session=None, **_kw):
+        captured["confirm_apply"] = confirm_apply
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            "cloud_credential_version": 1,
+        })
+        result = await task.execute()
+
+    assert captured["confirm_apply"] is True
+    assert result.success is True
+    assert result.details["is_dry_run"] is False
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_refuses_missing_apply_confirmation(_wire_db):
+    """A malformed/legacy schedule must fail loudly, never fall back to preview."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({"sync_target_id": target_id})
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.success is False
+    assert result.error == "SCHEDULE_APPLY_NOT_CONFIRMED"
+
+
+@pytest.mark.asyncio
+async def test_scheduled_execute_refuses_missing_credential_version(_wire_db):
+    """Legacy schedules must be reauthorized before destructive execution."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    with patch.object(dbas_sync, "run_sync", new=AsyncMock()) as mock_run:
+        task = DbasSyncTask()
+        task.set_run_trigger("scheduled")
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        result = await task.execute()
+
+    assert mock_run.await_count == 0
+    assert result.success is False
+    assert result.error == "SCHEDULE_CREDENTIAL_VERSION_MISSING"
+
+
+@pytest.mark.asyncio
+async def test_confirmed_scheduled_run_resets_before_direct_manual_run(_wire_db):
+    """The same bound singleton must return to manual-preview state after apply."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import make_sync_task_class
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+    task = make_sync_task_class(target_id, "Replica")()
+    confirmations = []
+
+    async def _fake_run_sync(sync_target, *, confirm_apply=False, **_kw):
+        confirmations.append(confirm_apply)
+        return _success_report() if confirm_apply else _dry_run_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task.set_run_trigger("scheduled")
+        task.update_config({"confirm_apply": True, "cloud_credential_version": 1})
+        scheduled_result = await task.execute()
+        task.set_run_trigger("manual")
+        manual_result = await task.execute()
+
+    assert scheduled_result.details["is_dry_run"] is False
+    assert manual_result.details["is_dry_run"] is True
+    assert confirmations == [True, False]
 
 
 @pytest.mark.asyncio
@@ -669,11 +793,19 @@ async def test_apply_partial_counts_reflect_real_failures(_wire_db):
 
 def test_sync_runs_total_is_registered(_reset_metrics):
     """The tri-state run-outcome counter must be registered (mirrors
-    ecm_backup_runs_total)."""
+    ecm_backup_runs_total) and carry PER-TARGET attribution.
+
+    The sync_target_id label (the SyncTarget pk) is what lets the runbook's
+    "unreachable vs half-applying" triage step name WHICH replica is broken
+    once targets run concurrently — see test_dbas_sync_concurrency.py for the
+    behavioural attribution tests."""
     counter = observability.get_metric("sync_runs_total")
-    # Bounded label set — each result label materializes its own series.
+    assert set(counter._labelnames) == {"result", "sync_target_id"}
+    # Bounded label set — each (result, target) pair materializes its own series.
     for result in ("success", "partial", "failed"):
-        assert counter.labels(result=result)._value.get() == 0.0
+        assert counter.labels(
+            result=result, sync_target_id="1"
+        )._value.get() == 0.0
 
 
 @pytest.mark.asyncio
@@ -697,9 +829,9 @@ async def test_success_run_bumps_success_metric(_wire_db, _reset_metrics):
         result = await task.execute()
 
     assert result.success is True
-    assert _sync_counter_value("success") == 1.0
-    assert _sync_counter_value("partial") == 0.0
-    assert _sync_counter_value("failed") == 0.0
+    assert _sync_counter_value("success", target_id) == 1.0
+    assert _sync_counter_value("partial", target_id) == 0.0
+    assert _sync_counter_value("failed", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -722,9 +854,9 @@ async def test_dry_run_bumps_success_metric(_wire_db, _reset_metrics):
         task.update_config({"sync_target_id": target_id})
         await task.execute()
 
-    assert _sync_counter_value("success") == 1.0
-    assert _sync_counter_value("partial") == 0.0
-    assert _sync_counter_value("failed") == 0.0
+    assert _sync_counter_value("success", target_id) == 1.0
+    assert _sync_counter_value("partial", target_id) == 0.0
+    assert _sync_counter_value("failed", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -749,9 +881,9 @@ async def test_partial_run_bumps_partial_metric(_wire_db, _reset_metrics):
         result = await task.execute()
 
     assert result.success is False
-    assert _sync_counter_value("partial") == 1.0
-    assert _sync_counter_value("success") == 0.0
-    assert _sync_counter_value("failed") == 0.0
+    assert _sync_counter_value("partial", target_id) == 1.0
+    assert _sync_counter_value("success", target_id) == 0.0
+    assert _sync_counter_value("failed", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -774,9 +906,9 @@ async def test_exception_run_bumps_failed_metric(_wire_db, _reset_metrics):
         result = await task.execute()
 
     assert result.success is False
-    assert _sync_counter_value("failed") == 1.0
-    assert _sync_counter_value("success") == 0.0
-    assert _sync_counter_value("partial") == 0.0
+    assert _sync_counter_value("failed", target_id) == 1.0
+    assert _sync_counter_value("success", target_id) == 0.0
+    assert _sync_counter_value("partial", target_id) == 0.0
 
 
 @pytest.mark.asyncio
@@ -791,6 +923,9 @@ async def test_no_target_bumps_failed_metric(_wire_db, _reset_metrics):
 
     assert mock_run.await_count == 0
     assert result.success is False
+    # No target was ever selected, so the increment lands on the "unknown"
+    # catch-all series rather than being dropped (losing a failure signal
+    # would be strictly worse) — see tasks/dbas_sync._bump_sync_metric.
     assert _sync_counter_value("failed") == 1.0
 
 
@@ -815,6 +950,112 @@ async def test_freshness_abort_bumps_failed_metric(_wire_db, _reset_metrics):
 
     assert mock_run.await_count == 0
     assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
-    assert _sync_counter_value("failed") == 1.0
-    assert _sync_counter_value("success") == 0.0
-    assert _sync_counter_value("partial") == 0.0
+    assert _sync_counter_value("failed", target_id) == 1.0
+    assert _sync_counter_value("success", target_id) == 0.0
+    assert _sync_counter_value("partial", target_id) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# One-shot arming (bead 7ipq2.2 — live-validation finding): ad-hoc /run
+# parameters are merged into the SINGLETON task instance by the task engine
+# and never restored, so a prior run's armed state (confirm_apply=True, a
+# captured credential_version, the target id) leaked into later runs that
+# omitted those keys — observed live: a follow-up run with no
+# cloud_credential_version aborted on the PREVIOUS run's stale captured
+# version. Worst case: a retained confirm_apply=True silently turns a later
+# intended dry-run into a source-wins APPLY. execute() therefore DISARMS the
+# per-invocation state after every run — each run must bring its own full
+# parameters (schedules always do).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_execute_disarms_per_invocation_state_after_run(_wire_db):
+    """After a run completes, sync_target_id / confirm_apply /
+    cloud_credential_version reset to their disarmed defaults."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync):
+        task = DbasSyncTask()
+        task.update_config(
+            {
+                "sync_target_id": target_id,
+                "confirm_apply": True,
+                "cloud_credential_version": 1,
+            }
+        )
+        result = await task.execute()
+
+    assert result.success is True
+    assert task.sync_target_id is None
+    assert task.confirm_apply is False
+    assert task.cloud_credential_version is None
+
+
+@pytest.mark.asyncio
+async def test_second_bare_run_cannot_reuse_previous_armed_state(_wire_db):
+    """A second execute() with NO fresh parameters must NOT replay the previous
+    run's armed state: it hard-fails 'no sync_target_id' without ever calling
+    run_sync (fail-safe direction — disarmed)."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    async def _fake_run_sync(sync_target, **_kw):
+        return _success_report()
+
+    with patch.object(dbas_sync, "run_sync", side_effect=_fake_run_sync) as mock_run:
+        task = DbasSyncTask()
+        task.update_config({"sync_target_id": target_id, "confirm_apply": True})
+        first = await task.execute()
+        # Engine behaviour for a bare re-run: parameters absent/empty means
+        # update_config is NOT called again — the instance runs as-is.
+        second = await task.execute()
+
+    assert first.success is True
+    assert mock_run.await_count == 1  # the second run never reached run_sync
+    assert second.success is False
+    assert "No sync_target_id" in (second.message or "")
+
+
+@pytest.mark.asyncio
+async def test_disarm_also_runs_on_freshness_abort(_wire_db):
+    """The freshness-gate abort path disarms too — an aborted run must not
+    leave the previous arming in place either."""
+    from tasks import dbas_sync
+    from tasks.dbas_sync import DbasSyncTask
+
+    session = _wire_db()
+    target = _make_target(session)
+    target_id = target.id
+    session.close()
+
+    task = DbasSyncTask()
+    task.update_config(
+        {
+            "sync_target_id": target_id,
+            "confirm_apply": True,
+            # Stale captured version — the gate must abort.
+            "cloud_credential_version": 999,
+        }
+    )
+    result = await task.execute()
+
+    assert result.success is False
+    assert result.error == "CREDENTIAL_FRESHNESS_ABORT"
+    assert task.sync_target_id is None
+    assert task.confirm_apply is False
+    assert task.cloud_credential_version is None

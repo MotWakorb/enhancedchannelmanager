@@ -6,23 +6,32 @@
   margin-bottom: 0;
 }
 
+/* Section role. 14.4px -> 15px. */
 .channel-stats-detail-section h4 {
   margin: 0 0 0.5rem;
-  font-size: 0.9rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary, #ffffff);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .channel-stats-detail-hint {
   color: var(--text-secondary, #888);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   margin: 0;
 }
 
+/* Body role. 13.6px -> 13px. */
 .channel-stats-detail-grid {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 0.35rem 1rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .channel-stats-detail-grid span:nth-child(odd) {
@@ -36,12 +45,15 @@
   border-radius: var(--radius-sm, 4px);
 }
 
+/* Meta role. 12.8px -> 11px. */
 .channel-stats-detail-row {
   display: flex;
   gap: 0.75rem;
   padding: 0.3rem 0.6rem;
   border-bottom: 1px solid var(--border-color, #3a3a5a);
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .channel-stats-detail-row:last-child {

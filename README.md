@@ -45,23 +45,60 @@ services:
       - "6143:6143"
     volumes:
       - ./config:/config
+      # ECM writes MCP credential material here. This is the ONLY ECM-owned
+      # directory the AI-facing sidecar can see.
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp
     environment:
       - PUID=1000
       - PGID=1000
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
 
   ecm-mcp:
     image: ghcr.io/motwakorb/enhancedchannelmanager-mcp:latest
     ports:
-      - "6101:6101"
+      - "127.0.0.1:6101:6101"
     volumes:
-      - ./config:/config:ro
+      # Credential projection only. Do NOT mount /config here: the sidecar is
+      # the process most exposed to prompt injection, and a /config mount puts
+      # settings.json, auth_settings.json, the audit journal, TLS private keys
+      # and every stored backup one file read away from it.
+      - ecm-mcp-secrets:/run/secrets/ecm-mcp:ro
+    # Must match ECM's PUID/PGID above: the projection is owner-only (0600) and
+    # the sidecar can read it only because it runs as the same account.
+    user: "1000:1000"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,mode=1777
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
     environment:
+      - MCP_SECRETS_DIR=/run/secrets/ecm-mcp
       - ECM_URL=http://ecm:6100
       - MCP_PORT=6101
+      # Container-internal bind; host publishing above remains loopback-only.
+      - MCP_BIND_ADDRESS=0.0.0.0
     depends_on:
       ecm:
         condition: service_healthy
+
+volumes:
+  ecm-mcp-secrets:
 ```
+
+**Upgrading from an MCP sidecar that mounted `./config:/config:ro`.** Add the
+`ecm-mcp-secrets` volume and the `MCP_SECRETS_DIR` variable to *both* services
+as shown, then recreate. Recreating the containers alone is not enough. The
+sidecar images from v0.18.1 onward default `MCP_SECRETS_DIR` to
+`/run/secrets/ecm-mcp`, so without that volume the sidecar finds an empty
+directory and reports `api_key_status: file_not_found` permanently. Once the
+volume is in place, ECM publishes an existing key during startup or provisions
+one when upgrading settings that predate the field; no save or regeneration is
+needed to make the sidecar ready. An explicitly revoked key stays revoked.
 
 Or if you're building from source, use the MCP compose overlay:
 
@@ -69,7 +106,33 @@ Or if you're building from source, use the MCP compose overlay:
 docker compose -f docker-compose.yml -f docker-compose.mcp.yml up -d
 ```
 
+This default publishes MCP on host loopback only. For another machine, put an
+HTTPS reverse proxy in front of MCP and use the fail-closed remote overlay:
+
+```bash
+MCP_ALLOWED_HOSTS=mcp.example.home \
+MCP_TRUSTED_PROXY_IPS=172.20.0.10 \
+docker compose -f docker-compose.yml -f docker-compose.mcp.yml \
+  -f docker-compose.mcp.remote.yml up -d
+```
+
+The proxy must terminate TLS and forward to port 6101. Do not expose port 6101
+through a router or firewall; remote mode rejects non-HTTPS `/mcp` requests.
+**ECM's own TLS setting does not protect MCP.** It terminates HTTPS for ECM's
+web interface on port 6143 only. The MCP sidecar is a separate listener with no
+TLS of its own, so the reverse proxy is what encrypts MCP traffic.
+`MCP_TRUSTED_PROXY_IPS` accepts only explicit IP addresses or bounded CIDRs.
+Trust-all values (`*`, `0.0.0.0/0`, and `::/0`) and malformed entries stop the
+sidecar at startup. Forwarded HTTPS is honored only from a configured peer.
+
 **Reaching the MCP container from ECM** — ECM's Settings > MCP Integration status badge probes the MCP server's `/health` endpoint. By default it targets `ecm-mcp:6101`, which Docker DNS resolves to the MCP container on the canonical compose network — no extra configuration needed. If you run both containers with `network_mode: host` (host network namespace shared), set `MCP_HOST=localhost` on the ECM service so the probe targets the host loopback instead of the (non-existent on that topology) `ecm-mcp` DNS name.
+
+**Allowed MCP hostnames:** The MCP sidecar accepts `localhost`, loopback IPs,
+and the Compose service name `ecm-mcp` by default. The remote HTTPS profile
+requires the proxy-facing hostname in `MCP_ALLOWED_HOSTS` (comma-separated for
+more than one), then recreates the container.
+List hostnames/IPs only: no scheme, port, path, or wildcard. Requests carrying
+any other or malformed `Host` value are rejected before MCP routing.
 
 **Reaching ECM from the MCP container** — the symmetric case. The MCP server calls ECM's backend API at its `ECM_URL` (default `http://ecm:6100`, Docker DNS on the canonical compose network). If both containers run with `network_mode: host`, the `ecm` service name has no DNS entry on the shared host network and the backend answers only on the host loopback, so every MCP tool call fails with `All connection attempts failed`. Fix: set `ECM_URL=http://localhost:6100` on the MCP service. See [MCP integration troubleshooting](docs/user_guide/integrations/mcp.md#mcp-tools-fail-with-all-connection-attempts-failed).
 
@@ -84,8 +147,72 @@ See [MCP Server (Claude Integration)](#mcp-server-claude-integration) for setup 
 Set these to match the owner of your bind-mounted volumes to avoid permission issues. Find your IDs with `id your_user`.
 
 **Port Configuration:**
-- **ECM_PORT** (default: 6100) — HTTP interface (always available as fallback)
+- **ECM_PORT** (default: 6100): HTTP interface. It remains available when TLS is enabled, but ECM refuses to start or refresh a browser session there (see below).
 - **ECM_HTTPS_PORT** (default: 6143) — HTTPS interface (when TLS is configured in Settings)
+
+When ECM TLS is enabled, use the HTTPS address for the web UI. The HTTP port
+continues to serve health checks and unauthenticated recovery surfaces, but sign-in,
+Dispatcharr sign-in and token refresh all answer `403` there with a message naming the
+HTTPS address, rather than appearing to succeed and then failing on the next request.
+Session cookies are `Secure`, `HttpOnly` and `SameSite=Lax`.
+
+**Turning TLS on signs everyone out once.** The moment ECM starts terminating TLS, every
+existing browser session is revoked, so a browser still holding a pre-activation cookie
+cannot keep replaying it. Everyone, including the administrator who made the change,
+signs in again over HTTPS. That moment is wherever it actually happens: switching TLS on
+when a certificate is already present, issuing or completing a Let's Encrypt
+certificate, uploading one manually, or a manual renewal that issues the first
+certificate. Switching TLS on *before* any certificate exists is not activation and
+signs nobody out, because you still need the UI to finish issuing.
+
+Reverse proxy deployments should set the canonical `public_base_url` to an `https://`
+origin. ECM's own policy code does not consult `X-Forwarded-Proto`, `X-Forwarded-Host`
+or `Forwarded`, because it has no trusted-proxy allowlist of its own. That setting
+is how a proxy declares its external scheme. (Note that uvicorn, the server ECM runs under,
+enables its own `ProxyHeadersMiddleware` by default and may rewrite the request scheme
+for clients within `FORWARDED_ALLOW_IPS`, which defaults to `127.0.0.1`. That is
+uvicorn's policy, not ECM's.)
+
+#### Emergency recovery when HTTPS is unreachable
+
+There are two escape hatches. Both send session credentials in plaintext, so use them
+only on a trusted network and close them the moment HTTPS is repaired. Both work
+regardless of whether `public_base_url` is set.
+
+1. **If you can still sign in over HTTPS**, enable **Emergency recovery: allow
+   authenticated sessions over HTTP** in Settings › TLS. While it is actually costing you
+   protection (ECM's own TLS is on, or `public_base_url` is an `https://` origin), the
+   TLS panel shows a plaintext-session warning banner and ECM logs a warning. On a
+   plain-HTTP install with neither, the hatch changes nothing and both stay quiet.
+2. **If you cannot sign in at all**, stop ECM, set
+   `ECM_ALLOW_HTTP_SESSION_COOKIES=true` on the ECM container, and restart it. ECM logs
+   a warning at startup for as long as it is set. Sign in through HTTP only long enough
+   to repair or disable TLS, then remove the variable (or set it back to `false`) and
+   restart ECM.
+
+Values other than `1`, `true`, `yes` or `on` (including the `false` that
+`docker-compose.yml` ships by default) leave the protection ON.
+
+**Your browser may refuse to open the HTTP port at all. Read this before you need it.**
+Every HTTPS response from ECM carries `Strict-Transport-Security: max-age=31536000`
+(one year, deliberately without `includeSubDomains` and without `preload`). Per
+[RFC 6797 §8.3](https://www.rfc-editor.org/rfc/rfc6797#section-8.3) that pin is scoped
+to the **hostname and is port-agnostic**: once you have visited
+`https://ecm.example.com:6143` even once, your browser will silently upgrade
+`http://ecm.example.com:6100` to `https://ecm.example.com:6100` for a year, with no
+click-through to bypass it. So "browse to `http://ecm.example.com:6100`" is *not* a
+recovery instruction that works on a pinned browser. Use one of these instead:
+
+- **Reach ECM by IP literal**, e.g. `http://192.168.1.50:6100`. HSTS pins are stored
+  per hostname and are never applied to IP addresses, so this always works and is the
+  fastest route.
+- **Use a different hostname** for the same instance (another DNS name, or a
+  `hosts`-file alias) that you have never visited over HTTPS.
+- **Clear the pin** for the hostname: in Chrome/Edge open `chrome://net-internals/#hsts`,
+  enter the domain under *Delete domain security policies*, and delete it. In Firefox,
+  open the History sidebar (or Library › History), right-click the site and choose
+  *Forget About This Site*. Note that this also clears that site's cookies, cache and
+  history. Then browse to the HTTP port.
 
 **Volumes:**
 - `/config` — Persistent storage for database, settings, logos, TLS certificates, and backups
@@ -178,43 +305,64 @@ Things you can ask Claude to do:
 
 ### Setup
 
-> **`settings.json` field reference**
+> **Dispatcharr fields in `settings.json` (GH #273)**
 >
 > | Field in `settings.json` | What it is for |
 > |---|---|
 > | `url` | Dispatcharr base URL |
 > | `dispatcharr_api_key` | **Dispatcharr REST API token** — ECM uses this to talk to Dispatcharr. (Canonical field name as of v0.17.1, GH #273. Operators upgrading from v0.17.0 or earlier will have the value in the legacy `api_key` field; ECM auto-migrates on next startup with a one-time `[CONFIG] Reading deprecated 'api_key' field …` WARN log.) Never replace it with an MCP key. |
-> | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and silently mirrors the value into `dispatcharr_api_key` on the next save. Rename or remove this field once you confirm `dispatcharr_api_key` is populated. |
-> | `mcp_api_key` | **ECM MCP static key** — the `ecm-mcp` sidecar uses this to authenticate calls to ECM via the `?api_key=` path. This is what the Generate / Regenerate button in Settings > MCP Integration writes. The `?api_key=` path is the supported MCP authentication method. |
+> | `api_key` | **DEPRECATED legacy alias for `dispatcharr_api_key`.** ECM still reads this for one release of back-compat (v0.17.x). The first read after upgrade emits a deprecation WARN and mirrors the value into `dispatcharr_api_key` on the next save. |
 >
-> When rotating an MCP key, the new key goes in `mcp_api_key`. Do **not** touch `dispatcharr_api_key` (or its legacy `api_key` alias) — overwriting either with an MCP key breaks every channel and stream operation (ECM returns 401 to Dispatcharr). If you see `api_key_configured: false` from the `/health` endpoint after a rotation, the diagnostic's `status` field will indicate whether `mcp_api_key` is missing from the file (`field_missing`), blank (`field_empty`), or the file itself is unreadable (`file_not_found` / `invalid_json`) — use `GET http://YOUR_ECM_HOST:6100/api/health` to check.
+> **MCP key authority (separate from Dispatcharr settings)**
+>
+> Generate, regenerate, or revoke the MCP client key only through **Settings >
+> MCP Integration**. Copy the generated or regenerated key from the UI into
+> each client. The owner-only `/run/secrets/ecm-mcp/api-key` projection is the
+> sole live authority for inbound MCP authentication. The
+> `settings.json:mcp_api_key` field is only a compatibility mirror; generic
+> settings saves and manual changes cannot promote it over the authority and
+> instead repair it from the validated projection. An explicitly empty
+> authority is durable revocation.
+>
+> The separate `mcp-service.json` projection contains the sidecar's private
+> backend and confirmation credentials. Operators never copy those credentials
+> into a client. `.api-key.recovery` is an internal redo record for interrupted
+> rotation or revocation; do not edit or delete it as cleanup.
+>
+> Do **not** put the MCP key in `dispatcharr_api_key` (or its legacy `api_key`
+> alias): doing so breaks every channel and stream operation because
+> Dispatcharr rejects the wrong credential. If `/health` reports
+> `api_key_configured: false`, its status distinguishes an absent
+> (`file_not_found`), blank (`field_empty`), or malformed/unreadable
+> (`invalid_key`) projection. Read it with
+> `GET http://localhost:6101/health` on the Docker host.
 >
 > **Migration example.** A v0.17.0 `settings.json` from an operator hit by GH #273:
 > ```json
 > {
 >   "url": "http://dispatcharr:9191",
->   "api_key": "real-dispatcharr-rest-token-abc",
->   "mcp_api_key": "ecm-mcp-key-xyz"
+>   "api_key": "REDACTED_DISPATCHARR_REST_TOKEN"
 > }
 > ```
 > After the first v0.17.1 startup and the next settings save, the file becomes:
 > ```json
 > {
 >   "url": "http://dispatcharr:9191",
->   "dispatcharr_api_key": "real-dispatcharr-rest-token-abc",
->   "api_key": "real-dispatcharr-rest-token-abc",
->   "mcp_api_key": "ecm-mcp-key-xyz"
+>   "dispatcharr_api_key": "REDACTED_DISPATCHARR_REST_TOKEN",
+>   "api_key": "REDACTED_DISPATCHARR_REST_TOKEN"
 > }
 > ```
-> Both fields hold the same Dispatcharr token (the duplicate is intentional — external scripts that still read `api_key` keep working). Once you've removed any such scripts, you can manually delete the legacy `api_key` line; ECM will keep using `dispatcharr_api_key` from then on.
+> Both fields hold the same Dispatcharr token. The duplicate is intentional so
+> external scripts that still read `api_key` keep working. ECM handles the
+> migration and compatibility writes; neither field is an MCP credential.
 
-1. **Generate an API key** in ECM Settings > MCP Integration (this writes to `mcp_api_key` in `settings.json`)
+1. **Generate an API key** in ECM Settings > MCP Integration and copy the displayed key for your MCP client. ECM publishes the authoritative projection and compatibility mirror automatically.
 2. **Start the MCP container** — add the `ecm-mcp` service to your compose file (see [With MCP Server](#with-mcp-server-claude-ai-integration)) and start it on port 6101
 3. **Connect Claude** — choose your method:
 
 ### Choose your connection method
 
-ECM's MCP server is authenticated with a static API key (`mcp_api_key`), passed as the `?api_key=` query parameter. Both connection methods below run on *your* machine and connect to ECM over your LAN/VPN — nothing needs to be exposed to the public internet.
+ECM's MCP server is authenticated with the public MCP client key in an `Authorization: Bearer` header. The default deployment is available only on the Docker host's loopback interface. Use the HTTPS remote profile above for access from another machine.
 
 | Method | Node.js? | Best for |
 |---|---|---|
@@ -238,16 +386,22 @@ Claude Desktop talks to remote MCP servers through the `mcp-remote` bridge. Add 
       "command": "npx",
       "args": [
         "mcp-remote",
-        "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY",
+        "http://localhost:6101/mcp",
+        "--header",
+        "Authorization:${ECM_MCP_AUTH}",
         "--allow-http"
       ]
     }
   }
 }
 ```
-(`--allow-http` is needed because the endpoint is plain HTTP.)
+Set `ECM_MCP_AUTH` in the operating-system environment to `Bearer <your key>`
+before starting Claude Desktop. `--allow-http` is appropriate only for this
+loopback URL; use `https://` and omit it for remote access.
 
-> **Note:** the `?api_key=` query parameter in these URLs is your `mcp_api_key` value from `settings.json` — the key generated in ECM Settings > MCP Integration. It is **not** your Dispatcharr `api_key`.
+> **Note:** the Bearer value is the MCP key copied from Settings > MCP
+> Integration, not the Dispatcharr REST token in `dispatcharr_api_key` or its
+> legacy `api_key` alias.
 
 ---
 
@@ -262,14 +416,17 @@ Create a `.mcp.json` file in any project directory where you want ECM tools avai
   "mcpServers": {
     "ecm": {
       "type": "http",
-      "url": "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_API_KEY"
+      "url": "http://localhost:6101/mcp",
+      "headers": {
+        "Authorization": "Bearer ${ECM_MCP_API_KEY}"
+      }
     }
   }
 }
 ```
 
 To connect:
-1. Create the `.mcp.json` file above in your project root (replace `YOUR_ECM_HOST` and `YOUR_API_KEY`)
+1. Set `ECM_MCP_API_KEY` in your local environment and create the `.mcp.json` above
 2. Start Claude Code in that directory — it auto-detects `.mcp.json` on launch
 3. Run `/mcp` to reconnect if the MCP server restarts
 4. Ask Claude to manage your channels — e.g. "list my channels", "create a Channel Pipeline rule for sports", "probe all streams"
@@ -278,9 +435,9 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 
 ---
 
-**Upgrading from an earlier version:** the MCP server moved from the deprecated SSE transport (`/sse` + `/messages/`) to the modern Streamable HTTP transport on a single `/mcp` endpoint. If you have an existing config pointing at `http://YOUR_ECM_HOST:6101/sse?api_key=...` (or `"type": "sse"` in a `.mcp.json`), change the path to `/mcp` (and `"type": "http"` for Claude Code). The `/sse` endpoint was removed in this version. API-key auth is unchanged.
+**Upgrading from an earlier version:** remove `?api_key=...` from every MCP URL and configure the Bearer header shown above. The deprecated SSE endpoints remain removed. Rotate the old key through Settings > MCP Integration after removing URL-based configs because URLs may have been retained in logs or histories.
 
-**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key — this updates `mcp_api_key` in `settings.json`. Then update the `?api_key=` value in your Claude Desktop / Claude Code config. Do **not** edit `dispatcharr_api_key` (or its legacy `api_key` alias) in `settings.json` — that is the Dispatcharr REST token and is separate (see the field reference at the top of this section). As of v0.17.1 (GH #273) the Dispatcharr token lives in `dispatcharr_api_key`; the legacy `api_key` field is still read for one release of back-compat with a deprecation WARN.
+**Redeploying or rotating the MCP key:** use Settings > MCP Integration > Regenerate Key, copy the returned key, then update the local environment variable used for the Bearer header. Rotation is effective on the next request without restarting the sidecar. Revoke access with Settings > MCP Integration > Revoke Key. Do **not** edit server-side credential projection files or `dispatcharr_api_key` (or its legacy `api_key` alias).
 
 **For the full reference** — step-by-step connection setup, key rotation details, and troubleshooting — see **[docs/user_guide/integrations/mcp.md](docs/user_guide/integrations/mcp.md)**.
 
@@ -418,7 +575,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `mark_notifications_read` | Mark all as read |
 | `delete_all_notifications` | Clear all notifications |
 | `list_alert_methods` | List configured alert methods (Discord, Telegram, email) |
-| `test_alert_method` | Send a test notification through an alert method |
+| `test_alert_method` | Send a test notification through an alert method. **Not usable over MCP** (build 0089): the endpoint refuses the MCP service key with `403`, by design. An admin runs the test from Settings > Alert Methods |
 | **Profiles (3)** | |
 | `list_channel_profiles` | List channel profiles |
 | `list_stream_profiles` | List stream profiles |

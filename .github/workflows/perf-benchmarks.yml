@@ -59,16 +59,6 @@ jobs:
           cache: 'pip'
           cache-dependency-path: backend/requirements.txt
 
-      - name: Install dependencies
-        working-directory: backend
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # Belt-and-suspenders: requirements.txt already includes
-          # pytest-benchmark (bd-skqln.10), but pin the explicit install
-          # so the CI command is self-documenting.
-          pip install pytest pytest-benchmark
-
       # ───────────────────────────────────────────────────────────────────
       # Baseline pass — only on pull_request. For pushes to main/dev, we
       # skip the baseline run and just record the candidate's absolute
@@ -94,6 +84,15 @@ jobs:
           cp -r /tmp/pr-perf/fixtures/session_telemetry_volume.py \
             backend/tests/fixtures/session_telemetry_volume.py || true
 
+      - name: Install baseline dependencies (PR only)
+        if: github.event_name == 'pull_request'
+        working-directory: backend
+        run: |
+          python -m venv /tmp/ecm-perf-baseline
+          /tmp/ecm-perf-baseline/bin/python -m pip install --upgrade pip
+          /tmp/ecm-perf-baseline/bin/python -m pip install -r requirements.txt
+          /tmp/ecm-perf-baseline/bin/python -m pip install pytest pytest-benchmark
+
       - name: Run baseline benchmark (PR only)
         if: github.event_name == 'pull_request'
         working-directory: backend
@@ -102,7 +101,7 @@ jobs:
           RATE_LIMIT_ENABLED: '0'
         run: |
           mkdir -p /tmp/ecm_test_config
-          python -m pytest tests/performance/ \
+          /tmp/ecm-perf-baseline/bin/python -m pytest tests/performance/ \
             --benchmark-only --no-cov \
             --benchmark-min-rounds=10 \
             --benchmark-save=baseline \
@@ -119,6 +118,14 @@ jobs:
           # initially, then we mutated backend/ for the baseline run).
           git checkout HEAD -- backend/
 
+      - name: Install candidate dependencies
+        working-directory: backend
+        run: |
+          python -m venv /tmp/ecm-perf-candidate
+          /tmp/ecm-perf-candidate/bin/python -m pip install --upgrade pip
+          /tmp/ecm-perf-candidate/bin/python -m pip install -r requirements.txt
+          /tmp/ecm-perf-candidate/bin/python -m pip install pytest pytest-benchmark
+
       - name: Run candidate benchmark
         working-directory: backend
         env:
@@ -131,14 +138,14 @@ jobs:
           # push to main/dev, the baseline run was skipped so we just
           # record the absolute number.
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            python -m pytest tests/performance/ \
+            /tmp/ecm-perf-candidate/bin/python -m pytest tests/performance/ \
               --benchmark-only --no-cov \
               --benchmark-min-rounds=10 \
               --benchmark-storage=file://./.benchmarks \
               --benchmark-compare=0001 \
               --benchmark-compare-fail=median:20%
           else
-            python -m pytest tests/performance/ \
+            /tmp/ecm-perf-candidate/bin/python -m pytest tests/performance/ \
               --benchmark-only --no-cov \
               --benchmark-min-rounds=10 \
               --benchmark-storage=file://./.benchmarks \

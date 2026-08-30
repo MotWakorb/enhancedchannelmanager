@@ -55,6 +55,10 @@ def _capture_create_task():
     return _fake_create_task, captured
 
 
+# Sentinel for "send an explicit JSON null", distinct from "omit the field".
+JSON_NULL = object()
+
+
 @pytest.mark.asyncio
 class TestRestoreDbasSavedEndpoint:
     async def test_dry_run_is_default(self, async_client, backups_dir):
@@ -106,6 +110,54 @@ class TestRestoreDbasSavedEndpoint:
         assert params["confirm_apply"] is True
         assert params["cleanup_artifact"] is False
 
+    # --- channel_reattach_mode (bead dfkbn, PR review W1) -------------------
+
+    @pytest.mark.parametrize(
+        "sent,expected",
+        [
+            (None, "preserve"),        # OLD client: field absent entirely
+            ("preserve", "preserve"),
+            ("overwrite", "overwrite"),
+            ("OverWrite", "overwrite"),  # case-insensitive
+            ("  overwrite  ", "overwrite"),
+            ("nonsense", "preserve"),  # unrecognised falls back SAFE, never 422
+            ("", "preserve"),
+            (JSON_NULL, "preserve"),   # explicit null coerces, never 422
+        ],
+    )
+    async def test_reattach_mode_is_forwarded_and_defaults_safe(
+        self, async_client, backups_dir, sent, expected
+    ):
+        """An absent or unparseable mode must never mean "overwrite".
+
+        The unsafe direction is not a fallback: a restore from an older client
+        that has never heard of this field must keep the behaviour it was written
+        against, which is leaving the operator's live channels alone.
+        """
+        fname = "ecm-backup-2026-01-01_000000.zip"
+        (backups_dir / fname).write_bytes(_make_artifact_zip())
+        engine = MagicMock()
+        engine.run_task = AsyncMock(return_value=None)
+        fake_ct, _ = _capture_create_task()
+
+        body = {"filename": fname}
+        if sent is JSON_NULL:
+            body["channel_reattach_mode"] = None
+        elif sent is not None:
+            body["channel_reattach_mode"] = sent
+
+        with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
+            "task_engine.get_engine", return_value=engine
+        ), patch("asyncio.create_task", side_effect=fake_ct):
+            resp = await async_client.post(
+                "/api/backup/restore-dbas-saved", json=body
+            )
+
+        assert resp.status_code == 200
+        assert resp.json()["channel_reattach_mode"] == expected
+        _args, kwargs = engine.run_task.call_args
+        assert kwargs["parameters"]["channel_reattach_mode"] == expected
+
     async def test_missing_file_returns_404(self, async_client, backups_dir):
         with patch("routers.backup.BACKUPS_DIR", backups_dir):
             resp = await async_client.post(
@@ -148,6 +200,11 @@ class TestRestoreDbasSavedEndpoint:
     async def test_admin_guarded(self, async_client, backups_dir):
         from fastapi import HTTPException, status
         from main import app
+        # bead 9kwzp.10 item 2 (PR #855 review): this route keeps the PLAIN
+        # admin tier at the dependency and refuses only the MCP principal's
+        # APPLY in the handler, so the non-admin half this case pins is still
+        # ``RequireAdminIfEnabled``. Its upload sibling moved to
+        # ``RequireHumanAdminIfEnabled``; see test_o8tbv_restore_dbas_endpoint.
         from auth import RequireAdminIfEnabled as _prebuilt
 
         async def _reject() -> None:

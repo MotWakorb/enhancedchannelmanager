@@ -304,7 +304,7 @@ remote: - N of N required status checks are expected.
 **Correction (now authoritative; carried in `docs/shipping.md`):**
 
 1. The post-cut `dev` update — the back-merge (CHANGELOG promotion + version, plus any stabilization fixes, all now on `main`) **and** the re-opened build counter — is delivered as a **single `dev`-targeting PR**, not a direct push. Branch off `dev`, `git merge origin/main --no-edit`, bump the counter, open the PR, let the required checks pass, then `gh pr merge --merge --delete-branch`. The original steps 8 and 10 collapse into one PR-based step.
-2. The counter re-open must bump **all three** version touchpoints — `frontend/package.json` (`"version"`), `backend/main.py` (`FastAPI(version=…)`), and `backend/routers/backup.py` (`APP_VERSION`) — not just `frontend/package.json` as the original step 10 showed; the `Version Consistency` check requires all three to agree.
+2. The counter re-open must bump **all three** version touchpoints — `frontend/package.json` (`"version"`), `backend/main.py` (`FastAPI(version=…)`), and `backend/routers/backup.py` (`APP_VERSION`) — not just `frontend/package.json` as the original step 10 showed. All three must agree; note that the `Version Consistency` check that used to enforce this was removed in the CI gate reduction, so the lockstep bump is now held by review alone.
 
 **Scope.** This amends only the mechanical post-cut sequence. The ADR's decision — short-lived release branch + merge-commit release-cut PR + pre-cut gate + non-release-PR ban — is unchanged. Per ADR convention the original Cut Mechanics block above is left intact as the decision-time record; `docs/shipping.md` is the living runbook.
 

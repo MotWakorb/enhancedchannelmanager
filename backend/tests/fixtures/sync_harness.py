@@ -57,6 +57,7 @@ lazy ``%``-formatted logging; no secrets in any log line.
 """
 from __future__ import annotations
 
+import base64
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -66,6 +67,14 @@ from unittest.mock import MagicMock, patch
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# A real 1x1 PNG. The logos importer decodes and validates the bytes it is
+# handed, so a hosted-logo fetch has to return an image an image library
+# accepts, not a placeholder string.
+_PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+    "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+)
 
 
 # ---------------------------------------------------------------------------
@@ -236,12 +245,86 @@ class StatefulDispatcharrFake:
         self.label = label
         # Distinct id bases per entity type so a leaked A-id is obvious on B.
         self.m3u_accounts = _Store("m3u_account", _name_key, id_base=id_base + 100)
+        # tyrg1 — the ServerGroup an M3U account's ``server_group`` FK points at.
+        # On Dispatcharr 0.29.0 the row is exactly ``{id, name}``, so a
+        # name-keyed store models it completely rather than approximately.
+        self.server_groups = _Store("server_group", _name_key, id_base=id_base + 900)
+        # 10wnq / hiacv — user agents. An M3U account, a stream profile AND the
+        # ``stream_settings`` core-settings blob all carry a ``user_agent`` FK
+        # that resolves through this namespace.
+        self.user_agents = _Store("user_agent", _name_key, id_base=id_base + 950)
+        # 10wnq — CORE SETTINGS, modelled the way Dispatcharr really returns
+        # them: a BARE JSON LIST of ``{id, key, name, value}`` rows with
+        # NON-CONTIGUOUS ids that do not correlate with list position (the shape
+        # ``tests/fixtures/dispatcharr_core_settings_recorded.json`` captured
+        # live, and the shape that made a key-string PATCH 404 in bead q6xjl).
+        # EVERY instance has these rows — Dispatcharr's own app-ready hook
+        # creates them — so they are seeded here rather than in ``seeded_source``:
+        # an "empty" destination still has its settings rows, and modelling it
+        # otherwise would let the key->id resolver pass on a shape that cannot
+        # occur.
+        self.core_settings: list[dict] = [
+            {"id": 6, "key": "network_access", "name": "Network Access",
+             "value": {"UI": ["10.0.0.0/8"]}},
+            {"id": 7, "key": "proxy_settings", "name": "Proxy Settings",
+             "value": {"buffering_timeout": 15}},
+            {"id": 17, "key": "stream_settings", "name": "Stream Settings",
+             "value": {"default_output_format": "mpegts"}},
+            {"id": 18, "key": "dvr_settings", "name": "DVR Settings",
+             "value": {"tv_fallback_dir": "TV_Shows"}},
+            {"id": 19, "key": "backup_settings", "name": "Backup Settings",
+             "value": {"schedule_enabled": False}},
+            {"id": 20, "key": "system_settings", "name": "System Settings",
+             "value": {"time_zone": "UTC"}},
+            {"id": 21, "key": "user_limit_settings", "name": "User Limit Settings",
+             "value": {"terminate_oldest": True}},
+        ]
         self.epg_sources = _Store("epg_source", _name_key, id_base=id_base + 200)
+        # Guide rows are not a synced entity. They model independently minted
+        # ids on A/B so channel-link tests must resolve by the portable tvg_id.
+        self.epg_data = _Store("epg_data", _name_key, id_base=id_base + 250)
         self.channel_groups = _Store("channel_group", _name_key, id_base=id_base + 300)
         self.channel_profiles = _Store("channel_profile", _name_key, id_base=id_base + 400)
         self.stream_profiles = _Store("stream_profile", _name_key, id_base=id_base + 500)
         self.channels = _Store("channel", _channel_key, id_base=id_base + 600)
         self.streams = _Store("stream", _stream_key, id_base=id_base + 700)
+        # Logos (bead 7ipq2.1): keyed by normalized name — the importer's tier-2
+        # match key, and the natural key upload_logo_file writes under.
+        self.logos = _Store("logo", _name_key, id_base=id_base + 800)
+        # What ``fetch_logo_image`` serves for a HOSTED logo — a real 1x1 PNG,
+        # the smallest thing the logos importer's post-decode validator accepts.
+        self.hosted_logo_bytes: bytes = _PNG_BYTES
+        # Every bulk_delete_logos invocation is recorded so tests can pin the
+        # sync-path invariant: the destructive pre-step NEVER fires (ADR-013 S9).
+        self.bulk_logo_delete_calls: list[list[int]] = []
+        # PER-ACCOUNT PROVIDER GROUP SELECTION (bead …-avrix), modelled the way
+        # Dispatcharr models it (0.29.0 ``dispatcharr_channels_channelgroupm3uaccount``,
+        # written by ``PATCH /api/m3u/accounts/<id>/group-settings/`` as a
+        # bulk_create UPSERT on ``(channel_group, m3u_account)``). This is the
+        # setting that decides WHAT AN ACCOUNT INGESTS: on the live measured
+        # account, 2 of 777 groups enabled is the difference between 316 channels
+        # and the provider's whole 53,661-stream catalogue. Keyed
+        # ``(m3u_account_id, channel_group_id) -> row``.
+        self.group_settings: dict[tuple[int, int], dict] = {}
+        # Every PROVIDER-touching M3U call, recorded so a test can pin ADR-013
+        # S9: the sync path applies the destination's own group settings and
+        # triggers NO provider refresh. Recorded rather than absent so the
+        # assertion can actually fail — a method the fake does not define would
+        # raise AttributeError, which is a different (and weaker) signal.
+        self.m3u_refresh_calls: list[int] = []
+        self.m3u_patch_calls: list[tuple[int, dict]] = []
+        # Channel-profile MEMBERSHIP, modelled the way Dispatcharr models it
+        # (0.29.0 ``apps/channels``): ``ChannelProfileMembership.enabled``
+        # defaults to ``True``; the ``post_save`` signal on ChannelProfile
+        # bulk-creates a row for every existing channel, and the channel-create
+        # view bulk-creates a row on every existing profile with
+        # ``enabled=True`` whenever ``channel_profile_ids`` is omitted — which
+        # is what every ECM create does. So on a real instance a membership is
+        # "ENABLED unless something explicitly disabled it", and only the
+        # exceptions need storing. Modelling it this way is what makes the
+        # enable-everything DEFAULT — the thing bead …-38c5a is about — real in
+        # the harness instead of an assumption.
+        self.disabled_memberships: set[tuple[int, int]] = set()
 
         # Optional write-fault injection: a callable invoked at the start of every
         # mutating call with (method_name, payload). If it raises, the fake raises
@@ -267,11 +350,156 @@ class StatefulDispatcharrFake:
     # ----- M3U accounts ----------------------------------------------------
 
     async def get_m3u_accounts(self) -> list:
-        return self.m3u_accounts.list()
+        # ``M3UAccountSerializer`` embeds the account's per-group settings under
+        # ``channel_groups`` (confirmed live on 0.29.0: A's XC account serialized
+        # 777 entries, 2 ``enabled``). The gather reads this shape, so the fake
+        # has to produce it or a test can never see the selection cross.
+        rows = self.m3u_accounts.list()
+        for row in rows:
+            account_id = row.get("id")
+            # ``to_representation`` projects the four preference booleans out of
+            # the blob and onto the top level — the ONLY route by which they can
+            # reach a create payload (see ``_PREFERENCE_DEFAULTS``).
+            custom = row.get("custom_properties") or {}
+            for key, default in self._PREFERENCE_DEFAULTS.items():
+                row[key] = custom.get(key, default)
+            row["channel_groups"] = [
+                dict(entry)
+                for (acc_id, _group_id), entry in sorted(self.group_settings.items())
+                if acc_id == account_id
+            ]
+        return rows
+
+    def set_group_selection(self, account_id: int, entries: list[dict]) -> None:
+        """Seed an account's per-group selection (test-side helper, not an API)."""
+        for entry in entries:
+            group_id = entry["channel_group"]
+            self.group_settings[(account_id, group_id)] = {
+                "channel_group": group_id,
+                "enabled": entry.get("enabled", True),
+                "auto_channel_sync": entry.get("auto_channel_sync", False),
+                **{
+                    k: entry[k]
+                    for k in ("auto_sync_channel_start", "auto_sync_channel_end",
+                              "custom_properties")
+                    if entry.get(k) is not None
+                },
+            }
+
+    def enabled_group_ids(self, account_id: int) -> set[int]:
+        """The group ids this account would ingest from — the operator's choice."""
+        return {
+            gid
+            for (acc_id, gid), entry in self.group_settings.items()
+            if acc_id == account_id and entry.get("enabled")
+        }
+
+    async def update_m3u_group_settings(self, account_id: int, data: dict) -> dict:
+        """UPSERT the per-group settings — the real endpoint's exact semantics.
+
+        Dispatcharr 0.29.0 ``apps/m3u/api_views.py::update_group_settings``
+        validates the auto-sync ranges then ``bulk_create(..., update_conflicts=
+        True, unique_fields=["channel_group", "m3u_account"])``. It triggers NO
+        refresh and opens no socket to the provider, which is why the sync path
+        may call it under ADR-013 S9.
+        """
+        self._check_fault("update_m3u_group_settings", data)
+        for entry in data.get("group_settings") or []:
+            group_id = entry.get("channel_group")
+            if not group_id:
+                continue
+            self.group_settings[(account_id, group_id)] = {
+                "channel_group": group_id,
+                "enabled": entry.get("enabled", True),
+                "auto_channel_sync": entry.get("auto_channel_sync", False),
+                **{
+                    k: entry[k]
+                    for k in ("auto_sync_channel_start", "auto_sync_channel_end",
+                              "custom_properties")
+                    if entry.get(k) is not None
+                },
+            }
+        return {"message": "Group settings updated successfully"}
+
+    async def refresh_m3u_account(self, account_id: int) -> dict:
+        """PROVIDER-TOUCHING. Recorded so ADR-013 S9 can be asserted, not assumed."""
+        self._check_fault("refresh_m3u_account", account_id)
+        self.m3u_refresh_calls.append(account_id)
+        return {"success": True}
+
+    async def patch_m3u_account(self, account_id: int, data: dict) -> dict:
+        """PATCH an account — the restore path's is_active toggle, and the
+        sync path's field convergence (bead ``…-zszjd``).
+
+        MODELS ``M3UAccountSerializer.update``, read off Dispatcharr 0.29.0 on
+        2026-08-23, because two of its behaviours decide whether a convergence
+        test can fail at all:
+
+        * **The four preference booleans are POPPED off the top level and written
+          into ``custom_properties``** — the same asymmetry ``create`` has (see
+          ``_PREFERENCE_DEFAULTS``). A fake that stored them at the top level
+          would be contradicted by ``get_m3u_accounts``, which projects them
+          back OUT of the blob, so the round trip has to go through the blob or
+          the value never survives a read.
+        * **``custom_properties`` is MERGED, not replaced**:
+          ``custom_props = {**existing_custom, **incoming_custom}``. A key the
+          destination holds and the source does not therefore SURVIVES a PATCH.
+          That is the honest ceiling on convergence through this endpoint, and
+          modelling replacement instead would let a test assert a deletion the
+          real API cannot perform.
+
+        Unlike ``update`` the booleans are only written when PRESENT — a partial
+        PATCH that omits them must not reset them to the create-time defaults.
+        """
+        self._check_fault("patch_m3u_account", data)
+        self.m3u_patch_calls.append((account_id, dict(data)))
+        payload = dict(data)
+        existing = self.m3u_accounts.rows.get(account_id) or {}
+        existing_custom = dict(existing.get("custom_properties") or {})
+        incoming_custom = dict(payload.pop("custom_properties", None) or {})
+        merged_custom = {**existing_custom, **incoming_custom}
+        touched_custom = bool(incoming_custom)
+        for key in self._PREFERENCE_DEFAULTS:
+            if key in payload:
+                merged_custom[key] = payload.pop(key)
+                touched_custom = True
+        if touched_custom:
+            payload["custom_properties"] = merged_custom
+        return self.m3u_accounts.update(account_id, payload)
+
+    # THE FOUR PREFERENCE BOOLEANS AND WHERE THEY REALLY LIVE (bead …-avrix).
+    # On Dispatcharr 0.29.0 (``apps/m3u/serializers.py``, read 2026-08-22) each
+    # of these is a ``write_only`` top-level serializer field whose STORAGE is
+    # ``custom_properties``. The two directions are asymmetric, and modelling
+    # only one of them makes a test that cannot fail:
+    #
+    # * ``to_representation`` PROJECTS them from the blob back onto the top
+    #   level, with these defaults for an account whose blob omits them;
+    # * ``create`` POPS them from the top level with these same defaults and
+    #   writes them into the blob, OVERWRITING whatever the incoming
+    #   ``custom_properties`` carried. So a payload that forwards the blob but
+    #   drops the top-level fields silently lands on the DEFAULTS — and for the
+    #   three auto-enable flags the default is ``True``, the setting that makes
+    #   a replica ingest a provider's entire catalogue.
+    #
+    # ``enable_vod`` defaults ``False`` and the other three ``True``; that
+    # asymmetry is real and is what lets a test tell a crossed value from a
+    # defaulted one without contriving anything.
+    _PREFERENCE_DEFAULTS = {
+        "enable_vod": False,
+        "auto_enable_new_groups_live": True,
+        "auto_enable_new_groups_vod": True,
+        "auto_enable_new_groups_series": True,
+    }
 
     async def create_m3u_account(self, data: dict) -> dict:
         self._check_fault("create_m3u_account", data)
-        return self.m3u_accounts.create(data)
+        payload = dict(data)
+        custom = dict(payload.get("custom_properties") or {})
+        for key, default in self._PREFERENCE_DEFAULTS.items():
+            custom[key] = payload.pop(key, default)
+        payload["custom_properties"] = custom
+        return self.m3u_accounts.create(payload)
 
     async def update_m3u_account(self, account_id: int, data: dict) -> dict:
         self._check_fault("update_m3u_account", data)
@@ -303,6 +531,78 @@ class StatefulDispatcharrFake:
 
     # ----- EPG sources -----------------------------------------------------
 
+    # ----- user agents (hiacv) ---------------------------------------------
+
+    async def get_user_agents(self) -> list:
+        return self.user_agents.list()
+
+    async def create_user_agent(self, data: dict) -> dict:
+        self._check_fault("create_user_agent", data)
+        return self.user_agents.create(data)
+
+    async def delete_user_agent(self, user_agent_id: int) -> None:
+        self.user_agents.delete(user_agent_id)
+
+    # ----- core settings (10wnq) -------------------------------------------
+
+    async def get_core_settings(self):
+        """The BARE LIST shape the real endpoint returns (never an envelope)."""
+        return [dict(row) for row in self.core_settings]
+
+    async def update_core_setting(self, setting_id: int, setting_value) -> dict:
+        """PATCH ONE settings row BY INTEGER ID — the real route's contract.
+
+        Keyed by id rather than by key name on purpose: a key-string URL matches
+        no route and 404s on a real instance (bead ``…-q6xjl``), so a fake that
+        accepted a key would let a broken resolver pass.
+        """
+        self._check_fault("update_core_setting", setting_value)
+        for row in self.core_settings:
+            if row["id"] == setting_id:
+                row["value"] = setting_value
+                return dict(row)
+        raise FakeNotFoundError("core_setting", setting_id)
+
+    async def get_core_setting_id_map(self) -> dict:
+        """``{key -> row id}``. This is what CoreSettingIdResolver ACTUALLY calls.
+
+        Modelled because omitting it is how the settings step degraded into
+        something far louder than a missing fake: the resolver caught the
+        AttributeError, reported every key unresolvable, and — SETTINGS being a
+        FATAL failure category — the compensating rollback deleted every entity
+        the cycle had created. 73 tests across nine files failed on the
+        rolled-back state, almost none of them about settings.
+
+        A fake that answers ``get_core_settings`` but not this one cannot tell a
+        working resolver from a broken one: ``CoreSettingIdResolver`` calls THIS
+        method, and the detail route is keyed by integer pk (a key-string URL
+        404s on a real instance — bead ``…-q6xjl``).
+        """
+        return {row["key"]: row["id"] for row in self.core_settings}
+
+    def core_setting(self, key: str):
+        """This instance's stored value for one blob (test-side reader)."""
+        for row in self.core_settings:
+            if row["key"] == key:
+                return row["value"]
+        return None
+
+    # ----- server groups (tyrg1) -------------------------------------------
+
+    async def get_server_groups(self) -> list:
+        return self.server_groups.list()
+
+    async def create_server_group(self, data: dict) -> dict:
+        self._check_fault("create_server_group", data)
+        return self.server_groups.create(data)
+
+    async def update_server_group(self, group_id: int, data: dict) -> dict:
+        self._check_fault("update_server_group", data)
+        return self.server_groups.update(group_id, data)
+
+    async def delete_server_group(self, group_id: int) -> None:
+        self.server_groups.delete(group_id)
+
     async def get_epg_sources(self) -> list:
         return self.epg_sources.list()
 
@@ -316,6 +616,9 @@ class StatefulDispatcharrFake:
 
     async def delete_epg_source(self, source_id: int) -> None:
         self.epg_sources.delete(source_id)
+
+    async def get_epg_data(self, max_results: int = 200_000) -> list:
+        return self.epg_data.list()[:max_results]
 
     # ----- channel groups (create takes a NAME STRING) ---------------------
 
@@ -336,7 +639,21 @@ class StatefulDispatcharrFake:
     # ----- channel profiles ------------------------------------------------
 
     async def get_channel_profiles(self) -> list:
-        return self.channel_profiles.list()
+        # ``ChannelProfileSerializer.channels`` is the list of ENABLED channel
+        # ids — re-confirmed on 0.29.0 (``get_channels`` filters
+        # ``enabled=True``, and the ``enabled_memberships`` prefetch it prefers
+        # carries the same filter). Absence from this list IS the exclusion.
+        channel_ids = list(self.channels.rows)
+        rows = []
+        for row in self.channel_profiles.list():
+            profile_id = row.get("id")
+            row["channels"] = [
+                cid
+                for cid in channel_ids
+                if (profile_id, cid) not in self.disabled_memberships
+            ]
+            rows.append(row)
+        return rows
 
     async def create_channel_profile(self, data: dict) -> dict:
         self._check_fault("create_channel_profile", data)
@@ -348,12 +665,80 @@ class StatefulDispatcharrFake:
 
     async def delete_channel_profile(self, profile_id: int) -> None:
         self.channel_profiles.delete(profile_id)
+        self._forget_memberships(profile_id=profile_id)
 
     async def update_profile_channel(
         self, profile_id: int, channel_id: int, data: dict
     ) -> dict:
-        # Profile-membership toggle — best-effort, no store of its own here.
-        return {"success": True}
+        """``PATCH /api/channels/profiles/<p>/channels/<c>/`` — APPLIED.
+
+        Models 0.29.0's ``UpdateChannelMembershipAPIView.patch``: the membership
+        row is CREATED when absent, then the payload's ``enabled`` is applied;
+        an unknown profile or channel is a 404 (``get_object_or_404``). It used
+        to return ``{"success": True}`` and store nothing, which meant a test
+        could only ever assert that the call was MADE — never what the
+        destination profile ended up enabling. That is exactly the blind spot
+        bead …-38c5a's defect lived in.
+        """
+        self._check_fault(
+            "update_profile_channel",
+            {"profile_id": profile_id, "channel_id": channel_id, **(data or {})},
+        )
+        if profile_id not in self.channel_profiles.rows:
+            raise FakeNotFoundError("channel_profile", profile_id)
+        if channel_id not in self.channels.rows:
+            raise FakeNotFoundError("channel", channel_id)
+        enabled = bool((data or {}).get("enabled", True))
+        if enabled:
+            self.disabled_memberships.discard((profile_id, channel_id))
+        else:
+            self.disabled_memberships.add((profile_id, channel_id))
+        return {"channel": channel_id, "enabled": enabled}
+
+    def _forget_memberships(
+        self, *, profile_id: int | None = None, channel_id: int | None = None
+    ) -> None:
+        """Drop the membership exceptions a deleted row cascades away."""
+        self.disabled_memberships = {
+            (pid, cid)
+            for (pid, cid) in self.disabled_memberships
+            if not (
+                (profile_id is not None and pid == profile_id)
+                or (channel_id is not None and cid == channel_id)
+            )
+        }
+
+    def set_membership(self, profile_id: int, channel_id: int, enabled: bool) -> None:
+        """Seed one membership directly (test setup; no fault hook, no 404)."""
+        if enabled:
+            self.disabled_memberships.discard((profile_id, channel_id))
+        else:
+            self.disabled_memberships.add((profile_id, channel_id))
+
+    def enabled_channel_names(self, profile_name: str) -> set:
+        """The channel NAMES one profile ENABLES on this instance.
+
+        The cross-instance assertion surface: A's ids and B's ids never
+        coincide, so "the replica enables exactly what the source enables" can
+        only be stated by name. Raises rather than returning an empty set when
+        the profile is absent — an assertion that silently compares two empty
+        sets is the false green this helper exists to prevent.
+        """
+        key = _norm_name(profile_name)
+        profile_id = None
+        for row_id, row in self.channel_profiles.rows.items():
+            if _name_key(row) == key:
+                profile_id = row_id
+                break
+        if profile_id is None:
+            raise AssertionError(
+                "no channel profile named %r on %s" % (profile_name, self.label)
+            )
+        return {
+            str(row.get("name"))
+            for row_id, row in self.channels.rows.items()
+            if (profile_id, row_id) not in self.disabled_memberships
+        }
 
     # ----- stream profiles -------------------------------------------------
 
@@ -395,6 +780,7 @@ class StatefulDispatcharrFake:
 
     async def delete_channel(self, channel_id: int) -> None:
         self.channels.delete(channel_id)
+        self._forget_memberships(channel_id=channel_id)
 
     # ----- users (NEVER synced, but the rollback dispatch references the
     #        compensator unconditionally) -----------------------------------
@@ -406,7 +792,7 @@ class StatefulDispatcharrFake:
         # references ``client.delete_user``. A 404 is the correct "already gone".
         raise FakeNotFoundError("user", user_id)
 
-    # ----- user agents / DVR rules / logos (not in the sync category set, but
+    # ----- user agents / DVR rules (not in the sync category set, but
     #        _delete_dispatch references their compensators eagerly — kxcjf) ---
 
     async def delete_user_agent(self, user_agent_id: int) -> None:
@@ -415,8 +801,115 @@ class StatefulDispatcharrFake:
     async def delete_dvr_rule(self, rule_id: int) -> None:
         raise FakeNotFoundError("dvr_rule", rule_id)
 
+    async def delete_recording(self, recording_id: int) -> None:
+        # …-ciabe. Upcoming recordings are not in SYNC_CONFIG_CATEGORIES, so a
+        # sync cycle never creates one and this is never a real rollback target
+        # — it exists for the same reason ``delete_user`` above does.
+        raise FakeNotFoundError("upcoming_recording", recording_id)
+
+    # ----- logos (bead 7ipq2.1 — the opt-in sync slice's write surface) -----
+
+    async def get_all_logos_paginated(self, page_size: int = 500) -> list:
+        return self.logos.list()
+
+    async def create_logo(self, data: dict) -> dict:
+        """``POST /api/channels/logos/`` — create a logo from a ``{name, url}``.
+
+        The re-create-BY-URL path (``importers.logos._create_logo_from_url``).
+        A logo whose ``url`` is an absolute http(s) address has no bytes to
+        upload: Dispatcharr's Logo model IS ``{name, url}``, so the replica's
+        row is restored by pointing at the same address. Modelling this write is
+        what lets a test drive the REMOTE-url logo shape (bead …-sgrez) — on a
+        real XC-sourced instance the overwhelming majority — end to end.
+        """
+        self._check_fault("create_logo", dict(data))
+        return self.logos.create(
+            {"name": data.get("name"), "url": data.get("url")}
+        )
+
+    async def upload_logo_file(
+        self, name: str, filename: str, data: bytes, content_type: str
+    ) -> dict:
+        """Store an uploaded logo; the row carries the url the tier-3 (file)
+        match reads, so a re-run matches what a previous run uploaded."""
+        self._check_fault("upload_logo_file", {"name": name, "filename": filename})
+        return self.logos.create(
+            {"name": name, "url": "/data/logos/%s" % filename}
+        )
+
+    async def fetch_logo_image(self, logo_id: int) -> Optional[bytes]:
+        """``GET /api/channels/logos/<id>/cache/`` — the hosted logo's BYTES.
+
+        A Dispatcharr-HOSTED logo (a ``url`` naming a path inside Dispatcharr's
+        own volume, which is what ECM's Logo Manager writes) has its image bytes
+        NOWHERE ELSE: not in ECM's ``uploads/logos`` dir, not in the plan. Bead
+        ``…-cfxml`` taught the sync gather to fetch them from here, one at a
+        time, at import time (D8). Modelling that read is what lets a test drive
+        the real hosted path end to end instead of the ECM-local file path,
+        which is the one shape the live defect never took.
+        """
+        if logo_id not in self.logos.rows:
+            return None
+        return self.hosted_logo_bytes
+
     async def delete_logo(self, logo_id: int) -> None:
-        raise FakeNotFoundError("logo", logo_id)
+        # Real compensating delete (rollback target for an uploaded logo);
+        # 404 (FakeNotFoundError) when already gone — the rollback's
+        # 404-as-success shape.
+        self.logos.delete(logo_id)
+
+    async def bulk_delete_logos(self, logo_ids: list[int]) -> dict:
+        # The DESTRUCTIVE pre-step. Recorded so tests can assert the sync path
+        # NEVER invokes it (clear_existing is hard-disabled in the sync step).
+        self.bulk_logo_delete_calls.append(list(logo_ids))
+        for logo_id in list(logo_ids):
+            if logo_id in self.logos.rows:
+                del self.logos.rows[logo_id]
+        return {"deleted": len(logo_ids)}
+
+    def logo_names(self) -> set:
+        """Normalized logo names on this instance — the logo convergence key."""
+        return {_name_key(r) for r in self.logos.list()}
+
+    def channel_logo_name(self, channel_name: str) -> Optional[str]:
+        """The NAME of the logo one channel points at on THIS instance.
+
+        The cross-instance assertion surface for the channel→logo BINDING (bead
+        ``…-xgbjm``). A's logo ids and B's logo ids never coincide, so "the
+        replica's channel carries the CORRESPONDING logo" is only sayable by
+        NAME — asserting on the id would pass for a fix that forwarded A's id
+        onto a B row that happens to share the number.
+
+        ``None`` means the channel carries no logo, which is the broken state
+        this helper was written to catch. Two conditions RAISE instead, because
+        both are distinct failures that must never read as "no logo":
+
+        * the channel is absent — an assertion comparing two ``None``s from two
+          missing channels is the false green ``enabled_channel_names`` guards
+          against for the same reason;
+        * the channel's ``logo_id`` names a logo THIS instance does not have —
+          a DANGLING binding, which is exactly what forwarding a source id at
+          create time would produce.
+        """
+        row = None
+        for candidate in self.channels.rows.values():
+            if str(candidate.get("name")) == channel_name:
+                row = candidate
+                break
+        if row is None:
+            raise AssertionError(
+                "no channel named %r on %s" % (channel_name, self.label)
+            )
+        logo_id = row.get("logo_id")
+        if logo_id is None:
+            return None
+        logo = self.logos.rows.get(logo_id)
+        if logo is None:
+            raise AssertionError(
+                "channel %r on %s points at logo id=%r, which does not exist "
+                "there (a dangling binding)" % (channel_name, self.label, logo_id)
+            )
+        return str(logo.get("name"))
 
     # ----- state snapshot (the convergence assertion surface) --------------
 
@@ -435,6 +928,7 @@ class StatefulDispatcharrFake:
             "channel_groups": {_name_key(r) for r in self.channel_groups.list()},
             "channel_profiles": {_name_key(r) for r in self.channel_profiles.list()},
             "stream_profiles": {_name_key(r) for r in self.stream_profiles.list()},
+            "server_groups": {_name_key(r) for r in self.server_groups.list()},
             "channels": {_channel_key(r) for r in self.channels.list()},
         }
 
@@ -448,8 +942,10 @@ class StatefulDispatcharrFake:
                 self.channel_groups,
                 self.channel_profiles,
                 self.stream_profiles,
+                self.server_groups,
                 self.channels,
                 self.streams,
+                self.logos,
             )
         )
 
@@ -466,14 +962,20 @@ class StatefulDispatcharrFake:
         *,
         label: str = "source-A",
         m3u_password: str = "SEED-M3U-SECRET",
-        epg_api_key: str = "SEED-EPG-SECRET",
+        epg_password: str = "SEED-EPG-SECRET",
         with_embedded_streams: bool = False,
     ) -> "StatefulDispatcharrFake":
         """A populated source-A holding a production-shaped config + channels.
 
         Carries plaintext credential fields (``password`` on the M3U account,
-        ``api_key`` on the EPG source) so the redaction end-to-end assertion is
-        REAL: those literal secrets must NEVER reach B (D2). Also seeds a config +
+        ``password`` on the EPG source) so the redaction end-to-end assertion is
+        REAL against the fields Dispatcharr actually exposes. The EPG seed was
+        ``api_key`` until bead ``…-fmtg0``; Dispatcharr REMOVED that field from
+        ``EPGSource`` in its ``epg/0024`` migration and replaced it with
+        ``username``/``password`` (``docs/dispatcharr_api.md`` says so, and the
+        live 0.29.0 ``epg_epgsource`` table has no ``api_key`` column), so a
+        fixture seeding it was asserting redaction of a field that cannot
+        occur. Also seeds a config +
         one non-colliding channel (``CNN``, number 5) so the channel slice
         converges.
 
@@ -489,16 +991,46 @@ class StatefulDispatcharrFake:
                 the dedicated channels+streams slice test that expects the synth.
         """
         fake = cls(label=label, id_base=1)
+        # tyrg1 — a SERVER GROUP, and the account below belongs to it. Seeding
+        # the FK rather than leaving it null is what makes the remap testable at
+        # all: a null ``server_group`` takes the same code path whether the
+        # namespace resolves or not, so a fixture without one cannot tell a
+        # working remap from the old unconditional drop.
+        server_group = fake.server_groups.create({"name": "Shared Provider Pool"})
         # M3U account with a SECRET that must not reach B (D2).
         fake.m3u_accounts.create(
             {"name": "Provider A", "username": "operator", "password": m3u_password,
-             "server_url": "http://provider-a.test/playlist.m3u"}
+             "server_url": "http://provider-a.test/playlist.m3u",
+             "server_group": server_group["id"]}
         )
-        # EPG source with a SECRET api_key (D2).
+        # EPG source with a SECRET password (D2) — the credential field
+        # ``EPGSourceSerializer`` actually carries.
         fake.epg_sources.create(
             {"name": "EPG One", "source_type": "xmltv", "m3u_account": None,
-             "api_key": epg_api_key, "url": "http://epg-one.test/guide.xml"}
+             "password": epg_password, "url": "http://epg-one.test/guide.xml"}
         )
+        # hiacv / 10wnq — a custom user agent, and the ``stream_settings`` blob
+        # pointing its ``default_user_agent`` at A's id for it. Seeding that FK
+        # is what makes the remap testable: a blob without one takes the same
+        # path whether the namespace resolves or not.
+        agent = fake.user_agents.create(
+            {"name": "ECM UA", "user_agent": "ECM/1.0"}
+        )
+        for row in fake.core_settings:
+            if row["key"] == "stream_settings":
+                row["value"] = {
+                    "default_user_agent": agent["id"],
+                    "default_output_format": "hls",
+                    # No ECM category corresponds to a Dispatcharr OutputProfile,
+                    # so this one can only ever be dropped (see the …-g8tyd
+                    # disposition in remap_stream_settings_fks).
+                    "hdhr_output_profile_id": 77,
+                }
+            elif row["key"] == "system_settings":
+                row["value"] = {"time_zone": "Europe/London", "catchup_enabled": False}
+            elif row["key"] == "network_access":
+                # A's allowlist. It must NEVER appear on B.
+                row["value"] = {"UI": ["192.168.50.0/24"]}
         fake.channel_groups.create({"name": "News"})
         fake.channel_groups.create({"name": "Sports"})
         fake.channel_profiles.create({"name": "Default Profile"})
@@ -527,13 +1059,29 @@ class StatefulDispatcharrFake:
 
 
 def make_sync_target(
-    *, credential_version: int = 1, fuzzy_stream_matching: bool = False
+    *,
+    credential_version: int = 1,
+    fuzzy_stream_matching: bool = False,
+    sync_logos: bool = False,
+    logo_sync_interval_hours: int = 0,
+    last_logo_sync_at=None,
 ) -> MagicMock:
     """A fake ``SyncTarget`` row — enabled, fresh, never-insecure.
 
     Mirrors the shape ``run_sync`` reads (``id``/``name``/``base_url``/
     ``credentials``/``enabled``/``token_revoked_at``/``credential_version``/
-    ``insecure``/``fuzzy_stream_matching``).
+    ``insecure``/``fuzzy_stream_matching``/``sync_logos``/
+    ``logo_sync_interval_hours``/``last_logo_sync_at``).
+
+    ``sync_logos`` defaults ``False`` HERE while the product default is ``True``
+    (bead ``…-2yq19``), and the two are deliberately not the same knob: this
+    fixture's job is to let a test say "logos off" or "logos on" explicitly, and
+    most of the suite's logo tests were written to state one or the other. A
+    test that means to assert the PRODUCT default asserts it where the product
+    sets it — the ORM column and the create route — not through a mock.
+
+    ``logo_sync_interval_hours`` defaults ``0`` (= every cycle), which is the
+    pre-throttle behaviour every existing logo test was written against.
     """
     target = MagicMock()
     target.id = 7
@@ -545,6 +1093,9 @@ def make_sync_target(
     target.credential_version = credential_version
     target.credentials = "encrypted-blob"
     target.fuzzy_stream_matching = fuzzy_stream_matching
+    target.sync_logos = sync_logos
+    target.logo_sync_interval_hours = logo_sync_interval_hours
+    target.last_logo_sync_at = last_logo_sync_at
     return target
 
 
@@ -587,6 +1138,7 @@ class SyncHarness:
         dest: StatefulDispatcharrFake,
         target: Optional[MagicMock] = None,
         freshness_reason: Optional[str] = None,
+        config_dir=None,
     ):
         self.source = source
         self.dest = dest
@@ -596,20 +1148,40 @@ class SyncHarness:
             ) if target else False
         )
         self.freshness_reason = freshness_reason
+        # Optional CONFIG_DIR override (a tmp_path): the logo slice (7ipq2.1)
+        # gathers source logo FILES from <CONFIG_DIR>/uploads/logos — pointing
+        # this at a tmp dir gives a test real on-disk source logos without
+        # touching the real config partition. None leaves CONFIG_DIR alone
+        # (safe for targets that never opt into sync_logos).
+        self.config_dir = config_dir
 
     @contextmanager
     def _patched(self):
-        """Apply the three engine seams (local gather / remote factory / freshness)."""
+        """Apply the engine seams (local gather / remote factory / freshness /
+        optional logo source dir)."""
         # Imported lazily so importing the harness module never drags the engine in
         # at collection time (keeps the fixture import cheap + cycle-free).
+        from contextlib import ExitStack
+
         from routers import backup as backup_mod
         from tasks import dbas_sync_engine as engine
 
-        with patch.object(backup_mod, "get_client", return_value=self.source), \
-             patch.object(engine, "make_remote_client", return_value=self.dest), \
-             patch.object(
-                 engine, "sync_freshness_reason", return_value=self.freshness_reason
-             ):
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch.object(backup_mod, "get_client", return_value=self.source)
+            )
+            stack.enter_context(
+                patch.object(engine, "make_remote_client", return_value=self.dest)
+            )
+            stack.enter_context(
+                patch.object(
+                    engine, "sync_freshness_reason", return_value=self.freshness_reason
+                )
+            )
+            if self.config_dir is not None:
+                stack.enter_context(
+                    patch.object(backup_mod, "CONFIG_DIR", self.config_dir)
+                )
             yield
 
     async def run(self, *, confirm_apply: bool = False, ledger_dir=None, **kwargs):

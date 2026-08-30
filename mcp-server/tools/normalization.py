@@ -242,8 +242,8 @@ def register(mcp: FastMCP):
             condition_value: Value/pattern for condition_type (not needed for
                 'always' or 'tag_group')
             case_sensitive: Whether condition_value matching is case-sensitive
-            tag_group_id: Tag group ID for condition_type='tag_group' (see the
-                lookup-tables tools for tag groups)
+            tag_group_id: Tag group ID for condition_type='tag_group' (see
+                list_tag_groups / create_tag_group)
             tag_match_position: 'prefix', 'suffix', or 'contains' — where the
                 matched tag must sit (condition_type='tag_group')
             require_delimiter: Require a strong delimiter (':','-','|','/')
@@ -414,6 +414,8 @@ def register(mcp: FastMCP):
     async def apply_normalization_to_channels(
         dry_run: bool = True,
         actions: list[dict] | None = None,
+        plan_id: str | None = None,
+        plan_hash: str | None = None,
     ) -> str:
         """Apply enabled normalization rules to existing channel names.
 
@@ -448,8 +450,10 @@ def register(mcp: FastMCP):
         try:
             client = get_ecm_client()
             body = None
-            if not dry_run and actions:
+            if actions:
                 body = {"actions": actions}
+            if plan_id and plan_hash:
+                body = {**(body or {}), "plan_id": plan_id, "plan_hash": plan_hash}
             result = await client.call_endpoint(
                 ENDPOINTS["normalization_apply_to_channels"],
                 query={"dry_run": dry_run},

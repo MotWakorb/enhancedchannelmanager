@@ -10,11 +10,13 @@ export function EditModeExitDialog({
   onKeepEditing,
   isCommitting = false,
   commitProgress = null,
+  commitFailure = null,
+  onAcknowledgeFailure,
 }: EditModeExitDialogProps) {
   const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
-    if (!isOpen || isCommitting) return;
+    if (!isOpen || isCommitting || commitFailure) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         onKeepEditing();
@@ -22,11 +24,60 @@ export function EditModeExitDialog({
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [isOpen, isCommitting, onKeepEditing]);
+  }, [isOpen, isCommitting, commitFailure, onKeepEditing]);
 
   if (!isOpen) return null;
 
-  const hasChanges = summary.totalOperations > 0;
+  // A commit that did not fully apply takes over the dialog: the operator has
+  // to read and acknowledge it before Edit Mode closes. Escape does not
+  // dismiss it (bead enhancedchannelmanager-udq1j).
+  if (commitFailure) {
+    return (
+      <div className="edit-mode-dialog-overlay">
+        <div className="edit-mode-dialog" onClick={(e) => e.stopPropagation()}>
+          <div className="edit-mode-dialog-header">
+            <h2>
+              {commitFailure.applied > 0 ? 'Some Changes Were Not Applied' : 'Changes Were Not Applied'}
+            </h2>
+          </div>
+
+          <div className="edit-mode-dialog-content">
+            <p className="edit-mode-dialog-commit-failure-intro" role="alert">
+              <span className="material-icons" aria-hidden="true">error_outline</span>
+              {commitFailure.applied} operation{commitFailure.applied !== 1 ? 's' : ''} applied,{' '}
+              <strong>
+                {commitFailure.failed} failed
+              </strong>
+              .
+            </p>
+            {commitFailure.messages.length > 0 && (
+              <ul className="edit-mode-dialog-commit-failure-list">
+                {commitFailure.messages.map((message) => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+            )}
+            <p className="edit-mode-dialog-question">
+              Check the channel list before making further changes — the failed operations were
+              not retried.
+            </p>
+          </div>
+
+          <div className="edit-mode-dialog-actions">
+            <button
+              className="edit-mode-dialog-btn primary"
+              onClick={onAcknowledgeFailure}
+              autoFocus
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const hasChanges = summary.totalChanges > 0;
 
   // Calculate progress percentage
   const progressPercent = commitProgress
@@ -62,7 +113,7 @@ export function EditModeExitDialog({
           ) : hasChanges ? (
             <>
               <p className="edit-mode-dialog-summary-intro">
-                You have {summary.totalOperations} pending change{summary.totalOperations !== 1 ? 's' : ''}:
+                You have {summary.totalChanges} pending change{summary.totalChanges !== 1 ? 's' : ''}:
               </p>
               <ul className="edit-mode-dialog-summary">
                 {summary.channelNumberChanges > 0 && (
@@ -100,6 +151,26 @@ export function EditModeExitDialog({
                     {summary.gracenoteIdChanges} Gracenote ID{summary.gracenoteIdChanges !== 1 ? 's' : ''} assigned
                   </li>
                 )}
+                {summary.logoChanges > 0 && (
+                  <li>
+                    {summary.logoChanges} logo change{summary.logoChanges !== 1 ? 's' : ''}
+                  </li>
+                )}
+                {summary.streamProfileChanges > 0 && (
+                  <li>
+                    {summary.streamProfileChanges} stream profile change{summary.streamProfileChanges !== 1 ? 's' : ''}
+                  </li>
+                )}
+                {summary.groupMoves > 0 && (
+                  <li>
+                    {summary.groupMoves} channel{summary.groupMoves !== 1 ? 's' : ''} moved to another group
+                  </li>
+                )}
+                {summary.otherChannelChanges > 0 && (
+                  <li>
+                    {summary.otherChannelChanges} other channel change{summary.otherChannelChanges !== 1 ? 's' : ''}
+                  </li>
+                )}
                 {summary.newChannels > 0 && (
                   <li>
                     {summary.newChannels} new channel{summary.newChannels !== 1 ? 's' : ''} created
@@ -125,7 +196,54 @@ export function EditModeExitDialog({
                     {summary.renamedGroups} group{summary.renamedGroups !== 1 ? 's' : ''} renamed
                   </li>
                 )}
+                {/* The actions that used to bypass this dialog entirely, because
+                    they had already been applied by the time it opened
+                    (bead enhancedchannelmanager-kz089). `totalChanges` sums
+                    every bucket, so a line missing here is a headline that
+                    disagrees with its own list. */}
+                {summary.profileVisibilityChanges > 0 && (
+                  <li>
+                    {summary.profileVisibilityChanges} profile visibility change
+                    {summary.profileVisibilityChanges !== 1 ? 's' : ''}
+                  </li>
+                )}
+                {summary.restoredGroups > 0 && (
+                  <li>
+                    {summary.restoredGroups} hidden group{summary.restoredGroups !== 1 ? 's' : ''} restored
+                  </li>
+                )}
+                {summary.clearedStreamStats > 0 && (
+                  <li>
+                    Probe stats cleared for {summary.clearedStreamStats} stream
+                    {summary.clearedStreamStats !== 1 ? 's' : ''}
+                  </li>
+                )}
               </ul>
+
+              {/* Renames nobody typed (bead enhancedchannelmanager-ic884.5).
+                  These are already counted above under channel name changes;
+                  this block does not add to `totalChanges`, it explains part
+                  of it. A count alone is not actionable — an operator asked to
+                  approve a name change they did not make needs the before and
+                  the after, so both are shown rather than summarised. */}
+              {summary.automaticRenames.length > 0 && (
+                <div className="edit-mode-dialog-auto-renames" data-testid="automatic-rename-preview">
+                  <p className="edit-mode-dialog-auto-renames-intro">
+                    {summary.automaticRenames.length} channel name
+                    {summary.automaticRenames.length !== 1 ? 's' : ''} will also be rewritten because
+                    the number changed:
+                  </p>
+                  <ul className="edit-mode-dialog-auto-renames-list">
+                    {summary.automaticRenames.map((rename) => (
+                      <li key={rename.channelId}>
+                        <span className="auto-rename-from">{rename.from}</span>
+                        <span className="material-icons auto-rename-arrow">arrow_forward</span>
+                        <span className="auto-rename-to">{rename.to}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               {/* Toggle for detailed change list */}
               <button

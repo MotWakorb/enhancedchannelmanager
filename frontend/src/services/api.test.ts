@@ -29,12 +29,6 @@ import {
   getPopularityRankings,
   getTrendingChannels,
   calculatePopularity,
-  // Lookup tables (v0.14.0 dummy EPG template engine)
-  listLookupTables,
-  getLookupTable,
-  createLookupTable,
-  updateLookupTable,
-  deleteLookupTable,
   // Dummy EPG preview
   previewDummyEPG,
   // Alert methods
@@ -1462,141 +1456,7 @@ describe('API Service', () => {
   });
 
   // ===========================================================================
-  // Lookup tables (v0.14.0 dummy EPG template engine)
-  // ===========================================================================
-
-  describe('listLookupTables', () => {
-    it('returns summaries without entries payload', async () => {
-      const result = await listLookupTables();
-      expect(Array.isArray(result)).toBe(true);
-      expect(result[0]).toMatchObject({
-        id: 1,
-        name: 'callsigns',
-        entry_count: 2,
-      });
-      // The list endpoint omits `entries` — callers must fetch by id to edit.
-      expect((result[0] as unknown as { entries?: unknown }).entries).toBeUndefined();
-    });
-
-    it('surfaces server errors', async () => {
-      server.use(
-        http.get('/api/lookup-tables', () => HttpResponse.error()),
-      );
-      await expect(listLookupTables()).rejects.toThrow();
-    });
-  });
-
-  describe('getLookupTable', () => {
-    it('fetches a single table with entries', async () => {
-      const result = await getLookupTable(1);
-      expect(result.id).toBe(1);
-      expect(result.entries).toEqual({ ESPN: 'espn.com', CNN: 'cnn.com' });
-    });
-
-    it('interpolates the id into the URL', async () => {
-      let capturedId: string | undefined;
-      server.use(
-        http.get('/api/lookup-tables/:id', ({ params }) => {
-          capturedId = params.id as string;
-          return HttpResponse.json({
-            id: Number(capturedId),
-            name: 'test',
-            description: null,
-            entries: {},
-            entry_count: 0,
-            created_at: null,
-            updated_at: null,
-          });
-        }),
-      );
-
-      await getLookupTable(42);
-      expect(capturedId).toBe('42');
-    });
-  });
-
-  describe('createLookupTable', () => {
-    it('POSTs name + description + entries and returns the created table', async () => {
-      let requestBody: unknown;
-      server.use(
-        http.post('/api/lookup-tables', async ({ request }) => {
-          requestBody = await request.json();
-          return HttpResponse.json(
-            {
-              id: 99,
-              name: 'seasons',
-              description: 'TV seasons',
-              entries: { S1: 'Season 1' },
-              entry_count: 1,
-              created_at: '2026-04-19T00:00:00Z',
-              updated_at: '2026-04-19T00:00:00Z',
-            },
-            { status: 201 },
-          );
-        }),
-      );
-
-      const created = await createLookupTable({
-        name: 'seasons',
-        description: 'TV seasons',
-        entries: { S1: 'Season 1' },
-      });
-      expect(requestBody).toMatchObject({
-        name: 'seasons',
-        description: 'TV seasons',
-        entries: { S1: 'Season 1' },
-      });
-      expect(created.id).toBe(99);
-    });
-  });
-
-  describe('updateLookupTable', () => {
-    it('PATCHes and returns the updated table', async () => {
-      const result = await updateLookupTable(1, { entries: { A: '1', B: '2' } });
-      expect(result.entries).toEqual({ A: '1', B: '2' });
-      expect(result.entry_count).toBe(2);
-    });
-
-    it('allows renaming without touching entries', async () => {
-      let requestBody: { name?: string; entries?: unknown } | undefined;
-      server.use(
-        http.patch('/api/lookup-tables/:id', async ({ request }) => {
-          requestBody = (await request.json()) as { name?: string; entries?: unknown };
-          return HttpResponse.json({
-            id: 1,
-            name: requestBody.name ?? 'unchanged',
-            description: null,
-            entries: {},
-            entry_count: 0,
-            created_at: null,
-            updated_at: null,
-          });
-        }),
-      );
-
-      await updateLookupTable(1, { name: 'renamed' });
-      expect(requestBody?.name).toBe('renamed');
-      expect(requestBody?.entries).toBeUndefined();
-    });
-  });
-
-  describe('deleteLookupTable', () => {
-    it('issues a DELETE and resolves on 204', async () => {
-      await expect(deleteLookupTable(1)).resolves.toBeUndefined();
-    });
-
-    it('rejects on 404', async () => {
-      server.use(
-        http.delete('/api/lookup-tables/:id', () =>
-          new HttpResponse(JSON.stringify({ detail: 'Lookup table not found' }), { status: 404 }),
-        ),
-      );
-      await expect(deleteLookupTable(999)).rejects.toThrow();
-    });
-  });
-
-  // ===========================================================================
-  // Dummy EPG preview (lookup + trace surface used by the preview UI)
+  // Dummy EPG preview (trace surface used by the preview UI)
   // ===========================================================================
 
   describe('previewDummyEPG', () => {
@@ -1663,47 +1523,6 @@ describe('API Service', () => {
       });
       expect(sentBody?.include_trace).toBe(true);
       expect(result.traces?.title_template?.[0]?.kind).toBe('placeholder');
-    });
-
-    it('forwards inline_lookups + global_lookup_ids in the payload', async () => {
-      let sentBody: {
-        inline_lookups?: Record<string, Record<string, string>>;
-        global_lookup_ids?: number[];
-      } | undefined;
-      server.use(
-        http.post('/api/dummy-epg/preview', async ({ request }) => {
-          sentBody = (await request.json()) as typeof sentBody;
-          return HttpResponse.json({
-            original_name: 'x',
-            substituted_name: 'x',
-            substitution_steps: [],
-            matched: true,
-            matched_variant: null,
-            groups: null,
-            time_variables: null,
-            rendered: {
-              title: '',
-              description: '',
-              upcoming_title: '',
-              upcoming_description: '',
-              ended_title: '',
-              ended_description: '',
-              fallback_title: '',
-              fallback_description: '',
-              channel_logo_url: '',
-              program_poster_url: '',
-            },
-          });
-        }),
-      );
-
-      await previewDummyEPG({
-        sample_name: 'x',
-        inline_lookups: { codes: { a: '1' } },
-        global_lookup_ids: [7, 8, 9],
-      });
-      expect(sentBody?.inline_lookups).toEqual({ codes: { a: '1' } });
-      expect(sentBody?.global_lookup_ids).toEqual([7, 8, 9]);
     });
   });
 
@@ -1966,6 +1785,54 @@ describe('API Service', () => {
     });
   });
 
+  describe('profile conflict review API', () => {
+    it('lists the actionable review queue', async () => {
+      server.use(
+        http.get('/api/profile-conflict-reviews', () => HttpResponse.json({
+          reviews: [], total: 0,
+        })),
+      );
+
+      await expect(api.getProfileConflictReviews()).resolves.toEqual({
+        reviews: [], total: 0,
+      });
+    });
+
+    it('posts only the opaque choice key when accepting a review', async () => {
+      let requestBody: unknown;
+      server.use(
+        http.post('/api/profile-conflict-reviews/9/accept', async ({ request }) => {
+          requestBody = await request.json();
+          return HttpResponse.json({
+            status: 'accepted', applied: true, updated_account_ids: [1, 2],
+            failed_account_ids: [], retry_error: null,
+          });
+        }),
+      );
+
+      await api.acceptProfileConflictReview(9, 'choice-sports');
+      expect(requestBody).toEqual({ choice_key: 'choice-sports' });
+    });
+
+    it('forwards an AbortSignal to profile conflict acceptance', async () => {
+      server.use(
+        http.post('/api/profile-conflict-reviews/9/accept', () => HttpResponse.json({
+          status: 'accepted', applied: true, updated_account_ids: [],
+          failed_account_ids: [], retry_error: null,
+        })),
+      );
+      const controller = new AbortController();
+      const fetchSpy = vi.spyOn(globalThis, 'fetch');
+
+      await api.acceptProfileConflictReview(9, 'choice-sports', controller.signal);
+
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/profile-conflict-reviews/9/accept',
+        expect.objectContaining({ signal: controller.signal }),
+      );
+    });
+  });
+
   // GH #720 Part B (#9) — profile-apply summary interpretation. These pure
   // functions drive the incomplete-apply warning on EVERY save path (primary,
   // linked cascade, Sync Groups union), so they are unit-tested directly.
@@ -1988,7 +1855,7 @@ describe('API Service', () => {
       ['error-with-detail', [{ status: 'error', error: 'account 22 not updated — Re-save' }], 'account 22 not updated'],
       ['error-no-detail', [{ status: 'error' }], 'hit an error'],
       ['stale_selection', [{ status: 'stale_selection' }], 'no longer exist'],
-      ['conflict', [{ status: 'reconciled', conflict: true }], 'conflicting profile selections'],
+      ['conflict', [{ status: 'conflict', conflict: true }], 'membership is frozen pending review'],
       ['failed_profile_ids', [{ status: 'reconciled', failed_profile_ids: [2] }], 'applying some channel profiles failed'],
     ])('%s is incomplete with status-specific guidance', (_label, summary, needle) => {
       expect(api.profileApplyIncomplete(summary as never)).toBe(true);

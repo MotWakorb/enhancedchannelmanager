@@ -24,17 +24,32 @@ Design (per §9.4)
 * **Scheme allowlist** — only ``http`` / ``https``.
 * **Always-on denylist** (BOTH modes, no opt-out, no settings key, no
   allowlist): ``0.0.0.0/8``, ``169.254.0.0/16`` (incl. IMDS ``169.254.169.254``),
-  ``100.64.0.0/10`` (CGNAT), ``::1``/``::``, ``fc00::/7`` (ULA),
+  ``::``, ``fc00::/7`` (ULA),
   ``fe80::/10`` (link-local), ``fec0::/10`` (site-local), IPv4-mapped IPv6
   ``::ffff:0:0/96`` (unwrapped + re-checked against the v4 rules), multicast
   (``224.0.0.0/4`` / ``ff00::/8``). Backed by the stdlib ``ipaddress``
   ``is_private`` / ``is_reserved`` / ``is_loopback`` / ``is_link_local`` /
   ``is_multicast`` properties as a **fail-closed backstop** so a future special
   range we did not enumerate is still denied.
-* **Wizard-toggled band** — RFC1918 (``10/8``, ``172.16/12``, ``192.168/16``)
-  + ``127.0.0.0/8`` loopback (and IPv6 unique-local is *always* denied; there is
-  no LAN IPv6 ULA carve-out in §9.4) are ALLOWED in LAN-friendly (default) and
-  REJECTED in public-only.
+* **Wizard-toggled band** — RFC1918 (``10/8``, ``172.16/12``, ``192.168/16``),
+  RFC 6598 Shared Address Space (``100.64/10``), and loopback
+  (``127.0.0.0/8`` and ``::1``) are ALLOWED in LAN-friendly
+  (default) and REJECTED in public-only. IPv6 unique-local ``fc00::/7`` is
+  *always* denied — there is no LAN IPv6 ULA carve-out in §9.4.
+
+  ``::1`` sits in the toggled band, not the always-on list (GH #754, bead
+  ``0yh70``). §9.4 item 2 is self-contradictory on this point — its always-on
+  bullet lists ``::1/128`` while its wizard-toggled bullet reads
+  "``127.0.0.0/8`` and RFC1918 ... **+ IPv6 equivalents**" — and we resolve it
+  toward the toggled bullet, for loopback ONLY, because (a) ``::1`` and
+  ``127.0.0.1`` are the same trust domain (this host's own loopback
+  interface), so denying one while permitting the other blocks no attacker
+  capability; and (b) Docker's generated ``/etc/hosts`` maps ``localhost``
+  to BOTH ``::1`` and ``127.0.0.1``, so with reject-if-any-record-denied
+  (below) an always-on ``::1`` makes ``http://localhost:<port>`` unusable in
+  LAN-friendly mode on every container that is not ``network_mode: host``.
+  ULA / link-local / site-local are NOT part of that carve-out: those address
+  a *different* host on the network, not this one.
 * **Resolve-then-connect-by-IP** — resolve the hostname ONCE, validate EVERY A
   and AAAA record (any denied → reject the whole request), and return the
   validated IP so the caller connects by IP with the hostname preserved for
@@ -47,6 +62,30 @@ Design (per §9.4)
 * **Redirect re-validation** — :func:`validate_redirect` re-runs the full check
   on a redirect target, rejects ``https → http`` downgrades, and
   :func:`check_redirect_depth` caps the chain at :data:`MAX_REDIRECTS`.
+
+Scheme-downgrade scope (bead ``enhancedchannelmanager-iyvl9``)
+-------------------------------------------------------------
+The ``https → http`` refusal is the DEFAULT for every outbound path and stays
+that way. Exactly one caller may opt out: the stream-probe path, via the
+explicit :class:`SchemeDowngrade` parameter on :func:`validate_redirect`
+(``SchemeDowngrade.ALLOW_STREAM_PROBE``). It is a per-call argument on purpose —
+not a global flag, not a settings key, not an environment variable — so that
+reading :func:`validate_redirect` tells you who is allowed to downgrade, and so
+that ``grep -rn ALLOW_STREAM_PROBE`` enumerates every site that does.
+
+Why the probe path and nothing else: XC providers routinely 302 an
+``https://<portal>/live/<user>/<pass>/<id>.ts`` request onto a plain-HTTP edge
+node, and they serve the video over HTTP at that edge regardless. Playback is
+already unencrypted in transit, and the redirect target's path is an opaque
+token carrying no credentials, so refusing the hop buys no confidentiality — it
+only costs the operator the ability to learn whether a stream works. Every other
+outbound destination (cloud backup targets, EPG sources, a second Dispatcharr
+instance) is a credentialed API where a downgrade IS a real loss, so those keep
+the refusal.
+
+The relaxation is narrow in a second sense: it waives ONLY the scheme-downgrade
+clause. The denylist, resolve-then-connect-by-IP, redirect depth capping and
+origin pinning all still apply to the probe path unchanged.
 
 Seam for bead .8
 ----------------
@@ -103,6 +142,30 @@ class SSRFMode(str, Enum):
     PUBLIC_ONLY = "public_only"
 
 
+class SchemeDowngrade(str, Enum):
+    """Whether a caller may follow an ``https → http`` redirect.
+
+    Bead ``enhancedchannelmanager-iyvl9``. This is a per-call argument to
+    :func:`validate_redirect`, deliberately NOT a global flag or a setting: the
+    only way to obtain the relaxation is to name it at the call site, which
+    makes every site that has it greppable
+    (``grep -rn ALLOW_STREAM_PROBE backend/``).
+
+    The default is :data:`REFUSE` and every existing caller gets it implicitly,
+    so a new outbound path cannot acquire the relaxation by accident — only by
+    writing the member name.
+    """
+
+    #: Refuse the downgrade. The default, and the policy for EVERY outbound
+    #: path other than the stream probe.
+    REFUSE = "refuse"
+    #: Follow the downgrade. Reserved for the stream-probe path (ffprobe /
+    #: bitrate measurement / black-screen detection), where the provider serves
+    #: the media over plain HTTP anyway and the redirect target carries no
+    #: credentials. See the module docstring for the full rationale.
+    ALLOW_STREAM_PROBE = "allow_stream_probe"
+
+
 class SSRFError(Exception):
     """Raised when an outbound URL is rejected by the SSRF chokepoint.
 
@@ -134,9 +197,10 @@ class ResolvedTarget:
     def host_header(self) -> str:
         """Value for the ``Host:`` header (host[:port] when non-default)."""
         default = 443 if self.scheme == "https" else 80
+        hostname = f"[{self.hostname}]" if ":" in self.hostname else self.hostname
         if self.port == default:
-            return self.hostname
-        return f"{self.hostname}:{self.port}"
+            return hostname
+        return f"{hostname}:{self.port}"
 
 
 # ---------------------------------------------------------------------------
@@ -145,13 +209,11 @@ class ResolvedTarget:
 _ALWAYS_ON_V4 = tuple(ipaddress.ip_network(c) for c in (
     "0.0.0.0/8",            # "this" network / wildcard
     "169.254.0.0/16",      # link-local (incl. IMDS 169.254.169.254)
-    "100.64.0.0/10",       # CGNAT (RFC 6598)
     "224.0.0.0/4",         # multicast
 ))
 _ALWAYS_ON_V6 = tuple(ipaddress.ip_network(c) for c in (
-    "::1/128",             # IPv6 loopback
     "::/128",              # unspecified
-    "fc00::/7",            # unique-local (ULA)
+    "fc00::/7",            # unique-local (ULA) — a DIFFERENT host, not this one
     "fe80::/10",           # link-local
     "fec0::/10",           # site-local (deprecated, still denied)
     "ff00::/8",            # multicast
@@ -164,7 +226,15 @@ _TOGGLED_V4 = tuple(ipaddress.ip_network(c) for c in (
     "10.0.0.0/8",
     "172.16.0.0/12",
     "192.168.0.0/16",
+    "100.64.0.0/10",       # RFC 6598 Shared Address Space / intended peers
     "127.0.0.0/8",         # loopback toggles with the band per §9.4 item 2
+))
+
+_TOGGLED_V6 = tuple(ipaddress.ip_network(c) for c in (
+    # The v6 equivalent of 127.0.0.0/8 — same trust domain, so it follows the
+    # same toggle (GH #754 / bead 0yh70; rationale in the module docstring).
+    # NOTE: this is the ONLY v6 carve-out. fc00::/7 stays always-on denied.
+    "::1/128",
 ))
 
 
@@ -179,8 +249,9 @@ def _is_always_on_denied(ip: _IPAddress) -> bool:
     (§9.5) closes the gap for special-purpose ranges we did not enumerate. Note
     we deliberately do NOT use ``is_private`` here because RFC1918 is the
     wizard-toggled band, handled separately — ``is_private`` would also match
-    RFC1918 and break LAN-friendly mode. Loopback is handled in the toggled band
-    for IPv4 (``127/8``) but ``::1`` is always-on denied via the explicit list.
+    RFC1918 and break LAN-friendly mode. Likewise ``is_loopback`` is excluded
+    from the backstop in BOTH address families: ``127.0.0.0/8`` and ``::1``
+    are the toggled band (GH #754 / bead ``0yh70``), not always-on denials.
     """
     if ip.version == 4:
         if _in_any(ip, _ALWAYS_ON_V4):
@@ -196,7 +267,15 @@ def _is_always_on_denied(ip: _IPAddress) -> bool:
     # IPv6
     if _in_any(ip, _ALWAYS_ON_V6):
         return True
-    if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+    if _in_any(ip, _TOGGLED_V6):
+        # ``::1`` — the mode decides in _ip_allowed, not here. This early
+        # return is load-bearing: ``::1`` IS IETF-reserved, so the is_reserved
+        # backstop below would otherwise deny it unconditionally and silently
+        # re-create GH #754 (the v4 branch needs no equivalent — 127.0.0.0/8
+        # is not is_reserved).
+        return False
+    # Backstop — NOT is_loopback: ``::1`` is the toggled band (see docstring).
+    if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
         return True
     if ip.is_reserved:
         return True
@@ -206,13 +285,13 @@ def _is_always_on_denied(ip: _IPAddress) -> bool:
 
 
 def _is_toggled_band(ip: _IPAddress) -> bool:
-    """RFC1918 + IPv4 loopback — the band the wizard toggles."""
+    """RFC1918, RFC 6598, and loopback — the LAN-friendly policy band."""
     if ip.version == 4:
         return _in_any(ip, _TOGGLED_V4)
-    # No IPv6 LAN carve-out in §9.4 — ULA/link-local are always-on denied, so
-    # the toggled band is IPv4-only. (IPv4-mapped IPv6 is unwrapped before we
-    # ever reach here.)
-    return False
+    # The only v6 member is ``::1`` (GH #754 / bead 0yh70). There is still no
+    # LAN IPv6 *network* carve-out — ULA / link-local stay always-on denied.
+    # (IPv4-mapped IPv6 is unwrapped before we ever reach here.)
+    return _in_any(ip, _TOGGLED_V6)
 
 
 def _unwrap_mapped(ip: _IPAddress) -> _IPAddress:
@@ -247,8 +326,8 @@ def _ip_allowed(ip: _IPAddress, mode: SSRFMode) -> bool:
         return False
 
     if _is_toggled_band(ip):
-        # RFC1918 / 127.0.0.0/8 loopback: the explicit LAN allowlist — allowed
-        # only in LAN-friendly. A mapped ::ffff:<RFC1918> reaches here after
+        # RFC1918 / RFC 6598 / loopback: the explicit LAN-friendly allowlist —
+        # allowed only in LAN-friendly. A mapped ::ffff:<RFC1918> reaches after
         # unwrap and follows the same toggle (§9.4 item 2: "re-checked against
         # the IPv4 rules").
         return mode is SSRFMode.LAN_FRIENDLY
@@ -388,30 +467,63 @@ def validate_outbound_url(url: str, mode: SSRFMode) -> ResolvedTarget:
     return target
 
 
-def validate_redirect(from_url: str, to_url: str, mode: SSRFMode) -> ResolvedTarget:
+def validate_redirect(
+    from_url: str,
+    to_url: str,
+    mode: SSRFMode,
+    *,
+    scheme_downgrade: SchemeDowngrade = SchemeDowngrade.REFUSE,
+) -> ResolvedTarget:
     """Re-validate a redirect target before following it (§9.4 item 4).
 
     * Re-runs the full denylist + resolve-by-IP on ``to_url``.
-    * Rejects an ``https → http`` scheme downgrade.
+    * Rejects an ``https → http`` scheme downgrade UNLESS the caller explicitly
+      passes ``scheme_downgrade=SchemeDowngrade.ALLOW_STREAM_PROBE``.
 
     The caller is responsible for capping the chain length via
     :func:`check_redirect_depth`.
+
+    Who may downgrade
+    -----------------
+    Only the stream-probe path
+    (:mod:`stream_prober` → :mod:`security.stream_outbound`). ``scheme_downgrade``
+    is keyword-only and defaults to :data:`SchemeDowngrade.REFUSE`, so every
+    other caller — cloud backup targets, EPG source fetches, the
+    cross-instance sync client, the browser stream preview — keeps the refusal
+    without doing anything, and a new caller cannot inherit the relaxation by
+    accident. Waiving the downgrade waives ONLY the downgrade: the denylist,
+    resolve-then-connect-by-IP, depth cap and origin pinning are unaffected.
+    See the module docstring for why the probe path is the exception.
 
     Args:
         from_url: the URL that issued the 3xx (its scheme governs downgrade).
         to_url: the ``Location:`` target.
         mode: active SSRF mode.
+        scheme_downgrade: downgrade policy for THIS hop. Defaults to
+            :data:`SchemeDowngrade.REFUSE`; only the stream-probe path passes
+            :data:`SchemeDowngrade.ALLOW_STREAM_PROBE`.
 
     Returns:
         A validated :class:`ResolvedTarget` for ``to_url``.
 
     Raises:
-        SSRFError: downgrade, or any reason :func:`validate_outbound_url` would.
+        SSRFError: downgrade (unless explicitly allowed for this hop), or any
+            reason :func:`validate_outbound_url` would.
     """
     from_scheme, _, _ = _split(from_url)
     to_scheme = (urlsplit(to_url).scheme or "").lower()
     if from_scheme == "https" and to_scheme == "http":
-        raise SSRFError("Refusing redirect that downgrades https → http")
+        if scheme_downgrade is not SchemeDowngrade.ALLOW_STREAM_PROBE:
+            raise SSRFError("Refusing redirect that downgrades https → http")
+        # Deliberate, scoped waiver — record it so the downgrade is never
+        # silent. No URL or credential in the message (bead
+        # ``enhancedchannelmanager-3dn59``): the probe path surfaces guard
+        # messages to the operator, so they must stay credential-free.
+        logger.warning(
+            "[SSRF] Following an https → http redirect on the stream-probe "
+            "path (policy=%s); this hop is not confidential",
+            scheme_downgrade.value,
+        )
     return validate_outbound_url(to_url, mode)
 
 

@@ -4,6 +4,11 @@ import type { Notification } from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { logger } from '../utils/logger';
 import { getDateLocale } from '../utils/formatting';
+import {
+  OPEN_TASK_EDITOR_EVENT,
+  OPEN_TASK_EDITOR_STORAGE_KEY,
+  type OpenTaskEditorIntent,
+} from '../utils/openTaskEditor';
 import { decoratePendingMergesToast } from './pendingMergesToast';
 import {
   collapseTaskNotificationPairs,
@@ -12,6 +17,7 @@ import {
   type NotificationDisplayEntry,
 } from './notificationGrouping';
 import { PENDING_MERGES_EVENT } from './tabs/ChannelManagerTab';
+import { PROFILE_CONFLICT_REVIEW_EVENT } from './ProfileConflictReviewModal';
 import './NotificationCenter.css';
 
 interface NotificationCenterProps {
@@ -386,10 +392,21 @@ export function NotificationCenter({
     if (onNotificationClick) {
       onNotificationClick(notification);
     }
+    if (notification.source === 'profile_reconcile') {
+      const detail: { review_id?: number; fingerprint?: string } = {};
+      if (typeof notification.metadata?.review_id === 'number') {
+        detail.review_id = notification.metadata.review_id;
+      }
+      if (typeof notification.metadata?.fingerprint === 'string') {
+        detail.fingerprint = notification.metadata.fingerprint;
+      }
+      window.dispatchEvent(new CustomEvent(PROFILE_CONFLICT_REVIEW_EVENT, { detail }));
+    }
     if (notification.action_url) {
       // Handle navigation if needed
       window.location.href = notification.action_url;
     }
+    if (notification.source === 'profile_reconcile') setIsOpen(false);
   };
 
   const formatTime = (dateStr: string) => {
@@ -431,9 +448,13 @@ export function NotificationCenter({
     // Close the notification panel
     setIsOpen(false);
     // Store intent in sessionStorage so components can pick it up when they mount
-    sessionStorage.setItem('ecm:open-task-editor', JSON.stringify({ taskId }));
-    // Dispatch event so App.tsx can switch to settings tab immediately
-    window.dispatchEvent(new CustomEvent('ecm:open-task-editor', { detail: { taskId } }));
+    const intent: OpenTaskEditorIntent = { taskId };
+    sessionStorage.setItem(OPEN_TASK_EDITOR_STORAGE_KEY, JSON.stringify(intent));
+    // Dispatch event so App.tsx can switch to settings tab. The route change may
+    // be DEFERRED by the Edit Mode exit guard, and App.tsx removes the stored
+    // intent above if the operator cancels it (bead
+    // enhancedchannelmanager-6fi7p).
+    window.dispatchEvent(new CustomEvent(OPEN_TASK_EDITOR_EVENT, { detail: intent }));
   };
 
   // Render progress bar for probe notifications
@@ -643,6 +664,18 @@ export function NotificationCenter({
                       >
                         <span className="material-icons">edit_calendar</span>
                         {notification.action_label || 'Edit Schedule'}
+                      </button>
+                    )}
+                    {notification.source === 'profile_reconcile' && (
+                      <button
+                        className="notification-action-btn-inline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleNotificationClick(notification);
+                        }}
+                      >
+                        <span className="material-icons" aria-hidden="true">rule</span>
+                        Review choice
                       </button>
                     )}
                     {renderProbeProgress(notification)}

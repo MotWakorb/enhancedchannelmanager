@@ -61,6 +61,24 @@ class TestHappyPath:
             == url
         )
 
+    def test_rewrite_log_records_safe_event_without_pattern_values(self, caplog):
+        prober = _make_prober()
+        search_pattern = "sensitive-source-fragment"
+        replace_pattern = "sensitive-target-fragment"
+
+        with caplog.at_level(logging.DEBUG, logger="stream_prober"):
+            result = prober._rewrite_url_for_profile(
+                "http://source.invalid/sensitive-source-fragment/stream",
+                _profile(search_pattern, replace_pattern, profile_id=77),
+            )
+
+        assert result == "http://source.invalid/sensitive-target-fragment/stream"
+        assert "Profile 77: rewrote URL" in caplog.text
+        assert search_pattern not in caplog.text
+        assert replace_pattern not in caplog.text
+        assert "source-fragment" not in caplog.text
+        assert "target-fragment" not in caplog.text
+
 
 # ---------------------------------------------------------------------------
 # Adversarial: ReDoS, oversize, invalid pattern all fall back to original URL.
@@ -98,6 +116,8 @@ class TestAdversarialPatterns:
             "[SAFE_REGEX]" in rec.getMessage() and rec.levelno == logging.WARNING
             for rec in caplog.records
         ), "expected [SAFE_REGEX] WARN on timeout"
+        assert self.REAL_REDOS_PATTERN not in caplog.text
+        assert "pattern_excerpt=" not in caplog.text
 
     def test_oversize_pattern_returns_original_url(self, caplog):
         """Pattern beyond the 500-char cap → original URL, WARN logged."""
@@ -110,6 +130,8 @@ class TestAdversarialPatterns:
 
         assert result == url
         assert any("[SAFE_REGEX]" in rec.getMessage() for rec in caplog.records)
+        assert oversize[:50] not in caplog.text
+        assert "pattern_excerpt=" not in caplog.text
 
     def test_invalid_pattern_returns_original_url(self, caplog):
         """Syntactically invalid pattern → original URL, no exception bubbles up."""
@@ -120,3 +142,24 @@ class TestAdversarialPatterns:
             result = prober._rewrite_url_for_profile(url, _profile(r"(unclosed"))
 
         assert result == url, "invalid regex must not propagate an exception"
+        assert "(unclosed" not in caplog.text
+        assert "pattern_excerpt=" not in caplog.text
+
+    def test_invalid_replacement_template_logs_no_pattern_or_template_values(self, caplog):
+        prober = _make_prober()
+        pattern = r"(sensitive-pattern-fragment)"
+        replacement = r"sensitive-template-fragment-\2"
+        url = "http://example.invalid/sensitive-pattern-fragment"
+
+        with caplog.at_level(logging.WARNING, logger="safe_regex"):
+            result = prober._rewrite_url_for_profile(
+                url,
+                _profile(pattern, replacement),
+            )
+
+        assert result == url
+        assert "replacement template error" in caplog.text
+        assert "sensitive-pattern" not in caplog.text
+        assert "sensitive-template" not in caplog.text
+        assert "pattern_excerpt=" not in caplog.text
+        assert "repl_excerpt=" not in caplog.text

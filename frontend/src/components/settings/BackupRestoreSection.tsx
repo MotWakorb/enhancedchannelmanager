@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import * as api from '../../services/api';
 import { useNotifications } from '../../contexts/NotificationContext';
+import { useServerDataInvalidation } from '../../hooks/useServerDataInvalidation';
 import { BackupRestoreModal } from '../BackupRestoreModal';
 import { DbasRestoreModal } from '../DbasRestoreModal';
 import { DbasRestoreSavedModal } from '../DbasRestoreSavedModal';
 import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
+import { ConfigurationBackupCard } from './ConfigurationBackupCard';
 import { EncryptedBackupCard } from './EncryptedBackupCard';
 import { SyncTargetsCard } from './SyncTargetsCard';
 import { CloudTargetsCard } from './CloudTargetsCard';
@@ -35,6 +37,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [savedBackups, setSavedBackups] = useState<api.SavedBackup[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [deletingFile, setDeletingFile] = useState<string | null>(null);
+  // Scoped confirmations for the two destructive actions on this card that had
+  // none (bead enhancedchannelmanager-04c0u.12): permanently deleting a saved
+  // artifact, and replacing all ECM state from an uploaded one. Both name the
+  // exact file, matching the restore-from-saved dialog already below.
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [confirmFullRestore, setConfirmFullRestore] = useState<File | null>(null);
 
   // Restore-from-saved (bead rzhid): legacy full-ZIP restore-saved confirm
   // dialog target, and DBAS-format restore-dbas-saved modal target. GET
@@ -44,6 +52,21 @@ export function BackupRestoreSection({ isAdmin }: Props) {
   const [restoringLegacySaved, setRestoringLegacySaved] = useState<string | null>(null);
   const [legacySavedBusy, setLegacySavedBusy] = useState(false);
   const [dbasSavedTarget, setDbasSavedTarget] = useState<string | null>(null);
+
+  /**
+   * Surface what the artifact could NOT carry (bead
+   * enhancedchannelmanager-gi4zn). A standard backup carries no ECM account
+   * credentials, so a restore can succeed and still leave nobody able to log
+   * in until first-run setup runs. The success toast counts restored files and
+   * so can never say that; these come from the server, read off the live
+   * post-restore instance. `?? []` because a backend predating the field omits
+   * it entirely.
+   */
+  const announceRestoreNotices = useCallback((result: api.RestoreResult) => {
+    for (const notice of result.notices ?? []) {
+      notifications.warning(notice, 'Account Setup Required');
+    }
+  }, [notifications]);
 
   const loadSavedBackups = useCallback(async () => {
     setLoadingSaved(true);
@@ -56,6 +79,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       setLoadingSaved(false);
     }
   }, []);
+
+  // A DBAS artifact can be produced by a sibling card on this same page (the
+  // Encrypted Backup card), which this list cannot see — so it kept showing
+  // only the previous artifact, through an in-app navigation away and back,
+  // until a full page reload (bead enhancedchannelmanager-5z7c9, instance 3).
+  useServerDataInvalidation('saved-backups', loadSavedBackups);
 
   // Load export sections and saved backups on mount
   useEffect(() => {
@@ -140,7 +169,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
     }
   };
 
-  const handleRestore = async () => {
+  const requestFullRestore = () => {
     const file = fileInputRef.current?.files?.[0];
     if (!file) {
       notifications.error('Please select a backup file', 'No File Selected');
@@ -152,6 +181,13 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       return;
     }
 
+    setConfirmFullRestore(file);
+  };
+
+  const handleRestore = async () => {
+    const file = confirmFullRestore;
+    if (!file) return;
+
     setRestoring(true);
     setRestoreResult(null);
 
@@ -159,6 +195,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       const result = await api.restoreBackup(file);
       setRestoreResult(result);
       notifications.success(`Restored ${result.restored_files.length} files from backup`);
+      announceRestoreNotices(result);
 
       setTimeout(() => {
         window.location.reload();
@@ -167,6 +204,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
       notifications.error(err instanceof Error ? err.message : 'Restore failed', 'Restore Failed');
     } finally {
       setRestoring(false);
+      setConfirmFullRestore(null);
     }
   };
 
@@ -176,6 +214,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
     try {
       const result = await api.restoreSavedBackup(restoringLegacySaved);
       notifications.success(`Restored ${result.restored_files.length} files from ${restoringLegacySaved}`);
+      announceRestoreNotices(result);
       setRestoringLegacySaved(null);
       setTimeout(() => {
         window.location.reload();
@@ -208,8 +247,6 @@ export function BackupRestoreSection({ isAdmin }: Props) {
 
   return (
     <div className="backup-restore-section">
-      <h2 className="settings-page-header">Backup & Restore</h2>
-
       {/* One-time "Backups are not scheduled yet" setup nudge (bead ikv8z).
           Scheduled DBAS backup ships OFF by default, so surface the unscheduled
           state prominently to prevent an operator silently keeping zero backups. */}
@@ -255,9 +292,26 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         <p className="backup-card-description">
           Export ECM configuration as a single YAML file. Choose which sections to include.
         </p>
+        {/* The export's redaction contract, restated for the operator (bead
+            enhancedchannelmanager-gi4zn). This box used to say "sensitive data
+            (passwords, API keys) are redacted", which is the exact reading that
+            made the defect plausible: it names only the secret half of a
+            credential, so an operator reasonably concluded the whole provider
+            sign-in was covered when the username was not. The gather is now the
+            single redaction authority for both this YAML export and the DBAS
+            artifact, so all three rules — credential keys, provider identity,
+            and credentials inside a URL value — apply here too. Says what the
+            file carries and what the operator re-enters, not an inventory of
+            redacted key names; docs/user_guide/backup-restore/backup-overview.md
+            carries the full list. */}
         <div className="backup-sensitive-warning">
           <span className="material-icons">info</span>
-          <span>Sensitive data (passwords, API keys) are redacted in the export.</span>
+          <span>
+            <strong>No working credentials leave in this file.</strong> Passwords, API keys,
+            provider usernames, and credentials carried inside a URL are all replaced with a
+            placeholder. Your configuration restores; your provider sign-ins do not — re-enter
+            those on each M3U account and EPG source.
+          </span>
         </div>
 
         {exportSections.length > 0 && (
@@ -335,8 +389,19 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <span className="material-icons">folder</span>
           <h3>Saved Backups</h3>
         </div>
+        {/* Both strings in this card described a card that no longer exists
+            (bead enhancedchannelmanager-e4iok). The caption called the list
+            YAML-only while list_saved_backups globs ecm-backup-*.yaml AND
+            *.zip, and the rows below render restore / download / delete for
+            DBAS .zip artifacts; the empty state named a "YAML Backup"
+            scheduled task, which is not the task that writes what this card
+            shows. Both now name what actually lands here and what produces
+            it. */}
         <p className="backup-card-description">
-          YAML backups saved on the server by the scheduled backup task.
+          Backups saved on the server, in /config/backups/ — YAML exports and .zip artifacts
+          alike, however they were produced. A .zip here is either a DBAS artifact or a full
+          backup, and a full backup taken before v0.18.0 also carries TLS certificates and
+          uploaded files.
         </p>
         {loadingSaved ? (
           <div className="backup-loading">
@@ -344,8 +409,9 @@ export function BackupRestoreSection({ isAdmin }: Props) {
             Loading...
           </div>
         ) : savedBackups.length === 0 ? (
-          <div className="saved-backups-empty">
-            No saved backups. Enable the YAML Backup scheduled task to create automatic backups.
+          <div className="saved-backups-empty empty-inline">
+            No saved backups yet. Use Configuration Backup below to take one now, or enable a
+            schedule on the DBAS Backup task to have them taken automatically.
           </div>
         ) : (
           <div className="saved-backups-list">
@@ -390,7 +456,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
                   </a>
                   <button
                     className="btn-secondary saved-backup-btn saved-backup-delete"
-                    onClick={() => handleDeleteSaved(backup.filename)}
+                    onClick={() => setDeleteTarget(backup.filename)}
                     disabled={deletingFile === backup.filename}
                     aria-label={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
                     title={deletingFile === backup.filename ? 'Deleting backup…' : 'Delete backup'}
@@ -406,9 +472,28 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         )}
       </div>
 
-      {/* Separator */}
+      {/* One-click standard DBAS artifact (bead enhancedchannelmanager-pui76).
+          Placed immediately above the encrypted card so the two DBAS producers
+          are adjacent and this card's "use Encrypted Backup below" pointer
+          lands on the next thing the operator sees. */}
+      <ConfigurationBackupCard />
+
+      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
+      <EncryptedBackupCard />
+
+      {/* THE ORDER OF THESE THREE CARDS IS LOAD-BEARING (bead
+          enhancedchannelmanager-pui76, review round 2). "Create Full Backup"
+          used to render ABOVE both DBAS producers, so the first backup control
+          an operator met was the deprecated pre-v0.18.0 one — while this
+          page's own "Which one do I need?" helper recommends DBAS for disaster
+          recovery and reserves the full format for restoring older files. The
+          legacy artifact is also the riskier one to hold: unlike the DBAS
+          artifact it carries TLS private keys and uploaded playlists, so the
+          neighbouring DBAS card's redaction language must not be easy to read
+          across onto it. Both reasons point the same way: the deprecated
+          producer goes last, behind its own divider. */}
       <div className="backup-section-divider">
-        <span>Full System Backup</span>
+        <span>Full System Backup (legacy)</span>
       </div>
 
       {/* Full ZIP Backup */}
@@ -417,12 +502,28 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <span className="material-icons">cloud_download</span>
           <h3>Create Full Backup</h3>
         </div>
+        {/* Bead enhancedchannelmanager-04c0u.13. Both strings described an
+            artifact this build no longer produces. The card promised TLS
+            certificates and M3U files; since BACKUP_DIRS narrowed to
+            ["uploads/logos"] the archive carries neither, and an operator who
+            rebuilt a container trusting that promise would find the TLS private
+            key permanently gone — there is no second copy. The warning named
+            "certificates" for the same reason. What IS still sensitive here is
+            real and unchanged: the archive is plaintext, and settings.json masks
+            credential-class fields by NAME, so it keeps the Dispatcharr
+            username. */}
         <p className="backup-card-description">
-          Download a full backup including settings, database, uploaded logos, TLS certificates, and M3U files.
+          Download a full backup of settings, the database, and uploaded logos. It does{' '}
+          <strong>not</strong> include TLS certificates or uploaded M3U files — copy
+          /config/tls and /config/m3u_uploads separately if you need them.
         </p>
         <div className="backup-sensitive-warning warning-level">
           <span className="material-icons">warning</span>
-          <span>This backup contains sensitive data including passwords and certificates.</span>
+          <span>
+            This backup contains sensitive data. It is plaintext and is not a redacted
+            artifact — it keeps your Dispatcharr username and any text you authored. Treat
+            the file as a secret.
+          </span>
         </div>
         {downloading ? (
           <div className="backup-loading">
@@ -436,9 +537,6 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           </button>
         )}
       </div>
-
-      {/* Encrypted Backup (Migration) — ADR-012 D12 / u81kh */}
-      <EncryptedBackupCard />
 
       {/* Cross-Instance Sync — epic i39wu / nnl9s */}
       <SyncTargetsCard />
@@ -455,9 +553,9 @@ export function BackupRestoreSection({ isAdmin }: Props) {
           <h3>Restore DBAS Backup</h3>
         </div>
         <p className="backup-card-description">
-          Restore a v0.18.0 backup artifact (.zip) — the format produced by scheduled backups and
-          the Encrypted Backup card. Preview the changes first (dry run), then apply. Encrypted
-          artifacts prompt for the passphrase.
+          Restore a v0.18.0 backup artifact (.zip) — the format produced by Configuration Backup,
+          scheduled backups, and Encrypted Backup (Migration). Preview the changes first (dry
+          run), then apply. Encrypted artifacts prompt for the passphrase.
         </p>
         <button className="btn-primary" onClick={() => setShowDbasRestoreModal(true)}>
           <span className="material-icons">upload_file</span>
@@ -503,7 +601,7 @@ export function BackupRestoreSection({ isAdmin }: Props) {
               Restoring...
             </div>
           ) : (
-            <button className="btn-primary" onClick={handleRestore}>
+            <button className="btn-primary" onClick={requestFullRestore}>
               Restore
             </button>
           )}
@@ -521,6 +619,12 @@ export function BackupRestoreSection({ isAdmin }: Props) {
               <strong>Files restored:</strong> {restoreResult.restored_files.length}<br />
               Reloading page...
             </div>
+            {(restoreResult.notices ?? []).map((notice) => (
+              <div className="warning-message" key={notice} role="status">
+                <span className="material-icons" aria-hidden="true">warning</span>
+                {notice}
+              </div>
+            ))}
           </div>
         )}
       </div>
@@ -555,6 +659,46 @@ export function BackupRestoreSection({ isAdmin }: Props) {
         <DbasRestoreSavedModal
           filename={dbasSavedTarget}
           onClose={() => setDbasSavedTarget(null)}
+        />
+      )}
+
+      {deleteTarget && (
+        <TypeToConfirmDialog
+          title="Delete Saved Backup"
+          message={
+            <>
+              This permanently removes <strong>{deleteTarget}</strong> from the
+              server. If it is your only copy, download it first — deleting a
+              recovery artifact cannot be undone.
+            </>
+          }
+          confirmText={deleteTarget}
+          confirmLabel="Delete this backup"
+          busy={deletingFile === deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={async () => {
+            await handleDeleteSaved(deleteTarget);
+            setDeleteTarget(null);
+          }}
+        />
+      )}
+
+      {confirmFullRestore && (
+        <TypeToConfirmDialog
+          title="Restore Full Backup"
+          message={
+            <>
+              This will replace all current settings, database records, and
+              uploaded files with the contents of{' '}
+              <strong>{confirmFullRestore.name}</strong>. The page reloads once
+              the restore completes. This cannot be undone.
+            </>
+          }
+          confirmText={confirmFullRestore.name}
+          confirmLabel="Restore this backup"
+          busy={restoring}
+          onCancel={() => setConfirmFullRestore(null)}
+          onConfirm={handleRestore}
         />
       )}
     </div>

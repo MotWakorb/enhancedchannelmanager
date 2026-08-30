@@ -15,11 +15,16 @@ export { useHashRoute } from './useHashRoute';
 export type { UseHashRouteReturn, SettingsPage } from './useHashRoute';
 export { useDedupOnDrop, DEDUP_RETURNING_HIGHLIGHT_MS } from './useDedupOnDrop';
 export type {
+  DedupDropOutcome,
+  DedupDropReport,
+  DedupDropReportOutcome,
   DedupDropRequest,
   DedupModalState,
   UseDedupOnDropOptions,
   UseDedupOnDropReturn,
 } from './useDedupOnDrop';
+export { invalidateServerData, useServerDataInvalidation } from './useServerDataInvalidation';
+export type { ServerDataKey } from './useServerDataInvalidation';
 export { useAddStreamDedup } from './useAddStreamDedup';
 export type {
   AddStreamDedupModalState,

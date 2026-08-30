@@ -8,7 +8,7 @@
  * out, mirroring the pattern in DeduplicationSettingsSection.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -68,9 +68,6 @@ vi.mock('../settings/BackupRestoreSection', () => ({
 vi.mock('../settings/MCPSettingsSection', () => ({
   MCPSettingsSection: () => <div data-testid="stub-mcp" />,
 }));
-vi.mock('../settings/LookupTableSection', () => ({
-  LookupTableSection: () => <div data-testid="stub-lookup" />,
-}));
 vi.mock('../ScheduledTasksSection', () => ({
   ScheduledTasksSection: () => <div data-testid="stub-scheduled-tasks" />,
 }));
@@ -99,6 +96,8 @@ vi.mock('../CustomSelect', () => ({
 
 import * as api from '../../services/api';
 import { SettingsTab } from '../tabs/SettingsTab';
+import { TabNavigation } from '../TabNavigation';
+import { SETTINGS_SECTIONS } from '../settingsSections';
 
 describe('Administration nav — Security page removed (bead 09x38.12)', () => {
   beforeEach(() => {
@@ -109,24 +108,41 @@ describe('Administration nav — Security page removed (bead 09x38.12)', () => {
     vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
   });
 
-  it('does not render a "Security" item under the Administration nav group', async () => {
-    render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="general" />);
+  // The Settings section list moved out of SettingsTab into the primary
+  // sidebar's drill-in view, so the nav assertions now target that.
+  it('does not render a "Security" item under the Administration nav group', () => {
+    render(
+      <TabNavigation activeTab="settings" onTabChange={vi.fn()} isAdmin settingsPage="general" />,
+    );
 
-    await waitFor(() => {
-      expect(screen.getByText('Administration')).toBeInTheDocument();
-    });
-
-    expect(screen.queryByText('Security')).not.toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+    expect(within(nav).getByRole('heading', { name: 'Administration' })).toBeInTheDocument();
+    expect(within(nav).queryByRole('link', { name: 'Security' })).not.toBeInTheDocument();
+    expect(SETTINGS_SECTIONS.map((section) => section.label)).not.toContain('Security');
   });
 
-  it('still renders the other Administration nav items (Authentication, TLS Certificates, MCP Integration)', async () => {
-    render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="general" />);
+  it('still renders the other Administration nav items (Authentication, TLS Certificates, MCP Integration)', () => {
+    render(
+      <TabNavigation activeTab="settings" onTabChange={vi.fn()} isAdmin settingsPage="general" />,
+    );
 
-    await waitFor(() => {
-      expect(screen.getByText('Authentication')).toBeInTheDocument();
-    });
-    expect(screen.getByText('TLS Certificates')).toBeInTheDocument();
-    expect(screen.getByText('MCP Integration')).toBeInTheDocument();
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+    for (const label of ['Authentication', 'TLS Certificates', 'MCP Integration']) {
+      expect(within(nav).getByRole('link', { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it('withholds the Administration sections from non-admin operators', () => {
+    render(
+      <TabNavigation activeTab="settings" onTabChange={vi.fn()} settingsPage="general" />,
+    );
+
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' });
+    expect(within(nav).queryByRole('heading', { name: 'Administration' })).not.toBeInTheDocument();
+    for (const label of ['Authentication', 'User Management', 'TLS Certificates', 'MCP Integration']) {
+      expect(within(nav).queryByRole('link', { name: label })).not.toBeInTheDocument();
+    }
+    expect(within(nav).getByRole('link', { name: 'General' })).toBeInTheDocument();
   });
 
   it('renders the Backup & Restore section (now home to the relocated policy card) via nav click', async () => {

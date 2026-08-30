@@ -9,11 +9,16 @@ Mocks: get_settings(), save_settings(), get_client(), get_prober(), get_tracker(
        httpx, smtplib, aiohttp.
 """
 import asyncio
+import stat
+from types import SimpleNamespace
 
+import httpx
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import config
 from tests.conftest import closing_create_task_mock
+from tests.conftest import patch_ssrf_dns as _patch_ssrf_dns
 
 
 def _mock_settings(**overrides):
@@ -56,6 +61,8 @@ def _mock_settings(**overrides):
         "stats_poll_interval": 30,
         "user_timezone": "UTC",
         "backend_log_level": "INFO",
+        "backend_log_file_max_bytes": 10 * 1024 * 1024,
+        "backend_log_file_backup_count": 4,
         "frontend_log_level": "INFO",
         "vlc_open_behavior": "stream",
         "stream_probe_batch_size": 50,
@@ -79,6 +86,10 @@ def _mock_settings(**overrides):
         "disabled_builtin_tags": [],
         "custom_normalization_tags": [],
         "normalize_on_channel_create": False,
+        # bead qsqfv: real "" (not a MagicMock auto-attr) because the POST
+        # handler preserves this field into the rebuilt settings model when
+        # the body omits it, and a Mock there fails Pydantic validation.
+        "public_base_url": "",
         "smtp_host": "",
         "smtp_port": 587,
         "smtp_user": "",
@@ -210,6 +221,22 @@ class TestGetSettings:
         assert response.status_code == 200
         assert response.json()["allow_multi_provider_auto_sync"] is False
 
+    @pytest.mark.asyncio
+    async def test_exposes_rotating_backend_log_settings(self, async_client):
+        mock = _mock_settings(
+            backend_log_file_max_bytes=25 * 1024 * 1024,
+            backend_log_file_backup_count=7,
+        )
+
+        with patch("routers.settings.get_settings", return_value=mock), patch(
+            "routers.settings._has_discord_alert_method", return_value=False
+        ):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["backend_log_file_max_bytes"] == 25 * 1024 * 1024
+        assert response.json()["backend_log_file_backup_count"] == 7
+
 
 class TestUpdateSettings:
     """Tests for POST /api/settings."""
@@ -233,6 +260,169 @@ class TestUpdateSettings:
 
         assert response.status_code == 200
         assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_rotation_fields_preserve_omitted_values_and_do_not_require_restart(
+        self, async_client
+    ):
+        current = _mock_settings(
+            backend_log_file_max_bytes=25 * 1024 * 1024,
+            backend_log_file_backup_count=7,
+        )
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings"
+        ) as mock_save, patch("routers.settings.clear_settings_cache"), patch(
+            "routers.settings.reset_client"
+        ), patch("routers.settings.get_prober", return_value=None), patch(
+            "routers.settings.get_cache", return_value=MagicMock()
+        ):
+            response = await async_client.post(
+                "/api/settings",
+                json={"url": current.url, "username": current.username},
+            )
+
+        assert response.status_code == 200
+        saved = mock_save.call_args.args[0]
+        assert saved.backend_log_file_max_bytes == 25 * 1024 * 1024
+        assert saved.backend_log_file_backup_count == 7
+        assert response.json()["restart_required"] is False
+
+    @pytest.mark.asyncio
+    async def test_rotation_change_is_persisted_and_reports_restart_required(
+        self, async_client
+    ):
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings"
+        ) as mock_save, patch("routers.settings.clear_settings_cache"), patch(
+            "routers.settings.reset_client"
+        ), patch("routers.settings.get_prober", return_value=None), patch(
+            "routers.settings.get_cache", return_value=MagicMock()
+        ):
+            response = await async_client.post(
+                "/api/settings",
+                json={
+                    "url": current.url,
+                    "username": current.username,
+                    "backend_log_file_max_bytes": 20 * 1024 * 1024,
+                    "backend_log_file_backup_count": 6,
+                },
+            )
+
+        assert response.status_code == 200
+        saved = mock_save.call_args.args[0]
+        assert saved.backend_log_file_max_bytes == 20 * 1024 * 1024
+        assert saved.backend_log_file_backup_count == 6
+        assert response.json()["restart_required"] is True
+
+    @pytest.mark.asyncio
+    async def test_pending_rotation_restart_stays_visible_on_later_save(
+        self, async_client
+    ):
+        current = _mock_settings(
+            backend_log_file_max_bytes=20 * 1024 * 1024,
+            backend_log_file_backup_count=6,
+        )
+        applied_policy = SimpleNamespace(
+            max_bytes=10 * 1024 * 1024,
+            backup_count=4,
+        )
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.get_persistent_log_policy",
+            return_value=applied_policy,
+        ), patch("routers.settings.save_settings"), patch(
+            "routers.settings.clear_settings_cache"
+        ), patch("routers.settings.reset_client"), patch(
+            "routers.settings.get_prober", return_value=None
+        ), patch("routers.settings.get_cache", return_value=MagicMock()):
+            response = await async_client.post(
+                "/api/settings",
+                json={"url": current.url, "username": current.username},
+            )
+
+        assert response.status_code == 200
+        assert response.json()["restart_required"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("field", "value"),
+        [
+            ("backend_log_file_max_bytes", (1024 * 1024) - 1),
+            ("backend_log_file_max_bytes", (100 * 1024 * 1024) + 1),
+            ("backend_log_file_backup_count", 0),
+            ("backend_log_file_backup_count", 10),
+        ],
+    )
+    async def test_rotation_api_bounds_reject_invalid_values(
+        self, async_client, field, value
+    ):
+        response = await async_client.post(
+            "/api/settings",
+            json={
+                "url": "http://dispatcharr:8000",
+                "username": "admin",
+                field: value,
+            },
+        )
+
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_untrusted_mcp_storage_returns_operator_actionable_503(
+        self, async_client
+    ):
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings",
+            side_effect=config.MCPApiKeyStorageError("authority is untrusted"),
+        ):
+            response = await async_client.post(
+                "/api/settings",
+                json={"url": "http://dispatcharr:8000", "username": "admin"},
+            )
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "mcp_api_key_storage_unavailable"
+        assert detail["operation"] == "settings save"
+        assert detail["retry_after_storage_repair"] is True
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "expected_status"),
+        [
+            (config.SettingsWriteTimeout("busy"), 503),
+            (OSError("target settings path sentinel"), 500),
+        ],
+    )
+    async def test_non_mcp_save_failures_keep_their_public_contract(
+        self, async_client, failure, expected_status
+    ):
+        from main import app
+
+        current = _mock_settings()
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings", side_effect=failure
+        ):
+            transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                response = await client.post(
+                    "/api/settings",
+                    json={"url": "http://dispatcharr:8000", "username": "admin"},
+                )
+
+        assert response.status_code == expected_status
+        assert "mcp_api_key_storage_unavailable" not in response.text
+        assert "target settings path sentinel" not in response.text
+        if isinstance(failure, config.SettingsWriteTimeout):
+            assert response.headers["Retry-After"] == "5"
 
     @pytest.mark.asyncio
     async def test_persists_date_format(self, async_client):
@@ -1127,6 +1317,430 @@ class TestTestConnection:
         assert "api key" in body["message"].lower()
 
 
+class TestTestConnectionVersionAdvisory:
+    """POST /api/settings/test carries a NON-BLOCKING untested-version notice.
+
+    ADR-014 option (c) / bead ``enhancedchannelmanager-ax0kf``. ECM's recorded
+    Dispatcharr contract fixtures are pinned to one version, so an operator who
+    upgrades Dispatcharr underneath ECM gets a green CI and no signal at all.
+    The connection test now also probes ``GET /api/core/version/`` and returns a
+    ``warning`` alongside ``success: true`` when the version is outside the
+    tested set. It must NEVER turn a working connection into a failure.
+
+    The probe itself runs through ``DispatcharrClient.get_version()`` (PR #773
+    review, W1) — a hand-written URL literal in this router would be a URL the
+    contract sweep cannot see. Because ``httpx.AsyncClient`` is patched here,
+    the client the router constructs shares the same mock: the connection test's
+    own call lands on ``.get``/``.post``, and the client's ``_request`` lands on
+    ``.request``.
+    """
+
+    @staticmethod
+    def _mock_http_client(*, get=None, post=None, request=None):
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        if get is not None:
+            mock_http_client.get = AsyncMock(return_value=get)
+        if post is not None:
+            mock_http_client.post = AsyncMock(return_value=post)
+        if request is not None:
+            if isinstance(request, BaseException):
+                mock_http_client.request = AsyncMock(side_effect=request)
+            else:
+                mock_http_client.request = AsyncMock(return_value=request)
+        else:
+            mock_http_client.request = AsyncMock(side_effect=AssertionError(
+                "the version probe must not run on this path"
+            ))
+        return mock_http_client
+
+    @staticmethod
+    def _ok(status_code=200):
+        response = MagicMock()
+        response.status_code = status_code
+        return response
+
+    @staticmethod
+    def _version_response(status_code=200, payload=None):
+        response = MagicMock()
+        response.status_code = status_code
+        response.json.return_value = payload if payload is not None else {}
+        return response
+
+    @pytest.mark.asyncio
+    async def test_untested_version_returns_a_warning_but_still_succeeds(self, async_client):
+        mock_http_client = self._mock_http_client(
+            get=self._ok(),
+            request=self._version_response(payload={"version": "9.9.9"}),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True, "the advisory must never fail the connection test"
+        assert "9.9.9" in body["warning"]
+        # The probe went through the client, at the client's own URL, carrying
+        # the same key the test just verified.
+        version_call = mock_http_client.request.await_args
+        assert version_call.args[0] == "GET"
+        assert version_call.args[1] == "http://dispatcharr:8000/api/core/version/"
+        assert version_call.kwargs["headers"]["X-API-Key"] == "abc123"
+
+    @pytest.mark.asyncio
+    async def test_tested_version_returns_no_warning(self, async_client):
+        from dispatcharr_client import TESTED_DISPATCHARR_SERIES
+
+        mock_http_client = self._mock_http_client(
+            get=self._ok(),
+            request=self._version_response(
+                payload={"version": f"{TESTED_DISPATCHARR_SERIES[0]}.0"}
+            ),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "warning" not in body
+
+    @pytest.mark.asyncio
+    async def test_version_probe_failure_leaves_the_connection_test_successful(
+        self, async_client
+    ):
+        """An older Dispatcharr without /api/core/version/ produces silence, not noise."""
+        mock_http_client = self._mock_http_client(
+            get=self._ok(), request=httpx.ConnectError("boom")
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "warning" not in body
+
+    @pytest.mark.asyncio
+    async def test_version_probe_404_produces_no_warning(self, async_client):
+        """get_version() raises for status; the advisory swallows it and stays quiet."""
+        mock_http_client = self._mock_http_client(
+            get=self._ok(), request=self._version_response(status_code=404)
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+
+    @pytest.mark.asyncio
+    async def test_hostile_version_string_is_clamped_before_it_reaches_the_operator(
+        self, async_client
+    ):
+        """Upstream text cannot emit a multi-kilobyte notice or forge a log line."""
+        hostile = "9.9.9" + "A" * 5000 + "\nINJECTED"
+        mock_http_client = self._mock_http_client(
+            get=self._ok(), request=self._version_response(payload={"version": hostile})
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        warning = response.json()["warning"]
+        assert "\n" not in warning and "\r" not in warning
+        assert "INJECTED" not in warning
+        assert len(warning) < 400
+
+    @pytest.mark.asyncio
+    async def test_password_mode_advisory_reuses_the_issued_access_token(self, async_client):
+        """The probe carries the token the connection test's own login issued.
+
+        Scope note: this exercises the 200 path ONLY, so it proves token REUSE
+        (the probe authenticates with ``jwt-abc`` rather than logging in again
+        before its first request). It does not, on its own, prove a second login
+        is impossible — the 401 path is what could reach ``_login``, and it is
+        pinned separately by
+        ``test_a_401_on_the_version_probe_never_triggers_a_second_login``.
+        """
+        token_response = MagicMock()
+        token_response.status_code = 200
+        token_response.json.return_value = {"access": "jwt-abc", "refresh": "jwt-ref"}
+
+        mock_http_client = self._mock_http_client(
+            post=token_response,
+            request=self._version_response(payload={"version": "9.9.9"}),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is True
+        assert "9.9.9" in body["warning"]
+        version_call = mock_http_client.request.await_args
+        assert version_call.args[1] == "http://dispatcharr:8000/api/core/version/"
+        assert version_call.kwargs["headers"]["Authorization"] == "Bearer jwt-abc"
+        # Exactly one login: the connection test's own. Note this only proves the
+        # HAPPY path never re-authenticates — the 401 case is what could actually
+        # reach ``_login``, and it is pinned by
+        # ``test_a_401_on_the_version_probe_never_triggers_a_second_login``.
+        assert mock_http_client.post.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_a_401_on_the_version_probe_never_triggers_a_second_login(
+        self, async_client
+    ):
+        """The probe cannot re-authenticate, even when upstream rejects its token.
+
+        PR #773 review, BLOCK. ``DispatcharrClient._request`` retries a 401 by
+        refreshing the token, and the probe client has no refresh token, so the
+        refresh falls through to a full ``_login()`` — a second
+        ``POST /api/accounts/token/`` with the operator's credentials.
+        Dispatcharr rate-limits login at 3/min per IP (this endpoint already has
+        a dedicated 429 branch because that budget is tight), so a best-effort
+        advisory that can spend a login could fail the operator's NEXT real test.
+        The probe passes ``retry_on_401=False``; exactly one login may leave the
+        process no matter what the version endpoint answers.
+        """
+        token_response = MagicMock()
+        token_response.status_code = 200
+        token_response.json.return_value = {"access": "jwt-abc", "refresh": "jwt-ref"}
+
+        mock_http_client = self._mock_http_client(
+            post=token_response,
+            request=self._version_response(status_code=401),
+        )
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+        assert mock_http_client.post.await_count == 1, (
+            "the version probe re-authenticated — POST /api/accounts/token/ was "
+            "issued twice for one connection test"
+        )
+        assert mock_http_client.request.await_count == 1, (
+            "the probe retried the version request after the 401"
+        )
+
+    @pytest.mark.asyncio
+    async def test_password_mode_without_a_usable_token_skips_the_probe(self, async_client):
+        """No token to reuse => no probe, rather than a second rate-limited login."""
+        token_response = MagicMock()
+        token_response.status_code = 200
+        token_response.json.return_value = {"refresh": "jwt-ref"}  # no "access"
+
+        mock_http_client = self._mock_http_client(post=token_response)
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "password",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+        assert mock_http_client.request.await_count == 0
+        assert mock_http_client.post.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_probe_client_construction_failure_cannot_fail_the_test(
+        self, async_client
+    ):
+        """Building the probe client is inside the guard, not in front of it.
+
+        PR #773 review, N1. ``DispatcharrSettings(...)``/``DispatcharrClient(...)``
+        used to be evaluated *before* the ``try`` that makes the advisory
+        unfailable, so a constructor raising turned a verified-successful
+        connection into ``{'success': False, ...}`` — the exact outcome the
+        advisory's docstring promises it can never produce.
+        """
+        mock_http_client = self._mock_http_client(get=self._ok())
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client), \
+             patch("routers.settings.DispatcharrClient",
+                   side_effect=RuntimeError("probe client construction failed")):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json() == {"success": True, "message": "Connection successful"}
+
+    @pytest.mark.asyncio
+    async def test_failed_connection_never_probes_the_version(self, async_client):
+        """A rejected key must not trigger an extra outbound request."""
+        mock_http_client = self._mock_http_client(get=self._ok(401))
+
+        with patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr:8000",
+                "auth_method": "api_key",
+                "api_key": "bad-key",
+            })
+
+        assert response.json()["success"] is False
+        assert mock_http_client.get.await_count == 1
+        assert mock_http_client.request.await_count == 0
+
+
+class TestTestConnectionOutboundPolicy:
+    """POST /api/settings/test enforces the SAME outbound policy as save.
+
+    GH #754 / bead ``0yh70``. The reporter's Test Connection SUCCEEDED against
+    ``http://localhost:9191`` and the save was then refused — because this
+    endpoint carried its own inline scheme+netloc check and never consulted
+    the host policy at all, while POST /api/settings ran the full validator.
+    Proving a connection works and then being refused permission to store it
+    is its own defect; so is the security half of the same gap — this endpoint
+    POSTs the operator-supplied username/password (or GETs with ``X-API-Key``)
+    to any host the caller names, with no host policy whatsoever.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("mode", ["lan_friendly", "public_only"])
+    async def test_metadata_host_rejected_without_probing(self, async_client, mode):
+        """IMDS is refused in BOTH modes and no HTTP request is issued."""
+        from security.ssrf import SSRFMode
+        http_client = MagicMock()
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode(mode)), \
+             patch("httpx.AsyncClient", return_value=http_client) as ctor:
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://169.254.169.254",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "host" in body["message"].lower()
+        # The credential never left the process.
+        ctor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_localhost_accepted_in_lan_friendly(self, async_client):
+        """The GH #754 URL still tests fine under the shipped default."""
+        from security.ssrf import SSRFMode
+        me_response = MagicMock()
+        me_response.status_code = 200
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.get = AsyncMock(return_value=me_response)
+
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://localhost:9191",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json()["success"] is True
+        assert mock_http_client.get.await_args[0][0].startswith("http://localhost:9191/")
+
+    @pytest.mark.asyncio
+    async def test_localhost_rejected_in_public_only(self, async_client):
+        """...and is refused under ``public_only``, matching the save path."""
+        from security.ssrf import SSRFMode
+        with patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             patch("httpx.AsyncClient") as ctor:
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://localhost:9191",
+                "auth_method": "api_key",
+                "api_key": "abc123",
+            })
+
+        assert response.json()["success"] is False
+        ctor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_non_http_scheme_rejected(self, async_client):
+        """Pre-existing scheme allowlist survives the rewire."""
+        with patch("httpx.AsyncClient") as ctor:
+            response = await async_client.post("/api/settings/test", json={
+                "url": "file:///etc/passwd",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "scheme" in body["message"].lower()
+        ctor.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_unresolvable_host_is_not_a_policy_rejection(self, async_client):
+        """An offline/unknown host must still be testable (fail-open on DNS).
+
+        The chokepoint fails CLOSED on resolution failure, which is right for
+        the connect path but wrong here: the operator is testing a host that
+        may legitimately be down. It must reach the probe and report a normal
+        connection error, not a policy refusal.
+        """
+        import socket as _socket
+
+        import httpx
+
+        mock_http_client = AsyncMock()
+        mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+        mock_http_client.__aexit__ = AsyncMock(return_value=False)
+        mock_http_client.post = AsyncMock(side_effect=httpx.ConnectError("nope"))
+
+        from security import ssrf as _ssrf
+
+        def _boom(host, port):
+            raise _socket.gaierror("Name or service not known")
+
+        with patch.object(_ssrf, "_resolve", _boom), \
+             patch("httpx.AsyncClient", return_value=mock_http_client):
+            response = await async_client.post("/api/settings/test", json={
+                "url": "http://dispatcharr.offline:8000",
+                "username": "admin",
+                "password": "secret",
+            })
+
+        body = response.json()
+        assert body["success"] is False
+        assert "could not connect" in body["message"].lower()
+
+
 class TestTestSMTP:
     """Tests for POST /api/settings/test-smtp."""
 
@@ -1444,33 +2058,83 @@ class TestMCPApiKeyGenerate:
     @pytest.mark.asyncio
     async def test_generates_key(self, async_client):
         """Generates a new MCP API key."""
-        mock = _mock_settings()
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings") as save_mock, \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch(
+                 "routers.settings.rotate_public_mcp_api_key",
+                 return_value="generated-mcp-key-with-sufficient-length",
+             ) as rotate_mock:
             response = await async_client.post("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
         data = response.json()
         assert "mcp_api_key" in data
         assert len(data["mcp_api_key"]) > 20  # token_urlsafe(32) produces 43 chars
-        save_mock.assert_called_once()
+        rotate_mock.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_replaces_existing_key(self, async_client):
         """Generating a new key replaces the old one."""
-        mock = _mock_settings(mcp_api_key="old-key-value")
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings") as save_mock, \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch(
+                 "routers.settings.rotate_public_mcp_api_key",
+                 return_value="replacement-mcp-key-with-sufficient-length",
+             ) as rotate_mock:
             response = await async_client.post("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
         data = response.json()
         assert data["mcp_api_key"] != "old-key-value"
-        save_mock.assert_called_once()
+        rotate_mock.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_durability_indeterminate_discloses_active_key_without_logging_it(
+        self, async_client, caplog
+    ):
+        active_key = "generated-mcp-key-with-indeterminate-durability"
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.rotate_public_mcp_api_key",
+            side_effect=config.MCPApiKeyDurabilityIndeterminate(active_key),
+        ):
+            response = await async_client.post("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == {
+            "code": "mcp_api_key_durability_indeterminate",
+            "message": (
+                "The new MCP API key is active now, but crash durability is "
+                "indeterminate. Repair storage and retry rotation."
+            ),
+            "operation": "rotation",
+            "authority_active": True,
+            "crash_durability": "indeterminate",
+            "retry_after_storage_repair": True,
+            "mcp_api_key": active_key,
+        }
+        assert active_key not in caplog.text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "failure",
+        [
+            config.MCPApiKeyStorageError("authority mode is untrusted"),
+            config.MCPApiKeyStorageError("recovery is untrusted"),
+        ],
+    )
+    async def test_storage_failures_return_operator_actionable_503(
+        self, async_client, failure
+    ):
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.rotate_public_mcp_api_key", side_effect=failure
+        ):
+            response = await async_client.post("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "mcp_api_key_storage_unavailable"
+        assert detail["operation"] == "rotation"
+        assert "api-key" in detail["message"]
+        assert ".api-key.recovery" in detail["message"]
+        assert "retry" in detail["message"].lower()
 
 
 class TestMCPApiKeyRevoke:
@@ -1479,31 +2143,65 @@ class TestMCPApiKeyRevoke:
     @pytest.mark.asyncio
     async def test_revokes_key(self, async_client):
         """Revokes the MCP API key."""
-        mock = _mock_settings(mcp_api_key="existing-key")
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings") as save_mock, \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch("routers.settings.revoke_public_mcp_api_key") as revoke_mock:
             response = await async_client.delete("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "revoked"
-        save_mock.assert_called_once()
-        # Verify the key was cleared on the mock
-        assert mock.mcp_api_key == ""
+        revoke_mock.assert_called_once_with()
 
     @pytest.mark.asyncio
     async def test_revoke_when_no_key(self, async_client):
         """Revoking when no key exists still succeeds."""
-        mock = _mock_settings(mcp_api_key="")
-
-        with patch("routers.settings.get_settings", return_value=mock), \
-             patch("routers.settings.save_settings"), \
-             patch("routers.settings.clear_settings_cache"):
+        with patch("routers.settings._rotate_private_projection_or_503"), \
+             patch("routers.settings.revoke_public_mcp_api_key") as revoke_mock:
             response = await async_client.delete("/api/settings/mcp-api-key")
 
         assert response.status_code == 200
+        revoke_mock.assert_called_once_with()
+
+    @pytest.mark.asyncio
+    async def test_durability_indeterminate_reports_active_revocation(
+        self, async_client
+    ):
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.revoke_public_mcp_api_key",
+            side_effect=config.MCPApiKeyDurabilityIndeterminate(""),
+        ):
+            response = await async_client.delete("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == {
+            "code": "mcp_api_key_durability_indeterminate",
+            "message": (
+                "MCP API key revocation is active now, but a host crash may restore "
+                "the previous key. Repair storage and retry revocation."
+            ),
+            "operation": "revocation",
+            "authority_active": True,
+            "revoked": True,
+            "crash_durability": "indeterminate",
+            "retry_after_storage_repair": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_storage_failure_returns_operator_actionable_503(
+        self, async_client
+    ):
+        with patch("routers.settings._rotate_private_projection_or_503"), patch(
+            "routers.settings.revoke_public_mcp_api_key",
+            side_effect=config.MCPApiKeyStorageError("authority is untrusted"),
+        ):
+            response = await async_client.delete("/api/settings/mcp-api-key")
+
+        assert response.status_code == 503
+        detail = response.json()["detail"]
+        assert detail["code"] == "mcp_api_key_storage_unavailable"
+        assert detail["operation"] == "revocation"
+        assert "api-key" in detail["message"]
+        assert ".api-key.recovery" in detail["message"]
 
 
 class TestMCPApiKeyConfiguredInResponse:
@@ -1540,9 +2238,7 @@ class TestMCPApiKeyAuthMiddleware:
     @pytest.mark.asyncio
     async def test_api_key_authenticates(self, async_client):
         """Valid MCP API key in Authorization header passes auth middleware."""
-        from config import DispatcharrSettings
-
-        settings = DispatcharrSettings(
+        settings = config.DispatcharrSettings(
             url="http://test", username="u", password="p",
             mcp_api_key="test-mcp-key-123",
         )
@@ -1563,9 +2259,7 @@ class TestMCPApiKeyAuthMiddleware:
     @pytest.mark.asyncio
     async def test_invalid_api_key_rejected(self, async_client):
         """Invalid API key is rejected with 401."""
-        from config import DispatcharrSettings
-
-        settings = DispatcharrSettings(
+        settings = config.DispatcharrSettings(
             url="http://test", username="u", password="p",
             mcp_api_key="real-key",
         )
@@ -1585,9 +2279,7 @@ class TestMCPApiKeyAuthMiddleware:
     @pytest.mark.asyncio
     async def test_empty_mcp_key_does_not_match(self, async_client):
         """When mcp_api_key is empty, Bearer tokens don't match it."""
-        from config import DispatcharrSettings
-
-        settings = DispatcharrSettings(
+        settings = config.DispatcharrSettings(
             url="http://test", username="u", password="p",
             mcp_api_key="",  # Not configured
         )
@@ -1603,6 +2295,39 @@ class TestMCPApiKeyAuthMiddleware:
             )
 
         assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_untrusted_authority_keeps_health_and_jwt_paths_available(
+        self, async_client, monkeypatch, tmp_path
+    ):
+        settings_file = tmp_path / "settings.json"
+        authority_file = tmp_path / "mcp" / "api-key"
+        authority_file.parent.mkdir()
+        authority_file.write_text("untrusted-secret\n")
+        authority_file.chmod(0o644)
+        settings_file.write_text('{"mcp_api_key":"stale-mirror"}')
+        monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+        monkeypatch.setattr(config, "CONFIG_FILE", settings_file)
+        monkeypatch.setattr(config, "MCP_SECRETS_DIR", authority_file.parent)
+        monkeypatch.setattr(config, "MCP_KEY_FILE", authority_file)
+        config.clear_settings_cache()
+
+        with patch("main.get_settings", side_effect=config.get_settings), patch(
+            "main.get_auth_settings"
+        ) as auth_mock:
+            auth_mock.return_value.require_auth = True
+            auth_mock.return_value.setup_complete = True
+            health = await async_client.get("/api/health")
+            jwt_rejection = await async_client.get(
+                "/api/settings",
+                headers={"Authorization": "Bearer invalid-jwt"},
+            )
+
+        assert health.status_code == 200
+        assert jwt_rejection.status_code == 401
+        assert authority_file.read_text() == "untrusted-secret\n"
+        assert stat.S_IMODE(authority_file.stat().st_mode) == 0o644
+        config.clear_settings_cache()
 
 
 class TestMCPStatusSanitization:
@@ -2152,6 +2877,9 @@ def _full_payload(mock):
         "discord_webhook_url": mock.discord_webhook_url,
         "telegram_bot_token": mock.telegram_bot_token,
         "telegram_chat_id": mock.telegram_chat_id,
+        # bead qsqfv: echo the stored origin so the admin-field gate sees NO
+        # change unless a test deliberately flips it.
+        "public_base_url": mock.public_base_url,
         "smtp_host": mock.smtp_host,
         "smtp_port": mock.smtp_port,
         "smtp_user": mock.smtp_user,
@@ -2163,6 +2891,8 @@ def _full_payload(mock):
         # unless a test deliberately flips them.
         "max_auto_created_channels_per_run": mock.max_auto_created_channels_per_run,
         "max_auto_creation_log_entries": mock.max_auto_creation_log_entries,
+        "backend_log_file_max_bytes": mock.backend_log_file_max_bytes,
+        "backend_log_file_backup_count": mock.backend_log_file_backup_count,
         # bd-dgs64 (GH #591): echo the stored value so the admin-field gate
         # sees NO change unless a test deliberately flips it.
         "allow_multi_provider_auto_sync": mock.allow_multi_provider_auto_sync,
@@ -2311,6 +3041,21 @@ class TestSettingsAdminFieldGate:
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_non_admin_changing_rotating_log_policy_is_rejected(
+        self, non_admin_client
+    ):
+        current = _mock_settings()
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["backend_log_file_backup_count"] = 8
+            response = await non_admin_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 403
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_admin_can_change_channel_cap_and_persists(self, admin_client):
         """skg35: an admin CAN raise the cap and the new value reaches save."""
         current = _mock_settings(max_auto_created_channels_per_run=500)
@@ -2391,10 +3136,8 @@ class TestSettingsMcpKeyGate:
         returns the MCP service principal, and ``_resolve_settings_admin``
         must classify it as non-admin for this endpoint.
         """
-        from config import DispatcharrSettings
-
         current = _mock_settings(url="http://dispatcharr:8000")
-        runtime_settings = DispatcharrSettings(
+        runtime_settings = config.DispatcharrSettings(
             url="http://dispatcharr:8000", username="u", password="p",
             mcp_api_key="mcp-secret-key",
         )
@@ -2425,10 +3168,8 @@ class TestSettingsMcpKeyGate:
         re-arm the runaway-creation crash, so it must be classified non-admin
         for this field (same posture as the connection/secret fields).
         """
-        from config import DispatcharrSettings
-
         current = _mock_settings(max_auto_created_channels_per_run=500)
-        runtime_settings = DispatcharrSettings(
+        runtime_settings = config.DispatcharrSettings(
             url="http://dispatcharr:8000", username="u", password="p",
             mcp_api_key="mcp-secret-key",
         )
@@ -2481,18 +3222,135 @@ class TestSettingsSsrfOnSave:
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_loopback_host_rejected(self, async_client):
-        """Saving a loopback base URL -> 400."""
-        current = _mock_settings()
+    @pytest.mark.parametrize("mode", ["lan_friendly", "public_only"])
+    @pytest.mark.parametrize("field,enable_field", [
+        ("emby_base_url", "emby_enabled"),
+        ("url", None),
+    ])
+    async def test_link_local_metadata_rejected_in_both_modes(
+        self, async_client, mode, field, enable_field,
+    ):
+        """IMDS stays blocked in BOTH modes — GH #754 / ``0yh70``.
+
+        This is the half that is easy to lose while making loopback work.
+        Reasoning for the both-modes call is on
+        ``test_ssrf_guard.TestAlwaysOnDenylist
+        .test_link_local_denied_in_both_modes_deliberately``.
+        """
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode=mode)
         s1, s2, s3, s4, s5 = _save_mocks()
         with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode(mode)), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload[field] = "http://169.254.169.254"
+            # Changing the connection URL re-requires the password; supplying
+            # it keeps the 400 attributable to the SSRF policy, not the gate.
+            payload["password"] = "secret"
+            if enable_field:
+                payload[enable_field] = True
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        detail = response.json()["detail"]
+        assert "169.254" in detail or "denied" in detail.lower(), detail
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_gh754_localhost_dispatcharr_url_saves_in_lan_friendly(self, async_client):
+        """GH #754: ``http://localhost:9191`` saves under the shipped default.
+
+        The reporter runs Dispatcharr behind a shared gluetun network, so
+        ``localhost`` is the only address that reaches it. Test Connection
+        succeeded and the running app polls that URL happily — only the save
+        validator refused it.
+
+        DNS is patched with the record set a real container returns
+        (``::1`` first, then ``127.0.0.1`` — captured from ``docker run --rm
+        python:3.12-slim``), because Docker's generated ``/etc/hosts`` maps
+        ``localhost`` dual-stack and §9.4 item 3 rejects the whole request if
+        ANY record is denied. A v4-only fixture would pass without proving the
+        reported case.
+        """
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["url"] = "http://localhost:9191"
+            # Changing the connection URL re-requires the password.
+            payload["password"] = "secret"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 200, response.json()
+        saved = mock_save.call_args[0][0]
+        # Round-trips verbatim — scheme + netloc, port preserved.
+        assert saved.url == "http://localhost:9191"
+
+    @pytest.mark.asyncio
+    async def test_gh754_localhost_dispatcharr_url_rejected_in_public_only(self, async_client):
+        """The same URL is still refused under ``public_only`` (the opt-in)."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             _patch_ssrf_dns("::1", "127.0.0.1"), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["url"] = "http://localhost:9191"
+            payload["password"] = "secret"
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
+        mock_save.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("base_url", [
+        "http://127.0.0.1:8096",
+        "http://127.0.0.5:8096",
+        "http://[::1]:8096",
+    ])
+    async def test_loopback_literal_allowed_in_lan_friendly(self, async_client, base_url):
+        """Literal loopback saves under the shipped default (ADR-012 D4)."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="lan_friendly")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY), \
              s1 as mock_save, s2, s3, s4, s5:
             payload = _full_payload(current)
             payload["emby_enabled"] = True
-            payload["emby_base_url"] = "http://127.0.0.1:8096"
+            payload["emby_base_url"] = base_url
             response = await async_client.post("/api/settings", json=payload)
 
-        assert response.status_code == 400
+        assert response.status_code == 200, response.json()
+        assert mock_save.call_args[0][0].emby_base_url == base_url
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("base_url", [
+        "http://127.0.0.1:8096",
+        "http://127.0.0.5:8096",
+        "http://[::1]:8096",
+    ])
+    async def test_loopback_literal_rejected_in_public_only(self, async_client, base_url):
+        """...and is still refused under ``public_only``."""
+        from security.ssrf import SSRFMode
+        current = _mock_settings(ssrf_outbound_mode="public_only")
+        s1, s2, s3, s4, s5 = _save_mocks()
+        with patch("routers.settings.get_settings", return_value=current), \
+             patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.PUBLIC_ONLY), \
+             s1 as mock_save, s2, s3, s4, s5:
+            payload = _full_payload(current)
+            payload["emby_enabled"] = True
+            payload["emby_base_url"] = base_url
+            response = await async_client.post("/api/settings", json=payload)
+
+        assert response.status_code == 400, response.json()
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio

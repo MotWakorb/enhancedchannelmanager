@@ -36,6 +36,45 @@ def _account(aid, *, auto_sync, selection):
     }
 
 
+def _fan_in_account(aid, gid, selection, *, target=665):
+    return {
+        "id": aid,
+        "name": f"Account {aid}",
+        "channel_groups": [{
+            "channel_group": gid,
+            "auto_channel_sync": True,
+            "custom_properties": {
+                "channel_profile_ids": selection,
+                "group_override": target,
+            },
+        }],
+    }
+
+
+def _target_account(aid, gid, selection):
+    return {
+        "id": aid,
+        "name": f"Account {aid}",
+        "channel_groups": [{
+            "channel_group": gid,
+            "auto_channel_sync": True,
+            "custom_properties": {"channel_profile_ids": selection},
+        }],
+    }
+
+
+@pytest.mark.asyncio
+async def test_prefetched_accounts_skip_the_internal_account_fetch():
+    accounts = [_account(3, auto_sync=True, selection=[7])]
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(side_effect=AssertionError("must reuse accounts"))
+
+    settings = await client.get_all_m3u_group_settings(accounts)
+
+    assert settings[500]["m3u_account_id"] == 3
+    client.get_m3u_accounts.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("order", [("a", "b"), ("b", "a")])
 async def test_collapse_is_deterministic_auto_sync_then_lowest_account(order):
@@ -169,3 +208,81 @@ async def test_legacy_string_equals_int_selection_not_flagged():
     settings = await client.get_all_m3u_group_settings()
 
     assert settings[500]["_ecm_channel_profile_conflict"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_distinct_source_groups_with_divergent_selections_flag_effective_bucket(reverse):
+    accounts = [
+        _fan_in_account(1, 823, [6, 7]),
+        _fan_in_account(2, 825, [7, 6]),
+        _fan_in_account(3, 2866, [14]),
+    ]
+    if reverse:
+        accounts.reverse()
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=accounts)
+
+    settings = await client.get_all_m3u_group_settings()
+
+    for gid in (823, 825, 2866):
+        assert settings[gid]["_ecm_channel_profile_conflict"] is True
+    shape = settings[823]["_ecm_profile_conflict_shape"]
+    assert shape["effective_group_id"] == 665
+    assert {tuple(choice["profile_ids"]) for choice in shape["choices"]} == {(6, 7), (14,)}
+    assert {
+        source["source_group_id"]
+        for choice in shape["choices"]
+        for source in choice["sources"]
+    } == {823, 825, 2866}
+
+
+@pytest.mark.asyncio
+async def test_distinct_source_groups_that_agree_do_not_flag_conflict():
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[
+        _fan_in_account(1, 823, [6, 7]),
+        _fan_in_account(2, 825, [7, 6]),
+    ])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    assert settings[823]["_ecm_channel_profile_conflict"] is False
+    assert settings[825]["_ecm_channel_profile_conflict"] is False
+
+
+@pytest.mark.asyncio
+async def test_effective_targets_own_selection_outranks_redirected_sources():
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[
+        _fan_in_account(1, 823, [6, 7]),
+        _target_account(2, 665, [14]),
+    ])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    assert settings[665]["_ecm_channel_profile_conflict"] is False
+    assert settings[823]["_ecm_channel_profile_conflict"] is False
+    assert settings[665]["custom_properties"]["channel_profile_ids"] == [14]
+
+
+@pytest.mark.asyncio
+async def test_conflict_shape_keeps_every_participant_including_unset_sources():
+    client = _make_client()
+    client.get_m3u_accounts = AsyncMock(return_value=[
+        _fan_in_account(1, 823, [6, 7]),
+        _fan_in_account(2, 825, None),
+        _fan_in_account(3, 2866, [14]),
+    ])
+
+    settings = await client.get_all_m3u_group_settings()
+
+    shape = settings[823]["_ecm_profile_conflict_shape"]
+    assert {tuple(choice["profile_ids"]) for choice in shape["choices"]} == {
+        (), (6, 7), (14,),
+    }
+    assert {
+        source["source_group_id"]
+        for choice in shape["choices"]
+        for source in choice["sources"]
+    } == {823, 825, 2866}

@@ -30,28 +30,57 @@
   min-width: 0;
 }
 
-.list-header {
-  display: grid;
-  grid-template-columns: 40px 70px 100px 1fr 150px 160px 120px;
+/* Layout only. shared/common.css § LIST HEADERS owns every `.list-header`
+   appearance property (background, border, font-size/weight, colour, case,
+   tracking); this rule adds the column layout that has to line up with
+   `.epg-source-row` and nothing else (bead enhancedchannelmanager-qlc4h).
+   It is scoped to `.epg-sources-list` because a bare `.list-header` here is
+   not file-local: each tab is a lazily-imported chunk, so its stylesheet is
+   appended in visit order, and an equal-specificity bare rule from any tab
+   visited later wins on every other tab. Measured before this change, this
+   file's seven-column template was the one Logo Manager and Journal were
+   rendering with after a visit to EPG Manager. */
+/* min-width re-derived for the P1 type scale (bead
+   enhancedchannelmanager-f4yc7). The row is 640px of fixed columns
+   (40+70+100+150+160+120) + 6x1rem gaps (96) + 2x1rem padding (32) = 768px,
+   plus a floor for the flexible Source column. That floor was 132px — 900px
+   total — when the source name rendered at the 16px UA default; the item
+   title is now 13px, so the same string needs 132 x 13/16 = 107px. 110px
+   rounded, giving 878px, rounded to 880. Measured at 1600 and 1280: every
+   header label still fits its own column (widest is "Last Updated" at 94px
+   in a 160px box).
+
+   The Actions column then went 120px -> 144px, so the fixed columns are 664px
+   and the min-width 904px. `.action-btn` is `flex-shrink: 0` as of bead
+   enhancedchannelmanager-xh33o, which means the actions no longer squeeze to
+   fit: at 36px per button (32px box + the row's 4px gap) less one trailing
+   gap, 120px held three and this row carries four (Toggle, Refresh, Edit and
+   the overflow kebab). A fourth in a 120px track overflows a container that
+   `.epg-source-row > div` gives `overflow: hidden`, which clips a control
+   rather than shrinking it.
+
+   144px, NOT the 140px that exactly fits. 140px is four 32px boxes and three
+   4px gaps with 0.00px left over, so the row is correct today and clips the
+   moment anyone adds a fifth control -- the failure `flex-shrink: 0` exists to
+   make visible, arriving as an invisible one. 144px is the same 4px trailing
+   slack `.account-actions` has in M3U's 180px track, so the two rows fail the
+   same way at the same distance from full instead of one of them sitting
+   exactly on the edge. "Last Updated" at 94px is still the widest header
+   label and still fits its own 160px column. */
+.epg-sources-list .list-header {
+  grid-template-columns: 40px 70px 100px 1fr 150px 160px 144px;
   gap: 1rem;
   padding: 0.75rem 1rem;
-  background-color: var(--input-bg);
-  border-bottom: 1px solid var(--border-primary);
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
   align-items: center;
-  min-width: 900px;
+  min-width: 904px;
   white-space: nowrap;
 }
 
-.list-header span[title] {
+.epg-sources-list .list-header span[title] {
   cursor: help;
 }
 
-.list-header span,
+.epg-sources-list .list-header span,
 .epg-source-row > div,
 .epg-source-row > span {
   min-width: 0;
@@ -61,14 +90,16 @@
 
 .epg-source-row {
   display: grid;
-  grid-template-columns: 40px 70px 100px 1fr 150px 160px 120px;
+  grid-template-columns: 40px 70px 100px 1fr 150px 160px 144px;
   gap: 1rem;
   padding: 1rem;
   border-bottom: 1px solid var(--border-primary);
   align-items: center;
   background-color: var(--bg-secondary);
   transition: background-color 0.15s;
-  min-width: 900px;
+  /* Kept in lockstep with `.epg-sources-list .list-header` above — the two
+     have to scroll as one. */
+  min-width: 904px;
 }
 
 .epg-source-row:last-child {
@@ -83,26 +114,34 @@
   opacity: 0.6;
 }
 
-.drag-handle {
-  display: flex;
-  align-items: center;
+/* `.drag-handle` is owned by shared/common.css § 10 DRAG HANDLES. This file
+   used to restate that whole rule bare — `display: flex`, `align-items:
+   center`, `cursor: grab`, `color: var(--drag-handle-color)` and `transition:
+   color 0.15s` are byte-identical to common.css:830 — plus `:hover` and
+   `:active` copies byte-identical to common.css:838 and :842. The only thing
+   this page actually adds is centring the glyph in its grid cell, so that is
+   all that is left here. common.css is emitted LAST inside the eager bundle
+   (verified in a build: `.drag-handle` lands at byte 259,429 of 273,289,
+   after StreamsPane.css's own `.drag-handle` reset at 165,668), and this
+   chunk is appended after the eager bundle, so the deleted declarations
+   resolve to exactly the values they resolved to before.
+
+   Bare, they were also the app-wide winners: one visit to EPG Manager
+   permanently added `justify-content: center` to StreamsPane's and Channel
+   Pipeline's drag handles too. `.epg-manager-tab` is this route's root
+   (EPGManagerTab.tsx:1077,1105,1129) and encloses the handle
+   (EPGManagerTab.tsx:145, inside `.epg-source-row` inside
+   `.epg-sources-list`; there is no `DragOverlay` and no portal). `:where()`
+   contributes zero specificity, so the rule keeps its 0-1-0 and still layers
+   over common.css on chunk order exactly as before
+   (bead enhancedchannelmanager-mktnb). */
+:where(.epg-manager-tab) .drag-handle {
   justify-content: center;
-  cursor: grab;
-  color: var(--drag-handle-color);
-  transition: color 0.15s;
-}
-
-.drag-handle:hover {
-  color: var(--drag-handle-hover);
-}
-
-.drag-handle:active {
-  cursor: grabbing;
-  color: var(--drag-handle-hover);
 }
 
 .source-priority {
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   font-weight: 600;
   color: var(--accent-primary);
   text-align: center;
@@ -128,20 +167,22 @@
 }
 
 .source-status .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
-.source-status .status-label {
-  font-size: 0.7rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-}
+/* The status word takes the micro role from shared/common.css § 24 via the
+   `micro-label` class in EPGManagerTab.tsx. Its colour still comes from the
+   `.status-*` class on `.source-status`, which is why § 24 sets none. */
 
+/* Badge role. The italic is gone — it was the only italic string in the pane
+   and it made an already small label harder to read. --text-secondary, not
+   --text-muted: in the light theme --text-muted measures 2.61:1 on
+   --bg-secondary, below the AA floor. */
 .source-status .status-hint {
-  font-size: 0.65rem;
-  color: var(--text-muted);
-  font-style: italic;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
+  color: var(--text-secondary);
 }
 
 /* .status-success, .status-error, .status-pending, .status-disabled, .status-idle are defined in shared/common.css */
@@ -150,8 +191,11 @@
   min-width: 0;
 }
 
+/* max-width stays in px on purpose — it is a truncation budget for the
+   column, not a measure. */
 .source-message {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   color: var(--warning);
   margin-top: 0.25rem;
   overflow: hidden;
@@ -162,11 +206,14 @@
 
 .status-error .source-message,
 .epg-source-row:has(.status-error) .source-message {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
+/* Had no font-size at all, so it rendered at the UA default 16px. */
 .source-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   margin-bottom: 0.25rem;
 }
@@ -175,7 +222,9 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -183,7 +232,7 @@
   background-color: var(--border-primary);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-md);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .source-url {
@@ -197,7 +246,8 @@
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -215,16 +265,16 @@
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
 }
 
-.updated-label {
-  color: var(--text-muted);
-}
-
-.updated-time {
-  color: var(--text-muted);
-}
+/* `.updated-label` and `.updated-time` are owned by shared/common.css § 29
+   UPDATED TIMESTAMP. This file and M3UManagerTab.css:349,353 declared them
+   bare and byte-identical in two different lazy chunks, so each tab owned the
+   other's timestamp colour for the rest of the session — latent today because
+   the values matched, and a defect the moment either page recoloured its own
+   (bead enhancedchannelmanager-mktnb). */
 
 .source-actions {
   display: flex;
@@ -232,46 +282,21 @@
   justify-content: flex-end;
 }
 
-.action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  background: none;
-  border: none;
-  border-radius: var(--radius-md);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.action-btn:hover:not(:disabled) {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.action-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.action-btn.delete:hover:not(:disabled) {
-  background-color: var(--error-bg);
-  color: var(--error);
-}
-
-.action-btn .material-icons {
-  font-size: 18px;
-}
+/* The whole `.action-btn` family is owned by shared/common.css § 18 ACTION
+   BUTTONS, including the 32x32 box this file used to declare — § 18 said
+   `padding: 0.375rem` and all three manager tabs overrode it identically,
+   so the shared rule described a geometry nothing rendered. The tabs' box
+   won and moved into § 18; row heights here are unchanged. Repeating any of
+   it here is what made it chunk-order dependent: these files are lazy
+   chunks appended after common.css, so a bare copy in whichever tab was
+   visited last silently won app-wide (bead enhancedchannelmanager-6z299). */
 
 /* Modal chrome (overlay, container, header/body/footer, form rows, buttons,
    error banner) now comes from the shared ModalBase.css — see EPGSourceModal. */
 
 /* Responsive */
 @media (max-width: 900px) {
-  .list-header {
+  .epg-sources-list .list-header {
     display: none;
   }
 
@@ -312,15 +337,15 @@
 }
 
 .dummy-epg-deprecation-notice .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--color-warning, #d9a627);
   flex-shrink: 0;
 }
 
 .dummy-epg-deprecation-notice p {
   margin: 0;
-  font-size: 0.8125rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -342,7 +367,8 @@
 
 .dummy-empty-state p {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -384,7 +410,7 @@
 }
 
 .dummy-status .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .dummy-status.active {
@@ -400,7 +426,9 @@
 }
 
 .dummy-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   margin-bottom: 0.25rem;
 }
@@ -409,7 +437,9 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -417,12 +447,12 @@
   background-color: var(--border-primary);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-md);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--accent-primary);
 }
 
 .dummy-pattern {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .dummy-actions {
@@ -547,6 +577,11 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+}
+
+.guide-migration-modal > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .guide-migration-summary {

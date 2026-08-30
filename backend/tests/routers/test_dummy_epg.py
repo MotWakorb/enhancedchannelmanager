@@ -412,65 +412,6 @@ class TestPreview:
         assert response.status_code == 500
 
     @pytest.mark.asyncio
-    async def test_preview_with_inline_lookup(self, async_client):
-        """Inline lookup table on the request resolves through the template engine."""
-        response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "ESPN",
-            "title_pattern": r"(?P<callsign>.+)",
-            "title_template": "{callsign|lookup:stations}",
-            "inline_lookups": {
-                "stations": {"ESPN": "Entertainment Sports Programming Network"},
-            },
-            "event_timezone": "UTC",
-            "program_duration": 180,
-        })
-
-        assert response.status_code == 200, response.json()
-        body = response.json()
-        assert body["matched"] is True
-        assert body["rendered"]["title"] == "Entertainment Sports Programming Network"
-
-    @pytest.mark.asyncio
-    async def test_preview_with_global_lookup_id(self, async_client):
-        """A lookup table created via /api/lookup-tables can be referenced by ID."""
-        created = (await async_client.post(
-            "/api/lookup-tables",
-            json={"name": "countries", "entries": {"US": "United States"}},
-        )).json()
-
-        response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "US",
-            "title_pattern": r"(?P<code>.+)",
-            "title_template": "{code|lookup:countries}",
-            "global_lookup_ids": [created["id"]],
-            "event_timezone": "UTC",
-            "program_duration": 180,
-        })
-
-        assert response.status_code == 200, response.json()
-        assert response.json()["rendered"]["title"] == "United States"
-
-    @pytest.mark.asyncio
-    async def test_preview_inline_overrides_global_lookup(self, async_client):
-        """Inline table with the same name as a global one takes precedence."""
-        created = (await async_client.post(
-            "/api/lookup-tables",
-            json={"name": "codes", "entries": {"A": "from-global"}},
-        )).json()
-
-        response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "A",
-            "title_pattern": r"(?P<k>.+)",
-            "title_template": "{k|lookup:codes}",
-            "global_lookup_ids": [created["id"]],
-            "inline_lookups": {"codes": {"A": "from-inline"}},
-            "event_timezone": "UTC",
-            "program_duration": 180,
-        })
-
-        assert response.json()["rendered"]["title"] == "from-inline"
-
-    @pytest.mark.asyncio
     async def test_preview_supports_pipe_transforms(self, async_client):
         """New template engine's pipe transforms work through the preview endpoint."""
         response = await async_client.post("/api/dummy-epg/preview", json={
@@ -500,8 +441,8 @@ class TestPreview:
 
     @pytest.mark.asyncio
     async def test_preview_include_trace_returns_step_by_step(self, async_client):
-        """include_trace=True returns a per-field trace describing pipes,
-        conditional branches, and lookup resolutions."""
+        """include_trace=True returns a per-field trace describing pipes
+        and conditional branches."""
         response = await async_client.post("/api/dummy-epg/preview", json={
             "sample_name": "nfl-chiefs",
             "title_pattern": r"(?P<league>\w+)-(?P<team>\w+)",
@@ -526,26 +467,6 @@ class TestPreview:
         conditional = next(t for t in title_trace if t["kind"] == "conditional")
         assert conditional["taken"] is True
         assert conditional["kind_detail"] == "truthy"
-
-    @pytest.mark.asyncio
-    async def test_preview_trace_records_lookup_miss(self, async_client):
-        """Trace's matched flag distinguishes lookup hits from misses."""
-        response = await async_client.post("/api/dummy-epg/preview", json={
-            "sample_name": "ZZ",
-            "title_pattern": r"(?P<code>.+)",
-            "title_template": "{code|lookup:countries}",
-            "inline_lookups": {"countries": {"US": "United States"}},
-            "event_timezone": "UTC",
-            "program_duration": 180,
-            "include_trace": True,
-        })
-
-        assert response.status_code == 200
-        pipe = response.json()["traces"]["title_template"][0]["pipes"][0]
-        assert pipe["transform"] == "lookup"
-        assert pipe["source"] == "countries"
-        assert pipe["matched"] is False
-
 
 # =============================================================================
 # Batch preview — matcher-level validity flag (bead hirm6)

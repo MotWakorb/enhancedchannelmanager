@@ -7,7 +7,10 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import globals from 'globals';
 
 export default defineConfig([
-  { ignores: ['dist', '.dist_root'] },
+  // Build outputs. `.audit-dist` is produced by vite.audit.config.ts (the CSS
+  // chunk-leak audit) and `.modal-harness-dist` by vite.harness.config.ts;
+  // both contain minified bundles that fail every rule when linted.
+  { ignores: ['dist', '.dist_root', '.audit-dist', '.modal-harness-dist'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   reactHooks.configs.flat.recommended,

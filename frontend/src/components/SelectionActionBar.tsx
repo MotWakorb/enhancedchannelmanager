@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { SortMode } from '../types';
+import { ImmediateActionNote } from './ImmediateActionNote';
 import './SelectionActionBar.css';
 
 /**
@@ -407,8 +408,28 @@ export function SelectionActionBar({
   );
 
   return createPortal(
-    <div className="selection-action-bar" role="toolbar" aria-label="Selection actions">
-      <span className="selection-action-bar-count" data-testid="selection-bar-count">
+    /* The bar is Edit-Mode-only, and Probe is the one action on it that writes
+       to the server the instant it is clicked. Per the PO's 2026-08-15 decision
+       probing stays immediate — a probe result staged and applied forty minutes
+       later would be worse than none — so it meets Edit Mode's rule by saying
+       so, in a line of its own above the bar because the bar itself is a
+       single nowrap row (bead enhancedchannelmanager-kz089, fix round 2). */
+    <div className="selection-action-bar-shell">
+      <ImmediateActionNote
+        what="Probing"
+        detail="It writes the stream stats it measures. Everything else on this bar stages."
+        compact
+        testId="probe-immediate-note-bulk"
+      />
+      <div className="selection-action-bar" role="toolbar" aria-label="Selection actions">
+      <span
+        className="selection-action-bar-count"
+        data-testid="selection-bar-count"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        aria-label={`${selectedCount} ${selectedCount === 1 ? 'channel' : 'channels'} selected`}
+      >
         {selectedCount} selected
       </span>
       <button
@@ -699,6 +720,7 @@ export function SelectionActionBar({
         <span className="material-icons" aria-hidden="true">close</span>
         <span>Clear</span>
       </button>
+      </div>
     </div>,
     document.body,
   );

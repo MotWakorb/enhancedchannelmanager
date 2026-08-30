@@ -17,7 +17,6 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 import { CustomSelect } from '../CustomSelect';
-import { OverflowMenu, type OverflowMenuItem } from '../OverflowMenu';
 import { EnhancedStatsPanel } from './EnhancedStatsPanel';
 import { PopularityPanel } from './PopularityPanel';
 import { WatchHistoryPanel } from './WatchHistoryPanel';
@@ -29,6 +28,12 @@ import { AttributionBadge } from '../AttributionBadge';
 import { ChannelStatsDetailModal } from '../ChannelStatsDetailModal';
 import type { Viewer } from '../../types';
 import './StatsTab.css';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { SourceLoadStatus } from '../SourceLoadStatus';
+import { StickySectionNav } from '../StickySectionNav';
+import { OverflowScroller } from '../OverflowScroller';
+import { formatConnections, describeConnections } from './statsConnections';
+import { CHART_TICK_META, CHART_TICK_MICRO, CHART_TEXT_FILL } from '../../utils/chartTypography';
 
 // Historical data point for charts
 interface HistoricalDataPoint {
@@ -239,6 +244,7 @@ function formatProgramTime(date: Date): string {
 }
 
 export function StatsTab() {
+  const statsContentRef = useRef<HTMLDivElement>(null);
   // Data state
   const [channelStats, setChannelStats] = useState<ChannelStatsResponse | null>(null);
   const [events, setEvents] = useState<SystemEvent[]>([]);
@@ -703,40 +709,6 @@ export function StatsTab() {
   const totalClients = channelStats?.channels?.reduce((sum, ch) => sum + (ch.client_count || 0), 0) || 0;
   const activeChannels = channelStats?.count || 0;
 
-  // Section jump nav (bead 09x38.15 item 9): ~10 sections stack inside
-  // .stats-content with no way to jump between them but scrolling. The
-  // first four are conditionally rendered (only when their data is
-  // non-empty); the rest are always-mounted child panels. Only list a
-  // conditional section when it will actually be in the DOM to scroll to.
-  const statsSectionNavItems: OverflowMenuItem[] = useMemo(() => {
-    const scrollToSection = (id: string) => () => {
-      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    };
-    const items: OverflowMenuItem[] = [];
-    if (activeChannels > 0) {
-      items.push({ label: 'Active Channels', icon: 'live_tv', onClick: scrollToSection('stats-section-active-channels') });
-    }
-    if (streamingEvents.length > 0) {
-      items.push({ label: 'Recent Events', icon: 'event_note', onClick: scrollToSection('stats-section-recent-events') });
-    }
-    if (topWatchedChannels.length > 0) {
-      items.push({ label: 'Top Watched Channels', icon: 'trending_up', onClick: scrollToSection('stats-section-top-watched') });
-    }
-    if (bandwidthStats) {
-      items.push({ label: 'Bandwidth Usage', icon: 'data_usage', onClick: scrollToSection('stats-section-bandwidth-usage') });
-    }
-    items.push(
-      { label: 'Bandwidth In/Out', icon: 'swap_vert', onClick: scrollToSection('stats-section-bandwidth-panel') },
-      { label: 'Enhanced Statistics', icon: 'insights', onClick: scrollToSection('stats-section-enhanced') },
-      { label: 'Popularity Rankings', icon: 'star', onClick: scrollToSection('stats-section-popularity') },
-      { label: 'Watch History', icon: 'history', onClick: scrollToSection('stats-section-watch-history') },
-      { label: 'User Watch Time', icon: 'person', onClick: scrollToSection('stats-section-user-watch-time') },
-      { label: 'Providers', icon: 'cloud_queue', onClick: scrollToSection('stats-section-providers') },
-      { label: 'Provider Stream Usage', icon: 'table_rows', onClick: scrollToSection('stats-section-provider-stream-usage') },
-    );
-    return items;
-  }, [activeChannels, streamingEvents.length, topWatchedChannels.length, bandwidthStats]);
-
   // bd-ox5q8: M3U account name lookup for the Active Channels stream
   // badge. Backend's /api/stats/channels enrichment surfaces each row's
   // ``m3u_account_id`` (when the live resolver attributes the active
@@ -900,6 +872,9 @@ export function StatsTab() {
   if (loading) {
     return (
       <div className="stats-tab">
+        <RouteHeaderSlot name="status">
+          <SourceLoadStatus state="loading" sourceName="statistics" successText="" />
+        </RouteHeaderSlot>
         <div className="tab-loading">
           <span className="material-icons spinning">sync</span>
           <p>Loading stats...</p>
@@ -912,21 +887,20 @@ export function StatsTab() {
     <div className="stats-tab">
       {/* Header */}
       <div className="stats-header">
-        <div className="header-left">
-          <h2>Live Stats</h2>
-          <div className="header-summary">
-            <div className="summary-stat">
+        <RouteHeaderSlot name="status"><div className="header-left">
+          {channelStats ? <OverflowScroller label="live counts" className="summary-scroller"><div className="header-summary">
+            <div className="summary-stat" title="Active channels">
               <span className="material-icons">live_tv</span>
               <div>
                 <div className="stat-value">{activeChannels}</div>
-                <div className="stat-label">Active Channels</div>
+                <div className="stat-label">Active</div>
               </div>
             </div>
-            <div className="summary-stat">
+            <div className="summary-stat" title="Connected clients">
               <span className="material-icons">people</span>
               <div>
                 <div className="stat-value">{totalClients}</div>
-                <div className="stat-label">Connected Clients</div>
+                <div className="stat-label">Clients</div>
               </div>
             </div>
             {/* bd-49obj / GH-481: below the condensed threshold, keep the
@@ -944,19 +918,21 @@ export function StatsTab() {
                 <div
                   key={m3u.id}
                   className={isUnknown ? 'summary-stat unknown-bucket' : 'summary-stat'}
-                  title={isUnknown ? 'Live streams whose upstream provider could not be attributed by the resolver. See SLO-8 (provider attribution rate).' : undefined}
+                  title={isUnknown
+                    ? 'Live streams whose upstream provider could not be attributed by the resolver. See SLO-8 (provider attribution rate).'
+                    : describeConnections(m3u.name, m3u.current, m3u.max)}
                 >
                   <span className="material-icons">{isUnknown ? 'help_outline' : 'cloud_queue'}</span>
                   <div>
                     <div className="stat-value">
-                      {isUnknown ? m3u.current : `${m3u.current}/${m3u.max}`}
+                      {formatConnections(m3u.current, m3u.max)}
                     </div>
                     <div className="stat-label">{m3u.name}</div>
                   </div>
                 </div>
               );
             })}
-          </div>
+          </div></OverflowScroller> : <SourceLoadStatus state="error" sourceName="statistics" successText="" />}
 
           {/* Condensed provider table (bd-49obj / GH-481): with many
               providers, per-provider tile badges wrap into several rows and
@@ -985,7 +961,7 @@ export function StatsTab() {
                           {m3u.name}
                         </td>
                         <td className="provider-live-table-count">
-                          {isUnknown ? m3u.current : `${m3u.current}/${m3u.max}`}
+                          {formatConnections(m3u.current, m3u.max)}
                         </td>
                       </tr>
                     );
@@ -994,37 +970,34 @@ export function StatsTab() {
               </table>
             </div>
           )}
-        </div>
-
-        <div className="header-actions">
           <div className={`refresh-indicator ${refreshInterval > 0 ? 'active' : ''}`}>
             <span className={`material-icons ${refreshing ? 'spinning' : ''}`}>
               {refreshing ? 'sync' : 'schedule'}
             </span>
-            {refreshInterval > 0 ? `Auto-refresh: ${refreshInterval}s` : 'Manual refresh'}
+            <span className="refresh-label">Auto refresh</span>
+            <CustomSelect
+              className="refresh-select"
+              ariaLabel="Auto refresh interval"
+              value={String(refreshInterval)}
+              onChange={(val) => setRefreshInterval(Number(val))}
+              options={REFRESH_OPTIONS.map(opt => ({
+                value: String(opt.value),
+                label: opt.label,
+              }))}
+            />
           </div>
+        </div></RouteHeaderSlot>
 
-          <CustomSelect
-            className="refresh-select"
-            value={String(refreshInterval)}
-            onChange={(val) => setRefreshInterval(Number(val))}
-            options={REFRESH_OPTIONS.map(opt => ({
-              value: String(opt.value),
-              label: opt.label,
-            }))}
-          />
-
+        <RouteHeaderSlot name="primary-action">
           <button
-            className="btn-secondary"
+            className="btn-primary"
             onClick={() => fetchData(false)}
             disabled={refreshing}
           >
             <span className="material-icons">refresh</span>
             Refresh
           </button>
-
-          <OverflowMenu items={statsSectionNavItems} label="Jump to section" icon="list" />
-        </div>
+        </RouteHeaderSlot>
       </div>
 
       {/* Error state */}
@@ -1036,7 +1009,24 @@ export function StatsTab() {
       )}
 
       {/* Content */}
-      <div className="stats-content">
+      <div className="stats-content" ref={statsContentRef}>
+        <StickySectionNav
+          containerRef={statsContentRef}
+          selector={[
+            '#stats-section-active-channels',
+            '#stats-section-recent-events',
+            '#stats-section-top-watched',
+            '#stats-section-bandwidth-usage',
+            '#stats-section-enhanced',
+            '#stats-section-popularity',
+            '#stats-section-watch-history',
+            '#stats-section-bandwidth-panel',
+            '#stats-section-user-watch-time',
+            '#stats-section-providers',
+            '#stats-section-provider-stream-usage',
+          ].join(', ')}
+          routeKey="stats"
+        />
         {/* No streams */}
         {!error && activeChannels === 0 && (
           <div className="no-streams">
@@ -1049,7 +1039,7 @@ export function StatsTab() {
         {/* Active Channels */}
         {activeChannels > 0 && (
           <div className="active-channels" id="stats-section-active-channels">
-            <h3 className="section-title">Active Channels</h3>
+            <h3 className="panel-caption">Active Channels</h3>
 
             {channelStats?.channels?.map((channel) => {
               // Try to look up channel name from ECM's channel data by UUID
@@ -1336,14 +1326,14 @@ export function StatsTab() {
                               <LineChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
                                 <XAxis
                                   dataKey="label"
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   interval="preserveStartEnd"
                                 />
                                 <YAxis
                                   domain={[0.8, 1.2]}
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   tickFormatter={(v) => `${v}x`}
@@ -1373,13 +1363,13 @@ export function StatsTab() {
                               <AreaChart data={chartData} margin={{ top: 5, right: 5, bottom: 5, left: 5 }}>
                                 <XAxis
                                   dataKey="label"
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   interval="preserveStartEnd"
                                 />
                                 <YAxis
-                                  tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                                  tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                                   axisLine={{ stroke: 'var(--border-primary)' }}
                                   tickLine={false}
                                   tickFormatter={(v) => formatBytes(v)}
@@ -1599,7 +1589,7 @@ export function StatsTab() {
                               if (client.emby_user_name) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.emby_user_name}
                                     <span
                                       className="badge attribution-source-badge"
@@ -1613,7 +1603,7 @@ export function StatsTab() {
                               if (client.plex_user_name) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.plex_user_name}
                                     <span className="badge attribution-source-badge">via Plex</span>
                                   </span>
@@ -1622,7 +1612,7 @@ export function StatsTab() {
                               if (client.jellyfin_user_name) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.jellyfin_user_name}
                                     <span className="badge attribution-source-badge">via Jellyfin</span>
                                   </span>
@@ -1633,7 +1623,7 @@ export function StatsTab() {
                               if (client.username || client.user_id) {
                                 return (
                                   <span className="client-user">
-                                    <span className="material-icons" style={{ fontSize: '14px' }}>person</span>
+                                    <span className="material-icons">person</span>
                                     {client.username || `User #${client.user_id}`}
                                   </span>
                                 );
@@ -1658,7 +1648,6 @@ export function StatsTab() {
                                 <span className="client-device-ip" data-testid="client-device-ip">
                                   <span
                                     className="material-icons"
-                                    style={{ fontSize: '14px' }}
                                     title="Real client device IP reported by the media server"
                                   >
                                     devices
@@ -1705,7 +1694,7 @@ export function StatsTab() {
         {streamingEvents.length > 0 && (
           <div className="events-section" id="stats-section-recent-events">
             <div className="events-header">
-              <h3 className="section-title">Recent Events</h3>
+              <h3 className="panel-caption">Recent Events</h3>
               <div className="events-filter">
                 <CustomSelect
                   value={eventFilter}
@@ -1754,7 +1743,7 @@ export function StatsTab() {
         {topWatchedChannels.length > 0 && (
           <div className="top-watched-section" id="stats-section-top-watched">
             <div className="top-watched-header">
-              <h3 className="section-title">Top Watched Channels</h3>
+              <h3 className="panel-caption">Top Watched Channels</h3>
               <div className="top-watched-toggle">
                 <button
                   className={`toggle-btn ${topWatchedSortBy === 'views' ? 'active' : ''}`}
@@ -1797,7 +1786,7 @@ export function StatsTab() {
         {/* Bandwidth Usage Summary */}
         {bandwidthStats && (
           <div className="bandwidth-section" id="stats-section-bandwidth-usage">
-            <h3 className="section-title">Bandwidth Usage</h3>
+            <h3 className="panel-caption">Bandwidth Usage</h3>
             <div className="bandwidth-summary">
               <div className="bandwidth-stat">
                 <span className="bandwidth-label">Today</span>
@@ -1861,13 +1850,13 @@ export function StatsTab() {
                     >
                       <XAxis
                         dataKey="date"
-                        tick={{ fontSize: 11, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: CHART_TICK_META, fill: CHART_TEXT_FILL }}
                         axisLine={{ stroke: 'var(--border-primary)' }}
                         tickLine={false}
                       />
                       <YAxis
                         domain={[0, maxBytes * 1.1]}
-                        tick={{ fontSize: 10, fill: 'var(--text-muted)' }}
+                        tick={{ fontSize: CHART_TICK_MICRO, fill: CHART_TEXT_FILL }}
                         axisLine={{ stroke: 'var(--border-primary)' }}
                         tickLine={false}
                         tickFormatter={(v) => formatBytes(v)}

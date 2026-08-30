@@ -20,8 +20,16 @@ from config import (
     get_http_port,
     CONFIG_DIR,
     CONFIG_FILE,
+    MCP_SERVICE_FILE,
+    MCP_SERVICE_FILENAME,
+    MCPApiKeyStorageError,
+    SettingsWriteTimeout,
+    mcp_api_key_storage_error_detail,
+    settings_file_allows_startup_writes,
+    superseded_mcp_service_projection,
     get_log_level_from_env,
     set_log_level,
+    sweep_orphaned_settings_temporaries,
 )
 from database import init_db, get_session
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
@@ -47,7 +55,12 @@ logging.basicConfig(
 logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 # Sanitize all log arguments to prevent log injection (CWE-117)
-from log_utils import install_safe_logging, install_ring_buffer  # noqa: E402
+from log_utils import (  # noqa: E402
+    install_persistent_json_logging,
+    install_ring_buffer,
+    install_safe_logging,
+    register_sensitive_values_from_object,
+)
 install_safe_logging()
 install_ring_buffer()
 
@@ -112,6 +125,7 @@ tags_metadata = [
     {"name": "Observability", "description": "Telemetry endpoints — frontend runtime error reporting (ADR-006)"},
     {"name": "Channel Merges", "description": "Interactive stream-to-channel deduplication — candidate lookup and merge queue (ADR-008, bd-1v4ht)"},
     {"name": "Event Sync Reviews", "description": "Event Sync ambiguous-match review queue — fingerprint-keyed accept/reject decisions (bead ti939.3.2)"},
+    {"name": "Profile Conflict Reviews", "description": "Human review queue for contradictory M3U channel-profile settings"},
     {"name": "Event Sync Exclusions", "description": "Event Sync operator never-attach exclusions — fingerprint-keyed standing orders consulted before the attach band (bead ti939.3.5)"},
     {"name": "Emby", "description": "Emby actions — clear cached channel logos so Emby re-fetches them (GH #475)"},
     {"name": "Sync Targets", "description": "Cross-instance live-sync destinations (remote Dispatcharr-B) — CRUD for sync targets (epic i39wu)"},
@@ -142,7 +156,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.0",
+    version="0.18.1",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -229,6 +243,26 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Assert HSTS only from the request scheme this process was handed. ECM's
+    # own code adds no trust in X-Forwarded-Proto / X-Forwarded-Host /
+    # Forwarded on top of that, because the ECM backend has no trusted-proxy
+    # allowlist of its own. Note the narrow claim: uvicorn's
+    # ProxyHeadersMiddleware is enabled by default (proxy_headers=True,
+    # forwarded_allow_ips defaulting to 127.0.0.1) and runs OUTSIDE this
+    # application, so for a loopback client it may itself have rewritten
+    # scope['scheme'] before anything here runs. That is uvicorn's policy, not
+    # ECM's, and HSTS asserted over genuine cleartext is ignored by the client
+    # anyway (RFC 6797 8.1).
+    #
+    # No includeSubDomains and no preload: this pin is deliberately scoped to
+    # this host, and both of those extend it past what ECM can promise.
+    # max-age is one year, which per RFC 6797 8.3 is HOST-scoped and
+    # PORT-AGNOSTIC — visiting the HTTPS listener also force-upgrades
+    # http://<host>:6100 for a year with no click-through. That interaction is
+    # documented in README.md under "Port Configuration", including how to
+    # reach the break-glass recovery once a pin exists.
+    if request.url.scheme.lower() == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
 
@@ -510,8 +544,25 @@ AUTH_EXEMPT_PATHS = {
     "/api/auth/providers",
     "/api/auth/dispatcharr/login",
     "/api/auth/admin/settings",
-    # Initial setup (only works when no config exists)
-    "/api/backup/restore-initial",
+    # NOTE: /api/backup/restore-initial was listed here until bead
+    # enhancedchannelmanager-lf29s. It rewrites journal.db wholesale — the
+    # users table, admin password hashes included — and carried no auth
+    # dependency of its own, so the exemption made an unauthenticated instance
+    # takeover reachable on any instance whose Dispatcharr connection was not
+    # yet configured. It is deliberately NOT exempt now:
+    #   * first-run reachability is unaffected. This middleware only enforces
+    #     when ``require_auth and setup_complete`` are both true, and a genuine
+    #     first run has setup_complete False, so it never engages there.
+    #   * the endpoint's real gate lives in the handler
+    #     (``routers.backup._guard_initial_restore``), which inspects instance
+    #     state — does a user row exist? — independently of setup_complete, so
+    #     the restore gate remains safe if configuration persistence is ever
+    #     interrupted or damaged.
+    # Removing the exemption therefore adds no new refusal; it prevents the
+    # handler from accepting and applying the upload on an owned instance.
+    # Multipart parsing can still spool file data before handler dependencies
+    # run, so bounded upload/decompression enforcement also lives in the
+    # restore handler (bead enhancedchannelmanager-9kwzp.3).
     # OpenAPI docs
     "/api/docs",
     "/api/redoc",
@@ -519,7 +570,14 @@ AUTH_EXEMPT_PATHS = {
 }
 
 from auth.settings import get_auth_settings
-from auth.dependencies import get_token_from_request, decode_token_safe
+from auth.dependencies import (
+    get_token_from_request,
+    decode_token_safe,
+    token_matches_user_auth_epoch,
+)
+from auth.mcp_capabilities import is_mcp_route_allowed
+from auth.mcp_service import load_mcp_service_credentials, verify_mcp_service_claim
+from models import User
 
 
 @app.middleware("http")
@@ -536,23 +594,104 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith("/api/"):
         auth_settings = get_auth_settings()
 
+        # Credential separation is independent of the human-auth mode. The
+        # operator-facing key terminates at the MCP listener and can never
+        # become a backend principal, including while JWT auth is disabled.
+        presented_token = get_token_from_request(request)
+        public_mcp_key = get_settings().mcp_api_key
+        if (
+            public_mcp_key and presented_token
+            and hmac.compare_digest(presented_token, public_mcp_key)
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": (
+                        "MCP service principal client credentials are valid only "
+                        "at the sidecar and cannot authenticate to the backend"
+                    )
+                },
+            )
+
         # Skip auth when it's not required or setup isn't complete
         if auth_settings.require_auth and auth_settings.setup_complete:
             # Check if path is exempt
             if path not in AUTH_EXEMPT_PATHS:
-                token = get_token_from_request(request)
+                token = presented_token
                 # Allow MCP API key as alternative to JWT. Constant-time compare
                 # to avoid a timing oracle on the static key (bd-1wq7z.24 (a));
                 # the truthiness guards on both operands keep compare_digest from
                 # ever seeing None (it raises on None) and reject an empty key.
-                settings = get_settings()
+                # Never raises: this runs on every non-exempt request, so a
+                # projection directory ECM cannot write must degrade the MCP
+                # principal, not 500 every authenticated request
+                # (…-04c0u.8). ``None`` means no sidecar principal exists, so
+                # the branch below is skipped and the request falls through to
+                # ordinary JWT handling — fail-closed.
+                credentials = load_mcp_service_credentials(MCP_SERVICE_FILE)
+                # The operator-disclosed key authenticates only the MCP
+                # listener. Return an explicit refusal (rather than treating it
+                # as a malformed JWT) so upgrades fail closed and are easy to
+                # diagnose without granting any backend principal.
                 if (
-                    settings.mcp_api_key
+                    credentials is not None
+                    and credentials.backend_key
                     and token
-                    and hmac.compare_digest(token, settings.mcp_api_key)
+                    and hmac.compare_digest(token, credentials.backend_key)
                 ):
+                    # The static key authenticates a service principal; it
+                    # does not confer blanket /api authority. Match the
+                    # concrete URL to FastAPI's registered route template so
+                    # path parameters cannot evade the explicit matrix. A new
+                    # or unregistered route fails closed.
+                    route_template = None
+                    for route in app.routes:
+                        path_regex = getattr(route, "path_regex", None)
+                        methods = getattr(route, "methods", set()) or set()
+                        if (
+                            request.method in methods
+                            and path_regex is not None
+                            and path_regex.fullmatch(path)
+                        ):
+                            route_template = route.path
+                            break
+                    if not is_mcp_route_allowed(request.method, route_template):
+                        logger.warning(
+                            "[AUTH] MCP service principal denied: %s %s",
+                            request.method,
+                            path,
+                        )
+                        return JSONResponse(
+                            status_code=403,
+                            content={
+                                "detail": (
+                                    "The MCP service principal is not authorized "
+                                    "for this operation; a human operator admin is required"
+                                )
+                            },
+                        )
+                    try:
+                        await verify_mcp_service_claim(request, credentials)
+                    except HTTPException as exc:
+                        return JSONResponse(
+                            status_code=exc.status_code,
+                            content={"detail": exc.detail},
+                        )
                     return await call_next(request)
-                if not token or not decode_token_safe(token):
+                payload = decode_token_safe(token) if token else None
+                authenticated = False
+                if payload:
+                    session = get_session()
+                    try:
+                        user = session.query(User).filter(User.id == payload.get("sub")).first()
+                        authenticated = bool(
+                            user
+                            and user.is_active
+                            and token_matches_user_auth_epoch(payload, user)
+                        )
+                    finally:
+                        session.close()
+                if not authenticated:
                     return JSONResponse(
                         status_code=401,
                         content={"detail": "Not authenticated"},
@@ -818,10 +957,98 @@ async def get_request_rates():
     }
 
 
+# The 422 handler below never puts a request-body VALUE into a log line or a
+# response, on any path. That is unconditional by design, and the design is the
+# fix rather than an implementation detail.
+#
+# WHAT CAME BEFORE. Bead enhancedchannelmanager-2owpi replaced a single
+# hardcoded "/api/auth" check with a module constant,
+# CREDENTIAL_BEARING_BODY_PREFIXES, seeded with "/api/auth" and "/api/tls" —
+# the two the bead had evidence for. A Codex pre-merge review of the same
+# branch then named four more credential-bearing routes the constant did not
+# cover, all of which were still logging their raw bodies at ERROR and echoing
+# them to the caller:
+#
+#   POST /api/settings          SettingsRequest carries the Dispatcharr
+#                               password, the Dispatcharr API key, SMTP
+#                               credentials, the Discord webhook URL and the
+#                               Telegram bot token.
+#   POST|PATCH /api/cloud-targets   an arbitrary ``credentials`` mapping.
+#   POST|PUT   /api/sync-targets    an arbitrary ``credentials`` mapping.
+#   POST|PATCH /api/admin/users     a plaintext ``password``.
+#
+# Those four were the ones a human review surfaced. Walking the live app for
+# write routes whose request models hold credential-shaped fields put the real
+# figure at SIXTEEN route/model pairs outside the two covered prefixes, adding
+# among others POST /api/settings/test-smtp, /test-discord, /test-telegram, the
+# Emby/Plex/Jellyfin test-connection routes, POST /api/cloud-targets/test and
+# POST /api/epg/migration/apply. That walk is
+# tests/routers/test_9kwzp_validation_error_body_redaction.py, and the gap
+# between "four found by reading" and "sixteen found by walking" is the whole
+# argument below.
+#
+# WHY THE MECHANISM CHANGED AND NOT JUST ITS CONTENTS. Those four are an
+# indictment of the allowlist, not of whoever wrote it. A list of
+# credential-bearing prefixes has to be extended by hand every time a route
+# starts accepting a secret, and the cost of forgetting is paid silently: the
+# unlisted route defaults to LEAKING, the tests stay green, and nothing tells
+# anyone. Appending the sixteen missing prefixes would have restored exactly
+# the state that produced them, and left the seventeenth to be found the same
+# way.
+#
+# ALTERNATIVE CONSIDERED AND REJECTED: redact by field NAME instead of by
+# route, matching against the credential-key denylist that routers/backup.py
+# already maintains. That has the same shape of defect one layer down. It
+# swaps a hand-maintained list of paths for a hand-maintained list of field
+# names, and a credential whose name nobody anticipated (an opaque vendor
+# token, "pat", "signing_key") defaults to leaking again. A denylist cannot
+# have a fail-closed default, because its default IS the deny list being
+# incomplete. That is acceptable for the backup redactor, whose job is to
+# preserve as much of an artifact as it safely can; it is the wrong trade for a
+# debug log line whose entire content is discretionary.
+#
+# So: no list, no per-route knob, nothing to remember. When someone adds a
+# credential-bearing route tomorrow and reads none of this, its body is
+# redacted because every body is redacted.
+#
+# WHAT SURVIVES, SO THIS IS NOT A LOSS OF DIAGNOSTICS. Only body VALUES are
+# withheld. Every validation error keeps its ``loc`` (which field), ``msg``
+# (what was wrong with it) and ``type`` (the pydantic error class), on every
+# path, so a 422 still tells the caller precisely which field to fix and why.
+# The one diagnostic that goes is pydantic's ``input`` echo of the offending
+# value, and on a missing-field error that ``input`` is the whole request body
+# anyway (which is why redacting ``exc.body`` alone was never sufficient).
+#
+# Note also that cloud_storage.upload_security.redact_secrets does NOT rescue
+# this path and never did: its key/value rule needs the key name adjacent to
+# the separator, and JSON puts a closing quote in between, so
+# {"aws_secret_access_key": "..."} passes through it untouched.
+_BODY_REDACTED = "[REDACTED: request bodies are not logged or returned]"
+
+
+def _redact_validation_errors(errors: list) -> list:
+    """Strip pydantic's per-error ``input`` echo from validation errors.
+
+    ``exc.errors()`` carries the offending input alongside each message, and
+    for a missing-field error that input is the ENTIRE request body, so
+    redacting the body alone would not have been enough (bead 2owpi).
+
+    ``loc``, ``msg`` and ``type`` are left untouched: they name the offending
+    field and say what was wrong with it without quoting what was sent.
+    """
+    redacted = []
+    for err in errors:
+        safe = dict(err)
+        if "input" in safe:
+            safe["input"] = _BODY_REDACTED
+        redacted.append(safe)
+    return redacted
+
+
 # Custom validation error handler to log details
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    """Log detailed validation errors for debugging."""
+    """Log validation errors without quoting any request-body value."""
     logger.error("[VALIDATION-ERROR] Request path: %s", request.url.path)
     logger.error("[VALIDATION-ERROR] Request method: %s", request.method)
 
@@ -833,24 +1060,34 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     }
     logger.error("[VALIDATION-ERROR] Request headers: %s", safe_headers)
 
-    # Log body but redact on auth paths (may contain passwords)
-    is_auth_path = request.url.path.startswith("/api/auth")
+    # Body SHAPE only: how many bytes arrived and what the client said they
+    # were. Never the bytes themselves. This is what distinguishes "the client
+    # sent nothing" from "the client sent something we could not parse", which
+    # is the part of the raw-body log line that had real diagnostic value; the
+    # ``loc`` of each error below covers the rest.
     try:
         body = await request.body()
-        if is_auth_path:
-            logger.error("[VALIDATION-ERROR] Request body: [REDACTED — auth endpoint]")
-        else:
-            logger.error("[VALIDATION-ERROR] Request body (decoded): %s", body.decode())
+        logger.error(
+            "[VALIDATION-ERROR] Request body: %s (%d bytes, content-type: %s)",
+            _BODY_REDACTED,
+            len(body),
+            request.headers.get("content-type", "unset"),
+        )
     except Exception as e:
         logger.error("[VALIDATION-ERROR] Could not read body: %s", e)
 
-    logger.error("[VALIDATION-ERROR] Validation errors: %s", exc.errors())
-    logger.error("[VALIDATION-ERROR] Validation body: %s", "[REDACTED]" if is_auth_path else exc.body)
+    logged_errors = _redact_validation_errors(exc.errors())
+    logger.error("[VALIDATION-ERROR] Validation errors: %s", logged_errors)
+    # A separate "[VALIDATION-ERROR] Validation body: %s" line used to log
+    # exc.body here. It is gone rather than redacted: with the value withheld
+    # it would print the same constant on every 422 forever, which is noise
+    # that reads like information. The line above already reports the body's
+    # size and content type.
 
     # Sanitize errors for JSON serialization — ctx.error may contain
     # non-serializable ValueError objects from field_validator
     safe_errors = []
-    for err in exc.errors():
+    for err in logged_errors:
         safe_err = dict(err)
         if "ctx" in safe_err and isinstance(safe_err["ctx"], dict):
             safe_err["ctx"] = {k: str(v) for k, v in safe_err["ctx"].items()}
@@ -858,7 +1095,47 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
     return JSONResponse(
         status_code=422,
-        content={"detail": safe_errors, "body": str(exc.body)},
+        content={
+            "detail": safe_errors,
+            # Kept as a key so the response shape is unchanged for any client
+            # that reads it; the value is constant.
+            "body": _BODY_REDACTED,
+        },
+    )
+
+
+@app.exception_handler(SettingsWriteTimeout)
+async def settings_write_timeout_handler(request: Request, exc: SettingsWriteTimeout):
+    """Surface a contended settings write as a retryable 503, not a 500.
+
+    ``save_settings`` takes the cross-process settings lock on a bounded retry
+    budget rather than blocking forever (blocking forever stalls the event
+    loop, and every caller is on it). Exhausting the budget means the save did
+    NOT happen and nothing was written — which is a service-availability
+    condition the client should retry, not an internal error.
+    """
+    logger.error("[MAIN] Settings write lock unavailable on %s: %s", request.url.path, exc)
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Settings are being saved by another writer. Please retry."},
+        headers={"Retry-After": "5"},
+    )
+
+
+@app.exception_handler(MCPApiKeyStorageError)
+async def mcp_api_key_storage_error_handler(
+    request: Request, exc: MCPApiKeyStorageError
+):
+    """Fail closed with the stable sanitized contract for public settings writers."""
+    logger.error(
+        "[MAIN] MCP API key settings save refused on %s because authority "
+        "storage is unavailable or untrusted (%s)",
+        request.url.path,
+        type(exc).__name__,
+    )
+    return JSONResponse(
+        status_code=503,
+        content={"detail": mcp_api_key_storage_error_detail("settings save")},
     )
 
 
@@ -883,9 +1160,83 @@ async def startup_event():
     from tls.https_server import is_https_subprocess
     _is_https_subprocess = is_https_subprocess()
 
+    # Remove any .settings.json.*.tmp a SIGKILLed/OOM-killed save left behind.
+    # Each orphan is a complete 0600 credential snapshot, so after a rotation
+    # that replaced a compromised key the orphan preserves that key forever;
+    # nothing else in the codebase removes them. Runs under the settings write
+    # lock and is best effort — see config.sweep_orphaned_settings_temporaries.
+    sweep_orphaned_settings_temporaries()
+
+    # Valid non-object JSON is not an ECM settings document. Preserve it for
+    # operator recovery by suppressing startup-only settings writers below.
+    _settings_file_allows_startup_writes = settings_file_allows_startup_writes()
+
+    # Reconcile public MCP credential authority before readiness. This is the
+    # first-install generation and legacy-migration point. A present-but-
+    # untrusted artifact degrades to no public key without blocking startup;
+    # explicit credential transitions remain fail-closed until it is repaired.
+    startup_settings = get_settings()
+
+    register_sensitive_values_from_object(startup_settings.model_dump())
+
+    # Install persistence as soon as its settings are available, before the
+    # database, credential-integrity, migration, and service diagnostics run.
+    install_persistent_json_logging(
+        CONFIG_DIR,
+        max_bytes=startup_settings.backend_log_file_max_bytes,
+        backup_count=startup_settings.backend_log_file_backup_count,
+    )
+
     logger.info("=" * 60)
     logger.info("[MAIN] Enhanced Channel Manager starting up%s", " (HTTPS subprocess)" if _is_https_subprocess else "")
     logger.info("[MAIN] Initial log level from environment: %s", initial_log_level)
+
+    # Materialize the private sidecar projection before the backend becomes
+    # healthy. The MCP container waits on that health check, so its very first
+    # tool call can authenticate after a fresh install or restart.
+    # Must not raise: an exception out of a startup handler aborts the ASGI
+    # lifespan and uvicorn exits, so a projection directory ECM cannot write
+    # would take the entire application down rather than degrade the optional
+    # sidecar (…-04c0u.8). backend/entrypoint.sh prepares that directory while
+    # it is still root; this is the runtime backstop for a mount that changes
+    # afterwards.
+    if load_mcp_service_credentials(MCP_SERVICE_FILE) is None:
+        # The directory is named by the MCP_SECRETS_DIR variable rather than
+        # interpolated: it is derived from that environment read, which makes it
+        # a CodeQL clear-text-logging finding (alert 1905), and the operator who
+        # set the variable can act on its name just as well as on the resolved
+        # path. Same rule at the three auth.mcp_service log sites and in
+        # mcp-server/config.py; enforced by
+        # backend/tests/test_04c0u8_projection_paths_are_not_logged.py.
+        logger.error(
+            "[MAIN] MCP sidecar backend credentials are UNAVAILABLE — the MCP "
+            "sidecar cannot authenticate until the directory named by "
+            "MCP_SECRETS_DIR is writable by this account (it must hold %s)",
+            MCP_SERVICE_FILENAME,
+        )
+    else:
+        logger.info("[MAIN] MCP sidecar backend credentials are ready")
+
+    # SEC-07 — the pre-…-04c0u.8 private projection is not removed by the move.
+    _superseded_projection = superseded_mcp_service_projection()
+    if _superseded_projection is not None:
+        # The superseded path IS interpolated, and deliberately: the whole point
+        # of the warning is to name the exact file the operator should delete,
+        # and it is a CONFIG_DIR path built from a constant filename, so it is
+        # not derived from the MCP_SECRETS_DIR read (see
+        # config.superseded_mcp_service_projection, which builds it from
+        # MCP_SERVICE_FILENAME for exactly this reason). The live projection is
+        # named by file and variable instead, as everywhere else.
+        logger.warning(
+            "[MAIN] A superseded MCP credential file remains at %s. It "
+            "authenticates nothing — this backend reads only %s under the "
+            "directory named by MCP_SECRETS_DIR — but it is still secret "
+            "material in the config volume and host-side backups will capture "
+            "it. Delete it when convenient; ECM will not delete credential "
+            "material for you.",
+            _superseded_projection,
+            MCP_SERVICE_FILENAME,
+        )
 
     # Exit-path diagnostics (bd-0gt2i / GH #546): the loop exception handler
     # can only be installed once the event loop is running. Logs loudly on
@@ -945,19 +1296,41 @@ async def startup_event():
     except Exception as _gauge_seed_err:
         logger.warning("[MAIN] Failed to seed pending_merges queue-depth gauge: %s", _gauge_seed_err)
 
-    # Probe the cloud-backup encryption key's integrity at startup (bead
-    # m40pn): mode/ownership violations surface at every container start
-    # instead of at the first scheduled backup. Log-loudly-but-boot — the
-    # probe never raises (it logs an unmissable ERROR itself), and actual
-    # crypto use remains fail-closed inside cloud_storage.crypto. The outer
-    # try only guards an unexpected import/probe crash.
+    # Probe the credential-bearing config files' integrity at startup (bead
+    # m40pn for the cloud-backup Fernet key, extended by bead 2owpi to
+    # tls_settings.json, which holds the DNS-01 provider credentials in clear
+    # because ECM must renew unattended). Mode/ownership violations surface at
+    # every container start instead of at the first scheduled backup or the
+    # first renewal. Log-loudly-but-boot — neither probe raises (each logs an
+    # unmissable ERROR itself), and actual crypto use remains fail-closed
+    # inside cloud_storage.crypto. The outer try only guards an unexpected
+    # import/probe crash.
     try:
         from cloud_storage.crypto import verify_key_integrity_at_startup
         verify_key_integrity_at_startup()
+
+        from tls.settings import verify_tls_settings_integrity_at_startup
+        verify_tls_settings_integrity_at_startup()
     except Exception as _key_probe_err:
         logger.error(
-            "[MAIN] Cloud-backup key integrity startup probe crashed: %s",
+            "[MAIN] Config secret-file integrity startup probe crashed: %s",
             _key_probe_err,
+        )
+
+    # Surface the public-base-URL posture at boot (bead ...-qsqfv). The call
+    # itself is what warns: config.get_public_base_url() logs once per process
+    # when the value is unset or unusable, so making it here puts the warning
+    # near the top of the container log instead of leaving it to appear only
+    # after somebody happens to request a password reset. Never raises.
+    try:
+        from config import get_public_base_url
+        _public_base_url = get_public_base_url()
+        if _public_base_url:
+            logger.info("[MAIN] Public base URL for outbound links: %s", _public_base_url)
+    except Exception as _public_base_url_err:
+        logger.warning(
+            "[MAIN] Could not resolve the public base URL at startup: %s",
+            _public_base_url_err,
         )
 
     # Purge all expired user sessions
@@ -1058,21 +1431,22 @@ async def startup_event():
     try:
         from normalization_migration import apply_league_strip_require_delimiter_once
         from config import save_settings
-        settings = get_settings()
-        if not settings.league_delimiter_heal_applied:
-            session = get_session()
-            try:
-                heal = apply_league_strip_require_delimiter_once(session, settings)
-            finally:
-                session.close()
-            if heal.get("applied"):
-                save_settings(settings)
-                if heal.get("updated", 0) > 0:
-                    logger.info(
-                        "[MAIN] One-time heal: enabled strong-delimiter requirement "
-                        "on %s league strip rule(s)",
-                        heal["updated"],
-                    )
+        if _settings_file_allows_startup_writes:
+            settings = get_settings()
+            if not settings.league_delimiter_heal_applied:
+                session = get_session()
+                try:
+                    heal = apply_league_strip_require_delimiter_once(session, settings)
+                finally:
+                    session.close()
+                if heal.get("applied"):
+                    save_settings(settings)
+                    if heal.get("updated", 0) > 0:
+                        logger.info(
+                            "[MAIN] One-time heal: enabled strong-delimiter requirement "
+                            "on %s league strip rule(s)",
+                            heal["updated"],
+                        )
     except Exception as e:
         logger.warning("[MAIN] Could not apply league strip require_delimiter heal: %s", e)
 
@@ -1231,6 +1605,15 @@ async def startup_event():
         import tasks  # noqa: F401 - imported for side effects
         logger.info("[MAIN] Task modules loaded and registered")
 
+        # Register one cross-instance sync task per SyncTarget row (7ipq2.3 /
+        # ADR-013 S6: task_id dbas_sync_<target_id>, per-target overlap guard)
+        # and migrate any legacy shared-id 'dbas_sync' schedule rows. MUST run
+        # BEFORE start_engine(): sync_from_database creates scheduled_tasks
+        # rows only for ids registered at that point. Defensive internally —
+        # never raises into startup.
+        from tasks.dbas_sync import register_sync_target_tasks
+        register_sync_target_tasks()
+
         # Start the task engine
         from task_engine import start_engine, get_engine
         await start_engine()
@@ -1338,6 +1721,38 @@ async def startup_event():
 
     asyncio.create_task(_check_stale_groups_on_startup())
 
+    # Start the daily update-availability check (bead
+    # enhancedchannelmanager-nhkd4). This replaces the header's client-side
+    # "Update available" pill with a reconciling notification-centre entry.
+    # It sits below the `_is_https_subprocess` early return above, so exactly
+    # one process per container writes the row — the single-writer property the
+    # (unenforceable at the schema level) source/source_id dedup key relies on.
+    try:
+        from services.version_check import start_version_check_loop
+        start_version_check_loop()
+        logger.info("[MAIN] Update-availability check scheduled (every 24 hours)")
+    except Exception as e:
+        logger.warning("[MAIN] Failed to start update-availability check: %s", e)
+
+    # Break-glass visibility (bead 04c0u.9 remediation). The environment form
+    # of the escape hatch is read on every cookie issue and was previously
+    # silent everywhere: no startup line, no status field, no UI signal. An
+    # operator who set it at 02:00 to recover and then forgot it had every
+    # session cookie shipping without Secure indefinitely. Put it at the top of
+    # the log where a restart cannot hide it.
+    try:
+        from tls.settings import break_glass_environment_override
+        if break_glass_environment_override():
+            logger.warning(
+                "[MAIN] ECM_ALLOW_HTTP_SESSION_COOKIES is set: browser session "
+                "cookies will be issued WITHOUT Secure even when this instance "
+                "terminates TLS, so anyone who can observe the HTTP port can "
+                "steal a live session. This is emergency recovery only — unset "
+                "it and restart ECM once HTTPS is reachable."
+            )
+    except Exception as e:
+        logger.warning("[MAIN] Failed to check session-cookie break-glass state: %s", e)
+
     # Start TLS certificate renewal manager
     try:
         from tls.settings import get_tls_settings
@@ -1373,6 +1788,13 @@ async def shutdown_event():
         logger.info("[MAIN] HTTPS server stopped")
     except Exception as e:
         logger.error("[MAIN] Error stopping HTTPS server: %s", e)
+
+    # Stop the update-availability check
+    try:
+        from services.version_check import stop_version_check_loop
+        stop_version_check_loop()
+    except Exception as e:
+        logger.warning("[MAIN] Error stopping update-availability check: %s", e)
 
     # Stop TLS renewal manager
     try:

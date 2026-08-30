@@ -18,6 +18,9 @@ interface CustomSelectProps {
   className?: string;
   searchable?: boolean;
   searchPlaceholder?: string;
+  /** Accessible name for the trigger where no visible <label> can be associated
+   *  — this is a custom listbox widget, not a native <select>. */
+  ariaLabel?: string;
 }
 
 export function CustomSelect({
@@ -29,6 +32,7 @@ export function CustomSelect({
   className = '',
   searchable = false,
   searchPlaceholder = 'Search...',
+  ariaLabel,
 }: CustomSelectProps) {
   const listboxId = `${useId()}-custom-select-listbox`;
   const [isOpen, setIsOpen] = useState(false);
@@ -219,6 +223,7 @@ export function CustomSelect({
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={isOpen ? listboxId : undefined}
+        aria-label={ariaLabel}
       >
         <span className="custom-select-value">
           {selectedOption ? selectedOption.label : placeholder}

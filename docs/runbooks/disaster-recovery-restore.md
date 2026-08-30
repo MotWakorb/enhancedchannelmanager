@@ -1,10 +1,16 @@
-# Runbook: Disaster Recovery — ECM Configuration Restore
+# Runbook: Disaster Recovery (ECM Configuration Restore)
 
 > Restore ECM + Dispatcharr configuration from a DBAS backup artifact after host failure, data loss, or a corrupt Dispatcharr instance.
 
 - **Severity**: P1 (complete configuration loss) / P2 (partial data loss, instance degraded)
 - **Owner**: SRE / Operator
-- **Last reviewed**: 2026-06-28
+- **Last exercised**: 2026-08-18 against a live ECM (`ecm-ecm-1`, build
+  `0.18.1-0116`) and Dispatcharr 0.28.2. What was actually run: Diagnosis
+  Steps 1, 3 and 5, and the log/database inspection block in Phase 1.1. Steps 2
+  and 4 read a backup artifact and that instance had none, so their commands are
+  unexercised against a real file. Every command that writes, deletes, or
+  authenticates against another system carries a `NOT EXECUTED` marker inline
+  (`grep -n 'NOT EXECUTED'` finds all of them); none of those was run.
 - **Related beads**: `enhancedchannelmanager-0i2vt` (epic), `enhancedchannelmanager-sxx9x` (this doc)
 - **Related ADR**: ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`)
 
@@ -29,74 +35,163 @@
 
 ## Diagnosis
 
-### Step 1 — Confirm you have a usable backup
+!!! note "Where these commands run"
+    `/config` is **inside the ECM container**, on the `ecm-config` volume that
+    `docker-compose.yml` declares. A default deployment gives it no host path at
+    all, so every `/config/...` command below is prefixed with `docker exec`.
+    Running one bare on the Docker host answers `No such file or directory`,
+    which mid-incident reads like the backups are gone.
+
+    `docker exec` starts your command directly: there is no shell in the
+    container to expand a wildcard. A bare `docker exec … ls /config/backups/*.zip`
+    is expanded by the shell **on the host**, where `/config` does not exist, so
+    it fails or is passed through literally and `ls` reports the pattern as
+    missing. That is the same false "the backups are gone" signal, one layer
+    down. Any `/config` command with a `*` in it therefore runs inside an
+    explicit `sh -c '…'`.
+
+### Step 1: Confirm you have a usable backup
 
 ```bash
-ls -lh /config/backups/ecm-backup-*.zip
+docker exec ecm-ecm-1 sh -c 'ls -lh /config/backups/ecm-backup-*.zip'
 ```
 
 Expected: one or more `.zip` files sorted by timestamp. The most recent is the best candidate.
 
 If no local backup exists, check your configured cloud destinations (S3 bucket, WebDAV server, GDrive folder) for the most recent artifact.
 
-### Step 2 — Verify the artifact integrity
+### Step 2: Verify the artifact integrity
 
 ```bash
-sha256sum -c /config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip.sha256
+docker exec -w /config/backups ecm-ecm-1 \
+  sha256sum -c ecm-backup-YYYY-MM-DD_HHMMSS.zip.sha256
 ```
 
 Expected output: `ecm-backup-YYYY-MM-DD_HHMMSS.zip: OK`
 
 If the sidecar is absent or the hash does not match, the artifact is corrupted. Use an earlier backup.
 
-### Step 3 — Check ECM is running and can reach Dispatcharr
+### Step 3: Check ECM is running and can reach Dispatcharr
 
 ```bash
-docker exec ecm-ecm-1 curl -s http://localhost:8080/api/health/ready | python3 -m json.tool
+docker exec ecm-ecm-1 python3 -c "
+import json, os, urllib.error, urllib.request
+port = os.environ.get('ECM_PORT', '6100')
+try:
+    response = urllib.request.urlopen(f'http://localhost:{port}/api/health/ready', timeout=5)
+except urllib.error.HTTPError as error:
+    response = error   # a degraded readiness answer is a 503 carrying the same body
+print(response.status)
+print(json.dumps(json.load(response), indent=2))
+"
 ```
 
-Expected: `"dispatcharr": "ok"` (or equivalent healthy state). If Dispatcharr is unreachable, resolve that first — the restore pipeline writes directly to the Dispatcharr API.
+!!! note "Why `python3`, and why the `HTTPError` branch"
+    The ECM image ships no `curl` and no `wget`. The command most operators
+    reach for first,
+    `docker exec ecm-ecm-1 curl -s http://localhost:6100/api/health/ready`,
+    fails with `executable file not found`, which during an incident reads like
+    a dead container. `python3` is always present (it is what runs ECM). The
+    backend listens on `ECM_PORT`, default `6100`. It has never served on
+    `8080`.
 
-### Step 4 — Determine if the artifact is encrypted
+    `urlopen` raises `HTTPError` on any non-2xx status, and `/api/health/ready`
+    answers **503** whenever a subcheck is degraded. That is the state named in
+    Symptoms above, and the reason you are running this step. Without the `except`
+    branch the command exits 1 with a traceback and prints no body at all, so the
+    `"dispatcharr"` field this step asks you to read never appears. `HTTPError`
+    is file-like, so reading the body off it needs nothing else.
+
+Expected: `"status": "ready"` with `"dispatcharr": {"status": "ok", …}`. This one
+call is also the Dispatcharr reachability check: ECM probes its **configured**
+Dispatcharr URL, so a green result here proves the exact path the restore
+pipeline uses. If Dispatcharr is unreachable, resolve that first: the restore
+writes directly to the Dispatcharr API.
+
+`/api/health/ready` is public, so this needs no credentials.
+
+### Step 4: Determine if the artifact is encrypted
 
 ```bash
-python3 -c "
-import sys
+docker exec ecm-ecm-1 python3 -c "
 with open('/config/backups/ecm-backup-YYYY-MM-DD_HHMMSS.zip','rb') as f:
     print('ENCRYPTED' if f.read(8)==b'ECMBKENC' else 'PLAINTEXT')
 "
 ```
 
-If `ENCRYPTED`: have the passphrase ready before proceeding. If the passphrase is lost, you cannot decrypt this artifact — go to an older unencrypted backup.
+If `ENCRYPTED`: have the passphrase ready before proceeding. If the passphrase is lost, you cannot decrypt this artifact. Go to an older unencrypted backup.
+
+Note that encrypted does not imply credential-bearing. Only an artifact taken with **Include credentials** preserves the recognized structured provider credential fields, credential-bearing URL values, and ECM accounts; an encrypted artifact taken without it applies the same structured redaction rules as a standard one, and nothing in the file distinguishes the two. If you are recovering onto a fresh instance and need those credentials to travel, confirm which artifact you have before planning around it.
+
+### Step 5: Confirm the restoring build is not older than the artifact
+
+```bash
+docker exec ecm-ecm-1 python -c "import os,urllib.request,json; \
+print(json.load(urllib.request.urlopen('http://localhost:%s/api/health' % os.environ.get('ECM_PORT','6100'))))"
+```
+
+Compare that version against the `app_version` the artifact's manifest reports. **Restore only with the build that produced the artifact or a newer one.**
+
+`schema_version` did not move when full redaction shipped, so the version gate will **not** stop you from restoring a new artifact with an older ECM. That combination has three known problems, all of which arrive behind an apparently successful restore:
+
+1. **The restoring admin can be signed out of their own instance.** Older ECM has no step that preserves the destination's accounts across a restore, and a standard credential-redacted artifact carries none of its own accounts. During a DR rebuild this looks like the restore working and then dropping you at the setup wizard on an instance you were administering.
+2. Alert-method `username` and `chat_id` are written in as the literal text `***REDACTED***`.
+3. An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety and stops sending notifications until reconfigured.
+
+None is retroactively fixable. If you are rolling ECM back, roll back to an artifact taken before the upgrade instead of restoring a newer one onto the older build.
 
 ---
 
 ## Resolution
 
-### Phase 1 — Pre-restore (5 minutes)
+### Phase 1: Pre-restore (5 minutes)
 
 **1.1 Take a fresh backup of current state (if any state exists).**
 
 If the Dispatcharr instance still has any configuration (even partial), snapshot it first:
 
+Use the UI: **Settings → Backup & Restore → Configuration Backup → Create
+Configuration Backup**. Or, from the Docker host, against ECM's published port
+(`ECM_PORT`, default `6100`):
+
 ```bash
-# Trigger a manual backup via the API
-curl -s -X POST http://localhost:8080/api/backup/save \
+# NOT EXECUTED during the last exercise: this writes a new artifact.
+# Trigger a manual backup via the API. YOUR_TOKEN is an ECM administrator's
+# session token — a signed-in human. The MCP API key is refused here (403).
+curl -s -X POST http://localhost:6100/api/backup/save \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
-Or use the UI: **Settings → Backup & Restore → Back Up Now**.
+!!! danger "If this backup fails with a scrub error, that is the control working"
+    ECM removes its accounts, credentials, telemetry and history from the artifact's copy of
+    `journal.db` before writing anything. If it cannot open, read or rewrite that database, the
+    **whole backup fails and no artifact is written**. Earlier builds fell back to shipping the
+    database untouched behind a success, which is the outcome this replaces. Do not work around
+    it, and do not treat it as backup-system corruption.
+
+    In a DR context the cause is usually the incident itself: a truncated or damaged
+    `/config/journal.db`, a full or read-only `/config` volume, or an interrupted earlier restore.
+
+    ```bash
+    docker logs --since 30m ecm-ecm-1 2>&1 | grep BACKUP
+    docker exec ecm-ecm-1 sh -c 'ls -l /config/journal.db && df -h /config'
+    docker exec ecm-ecm-1 python -c "import sqlite3; sqlite3.connect('/config/journal.db').execute('PRAGMA integrity_check').fetchall()"
+    ```
+
+    If the database is damaged, skip the pre-restore snapshot and proceed. You are about to
+    replace that state anyway, and a failed snapshot must not stall the recovery. Record that you
+    have no pre-restore backup before you continue.
 
 **1.2 Open the Restore DBAS Backup modal.**
 
 Go to **Settings → Backup & Restore → Restore DBAS Backup** in the ECM UI.
 
-### Phase 2 — Upload and validate (2 minutes)
+### Phase 2: Upload and validate (2 minutes)
 
 **2.1** Upload the backup `.zip` artifact. If it is encrypted, enter the passphrase when prompted.
 
 ECM validates:
-- Decompression-bomb check (header scan only — nothing decompressed).
+- Decompression-bomb check (header scan only, nothing decompressed).
 - `manifest.json` presence and integrity.
 - `schema_version` compatibility (artifact must not be newer than this ECM build).
 - Per-member SHA-256 verification.
@@ -105,9 +200,9 @@ If validation fails, stop and use an older backup.
 
 **2.2** Note the reported `schema_version` and `app_version` from the manifest display.
 
-### Phase 3 — Dry-run preview (3 minutes)
+### Phase 3: Dry-run preview (3 minutes)
 
-**3.1** Click **Preview** (default mode — no changes are written).
+**3.1** Click **Preview** (default mode, no changes are written).
 
 **3.2** Review the per-category counts:
 
@@ -116,16 +211,16 @@ If validation fails, stop and use an older backup.
 | M3U accounts | Matches source instance | Wrong count = wrong backup |
 | Channel groups | Matches source instance | |
 | Channels | Matches source instance | |
-| Logos | Any non-zero count | Logo misses acceptable; channels still work |
+| Logos | Any non-zero count | As of `0.18.1-0024`, logos uploaded through ECM's own Logo Manager have their image bytes archived in the backup and restore intact, and a logo failure is a non-fatal restore category: it is counted and named in the report instead of aborting the whole restore. Logos referenced by a remote http(s) URL are unaffected either way and always round-tripped from their URL. **On builds before `0.18.1-0024`,** a logo uploaded through ECM's own Logo Manager was never archived, and the resulting miss aborted and rolled back the entire restore. On builds before `0.18.1-0032`, the preview also can't be trusted for this category specifically: it may report logo failures that don't occur on apply, or miss the one that will (`enhancedchannelmanager-dgnms`). |
 | Users | 0 (not selected by default) | Enable explicitly if needed |
 
 **3.3** If counts look wrong: verify you uploaded the correct artifact. Do not apply if the category counts are significantly lower than expected.
 
 **3.4** Check for pre-flight problems in the report notes. Common ones:
-- `unresolved_fk_reference` — the backup's channels reference groups/profiles not in the archive. Ensure channel groups are in the restore selection.
-- `duplicate_unique_name` — duplicate names in one category. Contact support — this should not occur in an ECM-produced artifact.
+- `unresolved_fk_reference`: the backup's channels reference groups/profiles not in the archive. Ensure channel groups are in the restore selection.
+- `duplicate_unique_name`: duplicate names in one category. Contact support. This should not occur in an ECM-produced artifact.
 
-### Phase 4 — Apply (15–30 minutes depending on logo count)
+### Phase 4: Apply (15–30 minutes depending on logo count)
 
 **4.1** Click **Apply these changes**.
 
@@ -146,54 +241,210 @@ If validation fails, stop and use an older backup.
 
 **4.4** Wait for the restore-complete report.
 
-### Phase 5 — Interpret the result
+### Phase 5: Interpret the result
 
 | Outcome | Action |
 |-|-|
-| **Success** | Go to Phase 6 — verification. |
-| **Restore failed — state rolled back** | The rollback ran cleanly. Instance is at pre-restore state. Diagnose the failure reason in the report notes and retry. See Phase 5a. |
-| **Restore failed — rollback incomplete** | **Critical — stop.** See Phase 5b. |
+| **Success** | Go to Phase 6: verification. |
+| **Restore failed: state rolled back** | The rollback ran cleanly. Instance is at pre-restore state. Diagnose the failure reason in the report notes and retry. See Phase 5a. |
+| **Restore failed: rollback incomplete** | **Critical: stop.** See Phase 5b. |
 
-**Phase 5a — Rolled-back failure:**
+**Phase 5a: Rolled-back failure:**
 
 Read the notes section. Common causes:
 - Dispatcharr returned an API error for a specific entity. Check Dispatcharr logs: `docker logs dispatcharr 2>&1 | tail -100`.
-- Network timeout. Confirm ECM→Dispatcharr connectivity: `docker exec ecm-ecm-1 curl -s http://dispatcharr:8080/api/health`.
+- Network timeout. Confirm ECM-to-Dispatcharr connectivity by re-running the
+  Step 3 readiness command and reading its `"dispatcharr"` check. Expect a
+  **503** here rather than a 200: that is the degraded answer, and the Step 3
+  command prints its body. Do not probe a hardcoded `dispatcharr:8080`. That
+  host and port are wrong on every deployment this runbook has been exercised
+  against, and the name does not resolve at all when ECM runs with
+  `network_mode: host`. ECM's own probe uses the Dispatcharr URL configured in
+  **Settings → Dispatcharr Connection**, which is the URL the restore actually
+  writes to.
 - Name conflict on the destination. If the destination has existing entities with conflicting names, the restore skips or fails them. Consider wiping the destination first if this is a fresh install.
 
 After resolving the cause, re-attempt from Phase 3.
 
-**Phase 5b — Rollback incomplete (instance in partial state):**
+**Phase 5b: Rollback incomplete (instance in partial state):**
 
 The restore created some entities and could not roll them back. The report lists the entity IDs.
 
+Get the residue list from the restore report (displayed in the UI), then delete
+each listed entity via the Dispatcharr UI or API.
+
+**First, mint a Dispatcharr token.** `DISPATCHARR_TOKEN` is not something ECM
+shows you: ECM obtains one for itself by posting its stored Dispatcharr
+credentials to `/api/accounts/token/` (`backend/dispatcharr_client.py`) and never
+surfaces the result. Do the same by hand with the same operator credentials you
+set in **Settings → Dispatcharr Connection**:
+
 ```bash
-# Get the residue list from the restore report (displayed in the UI)
-# Manually delete each listed entity via the Dispatcharr UI or API
-# Example: delete a channel group by its destination ID
-curl -s -X DELETE http://dispatcharr:8080/api/channel-groups/ID \
-  -H "Authorization: Bearer DISPATCHARR_TOKEN"
+# NOT EXECUTED during the last exercise: this authenticates to Dispatcharr.
+# DISPATCHARR_URL is the value from ECM Settings → Dispatcharr Connection
+# (for example http://192.0.2.20:9191) — Dispatcharr's default port is 9191.
+export DISPATCHARR_URL=http://192.0.2.20:9191
+read -r -p 'Dispatcharr username: ' DISPATCHARR_USER
+read -rs -p 'Dispatcharr password: ' DISPATCHARR_PASS; echo
+export DISPATCHARR_USER DISPATCHARR_PASS
+
+# Build the JSON body with python3 and stream it to curl as a config file on
+# stdin, so the password is never a command-line argument.
+DISPATCHARR_TOKEN=$(python3 <<'PY' | curl --config - -sS -X POST \
+  "$DISPATCHARR_URL/api/accounts/token/" -H 'Content-Type: application/json' \
+  | python3 -c '
+import json, sys
+raw = sys.stdin.read()
+try:
+    print(json.loads(raw)["access"])
+except Exception:
+    print(f"login failed; Dispatcharr answered: {raw[:200]!r}", file=sys.stderr)
+'
+import json, os
+body = json.dumps({"username": os.environ["DISPATCHARR_USER"],
+                   "password": os.environ["DISPATCHARR_PASS"]})
+print('data = "%s"' % body.replace("\\", "\\\\").replace('"', '\\"'))
+PY
+)
+
+# The password is no longer needed. Do not leave it in the environment.
+unset DISPATCHARR_PASS
 ```
+
+!!! warning "Why the password goes through stdin and not `-d`"
+    `read -rs` keeps the password off the terminal and out of shell history, but
+    that is only half of it. A password interpolated into `curl -d "{…}"` lands
+    in the process's argument list, which on Linux is **world-readable** at
+    `/proc/<pid>/cmdline` for as long as the request runs, so any other local
+    account can read it. `curl --config -` takes the same body off stdin
+    instead, which nothing outside the process can see. This is the shape
+    `docs/runbooks/mcp-release-verification.md` already uses for the MCP key.
+
+    `python3` builds the JSON rather than the shell, because a password
+    containing `"` or `\` (both are legal) produces malformed JSON when pasted
+    into a shell-quoted literal. Dispatcharr answers that with a `400`, and the
+    old one-line extractor met it with a Python traceback rather than the empty
+    token this runbook tells you to expect.
+
+    `export` puts the credential in the environment, which is readable only by
+    your own account (`/proc/<pid>/environ` is mode 0400), not by every local
+    user. `unset DISPATCHARR_PASS` as soon as the token is minted. The token
+    itself is a bearer credential too: `unset DISPATCHARR_TOKEN` when you are
+    finished, or close the shell.
+
+An empty `DISPATCHARR_TOKEN` means the login failed. Fix that before deleting
+anything, or every delete below will 401 while looking like it worked.
+
+**Then delete each residue entity**, checking the status code:
+
+```bash
+# NOT EXECUTED during the last exercise: this deletes Dispatcharr entities.
+# Example: delete a channel group by its destination ID.
+# `printf` is a shell builtin, so the token is not a separate process's argv
+# either; curl reads the header off stdin exactly as it read the body above.
+ID=123
+printf 'header = "Authorization: Bearer %s"\n' "$DISPATCHARR_TOKEN" | \
+  curl --config - -sS -o /dev/null -w 'DELETE -> %{http_code}\n' \
+    -X DELETE "$DISPATCHARR_URL/api/channels/groups/$ID/"
+
+# Confirm absence: re-GET the id. 404 means it is gone.
+printf 'header = "Authorization: Bearer %s"\n' "$DISPATCHARR_TOKEN" | \
+  curl --config - -sS -o /dev/null -w 'GET -> %{http_code}\n' \
+    "$DISPATCHARR_URL/api/channels/groups/$ID/"
+```
+
+!!! warning "Check the status code and the re-GET, not the content type"
+    Dispatcharr serves its web UI from the same origin, so a **mistyped API path
+    returns `200` with an HTML page** instead of `404`. `/api/channel-groups/` is
+    one such path: it looks like it worked and deletes nothing. The channel-group
+    route is `/api/channels/groups/`, which is what ECM itself calls.
+
+    A content-type check does not separate success from failure here. Dispatcharr
+    is a Django REST Framework app: a wrong ID (404) and an expired or wrong token
+    (401/403) both answer `application/json` while deleting nothing, and a
+    *successful* `DELETE` answers **204 with no body and no content type at all**.
+    So read `%{http_code}`: `204` (or `200`) is the delete, `401`/`403` is your
+    token, `404` is the wrong ID or the wrong path, and anything `text/html`-ish
+    with `200` is the SPA fallback.
+
+    The re-`GET` is the part that actually proves absence. `404` on the re-`GET`
+    is the only evidence the entity is gone.
 
 Repeat for each listed entity type and ID. Once all residue is deleted, take a fresh local backup and retry the restore from Phase 3.
 
-### Phase 6 — Verification (5 minutes)
+### Phase 6: Verification (5 minutes)
 
 **6.1** Navigate to **Channels** in ECM and confirm the channel count matches the backup.
 
 **6.2** Check channel groups are present: **Settings → Channel Groups**.
 
-**6.3** Run an M3U refresh to confirm streams are populating:
+**6.3** Run an M3U refresh. This confirms streams are populating **and**,
+as of `0.18.1-0033`, repairs the channel bindings: a completed refresh
+reattaches any channel still holding a placeholder stream onto the real
+provider stream, then removes the leftover placeholders and the synthetic
+`ECM Custom Streams (DBAS restore)` account. On a restore from a standard
+(redacted) artifact, this is the step that makes the lineup playable, and
+it is why you re-enter the provider credential before running it.
+
 ```bash
-curl -s -X POST http://localhost:8080/api/tasks/m3u_refresh/run \
+# NOT EXECUTED during the last exercise: this starts a real M3U refresh.
+# YOUR_TOKEN is an ECM administrator's session token.
+curl -s -X POST http://localhost:6100/api/tasks/m3u_refresh/run \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
+The scheduled `m3u_refresh` task above and the Refresh action on an
+individual account both trigger the reattach. A "refresh all accounts"
+call (`POST /api/m3u/refresh`) and a refresh performed in Dispatcharr's
+own UI do not; those are picked up on the next scheduled `m3u_refresh`
+run. On builds before `0.18.1-0033` no refresh reattached anything, and
+recovery required re-running the whole restore after the refresh.
+
 **6.4** Run an EPG refresh if guide data is absent.
+
+**6.4a Restored Dispatcharr accounts are deliberately unusable.** If you
+selected the Dispatcharr users category, every account it created:
+
+- has a **fresh random password that ECM generates and discards**. No password
+  or hash ever crosses from the archive: Dispatcharr's API never exposes one.
+  Nobody can sign in to a restored account until you set its password out of
+  band.
+- is forced **non-privileged**: `is_superuser` and `is_staff` are set false and
+  `user_level` to 0, whatever the archive claimed. Re-grant only the privileges
+  each account actually needs, deliberately.
+- is **skipped, never overwritten**, when its username already exists on the
+  destination. The account you are signed in as is likewise never overwritten,
+  deleted, disabled, or demoted. It is identified by the credential you
+  authenticated with, not by a name in the archive.
+
+Read the restore report's skip reasons before assuming an account was restored.
+This policy is enforced in `backend/dbas/importers/users.py` and pinned by
+`backend/tests/dbas/test_users_importer.py`.
+
+**6.4b TLS certificates are not part of a DBAS restore.** The DBAS artifact
+carries Dispatcharr entities and ECM settings; ECM's `tls/` directory is not one
+of its categories, so a DBAS restore never reinstates a certificate or private
+key. After host loss, reinstall or reissue the ECM certificate yourself
+(**Settings → TLS**) and expect HTTPS to be down until you do.
+
+A **legacy full ZIP** is different: it can contain `tls/`, including the private
+key, and a legacy restore does write that directory back. Treat every backup
+artifact as a secret regardless of format: store it with the same care as the
+key itself.
+
+**6.4c** If you restored a **legacy full ZIP** (not the DBAS artifact), read the
+notices on the restore response before anything else. A standard artifact carries no ECM
+accounts, so a rebuilt instance lands at first-run setup and the notice says so; create the
+admin account and sign in. A second notice names any configured surface this instance had
+before the restore and does not have after, which for a standard artifact means cloud storage
+targets, sync targets, M3U digest settings, or event-sync exclusions. Those are read from the
+live instance on both sides of the restore, so the notice names only what you actually lost.
+Re-establish each one and record it in the incident. The DBAS artifact restore does not write
+`journal.db` and emits no notices.
 
 **6.5** Test playback on one channel per M3U provider to confirm stream assignment worked.
 
-**6.6** If logos are missing (red banner on restore-complete), this is a warning — channels work. Re-upload logos manually or re-run an EPG logo match.
+**6.6** If logos are missing (red banner on restore-complete), and the restore still reached this phase, it's a warning: channels work. Re-upload logos manually or re-run an EPG logo match. On builds before `0.18.1-0024`, a restore that never completed and instead reported `partial_failed_rolled_back` at the logo category was the fatal case: the whole restore rolled back, not just the logos. As of `0.18.1-0024` a logo failure cannot cause that outcome.
 
 ---
 
@@ -218,10 +469,32 @@ If the restore repeatedly fails or if the rollback-incomplete state cannot be re
 
 ---
 
+## Recurring maintenance
+
+> Added 2026-08-03 (bead `enhancedchannelmanager-nvhg7`). `COMPONENTS.md` tags `dbas-backup` as the highest-care home-lab component: "restore must stay periodically exercised." Before this section, nothing prompted or enforced that — the only round-trip exercise this restore pipeline had ever received was a manual one-off doc-test run. **Tier: home-lab.** This is a documentation-level operational habit, not enforced infrastructure — there is no scheduled task or CI gate behind it (see "Future automation path" below).
+
+**Do this monthly**, or immediately after any change to the backup/restore pipeline itself:
+
+1. Go to **Settings → Backup & Restore → Saved Backups** and locate the most recent artifact (the one your regular schedule actually produced — don't manufacture a fresh one for this check; the point is to exercise what you would actually reach for in an incident).
+2. Click that artifact's **Restore as DBAS backup** action (the restore icon on its row) — this opens the restore modal directly against the saved file, no download/upload round-trip required, and defaults to a counts-only dry run. Click **Run preview**. This is a dry-run — nothing is written. See [Verify a backup](../user_guide/backup-restore/verify-a-backup.md) for what a restore validates before the preview runs (decompression-bomb guard, manifest integrity, schema-version gate, per-member SHA-256) — that guide walks the upload-a-file variant, but the same checks and the same dry-run-first contract apply to the saved-backup path used here.
+3. **What to check in the report:**
+   - Every category you expect present (M3U accounts, channel groups, channels, EPG sources, settings, etc.) has a row, and its counts are in the neighborhood you expect for your instance — not zero, not wildly off.
+   - **FAILED is 0**, or every non-zero FAILED row has a reason you already understand (see the `DEPENDENCY_UNRESOLVED` case in the next bullet — a settings key the destination doesn't have). A settings key skipped for being denylisted (credential/auth/instance-identity — see `backend/dbas/importers/settings_agents.py`) is reported as a separate **skipped** count, never as FAILED — it can never be the explanation for a non-zero FAILED row.
+   - As of build 0015 (bead `y6zg6`), the dry-run **resolves settings keys against the destination** and reports `DEPENDENCY_UNRESOLVED` for any key that would 404 on apply — the same check and the same message the apply path uses. A clean preview on the Settings category is a real signal that those keys would apply; it is not a claim your Dispatcharr credentials or connectivity are also fine (see "What the preview does not check" in the Verify-a-Backup guide) — the preview cannot predict every class of upstream error.
+   - No unexpected warning banner on the artifact itself. As of build 0019 (bead `zt3kf`), a backup that failed to gather one or more categories from Dispatcharr at capture time reports **warning-level, with the affected categories named** — it no longer masquerades as a clean SUCCESS. If your monthly artifact carries this warning, the backup you'd be restoring from is degraded; treat that as the finding, not the dry-run.
+4. **Do not click Apply** as part of this exercise. A monthly maintenance check is a preview only, against a real artifact, on your real instance. If you do want to prove the apply path end to end, do it against a disposable or throwaway Dispatcharr instance, never the production one: see `tests/dbas-test-env/` for the project's own disposable-instance tooling.
+5. **On any failure or surprise** (unexpected FAILED rows, a degraded-backup warning, counts that don't match expectations): file a bead capturing the artifact name/date, the report's counts and failure details, and whether this is the first month it's happened. Do not silently re-run and move on — a monthly check that "resolves itself" on retry without an explanation is exactly the kind of drift this section exists to catch.
+
+### Future automation path
+
+If this project ever moves up-tier from home-lab, a periodic restore exercise could be wired into CI rather than remaining a manual monthly habit: bead `1zwmr` (referenced from `backend/dbas/stream_matcher.py` and its tests) already flags stream-matching behavior that needs a seeded Dispatcharr instance to confirm, and bead `zqtjj`'s disposable-instance/seed tooling (`tests/dbas-test-env/`, documented in `docs/testing/dbas-test-env.md`) is the closest existing building block for a repeatable, non-production restore-exercise environment. Neither is currently wired into a schedule or CI job — this is a noted path, not a commitment.
+
+---
+
 ## References
 
 - [Backup & Restore overview](../user_guide/backup-restore/backup-overview.md)
-- [Restore a backup — user guide](../user_guide/backup-restore/restore-a-backup.md)
+- [Restore a backup: user guide](../user_guide/backup-restore/restore-a-backup.md)
 - [Troubleshoot a restore](../user_guide/backup-restore/troubleshoot-restore.md)
-- ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`) — the restore pipeline design
-- Threat model (`docs/security/threat_model_dbas_import.md`) — restore security controls
+- ADR-012 (`docs/adr/ADR-012-dbas-absorption-approach.md`): the restore pipeline design
+- Threat model (`docs/security/threat_model_dbas_import.md`): restore security controls

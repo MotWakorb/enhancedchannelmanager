@@ -5,6 +5,8 @@
   background-color: var(--bg-primary);
   border-right: 1px solid var(--border-primary);
   position: relative;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* Copy feedback notifications */
@@ -18,7 +20,10 @@
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-radius: 6px;
-  font-size: 0.875rem;
+  /* Body role's size; the 500 stays because this is a transient toast that
+     has to be readable over whatever it lands on. */
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   font-weight: 500;
   animation: slideInRight 0.3s ease-out;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -39,7 +44,7 @@
 }
 
 .copy-feedback .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 @keyframes slideInRight {
@@ -53,16 +58,13 @@
   }
 }
 
-.pane-header {
-  padding: 1rem;
-  border-bottom: 1px solid var(--border-primary);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  transition: background-color 0.2s, border-color 0.2s;
-  height: 56px;
-  box-sizing: border-box;
-}
+/* `.pane-header` is owned by shared/common.css § 14 PANE HEADERS. This copy
+   and StreamsPane.css's were both bare and eager, and common.css is emitted
+   last in the eager bundle, so its box won; only the height, `box-sizing`,
+   `min-width`, `gap` and the transition below survived from the panes, and all
+   of them are now in common.css. `.pane-header.edit-mode` stays here — it is
+   higher specificity and this pane's alone
+   (bead enhancedchannelmanager-87o0c). */
 
 .pane-header.edit-mode {
   border-bottom-color: var(--border-secondary);
@@ -72,14 +74,43 @@
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
 }
 
-.pane-header h2 {
-  font-size: 1.1rem;
+/* Mirrors .refresh-streams-btn in StreamsPane.css (bd-eelgi) */
+.refresh-channels-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
   color: var(--text-secondary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin: 0;
+  cursor: pointer;
+  padding: 0.25rem;
+  border-radius: var(--radius-md);
+  transition: color 0.15s, background-color 0.15s;
+}
+
+.refresh-channels-btn:hover:not(:disabled) {
+  color: var(--accent-primary);
+  background-color: var(--accent-15);
+}
+
+.refresh-channels-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.refresh-channels-btn .material-icons {
+  font-size: var(--icon-action);
+}
+
+/* `.pane-header h2` is owned by shared/common.css § 14 PANE HEADERS. The
+   1.1rem this file declared never rendered: common.css is emitted last
+   inside the eager bundle, so its 0.75rem/600 rule has been winning at equal
+   specificity all along and this was dead code. Deleted rather than
+   promoted (bead enhancedchannelmanager-6z299). */
+.pane-header h2 {
   transition: color 0.2s;
 }
 
@@ -97,8 +128,11 @@
   border: 1px solid rgba(245, 158, 11, 0.4);
   border-radius: 4px;
   color: #f59e0b;
-  font-size: 0.75rem;
-  font-weight: 600;
+  /* Text inside a pill — the badge role. Clickable, but it reads as a chip,
+     not as a button: it has a chip's padding, radius, tint and border. */
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
 }
@@ -109,7 +143,7 @@
 }
 
 .missing-streams-alert .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
 .failed-streams-alert {
@@ -120,9 +154,10 @@
   background-color: rgba(231, 76, 60, 0.15);
   border: 1px solid rgba(231, 76, 60, 0.4);
   border-radius: 4px;
-  color: var(--error, #e74c3c);
-  font-size: 0.75rem;
-  font-weight: 600;
+  color: var(--danger-text);
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
 }
@@ -133,120 +168,57 @@
 }
 
 .failed-streams-alert .material-icons {
-  font-size: 14px;
+  font-size: var(--icon-badge);
 }
 
-.edit-mode-info {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.85rem;
-}
+/* `.edit-mode-info`, `.edit-mode-count` and `.edit-mode-duration` had no
+   render site — no TSX in the tree emits `edit-mode-info`, and the edit-mode
+   summary the pane header shows lives in App.tsx's own band. Unreachable
+   rules, deleted rather than remapped, the same call bead 6z299.2 made on
+   `.enter-edit-mode-btn` a few lines below (bead
+   enhancedchannelmanager-6z299.5). */
 
-.edit-mode-info .edit-mode-count {
-  color: var(--accent-secondary);
-  font-weight: 500;
-}
+/* `.pane-header-actions` is owned by shared/common.css § 14. This bare eager
+   copy lost display/align-items/gap to it at identical values and contributed
+   only `min-width` and `flex-shrink`, both now folded in there
+   (bead enhancedchannelmanager-87o0c). */
 
-.edit-mode-info .edit-mode-duration {
-  color: var(--accent-secondary);
-}
-
-.pane-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
-/* Edit Mode Buttons */
-.edit-mode-buttons {
-  display: flex;
-  align-items: center;
-  gap: 0.375rem;
-}
-
-.edit-mode-cancel-btn {
-  display: flex;
+.pane-item-count {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 32px;
-  padding: 0 0.75rem;
-  background-color: transparent;
+  min-width: 1.75rem;
+  padding: 0.125rem 0.45rem;
   border: 1px solid var(--border-secondary);
+  border-radius: 999px;
   color: var(--text-secondary);
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.15s;
+  /* A count inside a pill — badge. */
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
+  font-variant-numeric: tabular-nums;
 }
 
-.edit-mode-cancel-btn:hover:not(:disabled) {
-  background-color: rgba(248, 113, 113, 0.15);
-  border-color: var(--error);
-  color: var(--error);
-}
+/* Edit Mode Buttons
+   `.edit-mode-buttons`, `.edit-mode-cancel-btn`, `.edit-mode-done-btn` and
+   `.edit-mode-done-count` are owned by App.css:143-192. Every one of them was
+   dead here, twice over: App.tsx is the only file that renders any of these
+   classes, and App.css is emitted later in the eager bundle (byte ~232,600
+   against this file's ~81,200) while redeclaring every property this file
+   set. The `.edit-mode-done-count` copy was the pre-fix version of the chip
+   whose 1.30:1 contrast bead enhancedchannelmanager-qlc4h repaired in
+   App.css — a stale duplicate of an accessibility fix is exactly the failure
+   mode the pointer-comment idiom exists to prevent
+   (bead enhancedchannelmanager-6z299.5). */
 
-.edit-mode-cancel-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.edit-mode-done-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 32px;
-  padding: 0 0.75rem;
-  background-color: rgba(74, 222, 128, 0.2);
-  border: 1px solid var(--success);
-  color: var(--success);
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.edit-mode-done-btn:hover:not(:disabled) {
-  background-color: rgba(74, 222, 128, 0.3);
-}
-
-.edit-mode-done-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.edit-mode-done-count {
-  background-color: var(--success);
-  color: var(--success-text);
-  padding: 0.125rem 0.375rem;
-  border-radius: 8px;
-  font-size: 0.7rem;
-  font-weight: 600;
-  min-width: 1.25rem;
-  text-align: center;
-  margin-left: 0.375rem;
-}
-
-.enter-edit-mode-btn {
-  display: flex;
-  align-items: center;
-  padding: 0.375rem 0.75rem;
-  background-color: var(--border-primary);
-  border: 1px solid var(--border-secondary);
-  color: var(--button-text);
-  border-radius: 4px;
-  font-size: 0.85rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.enter-edit-mode-btn:hover {
-  background-color: var(--border-secondary);
-  color: var(--text-primary);
-}
+/* `.enter-edit-mode-btn` and its `:hover` are owned by App.css:223. This copy
+   was dead, not a local variant: App.css is emitted after this file inside the
+   eager bundle and redeclares every property this rule set, at different values
+   (0.375rem/0.85rem/--border-primary here vs 0.5rem/0.9rem/--button-bg there),
+   so the button never rendered what this file said. Two owners for one class,
+   with the loser silently ignored — deleted rather than reconciled, because
+   reconciling means choosing a look and this wave changes no pixels
+   (bead enhancedchannelmanager-6z299.2). */
 
 .create-channel-btn {
   display: flex;
@@ -257,7 +229,9 @@
   color: var(--button-primary-text);
   padding: 0.375rem 0.75rem;
   border-radius: 4px;
-  font-size: 0.85rem;
+  /* Controls take the body role's size; weight stays 500, matching
+     `.btn-primary` in shared/common.css § 3. */
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
@@ -276,7 +250,7 @@
   color: var(--button-text);
   padding: 0.375rem 0.75rem;
   border-radius: 4px;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
@@ -288,8 +262,16 @@
   color: var(--text-primary);
 }
 
-.create-channel-icon {
-  font-size: 18px;
+/* Two classes deep, not one. The span carries `material-icons` as well, so a
+   bare `.create-channel-icon` rule ties with index.css's base
+   `.material-icons` at 0-1-0 — and index.css is emitted after this file
+   inside the eager bundle, so its 24px has been winning and neither this
+   rule's old 18px nor the action icon would have applied. Same defect, same
+   fix, as `.catchup-badge__icon` in bead enhancedchannelmanager-sccol
+   (bead enhancedchannelmanager-6z299.5). */
+.create-channel-btn .create-channel-icon,
+.create-group-btn .create-channel-icon {
+  font-size: var(--icon-action);
 }
 
 .profiles-btn,
@@ -305,7 +287,7 @@
   color: var(--button-text);
   padding: 0.375rem 0.75rem;
   border-radius: 4px;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s;
@@ -326,7 +308,7 @@
 .csv-import-btn .material-icons,
 .csv-export-btn .material-icons,
 .csv-template-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Sort All by Quality Button */
@@ -335,7 +317,7 @@
   align-items: center;
   gap: 0.375rem;
   padding: 0.375rem 0.625rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   color: var(--text-secondary);
   background-color: var(--button-secondary-bg);
@@ -357,7 +339,7 @@
 }
 
 .sort-all-quality-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .sort-all-quality-btn.loading .material-icons {
@@ -398,7 +380,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   display: flex;
   justify-content: space-between;
@@ -415,6 +397,11 @@
   border-color: var(--accent-primary);
 }
 
+/* Off the scale on purpose — see the same rule for `.filter-dropdown-button`
+   in shared/common.css § 12 for the full reasoning (bead
+   enhancedchannelmanager-6z299, completion pass). Short version: a `▼`
+   disclosure caret is a glyph, not text, and no P1 role fits it. The button
+   itself is on `--type-body-size`; only the caret is left literal. */
 .group-filter-button .dropdown-arrow {
   font-size: 0.6rem;
   color: var(--text-secondary);
@@ -451,7 +438,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 .group-filter-search-input:focus {
@@ -481,12 +468,12 @@
   color: var(--button-text);
 }
 
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, added
+   to the element in ChannelsPane.tsx. Only the padding and centring, which
+   are about where the string sits inside the dropdown, are local. */
 .group-filter-empty {
   padding: 1rem;
   text-align: center;
-  color: var(--text-muted);
-  font-size: 0.85rem;
-  font-style: italic;
 }
 
 .group-filter-actions {
@@ -503,7 +490,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--button-text);
-  font-size: 0.75rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
 }
 
@@ -531,15 +518,14 @@
 }
 
 .group-filter-option input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
   cursor: pointer;
 }
 
 .group-option-name {
   flex: 1;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -547,7 +533,9 @@
 }
 
 .group-option-count {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -589,13 +577,15 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* Tracked uppercase caption — the micro role, the same idiom as
+   `.micro-label` in shared/common.css § 24. */
 .filter-settings-header {
   padding: 0.625rem 0.75rem;
-  font-size: 0.8rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   border-bottom: 1px solid var(--border-secondary);
 }
 
@@ -609,7 +599,8 @@
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-primary);
   transition: background-color 0.1s;
 }
@@ -619,8 +610,6 @@
 }
 
 .filter-settings-option input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
   cursor: pointer;
 }
@@ -631,12 +620,16 @@
   margin: 6px 0;
 }
 
+/* Micro role. Already 10px, so this is a weight and tracking change only —
+   and a colour change: --text-muted measures 2.61:1 on --bg-secondary in the
+   light theme, below the AA floor, so meta and micro text takes
+   --text-secondary. */
 .filter-settings-subheader {
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--text-muted);
+  letter-spacing: var(--type-micro-tracking);
+  color: var(--text-secondary);
   padding: 2px 8px 4px;
 }
 
@@ -650,7 +643,8 @@
   width: 100%;
   padding: 0.5rem 0.75rem;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--accent-primary);
   background: none;
   border: none;
@@ -667,12 +661,12 @@
   color: var(--button-primary-bg);
 }
 
-.pane-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0.5rem;
-  transition: background-color 0.2s, border-color 0.2s;
-}
+/* `.pane-content` is owned by shared/common.css § 14. This bare eager copy
+   lost flex/overflow-y/padding to it at identical values; `overflow-x`, the
+   two `min-*: 0` guards and the transition were its only live contribution and
+   are now folded in there. `.pane-content.stream-group-drop-target` stays —
+   higher specificity, this pane's alone
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Stream group drop target styling */
 .pane-content.stream-group-drop-target {
@@ -735,7 +729,7 @@
 }
 
 .channel-group.empty-group {
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .channel-group.empty-group .group-header {
@@ -765,25 +759,10 @@
    it in the row are pushed right the same way. The reset properties strip
    default <button> chrome (border, background, inherited font) so it's
    visually identical to the old non-interactive wrapper. */
-.group-toggle-btn {
-  display: flex;
-  align-items: center;
-  flex: 1;
-  min-width: 0;
-  background: none;
-  border: none;
-  padding: 0;
-  margin: 0;
-  font: inherit;
-  text-align: left;
-  color: inherit;
-  cursor: pointer;
-}
-
-.group-toggle-btn:focus-visible {
-  outline: 2px solid var(--accent-primary);
-  outline-offset: -2px;
-}
+/* `.group-toggle-btn` and its `:focus-visible` are owned by
+   shared/common.css § 3 BUTTONS. This copy and StreamsPane.css's were
+   byte-identical — one class with two owners, which is how two copies of a
+   rule drift apart (bead enhancedchannelmanager-6z299.2). */
 
 .group-checkbox {
   display: flex;
@@ -814,8 +793,11 @@
   color: var(--accent-primary);
 }
 
+/* 20px -> the 18px status icon. A checkbox glyph is neither a control glyph
+   nor a chip glyph; the status size is the one that preserves the tick's
+   apparent weight in the row. */
 .group-checkbox .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
 }
 
 .group-checkbox.checked {
@@ -826,15 +808,13 @@
   color: var(--accent-primary);
 }
 
-.group-drag-handle {
-  color: var(--drag-handle-color);
-  cursor: grab;
-  padding: 0 0.25rem;
-  margin-right: 0.25rem;
-  user-select: none;
-  font-size: 1.2rem;
-  transition: color 0.15s;
-}
+/* `.group-drag-handle` is owned by StreamsPane.css, which declared it bare in
+   the same eager bundle and is emitted later — so its flex box and
+   `padding: 0` were already what this pane's handle rendered, and the
+   `padding: 0 0.25rem` here never applied. `user-select` and the 1.2rem size
+   were this rule's only live contribution and have moved there. The `:active`
+   rule below stays: higher specificity, and StreamsPane's equivalent is keyed
+   off its own group header (bead enhancedchannelmanager-87o0c). */
 
 .group-drag-handle:active {
   cursor: grabbing;
@@ -857,25 +837,39 @@
   border-radius: 4px;
 }
 
+/* Uppercase and tracked, so the micro role rather than the badge role — a
+   badge is sentence-case chip text, a micro label is a tracked uppercase
+   caption, and this is the latter wearing a chip. */
 .group-auto-sync-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   margin-left: 0.5rem;
   margin-right: 0.375rem;
-  font-size: 0.65rem;
-  font-weight: 500;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: #22d3ee;
   background-color: rgba(34, 211, 238, 0.15);
   padding: 0.125rem 0.375rem;
   border-radius: 4px;
   text-transform: uppercase;
-  letter-spacing: 0.025em;
+  letter-spacing: var(--type-micro-tracking);
+}
+
+/* Cyan-400 on a cyan wash is a dark-theme pairing: 6.14:1 on the dark group
+   row, but 1.63:1 once the light theme puts a near-white row behind the same
+   15%-alpha fill. Re-inked to cyan-800 for light only — the fill and therefore
+   the badge's cyan identity are untouched. 1.63 -> 6.09.
+   Bead enhancedchannelmanager-dlavh. */
+[data-theme="light"] .group-auto-sync-badge {
+  color: #155e75;
 }
 
 .group-empty-badge {
-  font-size: 0.7rem;
-  color: var(--text-secondary);
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
+  color: var(--text-primary);
   background-color: var(--border-primary);
   padding: 0.125rem 0.375rem;
   border-radius: 4px;
@@ -891,36 +885,47 @@
   background-color: var(--bg-tertiary);
 }
 
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, which
+   was added for exactly this string and names it — the class is on the
+   element in ChannelsPane.tsx. Only the centring is local. The italic goes
+   with the shared rule's reasoning: it was the only italic body text in the
+   product and it made an already small string harder to read. */
 .empty-group-message {
-  color: var(--text-muted);
-  font-size: 0.85rem;
   text-align: center;
-  font-style: italic;
 }
 
+/* The `▼︎`/`▶︎` expand caret in a group header (ChannelsPane.tsx:886). Same
+   verdict as the `.dropdown-arrow` family — a disclosure glyph, not text, so
+   no P1 role fits and 0.7rem stays (bead enhancedchannelmanager-6z299,
+   completion pass). Recorded here so the next sweep does not read the literal
+   as an oversight. `.group-name` beside it is on the item-title role. */
 .group-toggle {
   width: 1.25rem;
   font-size: 0.7rem;
-  color: var(--text-muted);
+  color: var(--text-primary);
 }
 
-.group-name {
+/* `.group-name` is owned by shared/common.css § 27 GROUP ROWS. It was
+   declared bare in four files across three chunks at 14px, 15.2px and — in
+   DeleteOrphanedGroupsModal.css, which set no size at all — the UA default
+   16px, so the same group row rendered at a different size depending on
+   which page you had opened (bead enhancedchannelmanager-6z299). */
+.group-header .group-name {
   flex: 1;
-  font-size: 0.875rem;
-  font-weight: 500;
-  color: var(--button-text);
 }
 
 .group-subtext {
-  font-size: 0.75rem;
-  font-weight: 400;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-primary);
   font-style: italic;
 }
 
-.group-count {
-  font-size: 0.8rem;
-  color: var(--text-muted);
+/* Type and colour for `.group-count` come from shared/common.css § 27 GROUP
+   ROWS; the pill this pane draws around it is local, and scoped so it stops
+   reaching the plain counts in M3UGroupsModal and elsewhere. */
+.group-header .group-count {
   background-color: var(--border-primary);
   padding: 0.125rem 0.5rem;
   border-radius: 4px;
@@ -936,12 +941,14 @@
   border: 1px solid rgba(39, 174, 96, 0.4);
   border-radius: 4px;
   color: var(--success, #27ae60);
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
+/* Glyph inside a chip — the badge icon, which is the 14px this already was. */
 .group-good-indicator .material-icons {
-  font-size: 0.875rem;
+  font-size: var(--icon-badge);
   color: var(--success, #27ae60);
 }
 
@@ -958,25 +965,27 @@
   background-color: rgba(231, 76, 60, 0.15);
   border: 1px solid rgba(231, 76, 60, 0.4);
   border-radius: 4px;
-  color: var(--error, #e74c3c);
-  font-size: 0.75rem;
-  font-weight: 600;
+  color: var(--danger-text);
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
 }
 
 .group-failed-indicator .material-icons {
-  font-size: 0.875rem;
-  color: var(--error, #e74c3c);
+  font-size: var(--icon-badge);
+  color: var(--danger-text);
 }
 
 .group-failed-indicator .failed-count {
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
 }
 
 .group-range {
-  font-size: 0.75rem;
-  color: var(--text-secondary);
-  font-weight: 500;
-  opacity: 0.8;
+  font-size: var(--type-meta-size);
+  color: var(--text-primary);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  opacity: 1;
   margin-left: 0.5rem;
 }
 
@@ -984,8 +993,47 @@
   margin-left: 1rem;
 }
 
+.channel-column-headers {
+  display: grid;
+  grid-template-columns: 1.5rem 1.5rem 1rem 2rem 3.25rem minmax(0, 1fr) 3rem 2rem;
+  column-gap: 0.375rem;
+  align-items: center;
+  padding: 0.375rem 0.5rem;
+  margin-left: 1rem;
+  border-bottom: 1px solid var(--border-primary);
+  /* Column headers over a list — the micro role, and --text-secondary rather
+     than --text-muted (2.61:1 on --bg-secondary in the light theme). This is
+     the same treatment `.list-header` takes in shared/common.css § 15; the
+     grid here is column-for-column with `.channel-item` below it, which is
+     why it is not simply that class. */
+  color: var(--text-secondary);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  letter-spacing: var(--type-micro-tracking);
+  text-transform: uppercase;
+}
+
+.channel-column-number {
+  grid-column: 5;
+}
+
+.channel-column-identity {
+  grid-column: 6;
+}
+
+.channel-column-streams {
+  grid-column: 7;
+}
+
+.channel-column-number,
+.channel-column-streams {
+  text-align: center;
+}
+
 .channel-item {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1.5rem 1.5rem 1rem 2rem 3.25rem minmax(0, 1fr) 3rem 2rem;
+  column-gap: 0.375rem;
   align-items: center;
   padding: 0.5rem;
   margin: 0.125rem 0;
@@ -994,19 +1042,23 @@
   transition: background-color 0.15s;
 }
 
-/* Explicit small row-gap for the Channel Manager rows. Scoped to
-   .channel-wrapper (every CM row's parent) on purpose: a global
-   `.channel-item { gap: 0.75rem }` leaks in from ChannelProfilesListModal.css
-   (that modal reuses the .channel-item class — a global class collision), and
-   that 12px gap was stacking on top of the left cluster's per-element margins,
-   wasting ~16-20px between the expand arrow, logo, and channel number. This
-   scoped rule (specificity 0-2-0) overrides the leak for CM rows only — the
-   modal keeps its own gap — and, with the per-element margin-right removed from
-   the expand icon / logo / drag handle, is the single source of the left
-   cluster's horizontal spacing. */
-.channel-wrapper .channel-item {
-  gap: 0.375rem;
-}
+.channel-select-indicator { grid-column: 1; }
+.channel-drag-handle { grid-column: 2; }
+.channel-expand-icon { grid-column: 3; }
+.channel-logo-container { grid-column: 4; }
+.channel-number-col { grid-column: 5; }
+.channel-content { grid-column: 6; }
+.channel-streams-count { grid-column: 7; }
+.channel-menu-btn { grid-column: 8; }
+
+/* The `.channel-wrapper .channel-item { gap: 0.375rem }` rule that stood here
+   is deleted (the enhancedchannelmanager-6z299.7 cleanup pass). It existed only
+   to beat a `.channel-item { gap: 0.75rem }` leaking in from
+   ChannelProfilesListModal.css — that modal reuses this file's
+   `.channel-item` class. The leak was repaired at its source: every
+   `.channel-item` rule in that file is now scoped to
+   `.channel-profiles-modal`. `column-gap: 0.375rem` in the base rule above is
+   again the single source of the left cluster's horizontal spacing. */
 
 .channel-item:hover {
   background-color: var(--input-bg);
@@ -1041,8 +1093,6 @@
   align-items: center;
   justify-content: center;
   padding: 0.5rem;
-  margin: -0.5rem;
-  margin-right: 0.25rem;
   color: var(--text-muted);
   cursor: pointer;
   /* Reset button styles -- the selector is a real <button role="checkbox">
@@ -1059,7 +1109,7 @@
 }
 
 .channel-select-indicator .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-status);
 }
 
 .channel-select-indicator.selected {
@@ -1112,8 +1162,24 @@
   flex-shrink: 0;
 }
 
-.channel-number {
-  font-size: 0.85rem;
+/* Body role. The 3.25rem column above is sized against the 5-digit EDIT
+   input, whose own font-size drops with this one, so the column gets slack
+   rather than losing it.
+
+   Scoped to `.channel-wrapper` — this pane's rows — rather than declared bare,
+   because ChannelsPane.css is eager and a bare class here donates to every
+   chunk in the app (docs/css_guidelines.md § Load order). It carried an extra
+   `.channel-item` step until the enhancedchannelmanager-6z299.7 cleanup pass, to
+   outrank ChannelProfilesListModal.css's `.channel-item .channel-number`; that
+   file's rules are now scoped to `.channel-profiles-modal`, so the defensive
+   depth is gone. Nothing else renders `.channel-number` inside a `.channel-wrapper`.
+
+   No `text-align`/`min-width` here on purpose: `.channel-number-col` centres
+   its content, and the modal's leaked `min-width: 50px; text-align: right`
+   was what had been overriding that. */
+.channel-wrapper .channel-number {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
   font-family: monospace;
 }
@@ -1138,7 +1204,7 @@
   border: 1px solid var(--accent-primary);
   border-radius: 3px;
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   font-family: monospace;
   text-align: center;
 }
@@ -1166,10 +1232,35 @@
   min-width: 0;
 }
 
+/* The name of a row in a list — item title. Two rules, deliberately.
+
+   The scoped one carries this pane's row treatment. Like `.channel-number`
+   above it lost a defensive `.channel-item` step in the
+   enhancedchannelmanager-6z299.7 cleanup pass, once
+   ChannelProfilesListModal.css's `.channel-item .channel-name` — which had
+   been setting this pane's channel names to its own 0.875rem — was scoped to
+   `.channel-profiles-modal`.
+
+   The bare one stays because it is the only owner `.channel-name` has
+   anywhere else in the app: BulkLCNFetchModal.css:133 and
+   BulkEPGAssignModal.css:419 scope the class but declare no font-size and
+   have been inheriting it from this rule. Deleting it would have dropped
+   them to whatever their container inherits. They move onto the item-title
+   role's SIZE with it, which is the same app-wide effect the f4yc7 pilot
+   recorded for the shared classes it touched — but deliberately only the
+   size. This rule is eager and therefore a donor to every chunk in the app;
+   adding a weight and a line-height it never had would push them into pages
+   that only ever asked it for a number. */
 .channel-name {
+  font-size: var(--type-item-title-size);
+}
+
+.channel-wrapper .channel-name {
   flex: 1;
   min-width: 0;
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1180,8 +1271,10 @@
 .channel-tvg-info {
   flex: 1;
   min-width: 0;
-  font-size: 0.7rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1196,14 +1289,18 @@
   margin-left: auto;
 }
 
+/* Already the badge role's 10px/500 — this only names it, and moves the
+   default (SD) pill off --text-muted. The four `.cap-*` variants below set
+   their own colours and are unaffected. */
 .capability-pill {
-  font-size: 10px;
+  font-size: var(--type-badge-size);
   padding: 2px 6px;
   border-radius: 3px;
-  font-weight: 500;
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   white-space: nowrap;
   background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .capability-pill.cap-4k {
@@ -1223,7 +1320,7 @@
 
 .capability-pill.cap-sd {
   background: var(--bg-tertiary);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .channel-name.editable {
@@ -1245,7 +1342,7 @@
   border: 1px solid var(--accent-primary);
   border-radius: 3px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   min-width: 0;
 }
 
@@ -1272,7 +1369,7 @@
 }
 
 .channel-normalize-indicator .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
   line-height: 1;
 }
 
@@ -1286,8 +1383,13 @@
   outline-offset: 1px;
 }
 
+/* Meta. This is the one target in the pane that gets slightly BIGGER
+   (10.4px -> 11px): the URL had drifted below the meta floor. It truncates
+   with an ellipsis either way and the column is rem-based, so nothing
+   reflows — measured in the running app. */
 .channel-url {
-  font-size: 0.65rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   font-family: monospace;
   white-space: nowrap;
@@ -1317,17 +1419,22 @@
   justify-content: center;
   gap: 0.125rem;
   width: 1.75rem;
+  justify-self: center;
   flex-shrink: 0;
   white-space: nowrap;
   text-align: center;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 /* Neutral "sources" icon for healthy channels (has streams, no probe problem).
-   Inherits the muted count colour. */
+   Inherits the count colour. The six glyphs in this column all take the badge
+   icon: they sit beside an 11px number in a 1.75rem cell, so the 16px action
+   icon would dominate it. */
 .channel-streams-count .streams-count-icon {
-  font-size: 0.9rem;
+  font-size: var(--icon-badge);
 }
 
 .channel-streams-count.no-streams {
@@ -1335,16 +1442,16 @@
 }
 
 .channel-streams-count .warning-icon {
-  font-size: 0.9rem;
+  font-size: var(--icon-badge);
 }
 
 .channel-streams-count.has-failed {
-  color: var(--error, #e74c3c);
+  color: var(--danger-text);
 }
 
 .channel-streams-count .failed-stream-icon {
-  font-size: 0.9rem;
-  color: var(--error, #e74c3c);
+  font-size: var(--icon-badge);
+  color: var(--danger-text);
 }
 
 .channel-streams-count.has-stale {
@@ -1352,7 +1459,7 @@
 }
 
 .channel-streams-count .stale-stream-icon {
-  font-size: 0.9rem;
+  font-size: var(--icon-badge);
   color: var(--warning);
 }
 
@@ -1361,7 +1468,7 @@
 }
 
 .channel-streams-count .black-screen-icon {
-  font-size: 0.9rem;
+  font-size: var(--icon-badge);
   color: #a855f7;
 }
 
@@ -1370,7 +1477,7 @@
 }
 
 .channel-streams-count .low-fps-icon {
-  font-size: 0.9rem;
+  font-size: var(--icon-badge);
   color: #f59e0b;
 }
 
@@ -1393,8 +1500,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   background: none;
   border: none;
   border-radius: 4px;
@@ -1410,18 +1517,33 @@
   opacity: 1;
 }
 
+.channel-menu-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
 .channel-menu-btn:hover {
   background-color: var(--accent-20);
   color: var(--accent-primary);
 }
 
 .channel-menu-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .channel-menu-dropdown {
   position: fixed;
   min-width: 180px;
+  /* Capped so the Edit Mode immediacy note WRAPS instead of laying itself out
+     on one line and dragging the menu with it: measured at 535px against a
+     180px natural width at the 1280px minimum viewport, and ~693px at 1600px
+     (bead enhancedchannelmanager-kz089 follow-up, PO decision 2026-08-16). The
+     note keeps its full wording — being unmissable is its purpose — so the box
+     is what gives. Pinned by e2e/edit-mode-immediacy-surfaces.spec.ts arm 3,
+     which asserts the cap AND that the note answered it by wrapping rather
+     than by being clipped. */
+  max-width: 320px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 6px;
@@ -1442,12 +1564,18 @@
   color: var(--text-primary);
   cursor: pointer;
   transition: background-color 0.15s;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   text-align: left;
 }
 
 .channel-menu-item:hover:not(:disabled) {
   background-color: var(--accent-10);
+}
+
+.channel-menu-item:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .channel-menu-item:disabled {
@@ -1456,7 +1584,7 @@
 }
 
 .channel-menu-item .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -1469,11 +1597,11 @@
 }
 
 .channel-menu-item.danger {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .channel-menu-item.danger .material-icons {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .channel-menu-item.danger:hover {
@@ -1512,7 +1640,7 @@
 }
 
 .pane-toolbar-menu-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .pane-toolbar-menu-dropdown {
@@ -1540,7 +1668,8 @@
   color: var(--text-primary);
   cursor: pointer;
   transition: background-color 0.15s;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   text-align: left;
 }
 
@@ -1554,7 +1683,7 @@
 }
 
 .pane-toolbar-menu-item .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -1572,16 +1701,19 @@
 
 .pane-toolbar-menu-item .submenu-arrow {
   margin-left: auto;
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .pane-toolbar-menu-item.submenu-open {
   background-color: var(--accent-10);
 }
 
+/* No font-size of its own any more: it inherits the body role from
+   `.pane-toolbar-menu-item`. The 0.8rem here and the 0.85rem there were a
+   12.8/13.6px pair that read as one size at a glance; the indent is what
+   actually says "submenu". */
 .pane-toolbar-menu-item.submenu-item {
   padding-left: 1.25rem;
-  font-size: 0.8rem;
 }
 
 .pane-toolbar-menu-submenu {
@@ -1599,10 +1731,11 @@
 
 .pane-toolbar-menu-section-label {
   padding: 0.25rem 0.75rem;
-  font-size: 0.7rem;
-  color: var(--text-muted);
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
+  color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .channel-expand-icon {
@@ -1640,10 +1773,10 @@
   border-left: 2px dashed var(--success);
 }
 
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, added
+   to both elements in ChannelsPane.tsx. */
 .inline-streams-loading,
 .inline-streams-empty {
-  font-size: 0.8rem;
-  color: var(--text-muted);
   padding: 0.5rem;
   text-align: center;
 }
@@ -1677,7 +1810,7 @@
 }
 
 .sort-quality-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .inline-streams-list {
@@ -1690,25 +1823,35 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .stream-priority {
   width: 1.25rem;
   text-align: center;
-  font-size: 0.75rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   font-family: monospace;
 }
 
 .inline-stream-item {
   flex: 1;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   display: flex;
   align-items: center;
   padding: 0.375rem 0.5rem;
   background-color: var(--input-bg);
   border-radius: 4px;
   gap: 0.5rem;
-  font-size: 0.85rem;
+  /* The row's base size; `.inline-stream-name` takes the item title from it
+     and the url/provider spans take meta. */
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .inline-stream-item:hover {
@@ -1756,7 +1899,21 @@
   gap: 0.125rem;
 }
 
+.inline-stream-details {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* The name of a row in a list — item title, the same role `.stream-name`
+   takes in StreamsPane.css. It had no font-size of its own and inherited
+   whatever `.inline-stream-item` happened to be set to. */
 .inline-stream-name {
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1764,20 +1921,43 @@
 }
 
 .inline-stream-url {
-  font-size: 0.65rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
   font-family: monospace;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1 1 5rem;
+  min-width: 3rem;
 }
 
 .inline-stream-provider {
-  font-size: 0.7rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 0 1 5rem;
+  min-width: 3rem;
+}
+
+.inline-stream-actions {
+  margin-left: auto;
+}
+
+.probe-warning-summary {
+  flex: 0 1 9rem;
+  min-width: 5rem;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.remove-stream-btn .material-icons {
+  font-size: var(--icon-action);
 }
 
 .remove-stream-btn {
@@ -1798,14 +1978,18 @@
 
 .remove-stream-btn:hover {
   background-color: var(--error)33;
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 /* Base .copy-url-btn, .vlc-btn, and .preview-btn styles are in shared/common.css */
 
 .inline-stream-item:hover .copy-url-btn,
 .inline-stream-item:hover .vlc-btn,
-.inline-stream-item:hover .preview-btn {
+.inline-stream-item:hover .preview-btn,
+.inline-stream-item:focus-within .copy-url-btn,
+.inline-stream-item:focus-within .vlc-btn,
+.inline-stream-item:focus-within .preview-btn,
+.inline-stream-item:focus-within .remove-stream-btn {
   opacity: 1;
 }
 
@@ -1829,7 +2013,7 @@
 }
 
 .clear-stats-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Stream Metadata Tags */
@@ -1840,14 +2024,30 @@
   flex-shrink: 0;
 }
 
+/* The badge role, which this was already the size and weight of — the
+   unremapped twin of `.catchup-badge`, which took the same role in bead
+   enhancedchannelmanager-sccol. Only the colour actually moves:
+   --text-muted measures 2.61:1 on --bg-secondary in the light theme. The
+   `.meta-tag.*` variants below all set their own colour and are unaffected. */
 .meta-tag {
-  font-size: 10px;
+  font-size: var(--type-badge-size);
   padding: 2px 6px;
   border-radius: 3px;
   background: var(--bg-tertiary);
-  color: var(--text-muted);
-  font-weight: 500;
+  color: var(--text-secondary);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   white-space: nowrap;
+}
+
+/* One rule for every glyph in a meta tag, replacing five per-variant copies
+   at 11px and 12px. `1em` rather than --icon-badge for the reason
+   CatchupBadge.css records: the badge icon (14px) is larger than the badge's
+   own 10px text and would make the pill taller than the text it wraps.
+   Two classes deep so it beats index.css's base `.material-icons` rule,
+   which is emitted after this file. */
+.meta-tag .material-icons {
+  font-size: 1em;
 }
 
 .meta-tag.resolution {
@@ -1890,11 +2090,6 @@
   padding: 2px 4px;
 }
 
-.meta-tag.probe-failed .material-icons,
-.meta-tag.probe-timeout .material-icons {
-  font-size: 12px;
-}
-
 .meta-tag.stream-stale {
   background: var(--warning-bg);
   color: var(--warning-text);
@@ -1903,10 +2098,6 @@
   align-items: center;
   gap: 2px;
   padding: 2px 5px;
-}
-
-.meta-tag.stream-stale .material-icons {
-  font-size: 12px;
 }
 
 .meta-tag.probe-black-screen {
@@ -1918,10 +2109,6 @@
   padding: 2px 4px;
 }
 
-.meta-tag.probe-black-screen .material-icons {
-  font-size: 12px;
-}
-
 .meta-tag.probe-low-fps {
   background: rgba(245, 158, 11, 0.2);
   color: #fbbf24;
@@ -1929,10 +2116,6 @@
   display: inline-flex;
   align-items: center;
   padding: 2px 4px;
-}
-
-.meta-tag.probe-low-fps .material-icons {
-  font-size: 12px;
 }
 
 .meta-tag.strike-count {
@@ -1945,55 +2128,36 @@
   cursor: help;
 }
 
-.meta-tag.strike-count .material-icons {
-  font-size: 11px;
-}
-
 .meta-tag.strike-count.strike-exceeded {
   background: rgba(239, 68, 68, 0.25);
   color: #f87171;
 }
 
-/* Probe Button - always visible to make it discoverable */
-.probe-stream-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0.25rem;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
-  opacity: 0.5;
-}
-
-.inline-stream-item:hover .probe-stream-btn {
-  opacity: 1;
-}
-
-.probe-stream-btn:hover:not(:disabled) {
-  color: var(--accent-primary);
-  background: rgba(var(--accent-primary-rgb, 74, 144, 226), 0.1);
-}
-
-.probe-stream-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.probe-stream-btn .material-icons {
-  font-size: 18px;
-}
-
-.probe-stream-btn.probing .material-icons {
-  animation: spin 1s linear infinite reverse;
-}
-
 /* .spinning is defined in shared/common.css (counter-clockwise) */
 
 /* Group Probe Button - probes all streams in all channels of a group */
+/* Idle opacity is 0.75, not 0.5. This is an icon-only button with no adjacent
+   label, so the glyph IS the affordance and WCAG 1.4.11's 3:1 non-text floor
+   applies to it — see `docs/css_guidelines.md` -> "opacity de-emphasises the
+   group, not the ink". PO decision on bead `enhancedchannelmanager-dlavh`: raise
+   the opacity rather than swap to a lighter ink token, so the de-emphasised
+   intent survives while the control stays findable.
+
+   Composited ratios against the surface it actually sits on (#1e1e23 dark /
+   #ffffff light / #000000 high-contrast), dark / light / high-contrast:
+       opacity 0.50   2.32 / 2.10 / 2.82   fails 3:1 in all three
+       opacity 0.70   3.30 / 3.00 / 4.69   clears, but light sits ON the floor
+       opacity 0.75   3.55 / 3.28 / 5.24   shipped
+   It is deliberately not 1.0 — hover still steps to full opacity plus the teal
+   ink below.
+
+   These numbers were RE-MEASURED on bead `enhancedchannelmanager-0zq1p`. This
+   comment previously recorded 1.56 / 2.10 / 2.25 at 0.5 and 3.15 / 3.28 / 5.02
+   at 0.75, and claimed 0.75 was the smallest 0.05 step that clears the floor
+   because 0.70 read 2.76 in dark. All of those came from a measurement core that
+   accumulated group opacity in the wrong direction and so faded this button's
+   own page background toward white; 0.70 does clear 3:1. The remediation was
+   still correct, and 0.75 stands as shipped — only the evidence was wrong. */
 .probe-group-btn {
   display: flex;
   align-items: center;
@@ -2005,7 +2169,7 @@
   cursor: pointer;
   border-radius: 4px;
   transition: color 0.15s, background 0.15s, opacity 0.15s;
-  opacity: 0.5;
+  opacity: 0.75;
   margin-left: 0.5rem;
 }
 
@@ -2018,13 +2182,18 @@
   background: rgba(20, 184, 166, 0.1);
 }
 
+/* Stays 0.5 while the idle state is 0.75 (bead enhancedchannelmanager-dlavh).
+   WCAG 1.4.3/1.4.11 exempt disabled controls, and `e2e/contrast-aa.spec.ts`
+   skips `[disabled]` subtrees for that reason, so the floor that forced the idle
+   value does not apply here — and the two values now actually distinguish
+   "de-emphasised but available" from "not available". */
 .probe-group-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
 .probe-group-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 .probe-group-btn.probing .material-icons {
@@ -2033,18 +2202,13 @@
 }
 
 /* Modal styles */
-.modal-overlay {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background-color: rgba(0, 0, 0, 0.7);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
+/* `.modal-overlay` and `.modal-btn` are owned by ModalBase.css. Both copies
+   here were bare and eager and emitted after ModalBase, so they were setting
+   the backdrop and the button geometry for every modal in the app, not just
+   this pane's. ModalBase's `--modal-overlay-bg` and `.modal-btn` now carry the
+   values that were rendering (0.7 backdrop, 0.5rem 1rem / 4px button), so the
+   deletions move nothing. `z-index: 1000` here was identical to
+   ModalBase's `var(--z-overlay)` (bead enhancedchannelmanager-87o0c). */
 
 .modal-content {
   background-color: var(--input-bg);
@@ -2055,9 +2219,12 @@
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .modal-content h3 {
   margin: 0 0 1rem 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -2067,14 +2234,18 @@
   gap: 1rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .modal-form label {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .modal-form input,
 .modal-form select {
   padding: 0.5rem;
@@ -2082,7 +2253,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .modal-form input:focus,
@@ -2098,38 +2269,23 @@
   margin-top: 1.5rem;
 }
 
-.modal-btn {
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  font-size: 0.9rem;
-  cursor: pointer;
-  transition: background-color 0.15s;
-}
-
-.modal-btn.cancel {
-  background-color: var(--bg-hover);
-  border: 1px solid var(--border-secondary);
-  color: var(--button-text);
-}
-
-.modal-btn.cancel:hover:not(:disabled) {
-  background-color: var(--button-hover-bg);
-}
-
-.modal-btn.primary {
-  background-color: var(--button-primary-bg);
-  border: none;
-  color: var(--button-primary-text);
-}
-
-.modal-btn.primary:hover:not(:disabled) {
-  background-color: var(--button-primary-bg);
-}
-
-.modal-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* `.modal-btn.cancel` and `.modal-btn.primary` are gone; `.modal-btn-secondary`
+   and `.modal-btn-primary` in ModalBase.css own them now, and the 22 markup
+   sites in this file and StreamsPane.tsx were migrated to that spelling
+   (bead enhancedchannelmanager-xhldy, PO decision 2 — see the variant-naming
+   note above `.modal-btn` in ModalBase.css).
+   NOT render-neutral, deliberately — these buttons converge on the canonical
+   treatment the app's other 108 modal buttons already use:
+     - cancel  -> secondary: fill --bg-hover -> --bg-tertiary, ink
+       --button-text -> --text-primary, and the border becomes theme-aware
+       (--border-primary) instead of ModalBase's dead `--border-color` literal.
+     - primary -> primary: gains the 1px border `.modal-btn` declares (the old
+       rule said `border: none`, so the box grows 2px in each axis) and gains a
+       real hover shade — `.modal-btn.primary:hover` re-declared its own resting
+       background, so hover was a no-op.
+   `.modal-btn:disabled` was byte-identical to ModalBase.css's and, being the
+   later of the two eager copies, simply reasserted it
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Collapsible Sections in Create Channel Modal */
 .modal-form .collapsible-section {
@@ -2138,6 +2294,7 @@
   overflow: hidden;
 }
 
+/* Section role. 14px -> 15px. */
 .modal-form .collapsible-header {
   display: flex;
   align-items: center;
@@ -2148,7 +2305,9 @@
   border: none;
   cursor: pointer;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   text-align: left;
 }
 
@@ -2156,14 +2315,16 @@
   background-color: var(--bg-hover);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .modal-form .collapsible-header .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .modal-form .collapsible-summary {
   margin-left: auto;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   color: var(--text-muted);
 }
 
@@ -2180,11 +2341,15 @@
   margin-left: 1.5rem;
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .separator-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .separator-btn {
   padding: 0.25rem 0.5rem;
   background-color: var(--bg-secondary);
@@ -2192,7 +2357,7 @@
   border-radius: 4px;
   cursor: pointer;
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   min-width: 28px;
 }
 
@@ -2206,6 +2371,7 @@
   color: var(--button-primary-text);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .country-input {
   width: 80px;
   margin-left: 1.5rem;
@@ -2214,7 +2380,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
 }
 
 .modal-form .country-input:focus {
@@ -2232,24 +2398,26 @@
   border-top: 1px solid var(--border-secondary);
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .prefix-order-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .modal-form .prefix-order-options .radio-option {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 0.375rem;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
 }
 
 .modal-form .prefix-order-options .radio-option input[type="radio"] {
-  width: 14px;
-  height: 14px;
   margin: 0;
   cursor: pointer;
   accent-color: var(--accent-primary);
@@ -2265,15 +2433,20 @@
   margin-top: 0.25rem;
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .preview-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
 }
 
+/* Item-title role. 14px -> 13px. */
 .modal-form .preview-name {
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
   color: var(--accent-primary);
-  font-weight: 500;
+  font-weight: var(--type-item-title-weight);
 }
 
 /* Normalization Options in Modal */
@@ -2283,6 +2456,7 @@
   gap: 0.75rem;
 }
 
+/* Item-title role. 14px -> 13px. */
 .modal-form .original-stream-name {
   display: flex;
   align-items: center;
@@ -2290,11 +2464,16 @@
   padding: 0.5rem 0.75rem;
   background-color: var(--bg-secondary);
   border-radius: 4px;
-  font-size: 0.875rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
 }
 
+/* Label role. 12.8px -> 13px. */
 .modal-form .original-label {
-  font-size: 0.8rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -2304,25 +2483,32 @@
   word-break: break-word;
 }
 
+/* Body role. 14px -> 13px. */
 .modal-form .normalization-option {
   display: flex;
   flex-direction: column;
   gap: 0.375rem;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .modal-form .normalization-option > span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .normalization-option select {
   padding: 0.375rem 0.5rem;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
 }
 
@@ -2336,6 +2522,7 @@
   margin-top: 0.25rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .renormalize-btn {
   display: flex;
   align-items: center;
@@ -2347,7 +2534,7 @@
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   font-weight: 500;
   margin-top: 0.25rem;
 }
@@ -2356,18 +2543,21 @@
   opacity: 0.9;
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .modal-form .renormalize-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
+/* Meta role. 12px -> 11px. */
 .modal-form .normalization-hint {
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin: 0;
   padding: 0.5rem;
   background-color: var(--bg-secondary);
   border-radius: 4px;
-  line-height: 1.4;
+  line-height: var(--type-meta-line-height);
 }
 
 /* Profile List in Modal */
@@ -2377,19 +2567,18 @@
   gap: 0.5rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .modal-form .profile-checkbox {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   color: var(--text-primary);
 }
 
 .modal-form .profile-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin: 0;
   padding: 0;
   cursor: pointer;
@@ -2404,6 +2593,8 @@
 .conflict-message {
   margin-bottom: 1rem;
   color: var(--button-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .conflict-message p {
@@ -2414,12 +2605,13 @@
   color: var(--text-primary);
 }
 
-.conflict-options {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-  margin-bottom: 1rem;
-}
+/* This bare `.conflict-options` rule had no render site in ChannelsPane.tsx —
+   the class is emitted by StreamsPane.tsx and BulkEPGAssignModal.tsx. Being
+   eager and later than BulkEPGAssignModal.css, it was nonetheless winning
+   their gap and adding a bottom margin neither asked for. Its two live values
+   (`gap: 0.75rem`, `margin-bottom: 1rem`) moved into BulkEPGAssignModal.css's
+   rule, which is now the single owner, so both render sites are unchanged
+   (bead enhancedchannelmanager-87o0c). */
 
 .conflict-option-btn {
   display: flex;
@@ -2444,8 +2636,9 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 24px -> 16px. */
 .conflict-option-btn .material-icons {
-  font-size: 24px;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -2467,14 +2660,20 @@
   gap: 0.25rem;
 }
 
+/* Section role. 15.2px -> 15px. */
 .conflict-option-text strong {
   color: var(--text-primary);
-  font-size: 0.95rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .conflict-option-text span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Group autocomplete styles */
@@ -2482,6 +2681,7 @@
   position: relative;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .group-autocomplete input {
   width: 100%;
   padding: 0.5rem;
@@ -2490,7 +2690,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .group-autocomplete input:focus {
@@ -2498,6 +2698,7 @@
   border-color: var(--accent-primary);
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12.8px -> 11px. */
 .group-autocomplete-clear {
   position: absolute;
   right: 0.5rem;
@@ -2508,7 +2709,7 @@
   color: var(--text-muted);
   cursor: pointer;
   padding: 0.25rem;
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
   line-height: 1;
 }
 
@@ -2531,10 +2732,13 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* Body role. 14.4px -> 13px. */
 .group-autocomplete-option {
   padding: 0.5rem 0.75rem;
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--button-text);
 }
 
@@ -2547,9 +2751,12 @@
   color: var(--text-primary);
 }
 
+/* Body role. 13.6px -> 13px. */
 .group-autocomplete-empty {
   padding: 0.5rem 0.75rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-muted);
   font-style: italic;
 }
@@ -2568,14 +2775,20 @@
   color: var(--button-text);
 }
 
+/* Body role. 13.6px -> 13px. */
 .delete-warning {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--warning) !important;
   font-style: italic;
 }
 
+/* Body role. 13.6px -> 13px. */
 .delete-info {
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   font-style: italic;
 }
@@ -2588,18 +2801,17 @@
   border-radius: 4px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .delete-channels-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .delete-channels-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
   accent-color: var(--error);
 }
@@ -2609,6 +2821,7 @@
 }
 
 /* Bulk delete empty groups checkbox */
+/* Label role. 14.4px -> 13px. */
 .delete-checkbox-label {
   display: flex;
   align-items: flex-start;
@@ -2620,14 +2833,13 @@
   border-radius: 4px;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
 }
 
 .delete-checkbox-label input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   margin-top: 2px;
-  flex-shrink: 0;
   cursor: pointer;
   accent-color: var(--error);
 }
@@ -2637,19 +2849,13 @@
   line-height: 1.4;
 }
 
-.modal-btn.danger {
-  background-color: var(--error);
-  color: var(--text-primary);
-}
-
-.modal-btn.danger:hover:not(:disabled) {
-  background-color: #b91c1c;
-}
-
-.modal-btn.danger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
+/* `.modal-btn.danger` is gone — `.modal-btn-danger` in ModalBase.css owns it,
+   and the three markup sites in this file were migrated to that spelling
+   (bead enhancedchannelmanager-xhldy). The fill was already `--error`, which is
+   correct; what changes is the ink (`--text-primary` -> `#fff`, so the button
+   keeps white text in the light theme instead of flipping to #1a1a1a on a red
+   fill) and the hover shade (#b91c1c -> #dc2626, matching `.btn-danger`).
+   `:disabled` was byte-identical to ModalBase's `.modal-btn:disabled`. */
 
 /* Rename group dialog */
 .rename-dialog {
@@ -2660,13 +2866,17 @@
   padding: 0 0.5rem;
 }
 
+/* Label role. 13.6px -> 13px. */
 .rename-form label {
   display: block;
   margin-bottom: 0.5rem;
-  font-size: 0.85rem;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .rename-input {
   width: 100%;
   padding: 0.625rem 0.75rem;
@@ -2674,7 +2884,7 @@
   border-radius: 4px;
   background-color: var(--input-bg);
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   margin-bottom: 1rem;
 }
 
@@ -2698,18 +2908,17 @@
   border-radius: 4px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .renumber-checkbox {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .renumber-checkbox input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
 }
 
@@ -2719,12 +2928,15 @@
   border-top: 1px solid var(--border-primary);
 }
 
+/* Body role. 13.6px -> 13px. */
 .renumber-preview-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   flex-wrap: wrap;
 }
 
@@ -2743,20 +2955,29 @@
   min-width: 2rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-name-old {
   color: var(--text-secondary);
   margin-left: 0.5rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-name-new {
   color: var(--success);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-preview-more {
   color: var(--text-muted);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   font-style: italic;
   margin-top: 0.25rem;
 }
@@ -2792,8 +3013,9 @@
   color: var(--text-muted);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .channel-logo-placeholder .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 
@@ -2821,15 +3043,18 @@
   flex: 1;
 }
 
+/* Micro role — the tracked uppercase label idiom. 13.6px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .edit-channel-header-fields label {
   display: block;
   margin-bottom: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 16px -> 13px. */
 .edit-channel-number-input,
 .edit-channel-name-input {
   width: 100%;
@@ -2838,7 +3063,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: var(--type-body-size);
 }
 
 .edit-channel-number-input {
@@ -2846,8 +3071,9 @@
   text-align: center;
 }
 
+/* Control: section role's SIZE only, authored weight kept. 17.6px -> 15px. */
 .edit-channel-name-input {
-  font-size: 1.1rem;
+  font-size: var(--type-section-size);
 }
 
 .edit-channel-number-input:focus,
@@ -2860,13 +3086,15 @@
   margin-bottom: 1.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 13.6px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .edit-channel-section label {
   display: block;
   margin-bottom: 0.5rem;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .logo-section-header {
@@ -2925,12 +3153,14 @@
   object-fit: contain;
 }
 
-.logo-option-none {
-  color: var(--text-muted);
-  font-size: 0.8rem;
-  text-align: center;
-}
+/* `.logo-option-none` moved to ModalBase.css, next to the
+   `.dropdown-option` family it shares a rule with there. This copy was bare
+   and eager and emitted after ModalBase, so its colour and size were winning
+   while ModalBase supplied the rest of the box — a merge that rendered in
+   EditChannelModal and AutoSyncSettingsModal, neither of which is this file's
+   surface (bead enhancedchannelmanager-87o0c). */
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-search-input {
   width: 100%;
   padding: 0.5rem;
@@ -2939,7 +3169,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .logo-search-input:focus {
@@ -2954,6 +3184,7 @@
   align-items: center;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-add-row input[type="text"] {
   flex: 1;
   padding: 0.5rem;
@@ -2961,7 +3192,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .logo-add-row input[type="text"]:focus {
@@ -2969,6 +3200,7 @@
   border-color: var(--accent-primary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-add-btn {
   display: flex;
   align-items: center;
@@ -2982,7 +3214,7 @@
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
   white-space: nowrap;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .logo-add-btn:hover {
@@ -2995,6 +3227,7 @@
   cursor: not-allowed;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-upload-btn {
   display: flex;
   align-items: center;
@@ -3008,7 +3241,7 @@
   color: var(--button-text);
   cursor: pointer;
   transition: all 0.15s;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   white-space: nowrap;
 }
 
@@ -3023,10 +3256,12 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .logo-upload-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .logo-epg-btn {
   display: flex;
   align-items: center;
@@ -3040,7 +3275,7 @@
   color: var(--button-text);
   cursor: pointer;
   transition: all 0.15s;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   white-space: nowrap;
 }
 
@@ -3055,8 +3290,9 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .logo-epg-btn .material-icons {
-  font-size: 1rem;
+  font-size: var(--icon-action);
 }
 
 /* Discard Changes Confirmation Dialog */
@@ -3083,17 +3319,21 @@
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .discard-confirm-title {
-  font-size: 1.1rem;
-  font-weight: 600;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
   margin-bottom: 0.75rem;
 }
 
+/* Body role. 14.4px -> 13px. */
 .discard-confirm-message {
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-body-line-height);
   margin-bottom: 1.25rem;
 }
 
@@ -3103,6 +3343,7 @@
   justify-content: flex-end;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .discard-confirm-cancel {
   padding: 0.5rem 1rem;
   background-color: transparent;
@@ -3110,7 +3351,7 @@
   border-radius: 4px;
   color: var(--button-text);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   transition: background-color 0.15s, color 0.15s;
 }
 
@@ -3119,6 +3360,7 @@
   color: var(--text-primary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .discard-confirm-discard {
   padding: 0.5rem 1rem;
   background-color: var(--error);
@@ -3126,7 +3368,7 @@
   border-radius: 4px;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
   transition: background-color 0.15s;
 }
 
@@ -3152,19 +3394,23 @@
   background-color: var(--input-bg);
 }
 
+/* Body role. 14.4px -> 13px. */
 .current-logo-preview span {
   color: var(--text-secondary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .current-logo-remove-btn {
   margin-left: auto;
   padding: 0.25rem 0.5rem;
   background-color: transparent;
   border: 1px solid var(--error);
   border-radius: 4px;
-  color: var(--error);
-  font-size: 0.8rem;
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s;
 }
@@ -3174,6 +3420,7 @@
 }
 
 /* Edit Channel Form Elements */
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .edit-channel-text-input {
   width: 100%;
   padding: 0.5rem;
@@ -3181,7 +3428,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .edit-channel-text-input:focus {
@@ -3221,11 +3468,13 @@
   color: var(--accent-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .edit-channel-copy-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Get from EPG button */
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .edit-channel-get-epg-btn {
   padding: 0.375rem 0.625rem;
   background-color: var(--bg-hover);
@@ -3236,7 +3485,7 @@
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
   transition: background-color 0.15s, color 0.15s, border-color 0.15s;
   white-space: nowrap;
 }
@@ -3247,8 +3496,9 @@
   border-color: var(--accent-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 16px -> 16px. */
 .edit-channel-get-epg-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
 /* TVG-ID Picker */
@@ -3268,18 +3518,24 @@
   border-radius: 4px;
 }
 
+/* Meta role. 12px -> 11px. */
 .edit-channel-hint {
   display: block;
   margin-top: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   font-style: italic;
 }
 
+/* Meta role. 12px -> 11px. */
 .edit-channel-error {
   display: block;
   margin-top: 0.375rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--error-color, #ef4444);
   font-style: italic;
 }
@@ -3311,27 +3567,34 @@
   min-width: 0;
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .current-epg-name {
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 12px -> 11px. */
 .current-epg-tvgid {
   color: var(--text-muted);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-family: monospace;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .current-epg-remove-btn {
   padding: 0.25rem 0.5rem;
   background-color: transparent;
   border: 1px solid var(--error);
   border-radius: 4px;
-  color: var(--error);
-  font-size: 0.8rem;
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s;
 }
@@ -3346,6 +3609,7 @@
   margin-bottom: 0.5rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .epg-source-filter-btn {
   display: flex;
   align-items: center;
@@ -3356,7 +3620,7 @@
   border-radius: 4px;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
   width: 100%;
 }
 
@@ -3364,8 +3628,9 @@
   background-color: var(--bg-hover);
 }
 
+/* Button/inline-action glyph -> --icon-action. 17.6px -> 16px. */
 .epg-source-filter-btn .material-icons {
-  font-size: 1.1rem;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -3394,6 +3659,7 @@
   border-bottom: 1px solid var(--border-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .epg-source-filter-actions button {
   flex: 1;
   padding: 0.35rem 0.5rem;
@@ -3402,7 +3668,7 @@
   border-radius: 4px;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
 }
 
 .epg-source-filter-actions button:hover {
@@ -3413,6 +3679,7 @@
   padding: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .epg-source-filter-option {
   display: flex;
   align-items: center;
@@ -3420,7 +3687,9 @@
   padding: 0.4rem 0.5rem;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
@@ -3463,12 +3732,15 @@
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
+/* Body role. 13.6px -> 13px. */
 .epg-dropdown-loading,
 .epg-dropdown-empty {
   padding: 1rem;
   text-align: center;
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .epg-dropdown-item {
@@ -3504,24 +3776,32 @@
   min-width: 0;
 }
 
+/* Item-title role. 13.6px -> 13px. */
 .epg-dropdown-name {
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+/* Meta role. 12px -> 11px. */
 .epg-dropdown-tvgid {
   color: var(--text-secondary);
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   font-family: monospace;
 }
 
+/* Meta role. 11.2px -> 11px. */
 .epg-dropdown-source {
   color: var(--accent-secondary);
-  font-size: 0.7rem;
-  font-weight: 500;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   padding: 0.125rem 0.375rem;
   background-color: var(--accent-primary)33;
   border-radius: 3px;
@@ -3535,9 +3815,12 @@
   max-width: 560px;
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .cross-group-move-dialog h3 {
   margin: 0 0 1rem 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -3545,11 +3828,13 @@
   margin-bottom: 1rem;
 }
 
+/* Body role. 15.2px -> 13px. */
 .cross-group-move-info p {
   margin: 0;
   color: var(--button-text);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .cross-group-move-info .group-tag {
@@ -3572,13 +3857,16 @@
   padding: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-channel-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -3591,6 +3879,7 @@
   font-style: italic;
 }
 
+/* Badge role. 12px -> 10px. */
 .cross-group-move-channel-list .channel-number-badge {
   display: inline-flex;
   align-items: center;
@@ -3601,7 +3890,9 @@
   color: var(--text-secondary);
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
 }
 
 .cross-group-move-warning {
@@ -3614,9 +3905,10 @@
   margin-bottom: 1.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .cross-group-move-warning .warning-icon {
   color: var(--warning);
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -3624,18 +3916,23 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .cross-group-move-warning .warning-text strong {
   display: block;
   color: var(--warning);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.25rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-warning .warning-text p {
   margin: 0;
   color: var(--warning);
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Conflict warning (info style - blue) */
@@ -3649,9 +3946,10 @@
   margin-bottom: 1.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .cross-group-move-conflict-warning .conflict-icon {
   color: #3b82f6;
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -3659,18 +3957,23 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .cross-group-move-conflict-warning .conflict-warning-text strong {
   display: block;
   color: #60a5fa;
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.25rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-conflict-warning .conflict-warning-text p {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .cross-group-move-conflict-warning .conflict-warning-text p strong {
@@ -3688,19 +3991,32 @@
   margin-bottom: 0.75rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .cross-group-move-options .channel-number-section label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.375rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .cross-group-move-options .group-range-info {
   margin: 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
+}
+
+/* Why the Move button is disabled (bd-gddai) */
+.move-numbering-blocked {
+  margin: 0.5rem 0 0;
+  color: var(--danger-text);
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 /* Radio button option group */
@@ -3734,15 +4050,13 @@
 }
 
 .move-option-radio input[type="radio"] {
-  width: 18px;
-  height: 18px;
   accent-color: var(--accent-primary);
   cursor: pointer;
-  flex-shrink: 0;
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .move-option-radio .material-icons {
-  font-size: 1.25rem;
+  font-size: var(--icon-action);
   color: var(--text-secondary);
 }
 
@@ -3754,16 +4068,22 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .move-option-text strong {
   display: block;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.125rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .move-option-text span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 /* Custom number input - inline within radio option */
@@ -3774,6 +4094,7 @@
   margin-top: 0.375rem;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13.6px -> 13px. */
 .custom-number-input-inline {
   width: 140px;
   padding: 0.375rem 0.5rem;
@@ -3781,7 +4102,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
 }
 
 .custom-number-input-inline:focus {
@@ -3793,9 +4114,12 @@
   color: var(--text-muted);
 }
 
+/* Body role. 12.8px -> 13px. */
 .custom-number-range-inline {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   white-space: nowrap;
 }
 
@@ -3816,8 +4140,6 @@
 }
 
 .source-renumber-option input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   margin-top: 2px;
   accent-color: var(--accent-primary);
   cursor: pointer;
@@ -3827,17 +4149,22 @@
   flex: 1;
 }
 
+/* Body role. 14.4px -> 13px. */
 .source-renumber-text strong {
   display: block;
   color: var(--text-primary);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 0.25rem;
 }
 
+/* Body role. 12.8px -> 13px. */
 .source-renumber-text span {
   color: var(--text-secondary);
-  font-size: 0.8rem;
-  line-height: 1.4;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 /* Drag Overlay */
@@ -4273,7 +4600,7 @@
 
 .group-delete-btn:hover {
   background-color: rgba(248, 113, 113, 0.2);
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .group-delete-btn .material-icons {
@@ -4318,6 +4645,15 @@
 .group-menu-dropdown {
   position: fixed;
   min-width: 180px;
+  /* Capped so the Edit Mode immediacy note WRAPS instead of laying itself out
+     on one line and dragging the menu with it: measured at 535px against a
+     180px natural width at the 1280px minimum viewport, and ~693px at 1600px
+     (bead enhancedchannelmanager-kz089 follow-up, PO decision 2026-08-16). The
+     note keeps its full wording — being unmissable is its purpose — so the box
+     is what gives. Pinned by e2e/edit-mode-immediacy-surfaces.spec.ts arm 3,
+     which asserts the cap AND that the note answered it by wrapping rather
+     than by being clipped. */
+  max-width: 320px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 6px;
@@ -4365,11 +4701,11 @@
 }
 
 .group-menu-item.danger {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .group-menu-item.danger .material-icons {
-  color: var(--error);
+  color: var(--danger-text);
 }
 
 .group-menu-item.danger:hover {
@@ -4423,11 +4759,13 @@
   margin-bottom: 1.25rem;
 }
 
+/* Body role. 15.2px -> 13px. */
 .sort-renumber-info p {
   margin: 0;
   color: var(--button-text);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .sort-renumber-options {
@@ -4440,13 +4778,16 @@
   gap: 0.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .sort-renumber-field label {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 16px -> 13px. */
 .sort-renumber-input {
   width: 150px;
   padding: 0.625rem 0.75rem;
@@ -4454,7 +4795,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: var(--type-body-size);
   font-weight: 600;
 }
 
@@ -4463,9 +4804,12 @@
   border-color: var(--accent-primary);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .sort-renumber-range {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .sort-renumber-order-field {
@@ -4481,6 +4825,7 @@
   margin-top: 0;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14.4px -> 13px. */
 .sort-renumber-checkbox {
   display: flex;
   align-items: center;
@@ -4488,13 +4833,11 @@
   margin-top: 0.75rem;
   cursor: pointer;
   color: var(--button-text);
-  font-size: 0.9rem;
+  font-size: var(--type-body-size);
 }
 
 .sort-renumber-checkbox input[type="checkbox"],
 .sort-renumber-checkbox input[type="radio"] {
-  width: 16px;
-  height: 16px;
   margin: 0;
   cursor: pointer;
   accent-color: #22d3ee;
@@ -4508,12 +4851,14 @@
   margin-bottom: 1.25rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .sort-renumber-preview label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
@@ -4527,13 +4872,16 @@
   overflow-y: auto;
 }
 
+/* Body role. 13.6px -> 13px. */
 .sort-renumber-preview-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -4546,6 +4894,7 @@
   font-style: italic;
 }
 
+/* Meta role. 12px -> 11px. */
 .preview-old-number {
   display: inline-flex;
   align-items: center;
@@ -4556,7 +4905,9 @@
   color: var(--text-secondary);
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   text-decoration: line-through;
 }
 
@@ -4565,6 +4916,7 @@
   font-weight: bold;
 }
 
+/* Meta role. 12px -> 11px. */
 .preview-new-number {
   display: inline-flex;
   align-items: center;
@@ -4575,16 +4927,16 @@
   color: var(--accent-secondary);
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
-.preview-name {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* `.preview-name` is owned by StreamsPane.css, which declares it bare in the
+   same eager bundle and is emitted later, so it already won all four
+   properties this copy declared, at identical values — and this pane's renumber
+   previews have always also picked up StreamsPane's 0.85rem and text colour
+   (bead enhancedchannelmanager-87o0c). */
 
 /* Mass Renumber Modal */
 .mass-renumber-dialog {
@@ -4592,9 +4944,12 @@
   max-width: 550px;
 }
 
+/* Modal-title role. 17.6px -> 18px. */
 .mass-renumber-dialog h3 {
   margin: 0 0 1rem 0;
-  font-size: 1.1rem;
+  font-size: var(--type-modal-title-size);
+  line-height: var(--type-modal-title-line-height);
+  font-weight: var(--type-modal-title-weight);
   color: var(--text-primary);
 }
 
@@ -4602,11 +4957,13 @@
   margin-bottom: 1.25rem;
 }
 
+/* Body role. 15.2px -> 13px. */
 .mass-renumber-info p {
   margin: 0;
   color: var(--button-text);
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }
 
 .mass-renumber-options {
@@ -4619,13 +4976,16 @@
   gap: 0.5rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .mass-renumber-field label {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 16px -> 13px. */
 .mass-renumber-input {
   width: 150px;
   padding: 0.625rem 0.75rem;
@@ -4633,7 +4993,7 @@
   border: 1px solid var(--border-secondary);
   border-radius: 4px;
   color: var(--text-primary);
-  font-size: 1rem;
+  font-size: var(--type-body-size);
   font-weight: 600;
 }
 
@@ -4642,9 +5002,12 @@
   border-color: var(--accent-primary);
 }
 
+/* Meta role. 13.6px -> 11px. */
 .mass-renumber-range {
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
 .mass-renumber-conflict-warning {
@@ -4657,9 +5020,10 @@
   margin-bottom: 1.25rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .mass-renumber-conflict-warning .conflict-icon {
   color: #f59e0b;
-  font-size: 1.25rem;
+  font-size: var(--icon-status);
   flex-shrink: 0;
 }
 
@@ -4673,10 +5037,13 @@
   margin-bottom: 0.5rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .mass-renumber-conflict-warning .conflict-warning-content p {
   margin: 0 0 0.5rem 0;
   color: var(--text-secondary);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .conflict-channel-list {
@@ -4685,12 +5052,15 @@
   padding: 0;
 }
 
+/* Body role. 13.6px -> 13px. */
 .conflict-channel-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.25rem 0;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .conflict-channel-list li.more-conflicts {
@@ -4698,6 +5068,7 @@
   font-style: italic;
 }
 
+/* Meta role. 12px -> 11px. */
 .conflict-channel-number {
   display: inline-flex;
   align-items: center;
@@ -4708,27 +5079,40 @@
   color: #f59e0b;
   border-radius: 3px;
   font-family: monospace;
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
 }
 
+/* Sole owner of `.conflict-channel-name`. GracenoteConflictModal.css declared
+   it bare in the same eager bundle; this file is emitted later, so it won the
+   colour and that modal's row was already rendering
+   `var(--text-secondary)` — its weight and 0.9375rem size are the only things
+   that survived from there, and they are folded in below so its copy could go
+   (bead enhancedchannelmanager-87o0c). */
+/* Item-title role. 15px -> 13px. */
 .conflict-channel-name {
   color: var(--text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  font-weight: var(--type-item-title-weight);
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
 }
 
 .mass-renumber-preview {
   margin-bottom: 1.25rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .mass-renumber-preview label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
@@ -4742,13 +5126,16 @@
   overflow-y: auto;
 }
 
+/* Body role. 13.6px -> 13px. */
 .mass-renumber-preview-list li {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0.375rem 0;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -4777,12 +5164,14 @@
   margin-bottom: 1.25rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12.8px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .renumber-all-preview > label {
   display: block;
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
   margin-bottom: 0.5rem;
 }
 
@@ -4796,13 +5185,16 @@
   overflow-y: auto;
 }
 
+/* Body role. 13.6px -> 13px. */
 .renumber-all-preview-list li {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   padding: 0.375rem 0.5rem;
   color: var(--button-text);
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   border-bottom: 1px solid var(--border-primary);
 }
 
@@ -4819,14 +5211,18 @@
   white-space: nowrap;
 }
 
+/* Meta role. 12.8px -> 11px. */
 .renumber-all-group-count {
   color: var(--text-secondary);
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   white-space: nowrap;
   min-width: 55px;
   text-align: right;
 }
 
+/* Body role. 12.8px -> 13px. */
 .renumber-all-group-start {
   width: 72px;
   padding: 0.25rem 0.375rem;
@@ -4834,7 +5230,9 @@
   border: 1px solid var(--border-color, #3a3a5a);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.8rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   text-align: center;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
@@ -4856,4 +5254,3 @@
   min-width: 70px;
   text-align: right;
 }
-

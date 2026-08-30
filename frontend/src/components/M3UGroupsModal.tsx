@@ -6,6 +6,7 @@ import { useNotifications } from '../contexts/NotificationContext';
 import { naturalCompare } from '../utils/naturalSort';
 import { AutoSyncSettingsModal } from './AutoSyncSettingsModal';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './M3UGroupsModal.css';
 
@@ -49,6 +50,7 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
   onChannelGroupsChange,
   allowMultiProviderAutoSync = false,
 }: M3UGroupsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [groups, setGroups] = useState<GroupWithName[]>([]);
   const [search, setSearch] = useState('');
@@ -351,11 +353,11 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={handleRequestClose}>
-      <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }}>
+    <ModalOverlay onClose={handleRequestClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg m3u-groups-modal" style={{ height: '80vh', minHeight: '80vh', maxHeight: '80vh' }} ref={containerRef}>
         <div className="modal-header">
           <div className="header-info">
-            <h2>Manage Groups</h2>
+            <h2 id={titleId}>Manage Groups</h2>
             <span className="account-name">{account.name}</span>
             {linkedAccountInfo.isLinked && (
               <span className="linked-info">
@@ -387,8 +389,8 @@ export const M3UGroupsModal = memo(function M3UGroupsModal({
           <div className="toolbar-actions">
             <span className="group-count">{enabledCount} / {groups.length} enabled</span>
             <div className="toolbar-buttons">
-              <button className="btn-small" onClick={handleEnableAll}>Enable All</button>
-              <button className="btn-small" onClick={handleDisableAll}>Disable All</button>
+              <button className="btn-secondary btn-small" onClick={handleEnableAll}>Enable All</button>
+              <button className="btn-secondary btn-small" onClick={handleDisableAll}>Disable All</button>
             </div>
           </div>
         </div>

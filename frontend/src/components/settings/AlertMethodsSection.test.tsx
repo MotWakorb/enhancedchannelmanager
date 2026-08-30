@@ -66,7 +66,7 @@ describe('AlertMethodsSection', () => {
 
   it('renders an empty state when no alert methods exist', async () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([]);
-    render(<AlertMethodsSection />);
+    render(<AlertMethodsSection isAdmin />);
 
     await waitFor(() => {
       expect(screen.getByText(/no alert methods configured/i)).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe('AlertMethodsSection', () => {
 
   it('lists alert methods with type and enabled state', async () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([smtpMethod, discordMethod]);
-    render(<AlertMethodsSection />);
+    render(<AlertMethodsSection isAdmin />);
 
     await waitFor(() => {
       expect(screen.getByText('Email')).toBeInTheDocument();
@@ -91,7 +91,7 @@ describe('AlertMethodsSection', () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([smtpMethod]);
     vi.mocked(api.testAlertMethod).mockResolvedValue({ success: true, message: 'Test email sent' });
 
-    render(<AlertMethodsSection />);
+    render(<AlertMethodsSection isAdmin />);
     await waitFor(() => screen.getByText('Email'));
 
     fireEvent.click(screen.getByLabelText('Send test to Email'));
@@ -106,7 +106,7 @@ describe('AlertMethodsSection', () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([smtpMethod]);
     vi.mocked(api.testAlertMethod).mockResolvedValue({ success: false, message: 'SMTP auth failed' });
 
-    render(<AlertMethodsSection />);
+    render(<AlertMethodsSection isAdmin />);
     await waitFor(() => screen.getByText('Email'));
 
     fireEvent.click(screen.getByLabelText('Send test to Email'));
@@ -120,7 +120,7 @@ describe('AlertMethodsSection', () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([discordMethod]);
     vi.mocked(api.deleteAlertMethod).mockResolvedValue({ success: true });
 
-    render(<AlertMethodsSection />);
+    render(<AlertMethodsSection isAdmin />);
     await waitFor(() => screen.getByText('Discord Alerts'));
 
     fireEvent.click(screen.getByLabelText('Delete Discord Alerts'));
@@ -143,7 +143,7 @@ describe('AlertMethodsSection', () => {
   it('cancelling delete does not call the API', async () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([discordMethod]);
 
-    render(<AlertMethodsSection />);
+    render(<AlertMethodsSection isAdmin />);
     await waitFor(() => screen.getByText('Discord Alerts'));
 
     fireEvent.click(screen.getByLabelText('Delete Discord Alerts'));
@@ -153,5 +153,22 @@ describe('AlertMethodsSection', () => {
     await waitFor(() => {
       expect(screen.getByText('Discord Alerts')).toBeInTheDocument();
     });
+  });
+
+  // bead enhancedchannelmanager-9kwzp.10 item 4: every backing endpoint is now
+  // admin-gated on the backend, because an alert method's `config` holds the
+  // Discord webhook URL, the Telegram bot token and the SMTP password. The
+  // component must not issue the request it would be refused, so a non-admin
+  // gets the lock notice instead of a 403 toast.
+  it('shows the admin-only notice and issues no request for a non-admin', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([discordMethod]);
+
+    render(<AlertMethodsSection isAdmin={false} />);
+
+    expect(
+      screen.getByText(/Only administrators can view or manage alert methods\./),
+    ).toBeInTheDocument();
+    expect(api.listAlertMethods).not.toHaveBeenCalled();
+    expect(screen.queryByText('Discord Alerts')).not.toBeInTheDocument();
   });
 });

@@ -97,17 +97,15 @@ ALWAYS_ON_DENIED = [
     # IMDS + link-local
     "http://169.254.169.254/latest/meta-data/",   # AWS/GCP/Azure IMDS
     "http://169.254.1.1/",                          # link-local 169.254.0.0/16
-    # CGNAT 100.64.0.0/10
-    "http://100.64.0.1/",
-    "http://100.127.255.254/",
     # 0.0.0.0/8 wildcard
     "http://0.0.0.0/",
     "http://0.1.2.3/",
     # multicast 224.0.0.0/4
     "http://224.0.0.1/",
     "http://239.255.255.250/",
-    # IPv6 loopback ::1
-    "http://[::1]/",
+    # NOTE: IPv6 loopback ``::1`` is NOT here — it is the v6 equivalent of
+    # ``127.0.0.0/8`` and follows the wizard toggle (GH #754 / bead 0yh70).
+    # See TestWizardToggledBand.test_ipv6_loopback_follows_the_wizard_toggle.
     # IPv6 ULA fc00::/7
     "http://[fc00::1]/",
     "http://[fd12:3456:789a::1]/",
@@ -124,7 +122,6 @@ ALWAYS_ON_DENIED = [
     # always-on list — see TestWizardToggledBand below.)
     "http://[::ffff:169.254.169.254]/",            # mapped IMDS (169.254/16 always-on)
     "http://[::ffff:0.0.0.0]/",                     # mapped wildcard (0.0.0.0/8 always-on)
-    "http://[::ffff:100.64.0.1]/",                  # mapped CGNAT (100.64/10 always-on)
 ]
 
 
@@ -143,6 +140,38 @@ class TestAlwaysOnDenylist:
             with pytest.raises(SSRFError):
                 validate_outbound_url("http://evil.example.com/", SSRFMode.LAN_FRIENDLY)
 
+    @pytest.mark.parametrize("url", [
+        "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+        "http://169.254.169.254/",
+        "http://169.254.1.1/",
+        "http://[::ffff:169.254.169.254]/",
+        "http://[fe80::1]/",
+    ])
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_link_local_denied_in_both_modes_deliberately(self, url, mode):
+        """Link-local (incl. IMDS) stays denied in BOTH modes — GH #754 / ``0yh70``.
+
+        Decided deliberately rather than inherited from the loopback rule it
+        used to share a rejection message with:
+
+        1. **Asymmetric cost.** Loopback has a proven legitimate ECM use (a
+           Dispatcharr sharing the container's network namespace — the GH #754
+           report). Link-local has none: ``169.254.0.0/16`` is DHCP-failure
+           autoconfiguration plus cloud IMDS. Nobody deliberately runs
+           Dispatcharr/Plex/Emby/Jellyfin on a link-local address.
+        2. **Highest-value target in the set.** ``169.254.169.254`` serves
+           IAM/instance credentials to any unauthenticated GET from the
+           instance, and ECM's pollers re-GET a stored base URL every few
+           seconds with the stored key — the exact SSRF-to-credential-
+           exfiltration chain ``kgz3k`` SEC-1/2 closed.
+        3. **Spec-conformant.** §9.4 items 2 and 7: the wizard can move only
+           the RFC1918/loopback band and "can never touch the always-on
+           denylist". Addendum B row B6's named threat is precisely a settings
+           surface that re-enables ``169.254.169.254``.
+        """
+        with pytest.raises(SSRFError):
+            validate_outbound_url(url, mode)
+
     def test_no_settings_key_can_disable_denylist(self):
         # §9.4 item 2 / B6: the always-on denylist is unconditional in code.
         # There must be no module-level allowlist that re-enables a denied IP.
@@ -152,8 +181,8 @@ class TestAlwaysOnDenylist:
 
 
 # ---------------------------------------------------------------------------
-# Wizard-toggled band: RFC1918 + loopback (§9.4 item 2 — wizard-toggled;
-# corpus: RFC1918 allowed in LAN-friendly / rejected in public-only).
+# Wizard-toggled band: RFC1918 + RFC 6598 shared space + loopback (§9.4 item 2;
+# allowed in LAN-friendly / rejected in public-only).
 # ---------------------------------------------------------------------------
 
 class TestWizardToggledBand:
@@ -168,6 +197,54 @@ class TestWizardToggledBand:
     def test_rfc1918_and_loopback_allowed_in_lan_friendly(self, url):
         result = validate_outbound_url(url, SSRFMode.LAN_FRIENDLY)
         assert result is not None
+
+    @pytest.mark.parametrize("url", [
+        "http://100.64.0.0/",
+        "http://100.80.3.24/",
+        "http://100.127.255.255/",
+        "http://[::ffff:100.80.3.24]/",
+    ])
+    def test_rfc6598_shared_space_allowed_in_lan_friendly(self, url):
+        result = validate_outbound_url(url, SSRFMode.LAN_FRIENDLY)
+        assert str(result.ip) in {"100.64.0.0", "100.80.3.24", "100.127.255.255"}
+
+    def test_hostname_resolving_only_to_rfc6598_allowed_in_lan_friendly(self):
+        with _patch_dns("100.80.3.24"):
+            result = validate_outbound_url("https://peer.example.test/", SSRFMode.LAN_FRIENDLY)
+        assert str(result.ip) == "100.80.3.24"
+
+    @pytest.mark.parametrize("url", [
+        "http://100.64.0.0/",
+        "http://100.80.3.24/",
+        "http://100.127.255.255/",
+    ])
+    def test_rfc6598_shared_space_blocked_in_public_only(self, url):
+        with pytest.raises(SSRFError):
+            validate_outbound_url(url, SSRFMode.PUBLIC_ONLY)
+
+    def test_mapped_rfc6598_blocked_in_public_only(self):
+        with pytest.raises(SSRFError):
+            validate_outbound_url(
+                "http://[::ffff:100.80.3.24]/", SSRFMode.PUBLIC_ONLY
+            )
+
+    @pytest.mark.parametrize("address", ["100.63.255.255", "100.128.0.0"])
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_adjacent_global_addresses_remain_public_literal(self, address, mode):
+        result = validate_outbound_url(f"https://{address}/", mode)
+        assert str(result.ip) == address
+
+    @pytest.mark.parametrize("address", ["100.63.255.255", "100.128.0.0"])
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_adjacent_global_addresses_remain_public_via_dns(self, address, mode):
+        with _patch_dns(address):
+            result = validate_outbound_url("https://public.example.test/", mode)
+        assert str(result.ip) == address
+
+    def test_rfc6598_does_not_weaken_reject_any_dns_record(self):
+        with _patch_dns("100.80.3.24", "169.254.169.254"):
+            with pytest.raises(SSRFError):
+                validate_outbound_url("https://peer.example.test/", SSRFMode.LAN_FRIENDLY)
 
     @pytest.mark.parametrize("url", [
         "http://10.0.0.5/",
@@ -195,11 +272,55 @@ class TestWizardToggledBand:
         with pytest.raises(SSRFError):
             validate_outbound_url("http://[::ffff:127.0.0.1]/", SSRFMode.PUBLIC_ONLY)
 
-    def test_ipv6_loopback_always_denied_even_lan_friendly(self):
-        # ::1 is in the ALWAYS-on denylist, NOT the toggled band — it stays
-        # denied even in LAN-friendly mode.
+    def test_ipv6_loopback_follows_the_wizard_toggle(self):
+        """``::1`` is the v6 equivalent of ``127.0.0.0/8`` — toggled, not always-on.
+
+        GH #754 / bead ``0yh70``. §9.4 item 2 is self-contradictory here: its
+        always-on bullet lists ``::1/128`` while its wizard-toggled bullet says
+        "``127.0.0.0/8`` and RFC1918 ... **+ IPv6 equivalents**". We resolve it
+        in favour of the toggled bullet for loopback ONLY, because:
+
+        * ``::1`` and ``127.0.0.1`` are the same trust domain (the ECM host's
+          own loopback interface), so denying one while allowing the other
+          blocks no attacker capability — they simply type ``127.0.0.1``.
+        * Docker's generated ``/etc/hosts`` maps ``localhost`` to BOTH ``::1``
+          and ``127.0.0.1``, and §9.4 item 3 rejects the whole request if ANY
+          record is denied. Keeping ``::1`` always-on therefore makes
+          ``http://localhost:<port>`` unusable in LAN-friendly mode for every
+          Docker deployment that is not ``network_mode: host`` — the reported
+          GH #754 failure.
+
+        IPv6 ULA ``fc00::/7`` deliberately stays ALWAYS-on denied: it addresses
+        a *different* host on the network, not this one (see ALWAYS_ON_DENIED).
+        """
+        result = validate_outbound_url("http://[::1]/", SSRFMode.LAN_FRIENDLY)
+        assert result is not None
         with pytest.raises(SSRFError):
-            validate_outbound_url("http://[::1]/", SSRFMode.LAN_FRIENDLY)
+            validate_outbound_url("http://[::1]/", SSRFMode.PUBLIC_ONLY)
+
+    def test_dual_stack_localhost_follows_the_toggle(self):
+        """``localhost`` in a container resolves dual-stack — GH #754 fixture.
+
+        The record order is copied verbatim from a real container run
+        (``docker run --rm python:3.12-slim python -c
+        "import socket; socket.getaddrinfo('localhost', 9191, ...)"``), which
+        returns ``::1`` FIRST and then ``127.0.0.1``. §9.4 item 3 rejects the
+        whole request if any record is denied, so this is the case that a
+        v4-only reproduction on a ``network_mode: host`` box silently misses.
+        """
+        with _patch_dns("::1", "127.0.0.1"):
+            result = validate_outbound_url("http://localhost:9191", SSRFMode.LAN_FRIENDLY)
+        assert result is not None
+
+        with _patch_dns("::1", "127.0.0.1"):
+            with pytest.raises(SSRFError):
+                validate_outbound_url("http://localhost:9191", SSRFMode.PUBLIC_ONLY)
+
+    @pytest.mark.parametrize("mode", [SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY])
+    def test_ipv6_ula_stays_always_denied(self, mode):
+        """The loopback carve-out does NOT extend to ULA (a different host)."""
+        with pytest.raises(SSRFError):
+            validate_outbound_url("http://[fd12:3456:789a::1]/", mode)
 
     def test_public_address_allowed_in_both_modes(self):
         for mode in (SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY):
@@ -307,6 +428,20 @@ class TestFailClosed:
 # ---------------------------------------------------------------------------
 
 class TestRedirectValidation:
+    def test_redirect_to_rfc6598_follows_mode(self):
+        result = ssrf.validate_redirect(
+            "http://example.com/",
+            "http://100.80.3.24/api/",
+            SSRFMode.LAN_FRIENDLY,
+        )
+        assert str(result.ip) == "100.80.3.24"
+        with pytest.raises(SSRFError):
+            ssrf.validate_redirect(
+                "http://example.com/",
+                "http://100.80.3.24/api/",
+                SSRFMode.PUBLIC_ONLY,
+            )
+
     def test_redirect_to_imds_rejected(self):
         with _patch_dns("169.254.169.254"):
             with pytest.raises(SSRFError):
@@ -368,7 +503,7 @@ class TestIpaddressBackstop:
     ])
     def test_reserved_ranges_denied_in_both_modes(self, ip):
         # These are is_reserved / is_private-ish per stdlib and must be denied
-        # even though they are not in the explicit CGNAT/IMDS list.
+        # even though they are not in the explicit policy bands.
         for mode in (SSRFMode.LAN_FRIENDLY, SSRFMode.PUBLIC_ONLY):
             with pytest.raises(SSRFError):
                 validate_outbound_url(f"http://{ip}/", mode)

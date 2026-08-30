@@ -13,12 +13,40 @@ import './SyncTargetsCard.css';
  *
  * Load-bearing operator-expectation copy (ADR-013) is surfaced prominently:
  *   - sync is ONE-WAY — edits on B are overwritten by A on the next apply;
- *   - credentials are NOT synced — they must be re-entered on B.
+ *   - provider credentials ARE synced, on every cycle (PO ruling 2026-08-22),
+ *     so B authenticates and serves without the operator typing anything.
+ *
+ * THAT SECOND LINE USED TO SAY THE OPPOSITE, and getting it wrong is the whole
+ * of bead `…-msqf7`. That bead was not about transmitting credentials; it was
+ * about ECM asserting they were stripped while transmitting them anyway. The
+ * copy below therefore changes in the same commit as the behaviour, and the
+ * `key_off` "credentials are not synced" banner is replaced by a `key` banner
+ * that says what actually happens — including the part an operator has to
+ * weigh, which is that a target with certificate checking off carries those
+ * credentials in clear on every cycle.
+ *
+ * Logo replication is per-target (`sync_logos`, default ON since bead 2yq19)
+ * with its own row toggle — see `handleToggleLogos`. It still does not run
+ * every cycle: `logo_sync_interval_hours` throttles the slice instead.
  *
  * Safety model for "Sync now": the default action is a counts-only DRY-RUN
  * preview (confirm_apply:false). Only after a successful preview does an
  * explicit, confirm-gated "Apply" (confirm_apply:true) become available — apply
  * is a source-wins overwrite of B, so we make the operator confirm it.
+ *
+ * `result.success` is the ONLY thing that unlocks Apply, which makes the
+ * backend's TaskResult the whole safety mechanism. It has to be trustworthy: a
+ * preview that could not read B used to arrive here as success=true with
+ * would-create counts derived purely from A (bead …-jqfxm), so the card offered
+ * Apply for a destination nobody had reached. The backend now fails such a
+ * preview; this card needs no extra check, only to keep gating on `success`.
+ *
+ * Correcting a target in place (bead …-a3lby) — see `handleSave`. Every field
+ * the create form sets was WRITE-ONCE here, so a mistyped base URL or password
+ * meant delete-and-recreate: that resets `sync_logos` to its default and
+ * hands the replacement the deleted target's execution history, which is keyed
+ * on a REUSABLE target id (bead …-5dp92). The backend PUT and the api.ts client
+ * already accepted every one of those fields; only this affordance was absent.
  */
 
 /** Tri-state badge derived from SyncTarget.last_outcome. */
@@ -44,7 +72,8 @@ function formatTimestamp(ts?: string | null): string {
   return d.toLocaleString(getDateLocale());
 }
 
-interface AddForm {
+/** Shape of the create/correct form — one form, two modes (bead …-a3lby). */
+interface TargetForm {
   name: string;
   baseUrl: string;
   authMode: 'password' | 'api_key';
@@ -52,9 +81,17 @@ interface AddForm {
   password: string;
   apiKey: string;
   insecure: boolean;
+  /**
+   * The ONE provider credential that cannot be harvested off this instance —
+   * Dispatcharr marks the Schedules Direct password write-only and never
+   * returns it. Typed once, stored encrypted on the target, re-sent every
+   * cycle. The field is only RENDERED when this instance actually has a
+   * Schedules Direct EPG source (`needsSdPassword`).
+   */
+  schedulesDirectPassword: string;
 }
 
-const EMPTY_FORM: AddForm = {
+const EMPTY_FORM: TargetForm = {
   name: '',
   baseUrl: '',
   authMode: 'password',
@@ -62,19 +99,64 @@ const EMPTY_FORM: AddForm = {
   password: '',
   apiKey: '',
   insecure: false,
+  schedulesDirectPassword: '',
 };
+
+/**
+ * Which auth mode a stored target uses, read off its credential KEYS.
+ *
+ * The read shape masks credential VALUES to last-4 but leaves the keys intact,
+ * so the shape of the dict is knowable even though its secrets are not — which
+ * is exactly enough to reopen the form on the mode the operator chose.
+ */
+function authModeOf(target: api.SyncTarget): TargetForm['authMode'] {
+  return 'api_key' in target.credentials ? 'api_key' : 'password';
+}
 
 export function SyncTargetsCard() {
   const notifications = useNotifications();
   const [targets, setTargets] = useState<api.SyncTarget[]>([]);
   const [loading, setLoading] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState<AddForm>(EMPTY_FORM);
-  const [creating, setCreating] = useState(false);
-  // Per-target id currently busy with a sync/preview/apply/toggle/delete op.
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  // The target being corrected, or null when the form is creating a new one.
+  const [editing, setEditing] = useState<api.SyncTarget | null>(null);
+  const [form, setForm] = useState<TargetForm>(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
+  // Target ids currently busy with a sync/preview/apply/toggle/delete op.
+  // A SET, not a scalar: with per-target sync tasks (7ipq2.3) two targets can
+  // legitimately be in flight at once, and a scalar marker let starting B
+  // overwrite A's state — B finishing then re-enabled A's row mid-request, so
+  // the next click hit the backend's per-target lock with an avoidable
+  // ALREADY_RUNNING (PR #752 review).
+  const [busyIds, setBusyIds] = useState<Set<number>>(new Set());
+
+  // Functional updates throughout — two concurrent handlers must not clobber
+  // each other's entry by writing a value derived from a stale render.
+  const markBusy = useCallback((id: number) => {
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  }, []);
+
+  const clearBusy = useCallback((id: number) => {
+    setBusyIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
   // Targets that have a successful preview pending, so Apply is offered.
   const [previewedIds, setPreviewedIds] = useState<Set<number>>(new Set());
+  // What this instance cannot harvest and therefore has to be typed. Normally
+  // nothing at all: the create form asks for a Schedules Direct password ONLY
+  // when a `schedules_direct` EPG source exists here for it to be written onto.
+  // Defaults to "nothing needed" so a failed probe hides the field rather than
+  // showing a box the operator has no value for.
+  const [credentialNeeds, setCredentialNeeds] =
+    useState<api.SyncSourceCredentialNeeds | null>(null);
+  const needsSdPassword = credentialNeeds?.needs_schedules_direct_password === true;
 
   const loadTargets = useCallback(async () => {
     setLoading(true);
@@ -95,37 +177,154 @@ export function SyncTargetsCard() {
     loadTargets();
   }, [loadTargets]);
 
-  const handleCreate = useCallback(async () => {
-    if (!form.name.trim() || !form.baseUrl.trim() || creating) return;
-    setCreating(true);
+  // Advisory, and deliberately silent on failure: not knowing whether a
+  // Schedules Direct source exists must never block target creation, and the
+  // consequence of being wrong is one EPG source keeping the password it
+  // already has on the replica.
+  useEffect(() => {
+    let cancelled = false;
+    // An ASYNC body with try/catch, not a `.catch()` on the promise, and the
+    // difference is load-bearing: a throw that happens BEFORE a promise exists
+    // (the call itself failing) escapes a `.catch()` chain entirely and takes
+    // the render down. `loadTargets` above is shaped the same way for the same
+    // reason.
+    (async () => {
+      try {
+        const needs = await api.getSyncSourceCredentialNeeds();
+        if (!cancelled) setCredentialNeeds(needs);
+      } catch {
+        if (!cancelled) setCredentialNeeds(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const closeForm = useCallback(() => {
+    setForm(EMPTY_FORM);
+    setEditing(null);
+    setFormOpen(false);
+  }, []);
+
+  /**
+   * Open the form on an existing target so its settings can be CORRECTED
+   * (bead …-a3lby) instead of the target being deleted and rebuilt.
+   *
+   * Name, base URL and the insecure opt-out are prefilled from what is stored.
+   * The credential inputs deliberately are NOT: what the read shape carries is
+   * the last-4 MASK (`***user`), and putting that in the box invites the
+   * operator to "keep" a value that is not the secret.
+   */
+  const handleEdit = useCallback((target: api.SyncTarget) => {
+    setEditing(target);
+    setForm({
+      ...EMPTY_FORM,
+      name: target.name,
+      baseUrl: target.base_url,
+      authMode: authModeOf(target),
+      insecure: target.insecure,
+    });
+    setFormOpen(true);
+  }, []);
+
+  /**
+   * Commit the form — a create when `editing` is null, a correction otherwise.
+   *
+   * TWO RULES CARRY THE BEAD, and both are about what the update does NOT say.
+   *
+   * 1. The payload names ONLY the fields this form edits. `PUT
+   *    /api/sync-targets/{id}` is a partial update, so omitting `enabled`,
+   *    `sync_logos` and `fuzzy_stream_matching` is what leaves the operator's
+   *    kill-switch state and logo choice exactly where they set them. Naming
+   *    any of them here would reintroduce, through the correction path, the
+   *    silent reset that delete-and-recreate caused.
+   *
+   * 2. Credentials are ALL-OR-NOTHING. The backend REPLACES the stored dict
+   *    rather than merging into it, and ECM cannot read the stored secret back
+   *    to fill a gap, so a half-entry would blank the half left empty. Blank
+   *    boxes therefore omit `credentials` entirely (the stored secret is
+   *    untouched); a partial entry — or a change of auth MODE, which changes
+   *    the dict's shape and so cannot carry the old secret over — is refused
+   *    with the reason, not silently completed.
+   */
+  const handleSave = useCallback(async () => {
+    if (!form.name.trim() || !form.baseUrl.trim() || saving) return;
+
+    const credentials: Record<string, string> =
+      form.authMode === 'api_key'
+        ? { api_key: form.apiKey }
+        : { username: form.username, password: form.password };
+    const credentialsComplete = Object.values(credentials).every((v) => v !== '');
+    const credentialsTouched = Object.values(credentials).some((v) => v !== '');
+
+    if (editing) {
+      const modeChanged = authModeOf(editing) !== form.authMode;
+      if ((credentialsTouched || modeChanged) && !credentialsComplete) {
+        notifications.error(
+          form.authMode === 'api_key'
+            ? 'Enter the API key in full. ECM cannot read the stored one back, so ' +
+              'a partial entry would replace it rather than add to it.'
+            : 'Enter the username AND password in full. ECM cannot read the stored ' +
+              'ones back, so a partial entry would replace them rather than add to them.',
+          'Cross-Instance Sync',
+        );
+        return;
+      }
+    }
+
+    setSaving(true);
     try {
-      const credentials: Record<string, string> =
-        form.authMode === 'api_key'
-          ? { api_key: form.apiKey }
-          : { username: form.username, password: form.password };
-      await api.createSyncTarget({
-        name: form.name.trim(),
-        base_url: form.baseUrl.trim(),
-        credentials,
-        insecure: form.insecure,
-      });
-      notifications.success(`Added sync target '${form.name.trim()}'`, 'Cross-Instance Sync');
-      setForm(EMPTY_FORM);
-      setShowAdd(false);
+      if (editing) {
+        const payload: api.SyncTargetUpdateRequest = {
+          name: form.name.trim(),
+          base_url: form.baseUrl.trim(),
+          insecure: form.insecure,
+        };
+        if (credentialsComplete) payload.credentials = credentials;
+        // Omitted when blank, exactly like `credentials`: an empty box means
+        // "leave the stored Schedules Direct password alone", never "clear it".
+        if (form.schedulesDirectPassword !== '') {
+          payload.schedules_direct_password = form.schedulesDirectPassword;
+        }
+        await api.updateSyncTarget(editing.id, payload);
+        notifications.success(
+          credentialsComplete
+            ? `Updated sync target '${form.name.trim()}' — credentials replaced`
+            : `Updated sync target '${form.name.trim()}'`,
+          'Cross-Instance Sync',
+        );
+      } else {
+        await api.createSyncTarget({
+          name: form.name.trim(),
+          base_url: form.baseUrl.trim(),
+          credentials,
+          insecure: form.insecure,
+          ...(form.schedulesDirectPassword !== ''
+            ? { schedules_direct_password: form.schedulesDirectPassword }
+            : {}),
+        });
+        notifications.success(`Added sync target '${form.name.trim()}'`, 'Cross-Instance Sync');
+      }
+      closeForm();
       await loadTargets();
     } catch (err) {
       notifications.error(
-        err instanceof Error ? err.message : 'Failed to add sync target',
+        err instanceof Error
+          ? err.message
+          : editing
+            ? 'Failed to update sync target'
+            : 'Failed to add sync target',
         'Cross-Instance Sync',
       );
     } finally {
-      setCreating(false);
+      setSaving(false);
     }
-  }, [form, creating, notifications, loadTargets]);
+  }, [form, saving, editing, notifications, loadTargets, closeForm]);
 
   const handleToggleEnabled = useCallback(
     async (target: api.SyncTarget) => {
-      setBusyId(target.id);
+      markBusy(target.id);
       try {
         await api.updateSyncTarget(target.id, { enabled: !target.enabled });
         notifications.success(
@@ -139,10 +338,54 @@ export function SyncTargetsCard() {
           'Cross-Instance Sync',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications, loadTargets],
+    [notifications, loadTargets, markBusy, clearBusy],
+  );
+
+  /**
+   * Per-target logo-replication opt-in (bead …-8gnik).
+   *
+   * `sync_logos` had no UI: enabling logo replication meant a raw
+   * `PUT /api/sync-targets/{id}` or the MCP tool, and the operator guide said
+   * so. This is that control.
+   *
+   * The DEFAULT is now ON (bead 2yq19). It was OFF because the logos importer
+   * carries a streaming-upload cost ADR-013 S9 judged wrong to run every
+   * interval — a COST decision, which the faithful-copy principle does not
+   * overrule; what it does overrule is answering that cost with a replica that
+   * has no artwork. The cost is answered by `logo_sync_interval_hours` (default
+   * 24h) instead. The create path still never SETS the field: it omits it and
+   * takes the backend default, so this toggle remains the only explicit
+   * operator choice in either direction.
+   *
+   * Unlike preview/apply this is not gated on `enabled`: it is configuration,
+   * and an operator should be able to set it on a target whose kill switch is
+   * currently off, ready for when they turn it back on.
+   */
+  const handleToggleLogos = useCallback(
+    async (target: api.SyncTarget) => {
+      markBusy(target.id);
+      try {
+        await api.updateSyncTarget(target.id, { sync_logos: !target.sync_logos });
+        notifications.success(
+          target.sync_logos
+            ? `Logo replication off for ${target.name}`
+            : `Logo replication on for ${target.name} — logos replicate on the next apply`,
+          'Cross-Instance Sync',
+        );
+        await loadTargets();
+      } catch (err) {
+        notifications.error(
+          err instanceof Error ? err.message : 'Failed to update logo replication',
+          'Cross-Instance Sync',
+        );
+      } finally {
+        clearBusy(target.id);
+      }
+    },
+    [notifications, loadTargets, markBusy, clearBusy],
   );
 
   const handleDelete = useCallback(
@@ -152,7 +395,7 @@ export function SyncTargetsCard() {
           `It does NOT undo any config already pushed to B.`,
       );
       if (!ok) return;
-      setBusyId(target.id);
+      markBusy(target.id);
       try {
         await api.deleteSyncTarget(target.id);
         notifications.success(`Deleted sync target '${target.name}'`, 'Cross-Instance Sync');
@@ -168,17 +411,27 @@ export function SyncTargetsCard() {
           'Cross-Instance Sync',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications, loadTargets],
+    [notifications, loadTargets, markBusy, clearBusy],
   );
 
   const handlePreview = useCallback(
     async (target: api.SyncTarget) => {
-      setBusyId(target.id);
+      setPreviewedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(target.id);
+        return next;
+      });
+      markBusy(target.id);
       try {
-        const result = await api.runTask('dbas_sync', undefined, {
+        // Per-target task id (7ipq2.3 / ADR-013 S6): each target owns
+        // `dbas_sync_<id>`, so two targets can sync concurrently while the
+        // engine still refuses a second run against the SAME target.
+        // sync_target_id stays in the payload as a self-documenting
+        // cross-check — the backend hard-fails on a mismatch.
+        const result = await api.runTask(`dbas_sync_${target.id}`, undefined, {
           sync_target_id: target.id,
           confirm_apply: false,
         });
@@ -189,8 +442,13 @@ export function SyncTargetsCard() {
             'Sync Preview (dry run)',
           );
         } else {
+          // `message` before `error`: `message` is the backend's operator-facing
+          // sentence ("could not read the destination it describes — …"), while
+          // `error` is a machine code (SYNC_DESTINATION_UNREADABLE). Showing the
+          // code first told an operator that something failed without telling
+          // them what, which is half of what a false-green instrument costs.
           notifications.error(
-            result.error || result.message || 'Preview failed',
+            result.message || result.error || 'Preview failed',
             'Sync Preview (dry run)',
           );
         }
@@ -200,10 +458,10 @@ export function SyncTargetsCard() {
           'Sync Preview (dry run)',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications],
+    [notifications, markBusy, clearBusy],
   );
 
   const handleApply = useCallback(
@@ -211,12 +469,13 @@ export function SyncTargetsCard() {
       const ok = window.confirm(
         `Apply sync to '${target.name}'? This OVERWRITES B's config with A's ` +
           `(source-wins). Any edits made directly on B will be lost. ` +
-          `Credentials are NOT pushed — re-enter them on B.`,
+          `Your provider credentials ARE pushed, so B can serve — ` +
+          `this is the confirmation that a secret is about to leave this instance.`,
       );
       if (!ok) return;
-      setBusyId(target.id);
+      markBusy(target.id);
       try {
-        const result = await api.runTask('dbas_sync', undefined, {
+        const result = await api.runTask(`dbas_sync_${target.id}`, undefined, {
           sync_target_id: target.id,
           confirm_apply: true,
         });
@@ -233,7 +492,8 @@ export function SyncTargetsCard() {
           await loadTargets();
         } else {
           notifications.error(
-            result.error || result.message || 'Apply failed',
+            // Sentence before code — see the preview branch above.
+            result.message || result.error || 'Apply failed',
             'Cross-Instance Sync',
           );
         }
@@ -243,13 +503,13 @@ export function SyncTargetsCard() {
           'Cross-Instance Sync',
         );
       } finally {
-        setBusyId(null);
+        clearBusy(target.id);
       }
     },
-    [notifications, loadTargets],
+    [notifications, loadTargets, markBusy, clearBusy],
   );
 
-  const updateForm = <K extends keyof AddForm>(key: K, value: AddForm[K]) =>
+  const updateForm = <K extends keyof TargetForm>(key: K, value: TargetForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   return (
@@ -271,11 +531,14 @@ export function SyncTargetsCard() {
         </span>
       </div>
 
-      <div className="stc-warning stc-warning-creds">
-        <span className="material-icons">key_off</span>
+      <div className="stc-warning stc-warning-creds" data-testid="stc-credentials-banner">
+        <span className="material-icons">key</span>
         <span>
-          <strong>Credentials are not synced.</strong> Provider passwords and API keys are never
-          pushed to B — re-enter them on B after the first sync.
+          <strong>Provider credentials are sent on every sync.</strong> B receives this
+          instance&apos;s real provider username, password and stream addresses, so it
+          authenticates and serves without you re-typing anything, and a password change here
+          reaches B on its next scheduled sync. Turning certificate checking off for a target
+          sends them in clear, every cycle.
         </span>
       </div>
 
@@ -290,7 +553,7 @@ export function SyncTargetsCard() {
         <div className="stc-target-list">
           {targets.map((target) => {
             const kind = outcomeKind(target.last_outcome);
-            const busy = busyId === target.id;
+            const busy = busyIds.has(target.id);
             const previewed = previewedIds.has(target.id);
             return (
               <div
@@ -312,12 +575,24 @@ export function SyncTargetsCard() {
                       <span
                         className="stc-badge stc-badge-insecure"
                         data-testid={`sync-target-insecure-${target.id}`}
-                        title="Certificate checking is turned off for this target. Only safe on a trusted instance with a self-signed certificate."
+                        title="Certificate checking is turned off for this target, and every sync sends your provider credentials to it in clear. Only do this on a trusted instance with a self-signed certificate."
                       >
                         <span className="material-icons" aria-hidden="true">
                           gpp_maybe
                         </span>
                         Certificate check off
+                      </span>
+                    )}
+                    {target.has_schedules_direct_password && (
+                      <span
+                        className="stc-badge stc-badge-sd"
+                        data-testid={`sync-target-sd-password-${target.id}`}
+                        title="A Schedules Direct password is stored for this target and is re-sent on every sync. Every other provider credential is read from this instance and needs no input."
+                      >
+                        <span className="material-icons" aria-hidden="true">
+                          vpn_key
+                        </span>
+                        Schedules Direct password stored
                       </span>
                     )}
                     <span className="stc-last-synced">
@@ -340,6 +615,25 @@ export function SyncTargetsCard() {
                       {target.enabled ? 'toggle_on' : 'toggle_off'}
                     </span>
                     {target.enabled ? 'Enabled' : 'Disabled'}
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`stc-toggle stc-logos-toggle${target.sync_logos ? ' is-on' : ''}`}
+                    aria-pressed={target.sync_logos}
+                    title={
+                      target.sync_logos
+                        ? 'Logo replication is on — A\u2019s logos are copied to B on each apply. Click to turn off.'
+                        : 'Logo replication is off — B keeps its own logos and channels there have no artwork. Click to turn on.'
+                    }
+                    disabled={busy}
+                    data-testid={`sync-target-logos-${target.id}`}
+                    onClick={() => handleToggleLogos(target)}
+                  >
+                    <span className="material-icons" aria-hidden="true">
+                      {target.sync_logos ? 'image' : 'hide_image'}
+                    </span>
+                    {target.sync_logos ? 'Logos on' : 'Logos off'}
                   </button>
 
                   <button
@@ -370,6 +664,18 @@ export function SyncTargetsCard() {
 
                   <button
                     type="button"
+                    className="btn-secondary stc-action-btn"
+                    disabled={busy}
+                    title="Edit — correct the name, base URL, credentials or certificate setting"
+                    data-testid={`sync-target-edit-${target.id}`}
+                    onClick={() => handleEdit(target)}
+                    aria-label="Edit sync target"
+                  >
+                    <span className="material-icons" aria-hidden="true">edit</span>
+                  </button>
+
+                  <button
+                    type="button"
                     className="btn-secondary stc-action-btn stc-delete-btn"
                     disabled={busy}
                     title="Delete sync target"
@@ -386,15 +692,19 @@ export function SyncTargetsCard() {
         </div>
       )}
 
-      {showAdd ? (
+      {formOpen ? (
         <div className="stc-add-form">
+          <div className="stc-form-title">
+            {editing ? `Edit '${editing.name}'` : 'New sync target'}
+          </div>
+
           <div className="stc-field">
             <label htmlFor="stc-name">Name</label>
             <input
               id="stc-name"
               type="text"
               value={form.name}
-              disabled={creating}
+              disabled={saving}
               onChange={(e) => updateForm('name', e.target.value)}
               placeholder="e.g. Living Room B"
             />
@@ -406,19 +716,28 @@ export function SyncTargetsCard() {
               id="stc-base-url"
               type="text"
               value={form.baseUrl}
-              disabled={creating}
+              disabled={saving}
               onChange={(e) => updateForm('baseUrl', e.target.value)}
               placeholder="https://dispatcharr-b.example.com"
             />
           </div>
+
+          {editing && (
+            <p className="form-hint" data-testid="stc-credentials-hint">
+              Leave the credential boxes blank to keep the stored credentials. To
+              change them, enter them <strong>in full</strong> — ECM cannot read the
+              stored secret back, so a partial entry replaces what is there rather
+              than adding to it.
+            </p>
+          )}
 
           <div className="stc-field">
             <label htmlFor="stc-auth-mode">Authentication</label>
             <select
               id="stc-auth-mode"
               value={form.authMode}
-              disabled={creating}
-              onChange={(e) => updateForm('authMode', e.target.value as AddForm['authMode'])}
+              disabled={saving}
+              onChange={(e) => updateForm('authMode', e.target.value as TargetForm['authMode'])}
             >
               <option value="password">Username &amp; password</option>
               <option value="api_key">API key</option>
@@ -434,7 +753,7 @@ export function SyncTargetsCard() {
                   type="text"
                   autoComplete="off"
                   value={form.username}
-                  disabled={creating}
+                  disabled={saving}
                   onChange={(e) => updateForm('username', e.target.value)}
                 />
               </div>
@@ -445,7 +764,7 @@ export function SyncTargetsCard() {
                   type="password"
                   autoComplete="new-password"
                   value={form.password}
-                  disabled={creating}
+                  disabled={saving}
                   onChange={(e) => updateForm('password', e.target.value)}
                 />
               </div>
@@ -458,9 +777,30 @@ export function SyncTargetsCard() {
                 type="password"
                 autoComplete="new-password"
                 value={form.apiKey}
-                disabled={creating}
+                disabled={saving}
                 onChange={(e) => updateForm('apiKey', e.target.value)}
               />
+            </div>
+          )}
+
+          {needsSdPassword && (
+            <div className="stc-field" data-testid="stc-sd-password-field">
+              <label htmlFor="stc-sd-password">Schedules Direct password</label>
+              <input
+                id="stc-sd-password"
+                type="password"
+                autoComplete="new-password"
+                value={form.schedulesDirectPassword}
+                disabled={saving}
+                onChange={(e) => updateForm('schedulesDirectPassword', e.target.value)}
+              />
+              <p className="form-hint" data-testid="stc-sd-password-hint">
+                The only credential you have to type. Dispatcharr never returns a Schedules
+                Direct password, so there is nothing on this instance to read — every other
+                provider credential is copied to B automatically. Enter it once and it is
+                re-sent on every sync.
+                {editing && ' Leave blank to keep the stored one.'}
+              </p>
             </div>
           )}
 
@@ -468,12 +808,14 @@ export function SyncTargetsCard() {
             <input
               type="checkbox"
               checked={form.insecure}
-              disabled={creating}
+              disabled={saving}
               onChange={(e) => updateForm('insecure', e.target.checked)}
             />
             <span>
               <strong>Allow insecure TLS.</strong> Skip certificate verification when connecting to
-              B. Only use this for a trusted instance with a self-signed certificate.
+              B. Every sync sends your provider credentials to B, so with this on they cross in
+              clear on every cycle. Only use it for a trusted instance with a self-signed
+              certificate.
             </span>
           </label>
 
@@ -481,21 +823,15 @@ export function SyncTargetsCard() {
             <button
               type="button"
               className="btn-primary"
-              disabled={creating || !form.name.trim() || !form.baseUrl.trim()}
-              onClick={handleCreate}
+              disabled={saving || !form.name.trim() || !form.baseUrl.trim()}
+              onClick={handleSave}
             >
-              <span className="material-icons">{creating ? 'hourglass_empty' : 'add'}</span>
-              Create target
+              <span className="material-icons">
+                {saving ? 'hourglass_empty' : editing ? 'save' : 'add'}
+              </span>
+              {editing ? 'Save changes' : 'Create target'}
             </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={creating}
-              onClick={() => {
-                setForm(EMPTY_FORM);
-                setShowAdd(false);
-              }}
-            >
+            <button type="button" className="btn-secondary" disabled={saving} onClick={closeForm}>
               Cancel
             </button>
           </div>
@@ -504,7 +840,11 @@ export function SyncTargetsCard() {
         <button
           type="button"
           className="btn-secondary stc-add-toggle"
-          onClick={() => setShowAdd(true)}
+          onClick={() => {
+            setEditing(null);
+            setForm(EMPTY_FORM);
+            setFormOpen(true);
+          }}
         >
           <span className="material-icons">add</span>
           Add sync target

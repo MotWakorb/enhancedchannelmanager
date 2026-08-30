@@ -90,7 +90,7 @@
   top: 100%;
   left: 0;
   font-size: 0.7rem;
-  color: var(--error);
+  color: var(--danger-text);
   white-space: nowrap;
 }
 
@@ -115,8 +115,6 @@
 }
 
 .sub-pair-regex input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
   accent-color: var(--accent-primary);
   cursor: pointer;
 }
@@ -163,7 +161,7 @@
 }
 
 .sub-pair-delete:hover {
-  color: var(--error);
+  color: var(--danger-text);
   background-color: var(--error-bg);
 }
 

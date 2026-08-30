@@ -115,7 +115,7 @@ export const selectors = {
   // Modals
   modal: '.modal',
   modalOverlay: '.modal-overlay',
-  modalClose: '.modal-close',
+  modalClose: '.modal-close-btn',
   modalConfirm: '.modal-confirm',
   modalCancel: '.modal-cancel',
 

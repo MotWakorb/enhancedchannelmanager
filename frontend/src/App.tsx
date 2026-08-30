@@ -8,31 +8,62 @@ import { useState, useEffect, useCallback, useRef, useMemo, Suspense, lazy } fro
 import {
   SettingsModal,
   EditModeExitDialog,
+  EditModeRestoreDialog,
+  EditModeRestoredBadge,
   TabNavigation,
+  PageHeader,
   UserMenu,
   NAVIGATE_TO_ORPHANED_GROUPS_EVENT,
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
-import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop } from './hooks';
+import { OperatorDashboard } from './components/tabs/OperatorDashboard';
+import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
+import { useAuth } from './hooks/useAuth';
+import { operatorLedgerKey, planLedgerRestore } from './utils/stagedLedgerStorage';
+import type { DedupDropReport } from './hooks';
 import { StreamDedupModal } from './components/StreamDedupModal';
 import * as api from './services/api';
-import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress } from './types';
+import type { Channel, ChannelGroup, ChannelProfile, Stream, StreamGroupInfo, M3UAccount, M3UGroupSetting, Logo, ChangeInfo, EPGData, StreamProfile, EPGSource, ChannelListFilterSettings, CommitProgress, CommitFailure } from './types';
 import packageJson from '../package.json';
 import { logger } from './utils/logger';
 import { setDateFormatLocale } from './utils/formatting';
+import { OPEN_TASK_EDITOR_EVENT, OPEN_TASK_EDITOR_STORAGE_KEY } from './utils/openTaskEditor';
 import { computeAutoRename } from './utils/channelRename';
+import { planChannelNumberShift, type PlannedChannelShift } from './utils/channelNumberShift';
+import { NumberingConflictDialog } from './components/NumberingConflictDialog';
+import type { NumberingConflict, ReconcileDecision } from './utils/channelNumberConcurrency';
 import { registerVLCModalCallback, downloadM3U } from './utils/vlc';
 import { VLCProtocolHelperModal } from './components/VLCProtocolHelperModal';
 import { NotificationCenter } from './components/NotificationCenter';
+import {
+  ProfileConflictReviewModal,
+} from './components/ProfileConflictReviewModal';
 import { NotificationProvider } from './contexts/NotificationContext';
 import { BackupDestinationPromptProvider } from './contexts/BackupDestinationPromptContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { SkipToMainContent } from './components/AppLandmarks';
+import { ROUTE_TITLES } from './components/routeTitles';
+import {
+  getGuardedPopStateDecision,
+  getGuardedRouteDecision,
+  getGuardedSignOutDecision,
+  isPlainPrimaryActivation,
+  resolvePendingRouteResume,
+  ROUTE_HIERARCHY,
+  type PendingRouteChange,
+} from './components/routeHierarchy';
+import type { RouteChangeGuardDetail } from './hooks/useHashRoute';
+import type { SettingsPage } from './hooks/useHashRoute';
+import { useAdminNavVisible } from './hooks/useAuth';
+import { settingsSectionHeading } from './components/settingsSections';
+import { RouteHeaderTargetProvider } from './components/RouteHeaderSlots';
+import { classifySourceLoadError, type SourceLoadState } from './components/sourceLoadState';
+import type { WorkspaceSource } from './components/workspaceLoadState';
 import {
   setTelemetryRuntimeEnabled,
   withImportTelemetry,
 } from './services/clientErrorReporter';
-import ECMLogo from './assets/ECMLogo.png';
 import './App.css';
 
 // All known sort criteria - used to merge new criteria into saved settings
@@ -112,14 +143,21 @@ function EditModeTimer({ enteredAt }: { enteredAt: number }) {
   );
 }
 
+type OperationLoadState = { state: SourceLoadState; hasSnapshot: boolean };
+
 function App() {
+  // Who is signed in. Read here only to bind staged Edit Mode work to an
+  // identity; every authorisation decision is the backend's.
+  const { user: authenticatedUser } = useAuth();
+
   // Health check and version info
   const [health, setHealth] = useState<api.HealthResponse | null>(null);
+  const [healthSourceState, setHealthSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [error, setError] = useState<string | null>(null);
-  const [updateInfo, setUpdateInfo] = useState<api.UpdateInfo | null>(null);
 
   // Channels state
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [channelInventoryTotal, setChannelInventoryTotal] = useState(0);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [selectedChannel, setSelectedChannel] = useState<Channel | null>(null);
   const [selectedChannelIds, setSelectedChannelIds] = useState<Set<number>>(new Set());
@@ -134,8 +172,14 @@ function App() {
 
   // Streams state
   const [streams, setStreams] = useState<Stream[]>([]);
+  // Read the latest committed inventory inside stable async callbacks. Using
+  // `streams` directly there captures the render that created the callback,
+  // so a later group failure could miss rows loaded by an earlier group.
+  const streamsSnapshotRef = useRef<Stream[]>([]);
   const [providers, setProviders] = useState<M3UAccount[]>([]);
+  const [providerSourceState, setProviderSourceState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
   const [streamGroups, setStreamGroups] = useState<StreamGroupInfo[]>([]);
+  const [streamInventoryTotal, setStreamInventoryTotal] = useState(0);
 
   // Accumulates every stream ever returned by a search so ChannelsPane can
   // resolve staged stream IDs even after the stream search term has changed.
@@ -183,6 +227,17 @@ function App() {
     streams: true,
     epgData: false,
   });
+  const [channelSourceStates, setChannelSourceStates] = useState<Record<'groups' | 'channels', OperationLoadState>>({
+    groups: { state: 'loading', hasSnapshot: false },
+    channels: { state: 'loading', hasSnapshot: false },
+  });
+  const [channelInventoryState, setChannelInventoryState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
+  const [streamSourceStates, setStreamSourceStates] = useState<Record<string, OperationLoadState>>({
+    metadata: { state: 'loading', hasSnapshot: false },
+  });
+  const [streamInventoryState, setStreamInventoryState] = useState<OperationLoadState>({ state: 'loading', hasSnapshot: false });
+  const [streamMatchingTotal, setStreamMatchingTotal] = useState<number | null>(null);
+  const streamRetryOperations = useRef<Record<string, () => Promise<unknown>>>({});
 
   // Settings state
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -275,10 +330,108 @@ function App() {
   // Edit mode exit dialog state
   const [showExitDialog, setShowExitDialog] = useState(false);
   const [commitProgress, setCommitProgress] = useState<CommitProgress | null>(null);
+  // Set when a commit does not fully apply, so the exit dialog can say so
+  // instead of closing silently (bead enhancedchannelmanager-udq1j).
+  const [commitFailure, setCommitFailure] = useState<CommitFailure | null>(null);
+  /**
+   * Channel numbers somebody else changed while this session was staging, plus
+   * the server read they were found in (bead
+   * enhancedchannelmanager-ic884.4). Set when Apply refuses to write over them;
+   * cleared the moment the operator has answered for every one.
+   */
+  const [numberingConflicts, setNumberingConflicts] =
+    useState<{ conflicts: NumberingConflict[]; serverChannels: Channel[] } | null>(null);
+  /**
+   * Set when the operator has answered every conflict, so Apply can run again
+   * on the NEXT render rather than inside the handler that reconciled.
+   *
+   * Not a nicety. `commit` closes over `stagedOperations`, so calling it from
+   * the same tick as the reconcile would run the OLD plan — find the same
+   * conflict, reopen the dialog, and lose the operator's answers to the
+   * dialog's own "new conflicts are new questions" reset. The browser guard
+   * caught exactly that loop.
+   */
+  const [applyAfterReconcile, setApplyAfterReconcile] = useState(false);
 
   // Tab navigation state (hash-based routing)
-  const { activeTab, settingsPage, setHash, setSettingsPage } = useHashRoute();
-  const [pendingTabChange, setPendingTabChange] = useState<TabId | null>(null);
+  const {
+    activeTab, settingsPage, m3uChangesHours, setHash, setSettingsPage, resumeRejectedNavigation,
+  } = useHashRoute();
+  // Gates the administration-only entries in the sidebar's Settings drill-in.
+  // This used to be `Boolean(user?.is_admin)`, which hid the whole
+  // Administration group on any auth-disabled instance, because `user` is
+  // permanently null there (bead enhancedchannelmanager-p388h, absorbing
+  // ee5f1). SettingsTab's own gate already reads null as PERMITTED for the
+  // same reason (`isAdminUser = !user || user.is_admin`, bead
+  // enhancedchannelmanager-9kwzp.10); the navigation into it was the one place
+  // still resolving unknown to hidden.
+  const adminNavVisible = useAdminNavVisible();
+  // `onCancel` undoes whatever the REQUESTER did before asking to navigate, and
+  // runs only if the operator keeps editing. A caller that leaves state behind
+  // for its destination to pick up (see the task-editor handoff below) needs a
+  // way to take it back when the guard refuses the navigation, or a deferred
+  // route becomes a stale intent (bead enhancedchannelmanager-6fi7p).
+  // A ref rather than state: nothing renders from the pending route, and an
+  // event handler has to be able to read the intent it is about to REPLACE. A
+  // second deferral — the operator presses Back while the exit dialog from a
+  // task-editor handoff is still up — must not drop the first one's `onCancel`
+  // on the floor, which would strand exactly the stale sessionStorage intent
+  // that callback exists to clear.
+  const pendingRouteChangeRef = useRef<PendingRouteChange | null>(null);
+  const replacePendingRouteChange = useCallback((next: PendingRouteChange | null) => {
+    const outgoing = pendingRouteChangeRef.current;
+    if (outgoing && outgoing !== next) outgoing.onCancel?.();
+    pendingRouteChangeRef.current = next;
+  }, []);
+  // Unmounting with a deferred navigation still pending abandons it for good:
+  // signing out flips auth state, ProtectedRoute swaps this whole tree for
+  // LoginPage, and nothing here gets another render to notice. The in-memory
+  // half of that does not matter — it dies with the tree — but `onCancel`
+  // clears a sessionStorage handoff, which SURVIVES both the unmount and the
+  // next sign-in in the same tab, and would then redirect the operator's next
+  // visit to ANY Settings page to Scheduled Tasks. Unmount is the honest
+  // trigger: it covers sign-out, session expiry and teardown alike, without
+  // App having to observe an auth transition it is never rendered for.
+  useEffect(() => () => {
+    pendingRouteChangeRef.current?.onCancel?.();
+    pendingRouteChangeRef.current = null;
+  }, []);
+  // Set when the operator asked to sign out with staged changes: the sign-out
+  // itself, held until they answer the exit dialog (bead epic
+  // enhancedchannelmanager-r93hq). A ref, not state — nothing renders from it,
+  // and running a stored continuation from inside a state updater would fire
+  // it twice under StrictMode.
+  const pendingSignOutRef = useRef<(() => void | Promise<void>) | null>(null);
+  const [routeHeaderTargets, setRouteHeaderTargets] = useState({
+    'primary-action': null as HTMLDivElement | null,
+    status: null as HTMLDivElement | null,
+    controls: null as HTMLDivElement | null,
+  });
+  const setPrimaryActionTarget = useCallback((target: HTMLDivElement | null) => {
+    setRouteHeaderTargets((current) => (
+      current['primary-action'] === target ? current : { ...current, 'primary-action': target }
+    ));
+  }, []);
+  const setStatusTarget = useCallback((target: HTMLDivElement | null) => {
+    setRouteHeaderTargets((current) => (
+      current.status === target ? current : { ...current, status: target }
+    ));
+  }, []);
+  const setControlsTarget = useCallback((target: HTMLDivElement | null) => {
+    setRouteHeaderTargets((current) => (
+      current.controls === target ? current : { ...current, controls: target }
+    ));
+  }, []);
+  const routeHeadingRef = useRef<HTMLHeadingElement>(null);
+  const focusHeadingOnRouteChangeRef = useRef(false);
+
+  useEffect(() => {
+    document.title = `${ROUTE_TITLES[activeTab]} | Enhanced Channel Manager`;
+    if (focusHeadingOnRouteChangeRef.current) {
+      focusHeadingOnRouteChangeRef.current = false;
+      routeHeadingRef.current?.focus();
+    }
+  }, [activeTab]);
 
   // Stream group drop trigger (for opening bulk create modal from channels pane)
   // Supports multiple groups being dropped at once
@@ -290,6 +443,17 @@ function App() {
   const [droppedStreamStartingNumber, setDroppedStreamStartingNumber] = useState<number | null>(null);
   // Manual entry trigger (for opening bulk create modal without pre-selected streams)
   const [manualEntryTrigger, setManualEntryTrigger] = useState(false);
+
+  /**
+   * Identity this tab's staged Edit Mode work belongs to (epic
+   * enhancedchannelmanager-r93hq).
+   *
+   * `ProtectedRoute` does not render this component until the auth check has
+   * settled, so `user` is resolved by the time `useEditMode` reads this on its
+   * first render — which is the render that decides whether a persisted ledger
+   * is offered or destroyed.
+   */
+  const operatorKey = useMemo(() => operatorLedgerKey(authenticatedUser), [authenticatedUser]);
 
   // Edit mode for staging changes
   const {
@@ -304,26 +468,38 @@ function App() {
     canLocalUndo,
     canLocalRedo,
     editModeEnteredAt,
+    pendingRestore,
+    restoredFrom,
+    restoreStagedLedger,
+    dismissPendingRestore,
     enterEditMode,
     exitEditMode: rawExitEditMode,
     stageUpdateChannel,
     stageAddStream,
+    stageSetProfileMembership,
+    stageRestoreChannelGroup,
+    stageClearStreamStats,
+    stagedSideEffects,
     stageRemoveStream,
     stageReorderStreams,
     stageBulkAssignNumbers,
     stageCreateChannel,
+    stageCreateChannelWithStreams,
     stageDeleteChannel,
     stageDeleteChannelGroup,
     stageRenameChannelGroup,
+    stageCreateGroup,
     summary,
     commit,
     discard,
+    reconcileNumberingConflicts,
     localUndo,
     localRedo,
     startBatch,
     endBatch,
   } = useEditMode({
     channels,
+    operatorKey,
     onChannelsChange: setChannels,
     onCommitComplete: async (createdGroupIds) => {
       // Refresh data from server
@@ -473,24 +649,150 @@ function App() {
     onError: setError,
   });
 
+  // Every "the operator chose to leave" path ends the same way: honour what
+  // the exit dialog was holding back. Deliberately NOT a cancel path — none of
+  // these abandon the request, so none of them may fire `onCancel`.
+  //
+  // A deferred Back/Forward resumes as a real history transition rather than a
+  // pushState (bead enhancedchannelmanager-6fi7p): the operator pressed Back,
+  // so they should end up on the entry they pressed Back to, not on a new
+  // entry with that one still behind them.
+  //
+  // A history transition is a REQUEST, though, and the browser can decline it
+  // silently. The operator answered the dialog either way, so the destination
+  // still has to be honoured — by hash, on a new entry, which is the same
+  // fallback a navigation that was never a history transition already takes.
+  const completeDeferredExit = useCallback(() => {
+    const pendingRoute = pendingRouteChangeRef.current;
+    if (pendingRoute) {
+      pendingRouteChangeRef.current = null;
+      const resume = resolvePendingRouteResume(pendingRoute);
+      if (resume.kind === 'history') {
+        resumeRejectedNavigation(
+          resume.delta,
+          () => setHash(pendingRoute.tab, pendingRoute.settingsPage),
+        );
+      } else {
+        setHash(resume.tab, resume.settingsPage);
+      }
+    }
+    const pendingSignOut = pendingSignOutRef.current;
+    pendingSignOutRef.current = null;
+    if (pendingSignOut) void pendingSignOut();
+  }, [resumeRejectedNavigation, setHash]);
+
   // Handle dialog actions
   const handleApplyChanges = useCallback(async () => {
     setCommitProgress({ current: 0, total: 1, currentOperation: 'Starting...' });
-    await commit((progress) => {
+    const result = await commit((progress) => {
       setCommitProgress(progress);
     }, { continueOnError: true });
     setCommitProgress(null);
+
+    // NOTHING WAS APPLIED, and this is a question rather than a failure: a
+    // channel number this session was about to write has moved on the server
+    // since the session's baseline was captured (bead
+    // enhancedchannelmanager-ic884.4). The operator answers keep-mine /
+    // take-theirs per channel and Apply runs again with those answers folded
+    // into the staged plan; the changes that do not overlap are untouched
+    // throughout. Handled BEFORE the failure branch so a conflict is never
+    // reported as "some changes were not applied", which would be false.
+    if (result.numberingConflicts && result.numberingConflicts.length > 0) {
+      setNumberingConflicts({
+        conflicts: result.numberingConflicts,
+        serverChannels: result.serverChannels ?? [],
+      });
+      return;
+    }
+
+    // A commit the server reported as partially applied used to close the
+    // dialog exactly like a clean one, leaving the operator to discover the
+    // missing channel themselves (bead enhancedchannelmanager-udq1j). Hold the
+    // dialog open on the outcome instead.
+    if (result.operationsFailed > 0 || !result.success) {
+      const messages: string[] = [];
+      const seen = new Set<string>();
+      for (const err of result.errors) {
+        const subject = err.channelName || err.streamName || err.entityName;
+        const line = subject ? `${subject}: ${err.error}` : err.error;
+        if (seen.has(line)) continue;
+        seen.add(line);
+        messages.push(line);
+        if (messages.length === 5) break;
+      }
+      for (const issue of result.validationIssues ?? []) {
+        if (seen.has(issue.message)) continue;
+        seen.add(issue.message);
+        messages.push(issue.message);
+        if (messages.length === 5) break;
+      }
+      setCommitFailure({
+        applied: result.operationsApplied,
+        failed: result.operationsFailed,
+        messages,
+      });
+      return;
+    }
+
     setShowExitDialog(false);
     // Clear selection when exiting edit mode
     setSelectedChannelIds(new Set());
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Switch to pending tab if there was one
-    if (pendingTabChange) {
-      setHash(pendingTabChange);
-      setPendingTabChange(null);
+    // Carry the operator wherever they were trying to go — or sign them out
+    completeDeferredExit();
+  }, [commit, clearHistory, completeDeferredExit]);
+
+  /**
+   * Fold the operator's per-channel answers into the staged plan, then Apply
+   * again (bead enhancedchannelmanager-ic884.4).
+   *
+   * The re-Apply is deliberate rather than a shortcut past the check: the
+   * reconcile re-baselines the session on the lineup the answers were given
+   * against, so the second pass runs the SAME check over the SAME staged queue
+   * and finds nothing left to ask about — unless something moved again in the
+   * meantime, in which case asking again is exactly right.
+   *
+   * An operation dropped whole by a take-theirs answer is named to the
+   * operator rather than left for them to notice, because a range renumbering
+   * disappearing from the change count with no explanation is indistinguishable
+   * from a bug.
+   */
+  const handleReconcileNumbering = useCallback((decisions: ReconcileDecision[]) => {
+    const pending = numberingConflicts;
+    if (!pending) return;
+    const outcome = reconcileNumberingConflicts(decisions, pending.serverChannels);
+    setNumberingConflicts(null);
+    if (outcome.removed.length > 0) {
+      // `setError` is the same channel Apply's own refusals use — `App`
+      // renders `NotificationProvider`, so it is outside its own provider and
+      // cannot raise a toast. A dropped renumbering has to be SAID: a change
+      // disappearing from the count with no explanation is indistinguishable
+      // from a bug.
+      setError(
+        `${outcome.removed.length} staged change${outcome.removed.length !== 1 ? 's were' : ' was'} ` +
+        `dropped so the server's channel numbers could be kept: ` +
+        `${outcome.removed.map((entry) => entry.description).join('; ')}`,
+      );
     }
-  }, [commit, clearHistory, pendingTabChange, setHash]);
+    setApplyAfterReconcile(true);
+  }, [numberingConflicts, reconcileNumberingConflicts]);
+
+  // The re-Apply itself, one render later, when `commit` has been rebuilt from
+  // the reconciled operation queue. See `applyAfterReconcile`.
+  useEffect(() => {
+    if (!applyAfterReconcile) return;
+    setApplyAfterReconcile(false);
+    void handleApplyChanges();
+  }, [applyAfterReconcile]);
+
+  const handleAcknowledgeCommitFailure = useCallback(() => {
+    setCommitFailure(null);
+    setShowExitDialog(false);
+    setSelectedChannelIds(new Set());
+    clearHistory();
+    completeDeferredExit();
+  }, [clearHistory, completeDeferredExit]);
 
   const handleDiscardChanges = useCallback(() => {
     discard();
@@ -498,55 +800,167 @@ function App() {
     setShowExitDialog(false);
     // Clear checkpoints when exiting edit mode
     clearHistory();
-    // Switch to pending tab if there was one
-    if (pendingTabChange) {
-      setHash(pendingTabChange);
-      setPendingTabChange(null);
-    }
-  }, [discard, clearHistory, pendingTabChange, setHash]);
+    // Carry the operator wherever they were trying to go — or sign them out
+    completeDeferredExit();
+  }, [discard, clearHistory, completeDeferredExit]);
 
+  // The ONE cancel path. The three handlers above all navigate through to the
+  // pending route, so `onCancel` must not fire from any of them: this is the
+  // only place the requested navigation is genuinely abandoned.
   const handleKeepEditing = useCallback(() => {
     setShowExitDialog(false);
-    setPendingTabChange(null);
-  }, []);
+    replacePendingRouteChange(null);
+    // A vetoed Back has ALREADY been rewound to the entry the operator was on
+    // by the router, so keeping editing needs to undo nothing here — they are
+    // still on Channel Manager, still in Edit Mode, with their staged work.
+    pendingSignOutRef.current = null;
+    focusHeadingOnRouteChangeRef.current = false;
+  }, [replacePendingRouteChange]);
+
+  /**
+   * Abandon this Apply and go back to editing, with every staged change intact.
+   *
+   * Routed through {@link handleKeepEditing} rather than just closing the
+   * dialog: the operator asked to Apply, which may have deferred a navigation
+   * or a sign-out behind it, and answering "not now" to the conflict question
+   * abandons that intent exactly as pressing Keep Editing does. Closing only
+   * the dialogs would leave the deferred intent armed with nothing left to
+   * complete it.
+   */
+  const handleKeepNumberingConflicts = useCallback(() => {
+    setNumberingConflicts(null);
+    handleKeepEditing();
+  }, [handleKeepEditing]);
 
   // Handle tab change - check for edit mode with pending changes
-  const handleTabChange = useCallback((newTab: TabId) => {
-    if (isEditMode && stagedOperationCount > 0 && newTab !== 'channel-manager') {
+  const handleRouteChange = useCallback((
+    newTab: TabId,
+    settingsPage?: SettingsPage,
+    options?: { onCancel?: () => void },
+  ) => {
+    // A same-route request with no settings page never navigates and never
+    // defers, so it can neither strand an intent nor cancel one — it just moves
+    // focus. `onCancel` deliberately does not fire here: nothing was abandoned.
+    // Both event callers below pass a settings page, so they cannot reach it.
+    if (newTab === activeTab && !settingsPage) {
+      routeHeadingRef.current?.focus();
+      return;
+    }
+    focusHeadingOnRouteChangeRef.current = true;
+
+    const decision = getGuardedRouteDecision(isEditMode, stagedOperationCount, newTab);
+    if (decision === 'confirm') {
       // Show confirmation dialog and store pending tab change
       setShowExitDialog(true);
-      setPendingTabChange(newTab);
+      replacePendingRouteChange({ tab: newTab, settingsPage, onCancel: options?.onCancel });
       return;
     }
 
-    if (isEditMode && newTab !== 'channel-manager') {
+    if (decision === 'exit-and-navigate') {
       // Exit edit mode when leaving Channel Manager
       rawExitEditMode();
       setSelectedChannelIds(new Set());
     }
 
-    setHash(newTab);
-  }, [isEditMode, stagedOperationCount, rawExitEditMode, setHash]);
+    setHash(newTab, settingsPage);
+  }, [activeTab, isEditMode, stagedOperationCount, rawExitEditMode, setHash, replacePendingRouteChange]);
 
-  // Listen for task editor navigation events from NotificationCenter
+  const handleTabChange = useCallback((newTab: TabId) => {
+    handleRouteChange(newTab);
+  }, [handleRouteChange]);
+
+  // Browser Back/Forward — the one navigation the Edit Mode guard could not
+  // see (bead enhancedchannelmanager-6fi7p).
+  //
+  // `useHashRoute` has always asked permission before a popstate transition,
+  // via the cancelable `ecm:before-route-change` event, and always had working
+  // machinery to rewind a refused one. Nothing here listened. The only
+  // production listener for that event in the whole frontend was SettingsTab's
+  // unsaved-form guard, so an operator with staged channel edits who pressed
+  // Back left Edit Mode with no dialog and no staged work. `handleRouteChange`
+  // is not on that path at all: Back does not go through a tab click.
+  //
+  // Vetoing is synchronous and the operator's answer is not, so the two halves
+  // are split. This handler refuses the transition, which makes the router
+  // rewind history to the entry the operator was on — so the app is never left
+  // showing a route it did not accept — and opens the exit dialog carrying the
+  // delta that re-runs the transition. `completeDeferredExit` replays it on
+  // Apply or Discard; Keep Editing simply leaves the rewind in place.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<RouteChangeGuardDetail>).detail;
+      const decision = getGuardedPopStateDecision(detail, isEditMode, stagedOperationCount);
+      if (decision === 'ignore') return;
+
+      if (decision === 'exit-and-navigate') {
+        // Nothing staged: let the transition through and tidy up, exactly as
+        // a tab click to the same destination would.
+        rawExitEditMode();
+        setSelectedChannelIds(new Set());
+        return;
+      }
+
+      event.preventDefault();
+      focusHeadingOnRouteChangeRef.current = true;
+      setShowExitDialog(true);
+      replacePendingRouteChange({
+        tab: detail.tab,
+        settingsPage: detail.settingsPage ?? undefined,
+        historyDelta: detail.historyDelta,
+      });
+    };
+    window.addEventListener('ecm:before-route-change', handler);
+    return () => window.removeEventListener('ecm:before-route-change', handler);
+  }, [isEditMode, stagedOperationCount, rawExitEditMode, replacePendingRouteChange]);
+
+  // Signing out unmounts the app and takes the in-memory Edit Mode ledger with
+  // it, so it discards staged work exactly as navigating away does — but it is
+  // an SPA state transition, so `beforeunload` never fires and no route guard
+  // can see it (bead epic enhancedchannelmanager-r93hq). UserMenu hands the
+  // sign-out here instead of running it, and gets it back only once the
+  // operator has answered.
+  const requestSignOut = useCallback((proceed: () => void | Promise<void>) => {
+    if (getGuardedSignOutDecision(isEditMode, stagedOperationCount) === 'sign-out') {
+      void proceed();
+      return;
+    }
+    // A sign-out supersedes any deferred navigation: there will be no app left
+    // to navigate. Cancelling it rather than dropping it keeps the requester's
+    // handoff state from being stranded.
+    replacePendingRouteChange(null);
+    pendingSignOutRef.current = proceed;
+    setShowExitDialog(true);
+  }, [isEditMode, stagedOperationCount, replacePendingRouteChange]);
+
+  // Listen for task editor navigation events from NotificationCenter.
+  //
+  // Routed through the guard, so an operator with staged channel edits is asked
+  // before the work is abandoned (bead enhancedchannelmanager-6fi7p). The guard
+  // can DEFER this navigation, and NotificationCenter has already written its
+  // sessionStorage handoff by the time the event arrives — so if the operator
+  // keeps editing, that entry has to go with the cancelled request. Left behind,
+  // it redirects their next visit to ANY Settings page to Scheduled Tasks,
+  // because SettingsTab reads the key in a mount-only effect.
   useEffect(() => {
     const handler = () => {
-      setHash('settings', 'scheduled-tasks');
+      handleRouteChange('settings', 'scheduled-tasks', {
+        onCancel: () => sessionStorage.removeItem(OPEN_TASK_EDITOR_STORAGE_KEY),
+      });
     };
-    window.addEventListener('ecm:open-task-editor', handler);
-    return () => window.removeEventListener('ecm:open-task-editor', handler);
-  }, [setHash]);
+    window.addEventListener(OPEN_TASK_EDITOR_EVENT, handler);
+    return () => window.removeEventListener(OPEN_TASK_EDITOR_EVENT, handler);
+  }, [handleRouteChange]);
 
   // Listen for "Clean up empty groups" navigation from ChannelsPane's
   // Channel List Filters panel (bead 09x38.15 item 3) — links to Settings →
   // Maintenance → Orphaned Channel Groups rather than embedding the tool.
   useEffect(() => {
     const handler = () => {
-      setHash('settings', 'maintenance');
+      handleRouteChange('settings', 'maintenance');
     };
     window.addEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
     return () => window.removeEventListener(NAVIGATE_TO_ORPHANED_GROUPS_EVENT, handler);
-  }, [setHash]);
+  }, [handleRouteChange]);
 
   // Check settings and load initial data
   useEffect(() => {
@@ -633,20 +1047,16 @@ function App() {
         api.getHealth()
           .then(healthData => {
             setHealth(healthData);
+            setHealthSourceState({ state: 'success', hasSnapshot: true });
             logger.info('Health check passed', healthData);
-            // Check for updates after health check succeeds
-            if (healthData.version && healthData.release_channel) {
-              api.checkForUpdates(healthData.version, healthData.release_channel)
-                .then(update => {
-                  setUpdateInfo(update);
-                  if (update.updateAvailable) {
-                    logger.info('Update available', update);
-                  }
-                })
-                .catch(err => logger.warn('Update check failed', err));
-            }
+            // No update check here any more (bead nhkd4). It used to run in the
+            // browser to drive the header pill; it now runs server-side
+            // (backend/services/version_check.py) and reconciles a single
+            // notification-centre entry, so every open tab no longer races to
+            // ask GitHub the same question.
           })
           .catch((err) => {
+            setHealthSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
             setError(err.message);
             logger.error('Health check failed', err);
           });
@@ -656,6 +1066,7 @@ function App() {
         loadProviders();
         loadProviderGroupSettings();
         loadStreamGroups();
+        loadStreamInventoryTotal();
         // NOTE: Streams are loaded lazily when user interacts with the streams pane
         // This prevents loading 27,000+ streams on app startup which causes high CPU
         loadLogos();
@@ -830,13 +1241,20 @@ function App() {
     }
     // Reload all data after settings change
     api.getHealth()
-      .then(setHealth)
-      .catch((err) => setError(err.message));
+      .then((healthData) => {
+        setHealth(healthData);
+        setHealthSourceState({ state: 'success', hasSnapshot: true });
+      })
+      .catch((err) => {
+        setHealthSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
+        setError(err.message);
+      });
     loadChannelGroups();
     loadChannels();
     loadProviders();
     loadProviderGroupSettings();
     loadStreamGroups();
+    loadStreamInventoryTotal();
     // Only reset streams if they were already loaded (lazy loading preservation)
     if (streamsExplicitlyRequested.current) {
       resetStreams(false);
@@ -849,11 +1267,23 @@ function App() {
   };
 
   const loadChannelGroups = async () => {
+    setChannelSourceStates((current) => ({
+      ...current,
+      groups: { ...current.groups, state: 'loading' },
+    }));
     try {
       const groups = await api.getChannelGroups();
       setChannelGroups(groups);
+      setChannelSourceStates((current) => ({
+        ...current,
+        groups: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       logger.error('Failed to load channel groups:', err);
+      setChannelSourceStates((current) => ({
+        ...current,
+        groups: { ...current.groups, state: classifySourceLoadError(err) },
+      }));
     }
   };
 
@@ -913,10 +1343,19 @@ function App() {
   }, []);
 
   const loadChannels = async (signal?: AbortSignal) => {
+    const isUnfilteredInventory = channelFilters.search === '';
+    if (isUnfilteredInventory) {
+      setChannelInventoryState((current) => ({ ...current, state: 'loading' }));
+    }
     setLoadingStates(prev => ({ ...prev, channels: true }));
+    setChannelSourceStates((current) => ({
+      ...current,
+      channels: { ...current.channels, state: 'loading' },
+    }));
     try {
       // Fetch all pages of channels
       const allChannels: Channel[] = [];
+      let responseTotal = 0;
       let page = 1;
       let hasMore = true;
 
@@ -928,18 +1367,45 @@ function App() {
           signal,
         });
         allChannels.push(...response.results);
+        if (page === 1) responseTotal = response.count;
         hasMore = response.next !== null;
         page++;
       }
 
       setChannels(allChannels);
+      if (isUnfilteredInventory) {
+        setChannelInventoryTotal(responseTotal);
+        setChannelInventoryState({ state: 'success', hasSnapshot: true });
+      }
+      setChannelSourceStates((current) => ({
+        ...current,
+        channels: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       // Don't log errors for aborted requests
       if (err instanceof Error && err.name !== 'AbortError') {
         logger.error('Failed to load channels:', err);
+        setChannelSourceStates((current) => ({
+          ...current,
+          channels: { ...current.channels, state: classifySourceLoadError(err) },
+        }));
+        if (isUnfilteredInventory) {
+          setChannelInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
+        }
       }
     } finally {
       setLoadingStates(prev => ({ ...prev, channels: false }));
+    }
+  };
+
+  const loadChannelInventoryTotal = async () => {
+    setChannelInventoryState((current) => ({ ...current, state: 'loading' }));
+    try {
+      const response = await api.getChannels({ page: 1, pageSize: 1 });
+      setChannelInventoryTotal(response.count);
+      setChannelInventoryState({ state: 'success', hasSnapshot: true });
+    } catch (err) {
+      setChannelInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
     }
   };
 
@@ -976,20 +1442,47 @@ function App() {
   }, [channelGroups]);
 
   const loadProviders = async () => {
+    setProviderSourceState((current) => ({ ...current, state: 'loading' }));
     try {
       const accounts = await api.getM3UAccounts();
       setProviders(accounts);
+      setProviderSourceState({ state: 'success', hasSnapshot: true });
     } catch (err) {
       logger.error('Failed to load providers:', err);
+      setProviderSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
     }
   };
 
   const loadStreamGroups = async (m3uAccountId?: number | null) => {
+    streamRetryOperations.current.metadata = () => loadStreamGroups(m3uAccountId);
+    setStreamSourceStates((current) => ({
+      ...current,
+      metadata: { ...current.metadata, state: 'loading' },
+    }));
     try {
       const groups = await api.getStreamGroups(false, m3uAccountId);
       setStreamGroups(groups);
+      setStreamSourceStates((current) => ({
+        ...current,
+        metadata: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       logger.error('Failed to load stream groups:', err);
+      setStreamSourceStates((current) => ({
+        ...current,
+        metadata: { ...current.metadata, state: classifySourceLoadError(err) },
+      }));
+    }
+  };
+
+  const loadStreamInventoryTotal = async () => {
+    setStreamInventoryState((current) => ({ ...current, state: 'loading' }));
+    try {
+      const response = await api.getStreams({ page: 1, pageSize: 1 });
+      setStreamInventoryTotal(response.count);
+      setStreamInventoryState({ state: 'success', hasSnapshot: true });
+    } catch (err) {
+      setStreamInventoryState((current) => ({ ...current, state: classifySourceLoadError(err) }));
     }
   };
 
@@ -1007,6 +1500,11 @@ function App() {
       logger.error('Failed to load logos:', err);
     }
   };
+
+  // `logos` is the catalogue the Edit Channel picker renders, and Logo Manager
+  // can add to or delete from it without this component ever hearing about it
+  // (bead enhancedchannelmanager-5z7c9, instance 2). Refetch when it does.
+  useServerDataInvalidation('logos', loadLogos);
 
   const loadStreamProfiles = async () => {
     try {
@@ -1047,13 +1545,36 @@ function App() {
     }
   };
 
+  // `epgData` is loaded once at init, so an EPG source added afterwards left the
+  // Edit Channel picker reporting "No EPG data found" for guide rows that
+  // demonstrably existed, until a full reload (bead
+  // enhancedchannelmanager-3vtim). EPG Manager publishes when a source finishes
+  // downloading; this is the refetch.
+  useServerDataInvalidation('epg-data', loadEpgData);
+
+  // Same class for the channel-group list: a DBAS restore creates and renames
+  // groups from the Settings tab, which this component's copy — the one the
+  // Channel Manager group filter renders — cannot see.
+  useServerDataInvalidation('channel-groups', loadChannelGroups);
+
+  // And for the channels those groups hold. Refreshing only the filter left an
+  // operator looking at "CHANNELS 0" straight after a restore that created 12
+  // (bead enhancedchannelmanager-eelgi). Skipped while Edit Mode is active: a
+  // refetch mid-session would fight the working copy, and a restore is not
+  // something an operator runs from inside an unsaved edit session.
+  useServerDataInvalidation('channels', () => {
+    if (isEditMode) return;
+    void loadChannels();
+  });
+
   // Lightweight reset: clear streams and refresh group metadata.
   // Actual stream data loads per-group on demand via loadStreamGroup().
   const resetStreams = async (_bypassCache: boolean = false) => {
     setLoadingStates(prev => ({ ...prev, streams: true }));
+    setStreamSourceStates((current) => ({ metadata: current.metadata }));
     try {
-      // Clear all loaded streams and group tracking
-      setStreams([]);
+      // Keep the last successful rows until replacement data settles. This
+      // makes transient metadata failures explicitly stale instead of blank.
       loadedStreamGroupsRef.current.clear();
 
       // Refresh stream group metadata (lightweight — just names + counts)
@@ -1070,30 +1591,52 @@ function App() {
   };
 
   // Search streams: fetch just the first page of server-filtered results
-  const searchStreams = async (signal?: AbortSignal) => {
+  const searchStreams = async (
+    signal?: AbortSignal,
+    query = {
+      search: streamFilters.search,
+      providerFilter: streamFilters.providerFilter,
+      groupFilter: streamFilters.groupFilter,
+    },
+  ) => {
+    const sourceKey = 'search';
+    streamRetryOperations.current[sourceKey] = () => searchStreams(undefined, query);
     setLoadingStates(prev => ({ ...prev, streams: true }));
+    setStreamSourceStates((current) => ({
+      ...current,
+      [sourceKey]: {
+        ...(current[sourceKey] ?? { hasSnapshot: streamsSnapshotRef.current.length > 0 }),
+        state: 'loading',
+      },
+    }));
     try {
-      setStreams([]);
-      loadedStreamGroupsRef.current.clear();
-
       const response = await api.getStreams({
         page: 1,
         pageSize: 500,
-        search: streamFilters.search || undefined,
-        m3uAccount: streamFilters.providerFilter ?? undefined,
-        channelGroup: streamFilters.groupFilter ?? undefined,
+        search: query.search || undefined,
+        m3uAccount: query.providerFilter ?? undefined,
+        channelGroup: query.groupFilter ?? undefined,
         signal,
       });
+      streamsSnapshotRef.current = response.results;
       setStreams(response.results);
+      setStreamMatchingTotal(response.count);
+      loadedStreamGroupsRef.current.clear();
       rememberSeenStreams(response.results);
-
-      // Also refresh group metadata so groups show correct filtered counts
-      const m3uAccountId = streamFilters.selectedProviders?.length === 1
-        ? streamFilters.selectedProviders[0] : null;
-      await loadStreamGroups(m3uAccountId);
+      setStreamSourceStates((current) => ({
+        ...current,
+        [sourceKey]: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       if (err instanceof Error && err.name !== 'AbortError') {
         logger.error('Failed to search streams:', err);
+        setStreamSourceStates((current) => ({
+          ...current,
+          [sourceKey]: {
+            ...(current[sourceKey] ?? { hasSnapshot: false }),
+            state: classifySourceLoadError(err),
+          },
+        }));
       }
     } finally {
       setLoadingStates(prev => ({ ...prev, streams: false }));
@@ -1122,11 +1665,34 @@ function App() {
   // Load streams for a single group (per-group lazy loading)
   // This allows loading only the streams for an expanded group instead of all streams
   // When search is active, loads only matching streams for that group
-  const loadStreamGroup = useCallback(async (groupName: string) => {
+  const loadStreamGroup = useCallback(async (
+    groupName: string,
+    force = false,
+    search = streamFilters.search,
+    provider = streamFilters.selectedProviders.length === 1
+      ? streamFilters.selectedProviders[0]
+      : streamFilters.providerFilter,
+  ) => {
     // Skip if this group's streams are already loaded
-    if (loadedStreamGroupsRef.current.has(groupName)) {
+    if (!force && loadedStreamGroupsRef.current.has(groupName)) {
       return;
     }
+
+    const sourceKey = `group:${groupName}`;
+    const query = { groupName, search, provider };
+    streamRetryOperations.current[sourceKey] = () => loadStreamGroup(
+      query.groupName,
+      true,
+      query.search,
+      query.provider,
+    );
+    setStreamSourceStates((current) => ({
+      ...current,
+      [sourceKey]: {
+        ...(current[sourceKey] ?? { hasSnapshot: streamsSnapshotRef.current.length > 0 }),
+        state: 'loading',
+      },
+    }));
 
     // Mark as loaded immediately to prevent duplicate requests
     loadedStreamGroupsRef.current.add(groupName);
@@ -1142,7 +1708,8 @@ function App() {
           page,
           pageSize: 500,
           channelGroup: groupName,
-          search: streamFilters.search || undefined,
+          search: query.search || undefined,
+          m3uAccount: query.provider ?? undefined,
         });
         allGroupStreams.push(...response.results);
         hasMore = response.next !== null;
@@ -1153,17 +1720,35 @@ function App() {
       setStreams(prevStreams => {
         const existingIds = new Set(prevStreams.map(s => s.id));
         const newStreams = allGroupStreams.filter(s => !existingIds.has(s.id));
-        return [...prevStreams, ...newStreams];
+        const nextStreams = [...prevStreams, ...newStreams];
+        streamsSnapshotRef.current = nextStreams;
+        return nextStreams;
       });
       rememberSeenStreams(allGroupStreams);
+      setStreamSourceStates((current) => ({
+        ...current,
+        [sourceKey]: { state: 'success', hasSnapshot: true },
+      }));
     } catch (err) {
       // Remove from loaded set on error so user can retry
       loadedStreamGroupsRef.current.delete(groupName);
       if (err instanceof Error && err.name !== 'AbortError') {
         logger.error(`Failed to load streams for group ${groupName}:`, err);
+        setStreamSourceStates((current) => ({
+          ...current,
+          [sourceKey]: {
+            ...(current[sourceKey] ?? { hasSnapshot: false }),
+            state: classifySourceLoadError(err),
+          },
+        }));
       }
     }
-  }, [streamFilters.search, rememberSeenStreams]);
+  }, [
+    streamFilters.search,
+    streamFilters.providerFilter,
+    streamFilters.selectedProviders,
+    rememberSeenStreams,
+  ]);
 
   // Reload channels when search changes
   useEffect(() => {
@@ -1569,12 +2154,101 @@ function App() {
     [isEditMode, stageCreateChannel, defaultChannelProfileIds]
   );
 
+  /**
+   * Stage the channel-number moves a push-down plan calls for.
+   *
+   * Highest number first, so no staged update lands on a number a later update
+   * in the same batch is still about to vacate.
+   *
+   * Both push-down call sites share this: creating channels from streams and
+   * inserting a single manual channel make the operator the same promise, and
+   * the second one had no implementation at all until bead
+   * `enhancedchannelmanager-fprsq`. Writing it twice is how the two would drift.
+   */
+  const stagePushDownShifts = useCallback(
+    (shifts: readonly PlannedChannelShift<Channel>[]) => {
+      for (let i = shifts.length - 1; i >= 0; i--) {
+        const { channel: ch, toNumber: newNum } = shifts[i];
+
+        // Apply auto-rename if enabled
+        const newName = autoRenameChannelNumber
+          ? computeAutoRename(ch.name, ch.channel_number, newNum)
+          : undefined;
+
+        if (newName) {
+          stageUpdateChannel(
+            ch.id,
+            { channel_number: newNum, name: newName },
+            `Shifted "${ch.name}" to "${newName}" (channel ${ch.channel_number} → ${newNum})`
+          );
+        } else {
+          stageUpdateChannel(
+            ch.id,
+            { channel_number: newNum },
+            `Shifted channel ${ch.channel_number} to ${newNum} to make room`
+          );
+        }
+      }
+    },
+    [autoRenameChannelNumber, stageUpdateChannel]
+  );
+
   // Create channel for manual entry mode (from StreamsPane bulk create modal)
-  // This supports creating a new group if newGroupName is provided
+  // This supports creating a new group if newGroupName is provided.
+  //
+  // `pushDownOnConflict` is the manual-entry half of the same promise the bulk
+  // path makes: inserting at an occupied number moves whatever is already there
+  // rather than creating a duplicate. It used to be unreachable here, because
+  // the manual path never reached the conflict dialog at all
+  // (bead enhancedchannelmanager-fprsq).
+  //
+  // `name` arrives FINAL. StreamsPane has already put the operator's typed
+  // name through `resolveCreateChannelNames`, which is the one place the
+  // "Normalization Rules" question is answered, so neither branch below may
+  // normalize again and neither sets the API's `normalize` flag — doing either
+  // would normalize an already-normalized name a second time
+  // (bead enhancedchannelmanager-e9e5o).
   const handleCreateChannelManual = useCallback(
-    async (name: string, channelNumber?: number, groupId?: number, newGroupName?: string) => {
+    async (
+      name: string,
+      channelNumber?: number,
+      groupId?: number,
+      newGroupName?: string,
+      pushDownOnConflict?: boolean,
+    ) => {
       try {
+        if (!isEditMode && pushDownOnConflict) {
+          // A push-down works by STAGING shifts, which only edit mode has. The
+          // manual-create button is rendered inside ChannelsPane's `isEditMode`
+          // block, so nothing can reach this; refusing loudly is what keeps it
+          // that way, rather than creating the channel on top of the occupied
+          // number and reporting success. Mirrors the edit-mode refusal
+          // `handleBulkCreateFromGroup` already makes.
+          setError('Pushing existing channels down requires edit mode');
+          return;
+        }
         if (isEditMode) {
+          // Make room BEFORE staging the creation, using the same planner and
+          // the same highest-number-first ordering as the bulk path, so no
+          // staged update lands on a number a later update is still about to
+          // vacate. One channel, so the plan claims exactly one number; the
+          // step follows the number the operator typed, which is what puts a
+          // `38.1` insert on the tenths grid instead of the whole-number one.
+          const shifts =
+            pushDownOnConflict && channelNumber !== undefined
+              ? planChannelNumberShift({
+                  channels: displayChannels,
+                  startingNumber: channelNumber,
+                  count: 1,
+                  step: channelNumber % 1 !== 0 ? 0.1 : 1,
+                }).shifts
+              : [];
+
+          if (shifts.length > 0) {
+            startBatch(`Insert channel "${name}" at ${channelNumber}`);
+            stagePushDownShifts(shifts);
+          }
+
           // In edit mode, stage the creation
           // stageCreateChannel handles newGroupName internally
           const tempId = stageCreateChannel(
@@ -1585,8 +2259,7 @@ function App() {
             undefined,     // logoId
             undefined,     // logoUrl
             undefined,     // tvgId
-            undefined,     // tvcGuideStationId
-            false          // normalize
+            undefined      // tvcGuideStationId
           );
 
           // Track profile assignments (use default profiles for manual creation)
@@ -1602,6 +2275,10 @@ function App() {
           // Track the newly created group so it appears in the filter
           if (newGroupName) {
             trackNewlyCreatedGroup(tempId);  // tempId acts as marker for new group
+          }
+
+          if (shifts.length > 0) {
+            endBatch();
           }
 
           // Refresh UI
@@ -1631,7 +2308,18 @@ function App() {
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, defaultChannelProfileIds, loadChannels, loadChannelGroups, trackNewlyCreatedGroup]
+    [
+      isEditMode,
+      stageCreateChannel,
+      stagePushDownShifts,
+      startBatch,
+      endBatch,
+      displayChannels,
+      defaultChannelProfileIds,
+      loadChannels,
+      loadChannelGroups,
+      trackNewlyCreatedGroup,
+    ]
   );
 
   // Check for conflicts with existing channel numbers
@@ -1644,6 +2332,19 @@ function App() {
               ch.channel_number <= endNumber
     );
     return conflictingChannels.length;
+  }, [displayChannels]);
+
+  // How many existing channels a "Push channels down" would renumber. The
+  // conflict count above only covers the numbers the new channels claim, which
+  // understates the blast radius whenever the insert has to ripple further up
+  // (bead enhancedchannelmanager-i85dg).
+  const handleCountPushDownShift = useCallback((startingNumber: number, count: number): number => {
+    return planChannelNumberShift({
+      channels: displayChannels,
+      startingNumber,
+      count,
+      step: startingNumber % 1 !== 0 ? 0.1 : 1,
+    }).shifts.length;
   }, [displayChannels]);
 
   // Get the highest existing channel number (for "insert at end" option)
@@ -1662,21 +2363,23 @@ function App() {
       streamsToCreate: Stream[],
       startingNumber: number,
       channelGroupId: number | null,
-      newGroupName?: string,
-      timezonePreference?: api.TimezonePreference,
-      _stripCountryPrefix?: boolean,
-      addChannelNumber?: boolean,
-      numberSeparator?: api.NumberSeparator,
-      keepCountryPrefix?: boolean,
-      countrySeparator?: api.NumberSeparator,
-      prefixOrder?: api.PrefixOrder,
-      _stripNetworkPrefix?: boolean,
-      _customNetworkPrefixes?: string[],
-      _stripNetworkSuffix?: boolean,
-      _customNetworkSuffixes?: string[],
-      profileIds?: number[],
-      pushDownOnConflict?: boolean,
-      normalize?: boolean
+      // `| undefined` rather than `?` so `nameResolution` below can be
+      // REQUIRED; see `StreamsPaneProps.onBulkCreateFromGroup`.
+      newGroupName: string | undefined,
+      timezonePreference: api.TimezonePreference | undefined,
+      _stripCountryPrefix: boolean | undefined,
+      addChannelNumber: boolean | undefined,
+      numberSeparator: api.NumberSeparator | undefined,
+      keepCountryPrefix: boolean | undefined,
+      countrySeparator: api.NumberSeparator | undefined,
+      prefixOrder: api.PrefixOrder | undefined,
+      _stripNetworkPrefix: boolean | undefined,
+      _customNetworkPrefixes: string[] | undefined,
+      _stripNetworkSuffix: boolean | undefined,
+      _customNetworkSuffixes: string[] | undefined,
+      profileIds: number[] | undefined,
+      pushDownOnConflict: boolean | undefined,
+      nameResolution: api.ResolvedCreateChannelNames
     ) => {
       try {
         // Bulk creation requires edit mode
@@ -1695,18 +2398,44 @@ function App() {
         // Filter streams by timezone preference
         const filteredStreams = api.filterStreamsByTimezone(streamsToCreate, timezonePreference ?? 'both');
 
-        // Normalize stream names using the backend normalization engine
-        // This applies all configured rules (country prefixes, network tags, etc.)
-        const streamNames = filteredStreams.map(s => s.name);
-        const normalizedNames = await api.normalizeStreamNamesWithBackend(streamNames);
+        // The names these channels will be created with, as ALREADY RESOLVED
+        // by the dialog (bead enhancedchannelmanager-e9e5o).
+        //
+        // This used to receive the operator's toggle and call
+        // `resolveCreateChannelNames` itself, which made two independent
+        // answers to one question: the dialog resolved for its preview and
+        // count, this resolved again at submit, and the two were free to
+        // disagree — by timing, by the rules changing in between, or because
+        // the dialog grouped its answer differently. Consuming the resolution
+        // the operator was SHOWN is what removes that gap. The names are
+        // FINAL: nothing here or downstream may normalize them again.
+        //
+        // The resolution is REQUIRED and it is asked whether it covers these
+        // streams before anything is staged. It used to be optional, defaulted
+        // to an empty map, and read per stream with `|| stream.name` — so a
+        // caller that forgot it, or a resolution built from a different set of
+        // streams, silently created every channel under its raw provider name.
+        // Refusing here is atomic: no batch has been started, so nothing is
+        // half-staged (bead enhancedchannelmanager-e9e5o, fix round 4).
+        const normalizationFailed = nameResolution.normalizationFailed;
+        const unresolved = filteredStreams.filter((s) => !nameResolution.has(s.name));
+        if (unresolved.length > 0) {
+          logger.error('[BulkCreate] Unresolved stream names, refusing to create', unresolved.map((s) => s.name));
+          setError(
+            `Cannot create channels: ${unresolved.length} stream name(s) were not resolved, ` +
+            'so the names on screen are not the names that would be created. Close the dialog and try again.'
+          );
+          return;
+        }
 
         // Group streams by normalized base name (also stripping quality suffixes to merge variants)
         // The grouping key is the normalized name with quality suffixes stripped
         // The channel name will be the normalized name (without quality stripping)
         const streamsByBaseName = new Map<string, { normalizedName: string; streams: Stream[] }>();
         for (const stream of filteredStreams) {
-          // Get the backend-normalized name, fallback to original if not found
-          const normalizedName = normalizedNames.get(stream.name) || stream.name;
+          // Total by construction: the coverage refusal above already
+          // established that the resolution answers for every one of these.
+          const normalizedName = nameResolution.nameFor(stream.name);
           // Strip quality suffixes for grouping (so HD/FHD/4K/SD variants merge together)
           const groupingKey = api.stripQualitySuffixes(normalizedName);
           const existing = streamsByBaseName.get(groupingKey);
@@ -1773,105 +2502,21 @@ function App() {
 
         // Only push down channels if explicitly requested via pushDownOnConflict
         if (pushDownOnConflict) {
-          // Calculate the decimal/integer mode for shifting
-          const hasDecimalShift = startingNumber % 1 !== 0;
-          const incrementShift = hasDecimalShift ? 0.1 : 1;
+          // Plan the push-down purely from which channel numbers are occupied
+          // in the staged working copy. Group membership decided WHERE the
+          // operator is inserting; it plays no part in the arithmetic, because
+          // groups are free to contain holes and outliers, to overlap and to
+          // interleave. See utils/channelNumberShift.ts for why the group
+          // interval model this replaced could not be repaired
+          // (bead enhancedchannelmanager-i85dg).
+          const shiftPlan = planChannelNumberShift({
+            channels: displayChannels,
+            startingNumber,
+            count: channelCount,
+            step: startingNumber % 1 !== 0 ? 0.1 : 1,
+          });
 
-          // Shift amount is the total range taken by new channels
-          const shiftAmount = channelCount * incrementShift;
-
-          // Group-aware push down: only shift channels within the target group,
-          // then cascade into subsequent groups only if shifting would cause collisions.
-          // e.g., Cable 200-312, Sports 400-425: inserting at 220 should only shift Cable,
-          // not Sports (there's a gap between 312 and 400).
-
-          // Build a sorted list of groups by their minimum channel number
-          const groupMap = new Map<number | null, { channels: typeof displayChannels; minNum: number; maxNum: number }>();
-          for (const ch of displayChannels) {
-            if (ch.channel_number === null) continue;
-            const gid = ch.channel_group_id;
-            const existing = groupMap.get(gid);
-            if (existing) {
-              existing.channels.push(ch);
-              existing.minNum = Math.min(existing.minNum, ch.channel_number);
-              existing.maxNum = Math.max(existing.maxNum, ch.channel_number);
-            } else {
-              groupMap.set(gid, { channels: [ch], minNum: ch.channel_number, maxNum: ch.channel_number });
-            }
-          }
-
-          // Sort groups by their minimum channel number
-          const sortedGroups = Array.from(groupMap.entries())
-            .sort((a, b) => a[1].minNum - b[1].minNum);
-
-          // Find the target group (the one we're inserting into)
-          const targetGroupId = channelGroupId;
-          const targetGroupIdx = sortedGroups.findIndex(([gid]) => gid === targetGroupId);
-
-          // Collect channels to shift: start with channels in the target group at or after insertion point
-          const channelsToShift: typeof displayChannels = [];
-
-          if (targetGroupIdx !== -1) {
-            const [, targetGroup] = sortedGroups[targetGroupIdx];
-
-            // Shift channels in the target group at or after the starting number
-            const targetShiftChannels = targetGroup.channels.filter(
-              (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber
-            );
-            channelsToShift.push(...targetShiftChannels);
-
-            // Cascade into subsequent groups only if the shifted max would collide
-            let currentMaxAfterShift = targetGroup.maxNum + shiftAmount;
-
-            for (let i = targetGroupIdx + 1; i < sortedGroups.length; i++) {
-              const [, nextGroup] = sortedGroups[i];
-              // If there's a gap between the shifted max and the next group's min, stop
-              if (currentMaxAfterShift < nextGroup.minNum) break;
-
-              // Collision: need to shift this group's channels too
-              channelsToShift.push(...nextGroup.channels);
-              currentMaxAfterShift = nextGroup.maxNum + shiftAmount;
-            }
-          } else {
-            // Fallback: target group not found, only shift channels at/after starting number
-            // that would actually collide with the new channel range
-            const endOfNewRange = startingNumber + shiftAmount;
-            channelsToShift.push(
-              ...displayChannels.filter(
-                (ch) => ch.channel_number !== null && ch.channel_number >= startingNumber && ch.channel_number < endOfNewRange
-              )
-            );
-          }
-
-          // Sort descending to avoid conflicts when shifting
-          channelsToShift.sort((a, b) => (b.channel_number ?? 0) - (a.channel_number ?? 0));
-
-          // Shift each channel by the amount needed to make room for new channels
-          for (const ch of channelsToShift) {
-            const rawNewNum = ch.channel_number! + shiftAmount;
-            const newNum = hasDecimalShift
-              ? Math.round(rawNewNum * 10) / 10
-              : rawNewNum;
-
-            // Apply auto-rename if enabled
-            const newName = autoRenameChannelNumber
-              ? computeAutoRename(ch.name, ch.channel_number, newNum)
-              : undefined;
-
-            if (newName) {
-              stageUpdateChannel(
-                ch.id,
-                { channel_number: newNum, name: newName },
-                `Shifted "${ch.name}" to "${newName}" (channel ${ch.channel_number} → ${newNum})`
-              );
-            } else {
-              stageUpdateChannel(
-                ch.id,
-                { channel_number: newNum },
-                `Shifted channel ${ch.channel_number} to ${newNum} to make room`
-              );
-            }
-          }
+          stagePushDownShifts(shiftPlan.shifts);
         }
 
         // Create channels and assign streams
@@ -1977,23 +2622,22 @@ function App() {
           // If targetNewGroupName is set, pass it so the commit logic can create the group first
           // Pass logoUrl - the commit logic will create the logo if needed
           // Pass tvgId and tvcGuideStationId - auto-populate from stream metadata for EPG matching
-          // Pass normalize flag to apply normalization rules during channel creation
-          const tempChannelId = stageCreateChannel(
-            channelName,
+          // `channelName` is already the final name — resolveCreateChannelNames
+          // above answered the normalization toggle, and the number/country
+          // prefixes were applied on top of its answer. That is why no
+          // normalize flag travels with the staged operation: a backend-side
+          // pass would normalize an already-normalized name a second time
+          // (bead enhancedchannelmanager-e9e5o).
+          stageCreateChannelWithStreams({
+            name: channelName,
+            streamIds: groupedStreams.map((stream) => stream.id),
             channelNumber,
-            targetGroupId ?? undefined,
-            targetNewGroupName,
-            undefined, // logoId - will be resolved during commit
+            groupId: targetGroupId ?? undefined,
+            newGroupName: targetNewGroupName,
             logoUrl,
             tvgId,
             tvcGuideStationId,
-            normalize
-          );
-
-          // Assign all streams in this group to the new channel
-          for (const stream of groupedStreams) {
-            stageAddStream(tempChannelId, stream.id, `Assign stream to "${channelName}"`);
-          }
+          });
         }
 
         // End the batch
@@ -2033,35 +2677,61 @@ function App() {
           increment, // Use the same increment calculated for channel creation
         });
 
+        // The caller owns the operator-facing message: StreamsPane sits inside
+        // the notification provider, App renders it (bead
+        // enhancedchannelmanager-e9e5o).
+        return { normalizationFailed };
       } catch (err) {
         logger.error('Bulk create failed:', err);
         setError('Failed to bulk create channels');
         throw err;
       }
     },
-    [isEditMode, stageCreateChannel, stageAddStream, stageUpdateChannel, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
+    [isEditMode, stageCreateChannelWithStreams, stageUpdateChannel, stagePushDownShifts, startBatch, endBatch, displayChannels, defaultChannelProfileIds]
   );
 
   // Handle stream group drop on channels pane (triggers bulk create modal in streams pane)
   // Supports multiple groups being dropped at once
   // Now includes optional target group and suggested starting number for positional drops
-  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[], _targetGroupId?: number, suggestedStartingNumber?: number) => {
+  const handleStreamGroupDrop = useCallback((groupNames: string[], _streamIds: number[], targetGroupId?: number, suggestedStartingNumber?: number) => {
     // Set the dropped group names - StreamsPane will react to this and open the modal
     setDroppedStreamGroupNames(groupNames);
-    // If a suggested starting number was provided, use it
-    if (suggestedStartingNumber !== undefined) {
-      setDroppedStreamStartingNumber(suggestedStartingNumber);
-    }
+    setDroppedStreamTargetGroupId(targetGroupId ?? null);
+    setDroppedStreamStartingNumber(suggestedStartingNumber ?? null);
   }, []);
 
   // Dedup-on-drop integration (bd-u6ftw / BD-H, ADR-008 §D1).
   // Wraps the single-stream drop-into-group flow with the BD-D candidates
   // lookup. Multi-stream drops bypass dedup entirely — bulk dedup is a
   // separate epic surface (bd-a5lb2 / bulk M3U dedup hook).
-  const dedupOnDrop = useDedupOnDrop({ reloadChannels: loadChannels });
+  // In Edit Mode the merge this hook offers stages like every other stream
+  // assignment (bead enhancedchannelmanager-kz089); outside it, it writes as
+  // before. Passing `undefined` rather than a no-op keeps the hook's own
+  // "am I staging?" test a simple presence check.
+  const dedupOnDrop = useDedupOnDrop({
+    reloadChannels: loadChannels,
+    stageAddStream: isEditMode ? stageAddStream : undefined,
+  });
 
   // Handle bulk streams drop on channels pane (triggers bulk create modal for specific streams)
-  const handleBulkStreamsDrop = useCallback((streamIds: number[], groupId: number | null, startingNumber: number) => {
+  //
+  // Every branch below now NAMES what the duplicate check did (bead
+  // enhancedchannelmanager-ok8tj), closing the sibling of the defect commit
+  // `941d9087` fixed on the `Create in…` trigger path. Silence covered five
+  // different stories here — a candidate was found, nothing was similar
+  // enough, the lookup broke, the drop carried more than one stream, or the
+  // client could not read the stream's name — and the first was the only one
+  // the operator could actually see.
+  //
+  // The report is RETURNED rather than toasted here: `App` renders
+  // `NotificationProvider`, so it is outside its own provider and cannot call
+  // `useNotifications()`. `ChannelsPane`, which owns the drop target and knows
+  // the group's name, turns the report into the message.
+  const handleBulkStreamsDrop = useCallback(async (
+    streamIds: number[],
+    groupId: number | null,
+    startingNumber: number,
+  ): Promise<DedupDropReport> => {
     const proceedWithCreate = () => {
       // Set the dropped stream IDs and target info - StreamsPane will react to this and open the modal
       setDroppedStreamIds(streamIds);
@@ -2070,9 +2740,11 @@ function App() {
     };
 
     if (streamIds.length !== 1) {
-      // Multi-stream drops keep the existing bulk-create flow unchanged.
+      // Multi-stream drops keep the existing bulk-create flow unchanged —
+      // bulk dedup is a separate surface. Say so, rather than leaving the
+      // absent merge prompt to be read as "nothing matched".
       proceedWithCreate();
-      return;
+      return { outcome: 'skipped_multi_stream', streamName: null, streamCount: streamIds.length };
     }
 
     const streamId = streamIds[0];
@@ -2082,10 +2754,10 @@ function App() {
       // the drop is never silently dropped on the floor.
       logger.warn('[DEDUP] dropped stream id %s not found in client cache; skipping dedup lookup', streamId);
       proceedWithCreate();
-      return;
+      return { outcome: 'skipped_unknown_stream', streamName: null, streamCount: 1 };
     }
 
-    void dedupOnDrop.handleSingleStreamDrop(
+    const outcome = await dedupOnDrop.handleSingleStreamDrop(
       {
         streamId,
         streamName: stream.name,
@@ -2093,6 +2765,7 @@ function App() {
       },
       proceedWithCreate,
     );
+    return { outcome, streamName: stream.name, streamCount: 1 };
   }, [streams, seenStreams, dedupOnDrop]);
 
   // Handle open create channel modal (triggers bulk create modal in manual entry mode)
@@ -2103,6 +2776,8 @@ function App() {
   // Clear the dropped stream group/streams trigger after it's been handled
   const handleStreamGroupTriggerHandled = useCallback(() => {
     setDroppedStreamGroupNames(null);
+    setDroppedStreamTargetGroupId(null);
+    setDroppedStreamStartingNumber(null);
     setDroppedStreamIds(null);
     setDroppedStreamTargetGroupId(null);
     setDroppedStreamStartingNumber(null);
@@ -2211,79 +2886,172 @@ function App() {
     ? [...channelGroups, ...stagedGroups]
     : channelGroups;
 
+  const channelWorkspaceSources: WorkspaceSource[] = [
+    {
+      key: 'groups',
+      label: 'channel groups',
+      ...channelSourceStates.groups,
+      retry: loadChannelGroups,
+    },
+    {
+      key: 'channels',
+      label: 'channels',
+      ...channelSourceStates.channels,
+      retry: () => loadChannels(),
+    },
+  ];
+  const streamWorkspaceSources: WorkspaceSource[] = Object.entries(streamSourceStates).map(([key, value]) => ({
+    key,
+    label: key === 'metadata' ? 'stream groups' : key === 'search' ? 'stream search' : key.slice('group:'.length),
+    ...value,
+    retry: streamRetryOperations.current[key] ?? (() => Promise.resolve()),
+  }));
+  const workspaceSources = [...channelWorkspaceSources, ...streamWorkspaceSources];
+  const workspacePermissionDenied = workspaceSources
+    .some((source) => source.state === 'permission');
+  const workspaceEditUnavailable = channelWorkspaceSources.some((source) =>
+    source.state === 'loading' || (source.state === 'error' && !source.hasSnapshot));
+
+  /**
+   * What a staged ledger left behind by a dead session can still be applied
+   * against (epic enhancedchannelmanager-r93hq).
+   *
+   * Planned against the channel and group lists as the server reports them
+   * NOW, and only once those lists are actually loaded: `workspaceEditUnavailable`
+   * is the same signal that holds Enter Edit Mode disabled, and planning against
+   * a half-loaded list would report every operation as stale.
+   *
+   * Recomputed rather than cached because the operator can leave the offer on
+   * screen while a refresh lands underneath it; the plan they act on must be
+   * the plan they are reading.
+   */
+  const restorePlan = useMemo(() => {
+    if (pendingRestore === null || workspaceEditUnavailable || workspacePermissionDenied) {
+      return null;
+    }
+    return planLedgerRestore(pendingRestore.operations, {
+      channels,
+      channelGroups,
+      profileIds: channelProfiles.map((profile) => profile.id),
+    });
+  }, [pendingRestore, workspaceEditUnavailable, workspacePermissionDenied, channels, channelGroups, channelProfiles]);
+
+  const channelManagerPageAction = activeTab === 'channel-manager'
+    && !workspacePermissionDenied && (
+    isEditMode ? (
+      <div className="edit-mode-header-controls">
+        <span className="edit-mode-label">
+          <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
+          Edit Mode
+        </span>
+        {stagedOperationCount > 0 && (
+          <span className="edit-mode-changes">
+            {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
+          </span>
+        )}
+        <EditModeRestoredBadge restoredFrom={restoredFrom} />
+        {editModeEnteredAt !== null && <EditModeTimer enteredAt={editModeEnteredAt} />}
+        <div className="edit-mode-buttons">
+          <button
+            className="edit-mode-done-btn"
+            onClick={handleExitEditMode}
+            disabled={isCommitting}
+            title="Apply changes"
+          >
+            <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
+            Done
+            {stagedOperationCount > 0 && <span className="edit-mode-done-count">{stagedOperationCount}</span>}
+          </button>
+          <button
+            className="edit-mode-cancel-btn"
+            onClick={() => {
+              if (stagedOperationCount > 0) {
+                if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
+                  discard();
+                  setSelectedChannelIds(new Set());
+                }
+              } else {
+                discard();
+                setSelectedChannelIds(new Set());
+              }
+            }}
+            disabled={isCommitting}
+            title="Cancel and discard changes"
+          >
+            <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
+            Cancel
+          </button>
+        </div>
+      </div>
+    ) : (
+      <button
+        className="enter-edit-mode-btn"
+        onClick={enterEditMode}
+        disabled={workspaceEditUnavailable}
+        title={workspaceEditUnavailable
+          ? 'Edit Mode is unavailable until channel data loads'
+          : 'Enter Edit Mode to make changes'}
+      >
+        <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
+        Edit Mode
+      </button>
+    )
+  );
+
+  // Header service indicator. Replaces the removed footer status line: an API
+  // error outranks a stale successful health payload, and any health status the
+  // backend does not report as healthy surfaces verbatim rather than as "Online".
+  const serviceStatus: { tone: 'online' | 'degraded' | 'offline' | 'pending'; label: string; detail: string } = error
+    ? { tone: 'offline', label: 'Offline', detail: `API error: ${error}` }
+    : !health
+      ? { tone: 'pending', label: 'Connecting', detail: 'Checking ECM service status' }
+      : /^(ok|okay|healthy|up|running)$/i.test(health.status ?? '')
+        ? { tone: 'online', label: 'Online', detail: `${health.service || 'ECM'} · ${health.status}` }
+        : { tone: 'degraded', label: health.status || 'Degraded', detail: `${health.service || 'ECM'} · ${health.status || 'status unavailable'}` };
+
+  // Settings carries a third breadcrumb crumb for the active section, e.g.
+  // SYSTEM / SETTINGS / GENERAL SETTINGS, with that section's own descriptive
+  // line beneath it. The section's heading block was removed from the content
+  // pane, so this header is now its only rendering.
+  const routeHeading = activeTab === 'settings'
+    ? (() => {
+      const section = settingsSectionHeading(settingsPage ?? 'general');
+      return {
+        group: `${ROUTE_HIERARCHY.settings.group} / ${ROUTE_TITLES.settings.toUpperCase()}`,
+        title: section.title.toUpperCase(),
+        description: section.description ?? ROUTE_HIERARCHY.settings.purpose,
+      };
+    })()
+    : {
+      group: ROUTE_HIERARCHY[activeTab].group,
+      title: ROUTE_TITLES[activeTab].toUpperCase(),
+      description: ROUTE_HIERARCHY[activeTab].purpose,
+    };
+
   return (
     <NotificationProvider position="top-right">
     <BackupDestinationPromptProvider>
     <div className="app">
+      <SkipToMainContent />
       <header className={`header ${isEditMode ? 'edit-mode-active' : ''}`}>
-        <h1>
-          <img src={ECMLogo} alt="ECM Logo" className="header-logo" />
-          Enhanced Channel Manager
-        </h1>
+        {/* Reading order (bead 57pp3, amended by nhkd4): the status indicator
+            sits left of the action icons, so the row reads "what is running"
+            -> the controls that act on it. The "what changed" slot used to be
+            an "Update available" pill; the PO moved that signal into the
+            notification centre (the bell further along this same row), so the
+            upgrade prompt now arrives where every other system message does
+            instead of as a second, differently-shaped status chip. */}
         <div className="header-actions">
-          {/* Edit Mode Controls - only show on Channel Manager tab */}
-          {activeTab === 'channel-manager' && (
-            <>
-              {isEditMode ? (
-                <div className="edit-mode-header-controls">
-                  <span className="edit-mode-label">
-                    <span className="material-icons" style={{ fontSize: '18px', marginRight: '4px' }}>edit</span>
-                    Edit Mode
-                  </span>
-                  {stagedOperationCount > 0 && (
-                    <span className="edit-mode-changes">
-                      {stagedOperationCount} change{stagedOperationCount !== 1 ? 's' : ''}
-                    </span>
-                  )}
-                  {editModeEnteredAt !== null && (
-                    <EditModeTimer enteredAt={editModeEnteredAt} />
-                  )}
-                  <div className="edit-mode-buttons">
-                    <button
-                      className="edit-mode-done-btn"
-                      onClick={handleExitEditMode}
-                      disabled={isCommitting}
-                      title="Apply changes"
-                    >
-                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>check</span>
-                      Done
-                      {stagedOperationCount > 0 && (
-                        <span className="edit-mode-done-count">{stagedOperationCount}</span>
-                      )}
-                    </button>
-                    <button
-                      className="edit-mode-cancel-btn"
-                      onClick={() => {
-                        if (stagedOperationCount > 0) {
-                          if (confirm(`You have ${stagedOperationCount} pending change${stagedOperationCount !== 1 ? 's' : ''} that will be lost. Are you sure you want to cancel?`)) {
-                            discard();
-                            setSelectedChannelIds(new Set());
-                          }
-                        } else {
-                          discard();
-                          setSelectedChannelIds(new Set());
-                        }
-                      }}
-                      disabled={isCommitting}
-                      title="Cancel and discard changes"
-                    >
-                      <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>close</span>
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  className="enter-edit-mode-btn"
-                  onClick={enterEditMode}
-                  title="Enter Edit Mode to make changes"
-                >
-                  <span className="material-icons" style={{ fontSize: '16px', marginRight: '4px' }}>edit</span>
-                  Edit Mode
-                </button>
-              )}
-            </>
-          )}
+          <span
+            className={`service-status service-status-${serviceStatus.tone}`}
+            role="status"
+            title={serviceStatus.detail}
+          >
+            <span className="service-status-dot" aria-hidden="true" />
+            <span className="service-status-sr">ECM service status: </span>
+            <span className="service-status-label">{serviceStatus.label}</span>
+            <span className="service-status-version">v{packageJson.version}</span>
+          </span>
           <a
             href="https://github.com/MotWakorb/enhancedchannelmanager/blob/main/USER_GUIDE.md"
             target="_blank"
@@ -2300,12 +3068,14 @@ function App() {
             className="header-icon-link"
             title="GitHub Repository"
           >
-            <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor">
+            {/* Sized by .header-icon-link svg in App.css so the mark tracks the
+                Material icons beside it from a single source of truth. */}
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
               <path d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.009-.866-.013-1.7-2.782.604-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.463-1.11-1.463-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836a9.59 9.59 0 012.504.337c1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z"/>
             </svg>
           </a>
           <NotificationCenter dedupM3uToastSuppressed={dedupM3uToastSuppressed} />
-          <UserMenu />
+          <UserMenu onRequestSignOut={requestSignOut} />
         </div>
       </header>
 
@@ -2314,6 +3084,31 @@ function App() {
         onTabChange={handleTabChange}
         disabled={isCommitting}
         editModeActive={isEditMode}
+        settingsPage={settingsPage}
+        onSettingsPageChange={(page) => handleRouteChange('settings', page)}
+        isAdmin={adminNavVisible}
+      />
+
+      {/* The one Edit Mode exit that cannot be guarded is the session dying
+          under the app. This is the way back from it (epic
+          enhancedchannelmanager-r93hq): the ledger survived in sessionStorage,
+          bound to the operator who staged it, and the operator decides whether
+          it comes back — after reading what of it still applies. */}
+      <EditModeRestoreDialog
+        isOpen={restorePlan !== null && pendingRestore !== null}
+        savedAt={pendingRestore?.savedAt ?? 0}
+        restorable={restorePlan?.restorable ?? []}
+        dropped={restorePlan?.dropped ?? []}
+        withdrawnAcknowledgements={restorePlan?.withdrawnAcknowledgements ?? []}
+        onRestore={() => {
+          if (pendingRestore === null || restorePlan === null) return;
+          restoreStagedLedger({
+            operations: restorePlan.restorable,
+            undoGroups: pendingRestore.undoGroups,
+            savedAt: pendingRestore.savedAt,
+          });
+        }}
+        onDiscard={dismissPendingRestore}
       />
 
       <EditModeExitDialog
@@ -2324,6 +3119,21 @@ function App() {
         onKeepEditing={handleKeepEditing}
         isCommitting={isCommitting}
         commitProgress={commitProgress}
+        commitFailure={commitFailure}
+        onAcknowledgeFailure={handleAcknowledgeCommitFailure}
+      />
+
+      {/* AFTER the exit dialog, deliberately: both render an
+          `.edit-mode-dialog-overlay`, so the later sibling is the one that
+          receives the operator's clicks. Nothing has been applied at this
+          point — this is a question, not a result — so it has to sit on top of
+          the Apply dialog that asked it (bead enhancedchannelmanager-ic884.4). */}
+      <NumberingConflictDialog
+        isOpen={numberingConflicts !== null}
+        conflicts={numberingConflicts?.conflicts ?? []}
+        isCommitting={isCommitting}
+        onKeepEditing={handleKeepNumberingConflicts}
+        onReconcile={handleReconcileNumbering}
       />
 
       {/* Keep SettingsModal for first-run configuration */}
@@ -2346,8 +3156,70 @@ function App() {
         onCancel={dedupOnDrop.handleCancel}
       />
 
-      <main className="main">
+      <main id="main-content" className="main" tabIndex={-1}>
+        <RouteHeaderTargetProvider targets={routeHeaderTargets}>
+        <PageHeader
+          className="route-page-header"
+          headingLevel={1}
+          headingRef={routeHeadingRef}
+          group={routeHeading.group}
+          title={routeHeading.title}
+          description={routeHeading.description}
+          actions={(
+            <>
+              {channelManagerPageAction}
+              <div
+                className="route-page-action-outlet"
+                ref={setPrimaryActionTarget}
+              />
+            </>
+          )}
+          status={(
+            <div
+              className="route-page-status-outlet"
+              ref={setStatusTarget}
+            />
+          )}
+          controls={(
+            <div
+              className="route-page-controls-outlet"
+              ref={setControlsTarget}
+            />
+          )}
+          relatedLinks={ROUTE_HIERARCHY[activeTab].settingsLinks?.map((link) => ({
+            ...link,
+            onClick: (event) => {
+              if (!isPlainPrimaryActivation(event.nativeEvent)) return;
+              event.preventDefault();
+              handleRouteChange('settings', link.href.slice('#settings/'.length) as SettingsPage);
+            },
+          }))}
+        />
         <Suspense fallback={<div className="tab-loading"><span className="material-icons spinning">sync</span><p>Loading...</p></div>}>
+          {activeTab === 'dashboard' && (
+            <OperatorDashboard
+              health={{
+                value: health,
+                ...healthSourceState,
+                retry: () => {
+                  setHealthSourceState((current) => ({ ...current, state: 'loading' }));
+                  void api.getHealth().then((healthData) => {
+                    setHealth(healthData);
+                    setHealthSourceState({ state: 'success', hasSnapshot: true });
+                  }).catch((err) => {
+                    setHealthSourceState((current) => ({ ...current, state: classifySourceLoadError(err) }));
+                  });
+                },
+              }}
+              channels={{ value: channelInventoryTotal, ...channelInventoryState, retry: () => { void loadChannelInventoryTotal(); } }}
+              streams={{
+                value: streamInventoryTotal,
+                ...streamInventoryState,
+                retry: () => { void loadStreamInventoryTotal(); },
+              }}
+              providers={{ value: providers.length, ...providerSourceState, retry: () => { void loadProviders(); } }}
+            />
+          )}
           {activeTab === 'channel-manager' && (
             <ErrorBoundary key="tab-channel-manager" scopeLabel="Channel Manager tab" reloadMode="reset">
             <ChannelManagerTab
@@ -2369,6 +3241,7 @@ function App() {
               onCreateChannel={handleCreateChannel}
               onDeleteChannel={handleDeleteChannel}
               channelsLoading={loadingStates.channels}
+              channelSources={channelWorkspaceSources}
 
               // Channel Search & Filter
               channelSearch={channelFilters.search}
@@ -2393,12 +3266,17 @@ function App() {
               modifiedChannelIds={modifiedChannelIds}
               onStageUpdateChannel={stageUpdateChannel}
               onStageAddStream={stageAddStream}
+              onStageSetProfileMembership={stageSetProfileMembership}
+              stagedSideEffects={stagedSideEffects}
+              onStageRestoreChannelGroup={stageRestoreChannelGroup}
+              onStageClearStreamStats={stageClearStreamStats}
               onStageRemoveStream={stageRemoveStream}
               onStageReorderStreams={stageReorderStreams}
               onStageBulkAssignNumbers={stageBulkAssignNumbers}
               onStageDeleteChannel={stageDeleteChannel}
               onStageDeleteChannelGroup={stageDeleteChannelGroup}
               onStageRenameChannelGroup={stageRenameChannelGroup}
+              onStageCreateGroup={stageCreateGroup}
               onStartBatch={startBatch}
               onEndBatch={endBatch}
 
@@ -2447,6 +3325,8 @@ function App() {
               providers={providers}
               streamGroups={streamGroups}
               streamsLoading={loadingStates.streams}
+              streamSources={streamWorkspaceSources}
+              streamMatchingTotal={streamMatchingTotal}
 
               // Stream Search & Filter (server-side search via useEffect debounce)
               streamSearch={streamFilters.search}
@@ -2476,6 +3356,7 @@ function App() {
               onCreateChannelManual={handleCreateChannelManual}
               defaultNormalizeOnCreate={normalizeOnChannelCreate}
               onCheckConflicts={handleCheckConflicts}
+              onCountPushDownShift={handleCountPushDownShift}
               onGetHighestChannelNumber={handleGetHighestChannelNumber}
 
               // Dispatcharr URL for channel stream URLs
@@ -2554,7 +3435,7 @@ function App() {
           )}
           {activeTab === 'm3u-changes' && (
             <ErrorBoundary key="tab-m3u-changes" scopeLabel="M3U Changes tab" reloadMode="reset">
-              <M3UChangesTab />
+              <M3UChangesTab initialHours={m3uChangesHours ?? undefined} />
             </ErrorBoundary>
           )}
           {activeTab === 'channel-pipeline' && (
@@ -2578,32 +3459,8 @@ function App() {
             </ErrorBoundary>
           )}
         </Suspense>
+        </RouteHeaderTargetProvider>
       </main>
-
-      <footer className="footer">
-        <div className="footer-left">
-          {error && <span className="error">API Error: {error}</span>}
-          {health && (
-            <span className="status">
-              API: {health.status} | Service: {health.service}
-            </span>
-          )}
-        </div>
-        <div className="footer-right">
-          <span className="version">v{packageJson.version}</span>
-          {updateInfo?.updateAvailable && (
-            <a
-              href={updateInfo.releaseUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="update-available"
-              title={updateInfo.latestVersion ? `Version ${updateInfo.latestVersion} available` : 'Update available'}
-            >
-              New Update Available!
-            </a>
-          )}
-        </div>
-      </footer>
 
       <VLCProtocolHelperModal
         isOpen={showVLCHelperModal}
@@ -2612,6 +3469,7 @@ function App() {
         streamName={vlcModalStreamName || 'Stream'}
       />
     </div>
+    <ProfileConflictReviewModal />
     </BackupDestinationPromptProvider>
     </NotificationProvider>
   );

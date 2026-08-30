@@ -3,6 +3,7 @@ import type { M3UAccount, M3UFilter, M3UFilterCreateRequest } from '../types';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './M3UFiltersModal.css';
 
@@ -36,6 +37,7 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
   onSaved,
   account,
 }: M3UFiltersModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [filters, setFilters] = useState<M3UFilter[]>([]);
   const [loading, setLoading] = useState(false);
@@ -173,11 +175,11 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container m3u-filters-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container m3u-filters-modal" ref={containerRef}>
         <div className="modal-header">
           <div className="header-info">
-            <h2>Manage Filters</h2>
+            <h2 id={titleId}>Manage Filters</h2>
             <span className="account-name">{account.name}</span>
           </div>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
@@ -333,33 +335,35 @@ export const M3UFiltersModal = memo(function M3UFiltersModal({
                   <p>Add a filter to control which streams are imported.</p>
                 </div>
               ) : filters.length > 0 && (
-                <div className="filters-list">
-                  <div className="filters-header">
-                    <span className="col-type">Type</span>
-                    <span className="col-pattern">Pattern</span>
-                    <span className="col-action">Action</span>
-                    <span className="col-order">Order</span>
-                    <span className="col-actions">Actions</span>
+                <div className="filters-list" role="table" aria-label="M3U filters">
+                  <div className="filters-header" role="row">
+                    <span className="col-type" role="columnheader">Type</span>
+                    <span className="col-pattern" role="columnheader">Pattern</span>
+                    <span className="col-action" role="columnheader">Action</span>
+                    <span className="col-order" role="columnheader">Order</span>
+                    <span className="col-actions" role="columnheader">Actions</span>
                   </div>
                   {filters.sort((a, b) => a.order - b.order).map(filter => (
-                    <div key={filter.id} className="filter-row">
-                      <div className="filter-type">
+                    <div key={filter.id} className="filter-row" role="row">
+                      <div className="filter-type" role="cell">
                         <span className={`type-badge ${filter.filter_type}`}>
                           {getFilterTypeLabel(filter.filter_type)}
                         </span>
                       </div>
-                      <div className="filter-pattern" title={filter.regex_pattern}>
+                      <div className="filter-pattern" title={filter.regex_pattern} role="cell">
                         <code>{filter.regex_pattern}</code>
                       </div>
-                      <div className="filter-action">
-                        <span className={`action-badge ${filter.exclude ? 'exclude' : 'include'}`}>
+                      <div className="filter-action" role="cell">
+                        <span className="filter-responsive-label">Action</span>
+                        <span className={`filter-mode-badge ${filter.exclude ? 'exclude' : 'include'}`}>
                           {filter.exclude ? 'Exclude' : 'Include'}
                         </span>
                       </div>
-                      <div className="filter-order">
+                      <div className="filter-order" role="cell">
+                        <span className="filter-responsive-label">Order</span>
                         {filter.order}
                       </div>
-                      <div className="filter-actions">
+                      <div className="filter-actions" role="cell">
                         <button
                           className="action-btn"
                           onClick={() => handleEdit(filter)}

@@ -14,6 +14,24 @@ export type JournalActionType =
   | 'stream_remove'
   | 'stream_reorder'
   | 'reorder'
+  /**
+   * A pending merge the operator accepted that ECM could NOT apply to
+   * Dispatcharr — the stream name matched zero or several streams, or the
+   * search could not establish an answer. Its own action type so the affected
+   * merges are findable by filter rather than by reading every row's prose
+   * (bead enhancedchannelmanager-i5ic0).
+   */
+  | 'merge_unapplied'
+  /**
+   * A bulk-merge group whose streams moved onto the target but whose source
+   * channels are NOT all gone — the deletions that errored and the ones the
+   * request never reached both leave the channel there. Its own action type,
+   * for the same reason as `merge_unapplied`: the groups needing attention are
+   * findable by filter rather than by reading every row's prose.
+   * `after_value.undeleted_ids` names the channels still upstream
+   * (bead enhancedchannelmanager-ftidn).
+   */
+  | 'bulk_merge_incomplete'
   | 'refresh'
   | 'start'
   | 'stop'

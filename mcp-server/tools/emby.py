@@ -58,7 +58,11 @@ async def _clear_logos_with_wait(client, payload: dict) -> dict:
 
 def register(mcp: FastMCP):
     @mcp.tool()
-    async def clear_emby_logos(logo_types: list[str] | None = None) -> str:
+    async def clear_emby_logos(
+        logo_types: list[str] | None = None,
+        plan_id: str | None = None,
+        plan_hash: str | None = None,
+    ) -> str:
         """Clear cached Emby channel logos so Emby re-fetches fresh ones.
 
         Emby caches channel logos and keeps serving a stale image even after the
@@ -89,7 +93,10 @@ def register(mcp: FastMCP):
             )
         try:
             client = get_ecm_client()
-            result = await _clear_logos_with_wait(client, {"logo_types": types})
+            body = {"logo_types": types}
+            if plan_id and plan_hash:
+                body.update({"plan_id": plan_id, "plan_hash": plan_hash})
+            result = await _clear_logos_with_wait(client, body)
             processed = result.get("channels_processed", 0)
             deleted = result.get("images_deleted", 0)
             missing = result.get("images_missing", 0)

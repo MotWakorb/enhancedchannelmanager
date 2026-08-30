@@ -24,12 +24,14 @@
   gap: 8px;
 }
 
+/* Micro role. This is the uppercase caption idiom, spelled locally at
+   13.6px/600/0.04em (bead enhancedchannelmanager-6z299.4). */
 .team-alias-group-title {
-  font-weight: 600;
-  font-size: 0.85rem;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .team-alias-remove-group {
@@ -41,9 +43,14 @@
   box-sizing: border-box;
 }
 
+/* Type and colour come from `.empty-inline` in shared/common.css § 7, added to
+   the element in EventSyncTeamAliasesSection.tsx. Only the margin is local.
+   This declared no font-size at all, so it rendered at the UA default 16px;
+   bead enhancedchannelmanager-6z299.4 gave it the body role, which put a
+   second treatment on an idiom that already had a shared one — corrected in
+   the 6z299.7 cleanup pass. The italic goes with the shared rule's reasoning: it
+   made an already short string harder to read. */
 .team-aliases-empty {
-  color: var(--text-secondary);
-  font-style: italic;
   margin: 12px 0;
 }
 

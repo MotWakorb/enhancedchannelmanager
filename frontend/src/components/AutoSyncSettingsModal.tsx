@@ -6,6 +6,7 @@ import { useNotifications } from '../contexts/NotificationContext';
 import './ModalBase.css';
 import './AutoSyncSettingsModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 interface AutoSyncSettingsModalProps {
   isOpen: boolean;
@@ -32,6 +33,7 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   streamProfiles,
   onGroupsChange,
 }: AutoSyncSettingsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   // Form state
   const [epgSourceId, setEpgSourceId] = useState<string>('');
@@ -403,11 +405,11 @@ export const AutoSyncSettingsModal = memo(function AutoSyncSettingsModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md auto-sync-settings-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md auto-sync-settings-modal" ref={containerRef}>
         <div className="modal-header">
           <div className="header-info">
-            <h2>Auto-Sync Settings</h2>
+            <h2 id={titleId}>Auto-Sync Settings</h2>
             <span className="group-name-display">{groupName}</span>
           </div>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">

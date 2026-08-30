@@ -5,7 +5,8 @@ import string
 import httpx
 
 from _endpoint_contracts import Endpoint
-from config import ECM_URL, get_mcp_api_key
+from config import ECM_URL, get_mcp_backend_credentials
+from auth_claim import SidecarBackendAuth
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class ContractError(RuntimeError):
 
 # Module-level client instance (lazy-initialized)
 _client: httpx.AsyncClient | None = None
+_client_backend_key: str | None = None
 
 # Default timeout for most requests; long-running endpoints override per-call
 DEFAULT_TIMEOUT = 30.0
@@ -31,10 +33,10 @@ LONG_TIMEOUT = 300.0  # 5 minutes for pipeline/probe/export operations
 
 def _get_client() -> httpx.AsyncClient:
     """Get or create the shared httpx client."""
-    global _client
-    api_key = get_mcp_api_key()
-    # Recreate client if API key changed (handles key rotation)
-    if _client is None or _client.headers.get("authorization") != f"Bearer {api_key}":
+    global _client, _client_backend_key
+    api_key, _confirmation_key = get_mcp_backend_credentials()
+    # Recreate client if the private backend key changed (handles live rotation).
+    if _client is None or _client_backend_key != api_key:
         if _client is not None:
             # Schedule close of old client (best effort)
             try:
@@ -46,9 +48,10 @@ def _get_client() -> httpx.AsyncClient:
                 pass
         _client = httpx.AsyncClient(
             base_url=ECM_URL,
-            headers={"Authorization": f"Bearer {api_key}"},
+            auth=SidecarBackendAuth(),
             timeout=DEFAULT_TIMEOUT,
         )
+        _client_backend_key = api_key
     return _client
 
 

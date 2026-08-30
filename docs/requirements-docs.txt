@@ -1,3 +1,15 @@
 # Pinned dependencies for building the public user-guide site (mkdocs.yml).
-# Used by .github/workflows/docs-pages.yml.
+#
+# Two consumers since bead enhancedchannelmanager-t4d5w:
+#   - .github/workflows/docs-pages.yml, which builds and deploys the site
+#     after a push to dev.
+#   - the docs-pages.yml build, which runs
+#     `mkdocs build --strict` on every pull request so a broken user-guide
+#     link is caught before the merge instead of after it.
+#
+# Because the second consumer runs on every pull request, this range is now
+# on the critical path repo-wide. `~=9.5` accepts any 9.x, so a future
+# mkdocs-material release that adds a warning turns the docs-pages build red on
+# every open branch at once, with no change of ours to blame. Pin to an
+# exact version if that happens.
 mkdocs-material~=9.5

@@ -286,7 +286,19 @@ def register(mcp: FastMCP):
             rnum = _fmt_channel_number(result.get("channel_number", "?"))
             rgrp = result.get("channel_group_id")
             grp_info = f", group_id={rgrp}" if rgrp is not None else ""
-            return f"Channel created: #{rnum}: {rname} (id={cid}{grp_info})"
+            lines = [f"Channel created: #{rnum}: {rname} (id={cid}{grp_info})"]
+            # The backend reports whether the normalization we asked for
+            # actually ran (bead enhancedchannelmanager-e9e5o). Without this
+            # line a failed run is indistinguishable from ``normalize=False``:
+            # the channel exists, the call returned 200, and the name is raw.
+            norm = result.get("normalization") or {}
+            if norm.get("requested") and not norm.get("applied"):
+                lines.append(
+                    "WARNING: normalization was requested but did NOT run "
+                    f"({norm.get('error', 'unknown error')}). The channel was "
+                    f"created with the name as given: '{norm.get('nameApplied', rname)}'."
+                )
+            return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] create_channel failed: %s", e)
             return f"Error creating channel: {e}"
@@ -301,6 +313,7 @@ def register(mcp: FastMCP):
         logo_id: int | None = None,
         streams: list[int] | None = None,
         confirm: bool = False,
+        plan_current_channel: dict | None = None,
     ) -> str:
         """Update an existing channel.
 
@@ -353,6 +366,16 @@ def register(mcp: FastMCP):
 
             if not payload:
                 return "No changes specified."
+
+            if plan_current_channel is not None:
+                fresh = await client.call_endpoint(
+                    ENDPOINTS["channels_get"], path_args={"channel_id": channel_id}
+                )
+                if fresh != plan_current_channel:
+                    return (
+                        f"Backend target drift detected for channel {channel_id}; "
+                        "request a new mutation-free preview."
+                    )
 
             # --- bd-onazy confirm gate ---------------------------------------
             # Only a rename or group-change is "high blast radius"; a bare
@@ -856,7 +879,11 @@ def register(mcp: FastMCP):
             return f"Error removing stream {stream_id} from channel {channel_id}: {e}"
 
     @mcp.tool()
-    async def reorder_streams(channel_id: int, stream_ids: list[int]) -> str:
+    async def reorder_streams(
+        channel_id: int,
+        stream_ids: list[int],
+        plan_current_channel: dict | None = None,
+    ) -> str:
         """Reorder streams within a channel. The order of stream_ids defines the new priority.
 
         Args:
@@ -873,6 +900,11 @@ def register(mcp: FastMCP):
             channel = await client.call_endpoint(
                 ENDPOINTS["channels_get"], path_args={"channel_id": channel_id}
             )
+            if plan_current_channel is not None and channel != plan_current_channel:
+                return (
+                    f"Backend target drift detected for channel {channel_id}; "
+                    "request a new mutation-free preview."
+                )
             current_ids = list(channel.get("streams", []) or []) if isinstance(channel, dict) else []
             current_set = set(current_ids)
 
@@ -1322,18 +1354,39 @@ def register(mcp: FastMCP):
             # the default 202+poll path so this site keeps a single shape.
             result = await _bulk_commit_with_wait(client, payload)
             success = result.get("success", False)
-            # Per-operation result list is available at result["errors"] but not
-            # surfaced in the response below — the operator gets aggregate status,
-            # the temp-id → real-id map, and validation issues only.
             # (Backend BulkCommitResponse exposes `tempIdMap`/`groupIdMap`, not
             # `idMappings` — the old key here always read empty: contract drift
             # fixed in bd-vtghg Phase 1.)
             id_mappings = {**(result.get("tempIdMap") or {}), **(result.get("groupIdMap") or {})}
             issues = result.get("validationIssues") or []
+            # `errors` used to be fetched, commented about, and dropped, and the
+            # applied/failed counts were never rendered at all: an agent read
+            # "Bulk commit FAILED: 1 operations submitted" about a batch whose
+            # channel HAD been created, retried it, and created it twice
+            # (bead enhancedchannelmanager-e9e5o, fix round 4).
+            errors = result.get("errors") or []
+            applied = result.get("operationsApplied")
+            failed = result.get("operationsFailed")
+            partially_applied = result.get("operationsPartiallyApplied") or 0
 
             lines = []
             status = "SUCCESS" if success else "FAILED"
             lines.append(f"Bulk commit {status}: {len(operations)} operations submitted.")
+            if applied is not None or failed is not None:
+                counts = f"{applied or 0} applied, {failed or 0} failed"
+                # A subset of the failures, not an extra category of operation
+                # — said in the same sentence so the numbers cannot be read as
+                # adding up to more than were submitted (bead …-1e4at).
+                if partially_applied:
+                    counts += (
+                        f" (of which {partially_applied} partially applied)"
+                    )
+                lines.append(counts + ".")
+            if result.get("partial"):
+                lines.append(
+                    "PARTIAL: some operations landed and some did not. Reconcile "
+                    "against the ID mappings below rather than resubmitting the batch."
+                )
             if validate_only:
                 lines.append("(validate-only mode — no changes applied)")
             if id_mappings:
@@ -1343,13 +1396,100 @@ def register(mcp: FastMCP):
                 lines.append(f"Validation issues ({len(issues)}):")
                 for issue in issues[:10]:
                     lines.append(f"  - {issue}")
+
+            # An error entry carrying `applied: true` names an operation whose
+            # upstream write LANDED and which ECM then could not finish
+            # recording — most often a create Dispatcharr accepted and answered
+            # without a usable id. It must never be presented as work still to
+            # do: retrying it is what produces the duplicate channel. Kept
+            # separate from the failures below for exactly that reason.
+            applied_incomplete = [e for e in errors if e.get("applied") is True]
+            # An entry carrying `sideEffectsLanded: true` names an operation
+            # that genuinely FAILED — the group it was asked to delete is still
+            # there — but which landed upstream writes of its own first. The
+            # channels a group delete reparents stay reparented. Presenting it
+            # beside a create that never happened reads as "retry me", and the
+            # retry acts on a precondition that has already changed (bead
+            # …-1e4at). Third bucket, because it is neither done nor unstarted.
+            side_effects_landed = [
+                e for e in errors
+                if e.get("applied") is not True and e.get("sideEffectsLanded") is True
+            ]
+            genuine_failures = [
+                e for e in errors
+                if e.get("applied") is not True and e.get("sideEffectsLanded") is not True
+            ]
+
+            if applied_incomplete:
+                lines.append(
+                    f"APPLIED BUT NOT FULLY RECORDED ({len(applied_incomplete)}) — "
+                    "these changes are live in Dispatcharr. DO NOT RETRY them; "
+                    "reconcile against Dispatcharr instead:"
+                )
+                for entry in applied_incomplete[:10]:
+                    lines.append(
+                        f"  ! {entry.get('operationId')} "
+                        f"({entry.get('entityName') or entry.get('channelName') or 'unnamed'}): "
+                        f"{entry.get('error')}"
+                    )
+            if side_effects_landed:
+                lines.append(
+                    f"PARTIALLY APPLIED ({len(side_effects_landed)}) — these "
+                    "operations did NOT achieve their outcome, but upstream "
+                    "writes they made first DID land and are still in place "
+                    "(e.g. a group delete that reparented the group's channels "
+                    "and then failed to delete the group). Reconcile the "
+                    "current Dispatcharr state before retrying:"
+                )
+                for entry in side_effects_landed[:10]:
+                    lines.append(
+                        f"  ~ {entry.get('operationId')} "
+                        f"({entry.get('entityName') or entry.get('channelName') or 'unnamed'}): "
+                        f"{entry.get('error')}"
+                    )
+            if genuine_failures:
+                lines.append(f"Failed operations ({len(genuine_failures)}):")
+                for entry in genuine_failures[:10]:
+                    lines.append(
+                        f"  x {entry.get('operationId')} "
+                        f"({entry.get('entityName') or entry.get('channelName') or 'unnamed'}): "
+                        f"{entry.get('error')}"
+                    )
+
+            # createChannel ops that asked for normalization and did not get it
+            # (bead enhancedchannelmanager-e9e5o). These ops APPLIED, so they
+            # appear nowhere in `errors` and nothing else here would mention
+            # them — the channel simply carries the raw name.
+            #
+            # "which were created" below is a claim about a channel EXISTING,
+            # and the backend is what makes it true: `routers/channels.py` only
+            # appends to `normalizationFailures` after `create_channel` has
+            # returned. Enforced by
+            # backend/tests/routers/test_e9e5o_normalize_failure_disclosure.py
+            # ::test_a_create_that_never_persisted_is_not_listed_as_normalized_raw.
+            # Before that ordering, a create Dispatcharr rejected was reported
+            # here as a created channel.
+            norm_failures = result.get("normalizationFailures") or []
+            if norm_failures:
+                lines.append(
+                    f"Normalization did NOT run for {len(norm_failures)} "
+                    "channel(s), which were created with the name as given:"
+                )
+                for failure in norm_failures[:10]:
+                    lines.append(
+                        f"  - '{failure.get('name')}' "
+                        f"(tempId={failure.get('tempId')}): {failure.get('error')}"
+                    )
             return "\n".join(lines)
         except Exception as e:
             logger.error("[MCP] bulk_commit_channels failed: %s", e)
             return f"Error in bulk commit: {e}"
 
     @mcp.tool()
-    async def set_logo_from_epg(channel_ids: list[int]) -> str:
+    async def set_logo_from_epg(
+        channel_ids: list[int],
+        plan_logo_actions: list[dict] | None = None,
+    ) -> str:
         """Set channel logos from their linked EPG entry's icon_url.
 
         For each channel: reads its epg_data_id, fetches the linked EPG entry from
@@ -1369,19 +1509,36 @@ def register(mcp: FastMCP):
             errors: list[str] = []
             logo_cache: dict[str, int] = {}
 
+            actions = plan_logo_actions
+            if actions is not None:
+                if sorted(action.get("channel_id") for action in actions) != sorted(set(channel_ids)):
+                    return "Backend target drift detected; request a new mutation-free preview."
+                # Validate the complete read set before the first logo create or
+                # channel patch. This prevents a partially applied stale plan.
+                for action in actions:
+                    cid = action["channel_id"]
+                    fresh_channel = await client.get(f"/api/channels/{cid}")  # contract-exempt: pre-write validation of the signed cross-domain logo plan
+                    if fresh_channel != action.get("channel"):
+                        return "Backend target drift detected; request a new mutation-free preview."
+                    epg_data_id = fresh_channel.get("epg_data_id")
+                    fresh_epg = await client.get(f"/api/epg/data/{epg_data_id}") if epg_data_id else None  # contract-exempt: pre-write validation of the signed EPG entry
+                    if fresh_epg != action.get("epg_entry"):
+                        return "Backend target drift detected; request a new mutation-free preview."
+
             # contract-exempt: composes per-channel reads + an epg-domain read
             # (/api/epg/data/{id}) + a logo create + a channel PATCH — a
             # multi-call/cross-domain flow that doesn't reduce to one Endpoint.
-            for cid in channel_ids:
+            for action in actions or ({"channel_id": cid} for cid in channel_ids):
                 try:
-                    channel = await client.get(f"/api/channels/{cid}")  # contract-exempt: see above
+                    cid = action["channel_id"]
+                    channel = action.get("channel") or await client.get(f"/api/channels/{cid}")  # contract-exempt: see above
                     epg_data_id = channel.get("epg_data_id")
                     if not epg_data_id:
                         skipped_no_epg += 1
                         continue
 
-                    epg_entry = await client.get(f"/api/epg/data/{epg_data_id}")  # contract-exempt: part of set_logo_from_epg cross-domain flow (no MCP tool hits /api/epg/data directly)
-                    icon_url = epg_entry.get("icon_url") or epg_entry.get("icon")
+                    epg_entry = action.get("epg_entry") or await client.get(f"/api/epg/data/{epg_data_id}")  # contract-exempt: part of set_logo_from_epg cross-domain flow (no MCP tool hits /api/epg/data directly)
+                    icon_url = action.get("icon_url") or epg_entry.get("icon_url") or epg_entry.get("icon")
                     if not icon_url:
                         skipped_no_icon += 1
                         continue

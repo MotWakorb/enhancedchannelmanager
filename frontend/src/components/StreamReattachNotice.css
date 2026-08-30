@@ -1,0 +1,99 @@
+/**
+ * StreamReattachNotice styles (bead d0bd3).
+ *
+ * Uses common.css for: .material-icons (icon glyphs).
+ *
+ * Two severities in one panel, both from the semantic theme tokens in index.css
+ * so dark/light/high-contrast stay legible. The default is the WARNING treatment
+ * shared with CredentialReentryNotice — a channel holding a leftover placeholder
+ * still plays, so it is an action item, not a failure. `.stream-reattach-dead`
+ * escalates to the ERROR treatment LogoMissBanner uses, because a channel with
+ * no playable stream is the one condition that makes a restored instance
+ * useless. Meaning is carried by the icon and the copy, never by colour alone
+ * (WCAG 1.4.1).
+ */
+
+.stream-reattach-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  border-radius: var(--radius-md);
+  background-color: var(--warning-bg);
+  border: 1px solid var(--warning);
+  border-left: 4px solid var(--warning);
+}
+
+.stream-reattach-notice.stream-reattach-dead {
+  background-color: var(--error-bg);
+  border-color: var(--error);
+}
+
+.stream-reattach-icon {
+  color: var(--warning-text);
+  font-size: 1.625rem;
+  line-height: 1.3;
+  flex-shrink: 0;
+}
+
+.stream-reattach-dead .stream-reattach-icon {
+  color: var(--danger-text);
+}
+
+.stream-reattach-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.stream-reattach-title {
+  color: var(--warning-text);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.stream-reattach-dead .stream-reattach-title {
+  color: var(--danger-text);
+}
+
+/* The second population's heading when both are present: same weight, one step
+   down in size, so the dead channels keep the panel's headline. */
+.stream-reattach-subtitle {
+  margin-top: 0.375rem;
+  color: var(--warning-text);
+  font-weight: 700;
+  font-size: 0.9375rem;
+}
+
+.stream-reattach-detail {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.stream-reattach-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  max-height: 12rem;
+  overflow-y: auto;
+  list-style: disc;
+}
+
+.stream-reattach-row {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.4;
+}
+
+.stream-reattach-channel {
+  font-weight: 600;
+}
+
+.stream-reattach-id {
+  margin-left: 0.375rem;
+  color: var(--text-tertiary, var(--text-secondary));
+  font-size: 0.8125rem;
+}

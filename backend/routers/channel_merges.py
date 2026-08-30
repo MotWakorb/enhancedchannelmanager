@@ -85,7 +85,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import List, Literal, Optional
+from typing import List, Literal, NamedTuple, Optional
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -99,6 +99,10 @@ from database import get_session
 from dispatcharr_client import get_client
 from models import PendingMerge, PendingMergeJournal
 from observability import get_metric
+# The ONE journal writer, which CHECKS both of `journal`'s return values (bead
+# …-kz089 fix round 5, reused here for …-i5ic0). No import cycle —
+# `routers.channels` does not import this module.
+from routers.channels import flush_journal_rows_on_exit, write_journal_rows
 from services.dedup_matcher import CONFIDENCE_FLOOR, find_candidate, MatchResult
 from services.m3u_dedup_hook import enqueue_pending_merge
 
@@ -198,6 +202,13 @@ class PendingMergeRecord(BaseModel):
     resolved_at: Optional[int] = None
     resolution_source: Optional[str] = None
     trigger_context: str
+    #: Why the LAST accept on this row could not be applied to Dispatcharr, in
+    #: operator-actionable prose; ``None`` when no accept has failed to apply.
+    #: A row with ``status='pending'`` AND this set is a merge the operator
+    #: accepted that ECM could not carry out — it stays in the queue, flagged,
+    #: and retrying it is an ordinary accept (bead
+    #: ``enhancedchannelmanager-i5ic0``, PO decision 2026-08-16).
+    unapplied_reason: Optional[str] = None
 
 
 class PendingMergesListResponse(BaseModel):
@@ -223,6 +234,127 @@ class PendingMergesSnapshotResponse(BaseModel):
     total: int
 
 
+class StreamLookup(NamedTuple):
+    """What a stream-name resolution actually established.
+
+    ``matches`` empty means three different things and the caller must be able
+    to tell them apart, because two of them are statements about ECM and one is
+    a statement about the operator's data (bead
+    ``enhancedchannelmanager-i5ic0``):
+
+    * ``failed`` — the lookup itself did not complete. NO evidence either way
+      about whether the stream exists. Reported as "no match", an upstream
+      outage became an accusation against the operator's catalogue.
+    * ``truncated`` — the search filled its single page, so an exact match may
+      exist on a page nobody asked for. Also not evidence of absence.
+    * neither — the search completed, saw everything it asked for, and nothing
+      matched. This is the only one that means "that stream is not there".
+
+    Completeness cuts BOTH ways, which is what round 1 got wrong. ``failed`` and
+    ``truncated`` were consulted on the no-match path and nowhere else, so one
+    usable exact match on a full page went straight to the PATCH: the 500th
+    result is not the last result, and the match chosen may be one of several
+    duplicates spread across pages nobody asked for. Reading ``matches`` to
+    decide what to PATCH is therefore not something a caller may do —
+    :meth:`conclusive_match` is the only door, and it is shut whenever the
+    search did not see everything it asked about. ``matches`` remains readable
+    for REPORTING (:func:`_unapplied_reason` says how many were visible), which
+    is a different question from what the lookup established.
+    """
+
+    matches: list[dict]
+    truncated: bool
+    failed: bool
+
+    @property
+    def complete(self) -> bool:
+        """Whether this search saw everything it asked about.
+
+        A lookup that did not complete, and one that filled its single page,
+        are the same fact for every decision built on it: what is in
+        ``matches`` may not be all there is.
+        """
+        return not self.failed and not self.truncated
+
+    def conclusive_match(self) -> Optional[dict]:
+        """The one stream this lookup ESTABLISHED, or ``None``.
+
+        The single decision point for "is there a stream to add". ``None`` means
+        the merge must not be applied — for any of the four reasons
+        :func:`_unapplied_reason` puts into words — and a caller cannot reach a
+        stream id without going through it. Uniqueness is only knowable when the
+        search was complete, so an incomplete search answers ``None`` however
+        promising its visible page looks.
+        """
+        if not self.complete:
+            return None
+        if len(self.matches) != 1:
+            return None
+        if self.matches[0].get("id") is None:
+            return None
+        return self.matches[0]
+
+
+def _unapplied_reason(lookup: StreamLookup, stream_name: str) -> Optional[str]:
+    """Why the Dispatcharr-side merge did not happen, in words, or ``None``.
+
+    Every branch names the stream, because the operator's next action is to go
+    and look for it. ``None`` means the merge applied and there is nothing to
+    report — the flag has to be able to read clean or it carries no information.
+    """
+    if lookup.failed:
+        return (
+            f"The Dispatcharr stream lookup for \"{stream_name}\" could not be "
+            "completed, so this merge was recorded but NOT applied upstream. "
+            "The stream may well exist. Retry once Dispatcharr is reachable, or "
+            "add the stream to the channel by hand."
+        )
+    if lookup.truncated:
+        # BEFORE the several-matches branch, because truncation is the stronger
+        # statement: it says ECM does not know how many there are, and that is
+        # true whether the visible page held none, one or several. Round 1 put
+        # this last and worded it "without an exact match", which is false in
+        # the case that matters most — one visible match, uniqueness unknown —
+        # and an operator told there is no match stops looking for a duplicate.
+        visible = len(lookup.matches)
+        seen = (
+            f"{visible} stream(s) on that page are named exactly "
+            f"\"{stream_name}\""
+            if visible
+            else f"nothing on that page is named exactly \"{stream_name}\""
+        )
+        return (
+            f"The search for \"{stream_name}\" filled its single page of "
+            f"{STREAM_LOOKUP_PAGE_SIZE} results, so ECM never saw the whole "
+            f"catalogue — {seen}, and further matches may exist on a page it "
+            "did not ask for. This merge was recorded but NOT applied "
+            "upstream, because adding one of several possible streams is not "
+            "the merge you asked for. Narrow the stream's name or add it to "
+            "the channel by hand."
+        )
+    if len(lookup.matches) > 1:
+        return (
+            f"{len(lookup.matches)} Dispatcharr streams are named "
+            f"\"{stream_name}\", so this merge was recorded but NOT applied "
+            "upstream — ECM cannot tell which one you meant. Add the right "
+            "stream to the channel by hand, or rename the duplicates."
+        )
+    if len(lookup.matches) == 1:
+        # Complete, unambiguous, and still not usable: the one match carries no
+        # id. Round 1 folded this into the no-match branch, which then accused
+        # the operator's catalogue of a gap that is really ECM's.
+        return (
+            f"The Dispatcharr stream named \"{stream_name}\" was found but "
+            "carries no usable id, so this merge was recorded but NOT applied "
+            "upstream. Add the stream to the channel by hand."
+        )
+    return (
+        f"No Dispatcharr stream is named \"{stream_name}\", so this merge was "
+        "recorded but NOT applied upstream. The stream may have been renamed or "
+        "removed since it was queued."
+    )
+
+
 class AcceptOutcome(BaseModel):
     """Flat-outcome response for POST /api/channel-merges/{id}/accept.
 
@@ -238,13 +370,59 @@ class AcceptOutcome(BaseModel):
     ``confidence`` is the RapidFuzz score captured at queue-time, mirrored
     here so the operator's UI / MCP client sees what the decision was
     made against without a second round-trip to the journal.
+
+    ``status`` describes the QUEUE ROW, and it is no longer always terminal
+    (PO decision 2026-08-16). ``'merged'`` when the merge was applied upstream
+    and the row left the queue; ``'pending'`` when ECM could not apply it, in
+    which case the row STAYS in the queue carrying ``unapplied_reason``, stays
+    counted by the queue badge, and stays retryable — a later accept on that
+    row is a real accept, not an idempotent replay. A consumer that hardcoded
+    ``'merged'`` is reading a claim this response no longer makes.
+
+    Whether DISPATCHARR was updated is a separate fact and used to be
+    unanswerable from this response — the queue row went terminal, the audit
+    row was written and the caller got a ``200`` whether the stream had been
+    added upstream or the name had matched nothing at all (bead
+    ``enhancedchannelmanager-i5ic0``). Three fields carry that fact now:
+
+    ``dispatcharr_updated``
+        ``True`` when the candidate channel ends this request holding the
+        stream — whether this call PATCHed it or it was already there. ``False``
+        when it does not, which includes every lookup whose COMPLETENESS is
+        unknown: a truncated page cannot establish uniqueness even when exactly
+        one exact match is visible on it, so it is not conclusive in either
+        direction (:meth:`StreamLookup.conclusive_match`). ``None`` on an
+        idempotent replay, which performed no Dispatcharr call and therefore has
+        no evidence about what the original one did; guessing ``True`` there
+        would be the same false claim one branch over.
+
+        Three values, so a consumer that tests ``!= False`` has two of them
+        collapsed. Each has its own path in ``PendingMergesPage``. They map
+        one-to-one onto the queue state rather than duplicating it:
+        ``True`` -> ``status='merged'``, ``pending_merges.unapplied_reason``
+        clear; ``False`` -> ``status='pending'``, that column set; ``None`` ->
+        a replay, which only an ALREADY-terminal row can produce. A row
+        deliberately still queued can therefore never answer ``None``, which is
+        what keeps "this request obtained no upstream evidence" and "still
+        queued on purpose" from collapsing into one value.
+    ``unapplied_reason``
+        Operator-actionable prose for anything other than a clean apply, naming
+        the stream and WHY it could not be resolved. ``None`` when applied. The
+        same text is persisted on the queue row, so the operator sees it on the
+        row itself rather than only in this response.
+    ``journal_rows_unwritten``
+        Rows of the operator-facing journal this request could not write.
+        Always present, so a caller checks a number rather than probing.
     """
 
     merged_into_channel_id: str
     journal_entry_id: int
     source_stream_id: str
     confidence: float
-    status: Literal["merged"] = "merged"
+    status: Literal["merged", "pending"] = "merged"
+    dispatcharr_updated: Optional[bool] = True
+    unapplied_reason: Optional[str] = None
+    journal_rows_unwritten: int = 0
 
 
 class DismissOutcome(BaseModel):
@@ -352,6 +530,7 @@ def _record_to_dict(row: PendingMerge) -> dict:
         "resolved_at": row.resolved_at,
         "resolution_source": row.resolution_source,
         "trigger_context": row.trigger_context,
+        "unapplied_reason": row.unapplied_reason,
     }
 
 
@@ -525,8 +704,24 @@ def _bump_metric(status: str) -> None:
     business failure. A failed emit logs at DEBUG and continues.
 
     The ``status`` argument is the BD-M contract label
-    (``success`` | ``error`` | ``dismissed``); ``cancelled`` is
-    reserved for the modal surface and never emitted from this router.
+    (``success`` | ``error`` | ``dismissed`` | ``unapplied``);
+    ``cancelled`` is reserved for the modal surface and never emitted from
+    this router.
+
+    ``unapplied`` was added with the PO decision of 2026-08-16 (bead
+    ``enhancedchannelmanager-i5ic0``) and is REQUIRED by SLI-10b's own
+    definition rather than being an extra dimension. ``docs/sre/slos.md``
+    defines that SLI's numerator as "terminal-state transitions out of the
+    queue", and an accept ECM could not apply now makes no such transition:
+    its row stays ``pending``, flagged. Counting it as ``success`` would have
+    reported the queue being cleared while flagged rows accumulated in it, and
+    would have suppressed ``ECMDedupPendingMergeResolutionStale``, the one
+    alert that exists to notice that. Dropping the emit entirely was the other
+    option and is worse: the request happened, and not counting it shrinks
+    SLI-10c's error-rate DENOMINATOR instead. Additive for every existing
+    query — ``{status="error"}`` and ``{status=~"success|dismissed"}`` keep
+    working and become more accurate. ``docs/sre/slos.md`` and
+    ``docs/runbooks/dedup-*.md`` enumerate the label values and need amending.
     """
     try:
         get_metric("dedup_merge_requests_total").labels(status=status).inc()
@@ -1021,6 +1216,17 @@ async def accept_pending_merge(
             journal_entry_id=journal_id,
             source_stream_id=source_stream_id,
             confidence=row.confidence,
+            # NOT `True`. This request made no Dispatcharr call, so it has no
+            # evidence about what the original one did, and asserting an
+            # outcome it did not observe is the same false success claim bead
+            # …-i5ic0 is about — one branch over (see `AcceptOutcome`).
+            dispatcharr_updated=None,
+            unapplied_reason=(
+                "This merge was already resolved by an earlier request, which "
+                "this one replayed without contacting Dispatcharr. Whether "
+                "Dispatcharr was updated is recorded in the journal against "
+                f"channel {row.candidate_channel_id}, not here."
+            ),
         )
 
     if row.status == "dismissed":
@@ -1086,95 +1292,290 @@ async def accept_pending_merge(
     # in pending_merges) means we search; ambiguity is a WARN, not an
     # abort — the audit-first contract still records the decision.
     source_stream_identifier = row.stream_name  # used by the journal if unresolved
+    # What actually happened upstream, decided here and reported verbatim
+    # rather than assumed from the fact that the request did not raise (bead
+    # …-i5ic0). `patched` is narrower than `dispatcharr_updated`: a stream
+    # already on the channel means the merge IS applied and no row is owed.
+    dispatcharr_updated = False
+    unapplied_reason: Optional[str] = None
+    patched = False
+    resolved_stream_id: Optional[int] = None
+    channel_name = channel.get("name") or f"Channel {row.candidate_channel_id}"
+
+    # The operator-facing journal, which is where the user guide tells an
+    # operator to trace a channel's history — and the only place a merge that
+    # was NOT applied upstream becomes findable afterwards. The
+    # `pending_merge_journal` row below records the DECISION (ADR-008 §D6);
+    # these record the OUTCOME, which is a different fact and was recorded
+    # nowhere (bead …-i5ic0).
+    #
+    # Queued the moment the write they describe lands, and flushed on every
+    # exit through the `finally` at the bottom. Round 1 CONSTRUCTED them after
+    # `db.commit()` returned, so a commit that failed after a landed PATCH left
+    # the stream attached upstream with no row even attempted — and a retry
+    # then reads as "already in the desired state", concealing which request
+    # performed the mutation. Same shape as the immediate group-delete path in
+    # `routers/channel_groups.py`: a pending list, an idempotent drain-then-
+    # write flush, and a `try/finally`.
+    outcome_rows: list[dict] = []
+    # Set by the `except BaseException` below, read by the `finally`: a flush
+    # that raises must never REPLACE an exception already on its way out.
+    unwinding = False
+
+    def flush_outcome_rows() -> int:
+        """Write what is queued and return how many could NOT be written.
+
+        Idempotent by construction — the queue is emptied before the write, so
+        the ``finally`` cannot write a row the success path already wrote.
+        """
+        if not outcome_rows:
+            return 0
+        draining = list(outcome_rows)
+        outcome_rows.clear()
+        return write_journal_rows(draining, log_tag="DEDUP")
+
     try:
-        matched_streams = await _resolve_streams_by_name(client, row.stream_name)
-        if len(matched_streams) == 1:
-            stream = matched_streams[0]
-            stream_id = stream.get("id")
-            if stream_id is not None:
-                source_stream_identifier = str(stream_id)
-                await _add_stream_to_channel(
+        try:
+            lookup = await _resolve_streams_by_name(client, row.stream_name)
+        except Exception as e:  # noqa: BLE001 — any Dispatcharr failure is SLI-10c
+            _bump_metric("error")
+            logger.exception(
+                "[DEDUP] accept failed during stream resolution "
+                "(pending_merges.id=%s): %s", row.id, e,
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Dispatcharr API error during merge",
+            )
+
+        # THE single decision point. `conclusive_match` is shut whenever the
+        # search did not see everything it asked about, so a truncated or
+        # failed lookup cannot reach the PATCH however promising its visible
+        # page looks — the fix that generalises past the branch that read
+        # `matches[0]["id"]` directly.
+        match = lookup.conclusive_match()
+        if match is not None:
+            resolved_stream_id = match["id"]
+            source_stream_identifier = str(resolved_stream_id)
+        else:
+            # Zero matches, several matches, a match with no usable id, a
+            # truncated page, a failed lookup — five ways to reach here and one
+            # sentence for each.
+            unapplied_reason = _unapplied_reason(lookup, row.stream_name)
+            logger.warning(
+                "[DEDUP] accept: pending_merges.id=%s recorded WITHOUT a "
+                "Dispatcharr-side update: %s", row.id, unapplied_reason,
+            )
+
+        # ----- DB state transition + audit row -----------------------------
+        # Both writes happen in one commit so a crash between them cannot
+        # leave the queue in a half-resolved state.
+        #
+        # ATTEMPTED BEFORE THE PATCH, on purpose. `_write_journal` flushes, so
+        # a read-only, full or locked database fails HERE — before anything
+        # irreversible has happened upstream — and the 500 that follows is then
+        # true in both directions: nothing was recorded and nothing was
+        # written. Round 1 PATCHed first, so the ordinary local-persistence
+        # failure returned a 500 for a request that had already mutated
+        # Dispatcharr. The commit itself is still after the PATCH, because the
+        # queue row must not go terminal for a merge Dispatcharr rejected; that
+        # residual window is what the queued `stream_add` row below covers.
+        #
+        # A MERGE ECM COULD NOT APPLY DOES NOT TRANSITION AT ALL (PO decision
+        # 2026-08-16, bead …-i5ic0). The previous shape flipped the row to
+        # `merged` and let it leave the queue carrying its reason — internally
+        # consistent, but the reason then outlived the row where only an
+        # operator who went looking in the journal would ever find it. The row
+        # now stays `pending` with `unapplied_reason` set: still in the list,
+        # still counted by the badge, still holding its §D5 uniqueness slot,
+        # and still retryable. `resolved_at` / `resolution_source` describe a
+        # row that LEFT the queue, so they stay NULL. The operator's DECISION
+        # is still recorded — that is the `merge_confirmed` audit row below,
+        # and §D6's audit-first contract is what makes recording it right even
+        # when ECM cannot act on it.
+        now_ms = _now_epoch_ms()
+        if unapplied_reason is None:
+            row.status = "merged"
+            row.resolved_at = now_ms
+            row.resolution_source = "operator"
+            # Cleared on the way out, so a retry that resolves leaves no stale
+            # reason behind and reads exactly like a first-time accept.
+            row.unapplied_reason = None
+        else:
+            row.unapplied_reason = unapplied_reason
+
+        try:
+            entry = _write_journal(
+                db=db,
+                pending_merge_id=row.id,
+                actor_token_id=_actor_token_id(user),
+                action_type="merge_confirmed",
+                source_channel_id=source_stream_identifier,
+                target_channel_id=row.candidate_channel_id,
+                confidence_score=row.confidence,
+                trigger_context=row.trigger_context,
+            )
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            _bump_metric("error")
+            logger.exception(
+                "[DEDUP] accept failed while staging the audit row, BEFORE any "
+                "Dispatcharr write (pending_merges.id=%s): %s", row.id, e,
+            )
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Internal error persisting merge outcome",
+            )
+
+        if match is not None:
+            try:
+                patched = await _add_stream_to_channel(
                     client=client,
                     channel=channel,
-                    stream_id=stream_id,
+                    stream_id=resolved_stream_id,
                 )
-        elif len(matched_streams) == 0:
-            logger.warning(
-                "[DEDUP] accept: no streams in Dispatcharr matched name=%r "
-                "(pending_merges.id=%s) — recording operator decision in "
-                "audit trail without a Dispatcharr-side update",
-                row.stream_name, row.id,
+            except Exception as e:  # noqa: BLE001 — any Dispatcharr failure is SLI-10c
+                db.rollback()
+                _bump_metric("error")
+                logger.exception(
+                    "[DEDUP] accept failed during Dispatcharr merge "
+                    "(pending_merges.id=%s): %s", row.id, e,
+                )
+                raise HTTPException(
+                    status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Dispatcharr API error during merge",
+                )
+            dispatcharr_updated = True
+            if patched:
+                # QUEUED HERE — the PATCH has returned, so the stream is on the
+                # channel and that is true whatever happens next. A merge that
+                # landed by already being in the desired state gets no row:
+                # nothing changed, so there is nothing to trace.
+                outcome_rows.append({
+                    "category": "channel",
+                    "action_type": "stream_add",
+                    "entity_id": None,
+                    "entity_name": channel_name,
+                    "description": (
+                        f"Added stream '{row.stream_name}' to channel "
+                        f"'{channel_name}' from the pending-merge queue"
+                    ),
+                    "after_value": {
+                        "streams": [resolved_stream_id],
+                        "channel_id": row.candidate_channel_id,
+                        "pending_merge_id": row.id,
+                    },
+                })
+
+        try:
+            db.commit()
+        except Exception as e:  # noqa: BLE001
+            db.rollback()
+            _bump_metric("error")
+            logger.exception(
+                "[DEDUP] accept failed during commit "
+                "(pending_merges.id=%s): %s", row.id, e,
             )
-        else:
-            logger.warning(
-                "[DEDUP] accept: %d streams matched name=%r "
-                "(pending_merges.id=%s) — ambiguous; recording operator "
-                "decision in audit trail without a Dispatcharr-side update",
-                len(matched_streams), row.stream_name, row.id,
+            if dispatcharr_updated:
+                # The queue row really did roll back, so a failure response is
+                # the truth about THIS request — what it must not do is bury
+                # the upstream write. `sanitized_http_exception_handler`
+                # replaces the detail of every 500, so the log is the only
+                # place this advisory can reach a human, the same posture the
+                # immediate group-delete path takes for its landed moves.
+                logger.error(
+                    "[DEDUP] Stream %s IS attached to channel %s in Dispatcharr "
+                    "and ECM could not record it: pending_merges.id=%s stays "
+                    "pending, so a retry will find the channel already in the "
+                    "desired state and report it as applied without a PATCH",
+                    resolved_stream_id, row.candidate_channel_id, row.id,
+                )
+            raise HTTPException(
+                status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Internal error persisting merge outcome",
             )
-    except Exception as e:  # noqa: BLE001 — any Dispatcharr failure is SLI-10c
-        _bump_metric("error")
-        logger.exception(
-            "[DEDUP] accept failed during Dispatcharr merge "
-            "(pending_merges.id=%s): %s", row.id, e,
-        )
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Dispatcharr API error during merge",
+
+        # `success` is SLI-10b's numerator and means the row LEFT the queue.
+        # An accept ECM could not apply did not resolve anything, so it is
+        # counted as itself; see `_bump_metric`.
+        _bump_metric("success" if dispatcharr_updated else "unapplied")
+        # Update the companion queue-depth gauge (bd-wvr1d). Best-effort:
+        # a failed COUNT or gauge.set is logged at WARN inside the helper and
+        # never blocks the accept response — the DB commit is the source of truth.
+        try:
+            from observability import set_pending_merges_queue_depth_gauge
+            set_pending_merges_queue_depth_gauge(db)
+        except Exception:  # pragma: no cover — defensive import guard
+            logger.warning("[DEDUP] gauge update failed after accept commit")
+        logger.info(
+            "[DEDUP] accept ok: pending_merges.id=%s %s candidate=%s "
+            "journal_entry_id=%s actor=%s",
+            row.id,
+            "merged into" if dispatcharr_updated else "NOT applied to",
+            row.candidate_channel_id, entry.id, _actor_token_id(user),
         )
 
-    # ----- DB state transition + audit row ---------------------------------
-    # Both writes happen in one commit so a crash between them cannot
-    # leave the queue in a half-resolved state.
-    now_ms = _now_epoch_ms()
-    row.status = "merged"
-    row.resolved_at = now_ms
-    row.resolution_source = "operator"
+        if not dispatcharr_updated:
+            # Queued only once the decision is COMMITTED. Unlike the stream_add
+            # row this describes an ECM-side fact — "accepted, and not applied"
+            # — which is not true of a request whose transition rolled back.
+            outcome_rows.append({
+                "category": "channel",
+                "action_type": "merge_unapplied",
+                "entity_id": None,
+                "entity_name": channel_name,
+                "description": (
+                    f"Accepted the pending merge of stream '{row.stream_name}' into "
+                    f"channel '{channel_name}', but Dispatcharr was NOT updated: "
+                    f"{unapplied_reason} The merge stays in Pending Merges, "
+                    "flagged as not applied, and can be retried."
+                ),
+                "after_value": {
+                    "channel_id": row.candidate_channel_id,
+                    "pending_merge_id": row.id,
+                    "stream_name": row.stream_name,
+                    "dispatcharr_updated": False,
+                    # The queue state this outcome left behind, recorded beside
+                    # the outcome so the two cannot be read apart later.
+                    "pending_merge_status": "pending",
+                },
+            })
 
-    try:
-        entry = _write_journal(
-            db=db,
-            pending_merge_id=row.id,
-            actor_token_id=_actor_token_id(user),
-            action_type="merge_confirmed",
-            source_channel_id=source_stream_identifier,
-            target_channel_id=row.candidate_channel_id,
-            confidence_score=row.confidence,
-            trigger_context=row.trigger_context,
+        return AcceptOutcome(
+            merged_into_channel_id=row.candidate_channel_id,
+            journal_entry_id=int(entry.id),
+            source_stream_id=source_stream_identifier,
+            confidence=row.confidence,
+            # The queue row's real state, not a constant. A merge ECM could not
+            # apply is still queued.
+            status="merged" if dispatcharr_updated else "pending",
+            dispatcharr_updated=dispatcharr_updated,
+            unapplied_reason=unapplied_reason,
+            journal_rows_unwritten=flush_outcome_rows(),
         )
-        db.commit()
-    except Exception as e:  # noqa: BLE001
-        db.rollback()
-        _bump_metric("error")
-        logger.exception(
-            "[DEDUP] accept failed during journal+commit "
-            "(pending_merges.id=%s): %s", row.id, e,
+    except BaseException:
+        # Every way out that is not the return above: the 500s raised in the
+        # clauses inside, a cancellation from a client disconnect or
+        # application shutdown, a `SystemExit`. Nothing to record and no
+        # envelope to return; this clause exists only to tell the `finally`
+        # that something is already on its way out, so the flush there cannot
+        # take its place.
+        unwinding = True
+        raise
+    finally:
+        # Every exit that is NOT the return above: a 500, a cancellation from
+        # application shutdown, a `SystemExit`. `asyncio.CancelledError`
+        # inherits from `BaseException`, so none of the `except Exception`
+        # clauses saw it. Whatever landed upstream, landed. `flush_outcome_rows`
+        # has already emptied the queue on the success path, so this writes only
+        # what that path never reached, and `write_journal_rows` logs every row
+        # it has not resolved before letting a `BaseException` past.
+        flush_journal_rows_on_exit(
+            flush_outcome_rows,
+            unwinding=unwinding,
+            context=f"pending_merges.id={row.id}",
+            log_tag="DEDUP",
         )
-        raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal error persisting merge outcome",
-        )
-
-    _bump_metric("success")
-    # Update the companion queue-depth gauge (bd-wvr1d). Best-effort:
-    # a failed COUNT or gauge.set is logged at WARN inside the helper and
-    # never blocks the accept response — the DB commit is the source of truth.
-    try:
-        from observability import set_pending_merges_queue_depth_gauge
-        set_pending_merges_queue_depth_gauge(db)
-    except Exception:  # pragma: no cover — defensive import guard
-        logger.warning("[DEDUP] gauge update failed after accept commit")
-    logger.info(
-        "[DEDUP] accept ok: pending_merges.id=%s merged into "
-        "candidate=%s journal_entry_id=%s actor=%s",
-        row.id, row.candidate_channel_id, entry.id, _actor_token_id(user),
-    )
-    return AcceptOutcome(
-        merged_into_channel_id=row.candidate_channel_id,
-        journal_entry_id=int(entry.id),
-        source_stream_id=source_stream_identifier,
-        confidence=row.confidence,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -1312,8 +1713,14 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
     but it may also be on a later page; downstream audit-first
     semantics still record the operator decision.
 
-    Returns ``[]`` when nothing matches or the API call fails — the
-    caller's audit-first contract handles the empty case.
+    Returns a :class:`StreamLookup`, not a bare list. The three ways this can
+    come back empty are NOT the same fact and the caller has to tell them apart
+    (bead ``enhancedchannelmanager-i5ic0``): nothing matched, the search was
+    truncated at the page ceiling so a match may exist on a page nobody asked
+    for, or the lookup itself failed. Collapsing all three into ``[]`` is what
+    let an outage and a truncated page be reported to the operator as "no
+    streams matched that name" — a claim about their data that the search never
+    established.
     """
     try:
         response = await client.get_streams(
@@ -1324,9 +1731,9 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
     except Exception:  # noqa: BLE001 — caller decides what to do with empty results
         logger.warning(
             "[DEDUP] stream-name resolution failed for name=%r; "
-            "treating as no-match", stream_name,
+            "no evidence either way about whether the stream exists", stream_name,
         )
-        return []
+        return StreamLookup(matches=[], truncated=False, failed=True)
 
     results = response.get("results", []) if isinstance(response, dict) else []
 
@@ -1336,7 +1743,8 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
     # trace. The exact-name filter below still selects the intended
     # stream if it is in this page, but operators should know when the
     # response was truncated.
-    if len(results) >= STREAM_LOOKUP_PAGE_SIZE:
+    truncated = len(results) >= STREAM_LOOKUP_PAGE_SIZE
+    if truncated:
         logger.warning(
             "[DEDUP] Stream-name lookup hit page_size ceiling (%d) for "
             "stream=%r; exact match may be in untested pages",
@@ -1345,10 +1753,14 @@ async def _resolve_streams_by_name(client, stream_name: str) -> list[dict]:
 
     # Exact-name filter — case-insensitive to match operator expectation.
     needle = stream_name.lower()
-    return [s for s in results if str(s.get("name", "")).lower() == needle]
+    return StreamLookup(
+        matches=[s for s in results if str(s.get("name", "")).lower() == needle],
+        truncated=truncated,
+        failed=False,
+    )
 
 
-async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> None:
+async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> bool:
     """Add ``stream_id`` to ``channel``'s stream list via Dispatcharr.
 
     Mirrors the proven pattern in ``backend/routers/channels.py``
@@ -1356,6 +1768,11 @@ async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> None:
     (``_add_stream_to_channel``). No-op if the stream is already
     present — Dispatcharr would silently dedup the list, but skipping
     the PATCH saves an HTTP round-trip.
+
+    Returns whether a PATCH was actually sent. The caller needs the difference
+    for the JOURNAL, not for the outcome: either way the channel ends holding
+    the stream, so the merge IS applied, but only one of the two is a mutation
+    worth a row (bead ``enhancedchannelmanager-i5ic0``).
     """
     current_streams = channel.get("streams", [])
     # The streams collection in Dispatcharr's channel payload can be
@@ -1367,10 +1784,11 @@ async def _add_stream_to_channel(client, channel: dict, stream_id: int) -> None:
             "[DEDUP] stream %s already present in channel %s — skipping PATCH",
             stream_id, channel.get("id"),
         )
-        return
+        return False
     new_streams = list(normalized) + [stream_id]
     await client.update_channel(channel["id"], {"streams": new_streams})
     logger.info(
         "[DEDUP] added stream %s to channel %s as part of pending-merge accept",
         stream_id, channel.get("id"),
     )
+    return True

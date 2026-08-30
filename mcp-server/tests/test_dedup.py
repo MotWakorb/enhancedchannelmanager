@@ -205,8 +205,12 @@ class TestAcceptChannelMerge:
         assert data["journal_entry_id"] == 99
         assert data["source_stream_id"] == "stream-xyz"
         assert data["confidence"] == 0.92
-        # Tool injects status='merged' when backend omits it.
-        assert data["status"] == "merged"
+        # The tool no longer INVENTS status='merged' when the backend omits it
+        # (bead enhancedchannelmanager-i5ic0, PO decision 2026-08-16). Since a
+        # merge ECM could not apply stays 'pending' in the queue, a fabricated
+        # default would relabel exactly that outcome as terminal. The backend's
+        # AcceptOutcome always carries the field; absent means absent.
+        assert "status" not in data
 
     @pytest.mark.asyncio
     async def test_404_returns_target_not_found_envelope(self):

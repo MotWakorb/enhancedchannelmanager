@@ -3,14 +3,14 @@
 > Per-release manual verification that the MCP static-key connection works
 > end-to-end. Walk this before tagging any release that includes MCP changes.
 
-- **Severity**: Release gate (blocking — do not tag until all steps pass)
+- **Severity**: Release gate (blocking: do not tag until all steps pass)
 - **Owner**: Releaser (Project Engineer, with PO authorization to cut)
 - **Last reviewed**: 2026-05-21
 - **Related beads**: `enhancedchannelmanager-9axgc` (retired the MCP OAuth offering)
 
 > **Note (bd-9axgc, bd-jir0m):** the MCP OAuth 2.1 "Custom Connector" offering was
 > retired and its code removed from the tree in v0.17.3. The supported MCP
-> authentication method is the static `?api_key=` path. The OAuth-flow /
+> authentication method is the static Bearer-header path. The OAuth-flow /
 > token-refresh / discovery verification steps were removed from this checklist
 > (see [ADR-009 (Superseded)](../adr/ADR-009-mcp-oauth-authorization-server-split.md)).
 
@@ -44,14 +44,14 @@ curl -s http://YOUR_ECM_HOST:6101/health | python3 -m json.tool
 # Expected: {"status": "ok", "api_key_configured": true, ...}
 ```
 
-No HTTPS reverse proxy is required — the static `?api_key=` path runs over plain
-HTTP on your private network.
+Run the local check from the Docker host over loopback. Remote checks use the
+documented HTTPS reverse proxy and remote overlay.
 
 ---
 
 ## Step 1: Static API Key Path
 
-**What this verifies**: the supported `?api_key=` connection works end-to-end —
+**What this verifies**: the supported Bearer-header connection works end-to-end:
 the MCP Resource Server accepts the static key and dispatches a tool listing.
 
 **Requires**: `mcp_api_key` configured in ECM Settings → MCP Integration.
@@ -59,9 +59,12 @@ the MCP Resource Server accepts the static key and dispatches a tool listing.
 1. Retrieve your MCP API key from ECM Settings → MCP Integration (or from
    `settings.json`).
 
-2. Make a direct curl request using the static key:
+2. Read the key without echo and stream curl's header configuration over stdin,
+   keeping the credential out of shell history and process arguments:
    ```bash
-   curl -s "http://YOUR_ECM_HOST:6101/mcp?api_key=YOUR_MCP_API_KEY" \
+   read -rsp 'MCP API key: ' MCP_KEY; echo
+   printf 'header = "Authorization: Bearer %s"\n' "$MCP_KEY" | \
+   curl --config - -s "http://localhost:6101/mcp" \
      -H "Content-Type: application/json" \
      -H "Accept: application/json, text/event-stream" \
      -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' \
@@ -72,7 +75,8 @@ the MCP Resource Server accepts the static key and dispatches a tool listing.
 
 **Pass criteria**:
 - [ ] Static key request returns 200 with a tools list
-- [ ] `?api_key=` variant works (also try `Authorization: Bearer <static-key>`)
+- [ ] A valid `Authorization: Bearer <static-key>` request works
+- [ ] `?api_key=<static-key>` is rejected and the key is absent from logs
 - [ ] A wrong key returns 401: replace the key with `wrong-key` and confirm 401
 
 ---
@@ -122,9 +126,9 @@ When all steps pass, record sign-off in the release PR description:
 
 ```
 ### MCP Release Verification (docs/runbooks/mcp-release-verification.md)
-- [x] Step 1: Static API key path — ?api_key= returns 200 with tools list
-- [x] Step 2: Tool call via Claude — list_channel_groups returned data
-- [x] Step 3: Settings panel smoke check — status, key, instructions correct
+- [x] Step 1 (Static API key path): Bearer header returns 200; query credential rejected
+- [x] Step 2 (Tool call via Claude): list_channel_groups returned data
+- [x] Step 3 (Settings panel smoke check): status, key, instructions correct
 Verified by: [your name], [date], on ECM vX.Y.Z-NNNN against [environment description]
 ```
 
@@ -132,6 +136,6 @@ Verified by: [your name], [date], on ECM vX.Y.Z-NNNN against [environment descri
 
 ## References
 
-- `docs/user_guide/integrations/mcp.md` — operator connection reference (mcp-remote + Claude Code)
-- `docs/adr/ADR-009-mcp-oauth-authorization-server-split.md` (Superseded) — history of the retired OAuth offering
-- `docs/shipping.md` — full release cut procedure (this checklist is linked from there)
+- `docs/user_guide/integrations/mcp.md`: operator connection reference (mcp-remote + Claude Code)
+- `docs/adr/ADR-009-mcp-oauth-authorization-server-split.md` (Superseded): history of the retired OAuth offering
+- `docs/shipping.md`: full release cut procedure (this checklist is linked from there)

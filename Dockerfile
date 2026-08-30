@@ -1,8 +1,8 @@
 # Build frontend
-FROM node:20-alpine AS frontend-builder
+FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb8363f609372293 AS frontend-builder
 WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN npm install
+RUN npm ci
 
 # Cache busting - invalidate cache when git commit changes
 ARG GIT_COMMIT=unknown
@@ -13,9 +13,9 @@ RUN npm run build
 
 # Build Python dependencies in a separate stage to reduce peak memory
 # ARM64 needs build tools + Rust for packages like cryptography
-FROM python:3.12-slim AS python-builder
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS python-builder
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:latest@sha256:e85be844203885286c60ffad8a858d48afb6c5a5c237ca0e67f12e74b8f174b1 /uv /usr/local/bin/uv
 
 # Install build tools in their own layer (cached separately from pip install)
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,7 +32,7 @@ RUN uv venv /opt/venv \
     && uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt
 
 # Production image
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
 
 # Build args - MUST be declared early in the stage to receive build arg
 ARG GIT_COMMIT=unknown
@@ -82,6 +82,12 @@ ENV ECM_HTTPS_PORT=6143
 EXPOSE 6100 6143
 
 # Add healthcheck (respects runtime ECM_PORT).
+# The interpreter is the absolute venv path, not a bare `python` resolved
+# through PATH (bead enhancedchannelmanager-0oi96): a runtime PATH override
+# would otherwise silently move the healthcheck onto the system interpreter.
+# urllib is stdlib, so this happens to survive that today — pinning it keeps
+# the healthcheck honest if it ever grows a dependency, and keeps every
+# interpreter invocation in the image consistent.
 # Long-running installs may hit slow first-run migrations against bloated
 # SQLite WAL files. WAL checkpoint at startup (bd-ej995) addresses the
 # common case; this start-period absorbs the edge case where a particularly
@@ -89,7 +95,7 @@ EXPOSE 6100 6143
 # with consistent fast startups can lower this; the default favors safety
 # over startup time.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
-  CMD python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
+  CMD /opt/venv/bin/python -c "import urllib.request, os; port = os.environ.get('ECM_PORT', '6100'); urllib.request.urlopen(f'http://localhost:{port}/api/health')" || exit 1
 
 # Entrypoint sets UID/GID from PUID/PGID, fixes permissions, then drops to non-root via gosu
 ENTRYPOINT ["/app/entrypoint.sh"]

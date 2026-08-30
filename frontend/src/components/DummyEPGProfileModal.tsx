@@ -10,6 +10,7 @@ import type {
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { SubstitutionPairsEditor } from './SubstitutionPairsEditor';
 import { PatternBuilder } from './patternBuilder';
 import { VariantTabs } from './patternBuilder/VariantTabs';
@@ -125,6 +126,7 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
   onSave,
   importData,
 }: DummyEPGProfileModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   // Basic Info
   const [name, setName] = useState('');
   const [enabled, setEnabled] = useState(true);
@@ -506,10 +508,10 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-xl dummy-epg-profile-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-xl dummy-epg-profile-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>{profile ? 'Edit Profile' : importData ? 'Import Dummy EPG Profile' : 'New Dummy EPG Profile'}</h2>
+          <h2 id={titleId}>{profile ? 'Edit Profile' : importData ? 'Import Dummy EPG Profile' : 'New Dummy EPG Profile'}</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
@@ -1158,7 +1160,7 @@ export const DummyEPGProfileModal = memo(function DummyEPGProfileModal({
                 onChange={(e) => setBatchInput(e.target.value)}
                 placeholder={"ESPN+ 17 : Ohio vs Notre Dame @ Feb 20 8:00PM ET\nPPV: UFC 300 Main Card\nNFL 12 : Cowboys VS Eagles @ Oct 17 1:00PM"}
                 rows={4}
-                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: '0.8rem' }}
+                style={{ fontFamily: "'JetBrains Mono', 'Fira Code', monospace", fontSize: 'var(--type-body-size)' }}
               />
             </div>
 

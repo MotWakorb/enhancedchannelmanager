@@ -54,17 +54,19 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .action-editor .reorder-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Order Number Input */
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .action-editor .order-number-input {
   width: 36px;
   height: 28px;
   padding: 2px 4px;
   text-align: center;
-  font-size: 13px;
+  font-size: var(--type-body-size);
   font-weight: 600;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
@@ -98,6 +100,7 @@
   position: relative;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .action-type-button {
   display: flex;
   align-items: center;
@@ -108,7 +111,7 @@
   border-radius: var(--radius-lg);
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
   font-weight: 500;
   width: 100%;
   justify-content: space-between;
@@ -142,13 +145,14 @@
   padding: 4px 0;
 }
 
+/* Micro role — the tracked uppercase label idiom. 11px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .action-category-label {
   padding: 10px 14px 6px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
   color: var(--text-muted);
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .action-type-option {
@@ -175,14 +179,19 @@
   color: var(--bg-primary);
 }
 
+/* Label role. 14px -> 13px. */
 .action-option-label {
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .action-option-desc {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin-top: 2px;
 }
@@ -192,8 +201,11 @@
   padding: 8px 0;
 }
 
+/* Meta role. 13px -> 11px. */
 .action-hint {
-  font-size: 13px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   font-style: italic;
 }
@@ -205,19 +217,22 @@
   gap: 6px;
 }
 
+/* Label role. 13px -> 13px. */
 .action-field label {
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .action-input {
   padding: 10px 12px;
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--type-body-size);
 }
 
 .action-input:focus {
@@ -234,13 +249,14 @@
   border-color: var(--error-color, #dc3545);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .action-select {
   padding: 10px 12px;
   background: var(--input-bg);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--type-body-size);
   cursor: pointer;
 }
 
@@ -282,8 +298,9 @@
   color: var(--text-primary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .show-variables-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Variables Dropdown */
@@ -295,8 +312,11 @@
   border-radius: var(--radius-lg);
 }
 
+/* Meta role. 12px -> 11px. */
 .variables-hint {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   margin-bottom: 8px;
 }
@@ -318,14 +338,20 @@
   background: var(--bg-secondary);
 }
 
+/* Item-title role. 13px -> 13px. */
 .variable-name {
   font-family: monospace;
-  font-size: 13px;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--accent-primary);
 }
 
+/* Meta role. 12px -> 11px. */
 .variable-desc {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
 }
 
@@ -340,13 +366,19 @@
   border-radius: var(--radius-md);
 }
 
+/* Label role. 12px -> 13px. */
 .preview-label {
-  font-size: 12px;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-muted);
 }
 
+/* Body role. 13px -> 13px. */
 .preview-text {
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
   font-family: monospace;
 }
@@ -370,13 +402,14 @@
   max-width: 160px;
 }
 
-/* Field Hint */
-.field-hint {
-  font-size: 11px;
-  color: var(--text-muted);
-}
+/* `.field-hint` is owned by shared/common.css § 26 FIELD MESSAGES. Four
+   files declared it bare and two declared `.field-error` bare, across three
+   different chunks and at three different sizes — so the hint under a form
+   field changed size depending on which page had been opened first
+   (bead enhancedchannelmanager-6z299). */
 
 /* Warning */
+/* Body role. 13px -> 13px. */
 .action-warning {
   display: flex;
   align-items: center;
@@ -385,17 +418,23 @@
   background: rgba(255, 193, 7, 0.1);
   border: 1px solid rgba(255, 193, 7, 0.3);
   border-radius: var(--radius-lg);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--warning-color, #ffc107);
 }
 
+/* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .action-warning .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
 /* Error Message */
+/* Meta role. 12px -> 11px. */
 .action-error {
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--error-color, #dc3545);
 }
 
@@ -425,8 +464,9 @@
   color: var(--error-color, #dc3545);
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .action-remove-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Name Transform Section */
@@ -440,11 +480,12 @@
   border-radius: var(--radius-lg);
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .transform-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--type-body-size);
   color: var(--text-secondary);
   cursor: pointer;
 }
@@ -460,9 +501,10 @@
   padding-top: 4px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 13px -> 13px. */
 .action-input.mono {
   font-family: monospace;
-  font-size: 13px;
+  font-size: var(--type-body-size);
 }
 
 /* Variable Config Section */
@@ -472,9 +514,12 @@
   gap: 12px;
 }
 
+/* Meta role. 12px -> 11px. */
 .variable-config-section code {
   font-family: monospace;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   padding: 1px 4px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border-primary);
@@ -482,15 +527,9 @@
   color: var(--text-primary);
 }
 
-/* Screen reader only */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
+/* `.sr-only` is owned by shared/common.css § 2 COMMON UTILITIES, as an alias of
+   `.visually-hidden`. This copy was byte-identical to the one in
+   ConditionEditor.css and was deleted first (bead
+   enhancedchannelmanager-87o0c); that surviving copy then moved to the shared
+   layer, because a lazy chunk is the wrong owner for a class two other chunks
+   render (bead enhancedchannelmanager-zncyv). */

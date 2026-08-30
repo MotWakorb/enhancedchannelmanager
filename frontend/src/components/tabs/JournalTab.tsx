@@ -1,11 +1,14 @@
 import { logger } from '../../utils/logger';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { JournalEntry, JournalCategory, JournalActionType, JournalStats, JournalQueryParams, MutationSource } from '../../types';
 import * as api from '../../services/api';
 import { CustomSelect } from '../CustomSelect';
 import './JournalTab.css';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { formatTimestamp, formatRelativeTime } from '../../utils/formatting';
+import { RouteHeaderSlot } from '../RouteHeaderSlots';
+import { DenseToolbar } from '../DenseToolbar';
+import { HttpError } from '../../services/httpClient';
 
 // Get icon for category
 function getCategoryIcon(category: JournalCategory): string {
@@ -49,9 +52,42 @@ function getActionClass(actionType: JournalActionType): string {
   }
 }
 
+/**
+ * Action types whose title-cased identifier is not the words an operator is
+ * told to look for. The generic transform below turns `merge_unapplied` into
+ * "Merge Unapplied", while the filter dropdown and the Pending Merges notice
+ * both say "Merge Not Applied" — so an operator following the notice found a
+ * badge with different words and no way to know they were the same thing.
+ *
+ * One label per action type, defined once and used by both the badge and the
+ * filter option, so the two cannot drift again. Module-local rather than
+ * exported: this file exports a component, and a second export trips the
+ * react-refresh lint rule (see docs/frontend_lint.md).
+ */
+const ACTION_TYPE_LABELS: Record<string, string> = {
+  merge_unapplied: 'Merge Not Applied',
+  // DELIBERATELY IDENTICAL to what the generic transform already produced.
+  // `docs/user_guide/channels-streams/the-journal.md` names this badge "Bulk
+  // Merge Incomplete" four times, once as the heading of the paragraph telling
+  // operators it is the badge worth reading for. Renaming it to something
+  // tidier would recreate, for this action type, precisely the defect the
+  // entry above exists to fix: documentation sending an operator to look for
+  // words the badge does not use.
+  //
+  // The entry still earns its place. Without it the filter option below would
+  // need its own string literal, leaving the badge and the option as two
+  // independent sources that agree only by coincidence — the drift condition.
+  // With it they are the same string by construction, so a future rewording
+  // moves both at once.
+  bulk_merge_incomplete: 'Bulk Merge Incomplete',
+};
+
 // Format action type for display
 function formatActionType(actionType: string): string {
-  return actionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  return (
+    ACTION_TYPE_LABELS[actionType] ??
+    actionType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+  );
 }
 
 // Format category for display
@@ -92,6 +128,44 @@ function formatMutationSource(source: MutationSource | null | undefined): string
   }
 }
 
+/**
+ * The reserved key the backend writes into `before_value` for a field whose
+ * before-state it could not read at all — a channel created earlier in the
+ * same batch, a catalog read that failed, a payload field Dispatcharr does not
+ * return (bead enhancedchannelmanager-kz089, `BEFORE_STATE_UNKNOWN_KEY` in
+ * `backend/routers/channels.py`).
+ *
+ * The WIRE key is deliberately machine-shaped and stays as it is: it has to be
+ * unmistakably not a Dispatcharr field name. What was wrong is that this tab
+ * rendered `before_value` as raw JSON, so an operator opening a row read the
+ * literal string `__before_state_unknown__` with nothing to tell them it meant
+ * "ECM never saw these fields" rather than "these fields were called that".
+ */
+const BEFORE_STATE_UNKNOWN_KEY = '__before_state_unknown__';
+
+/**
+ * Split a `before_value` into the values ECM actually read and the names of
+ * the fields it could not.
+ *
+ * "It held null" and "I never saw it" are different facts, and the whole point
+ * of the reserved key is to keep them apart; presenting them apart is the same
+ * requirement one layer up.
+ */
+function splitBeforeValue(
+  beforeValue: Record<string, unknown>,
+): { known: Record<string, unknown>; unknownFields: string[] } {
+  const known: Record<string, unknown> = {};
+  let unknownFields: string[] = [];
+  for (const [key, value] of Object.entries(beforeValue)) {
+    if (key === BEFORE_STATE_UNKNOWN_KEY) {
+      unknownFields = Array.isArray(value) ? value.map(String) : [String(value)];
+      continue;
+    }
+    known[key] = value;
+  }
+  return { known, unknownFields };
+}
+
 export function JournalTab() {
   const notifications = useNotifications();
 
@@ -99,6 +173,9 @@ export function JournalTab() {
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [stats, setStats] = useState<JournalStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [requestState, setRequestState] = useState<'loading' | 'success' | 'error' | 'permission'>('loading');
+  const entriesRequestFailedRef = useRef(false);
+  const entriesRequestGenerationRef = useRef(0);
 
   // Pagination state
   const [page, setPage] = useState(1);
@@ -123,7 +200,10 @@ export function JournalTab() {
 
   // Load entries
   const loadEntries = useCallback(async () => {
+    const requestGeneration = ++entriesRequestGenerationRef.current;
     setLoading(true);
+    setRequestState('loading');
+    entriesRequestFailedRef.current = false;
     try {
       const params: JournalQueryParams = {
         page,
@@ -135,13 +215,25 @@ export function JournalTab() {
       if (search) params.search = search;
 
       const result = await api.getJournalEntries(params);
+      if (requestGeneration !== entriesRequestGenerationRef.current) return;
       setEntries(result.results);
       setTotalPages(result.total_pages);
       setTotalCount(result.count);
+      setRequestState('success');
     } catch (err) {
+      if (requestGeneration !== entriesRequestGenerationRef.current) return;
+      entriesRequestFailedRef.current = true;
+      const permission = err instanceof HttpError && (err.status === 401 || err.status === 403);
+      if (permission) {
+        setEntries([]);
+        setTotalCount(0);
+        setTotalPages(1);
+        setStats(null);
+      }
+      setRequestState(permission ? 'permission' : 'error');
       notifications.error(err instanceof Error ? err.message : 'Failed to load journal entries', 'Journal');
     } finally {
-      setLoading(false);
+      if (requestGeneration === entriesRequestGenerationRef.current) setLoading(false);
     }
   }, [page, pageSize, category, actionType, mutationSource, search, notifications]);
 
@@ -149,14 +241,18 @@ export function JournalTab() {
   const loadStats = useCallback(async () => {
     try {
       const result = await api.getJournalStats();
-      setStats(result);
+      if (!entriesRequestFailedRef.current) setStats(result);
     } catch (err) {
+      setStats(null);
       logger.error('Failed to load journal stats:', err);
     }
   }, []);
 
   useEffect(() => {
-    loadEntries();
+    void loadEntries();
+    return () => {
+      entriesRequestGenerationRef.current += 1;
+    };
   }, [loadEntries]);
 
   useEffect(() => {
@@ -212,24 +308,13 @@ export function JournalTab() {
   };
 
   // Render loading state
-  if (loading && entries.length === 0) {
-    return (
-      <div className="journal-tab">
-        <div className="tab-loading">
-          <span className="material-icons spinning">sync</span>
-          <p>Loading journal...</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="journal-tab">
       {/* Header with inline stats */}
       <div className="journal-header">
         <div className="header-left">
-          <h2>Journal</h2>
-          {stats && (
+          <span className="visually-hidden">Journal</span>
+          {stats && <RouteHeaderSlot name="status">
             <div className="header-stats">
               <span className="header-stat" title="Channel entries">
                 <span className="material-icons">tv</span>
@@ -261,47 +346,26 @@ export function JournalTab() {
               </span>
               <span className="header-total" title="Total journal entries">({stats.total_entries.toLocaleString()} total)</span>
             </div>
-          )}
+          </RouteHeaderSlot>}
         </div>
-        <div className="header-actions">
-          <div className="journal-purge-control">
-            <input
-              type="number"
-              className="journal-purge-days-input"
-              min={1}
-              value={purgeDays}
-              onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
-              aria-label="Days to keep"
-              disabled={purging}
-            />
-            <span className="journal-purge-label">days</span>
-            <button
-              className="btn-secondary journal-purge-btn"
-              onClick={handlePurge}
-              disabled={purging || purgeDays < 1}
-              title="Delete journal entries older than the given number of days"
-            >
-              <span className={`material-icons ${purging ? 'spinning' : ''}`}>
-                {purging ? 'sync' : 'delete_sweep'}
-              </span>
-              {purging ? 'Purging…' : 'Purge Old Entries'}
-            </button>
-          </div>
-          <button className="btn-secondary" onClick={handleRefresh} disabled={loading}>
+        {requestState !== 'permission' && <RouteHeaderSlot name="primary-action">
+          <button className="btn-primary" onClick={handleRefresh} disabled={loading}>
             <span className="material-icons">refresh</span>
             Refresh
           </button>
-        </div>
+        </RouteHeaderSlot>}
       </div>
 
       {/* Filters */}
-      <div className="filters-bar">
+      <RouteHeaderSlot name="controls">
+      <DenseToolbar label="Journal entry controls" search={
         <div className="search-box">
           <span className="material-icons">search</span>
           <input
             type="text"
             placeholder="Search entries..."
             value={searchInput}
+            disabled={requestState === 'loading' && entries.length === 0}
             onChange={(e) => setSearchInput(e.target.value)}
           />
           {searchInput && (
@@ -311,15 +375,18 @@ export function JournalTab() {
               onClick={() => setSearchInput('')}
               title="Clear search"
               aria-label="Clear search"
+              disabled={requestState === 'loading' && entries.length === 0}
             >
               <span className="material-icons" aria-hidden="true">close</span>
             </button>
           )}
         </div>
+      } filters={<>
         <CustomSelect
           value={category}
           onChange={(val) => setCategory(val as JournalCategory | '')}
-          className="filter-select"
+          className="journal-filter-select"
+          disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Categories' },
             { value: 'channel', label: 'Channel' },
@@ -334,7 +401,8 @@ export function JournalTab() {
         <CustomSelect
           value={actionType}
           onChange={(val) => setActionType(val as JournalActionType | '')}
-          className="filter-select"
+          className="journal-filter-select"
+          disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Actions' },
             { value: 'create', label: 'Create' },
@@ -347,12 +415,21 @@ export function JournalTab() {
             { value: 'stream_remove', label: 'Stream Remove' },
             { value: 'stream_reorder', label: 'Stream Reorder' },
             { value: 'reorder', label: 'Reorder' },
+            {
+              value: 'merge_unapplied',
+              label: ACTION_TYPE_LABELS.merge_unapplied,
+            },
+            {
+              value: 'bulk_merge_incomplete',
+              label: ACTION_TYPE_LABELS.bulk_merge_incomplete,
+            },
           ]}
         />
         <CustomSelect
           value={mutationSource}
           onChange={(val) => setMutationSource(val as MutationSource | '')}
-          className="filter-select"
+          className="journal-filter-select"
+          disabled={requestState === 'loading' && entries.length === 0}
           options={[
             { value: '', label: 'All Sources' },
             { value: 'ui', label: 'UI' },
@@ -361,16 +438,48 @@ export function JournalTab() {
             { value: 'auto_creation', label: 'Channel Pipeline' },
           ]}
         />
-      </div>
+      </>} secondaryActions={requestState !== 'permission' ? <div className="journal-purge-control">
+        <input
+          type="number"
+          className="journal-purge-days-input"
+          min={1}
+          value={purgeDays}
+          onChange={(e) => setPurgeDays(parseInt(e.target.value, 10) || 0)}
+          aria-label="Days to keep"
+          disabled={purging || (requestState === 'loading' && entries.length === 0)}
+        />
+        <span className="journal-purge-label">days</span>
+        <button
+          className="btn-secondary journal-purge-btn"
+          onClick={handlePurge}
+          disabled={purging || purgeDays < 1 || (requestState === 'loading' && entries.length === 0)}
+          title="Delete journal entries older than the given number of days"
+        >
+          <span className={`material-icons ${purging ? 'spinning' : ''}`}>{purging ? 'sync' : 'delete_sweep'}</span>
+          {purging ? 'Purging…' : 'Purge Old Entries'}
+        </button>
+      </div> : undefined} />
+      </RouteHeaderSlot>
+
+      {requestState === 'loading' && entries.length === 0 && <div className="tab-loading">Loading journal entries…</div>}
+      {requestState === 'error' && <div className="tab-load-unavailable" role="alert">
+        <p>{entries.length > 0
+          ? 'Journal refresh failed — showing previously loaded entries.'
+          : 'Journal entries could not be loaded.'}</p>
+        <button className="btn-secondary" onClick={() => void loadEntries()}>Retry</button>
+      </div>}
+      {requestState === 'permission' && <div className="tab-load-unavailable" role="alert">
+        <p>You don't have permission to view journal entries.</p>
+      </div>}
 
       {/* Entries List */}
-      {entries.length === 0 ? (
+      {requestState === 'success' && entries.length === 0 ? (
         <div className="empty-state">
           <span className="material-icons">history</span>
           <h3>No journal entries</h3>
           <p>Changes to channels, EPG sources, and M3U accounts will appear here.</p>
         </div>
-      ) : (
+      ) : requestState === 'success' || entries.length > 0 ? (
         <>
           <div className="entries-list">
             <div className="list-header">
@@ -440,12 +549,29 @@ export function JournalTab() {
                 {expandedId === entry.id && (entry.before_value || entry.after_value) && (
                   <div className="entry-details">
                     <div className="details-grid">
-                      {entry.before_value && (
-                        <div className="detail-section">
-                          <h4>Before</h4>
-                          <pre>{JSON.stringify(entry.before_value, null, 2)}</pre>
-                        </div>
-                      )}
+                      {entry.before_value && (() => {
+                        const { known, unknownFields } = splitBeforeValue(
+                          entry.before_value as Record<string, unknown>,
+                        );
+                        return (
+                          <div className="detail-section">
+                            <h4>Before</h4>
+                            {Object.keys(known).length > 0 && (
+                              <pre>{JSON.stringify(known, null, 2)}</pre>
+                            )}
+                            {unknownFields.length > 0 && (
+                              <p
+                                className="detail-unknown-before"
+                                data-testid="journal-before-unknown"
+                              >
+                                ECM could not read the previous value of{' '}
+                                {unknownFields.join(', ')} — the change was recorded, but what
+                                these held beforehand is not known.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })()}
                       {entry.after_value && (
                         <div className="detail-section">
                           <h4>After</h4>
@@ -537,7 +663,7 @@ export function JournalTab() {
             </div>
           </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

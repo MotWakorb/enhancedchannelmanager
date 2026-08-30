@@ -6,10 +6,12 @@ FOUR categories, TWO shapes:
 ENTITY categories (create rows, remappable, ledger-tracked):
   1. user_agents -> EntityType.USER_AGENT — create + remap + ledger; identity by
      name; collision -> ALREADY_EXISTS_IDENTICAL + remap to existing.
-  2. dvr_rules -> EntityType.DVR_RULE — create + remap + ledger; identity by a
-     stable key (name/title); FK ``channel`` reference remapped through the
-     IdRemapTable; unresolvable FK -> FailureReason.DEPENDENCY_UNRESOLVED (skip
-     DEPENDENCY_UNRESOLVED on dry-run).
+  2. dvr_rules -> EntityType.DVR_RULE — create + remap + ledger against
+     Dispatcharr's recurring-recording-rules resource (lsa0s); identity by
+     name/title with a schedule fallback for unnamed rules; FK ``channel``
+     reference remapped through the IdRemapTable; unresolvable FK ->
+     FailureReason.DEPENDENCY_UNRESOLVED, reported IDENTICALLY on dry-run and
+     apply (the y6zg6 preview-parity rule).
 
 SETTINGS categories (APPLY key/value config; NOT entity-create; NOT id-remapped;
 NOT ledgered as creates):
@@ -58,6 +60,48 @@ from dbas.restore_contracts import (
 # ---------------------------------------------------------------------------
 
 
+class _AutoIdMap(dict):
+    """A destination key->row-id map that mints an id for any key looked up.
+
+    Stands in for a destination Dispatcharr that HAS every key the archive
+    carries. Because ids are minted on lookup, ``key in id_map`` after a run is
+    also an assertion that the importer resolved that key at all — a denylisted
+    key must never even be resolved.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._next_id = 1000
+
+    def get(self, key, default=None):
+        if key not in self:
+            self._next_id += 1
+            self[key] = self._next_id
+        return self[key]
+
+    def __eq__(self, other):
+        """Delegate to dict CONTENTS only -- ``_next_id`` is autovivification
+        bookkeeping, not identity. CodeQL flags a class that adds mutable state
+        (``_next_id``) without an explicit ``__eq__``: two instances with the
+        same entries but different mint-counters must still compare equal, and
+        this makes that contract explicit rather than relying on dict's
+        inherited (content-only) equality by accident.
+        """
+        if not isinstance(other, dict):
+            return NotImplemented
+        return dict(self) == dict(other)
+
+    # Defining __eq__ makes a class unhashable by default in Python 3 (this is
+    # already true here since dict itself is unhashable) -- spelled out
+    # explicitly so the mutable-equality contract above is fully documented.
+    __hash__ = None
+
+
+def _applied_setting_ids(client):
+    """The destination row ids the importer PATCHed."""
+    return {call.args[0] for call in client.update_core_setting.call_args_list}
+
+
 def _client(
     *,
     existing_user_agents=None,
@@ -65,11 +109,24 @@ def _client(
     ua_create_side_effect=None,
     dvr_create_side_effect=None,
     settings_patch_side_effect=None,
+    setting_id_map=None,
+    setting_id_map_side_effect=None,
 ):
-    """Build an AsyncMock Dispatcharr client with the methods the importer uses."""
+    """Build an AsyncMock Dispatcharr client with the methods the importer uses.
+
+    ``setting_id_map`` seeds the destination key->row-id map the settings
+    importer resolves against (q6xjl). The default is
+    :data:`_DEFAULT_SETTING_ID_MAP`, an autovivifying map that hands out a
+    distinct id for any key the test applies, so tests that do not care about id
+    resolution need no extra setup.
+    """
     client = AsyncMock()
     client.get_user_agents = AsyncMock(return_value=existing_user_agents or [])
     client.get_dvr_rules = AsyncMock(return_value=existing_dvr_rules or [])
+    client.get_core_setting_id_map = AsyncMock(
+        side_effect=setting_id_map_side_effect,
+        return_value=(_AutoIdMap() if setting_id_map is None else setting_id_map),
+    )
 
     ua_counter = {"n": 700}
 
@@ -93,7 +150,7 @@ def _client(
     client.delete_dvr_rule = AsyncMock(return_value=None)
     client.update_core_setting = AsyncMock(
         side_effect=settings_patch_side_effect
-        or (lambda key, value: {"key": key, "value": value})
+        or (lambda setting_id, value: {"id": setting_id, "value": value})
     )
     return client
 
@@ -125,6 +182,29 @@ def _remap(**kwargs):
 
 def _cat(report, entity_type):
     return report.category(entity_type)
+
+
+def test_auto_id_map_eq_delegates_to_dict_contents():
+    """``_AutoIdMap.__eq__`` compares CONTENTS only -- two instances with the
+    same entries but different ``_next_id`` mint-counters are still equal, and
+    an instance is equal to a plain dict with the same entries. Content that
+    differs (including a differing minted id) makes them unequal."""
+    a = _AutoIdMap({"ui_theme": 1000})
+    b = _AutoIdMap({"ui_theme": 1000})
+    a.get("default_user_agent")  # advances a's _next_id past b's
+    assert a._next_id != b._next_id
+    assert a != b  # the mint advanced a's contents (new key), not just its counter
+
+    c = _AutoIdMap({"ui_theme": 1000})
+    # A second, freshly-constructed instance with the SAME contents as `a`
+    # (including the minted key) is equal to it -- proves equality is a
+    # property of contents, not object identity (no self-comparison, which
+    # trips CodeQL's py/comparison-of-identical-expressions).
+    a_same_contents = _AutoIdMap({"ui_theme": 1000, "default_user_agent": a["default_user_agent"]})
+    assert a == a_same_contents
+    assert b == c  # same contents, same untouched counters
+    assert b == {"ui_theme": 1000}  # equal to a plain dict with the same entries
+    assert b != {"ui_theme": 1000, "other": 2}
 
 
 # ===========================================================================
@@ -234,6 +314,33 @@ async def test_user_agents_dry_run_creates_nothing():
 
 
 @pytest.mark.asyncio
+async def test_user_agents_dry_run_writes_a_provisional_remap():
+    """Dry-run registers a PROVISIONAL source->source remap entry.
+
+    Bead ``enhancedchannelmanager-lvfwd``: stream profiles now resolve their
+    ``user_agent`` FK through the USER_AGENT namespace. Without a provisional
+    entry a would-be-created user agent leaves the referencing stream profile
+    would_skip DEPENDENCY_UNRESOLVED on the preview while the apply creates it —
+    exactly the dry-run/apply drift ``groups_profiles`` already guards against.
+    The provisional id is never sent upstream (a dry-run creates nothing).
+    """
+    client = _client()
+    report, ledger, remap = _report(is_dry_run=True), _ledger(), _remap()
+
+    await import_user_agents(
+        archive_user_agents=[{"id": 4, "name": "Drill UA"}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+        is_dry_run=True,
+    )
+
+    assert remap.resolve(EntityType.USER_AGENT, 4) is not None
+
+
+@pytest.mark.asyncio
 async def test_user_agents_conflict_vs_upstream_error():
     """A create raising 'already exists' -> CONFLICT; any other error ->
     UPSTREAM_API_ERROR."""
@@ -330,12 +437,86 @@ async def test_dvr_rules_unresolvable_fk_fails_dependency_unresolved():
 
 
 @pytest.mark.asyncio
-async def test_dvr_rules_unresolvable_fk_dry_run_skips_dependency_unresolved():
-    """On dry-run, an unresolvable FK is a would_skip DEPENDENCY_UNRESOLVED, not a
-    failure."""
+async def test_dvr_rules_unresolvable_fk_dry_run_matches_apply_exactly():
+    """Dry-run reports an unresolvable FK the SAME way apply does.
+
+    lsa0s, following the y6zg6 ruling: whether a rule's ``channel`` resolves is a
+    FACT about the run's remap state, identically true on dry-run (the channels
+    importer registers a provisional remap for every would-create channel) and on
+    apply. Reporting it as a would_skip while the apply reports a failure is a
+    preview that lies about the outcome, so both modes now emit the SAME
+    FailureReason and the SAME message.
+    """
     archive = [{"id": 1, "name": "Record News", "channel": 999}]
-    client = _client()
-    report = _report(is_dry_run=True)
+    remap_kwargs = {"channel": {5: 105}}  # 999 not mapped
+
+    apply_report = _report()
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=_client(),
+        selected=True,
+        report=apply_report,
+        ledger=_ledger(),
+        remap=_remap(**remap_kwargs),
+    )
+
+    dry_client = _client()
+    dry_report = _report(is_dry_run=True)
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=dry_client,
+        selected=True,
+        report=dry_report,
+        ledger=_ledger(),
+        remap=_remap(**remap_kwargs),
+        is_dry_run=True,
+    )
+
+    applied = _cat(apply_report, EntityType.DVR_RULE)
+    previewed = _cat(dry_report, EntityType.DVR_RULE)
+    assert previewed.failed == applied.failed == 1
+    assert previewed.would_skip == 0
+    assert (
+        previewed.failure_details[0].reason
+        == applied.failure_details[0].reason
+        == FailureReason.DEPENDENCY_UNRESOLVED
+    )
+    assert previewed.failure_details[0].message == applied.failure_details[0].message
+    dry_client.create_dvr_rule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_matches_existing_by_schedule():
+    """A rule with no name is identified by its SCHEDULE, not by "<unknown>".
+
+    ``name`` is optional on Dispatcharr's RecurringRecordingRule (lsa0s recorded
+    fixture: ``name`` is absent from the schema's ``required`` list), so a
+    name-only identity would re-create every unnamed rule on each restore. The
+    fallback key is (destination channel, days_of_week, start_time, end_time).
+    """
+    archive = [
+        {
+            "id": 1,
+            "name": "",
+            "channel": 5,
+            "days_of_week": [2, 0],
+            "start_time": "20:00:00",
+            "end_time": "21:00:00",
+        }
+    ]
+    client = _client(
+        existing_dvr_rules=[
+            {
+                "id": 444,
+                "name": "",
+                "channel": 105,
+                "days_of_week": [0, 2],
+                "start_time": "20:00:00",
+                "end_time": "21:00:00",
+            }
+        ]
+    )
+    report, ledger = _report(), _ledger()
     remap = _remap(channel={5: 105})
 
     await import_dvr_rules(
@@ -343,15 +524,150 @@ async def test_dvr_rules_unresolvable_fk_dry_run_skips_dependency_unresolved():
         client=client,
         selected=True,
         report=report,
-        ledger=_ledger(),
+        ledger=ledger,
         remap=remap,
-        is_dry_run=True,
     )
 
     cat = _cat(report, EntityType.DVR_RULE)
-    assert cat.would_skip == 1
-    assert cat.skip_details[0].reason == SkipReason.DEPENDENCY_UNRESOLVED
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert remap.resolve(EntityType.DVR_RULE, 1) == 444
     client.create_dvr_rule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_differing_enabled_is_not_collapsed():
+    """An unnamed ENABLED rule is not "already" a disabled one with the same slot.
+
+    PR #768 review Warn 1: ``enabled`` is what decides whether the rule actually
+    records, so two unnamed rules that agree on channel, weekdays, clock window
+    and date range but disagree on ``enabled`` are NOT the same rule. Leaving it
+    out of the identity key made a restore silently adopt the destination's
+    disabled rule and drop the archived enabled one — the recordings the operator
+    backed up would never run.
+    """
+    archive = [
+        {
+            "id": 1,
+            "name": "",
+            "channel": 5,
+            "days_of_week": [0],
+            "start_time": "20:00:00",
+            "end_time": "21:00:00",
+            "enabled": True,
+        }
+    ]
+    client = _client(
+        existing_dvr_rules=[
+            {
+                "id": 444,
+                "name": "",
+                "channel": 105,
+                "days_of_week": [0],
+                "start_time": "20:00:00",
+                "end_time": "21:00:00",
+                "enabled": False,
+            }
+        ]
+    )
+    report, ledger = _report(), _ledger()
+
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=_remap(channel={5: 105}),
+    )
+
+    cat = _cat(report, EntityType.DVR_RULE)
+    assert cat.created == 1
+    assert cat.skipped == 0
+    sent = client.create_dvr_rule.call_args.args[0]
+    assert sent["enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_same_enabled_still_matches():
+    """The ``enabled`` field sharpens the key without breaking it.
+
+    Companion to the test above: two unnamed rules agreeing on the schedule AND
+    on ``enabled`` are still the same rule and must not be duplicated.
+    """
+    slot = {
+        "channel": 5,
+        "days_of_week": [0],
+        "start_time": "20:00:00",
+        "end_time": "21:00:00",
+        "enabled": True,
+    }
+    client = _client(
+        existing_dvr_rules=[{"id": 444, "name": "", **{**slot, "channel": 105}}]
+    )
+    report, ledger = _report(), _ledger()
+    remap = _remap(channel={5: 105})
+
+    await import_dvr_rules(
+        archive_dvr_rules=[{"id": 1, "name": "", **slot}],
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=remap,
+    )
+
+    cat = _cat(report, EntityType.DVR_RULE)
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert remap.resolve(EntityType.DVR_RULE, 1) == 444
+    client.create_dvr_rule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_dvr_rules_blank_name_different_schedule_is_created():
+    """The schedule fallback must not collapse two DIFFERENT unnamed rules.
+
+    Same channel, different start time — a distinct rule that must still be
+    created rather than swallowed as an already-exists skip.
+    """
+    archive = [
+        {
+            "id": 1,
+            "name": "",
+            "channel": 5,
+            "days_of_week": [0],
+            "start_time": "20:00:00",
+            "end_time": "21:00:00",
+        }
+    ]
+    client = _client(
+        existing_dvr_rules=[
+            {
+                "id": 444,
+                "name": "",
+                "channel": 105,
+                "days_of_week": [0],
+                "start_time": "06:00:00",
+                "end_time": "07:00:00",
+            }
+        ]
+    )
+    report, ledger = _report(), _ledger()
+
+    await import_dvr_rules(
+        archive_dvr_rules=archive,
+        client=client,
+        selected=True,
+        report=report,
+        ledger=ledger,
+        remap=_remap(channel={5: 105}),
+    )
+
+    cat = _cat(report, EntityType.DVR_RULE)
+    assert cat.created == 1
+    assert cat.skipped == 0
+    client.create_dvr_rule.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -511,9 +827,13 @@ async def test_core_settings_applies_safe_keys_only():
     assert settings_cat.updated == 2
     assert settings_cat.skipped == 1  # the dangerous key skipped
 
-    applied_keys = {c.args[0] for c in client.update_core_setting.call_args_list}
-    assert applied_keys == {"default_user_agent", "ui_theme"}
-    assert "dispatcharr_api_key" not in applied_keys
+    id_map = client.get_core_setting_id_map.return_value
+    assert _applied_setting_ids(client) == {
+        id_map["default_user_agent"],
+        id_map["ui_theme"],
+    }
+    # The dangerous key was never even resolved to a destination row id.
+    assert "dispatcharr_api_key" not in id_map
     # No ledger create-entry for settings.
     assert ledger.entries == []
 
@@ -535,6 +855,123 @@ async def test_core_settings_dry_run_applies_nothing():
     assert settings_cat.would_update == 2
     assert settings_cat.updated == 0
     client.update_core_setting.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_core_settings_dry_run_missing_key_reports_would_fail():
+    """Regression pin for enhancedchannelmanager-y6zg6: the ORIGINAL q6xjl
+    incident had the preview certify 'Settings 7 WILL UPDATE / 0 FAILED' for an
+    apply that then failed 7/7 — the dry-run branch never contacted upstream to
+    check whether a key resolves. A key absent on the destination must now be
+    WOULD-FAIL with the SAME DEPENDENCY_UNRESOLVED reason/wording the apply path
+    uses, so the preview and the apply verdict agree. The present key still
+    would-update — one bad key does not poison the whole blob, on dry-run any
+    more than on apply."""
+    client = _client(setting_id_map={"ui_theme": 21})
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark", "not_on_destination": "x"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    assert cat.would_update == 1
+    assert cat.failed == 1
+    assert cat.updated == 0  # dry-run never actually applies
+
+    detail = next(
+        d for d in cat.failure_details if d.label.endswith(":not_on_destination")
+    )
+    assert detail.reason == FailureReason.DEPENDENCY_UNRESOLVED
+    assert "not_on_destination" in detail.message
+    assert "not present" in detail.message.lower()
+    # A dry-run never PATCHes, even for the key that DID resolve.
+    client.update_core_setting.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_core_settings_dry_run_resolver_fetch_failure_reports_would_fail():
+    """If the destination's settings list GET itself fails during a dry-run,
+    every key fails UPSTREAM_API_ERROR (fail-closed preview) rather than
+    silently reporting WOULD-UPDATE for a destination ECM could not even read —
+    a lying preview beats nothing, but a fail-closed one beats a lying one."""
+    client = _client(setting_id_map_side_effect=RuntimeError("boom"))
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark", "default_user_agent": "VLC"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    assert cat.failed == 2
+    assert cat.would_update == 0
+    assert {d.reason for d in cat.failure_details} == {FailureReason.UPSTREAM_API_ERROR}
+    client.update_core_setting.assert_not_called()
+    # The GET is not retried per key even though every key hit the failure path.
+    assert client.get_core_setting_id_map.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_core_settings_resolver_fetch_failure_message_accurate_for_dry_run():
+    """The per-key failure message for a resolver-fetch failure must be
+    accurate on a DRY RUN -- nothing was ever attempted to be APPLIED at that
+    point, only RESOLVED (PR #766 review nit: the prior wording said "...could
+    not be applied" unconditionally, which overclaims an apply attempt that
+    never happens in the dry-run branch). The apply branch hits this exact same
+    code path (message parity -- one source string for both modes), so the
+    wording must be accurate for both."""
+    client = _client(setting_id_map_side_effect=RuntimeError("boom"))
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    detail = cat.failure_details[0]
+    assert "could not be applied" not in detail.message.lower()
+    assert "resolved" in detail.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_core_settings_dry_run_denylisted_key_never_resolved():
+    """A denylisted key keeps its existing dry-run treatment: it is would-skip
+    by NAME and is NEVER passed to the resolver — resolving it would cost an
+    upstream lookup for a key that will never be applied either way."""
+    id_map = {"dispatcharr_api_key": 99, "ui_theme": 21}
+    client = _client(setting_id_map=id_map)
+    report = _report(is_dry_run=True)
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark", "dispatcharr_api_key": "SECRET"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+
+    cat = _settings_category(report)
+    assert cat.would_skip == 1
+    assert cat.would_update == 1
+    assert cat.failed == 0
+    assert cat.skip_details[0].reason == SkipReason.EXCLUDED_BY_OPERATOR
+    assert cat.skip_details[0].label.endswith(":dispatcharr_api_key")
 
 
 @pytest.mark.asyncio
@@ -584,6 +1021,268 @@ async def test_core_settings_no_secret_in_report_or_logs(caplog):
         assert "hunter2-password" not in msg
 
 
+# ---------------------------------------------------------------------------
+# SETTINGS key -> destination row id resolution (enhancedchannelmanager-q6xjl)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_core_settings_patches_resolved_destination_row_ids():
+    """Each safe key is PATCHed at the destination's OWN row id for that key.
+
+    Dispatcharr's core-settings detail route is ``/api/core/settings/{id}/`` with
+    an integer pk; the archive carries key->value only (ids are per-instance and
+    deliberately not exported). Recorded ids are non-contiguous, so a positional
+    or key-string guess cannot pass this test.
+    """
+    id_map = {"default_user_agent": 6, "ui_theme": 21, "unused_key": 99}
+    client = _client(setting_id_map=id_map)
+    report = _report()
+
+    await import_core_settings(
+        archive_core_settings={"default_user_agent": "VLC/3.0.20", "ui_theme": "dark"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    assert _settings_category(report).updated == 2
+    calls = {call.args[0]: call.args[1] for call in client.update_core_setting.call_args_list}
+    assert calls == {6: "VLC/3.0.20", 21: "dark"}
+
+
+@pytest.mark.asyncio
+async def test_core_settings_missing_key_fails_that_key_explicitly(caplog):
+    """A key absent from the destination fails THAT key with an actionable
+    message — never a raw upstream 404, and never the whole category.
+
+    Regression pin for enhancedchannelmanager-q6xjl: the doc-test run reported
+    7/7 'Upstream API error — Upstream rejected applying setting X' because every
+    PATCH went to a key-string URL that has no route. A genuinely absent key must
+    now say so by name, and the keys that DO exist must still apply.
+    """
+    client = _client(setting_id_map={"ui_theme": 21})
+    report = _report()
+
+    with caplog.at_level(logging.DEBUG):
+        await import_core_settings(
+            archive_core_settings={"ui_theme": "dark", "not_on_destination": "x"},
+            client=client,
+            selected=True,
+            report=report,
+            ledger=_ledger(),
+        )
+
+    cat = _settings_category(report)
+    assert cat.updated == 1
+    assert cat.failed == 1
+    # The present key still applied — one bad key does not poison the blob.
+    assert _applied_setting_ids(client) == {21}
+
+    detail = next(
+        d for d in cat.failure_details if d.label.endswith(":not_on_destination")
+    )
+    assert detail.reason == FailureReason.DEPENDENCY_UNRESOLVED
+    assert "not_on_destination" in detail.message
+    assert "not present" in detail.message.lower()
+    # Log hygiene is unchanged: the key NAME never reaches a log record.
+    for rec in caplog.records:
+        assert "not_on_destination" not in rec.getMessage()
+
+
+@pytest.mark.asyncio
+async def test_settings_id_map_fetched_once_per_apply_run():
+    """ONE GET /api/core/settings/ backs the whole apply run.
+
+    core_settings and comskip share Dispatcharr's single settings namespace, so a
+    single run resolves one map and reuses it — no per-key list fetch, and no
+    second fetch for the comskip blob.
+    """
+    client = _client()
+    report, ledger = _report(), _ledger()
+
+    await import_settings_agents(
+        archive={
+            "core_settings": {"ui_theme": "dark", "default_user_agent": "VLC"},
+            "comskip": {"comskip_enabled": True, "comskip_ini": "detect_method=255"},
+        },
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=_remap(),
+        select_core_settings=True,
+        select_comskip=True,
+    )
+
+    assert client.update_core_setting.await_count == 4
+    assert client.get_core_setting_id_map.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_settings_id_map_not_fetched_when_nothing_to_apply():
+    """The map is resolved LAZILY — an opted-out category, or a dry-run whose
+    archive blob has no keys to preview, costs no upstream GET at all.
+
+    A dry-run WITH keys to preview is NOT one of these zero-GET cases as of
+    enhancedchannelmanager-y6zg6: previewing WOULD-UPDATE vs WOULD-FAIL requires
+    knowing whether the destination has each key, so it fetches — see
+    :func:`test_settings_id_map_fetched_once_on_dry_run_when_selected`.
+    """
+    empty_dry_client = _client()
+    await import_core_settings(
+        archive_core_settings={},
+        client=empty_dry_client,
+        selected=True,
+        report=_report(is_dry_run=True),
+        ledger=_ledger(),
+        is_dry_run=True,
+    )
+    empty_dry_client.get_core_setting_id_map.assert_not_called()
+
+    off_client = _client()
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark"},
+        client=off_client,
+        selected=False,
+        report=_report(),
+        ledger=_ledger(),
+    )
+    off_client.get_core_setting_id_map.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_settings_id_map_fetched_once_on_dry_run_when_selected():
+    """A dry-run preview that actually has keys to plan DOES fetch the
+    destination's settings list — once, shared across BOTH core_settings and
+    comskip in the same run, matching the apply-path contract exactly
+    (enhancedchannelmanager-y6zg6). Without this fetch the preview cannot tell
+    WOULD-UPDATE from WOULD-FAIL, which is the exact defect q6xjl found."""
+    client = _client()
+    report, ledger = _report(is_dry_run=True), _ledger()
+
+    await import_settings_agents(
+        archive={
+            "core_settings": {"ui_theme": "dark", "default_user_agent": "VLC"},
+            "comskip": {"comskip_enabled": True},
+        },
+        client=client,
+        report=report,
+        ledger=ledger,
+        remap=_remap(),
+        select_core_settings=True,
+        select_comskip=True,
+        is_dry_run=True,
+    )
+
+    assert client.get_core_setting_id_map.await_count == 1
+    client.update_core_setting.assert_not_called()
+    settings_cat = _settings_category(report)
+    assert settings_cat.would_update == 3
+    assert settings_cat.failed == 0
+
+
+@pytest.mark.asyncio
+async def test_settings_id_map_fetch_failure_fails_keys_without_refetching():
+    """If the map GET itself fails, every key fails UPSTREAM_API_ERROR and the
+    GET is NOT retried per key (that would be the per-key fetch storm the
+    one-GET contract exists to prevent)."""
+    client = _client(setting_id_map_side_effect=RuntimeError("boom"))
+    report = _report()
+
+    await import_core_settings(
+        archive_core_settings={"ui_theme": "dark", "default_user_agent": "VLC"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    cat = _settings_category(report)
+    assert cat.failed == 2
+    assert {d.reason for d in cat.failure_details} == {FailureReason.UPSTREAM_API_ERROR}
+    client.update_core_setting.assert_not_called()
+    assert client.get_core_setting_id_map.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_settings_id_map_fetch_failure_logs_exception_type(caplog):
+    """The resolver's fetch-failure warning names the EXCEPTION TYPE (so an
+    operator can distinguish timeout vs 5xx vs unreachable at 3 AM) WITHOUT
+    echoing the exception's message text -- the message could carry a request
+    URL or an upstream response fragment (no-key-names/no-URLs hygiene)."""
+
+    class _SimulatedTimeout(RuntimeError):
+        pass
+
+    client = _client(
+        setting_id_map_side_effect=_SimulatedTimeout(
+            "connect to 10.0.0.5:9191 timed out"
+        )
+    )
+    report = _report()
+
+    with caplog.at_level(logging.WARNING):
+        await import_core_settings(
+            archive_core_settings={"ui_theme": "dark"},
+            client=client,
+            selected=True,
+            report=report,
+            ledger=_ledger(),
+        )
+
+    messages = [rec.getMessage() for rec in caplog.records]
+    assert any("_SimulatedTimeout" in m for m in messages)
+    assert not any("10.0.0.5" in m for m in messages)
+
+
+@pytest.mark.asyncio
+async def test_core_settings_patch_failure_after_resolution_fails_that_key():
+    """A key that RESOLVES to a destination row id but whose PATCH itself then
+    fails (upstream 500, network blip, ...) fails ONLY that key
+    UPSTREAM_API_ERROR — successful id resolution is not a guarantee the apply
+    succeeds. Other keys in the same blob still apply; one bad PATCH does not
+    poison the whole run. The failing key is deliberately FIRST in the archive
+    (not last) so an early-return regression -- one that stops processing the
+    blob after the first failure instead of continuing to later keys -- cannot
+    escape this test. This is the original enhancedchannelmanager-q6xjl failure
+    text ("Upstream rejected applying setting ...") with no dedicated pin
+    before this test.
+    """
+    id_map = {"default_user_agent": 6, "ui_theme": 21}
+
+    def _patch_side_effect(setting_id, value):
+        if setting_id == id_map["default_user_agent"]:
+            raise RuntimeError("upstream 500")
+        return {"id": setting_id, "value": value}
+
+    client = _client(
+        setting_id_map=id_map, settings_patch_side_effect=_patch_side_effect
+    )
+    report = _report()
+
+    await import_core_settings(
+        archive_core_settings={"default_user_agent": "VLC", "ui_theme": "dark"},
+        client=client,
+        selected=True,
+        report=report,
+        ledger=_ledger(),
+    )
+
+    cat = _settings_category(report)
+    # The good key still applied — one bad PATCH does not poison the blob.
+    assert cat.updated == 1
+    assert cat.failed == 1
+    # Both keys resolved and both PATCHes were attempted (id 6's raised).
+    assert _applied_setting_ids(client) == {21, 6}
+
+    detail = next(
+        d for d in cat.failure_details if d.label.endswith(":default_user_agent")
+    )
+    assert detail.reason == FailureReason.UPSTREAM_API_ERROR
+    assert "default_user_agent" in detail.message
+
+
 # ===========================================================================
 # COMSKIP (settings category — same shape)
 # ===========================================================================
@@ -612,8 +1311,12 @@ async def test_comskip_applies_safe_keys_only():
     settings_cat = _settings_category(report)
     assert settings_cat.updated == 2
     assert settings_cat.skipped == 1
-    applied = {c.args[0] for c in client.update_core_setting.call_args_list}
-    assert "comskip_upload_token" not in applied
+    id_map = client.get_core_setting_id_map.return_value
+    assert _applied_setting_ids(client) == {
+        id_map["comskip_enabled"],
+        id_map["comskip_ini"],
+    }
+    assert "comskip_upload_token" not in id_map
     assert ledger.entries == []
 
 
@@ -671,8 +1374,9 @@ async def test_bulk_entry_per_category_opt_in():
     assert _cat(report, EntityType.DVR_RULE).skipped == 1  # opt-out
     client.create_dvr_rule.assert_not_called()
     # core_settings applied, comskip not.
-    applied = {c.args[0] for c in client.update_core_setting.call_args_list}
-    assert applied == {"ui_theme"}
+    id_map = client.get_core_setting_id_map.return_value
+    assert _applied_setting_ids(client) == {id_map["ui_theme"]}
+    assert "comskip_enabled" not in id_map
 
 
 # ---------------------------------------------------------------------------

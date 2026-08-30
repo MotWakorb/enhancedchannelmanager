@@ -15,6 +15,8 @@ ecm_client patched at the tool module's ``get_ecm_client``. We assert backend
 *mutation* call counts (not just output strings) so a tool that previews but
 still mutates is caught.
 """
+import re
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -39,6 +41,12 @@ def _register(module_name: str) -> FastMCP:
 
 def _text(result) -> str:
     return result[0][0].text
+
+
+def _token(result) -> str:
+    match = re.search(r"confirm_token='([^']+)'", _text(result))
+    assert match, _text(result)
+    return match.group(1)
 
 
 def _mutation_calls(mock_client) -> list:
@@ -259,8 +267,7 @@ class TestBulkDeleteToken:
                 "bulk_delete_channels", {"channel_ids": [1, 2, 3]}
             )
         text = _text(result)
-        token = derive_token([1, 2, 3])
-        assert token in text
+        assert "confirm_token='v3-" in text
         assert _mutation_calls(mock_client) == []
 
     @pytest.mark.asyncio
@@ -268,11 +275,13 @@ class TestBulkDeleteToken:
         mcp = _register("channels")
         mock_client = AsyncMock()
         mock_client.call_endpoint.return_value = None
-        token = derive_token([1, 2, 3])
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool(
+                "bulk_delete_channels", {"channel_ids": [1, 2, 3]}
+            )
             await mcp.call_tool(
                 "bulk_delete_channels",
-                {"channel_ids": [1, 2, 3], "confirm_token": token},
+                {"channel_ids": [1, 2, 3], "confirm_token": _token(preview)},
             )
         muts = _mutation_calls(mock_client)
         assert len(muts) == 3  # one delete per id
@@ -292,7 +301,7 @@ class TestBulkDeleteToken:
         text = _text(result)
         assert _mutation_calls(mock_client) == []
         # Refusal surfaces the fresh token for re-confirmation.
-        assert derive_token([1, 2, 3]) in text
+        assert "confirm_token='v3-" in text
 
 
 # ===========================================================================
@@ -315,8 +324,7 @@ class TestClearAutoCreatedToken:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("clear_auto_created", {"all_groups": True})
         text = _text(result)
-        token = derive_token([11, 12])  # manual id 13 excluded
-        assert token in text
+        assert "confirm_token='v3-" in text
         assert _mutation_calls(mock_client) == []
 
     @pytest.mark.asyncio
@@ -333,10 +341,11 @@ class TestClearAutoCreatedToken:
             return {"deleted": 2}
 
         mock_client.call_endpoint.side_effect = _side
-        token = derive_token([11, 12])
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool("clear_auto_created", {"all_groups": True})
             result = await mcp.call_tool(
-                "clear_auto_created", {"all_groups": True, "confirm_token": token}
+                "clear_auto_created",
+                {"all_groups": True, "confirm_token": _token(preview)},
             )
         muts = _mutation_calls(mock_client)
         assert len(muts) == 1
@@ -355,7 +364,7 @@ class TestClearAutoCreatedToken:
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("clear_auto_created", {"all_groups": True})
         assert _mutation_calls(mock_client) == []
-        assert derive_token([11]) in _text(result)
+        assert "confirm_token='v3-" in _text(result)
 
     @pytest.mark.asyncio
     async def test_stale_token_refused(self):
@@ -371,7 +380,7 @@ class TestClearAutoCreatedToken:
                 {"all_groups": True, "confirm_token": "2-deadbeef"},
             )
         assert _mutation_calls(mock_client) == []
-        assert derive_token([11, 12]) in _text(result)
+        assert "confirm_token='v3-" in _text(result)
 
 
 # ===========================================================================
@@ -392,8 +401,7 @@ class TestBulkMergeToken:
                 "bulk_merge_duplicate_channels", {"merges": merges}
             )
         text = _text(result)
-        token = derive_token([101, 102])  # source ids deleted
-        assert token in text
+        assert "confirm_token='v3-" in text
         assert _mutation_calls(mock_client) == []
 
     @pytest.mark.asyncio
@@ -408,11 +416,13 @@ class TestBulkMergeToken:
 
         mock_client.call_endpoint.side_effect = _side
         merges = [{"target_channel_id": 100, "source_channel_ids": [101, 102]}]
-        token = derive_token([101, 102])
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
+            preview = await mcp.call_tool(
+                "bulk_merge_duplicate_channels", {"merges": merges}
+            )
             await mcp.call_tool(
                 "bulk_merge_duplicate_channels",
-                {"merges": merges, "confirm_token": token},
+                {"merges": merges, "confirm_token": _token(preview)},
             )
         muts = _mutation_calls(mock_client)
         assert len(muts) == 1
@@ -455,4 +465,4 @@ class TestBulkMergeToken:
                 {"merges": merges, "confirm_token": "2-deadbeef"},
             )
         assert _mutation_calls(mock_client) == []
-        assert derive_token([101, 102]) in _text(result)
+        assert "confirm_token='v3-" in _text(result)

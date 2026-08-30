@@ -14,7 +14,7 @@
 
 All seven gates must pass before this PR can merge. G1a, G1b, G5, G6, G7 are author/reviewer-verified at Phase 1; G2, G3, G4 are mechanically enforced. See `docs/shipping.md` §Pre-Cut Gate Checklist for full criteria.
 
-- [ ] **G1a**: Zero open P0/P1 bugs at the cut SHA — verified via `bd list --status open --priority 0` and `bd list --status open --priority 1` (both empty, or each open item explicitly justified below).
+- [ ] **G1a**: Zero unresolved P0/P1 bugs in the authoritative board — verified across every unresolved status (empty, or each remaining item explicitly justified below).
 - [ ] **G1b**: Zero open HIGH/CRITICAL security findings not formally waived — verified via `gh api repos/:owner/:repo/code-scanning/alerts --paginate | jq '[.[] | select(.state=="open" and (.rule.security_severity_level=="high" or .rule.security_severity_level=="critical"))] | length'` returns `0`. Any waived alert MUST cite alert number + dismissal category here per the G1b "formally waived" semantics in `docs/shipping.md`.
 - [x] **G2**: `Backend Tests` green on the release branch (CI will verify via branch protection required check).
 - [x] **G3**: `Frontend Tests` green on the release branch (CI will verify via branch protection required check).

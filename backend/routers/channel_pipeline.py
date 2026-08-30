@@ -7,7 +7,9 @@ import asyncio
 import io
 import json
 import logging
+import os
 import tarfile
+import tempfile
 import time
 import uuid
 from datetime import date, datetime
@@ -16,12 +18,14 @@ from typing import List, Optional
 import httpx
 
 import journal
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field, model_validator
 from starlette.responses import StreamingResponse
+from starlette.background import BackgroundTask
 
-from auth import RequireAdminIfEnabled
+from auth import RequireAdminIfEnabled, ResolveIsMcpServicePrincipalIfEnabled
+from auth.dependencies import require_authenticated_human_admin
 from concurrency import run_cpu_bound
 from database import get_session
 from dispatcharr_client import get_client
@@ -42,6 +46,7 @@ from regex_lint import (
 # cancel them mid-run — fire-and-forget without supervision is a known
 # footgun. Tasks remove themselves on completion via the done callback below.
 _BACKGROUND_TASKS: set[asyncio.Task] = set()
+_MCP_PLANNED_RUN_LOCK = asyncio.Lock()
 
 logger = logging.getLogger(__name__)
 
@@ -225,6 +230,29 @@ class RunPipelineRequest(BaseModel):
     dry_run: bool = False
     m3u_account_ids: Optional[List[int]] = None
     rule_ids: Optional[List[int]] = None
+
+
+class CommitPipelinePlanRequest(BaseModel):
+    plan_id: str
+    plan_hash: str
+    phase: str = "execute"
+
+
+def _pipeline_plan_view(result: dict) -> dict:
+    """Keep only exact actions/targets and non-sensitive counters in a plan."""
+    return {
+        "dry_run_results": result.get("dry_run_results", []),
+        "streams_evaluated": result.get("streams_evaluated", 0),
+        "streams_matched": result.get("streams_matched", 0),
+        "channels_created": result.get("channels_created", 0),
+        "channels_updated": result.get("channels_updated", 0),
+        "groups_created": result.get("groups_created", 0),
+        "streams_merged": result.get("streams_merged", 0),
+        "streams_removed": result.get("streams_removed", 0),
+        "channels_removed": result.get("channels_removed", 0),
+        "channels_moved": result.get("channels_moved", 0),
+        "rule_match_counts": result.get("rule_match_counts", {}),
+    }
 
 
 class ImportYAMLRequest(BaseModel):
@@ -656,8 +684,10 @@ async def analyze_channel_pipeline_rule_body(request: AnalyzeRuleBodyRequest):
 
         # The analyzer reads a dict shaped like a rule's to_dict(). Only the
         # fields it consumes are forwarded; the rest of the create-shaped body
-        # (sort fields, orphan_action, etc.) is accepted for forward-compat but
-        # not needed by any current check.
+        # (sort fields, etc.) is accepted for forward-compat but not needed by
+        # any current check. match_scope_group_id and orphan_action feed
+        # MERGE_SCOPE_PINNED_TO_OTHER_GROUP (GH #801, bead rtst2.1) so the rule
+        # builder catches a wrong scope pin while the rule is still a draft.
         rule_dict = {
             "id": None,
             "name": request.name,
@@ -666,6 +696,8 @@ async def analyze_channel_pipeline_rule_body(request: AnalyzeRuleBodyRequest):
             "target_group_id": request.target_group_id,
             "normalization_group_ids": request.normalization_group_ids,
             "match_scope_target_group": request.match_scope_target_group,
+            "match_scope_group_id": request.match_scope_group_id,
+            "orphan_action": request.orphan_action,
         }
 
         # Richer findings (bd-m1s38.2): normalization-group enabled-state lets
@@ -1372,7 +1404,9 @@ def _create_pending_execution(
         session.close()
 
 
-def _mark_execution_failed(execution_id: int, error: BaseException) -> None:
+def _mark_execution_failed(
+    execution_id: int, error: BaseException, *, partial_replay: dict | None = None,
+) -> None:
     """Mark a pre-created execution as failed and capture the error message."""
     from models import ChannelPipelineExecution
 
@@ -1397,6 +1431,19 @@ def _mark_execution_failed(execution_id: int, error: BaseException) -> None:
             )
             execution.status = "failed"
             execution.error_message = f"{type(error).__name__}: {error}"
+            if partial_replay is not None:
+                execution.set_execution_log([{
+                    "type": "partial_replay_failure",
+                    **partial_replay,
+                }])
+                from models import ChannelPipelineSnapshot
+                snapshot = session.query(ChannelPipelineSnapshot).filter(
+                    ChannelPipelineSnapshot.execution_id == execution_id
+                ).first()
+                if snapshot is not None:
+                    evidence = snapshot.get_channels_data()
+                    evidence["partial_replay"] = partial_replay
+                    snapshot.set_channels_data(evidence)
             session.commit()
     finally:
         session.close()
@@ -1432,7 +1479,11 @@ def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> as
 
 
 @router.post("/run", status_code=202)
-async def run_auto_creation_pipeline(request: RunPipelineRequest, _admin=RequireAdminIfEnabled):
+async def run_auto_creation_pipeline(
+    request: RunPipelineRequest,
+    _admin=RequireAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
     """Enqueue an auto-creation pipeline run and return immediately (bd-enfsy).
 
     Pipeline runs on large catalogs can take minutes — running them inside the
@@ -1443,6 +1494,8 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest, _admin=Require
     ``GET /api/auto-creation/executions/{id}`` until ``status`` is terminal
     (``completed`` / ``failed`` / ``rolled_back``).
     """
+    if caller_is_mcp and not request.dry_run:
+        raise HTTPException(status_code=409, detail="MCP execution requires prepare and commit")
     logger.debug("[AUTO-CREATE] POST /run - dry_run=%s", request.dry_run)
     try:
         engine = await _ensure_engine()
@@ -1474,6 +1527,383 @@ async def run_auto_creation_pipeline(request: RunPipelineRequest, _admin=Require
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation pipeline: %s", e)
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def _plan_principal(principal) -> str:
+    return str(
+        getattr(principal, "id", None)
+        or getattr(principal, "username", None)
+        or getattr(principal, "role", None)
+        or "api"
+    )
+
+
+def _planned_run_warnings(result: dict) -> list:
+    """Preserve the warning surface produced during shadow planning."""
+    warnings = list(result.get("normalization_warnings", []))
+    warnings.extend(result.get("event_sync_warnings", []))
+    non_reversible_ids = sorted(result.get("non_reversible_channel_ids", []))
+    if non_reversible_ids:
+        warnings.append({
+            "type": "non_reversible_profile_changes",
+            "count": len(non_reversible_ids),
+            "channel_ids": non_reversible_ids,
+            "message": (
+                "This run changed channel-profile membership. Channel-profile "
+                "membership has no reversible previous state, so Rollback and "
+                "Undo will NOT restore it."
+            ),
+        })
+    ownership_ids = sorted(
+        result.get("profile_ownership_unestablished_channel_ids", [])
+    )
+    if ownership_ids:
+        warnings.append({
+            "type": "profile_ownership_not_established",
+            "count": len(ownership_ids),
+            "channel_ids": ownership_ids,
+            "message": (
+                "Channel profiles were applied, but the pipeline-ownership marker "
+                "could not be written, so precedence is not established."
+            ),
+        })
+    return warnings
+
+
+async def _compute_pipeline_plan_payload(request: RunPipelineRequest) -> dict:
+    """Compute the canonical pipeline decision and writes without persisting it."""
+    from channel_pipeline_engine import ChannelPipelineEngine
+    from services.pipeline_write_plan import PlanningDispatcharrClient
+    live_engine = await _ensure_engine()
+    planning_client = PlanningDispatcharrClient(live_engine.client)
+    engine = ChannelPipelineEngine(planning_client)
+    result = await engine.run_pipeline(
+        dry_run=False, triggered_by="api", m3u_account_ids=request.m3u_account_ids,
+        rule_ids=request.rule_ids, record_execution=False, plan_only=True,
+        skip_prerefresh=True,
+    )
+    scoped_rules = await engine._load_rules(request.rule_ids)
+    event_master_groups = {
+        config["master_group_id"]
+        for rule in scoped_rules
+        if rule.is_event_sync()
+        for config in [rule.get_event_sync_config() or {}]
+        if config.get("master_group_id") is not None
+    }
+    snapshot = [
+        {
+            "id": channel.get("id"), "name": channel.get("name"),
+            "channel_group_id": channel.get("channel_group_id"),
+            "epg_data_id": channel.get("epg_data_id"), "tvg_id": channel.get("tvg_id"),
+            "stream_ids": [item.get("id") if isinstance(item, dict) else item for item in channel.get("streams", [])],
+            **({"event_sync_master": True} if channel.get("auto_created", False) else {}),
+        }
+        for channel in (engine._existing_channels or [])
+        if not channel.get("auto_created", False)
+        or channel.get("channel_group_id") in event_master_groups
+    ]
+    payload = {
+        "request": request.model_dump(exclude={"dry_run"}),
+        "result": result,
+        "write_plan": planning_client.plan.as_dict(),
+        "snapshot": snapshot,
+    }
+    return payload
+
+
+def _canonical_pipeline_decision(payload: dict) -> dict:
+    """Remove observational timing only; retain every decision-bearing value."""
+    result = dict(payload["result"])
+    result.pop("duration_seconds", None)
+    return {
+        "write_plan": payload["write_plan"], "result": result,
+        "snapshot": payload["snapshot"],
+    }
+
+
+async def _materialize_pipeline_plan(request: RunPipelineRequest, principal: str = "api") -> dict:
+    """Build and persist the exact post-refresh write plan without side effects."""
+    from services.mutation_plan_store import canonical_hash, mutation_plan_store
+    payload = await _compute_pipeline_plan_payload(request)
+    summary = _pipeline_plan_view(payload["result"])
+    from services.pipeline_write_plan import PipelineWritePlan, PlannedWrite
+    raw = payload["write_plan"]
+    accounting = PipelineWritePlan(
+        writes=[PlannedWrite(**item) for item in raw["writes"]],
+        channel_preconditions=raw["channel_preconditions"],
+        group_preconditions=raw.get("group_preconditions", {}),
+        profile_preconditions=raw.get("profile_preconditions", {}),
+    ).accounting()
+    if max(accounting.values()) >= 500:
+        raise HTTPException(status_code=413, detail={
+            "message": "planned pipeline reaches the 500-operation hard cap",
+            **accounting,
+        })
+    payload["accounting"] = accounting
+    state_hash = canonical_hash(payload["write_plan"])
+    plan = mutation_plan_store.create("channel_pipeline", payload, state_hash, principal)
+    return {
+        "phase": "execute",
+        "plan_id": plan.plan_id, "plan_hash": plan.payload_hash,
+        "expires_at": plan.expires_at, "preview": summary,
+        **accounting,
+    }
+
+
+@router.post("/run/prepare")
+async def prepare_auto_creation_pipeline(request: RunPipelineRequest, _admin=RequireAdminIfEnabled):
+    """Prepare refresh phase when needed, otherwise materialize exact writes."""
+    from services.mutation_plan_store import canonical_hash, mutation_plan_store
+    engine = await _ensure_engine()
+    rules = await engine._load_rules(request.rule_ids)
+    account_ids: set[int] = set()
+    cache: dict = {}
+    for rule in rules:
+        config = rule.get_event_sync_config()
+        if config and config.get("refresh_providers_before_run"):
+            account_ids.update(
+                await engine._resolve_event_sync_refresh_accounts(config, cache)
+            )
+    if account_ids:
+        payload = {
+            "request": request.model_dump(exclude={"dry_run"}),
+            "account_ids": sorted(account_ids),
+        }
+        accounting = {
+            "write_count": len(payload["account_ids"]),
+            "unique_target_count": len(payload["account_ids"]),
+        }
+        if max(accounting.values()) >= 500:
+            raise HTTPException(status_code=413, detail={
+                "message": "provider refresh reaches the 500-operation hard cap", **accounting,
+            })
+        payload["accounting"] = accounting
+        plan = mutation_plan_store.create(
+            "channel_pipeline_refresh", payload, canonical_hash(payload["account_ids"]),
+            _plan_principal(_admin),
+        )
+        return {
+            "phase": "refresh", "plan_id": plan.plan_id,
+            "plan_hash": plan.payload_hash, "expires_at": plan.expires_at,
+            "preview": {"m3u_account_ids_to_refresh": payload["account_ids"]},
+            **accounting,
+        }
+    return await _materialize_pipeline_plan(request, _plan_principal(_admin))
+
+
+@router.post("/run/commit", status_code=202)
+async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _admin=RequireAdminIfEnabled):
+    """Validate drift, consume once, then execute the prepared pipeline scope."""
+    from services.mutation_plan_store import mutation_plan_store
+    from services.pipeline_write_plan import (
+        PipelineWritePlan, PlannedWrite, PartialReplayError,
+        replay_write_plan, validate_read_set,
+        journal_entries_for_plan,
+    )
+    try:
+        operation = "channel_pipeline_refresh" if request.phase == "refresh" else "channel_pipeline"
+        plan = mutation_plan_store.consume(
+            request.plan_id, operation, request.plan_hash,
+            principal=_plan_principal(_admin),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if request.phase == "refresh":
+        accounting = plan.payload.get("accounting", {})
+        if max(accounting.get("write_count", 500), accounting.get("unique_target_count", 500)) >= 500:
+            raise HTTPException(status_code=413, detail="provider refresh plan exceeds hard cap")
+        from tasks.m3u_refresh import M3URefreshTask
+        task = M3URefreshTask()
+        task.update_config({"account_ids": plan.payload["account_ids"], "skip_inactive": True})
+        refresh_result = await task.execute()
+        if isinstance(refresh_result, dict) and refresh_result.get("success") is False:
+            raise HTTPException(status_code=502, detail="planned provider refresh failed")
+        next_request = RunPipelineRequest(dry_run=False, **plan.payload["request"])
+        next_plan = await _materialize_pipeline_plan(next_request, plan.principal)
+        return {
+            "requires_confirmation": True,
+            "completed_phase": "refresh",
+            **next_plan,
+        }
+    if request.phase != "execute":
+        raise HTTPException(status_code=409, detail="unknown pipeline plan phase")
+    raw = plan.payload["write_plan"]
+    write_plan = PipelineWritePlan(
+        writes=[PlannedWrite(**item) for item in raw["writes"]],
+        channel_preconditions=raw["channel_preconditions"],
+        group_preconditions=raw.get("group_preconditions", {}),
+        profile_preconditions=raw.get("profile_preconditions", {}),
+    )
+    async with _MCP_PLANNED_RUN_LOCK:
+        engine = await _ensure_engine()
+        from services.mutation_plan_store import canonical_hash
+        original_decision_hash = canonical_hash(_canonical_pipeline_decision(plan.payload))
+        next_payload = await _compute_pipeline_plan_payload(
+            RunPipelineRequest(dry_run=False, **plan.payload["request"])
+        )
+        next_accounting = PipelineWritePlan(
+            writes=[PlannedWrite(**item) for item in next_payload["write_plan"]["writes"]],
+            channel_preconditions=next_payload["write_plan"]["channel_preconditions"],
+            group_preconditions=next_payload["write_plan"].get("group_preconditions", {}),
+            profile_preconditions=next_payload["write_plan"].get("profile_preconditions", {}),
+        ).accounting()
+        if max(next_accounting.values()) >= 500:
+            raise HTTPException(status_code=413, detail={
+                "message": "refreshed pipeline reaches the 500-operation hard cap",
+                **next_accounting,
+            })
+        current_decision_hash = canonical_hash(_canonical_pipeline_decision(next_payload))
+        if current_decision_hash != original_decision_hash:
+            raise HTTPException(
+                status_code=409,
+                detail="pipeline decision inputs drifted; prepare a new plan",
+            )
+        try:
+            await validate_read_set(engine.client, write_plan)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=f"pipeline state drifted: {exc}") from exc
+        execution_id = _create_pending_execution(mode="execute", triggered_by="api")
+        started = time.time()
+        # Durable recovery evidence is committed immediately before the first
+        # external write while the same planned-run lock is held.  Store both
+        # the current rollback snapshot and the exact replay program in the
+        # snapshot blob; a partial upstream failure can therefore be audited
+        # and compensated even if the process dies before finalization.
+        from models import ChannelPipelineSnapshot
+        evidence_session = get_session()
+        try:
+            targeted_channel_ids: set[int] = set()
+            for write in write_plan.writes:
+                if write.method == "assign_channel_numbers":
+                    targeted_channel_ids.update(value for value in write.args[0] if value > 0)
+                elif write.method == "update_profile_channel" and write.args[1] > 0:
+                    targeted_channel_ids.add(write.args[1])
+                elif write.method in {"update_channel", "delete_channel"} and write.args[0] > 0:
+                    targeted_channel_ids.add(write.args[0])
+            recovery_channels = [
+                channel for channel in next_payload["snapshot"]
+                if channel.get("id") in targeted_channel_ids
+            ]
+            snapshot = ChannelPipelineSnapshot(
+                execution_id=execution_id,
+                channel_count=len(recovery_channels),
+            )
+            snapshot.set_channels_data({
+                "channels": recovery_channels,
+                "execution_plan": plan.payload["write_plan"],
+                "plan_hash": plan.payload_hash,
+            })
+            evidence_session.add(snapshot)
+            evidence_session.commit()
+        finally:
+            evidence_session.close()
+        # Revalidate after the durable-evidence commit, immediately adjacent to
+        # first replay. No internal DB/file work occurs between this and the
+        # replay's first upstream call.
+        try:
+            await validate_read_set(engine.client, write_plan)
+        except ValueError as exc:
+            _mark_execution_failed(execution_id, exc)
+            raise HTTPException(status_code=409, detail=f"pipeline state drifted: {exc}") from exc
+        try:
+            _, remap = await replay_write_plan(engine.client, write_plan, read_set_validated=True)
+        except PartialReplayError as exc:
+            partial_replay = {
+                "failed_index": exc.failed_index,
+                "completed_targets": exc.completed,
+                "compensation_errors": exc.compensation_errors,
+            }
+            _mark_execution_failed(execution_id, exc, partial_replay=partial_replay)
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "pipeline replay partially failed",
+                    "completed_writes": exc.completed,
+                    "compensation_errors": exc.compensation_errors,
+                },
+            ) from exc
+
+        def remapped(value):
+            if isinstance(value, int) and value < 0:
+                return remap.get(value, value)
+            if isinstance(value, list):
+                return [remapped(item) for item in value]
+            if isinstance(value, dict):
+                return {key: remapped(item) for key, item in value.items()}
+            return value
+
+        from models import ChannelPipelineExecution
+        planned_journal = journal_entries_for_plan(write_plan, remap, execution_id)
+        if planned_journal:
+            journal.log_entries(entries=planned_journal)
+        result = remapped(plan.payload["result"])
+        review_counts: dict[int, dict] = {}
+        from services.event_sync_review_store import enqueue_review_candidates
+        for review in result.get("planned_review_candidates", []):
+            review_session = get_session()
+            try:
+                review_counts[review["rule_id"]] = enqueue_review_candidates(
+                    review_session, review["rule_id"], review["candidates"]
+                )
+            finally:
+                review_session.close()
+        for summary in result.get("event_sync", []):
+            counts = review_counts.get(summary.get("rule_id"))
+            if counts:
+                summary["review_enqueued"] = counts["enqueued"]
+                summary["review_refreshed"] = counts["refreshed"]
+        session = get_session()
+        try:
+            execution = session.query(ChannelPipelineExecution).filter(ChannelPipelineExecution.id == execution_id).one()
+            from models import ChannelPipelineConflict
+            for conflict in result.get("planned_conflicts", []):
+                row = ChannelPipelineConflict(
+                    execution_id=execution_id,
+                    stream_id=conflict["stream_id"],
+                    stream_name=conflict["stream_name"],
+                    winning_rule_id=conflict["winning_rule_id"],
+                    conflict_type=conflict["conflict_type"],
+                    resolution="first_rule_wins",
+                    description="Multiple channel-pipeline rules matched during planned execution",
+                )
+                row.set_losing_rule_ids(conflict["losing_rule_ids"])
+                session.add(row)
+            failed_actions = result.get("failed_actions", [])
+            execution.status = (
+                "capped" if result.get("capped") else
+                "completed_with_errors" if failed_actions else "completed"
+            )
+            if failed_actions:
+                execution.error_message = engine._summarize_failed_actions(failed_actions)
+            execution.completed_at = datetime.utcnow()
+            execution.duration_seconds = time.time() - started
+            execution.streams_evaluated = result.get("streams_evaluated", 0)
+            execution.streams_matched = result.get("streams_matched", 0)
+            execution.channels_created = result.get("channels_created", 0)
+            execution.channels_updated = result.get("channels_updated", 0)
+            execution.groups_created = result.get("groups_created", 0)
+            execution.streams_merged = result.get("streams_merged", 0)
+            execution.channels_touched = result.get("channels_touched", 0)
+            execution.streams_skipped = result.get("streams_skipped", 0)
+            execution.streams_excluded = result.get("streams_excluded", 0)
+            execution.set_created_entities(result.get("created_entities", []))
+            execution.set_modified_entities(result.get("modified_entities", []))
+            execution.set_execution_log(result.get("execution_log", []))
+            execution.set_warnings(_planned_run_warnings(result))
+            event_summaries = [
+                {key: value for key, value in summary.items() if key != "review_candidates"}
+                for summary in result.get("event_sync", [])
+            ]
+            execution.set_event_sync_summary(event_summaries)
+            scoped_rules = await engine._load_rules(plan.payload["request"].get("rule_ids"))
+            execution.is_event_sync = bool(event_summaries) and not any(
+                not rule.is_event_sync() for rule in scoped_rules
+            )
+            session.commit()
+        finally:
+            session.close()
+        await engine._update_rule_stats(scoped_rules, result)
+    return JSONResponse(status_code=202, content={"execution_id": execution_id, "status": "completed"})
 
 
 @router.post("/rules/{rule_id}/run", status_code=202)
@@ -3657,11 +4087,11 @@ async def get_auto_creation_template_variables():
 #   POST /debug-bundle              → 202 + {job_id, status: "running"};
 #                                     dispatches a supervised background task.
 #   GET  /debug-bundle/{job_id}     → JSON status while running/failed;
-#                                     StreamingResponse(application/gzip) when
-#                                     ready (job evicted on read).
+#                                     FileResponse(application/gzip) when ready
+#                                     (job and temp artifact evicted on read).
 #
-# Job state lives in-memory because the artifact itself is RAM-only and
-# operator-triggered. A 30-min TTL prunes abandoned jobs on every new POST.
+# Job state lives in-memory; completed artifacts use private temporary files.
+# An independent 30-min timer removes abandoned jobs and artifacts.
 #
 # Inside the worker, page fetches and stream-detail batches run via
 # asyncio.gather with a bounded semaphore so a 15K-channel catalog finishes
@@ -3670,6 +4100,10 @@ async def get_auto_creation_template_variables():
 _DEBUG_BUNDLE_PAGE_SIZE = 100
 _DEBUG_BUNDLE_FETCH_CONCURRENCY = 8
 _DEBUG_BUNDLE_JOB_TTL_SECONDS = 1800  # 30 minutes
+_DEBUG_BUNDLE_MAX_RETAINED_JOBS = 4
+# The accepted design sizes the default rotating set at 50 MiB. Keep bundle
+# ingestion at that bound even if an operator configures a larger on-disk set.
+_DEBUG_BUNDLE_LOG_BYTES_LIMIT = 50 * 1024 * 1024
 
 # Resilience for the upstream fan-out (bd-59x51). A debug bundle is generated
 # precisely when something is already wrong — often when Dispatcharr itself is
@@ -3720,37 +4154,209 @@ async def _with_retry(coro_factory, *, what: str):
 class _DebugBundleJob:
     """In-memory state for one debug-bundle build (bd-cns7j)."""
 
-    __slots__ = ("status", "created_at", "completed_at", "error", "filename", "data")
+    __slots__ = (
+        "status",
+        "created_at",
+        "completed_at",
+        "error",
+        "filename",
+        "owner_key",
+        "artifact_path",
+        "expiry_handle",
+    )
 
-    def __init__(self) -> None:
+    def __init__(self, owner_key: str = "test") -> None:
         self.status: str = "running"  # running | completed | failed
         self.created_at: float = time.time()
         self.completed_at: float | None = None
         self.error: str | None = None
         self.filename: str | None = None
-        self.data: bytes | None = None
+        self.owner_key = owner_key
+        self.artifact_path: str | None = None
+        self.expiry_handle: asyncio.TimerHandle | None = None
 
 
 _DEBUG_BUNDLE_JOBS: dict[str, _DebugBundleJob] = {}
 
 
+def _remove_debug_bundle_job(job_id: str) -> None:
+    job = _DEBUG_BUNDLE_JOBS.pop(job_id, None)
+    if job is None:
+        return
+    if job.expiry_handle is not None:
+        job.expiry_handle.cancel()
+        job.expiry_handle = None
+    if job.artifact_path is not None:
+        try:
+            os.unlink(job.artifact_path)
+        except FileNotFoundError:
+            # Another cleanup path may already have removed this artifact.
+            pass
+        job.artifact_path = None
+
+
+def _clear_debug_bundle_jobs_for_tests() -> None:
+    for job_id in list(_DEBUG_BUNDLE_JOBS):
+        _remove_debug_bundle_job(job_id)
+
+
+def _expire_debug_bundle_job(job_id: str, expected_job: _DebugBundleJob) -> None:
+    if _DEBUG_BUNDLE_JOBS.get(job_id) is expected_job:
+        _remove_debug_bundle_job(job_id)
+
+
+def _schedule_debug_bundle_expiry(job_id: str, job: _DebugBundleJob) -> None:
+    job.expiry_handle = asyncio.get_running_loop().call_later(
+        _DEBUG_BUNDLE_JOB_TTL_SECONDS,
+        _expire_debug_bundle_job,
+        job_id,
+        job,
+    )
+
+
 def _prune_old_debug_bundle_jobs() -> None:
-    """Drop jobs older than the TTL so the dict can't grow unbounded."""
-    cutoff = time.time() - _DEBUG_BUNDLE_JOB_TTL_SECONDS
-    stale = [jid for jid, job in _DEBUG_BUNDLE_JOBS.items() if job.created_at < cutoff]
+    """Drop terminal jobs whose completion-based TTL has elapsed."""
+    now = time.time()
+    stale = [
+        jid
+        for jid, job in _DEBUG_BUNDLE_JOBS.items()
+        if job.status != "running"
+        and job.completed_at is not None
+        and now - job.completed_at >= _DEBUG_BUNDLE_JOB_TTL_SECONDS
+    ]
     for jid in stale:
-        _DEBUG_BUNDLE_JOBS.pop(jid, None)
+        _remove_debug_bundle_job(jid)
     if stale:
         logger.debug("[AUTO-CREATE] Pruned %s expired debug-bundle jobs", len(stale))
 
 
-def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str):
-    """Add a text file to a tar archive."""
-    encoded = data.encode("utf-8")
+def _bound_debug_bundle_job_retention() -> None:
+    terminal = sorted(
+        (
+            (job.created_at, job_id)
+            for job_id, job in _DEBUG_BUNDLE_JOBS.items()
+            if job.status != "running"
+        )
+    )
+    excess = len(_DEBUG_BUNDLE_JOBS) - _DEBUG_BUNDLE_MAX_RETAINED_JOBS + 1
+    for _, job_id in terminal[:max(0, excess)]:
+        _remove_debug_bundle_job(job_id)
+
+
+def _debug_bundle_principal_key(admin) -> str:
+    return f"user:{admin.id}"
+
+
+def _persist_debug_bundle(payload: bytes) -> str:
+    descriptor, path = tempfile.mkstemp(
+        prefix="ecm-debug-bundle-", suffix=".tar.gz"
+    )
+    try:
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("debug bundle artifact write made no progress")
+            view = view[written:]
+        os.fsync(descriptor)
+        return path
+    except Exception:
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            # The failed write may not have left an artifact to remove.
+            pass
+        raise
+    finally:
+        os.close(descriptor)
+
+
+def _add_tar_entry(tf: tarfile.TarFile, name: str, data: str, scrub):
+    """Add a text file to a tar archive, credential-scrubbed on the way in.
+
+    ``scrub`` is the LAST redaction stage of the bundle and is a REQUIRED
+    positional argument so that adding a new member cannot silently skip it
+    (bead …-d0hoc). Per-producer scrubbing is necessary but not sufficient: the
+    leak this guards against reached ``channels.csv`` and ``channels.json``
+    through a producer that believed it had already obfuscated its URLs, and
+    every member added since would have inherited the same assumption. Pass
+    :func:`obfuscate.scrub_credential_values` bound to the harvested values.
+    """
+    encoded = scrub(data).encode("utf-8")
     info = tarfile.TarInfo(name=name)
     info.size = len(encoded)
     info.mtime = time.time()
     tf.addfile(info, io.BytesIO(encoded))
+
+
+def _log_line_timestamp(line: str) -> str | None:
+    """Return a validated JSON or legacy ring timestamp from one log line."""
+    try:
+        payload = json.loads(line)
+        timestamp = payload.get("ts") if isinstance(payload, dict) else None
+        if isinstance(timestamp, str):
+            datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            return timestamp
+    except (json.JSONDecodeError, TypeError, ValueError):
+        # Non-JSON lines may still use the legacy text timestamp parsed below.
+        pass
+
+    prefix = line.split(" - ", 1)[0]
+    try:
+        datetime.strptime(prefix, "%Y-%m-%d %H:%M:%S,%f")
+    except ValueError:
+        return None
+    return prefix
+
+
+def _log_member_metadata(
+    *,
+    member: str,
+    source: str,
+    source_files: list[str],
+    text: str,
+    max_bytes: int,
+    backup_count: int,
+    truncated: bool,
+    saturated: bool,
+    overwrite_count: int | None = None,
+    fallback_reason: str | None = None,
+    possible_overlap: bool | None = None,
+) -> dict:
+    """Describe the exact scrubbed text that will be added to the archive."""
+    lines = text.splitlines()
+    timestamps: list[str] = []
+    parse_failures = 0
+    for line in lines:
+        timestamp = _log_line_timestamp(line)
+        if timestamp is None:
+            parse_failures += 1
+        else:
+            timestamps.append(timestamp)
+    metadata = {
+        "member": member,
+        "source": source,
+        "source_files": source_files,
+        "first_timestamp": timestamps[0] if timestamps else None,
+        "last_timestamp": timestamps[-1] if timestamps else None,
+        "line_count": len(lines),
+        "byte_count": len(text.encode("utf-8")),
+        "truncated": truncated,
+        "saturated": saturated,
+        "timestamp_parse_failures": parse_failures,
+        "rotation_settings": {
+            "max_bytes": max_bytes,
+            "backup_count": backup_count,
+        },
+    }
+    if overwrite_count is not None:
+        metadata["overwrite_count"] = overwrite_count
+    if fallback_reason is not None:
+        metadata["fallback_reason"] = fallback_reason
+    if possible_overlap is not None:
+        metadata["possible_overlap"] = possible_overlap
+    return metadata
 
 
 async def _fetch_all_channels(client) -> tuple[list[dict], dict]:
@@ -4184,10 +4790,125 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     client = get_client()
 
     from csv_handler import generate_csv
-    from log_utils import get_recent_logs
+    from log_utils import (
+        get_persistent_log_policy,
+        get_registered_sensitive_value_forms,
+        get_ring_buffer_snapshot,
+        snapshot_persistent_logs,
+    )
     from models import ChannelPipelineRule
-    from obfuscate import obfuscate_text, obfuscate_url
-    from routers.backup import APP_VERSION
+    from obfuscate import obfuscate_text, obfuscate_url, scrub_credential_values
+    from routers.backup import APP_VERSION, _collect_credential_values
+    from config import CONFIG_DIR as LOG_CONFIG_DIR
+    from config import get_settings as get_config_settings
+
+    # -- 0. Harvest the credential VALUES this instance holds ---------
+    #
+    # THE PRIMARY CREDENTIAL RULE IS BY VALUE, NOT BY URL SHAPE (bead …-d0hoc).
+    # This must run BEFORE anything is obfuscated, because every later scrub
+    # takes these values as input. The shape rule in ``obfuscate.py`` is a
+    # fallback for credentials no account record holds; on its own it is the
+    # rule that shipped 316 copies of a real username and password in a bundle
+    # that looked obfuscated, because it was anchored on a path shape
+    # Dispatcharr does not emit.
+    #
+    # ``_collect_credential_values`` is the backup artifact's harvester, reused
+    # verbatim so the two redactors cannot drift on what counts as a credential:
+    # a new credential-bearing key added to either denylist starts contributing
+    # its value to BOTH artifacts automatically.
+    m3u_accounts: list = []
+    m3u_accounts_fetched = False
+    try:
+        m3u_accounts = await client.get_m3u_accounts() or []
+        m3u_accounts_fetched = True
+    except Exception:
+        logger.warning(
+            "[AUTO-CREATE] Debug bundle: could not fetch M3U accounts; the "
+            "value-based credential rule is DEGRADED for this bundle and only "
+            "the URL-shape fallback applies"
+        )
+    epg_sources: list = []
+    try:
+        epg_sources = await client.get_epg_sources() or []
+    except Exception as epg_lookup_err:
+        logger.warning(
+            "[AUTO-CREATE] Debug bundle: could not fetch EPG sources (%s); EPG "
+            "credential values are not known to the value-based rule",
+            epg_lookup_err,
+        )
+    settings_obj = get_config_settings()
+    settings_dict = settings_obj.model_dump()
+    known_secrets, known_identities = _collect_credential_values({
+        "m3u_accounts": m3u_accounts,
+        "epg_sources": epg_sources,
+        "settings": settings_dict,
+    })
+    registered_sensitive_forms = get_registered_sensitive_value_forms()
+
+    def scrub_url(value: str) -> str:
+        return obfuscate_url(value, known_secrets, known_identities)
+
+    def scrub_log_line(value: str) -> str:
+        return obfuscate_text(value, known_secrets, known_identities)
+
+    def scrub_member(value: str) -> str:
+        return scrub_credential_values(value, known_secrets, known_identities)
+
+    # -- 0b. Profile-reconcile inputs --------------------------------
+    # Keep the non-collapsed account rows alongside the deterministic winners:
+    # either view alone hides cross-account selection conflicts. The account
+    # rows come from the credential harvest above; the collapse helper receives
+    # that same list so it does not refetch the accounts.
+    per_account_group_settings = []
+    if not m3u_accounts_fetched:
+        # Do not serialize unavailable source data as authoritative empty views.
+        # Keep the message fixed because the failed response may echo a credential
+        # value that the step-0 harvest could not learn and therefore cannot scrub.
+        m3u_group_settings_data = {
+            "source_available": False,
+            "error": "M3U account source unavailable",
+        }
+    else:
+        for account in m3u_accounts:
+            for setting in account.get("channel_groups", []):
+                per_account_group_settings.append({
+                    **setting,
+                    "m3u_account_id": account.get("id"),
+                    "m3u_account_name": account.get("name", ""),
+                })
+        m3u_group_settings_data = {
+            "source_available": True,
+            "per_account": per_account_group_settings,
+            "collapsed": {},
+        }
+        try:
+            m3u_group_settings_data["collapsed"] = (
+                await client.get_all_m3u_group_settings(m3u_accounts) or {}
+            )
+        except Exception as e:  # noqa: BLE001 — diagnostics must fail soft
+            logger.warning(
+                "[AUTO-CREATE] Debug bundle: could not derive collapsed M3U "
+                "group settings: %s",
+                e,
+            )
+            m3u_group_settings_data["error"] = f"{type(e).__name__}: {e}"
+    m3u_group_settings_str = json.dumps(
+        m3u_group_settings_data, indent=2, default=str
+    )
+
+    channel_profiles_data = {"profiles": []}
+    try:
+        profiles = await client.get_channel_profiles() or []
+        channel_profiles_data["profiles"] = [
+            {"id": profile.get("id"), "name": profile.get("name", "")}
+            for profile in profiles
+        ]
+    except Exception as e:  # noqa: BLE001 — diagnostics must fail soft
+        logger.warning(
+            "[AUTO-CREATE] Debug bundle: could not fetch channel profiles: %s", e
+        )
+        channel_profiles_data["error"] = f"{type(e).__name__}: {e}"
+    channel_profiles_str = json.dumps(channel_profiles_data, indent=2, default=str)
 
     # -- 1. Fetch channels and groups from Dispatcharr ----------------
     all_channels, channels_report = await _fetch_all_channels(client)
@@ -4201,7 +4922,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
 
     stream_ids_list = list(all_stream_ids)
     stream_detail_lookup, streams_report = await _fetch_stream_details(
-        client, stream_ids_list, obfuscate_url
+        client, stream_ids_list, scrub_url
     )
 
     # Load stream stats from DB
@@ -4285,17 +5006,20 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
             ChannelPipelineRule.priority
         ).all()
 
+        # Reuses the accounts fetched in step 0 for the credential harvest —
+        # one upstream call, not two, and the same records feed both uses.
         m3u_id_to_name = {}
-        try:
-            m3u_accounts = await client.get_m3u_accounts()
-            m3u_id_to_name = {a["id"]: a["name"] for a in m3u_accounts}
-        except Exception as m3u_lookup_err:
+        if m3u_accounts_fetched:
+            m3u_id_to_name = {
+                a["id"]: a["name"] for a in m3u_accounts if "id" in a
+            }
+        else:
             # M3U-name lookup is decorative for the YAML export — when it
             # fails we still export rules with raw m3u_account_ids and the
             # operator can re-import on a host with M3U access.
             logger.warning(
-                "[AUTO-CREATE-EXPORT] Could not fetch M3U accounts for name resolution: %s",
-                m3u_lookup_err,
+                "[AUTO-CREATE-EXPORT] Could not fetch M3U accounts for name "
+                "resolution; exporting raw m3u_account_ids"
             )
 
         export_rules = {
@@ -4339,23 +5063,29 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         session.close()
 
     # -- 5. settings.json — user settings with secrets redacted -------
-    from config import get_settings as get_config_settings
+    # ``settings_dict`` was materialized in step 0 (its credential values are an
+    # input to the value-based rule) and is redacted in place here.
     # Import the canonical credential-field set from the backup router so the
     # two redactors can never drift (bd-jmi1c P0-1 / bd-46g4t). Prior to this
     # the local tuple omitted both the Dispatcharr ``api_key`` (legacy, leak
     # since v0.16.0-0004) and the new ``dispatcharr_api_key`` field.
     from routers.backup import _SETTINGS_CREDENTIAL_FIELDS as _BACKUP_CREDS
-    settings_obj = get_config_settings()
-    settings_dict = settings_obj.model_dump()
-    # Redact sensitive fields. The set is the union of the backup router's
-    # ``_SETTINGS_CREDENTIAL_FIELDS`` (password, dispatcharr_api_key, api_key,
-    # smtp_password, telegram_bot_token, mcp_api_key) plus debug-bundle-only
-    # additions (discord_webhook_url, telegram_chat_id) that aren't credential-
-    # class in the backup contract but are still PII operators wouldn't want
-    # shared in a debug bundle.
+    # Redact sensitive fields, using the backup router's
+    # ``_SETTINGS_CREDENTIAL_FIELDS`` verbatim.
+    #
+    # This used to append a local ``_DEBUG_BUNDLE_EXTRA = ("discord_webhook_url",
+    # "telegram_chat_id")`` with the note that those two "aren't credential-class
+    # in the backup contract but are still PII". That note described a real
+    # defect rather than a real distinction: bead …-9kwzp.9 established that the
+    # backup contract must redact them too (they are the ``9ej7f`` read-redaction
+    # partition, withheld from the MCP principal on GET /api/settings), and
+    # ``_SETTINGS_CREDENTIAL_FIELDS`` now derives them from
+    # ``config.ADMIN_ONLY_READ_REDACTED_FIELDS``. The local extension is gone so
+    # this bundle cannot drift from the artifact contract in either direction —
+    # note the debug bundle was the STRICTER of the two, which is exactly how the
+    # backup-side gap stayed invisible.
     _REDACTED = "***REDACTED***"
-    _DEBUG_BUNDLE_EXTRA = ("discord_webhook_url", "telegram_chat_id")
-    for key in (*_BACKUP_CREDS, *_DEBUG_BUNDLE_EXTRA):
+    for key in _BACKUP_CREDS:
         if settings_dict.get(key):
             settings_dict[key] = _REDACTED
     # Redact Dispatcharr URL credentials (keep host/port for debugging)
@@ -4499,10 +5229,119 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
     event_sync_matching_str = json.dumps(event_sync_matching, indent=2, default=str)
     event_sync_rule_count = len(event_sync_matching.get("rules", []))
 
-    # -- 8. logs.txt — recent logs, obfuscated -----------------------
-    log_lines = get_recent_logs()
-    obfuscated_lines = [obfuscate_text(line) for line in log_lines]
-    logs_text = "\n".join(obfuscated_lines)
+    # -- 8. logs — persistent rotating set, ring fallback ------------
+    applied_log_policy = get_persistent_log_policy()
+    applied_log_max_bytes = (
+        applied_log_policy.max_bytes
+        if applied_log_policy is not None
+        else settings_obj.backend_log_file_max_bytes
+    )
+    applied_log_backup_count = (
+        applied_log_policy.backup_count
+        if applied_log_policy is not None
+        else settings_obj.backend_log_file_backup_count
+    )
+    persistent_snapshot = await asyncio.to_thread(
+        snapshot_persistent_logs,
+        LOG_CONFIG_DIR,
+        backup_count=applied_log_backup_count,
+        max_total_bytes=_DEBUG_BUNDLE_LOG_BYTES_LIMIT,
+    )
+    ring_snapshot = get_ring_buffer_snapshot()
+
+    def collect_log_members() -> tuple[list[tuple[str, str]], list[dict]]:
+        persistent_text = "\n".join(
+            source.data.decode("utf-8", errors="replace").rstrip("\n")
+            for source in persistent_snapshot.files
+            if source.data
+        )
+        ring_text = "\n".join(ring_snapshot.lines)
+
+        def finalized_log_text(text: str) -> str:
+            # Apply producer-level obfuscation and the final literal-value sweep
+            # before measuring metadata. _add_tar_entry repeats it idempotently.
+            scrubbed_lines = (
+                scrub_log_line(line.rstrip("\r\n")) for line in io.StringIO(text)
+            )
+            scrubbed = scrub_member("\n".join(scrubbed_lines))
+            for form in registered_sensitive_forms:
+                scrubbed = scrubbed.replace(form, "***REDACTED***")
+            return scrubbed
+
+        contents: list[tuple[str, str]] = []
+        members: list[dict] = []
+        rotation_settings = {
+            "max_bytes": applied_log_max_bytes,
+            "backup_count": applied_log_backup_count,
+        }
+        if persistent_text:
+            logs_text = finalized_log_text(persistent_text)
+            source_files = [source.name for source in persistent_snapshot.files]
+            degraded_reason = persistent_snapshot.reason
+            if degraded_reason is None and persistent_snapshot.handler_degraded:
+                degraded_reason = "persistent_handler_degraded"
+            degraded = persistent_snapshot.incomplete or persistent_snapshot.handler_degraded
+            contents.append(("logs.txt", logs_text))
+            members.append(
+                _log_member_metadata(
+                    member="logs.txt",
+                    source="rotating_files",
+                    source_files=source_files,
+                    text=logs_text,
+                    **rotation_settings,
+                    truncated=(
+                        persistent_snapshot.incomplete
+                        or persistent_snapshot.rotation_saturated
+                        or persistent_snapshot.byte_limit_reached
+                    ),
+                    saturated=persistent_snapshot.rotation_saturated,
+                    fallback_reason=degraded_reason if degraded else None,
+                    possible_overlap=True if degraded else None,
+                )
+            )
+            if degraded:
+                finalized_ring_text = finalized_log_text(ring_text)
+                contents.append(("logs-ring-fallback.txt", finalized_ring_text))
+                members.append(
+                    _log_member_metadata(
+                        member="logs-ring-fallback.txt",
+                        source="ring_buffer",
+                        source_files=[],
+                        text=finalized_ring_text,
+                        **rotation_settings,
+                        truncated=ring_snapshot.overwrite_count > 0,
+                        saturated=ring_snapshot.saturated,
+                        overwrite_count=ring_snapshot.overwrite_count,
+                        fallback_reason=degraded_reason or "persistent_snapshot_degraded",
+                        possible_overlap=True,
+                    )
+                )
+        else:
+            logs_text = finalized_log_text(ring_text)
+            if persistent_snapshot.reason is not None:
+                fallback_reason = persistent_snapshot.reason
+            elif persistent_snapshot.handler_degraded:
+                fallback_reason = "persistent_logging_unavailable"
+            else:
+                fallback_reason = "no_persisted_log_files"
+            contents.append(("logs.txt", logs_text))
+            members.append(
+                _log_member_metadata(
+                    member="logs.txt",
+                    source="ring_buffer",
+                    source_files=[],
+                    text=logs_text,
+                    **rotation_settings,
+                    truncated=ring_snapshot.overwrite_count > 0,
+                    saturated=ring_snapshot.saturated,
+                    overwrite_count=ring_snapshot.overwrite_count,
+                    fallback_reason=fallback_reason,
+                    possible_overlap=False,
+                )
+            )
+        return contents, members
+
+    log_member_contents, log_members = await asyncio.to_thread(collect_log_members)
 
     # -- 9. manifest.json --------------------------------------------
     total_streams = len(all_stream_ids)
@@ -4528,10 +5367,24 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         "normalization_group_count": norm_group_count,
         "normalization_rule_count": norm_rule_count,
         "event_sync_rule_count": event_sync_rule_count,
+        "m3u_group_setting_count": len(per_account_group_settings),
+        "channel_profile_count": len(channel_profiles_data["profiles"]),
+        "log_members": log_members,
         "data_completeness": {
             "complete": data_complete,
             "channels": channels_report,
             "streams": streams_report,
+        },
+        # bead …-d0hoc: state what the credential scrub could actually do, so a
+        # reader is never left inferring safety from the fact that hostnames
+        # look replaced. COUNTS ONLY — putting the values here would be the
+        # leak this exists to close. ``value_rule_active`` False means the
+        # upstream account fetch failed and only the URL-shape fallback ran.
+        "credential_scrub": {
+            "value_rule_active": bool(known_secrets),
+            "known_credential_values": len(known_secrets) + len(known_identities),
+            "m3u_accounts_fetched": m3u_accounts_fetched,
+            "epg_sources_fetched": bool(epg_sources),
         },
         "stream_stats": {
             "probed_success": probed_success,
@@ -4549,19 +5402,32 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
         )
 
     # -- 10. Pack into tar.gz ----------------------------------------
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        _add_tar_entry(tf, "channels.json", channels_json_str)
-        _add_tar_entry(tf, "channels.csv", csv_content)
-        _add_tar_entry(tf, "rules.yaml", yaml_content)
-        _add_tar_entry(tf, "normalization_rules.yaml", norm_yaml_content)
-        _add_tar_entry(tf, "settings.json", settings_json_str)
-        _add_tar_entry(tf, "task_schedules.json", task_schedules_str)
-        _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str)
-        _add_tar_entry(tf, "event_sync_matching.json", event_sync_matching_str)
-        _add_tar_entry(tf, "logs.txt", logs_text)
-        _add_tar_entry(tf, "manifest.json", manifest_str)
-    payload = buf.getvalue()
+    #
+    # EVERY member goes through ``scrub_member`` — the literal value sweep — on
+    # its way into the archive. This is the stage that makes the invariant a
+    # property of the ARTIFACT rather than a property each producer has to
+    # remember: a member added later inherits the scrub whether or not its
+    # author thought about credentials, which is exactly the assumption that
+    # failed in bead …-d0hoc.
+    def pack_bundle() -> bytes:
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            _add_tar_entry(tf, "channels.json", channels_json_str, scrub_member)
+            _add_tar_entry(tf, "channels.csv", csv_content, scrub_member)
+            _add_tar_entry(tf, "rules.yaml", yaml_content, scrub_member)
+            _add_tar_entry(tf, "normalization_rules.yaml", norm_yaml_content, scrub_member)
+            _add_tar_entry(tf, "settings.json", settings_json_str, scrub_member)
+            _add_tar_entry(tf, "task_schedules.json", task_schedules_str, scrub_member)
+            _add_tar_entry(tf, "channel_groups_diagnostic.json", cg_diagnostic_str, scrub_member)
+            _add_tar_entry(tf, "event_sync_matching.json", event_sync_matching_str, scrub_member)
+            _add_tar_entry(tf, "m3u_group_settings.json", m3u_group_settings_str, scrub_member)
+            _add_tar_entry(tf, "channel_profiles.json", channel_profiles_str, scrub_member)
+            for log_member_name, log_member_text in log_member_contents:
+                _add_tar_entry(tf, log_member_name, log_member_text, scrub_member)
+            _add_tar_entry(tf, "manifest.json", manifest_str, scrub_member)
+        return buf.getvalue()
+
+    payload = await asyncio.to_thread(pack_bundle)
 
     elapsed_ms = (time.time() - start) * 1000
     filename = f"ecm-debug-bundle-{datetime.utcnow():%Y%m%d-%H%M%S}.tar.gz"
@@ -4585,13 +5451,19 @@ async def _run_debug_bundle_job(job_id: str) -> None:
         return
     try:
         filename, payload = await _build_debug_bundle()
+        artifact_path = await asyncio.to_thread(_persist_debug_bundle, payload)
+        payload_size = len(payload)
+        del payload
+        if _DEBUG_BUNDLE_JOBS.get(job_id) is not job:
+            os.unlink(artifact_path)
+            return
         job.filename = filename
-        job.data = payload
+        job.artifact_path = artifact_path
         job.status = "completed"
         job.completed_at = time.time()
         logger.info(
             "[AUTO-CREATE] Debug bundle job %s completed (%s bytes)",
-            job_id, len(payload),
+            job_id, payload_size,
         )
     except asyncio.CancelledError:
         job.status = "failed"
@@ -4604,10 +5476,15 @@ async def _run_debug_bundle_job(job_id: str) -> None:
         job.error = f"{type(e).__name__}: {e}"
         job.completed_at = time.time()
         logger.exception("[AUTO-CREATE] Debug bundle job %s failed: %s", job_id, e)
+    finally:
+        if job.completed_at is not None and _DEBUG_BUNDLE_JOBS.get(job_id) is job:
+            _schedule_debug_bundle_expiry(job_id, job)
 
 
 @router.post("/debug-bundle", status_code=202)
-async def start_debug_bundle():
+async def start_debug_bundle(
+    admin=Depends(require_authenticated_human_admin),
+):
     """Enqueue debug-bundle generation; return job id for polling (bd-cns7j).
 
     Generation walks the full catalog from Dispatcharr and was previously
@@ -4617,8 +5494,26 @@ async def start_debug_bundle():
     available.
     """
     _prune_old_debug_bundle_jobs()
+    owner_key = _debug_bundle_principal_key(admin)
+    for existing_job_id, existing_job in _DEBUG_BUNDLE_JOBS.items():
+        if existing_job.status == "running":
+            if existing_job.owner_key != owner_key:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A debug bundle generation is already in progress",
+                )
+            return JSONResponse(
+                status_code=202,
+                content={
+                    "job_id": existing_job_id,
+                    "status": "running",
+                    "message": "Debug bundle generation already in progress",
+                },
+            )
+    _bound_debug_bundle_job_retention()
     job_id = uuid.uuid4().hex
-    _DEBUG_BUNDLE_JOBS[job_id] = _DebugBundleJob()
+    job = _DebugBundleJob(owner_key)
+    _DEBUG_BUNDLE_JOBS[job_id] = job
 
     task = asyncio.create_task(
         _run_debug_bundle_job(job_id),
@@ -4639,7 +5534,10 @@ async def start_debug_bundle():
 
 
 @router.get("/debug-bundle/{job_id}")
-async def get_debug_bundle(job_id: str):
+async def get_debug_bundle(
+    job_id: str,
+    admin=Depends(require_authenticated_human_admin),
+):
     """Poll/download a debug-bundle job (bd-cns7j).
 
     - ``running``  → 200 with ``{job_id, status: "running"}``
@@ -4648,21 +5546,21 @@ async def get_debug_bundle(job_id: str):
     - missing job  → 404
     """
     job = _DEBUG_BUNDLE_JOBS.get(job_id)
-    if job is None:
+    if job is None or job.owner_key != _debug_bundle_principal_key(admin):
         raise HTTPException(status_code=404, detail="Debug bundle job not found")
     if job.status == "running":
         return {"job_id": job_id, "status": "running"}
     if job.status == "failed":
         return {"job_id": job_id, "status": "failed", "error": job.error or "unknown error"}
     # completed
-    payload = job.data or b""
     filename = job.filename or "ecm-debug-bundle.tar.gz"
-    # Single-shot download — drop the job so RAM is freed on read.
-    _DEBUG_BUNDLE_JOBS.pop(job_id, None)
-    return StreamingResponse(
-        io.BytesIO(payload),
+    if job.artifact_path is None:
+        raise HTTPException(status_code=500, detail="Debug bundle artifact unavailable")
+    return FileResponse(
+        job.artifact_path,
         media_type="application/gzip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        filename=filename,
+        background=BackgroundTask(_remove_debug_bundle_job, job_id),
     )
 
 

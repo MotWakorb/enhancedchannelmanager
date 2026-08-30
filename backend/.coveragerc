@@ -13,15 +13,21 @@ branch = False
 #   - alembic/*        — DB migration files (mechanical, reviewed separately)
 #   - conftest.py      — pytest fixtures, not production code
 #   - reset_password.py, test_dispatcharr_api.py — one-off operator scripts
-#   - obfuscate.py     — build-time code obfuscation tool, not runtime
 #   - __pycache__/*    — bytecode caches
+#
+# obfuscate.py was on this list until bead …-d0hoc, described as a "build-time
+# code obfuscation tool, not runtime". It is neither: it is the runtime
+# credential scrubber for the debug bundle and for frontend error telemetry —
+# a security boundary. Excluding it meant the one module whose whole job is to
+# not leak credentials was the one module with no coverage pressure, and the
+# rule that never matched a single real Dispatcharr URL sat there unexercised.
+# It is measured now. Do not re-add it.
 omit =
     tests/*
     alembic/*
     conftest.py
     reset_password.py
     test_dispatcharr_api.py
-    obfuscate.py
     __pycache__/*
     */__pycache__/*
 

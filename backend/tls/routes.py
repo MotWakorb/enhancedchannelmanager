@@ -6,6 +6,60 @@ Provides REST endpoints for:
 - Let's Encrypt certificate issuance (DNS-01 challenge)
 - Manual certificate upload
 - Certificate renewal
+
+AUTHORIZATION (bead 9kwzp.11)
+-----------------------------
+
+This router carried NO route-level dependency on any of its thirteen routes.
+The global ``auth_middleware`` in main.py establishes only that the caller is
+authenticated (no ``/api/tls`` path is or was in ``AUTH_EXEMPT_PATHS``), so
+every route was reachable by any authenticated non-admin AND by the static MCP
+service principal, which ``auth.dependencies._build_mcp_service_principal``
+stamps ``is_admin=True``. Three tiers now apply, per route:
+
+* ``RequireHumanAdminForTLSMaterial`` — the certificate/key material and
+  HTTPS-termination lifecycle, plus the settings read that emits masked DNS
+  credentials. Admin required and the MCP principal refused.
+* ``RequireHumanAdminForOutboundTest`` — ``POST /test-dns-provider`` only. It
+  hands DNS credentials to the provider API and reports the upstream verdict
+  back, which is the credential-oracle class of beads i4qrp / 9kwzp.6 /
+  9kwzp.7, and its 403 body already names that shape.
+* ``RequireAdminIfEnabled`` — the two status reads, which disclose no
+  credential material. Admin required, MCP principal admitted, which is the
+  inventory's default for anything outside the denied classes.
+
+AUTH-DISABLED BEHAVIOUR (beads jy006 and 2u4e0, PO decisions 2026-08-13 and
+2026-08-15)
+------------------------------------------------------------
+
+This paragraph used to read "all three no-op when ``require_auth`` is false or
+setup is incomplete". That is now true of only the third tier.
+
+* ``RequireHumanAdminForTLSMaterial`` carries ``enforce_when_auth_disabled``.
+  On an instance that HAS an operator identity (a user row, or
+  ``setup_complete``), all ten of its routes require a real human admin even
+  while ``require_auth`` is false. Installing a caller-supplied private key is
+  one of the identity primitives ECM refuses anonymously in every mode, because
+  the installed key becomes the instance's TLS identity and survives the
+  operator turning authentication back on. On an instance with NO operator
+  identity — a genuine first run, or a deliberately headless auth-disabled
+  deployment that never created a user — the gate still no-ops, so nothing is
+  locked out.
+* ``RequireHumanAdminForOutboundTest`` (``POST /test-dns-provider``) carries it
+  too, since bead 2u4e0. jy006 had left this one route open because its
+  decision named only the identity primitives and this gate carries eleven
+  siblings in other routers, and the residual made this router contradict
+  itself: ``GET /settings`` was refused on an owned auth-disabled instance
+  while ``POST /test-dns-provider``, which SPENDS the DNS-provider credentials
+  that route discloses in masked form, was not. The PO closed the whole family
+  on the credential-oracle axis. The same no-identity carve-out applies.
+* ``RequireAdminIfEnabled`` (the two status reads) is UNCHANGED: it still
+  no-ops whenever ``require_auth`` is false or setup is incomplete. Those reads
+  disclose no credential material.
+
+Every verdict is pinned in ``tests/test_admin_gate_inventory.py``,
+``tests/routers/test_9kwzp11_tls_router_admin_gate.py`` and
+``tests/routers/test_jy006_auth_disabled_identity_primitives.py``.
 """
 import asyncio
 import logging
@@ -13,10 +67,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Literal
 
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from database import get_session
+from models import User, UserSession
+
+from auth import (
+    RequireAdminIfEnabled,
+    RequireHumanAdminForOutboundTest,
+    RequireHumanAdminForTLSMaterial,
+)
+# Session-cookie transport policy lives in auth; this router only REPORTS it.
+from auth.routes import break_glass_is_downgrading
+
+from .redaction import redact_secret_values
 from .settings import (
+    break_glass_environment_override,
     get_tls_settings,
     save_tls_settings,
     TLSSettings,
@@ -40,6 +108,103 @@ except ImportError:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _redact(settings, text: str) -> str:
+    """Strip the stored DNS credentials out of an error string (bead 2owpi).
+
+    The renewal path redacts before it persists, and the DNS providers redact
+    before they raise. This is the last line: it also covers a
+    ``last_renewal_error`` that was written to disk BEFORE those fixes landed,
+    which no upstream redaction can reach.
+    """
+    return redact_secret_values(text, (
+        settings.dns_api_token,
+        settings.aws_access_key_id,
+        settings.aws_secret_access_key,
+    ))
+
+
+def _redact_request(request, text: str) -> str:
+    """Strip a ``/test-dns-provider`` request body's credentials from a string.
+
+    That route is the one place the credentials come from the caller rather
+    than from stored settings (bead 2owpi).
+    """
+    return redact_secret_values(text, (
+        request.api_token,
+        request.aws_access_key_id,
+        request.aws_secret_access_key,
+    ))
+
+
+def _tls_termination_active() -> bool:
+    """True when ECM's own HTTPS listener is configured to terminate TLS.
+
+    Exactly the two conditions ``tls/https_server.py`` starts uvicorn from
+    (``settings.enabled`` and ``CertificateStorage(TLS_DIR).has_certificate()``),
+    which is also the notion of "ECM terminates TLS" that
+    ``auth.routes._ecm_terminates_tls`` decides session-cookie policy from. The
+    one deliberate difference is that function's fail-closed leg for an
+    unreadable ``tls_settings.json``: cookie policy must assume TLS is on when
+    it cannot tell, but an ACTIVATION is a transition that has to be observed
+    positively, and "we could not read the file" is evidence of neither side of
+    it. The two are pinned in agreement over the enabled x issued matrix by
+    ``tests/unit/test_04c0u9_session_transport.py::
+    test_the_activation_and_cookie_policy_predicates_agree``.
+    """
+    settings = get_tls_settings()
+    return bool(settings.enabled and CertificateStorage(TLS_DIR).has_certificate())
+
+
+def _revoke_sessions_on_tls_activation(session: Session, was_terminating: bool) -> str:
+    """Cut every browser session that predates the start of TLS termination.
+
+    Bead 04c0u.9 remediation, stated as an invariant rather than as the route
+    that first demonstrated it: NO session that predates TLS termination
+    survives it, by ANY activation route. Without that, a jar holding a
+    PRE-activation, non-``Secure`` ``refresh_token`` keeps that token valid for
+    the remaining 7 days, and a token captured in cleartext before activation is
+    replayable against the brand-new HTTPS listener and can be rotated forward
+    indefinitely. Signing in once over HTTPS overwrites the pair, so this bites
+    exactly the operator who bookmarked the HTTP port and never revisits over
+    HTTPS. Revocation is the only control against pre-activation capture:
+    ``auth.routes._require_secure_session_transport`` closes the HTTP port to
+    NEW sessions, not to ones already minted.
+
+    Callers pass ``was_terminating`` captured BEFORE they touched settings or
+    key material; this rereads the predicate after. Four routes can move it:
+    ``/configure`` (flips ``enabled``), ``/request-cert`` and
+    ``/complete-challenge`` (land the certificate an already-``enabled``
+    instance was waiting for), ``/upload-cert`` (does both at once) and
+    ``/renew`` (issues a first certificate if none exists). The background
+    renewal task cannot: ``tls/renewal.py::check_and_renew_certificate``
+    returns early on ``not storage.has_certificate()``, so it can only replace
+    a certificate on an instance that is already terminating TLS.
+
+    ``auth_epoch`` is bumped as well as the rows revoked: the row revocation
+    kills the refresh token, the epoch bump kills the up-to-30-minute access
+    token already minted and sitting in the same jar. Returns the operator
+    message fragment, empty when this was not an activation.
+    """
+    if was_terminating or not _tls_termination_active():
+        return ""
+
+    revoked = session.query(UserSession).filter(
+        UserSession.is_revoked.is_(False),
+    ).update({UserSession.is_revoked: True}, synchronize_session=False)
+    session.query(User).update(
+        {User.auth_epoch: User.auth_epoch + 1}, synchronize_session=False
+    )
+    session.commit()
+    logger.warning(
+        "[TLS] TLS activated: revoked %d browser session(s) so no "
+        "pre-activation cookie can be replayed. Everyone must sign in again "
+        "over HTTPS.",
+        revoked,
+    )
+    return " All existing sign-ins were ended; sign in again over HTTPS."
+
 
 router = APIRouter(prefix="/api/tls", tags=["TLS"])
 
@@ -68,6 +233,15 @@ class TLSStatusResponse(BaseModel):
     certificate_valid: bool = False
     # HTTPS server status
     https_server_running: bool = False
+    # Break-glass visibility (bead 04c0u.9 remediation). Both inputs to the
+    # session-cookie escape hatch, so the UI can say plainly that sessions are
+    # travelling in cleartext. The stored flag alone was not enough: an
+    # operator who recovered with the environment variable and forgot the line
+    # saw an unchecked checkbox and an "Encrypted" badge while every session
+    # cookie shipped without ``Secure`` indefinitely.
+    allow_http_session_cookies: bool = False
+    http_session_cookies_env_override: bool = False
+    session_cookies_plaintext: bool = False
 
 
 class TLSConfigureRequest(BaseModel):
@@ -88,6 +262,26 @@ class TLSConfigureRequest(BaseModel):
     aws_region: str = "us-east-1"
     auto_renew: bool = True
     renew_days_before_expiry: int = 30
+    # PRESERVE ON OMIT, not full-replace (bead 04c0u.9 remediation).
+    #
+    # This was ``bool = False`` with an unconditional overwrite below, so any
+    # POST that omitted the field silently turned the operator's only emergency
+    # recovery path OFF: a cached pre-04c0u.9 bundle in an open tab, a scripted
+    # caller, an API client written against the previous contract. Same shape as
+    # bead ``enhancedchannelmanager-iij6s`` ("one click permanently silencing the
+    # only zero-backups signal"), reproduced on a security-relevant field, and
+    # the suite was blind to it.
+    #
+    # The consistency argument for keeping full-replace does not hold: this model
+    # is already MIXED, not uniformly full-replace — ``dns_api_token``,
+    # ``dns_zone_id``, ``aws_access_key_id``, ``aws_secret_access_key`` and
+    # ``aws_region`` are all conditional-update below. And the two failure
+    # directions are not symmetric. A client that does not know this field can
+    # never turn it ON, so under preserve-on-omit the only writer is a client
+    # that knows the field — which is also the client that can turn it off.
+    # Under full-replace, a client that does not know the field silently
+    # REVOKES a decision a knowing client made.
+    allow_http_session_cookies: Optional[bool] = None
 
 
 class CertificateRequestResponse(BaseModel):
@@ -121,11 +315,18 @@ class DNSProviderTestRequest(BaseModel):
 
 
 @router.get("/status", response_model=TLSStatusResponse)
-async def get_tls_status():
+async def get_tls_status(_admin=RequireAdminIfEnabled):
     """
     Get current TLS configuration status.
 
     Returns the current TLS settings, certificate status, and expiry information.
+
+    bead 9kwzp.11: the PLAIN admin tier, decided on its own merits. The response
+    carries no credential material — subject, issuer and validity window are
+    served to every TLS client anyway, and domain/port/running-state are
+    configuration disclosure that an authenticated non-admin has no business
+    reading but that the automation credential may. Contrast ``GET /settings``
+    below, which does emit credential fragments and is human-admin.
     """
     settings = get_tls_settings()
     storage = CertificateStorage(TLS_DIR)
@@ -141,9 +342,22 @@ async def get_tls_status():
         cert_issuer=settings.cert_issuer,
         auto_renew=settings.auto_renew,
         last_renewal_attempt=settings.last_renewal_attempt,
-        last_renewal_error=settings.last_renewal_error,
+        # Bead 2owpi: renewal errors are free text composed from third-party
+        # exceptions. The renewal path masks before persisting, but a value
+        # written before that fix may already be on disk, and this route is
+        # the weakest-gated one in the router.
+        last_renewal_error=_redact(settings, settings.last_renewal_error or "") or None,
         has_certificate=storage.has_certificate(),
         https_server_running=https_server_manager.is_running,
+        allow_http_session_cookies=settings.allow_http_session_cookies,
+        http_session_cookies_env_override=break_glass_environment_override(),
+        # Not recomputed here (bead 04c0u.9 round-2 remediation): this reports
+        # the verdict ``auth.routes`` actually applies to session cookies, and
+        # is the same call the WARN there is gated on. The local reconstruction
+        # this replaced required ECM's OWN TLS, so it read False — and the
+        # banner never rendered — on the reverse-proxy deployments where
+        # break-glass really was stripping ``Secure``.
+        session_cookies_plaintext=break_glass_is_downgrading(),
     )
 
     # Get certificate info if exists
@@ -161,11 +375,19 @@ async def get_tls_status():
 
 
 @router.get("/settings", response_model=TLSSettings)
-async def get_tls_settings_endpoint():
+async def get_tls_settings_endpoint(_admin=RequireHumanAdminForTLSMaterial):
     """
     Get TLS settings (for settings form).
 
     Note: Sensitive fields like dns_api_token and AWS credentials are masked in the response.
+
+    bead 9kwzp.11: human-admin rather than the plain admin tier the two status
+    reads take. Masked is not absent — the response discloses the last four
+    characters of ``dns_api_token``, ``aws_access_key_id`` and
+    ``aws_secret_access_key``, and ``dns_zone_id`` and ``acme_email`` in clear.
+    Withholding stored credential values from the automation credential is the
+    posture bead 9ej7f established on GET /api/settings, and this is the same
+    class of read.
     """
     settings = get_tls_settings()
 
@@ -177,6 +399,9 @@ async def get_tls_settings_endpoint():
         response.aws_access_key_id = "***" + response.aws_access_key_id[-4:]
     if response.aws_secret_access_key:
         response.aws_secret_access_key = "***" + response.aws_secret_access_key[-4:]
+    # Bead 2owpi: ``last_renewal_error`` is free text, not a masked field.
+    if response.last_renewal_error:
+        response.last_renewal_error = _redact(settings, response.last_renewal_error)
 
     return response
 
@@ -187,14 +412,31 @@ async def get_tls_settings_endpoint():
 
 
 @router.post("/configure")
-async def configure_tls(request: TLSConfigureRequest):
+async def configure_tls(
+    request: TLSConfigureRequest,
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
+):
     """
     Configure TLS settings.
 
     This updates the TLS configuration but does not request a certificate.
     Use /api/tls/request-cert to request a Let's Encrypt certificate.
+
+    bead 9kwzp.11: this WRITES the DNS-provider credentials that bead 2owpi
+    records as living in plaintext in /config/tls_settings.json, and its
+    ``enabled`` flag starts or stops HTTPS termination as a side effect below.
+    Both halves are the human-admin shape, for the same reason kgz3k denies
+    this principal the settings blob.
+
+    bead 04c0u.9 remediation: activating TLS here now REVOKES every existing
+    browser session (see below). That is operator-visible — everyone signed in,
+    including the admin performing this save, is logged out once and signs back
+    in over HTTPS.
     """
     settings = get_tls_settings()
+    was_terminating = _tls_termination_active()
+    previous_break_glass = settings.allow_http_session_cookies
 
     # Update settings
     settings.enabled = request.enabled
@@ -206,6 +448,27 @@ async def configure_tls(request: TLSConfigureRequest):
     settings.dns_provider = request.dns_provider
     settings.auto_renew = request.auto_renew
     settings.renew_days_before_expiry = request.renew_days_before_expiry
+
+    # Preserve on omit — see the field's note on TLSConfigureRequest.
+    if request.allow_http_session_cookies is not None:
+        settings.allow_http_session_cookies = request.allow_http_session_cookies
+    elif previous_break_glass:
+        logger.warning(
+            "[TLS] Configure request omitted allow_http_session_cookies while "
+            "break-glass is ON; leaving it ON. A client that does not send this "
+            "field cannot turn it off — use current ECM UI or send the field "
+            "explicitly."
+        )
+
+    if settings.allow_http_session_cookies != previous_break_glass:
+        # No security-audit facility exists in this codebase, so a warning is
+        # the house pattern for a security-relevant state change (bead 04c0u.9).
+        logger.warning(
+            "[TLS] Break-glass 'allow authenticated sessions over HTTP' turned "
+            "%s by an admin. While ON, session cookies are issued without "
+            "Secure and can be stolen by anyone who can observe the network.",
+            "ON" if settings.allow_http_session_cookies else "OFF",
+        )
 
     # Only update dns_api_token if not masked
     if request.dns_api_token and not request.dns_api_token.startswith("***"):
@@ -223,6 +486,8 @@ async def configure_tls(request: TLSConfigureRequest):
         settings.aws_region = request.aws_region
 
     save_tls_settings(settings)
+
+    revoked_message = _revoke_sessions_on_tls_activation(session, was_terminating)
 
     # Start or stop HTTPS server based on enabled state
     https_message = ""
@@ -245,11 +510,17 @@ async def configure_tls(request: TLSConfigureRequest):
             await https_server_manager.stop()
             https_message = " HTTPS server stopped."
 
-    return {"success": True, "message": f"TLS settings updated.{https_message}"}
+    return {
+        "success": True,
+        "message": f"TLS settings updated.{https_message}{revoked_message}",
+    }
 
 
 @router.post("/request-cert", response_model=CertificateRequestResponse)
-async def request_certificate():
+async def request_certificate(
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
+):
     """
     Request a new certificate from Let's Encrypt using DNS-01 challenge.
 
@@ -257,11 +528,22 @@ async def request_certificate():
     If a DNS provider (Cloudflare/Route53) is configured, the TXT record
     is created automatically. Otherwise, you must create the TXT record
     manually and call /api/tls/complete-challenge.
+
+    bead 9kwzp.11: ACME issuance drives the stored DNS-provider credentials
+    against the provider API, mints a private key, and writes both the key and
+    the certificate to /config/tls/. Certificate-material lifecycle, hence the
+    human-admin tier.
+
+    bead 04c0u.9 remediation: on the ACME flow this is where TLS termination
+    BEGINS — ``/configure`` switched ``enabled`` on earlier, while no
+    certificate existed — so pre-activation sessions are cut here. See
+    :func:`_revoke_sessions_on_tls_activation`.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
 
     settings = get_tls_settings()
+    was_terminating = _tls_termination_active()
 
     if not settings.enabled:
         raise HTTPException(400, "TLS is not enabled")
@@ -305,6 +587,8 @@ async def request_certificate():
             settings.cert_expires_at = result.expires_at.isoformat()
             save_tls_settings(settings)
 
+            revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
             # Start HTTPS server
             https_msg = ""
             if settings.enabled:
@@ -317,7 +601,7 @@ async def request_certificate():
 
             return CertificateRequestResponse(
                 success=True,
-                message=f"Certificate issued successfully.{https_msg}",
+                message=f"Certificate issued successfully.{https_msg}{revoked_msg}",
                 cert_expires_at=result.expires_at.isoformat(),
             )
 
@@ -390,6 +674,10 @@ async def request_certificate():
                         settings.cert_issuer = info.issuer
                     save_tls_settings(settings)
 
+                    revoked_msg = _revoke_sessions_on_tls_activation(
+                        session, was_terminating
+                    )
+
                     # Start HTTPS server
                     https_msg = ""
                     if settings.enabled:
@@ -402,7 +690,7 @@ async def request_certificate():
 
                     return CertificateRequestResponse(
                         success=True,
-                        message=f"Certificate issued successfully.{https_msg}",
+                        message=f"Certificate issued successfully.{https_msg}{revoked_msg}",
                         cert_expires_at=result.expires_at.isoformat(),
                     )
                 else:
@@ -414,7 +702,7 @@ async def request_certificate():
             except DNSProviderError as e:
                 return CertificateRequestResponse(
                     success=False,
-                    message=f"DNS provider error: {e}",
+                    message=_redact(settings, f"DNS provider error: {e}"),
                 )
 
         else:
@@ -427,24 +715,36 @@ async def request_certificate():
             )
 
     except Exception as e:
-        logger.error("[TLS] Certificate request failed: %s", e)
+        error = _redact(settings, f"Certificate request failed: {e}")
+        logger.error("[TLS] %s", error)
         return CertificateRequestResponse(
             success=False,
-            message=f"Certificate request failed: {e}",
+            message=error,
         )
 
 
 @router.post("/complete-challenge", response_model=CertificateRequestResponse)
-async def complete_dns_challenge():
+async def complete_dns_challenge(
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
+):
     """
     Complete a pending DNS-01 challenge.
 
     Call this after you have created the required TXT record.
+
+    bead 9kwzp.11: the second half of the issuance above, and it is the half
+    that actually saves the certificate and key. Same tier for the same reason.
+
+    bead 04c0u.9 remediation: it is therefore also where TLS termination begins
+    on the manual-DNS ACME flow, so pre-activation sessions are cut here. See
+    :func:`_revoke_sessions_on_tls_activation`.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
 
     settings = get_tls_settings()
+    was_terminating = _tls_termination_active()
 
     # Verify DNS record exists
     logger.debug("[TLS] Verifying DNS record...")
@@ -485,6 +785,8 @@ async def complete_dns_challenge():
                 settings.cert_issuer = info.issuer
             save_tls_settings(settings)
 
+            revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
             # Start HTTPS server
             https_msg = ""
             if settings.enabled:
@@ -497,7 +799,7 @@ async def complete_dns_challenge():
 
             return CertificateRequestResponse(
                 success=True,
-                message=f"Certificate issued successfully.{https_msg}",
+                message=f"Certificate issued successfully.{https_msg}{revoked_msg}",
                 cert_expires_at=result.expires_at.isoformat(),
             )
         else:
@@ -507,10 +809,11 @@ async def complete_dns_challenge():
             )
 
     except Exception as e:
-        logger.error("[TLS] Challenge completion failed: %s", e)
+        error = _redact(settings, f"Challenge failed: {e}")
+        logger.error("[TLS] Challenge completion failed: %s", error)
         return CertificateRequestResponse(
             success=False,
-            message=f"Challenge failed: {e}",
+            message=error,
         )
 
 
@@ -524,13 +827,27 @@ async def upload_certificate(
     cert_file: UploadFile = File(...),
     key_file: UploadFile = File(...),
     chain_file: UploadFile = File(None),
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
 ):
     """
     Upload a certificate and private key manually.
 
     Upload PEM-encoded certificate and key files.
     Optionally upload a chain file for intermediate certificates.
+
+    bead 9kwzp.11: this accepts CALLER-SUPPLIED certificate and private-key
+    material, persists it, flips the instance to ``mode="manual"`` and starts
+    the HTTPS server serving it. It is the sharpest route in the router — an
+    attacker-supplied key pair becomes the operator's transport identity — and
+    it previously carried no dependency at all.
+
+    bead 04c0u.9 remediation: it is the WHOLE manual activation flow in one
+    call — it sets ``enabled``, lands the key material and starts the listener —
+    so pre-activation sessions are cut here. See
+    :func:`_revoke_sessions_on_tls_activation`.
     """
+    was_terminating = _tls_termination_active()
     try:
         cert_content = await cert_file.read()
         key_content = await key_file.read()
@@ -562,6 +879,8 @@ async def upload_certificate(
             settings.domain = validation.domains[0]
         save_tls_settings(settings)
 
+        revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
         # Start HTTPS server
         https_msg = ""
         start_success, start_error = await https_server_manager.start()
@@ -573,7 +892,7 @@ async def upload_certificate(
 
         return {
             "success": True,
-            "message": f"Certificate uploaded successfully.{https_msg}",
+            "message": f"Certificate uploaded successfully.{https_msg}{revoked_msg}",
             "subject": validation.subject,
             "issuer": validation.issuer,
             "expires_at": validation.not_after.isoformat(),
@@ -593,17 +912,29 @@ async def upload_certificate(
 
 
 @router.post("/renew")
-async def trigger_renewal():
+async def trigger_renewal(
+    _admin=RequireHumanAdminForTLSMaterial,
+    session: Session = Depends(get_session),
+):
     """
     Manually trigger certificate renewal.
 
     This will request a new certificate from Let's Encrypt
     using the configured settings.
+
+    bead 9kwzp.11: renewal replaces the live key pair and restarts HTTPS with
+    it, driving the stored DNS credentials to do so. Same class as issuance.
+
+    bead 04c0u.9 remediation: unlike the background renewal task, this route
+    does NOT require an existing certificate — ``renew_certificate()`` will
+    issue a first one on an ``enabled`` instance that has none, which is an
+    activation. See :func:`_revoke_sessions_on_tls_activation`.
     """
     if not _acme_available:
         raise HTTPException(503, "ACME functionality not available (josepy not installed)")
 
     settings = get_tls_settings()
+    was_terminating = _tls_termination_active()
 
     if not settings.enabled:
         raise HTTPException(400, "TLS is not enabled")
@@ -614,6 +945,8 @@ async def trigger_renewal():
     result = await renew_certificate()
 
     if result.success:
+        revoked_msg = _revoke_sessions_on_tls_activation(session, was_terminating)
+
         # Restart HTTPS server to load new certificate
         https_msg = ""
         if https_server_manager.is_running:
@@ -626,13 +959,13 @@ async def trigger_renewal():
 
         return {
             "success": True,
-            "message": f"Certificate renewed successfully.{https_msg}",
+            "message": f"Certificate renewed successfully.{https_msg}{revoked_msg}",
             "expires_at": result.expires_at.isoformat(),
         }
     else:
         return {
             "success": False,
-            "message": f"Renewal failed: {result.error}",
+            "message": _redact(settings, f"Renewal failed: {result.error}"),
         }
 
 
@@ -642,11 +975,17 @@ async def trigger_renewal():
 
 
 @router.post("/https/start")
-async def start_https_server():
+async def start_https_server(_admin=RequireHumanAdminForTLSMaterial):
     """
     Start the HTTPS server.
 
     Starts the HTTPS server if TLS is enabled and a certificate exists.
+
+    bead 9kwzp.11: the HTTPS lifecycle trio is availability of the operator's
+    own transport security. The stop half is the direct denial of service and
+    the start/restart halves are its recovery, so all three take one tier; a
+    caller able to restart but not stop, or the reverse, would be an arbitrary
+    split. No frontend or MCP caller drives any of the three today.
     """
     settings = get_tls_settings()
 
@@ -669,11 +1008,14 @@ async def start_https_server():
 
 
 @router.post("/https/stop")
-async def stop_https_server():
+async def stop_https_server(_admin=RequireHumanAdminForTLSMaterial):
     """
     Stop the HTTPS server.
 
     Stops the HTTPS server. The HTTP server on port 6100 continues running.
+
+    bead 9kwzp.11: the denial-of-service half of the trio above. Falling back
+    to plaintext HTTP on 6100 is precisely the downgrade an attacker wants.
     """
     if not https_server_manager.is_running:
         return {"success": True, "message": "HTTPS server not running"}
@@ -683,11 +1025,14 @@ async def stop_https_server():
 
 
 @router.post("/https/restart")
-async def restart_https_server():
+async def restart_https_server(_admin=RequireHumanAdminForTLSMaterial):
     """
     Restart the HTTPS server.
 
     Useful after certificate renewal or configuration changes.
+
+    bead 9kwzp.11: same tier as start/stop — a restart is a stop with a
+    reload, so gating it any weaker would reopen the availability hole.
     """
     settings = get_tls_settings()
 
@@ -707,11 +1052,15 @@ async def restart_https_server():
 
 
 @router.get("/https/status")
-async def get_https_server_status():
+async def get_https_server_status(_admin=RequireAdminIfEnabled):
     """
     Get HTTPS server status.
 
     Returns whether the HTTPS server is running and on which port.
+
+    bead 9kwzp.11: the PLAIN admin tier, like ``GET /status``. A running flag
+    and a port number are not credential material, and the port is already
+    observable to anyone who can reach the host.
     """
     return https_server_manager.get_status()
 
@@ -722,11 +1071,17 @@ async def get_https_server_status():
 
 
 @router.delete("/certificate")
-async def delete_certificate():
+async def delete_certificate(_admin=RequireHumanAdminForTLSMaterial):
     """
     Delete the stored certificate and disable TLS.
 
     This removes the certificate and key files and disables TLS.
+
+    bead 9kwzp.11: destroys the operator's certificate and key, stops HTTPS,
+    and clears ``enabled``. Unlike the pipeline's rollback/restore-snapshot
+    pair (which the inventory admits this principal to, because they undo a
+    pipeline run against ECM's own rows), there is no undo here: recovering
+    means a fresh ACME issuance or a re-upload.
     """
     storage = CertificateStorage(TLS_DIR)
 
@@ -760,13 +1115,22 @@ async def delete_certificate():
 
 
 @router.post("/test-dns-provider")
-async def test_dns_provider(request: DNSProviderTestRequest):
+async def test_dns_provider(
+    request: DNSProviderTestRequest,
+    _admin=RequireHumanAdminForOutboundTest,
+):
     """
     Test DNS provider credentials.
 
     Verifies that the API token is valid and can access the zone.
     For Cloudflare, provide api_token.
     For Route53, provide aws_access_key_id and aws_secret_access_key (or use IAM role).
+
+    bead 9kwzp.11: the one route here that is the i4qrp shape verbatim — it
+    hands credentials to an upstream and reports the verdict back, which is a
+    credential-validity oracle, and it enumerates the operator's DNS zones on
+    the way. It reuses ``RequireHumanAdminForOutboundTest`` rather than the TLS
+    gate precisely so its 403 reads like the other eleven sinks.
     """
     if not _acme_available or get_dns_provider is None:
         raise HTTPException(503, "DNS provider functionality not available (josepy not installed)")
@@ -784,7 +1148,10 @@ async def test_dns_provider(request: DNSProviderTestRequest):
         # Verify credentials
         valid, error = await provider.verify_credentials()
         if not valid:
-            logger.warning("[TLS] DNS provider credential verification failed: %s", error)
+            logger.warning(
+                "[TLS] DNS provider credential verification failed: %s",
+                _redact_request(request, error or ""),
+            )
             return {"success": False, "message": "Invalid credentials. Verify your API token and permissions."}
 
         # Try to get zone if domain provided
@@ -807,10 +1174,14 @@ async def test_dns_provider(request: DNSProviderTestRequest):
     except ValueError as e:
         raise HTTPException(400, "Invalid provider configuration")
     except DNSProviderError as e:
-        logger.warning("[TLS] DNS provider test failed: %s", e)
+        logger.warning(
+            "[TLS] DNS provider test failed: %s", _redact_request(request, str(e)),
+        )
         return {"success": False, "message": "DNS provider test failed. Check API token and zone configuration."}
     except Exception as e:
-        logger.error("[TLS] DNS provider test unexpected error: %s", e)
+        logger.error(
+            "[TLS] DNS provider test unexpected error: %s",
+            _redact_request(request, str(e)),
+        )
         return {"success": False, "message": "DNS provider test failed unexpectedly. Check logs for details."}
-
 

@@ -7,13 +7,60 @@
 import { logger } from '../../utils/logger';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../../services/api';
+import { HttpError } from '../../services/httpClient';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { copyToClipboard } from '../../utils/clipboard';
 import { MCP_TOOL_CATEGORIES } from './mcpToolCategories';
+import { TypeToConfirmDialog } from '../TypeToConfirmDialog';
+import {
+  SettingsSectionHeader,
+  SettingsSectionPlaceholders,
+  type SettingsSectionMeta,
+} from './SettingsSectionHeader';
 import './MCPSettingsSection.css';
+
+/**
+ * The sections this page always has, in render order. Single authority for
+ * both the loading placeholders and the loaded cards, so the Settings section
+ * rail is complete from first paint and its anchor ids never move
+ * (see SettingsSectionHeader.tsx; bead enhancedchannelmanager-b32co).
+ *
+ * "Connection" and "Available Tools" are absent on purpose: they are gated on
+ * a key being configured, which is data rather than a loading window.
+ */
+const SECTIONS = {
+  serverStatus: { icon: 'dns', label: 'Server Status' },
+  apiKey: { icon: 'vpn_key', label: 'API Key' },
+} as const satisfies Record<string, SettingsSectionMeta>;
+
+const ALWAYS_PRESENT: readonly SettingsSectionMeta[] = [SECTIONS.serverStatus, SECTIONS.apiKey];
 
 interface Props {
   isAdmin: boolean;
+}
+
+interface MCPApiKeyDurabilityDetail {
+  code: 'mcp_api_key_durability_indeterminate';
+  message: string;
+  operation: 'rotation' | 'revocation';
+  mcp_api_key?: string;
+}
+
+function getDurabilityDetail(error: unknown): MCPApiKeyDurabilityDetail | null {
+  if (!(error instanceof HttpError) || error.status !== 503) return null;
+  const detail = error.detail;
+  if (
+    detail === null ||
+    typeof detail !== 'object' ||
+    (detail as Record<string, unknown>).code !== 'mcp_api_key_durability_indeterminate' ||
+    typeof (detail as Record<string, unknown>).message !== 'string' ||
+    !['rotation', 'revocation'].includes(
+      (detail as Record<string, unknown>).operation as string,
+    )
+  ) {
+    return null;
+  }
+  return detail as MCPApiKeyDurabilityDetail;
 }
 
 export function MCPSettingsSection({ isAdmin }: Props) {
@@ -24,15 +71,18 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+  // Which destructive key-lifecycle action is awaiting confirmation, if any.
+  const [keyAction, setKeyAction] = useState<'rotate' | 'revoke' | null>(null);
   const [mcpStatus, setMcpStatus] = useState<{
     reachable: boolean;
     tools_available?: number;
     // Self-diagnosing /health diagnostic (bd-ix1g6) — when reachable=true
     // but api_key_configured=false, api_key_status tells the operator WHY
-    // (file_not_found / invalid_json / field_missing / field_empty), and
-    // setup_hint carries a remediation matching the cause.
+    // (file_not_found / invalid_key / field_empty), and setup_hint carries a
+    // remediation matching the cause. The two settings.json-era values are
+    // still accepted from pre-…-04c0u.8 sidecar images.
     api_key_configured?: boolean;
-    api_key_status?: 'ok' | 'file_not_found' | 'invalid_json' | 'field_missing' | 'field_empty';
+    api_key_status?: 'ok' | 'file_not_found' | 'invalid_key' | 'field_empty' | 'invalid_json' | 'field_missing';
     setup_hint?: string;
   } | null>(null);
 
@@ -70,6 +120,14 @@ export function MCPSettingsSection({ isAdmin }: Props) {
       setShowKey(true);
       notifications.success('MCP API key generated');
     } catch (err) {
+      const detail = getDurabilityDetail(err);
+      if (detail?.operation === 'rotation' && typeof detail.mcp_api_key === 'string') {
+        setApiKey(detail.mcp_api_key);
+        setKeyConfigured(true);
+        setShowKey(true);
+        notifications.warning(detail.message, 'MCP Key Durability');
+        return;
+      }
       logger.error('Failed to generate MCP API key:', err);
       notifications.error('Failed to generate API key');
     } finally {
@@ -86,6 +144,15 @@ export function MCPSettingsSection({ isAdmin }: Props) {
       setShowKey(false);
       notifications.success('MCP API key revoked');
     } catch (err) {
+      const detail = getDurabilityDetail(err);
+      if (detail?.operation === 'revocation') {
+        setApiKey('');
+        setKeyConfigured(false);
+        setShowKey(false);
+        notifications.warning(detail.message, 'MCP Key Durability');
+        await checkMcpStatus();
+        return;
+      }
       logger.error('Failed to revoke MCP API key:', err);
       notifications.error('Failed to revoke API key');
     } finally {
@@ -103,12 +170,12 @@ export function MCPSettingsSection({ isAdmin }: Props) {
   };
 
   const mcpPort = '6101';
-  const mcpEndpoint = `http://YOUR_ECM_HOST:${mcpPort}/mcp?api_key=YOUR_API_KEY`;
+  const mcpEndpoint = `http://localhost:${mcpPort}/mcp`;
   const claudeDesktopConfig = JSON.stringify({
     mcpServers: {
       ecm: {
         command: 'npx',
-        args: ['mcp-remote', mcpEndpoint, '--allow-http']
+        args: ['mcp-remote', mcpEndpoint, '--header', 'Authorization:${ECM_MCP_AUTH}', '--allow-http']
       }
     }
   }, null, 2);
@@ -116,7 +183,8 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     mcpServers: {
       ecm: {
         type: 'http',
-        url: mcpEndpoint
+        url: mcpEndpoint,
+        headers: { Authorization: 'Bearer ${ECM_MCP_API_KEY}' }
       }
     }
   }, null, 2);
@@ -132,6 +200,12 @@ export function MCPSettingsSection({ isAdmin }: Props) {
     );
   }
 
+  // The placeholders are what keep this page's two rail entries — and the
+  // anchors a shared `?section=` link names — present while the fetch is in
+  // flight. Without them the rail appears from nothing when it settles, and a
+  // deep link scrolls the reader away from wherever they were reading. The
+  // `!isAdmin` branch above deliberately has none: that page really has no
+  // sections, and it never resolves into one that does.
   if (loading) {
     return (
       <div className="mcp-settings-section">
@@ -139,23 +213,16 @@ export function MCPSettingsSection({ isAdmin }: Props) {
           <span className="material-icons spinning">sync</span>
           Loading MCP settings...
         </div>
+        <SettingsSectionPlaceholders sections={ALWAYS_PRESENT} />
       </div>
     );
   }
 
   return (
     <div className="mcp-settings-section">
-      <div className="settings-page-header">
-        <h2>MCP Integration</h2>
-        <p>Connect Claude to ECM via the Model Context Protocol. Claude can list channels, manage streams, refresh M3U accounts, probe stream health, and more — all through natural language.</p>
-      </div>
-
       {/* Server Status */}
       <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">dns</span>
-          <h3>Server Status</h3>
-        </div>
+        <SettingsSectionHeader section={SECTIONS.serverStatus} />
         <div className="mcp-status-row">
           {mcpStatus === null ? (
             <div className="mcp-status-badge mcp-status-checking">
@@ -204,10 +271,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
       {/* API Key Management */}
       <div className="settings-section">
-        <div className="settings-section-header">
-          <span className="material-icons">vpn_key</span>
-          <h3>API Key</h3>
-        </div>
+        <SettingsSectionHeader section={SECTIONS.apiKey} />
 
         <div className="form-group-vertical">
           {keyConfigured ? (
@@ -231,21 +295,27 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                 </div>
               )}
 
+              {/* Both actions break every configured MCP client the moment
+                  they land, so each goes through a scoped type-to-confirm
+                  naming which one it is (bead enhancedchannelmanager-04c0u.12).
+                  The icons are decorative: without aria-hidden the Material
+                  ligature ("refresh", "block") is read out as part of the
+                  button's accessible name. */}
               <div className="mcp-key-actions">
                 <button
                   className="btn btn-primary"
-                  onClick={handleGenerate}
+                  onClick={() => setKeyAction('rotate')}
                   disabled={generating}
                 >
-                  <span className="material-icons">{generating ? 'sync' : 'refresh'}</span>
+                  <span className="material-icons" aria-hidden="true">{generating ? 'sync' : 'refresh'}</span>
                   {generating ? 'Generating...' : 'Regenerate Key'}
                 </button>
                 <button
                   className="btn btn-danger"
-                  onClick={handleRevoke}
+                  onClick={() => setKeyAction('revoke')}
                   disabled={revoking}
                 >
-                  <span className="material-icons">{revoking ? 'sync' : 'block'}</span>
+                  <span className="material-icons" aria-hidden="true">{revoking ? 'sync' : 'block'}</span>
                   {revoking ? 'Revoking...' : 'Revoke Key'}
                 </button>
               </div>
@@ -262,7 +332,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
                   onClick={handleGenerate}
                   disabled={generating}
                 >
-                  <span className="material-icons">{generating ? 'sync' : 'vpn_key'}</span>
+                  <span className="material-icons" aria-hidden="true">{generating ? 'sync' : 'vpn_key'}</span>
                   {generating ? 'Generating...' : 'Generate API Key'}
                 </button>
               </div>
@@ -281,7 +351,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
 
           <div className="form-group-vertical">
             <p className="form-description">
-              The MCP server runs on port <strong>{mcpPort}</strong> alongside ECM, using the Streamable HTTP transport on a single <code>/mcp</code> endpoint. Authentication uses your static MCP API key, passed as the <code>?api_key=</code> query parameter — all traffic stays on your private network, with no public exposure required.
+              The MCP server is published on host loopback by default at port <strong>{mcpPort}</strong>. Authentication uses an <code>Authorization: Bearer</code> header; credentials in URLs are rejected so they cannot leak through histories or access logs.
             </p>
 
             {/* mcp-remote bridge (Node) — Claude Desktop static-key path */}
@@ -294,7 +364,7 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>
               {', '}
               <code>winget install OpenJS.NodeJS.LTS</code>, <code>brew install node</code>, or <code>apt install nodejs npm</code>), add this to your <code>claude_desktop_config.json</code>.
-              Replace <code>YOUR_ECM_HOST</code> and <code>YOUR_API_KEY</code>. Without Node on PATH, Claude Desktop&apos;s logs show <code>spawn npx ENOENT</code>.
+              Set the operating-system environment variable <code>ECM_MCP_AUTH</code> to <code>Bearer &lt;your key&gt;</code> before launching Claude Desktop. The generated config intentionally contains no credential. Without Node on PATH, Claude Desktop&apos;s logs show <code>spawn npx ENOENT</code>.
             </p>
             <div className="mcp-config-block">
               <pre>{claudeDesktopConfig}</pre>
@@ -308,12 +378,12 @@ export function MCPSettingsSection({ isAdmin }: Props) {
               </button>
             </div>
             <p className="form-description" style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: 'var(--text-secondary, #888)' }}>
-              (<code>--allow-http</code> is needed because the endpoint is plain HTTP. The <code>?api_key=</code> parameter is your <code>mcp_api_key</code> — not your Dispatcharr key.)
+              (<code>--allow-http</code> is safe here only because the default endpoint is host loopback. Remote access must use the documented HTTPS profile.)
             </p>
 
             <label className="form-label" style={{ marginTop: '1rem' }}>MCP Endpoint (reference)</label>
             <div className="mcp-key-display">
-              <code>http://YOUR_ECM_HOST:{mcpPort}/mcp?api_key=YOUR_API_KEY</code>
+              <code>http://localhost:{mcpPort}/mcp</code>
               <button
                 className="mcp-copy-btn"
                 onClick={() => handleCopy(mcpEndpoint, 'MCP endpoint URL')}
@@ -344,6 +414,49 @@ export function MCPSettingsSection({ isAdmin }: Props) {
             </div>
           </div>
         </div>
+      )}
+
+      {keyAction === 'rotate' && (
+        <TypeToConfirmDialog
+          title="Rotate MCP API Key"
+          message={
+            <>
+              Every configured MCP client — Claude Desktop, Claude Code, and any
+              other — disconnects immediately and stays disconnected until you
+              copy the new key into each one. The key shown here is the only
+              copy; ECM cannot show it again later.
+            </>
+          }
+          confirmText="ROTATE MCP KEY"
+          confirmLabel="Rotate MCP API Key"
+          busy={generating}
+          onCancel={() => setKeyAction(null)}
+          onConfirm={async () => {
+            await handleGenerate();
+            setKeyAction(null);
+          }}
+        />
+      )}
+
+      {keyAction === 'revoke' && (
+        <TypeToConfirmDialog
+          title="Revoke MCP API Key"
+          message={
+            <>
+              All MCP access stops immediately and no replacement is issued.
+              Every configured client stays disconnected until you generate a new
+              key here and update each one.
+            </>
+          }
+          confirmText="REVOKE MCP KEY"
+          confirmLabel="Revoke MCP API Key"
+          busy={revoking}
+          onCancel={() => setKeyAction(null)}
+          onConfirm={async () => {
+            await handleRevoke();
+            setKeyAction(null);
+          }}
+        />
       )}
 
       {/* Available Tools */}

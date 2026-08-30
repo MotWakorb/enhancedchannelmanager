@@ -114,31 +114,13 @@ describe('pipe transforms', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Lookup tables
+// Lookup pipe removal (bead enhancedchannelmanager-70u0r.1, PO decision D2)
+//
+// `lookup:<table>` went away with the lookup_tables feature. It is now an
+// ordinary unknown transform, matching backend/template_engine.py.
 // ---------------------------------------------------------------------------
-describe('lookups', () => {
-  it('resolves key to value', () => {
-    const lookups = { callsigns: { ESPN: 'espn.com' } };
-    expect(render('{name|lookup:callsigns}', { name: 'ESPN' }, lookups)).toBe('espn.com');
-  });
-
-  it('falls back to input when key missing', () => {
-    const lookups = { callsigns: { ESPN: 'espn.com' } };
-    expect(render('{name|lookup:callsigns}', { name: 'UNKNOWN' }, lookups)).toBe('UNKNOWN');
-  });
-
-  it('unknown table throws', () => {
-    expect(() => render('{name|lookup:none}', { name: 'ESPN' }, {})).toThrow(TemplateSyntaxError);
-  });
-
-  it('chained after transform', () => {
-    const lookups = { stations: { ESPN: 'Entertainment Sports Programming Network' } };
-    expect(
-      render('{name|uppercase|lookup:stations}', { name: 'espn' }, lookups),
-    ).toBe('Entertainment Sports Programming Network');
-  });
-
-  it('no lookups dict throws', () => {
+describe('lookup pipe removed', () => {
+  it('lookup is an unknown transform', () => {
     expect(() => render('{name|lookup:callsigns}', { name: 'ESPN' })).toThrow(TemplateSyntaxError);
   });
 });
@@ -248,35 +230,6 @@ describe('renderWithTrace', () => {
     }
   });
 
-  it('annotates lookup hits with matched=true', () => {
-    const engine = new TemplateEngine();
-    const { output, trace } = engine.renderWithTrace(
-      '{code|lookup:countries}',
-      { code: 'US' },
-      { countries: { US: 'USA' } },
-    );
-    expect(output).toBe('USA');
-    const placeholder = trace[0];
-    if (placeholder.kind !== 'placeholder') throw new Error('unexpected trace shape');
-    const pipe = placeholder.pipes[0];
-    expect(pipe.transform).toBe('lookup');
-    expect(pipe.source).toBe('countries');
-    expect(pipe.matched).toBe(true);
-  });
-
-  it('annotates lookup misses with matched=false', () => {
-    const engine = new TemplateEngine();
-    const { output, trace } = engine.renderWithTrace(
-      '{code|lookup:countries}',
-      { code: 'ZZ' },
-      { countries: { US: 'USA' } },
-    );
-    expect(output).toBe('ZZ');
-    const placeholder = trace[0];
-    if (placeholder.kind !== 'placeholder') throw new Error('unexpected trace shape');
-    expect(placeholder.pipes[0].matched).toBe(false);
-  });
-
   it('conditional taken=true includes body trace', () => {
     const engine = new TemplateEngine();
     const { output, trace } = engine.renderWithTrace(
@@ -315,16 +268,5 @@ describe('TemplateEngine class', () => {
     const engine = new TemplateEngine();
     expect(engine.render('{x|uppercase}', { x: 'a' })).toBe('A');
     expect(engine.render('{y|lowercase}', { y: 'B' })).toBe('b');
-  });
-
-  it('uses instance-level lookups', () => {
-    const engine = new TemplateEngine({ flags: { usa: '🇺🇸' } });
-    expect(engine.render('{country|lookup:flags}', { country: 'usa' })).toBe('🇺🇸');
-  });
-
-  it('render-level lookups override instance lookups', () => {
-    const engine = new TemplateEngine({ tbl: { a: 'from-instance' } });
-    const out = engine.render('{k|lookup:tbl}', { k: 'a' }, { tbl: { a: 'from-call' } });
-    expect(out).toBe('from-call');
   });
 });

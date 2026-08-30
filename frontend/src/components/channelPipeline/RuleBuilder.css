@@ -44,27 +44,35 @@
   text-align: left;
 }
 
+/* Section role. 16px -> 15px. */
 .rule-section .section-title {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
   margin: 0;
   text-align: left;
 }
 
+/* Meta role. 13px -> 11px. */
 .rule-section .section-hint {
-  font-size: 13px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted);
   text-align: left;
 }
 
+/* Body role. 13px -> 13px. */
 .section-error {
   padding: 10px 14px;
   background: rgba(220, 53, 69, 0.1);
   border: 1px solid rgba(220, 53, 69, 0.3);
   border-radius: var(--radius-lg);
   color: var(--error-color, #dc3545);
-  font-size: 13px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   margin-bottom: 16px;
 }
 
@@ -73,14 +81,17 @@
   margin-bottom: 16px;
 }
 
+/* Label role. 13px -> 13px. */
 .form-field label {
   display: block;
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
+  font-weight: var(--type-label-weight);
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .form-field input[type="text"],
 .form-field input[type="number"],
 .form-field textarea {
@@ -90,7 +101,7 @@
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 14px;
+  font-size: var(--type-body-size);
   font-family: inherit;
 }
 
@@ -119,45 +130,54 @@
   width: 120px;
 }
 
-.field-error {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--error-color, #dc3545);
-}
+/* `.field-hint` and `.field-error` are owned by shared/common.css § 26
+   FIELD MESSAGES. Four files declared `.field-hint` bare and two declared
+   `.field-error` bare, across three different chunks and at three different
+   sizes — so the hint under a form field changed size depending on which
+   page had been opened first (bead enhancedchannelmanager-6z299). */
 
-.field-hint {
-  display: block;
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--text-muted);
-}
+/* `.form-row` and `.form-row .form-field` used to be declared here, bare.
+   NOTHING in the Channel Pipeline chunk renders `.form-row` — no file under
+   `components/channelPipeline/` puts that class on an element — so the rules
+   matched nothing on their own page and existed only to donate
+   `display: flex; gap: 24px; flex-wrap: wrap` to the three OTHER chunks that
+   do render it: SettingsTab.css:305,1094 (Email Settings, authored as a
+   two-column `display: grid`) and M3UAccountModal.css:48. After one visit to
+   Channel Pipeline this chunk is appended after both, so the Email Settings
+   grid collapsed to a flex row for the rest of the session. `.form-row
+   .form-field` matched nothing at all: `.form-field` exists only in this
+   chunk, `.form-row` only in the other two, so the descendant pair never
+   co-occurred. Deleted rather than scoped — there is no render to preserve
+   (bead enhancedchannelmanager-mktnb). */
 
-/* Form Row */
-.form-row {
-  display: flex;
-  gap: 24px;
-  flex-wrap: wrap;
-}
-
-.form-row .form-field {
-  flex: 1;
-  min-width: 150px;
-}
-
-/* Checkbox Group */
-.checkbox-group {
+/* Checkbox Group
+   Scoped to the route root, not bare. `.checkbox-group` is a shared class
+   owned by shared/common.css § 20 (column, gap 0.5rem); this is the Channel
+   Pipeline variant (wrapping rows, 8px/24px gap, 8px vertical padding). Bare,
+   it rode this lazy chunk — appended after common.css and never removed — so
+   one visit to Channel Pipeline re-gapped and re-padded every checkbox group
+   in the app for the rest of the session (StreamsPane's bulk-create profile
+   list, ScheduleEditor, Settings). `.channel-pipeline-tab` is the route root
+   (ChannelPipelineTab.tsx:882,896) and encloses all three consumers of this
+   rule — RuleBuilder.tsx:800+, EventSyncRuleEditor.tsx:1477 and
+   BulkRuleSettingsModal.tsx:191 are rendered inside it, and `ModalOverlay`
+   renders inline rather than through a portal, so the modals stay under it.
+   `:where()` contributes zero specificity, so this rule keeps the 0-1-0 it
+   had and only its match set narrows (bead enhancedchannelmanager-mktnb). */
+:where(.channel-pipeline-tab) .checkbox-group {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 24px;
   padding: 8px 0;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .checkbox-group .checkbox-item {
   display: inline-flex !important;
   align-items: center;
   gap: 8px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
   font-weight: 400;
   color: var(--text-primary);
   white-space: nowrap;
@@ -165,10 +185,7 @@
 }
 
 .checkbox-item input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
-  flex-shrink: 0;
 }
 
 /* Legacy checkbox-field support */
@@ -180,13 +197,14 @@
 }
 
 .checkbox-field input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
   cursor: pointer;
 }
 
+/* Body role. 14px -> 13px. */
 .checkbox-field span {
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary);
 }
 
@@ -223,10 +241,11 @@
   margin: 4px 0;
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .connector-toggle {
   padding: 4px 16px;
   border-radius: 12px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
   font-weight: 600;
   cursor: pointer;
   border: 1px solid var(--border-primary);
@@ -256,6 +275,7 @@
   position: relative;
 }
 
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .add-item-btn {
   display: flex;
   align-items: center;
@@ -266,7 +286,7 @@
   border-radius: var(--radius-xl);
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
   transition: all 0.2s;
 }
 
@@ -276,8 +296,9 @@
   background: var(--bg-secondary);
 }
 
+/* Button/inline-action glyph -> --icon-action. 20px -> 16px. */
 .add-item-btn .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-action);
 }
 
 /* Type Selector Dropdown */
@@ -324,15 +345,17 @@
   padding: 8px 0;
 }
 
+/* Micro role — the tracked uppercase label idiom. 11px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .type-category-label {
   padding: 8px 16px;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   text-transform: uppercase;
   color: var(--text-muted);
-  letter-spacing: 0.5px;
+  letter-spacing: var(--type-micro-tracking);
 }
 
+/* Body role. 14px -> 13px. */
 .type-option {
   display: block;
   width: 100%;
@@ -342,7 +365,9 @@
   border: none;
   color: var(--text-primary);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .type-option:hover {
@@ -368,40 +393,39 @@
   gap: 12px;
 }
 
-/* Buttons */
-.btn {
+/* Buttons — scoped to this editor.
+   A class literally named `.btn`, declared bare in a leaf rule editor that
+   rides the Channel Pipeline lazy chunk. Nothing else in the tree owns `.btn`
+   today, which is exactly the hazard: the next component to reach for the most
+   obvious button class name in the app would have silently inherited this
+   editor's 10px/20px padding and 14px text, on every page, permanently after
+   one visit to Channel Pipeline (bead enhancedchannelmanager-6z299.2).
+   `.rule-builder` is this component's own root (RuleBuilder.tsx:548) and
+   `:where()` keeps both selectors at the specificity they had, so the
+   `.btn-primary`/`.btn-secondary`/`.btn-danger` treatments from common.css
+   § 3 BUTTONS layer on top exactly as they do now. */
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
+:where(.rule-builder) .btn {
   padding: 10px 20px;
   border-radius: var(--radius-lg);
-  font-size: 14px;
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
 }
 
-.btn:disabled {
+:where(.rule-builder) .btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.btn-primary {
-  background: var(--button-primary-bg);
-  border: none;
-  color: var(--button-primary-text);
-}
-
-.btn-primary:hover:not(:disabled) {
-  opacity: 0.9;
-}
-
-.btn-secondary {
-  background: transparent;
-  border: 1px solid var(--border-primary);
-  color: var(--text-primary);
-}
-
-.btn-secondary:hover:not(:disabled) {
-  background: var(--bg-tertiary);
-}
+/* `.btn-primary` and `.btn-secondary` are owned by shared/common.css § 3
+   BUTTONS. Declared bare here they were not local variants — they were the
+   app-wide winners for anyone who had opened the Channel Pipeline, because
+   this file rides a lazy chunk appended after common.css. `.btn` above still
+   supplies this footer's own geometry; the secondary button picks up the
+   shared filled treatment instead of the transparent one that only existed
+   here (bead enhancedchannelmanager-6z299). */
 
 .btn-danger {
   background: var(--error-color, #dc3545);
@@ -414,32 +438,6 @@
 }
 
 /* Confirm Dialog - uses ModalBase.css (modal-overlay, modal-container modal-sm) */
-
-/* Responsive */
-@media (max-width: 600px) {
-  .form-row {
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .form-row .form-field {
-    min-width: 100%;
-  }
-
-  .rule-builder-footer {
-    flex-direction: column-reverse;
-    align-items: stretch;
-  }
-
-  .rule-builder-footer-nav {
-    flex-direction: column-reverse;
-    align-items: stretch;
-  }
-
-  .rule-builder-footer .btn {
-    width: 100%;
-  }
-}
 
 .checkbox-group.vertical {
   flex-direction: column;
@@ -456,11 +454,12 @@
   margin-top: 4px;
 }
 
+/* Control: meta role's SIZE only, authored weight kept. 12px -> 11px. */
 .norm-group-actions .text-button {
   background: none;
   border: none;
   color: var(--accent-primary, #3b82f6);
-  font-size: 12px;
+  font-size: var(--type-meta-size);
   cursor: pointer;
   padding: 0;
   text-decoration: underline;
@@ -475,22 +474,33 @@
   cursor: not-allowed;
 }
 
-.norm-group-disabled {
-  opacity: 0.5;
-  font-style: italic;
-}
+/* `.norm-group-disabled` deleted here and in BulkRuleSettingsModal.css: no TSX
+   in the tree emits the class, so neither copy had a render site. The two were
+   colliding inside the ChannelPipelineTab chunk (0.5 here vs 0.6 there) but
+   the collision was invisible because nothing wore the class
+   (bead enhancedchannelmanager-87o0c). */
 
+/* Meta role. 12px -> 11px. */
 .norm-hint {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--warning);
   margin-left: 4px;
 }
 
-.norm-hint-icon {
-  font-size: 14px;
+/* MEASURED DEAD, now fixed (bead enhancedchannelmanager-xhldy) — 0-1-0, and
+   although this file is a lazy Channel Pipeline chunk (which normally wins
+   against the eager bundle), the harness measured the glyph at 24px, so
+   `index.css`'s base `.material-icons` was winning here too. Scoped to
+   `.norm-hint` for the required second class of depth. The hint text beside it
+   is meta-sized, so the glyph takes --icon-badge. 24px -> 14px, which is what
+   the author intended. */
+.norm-hint .norm-hint-icon {
+  font-size: var(--icon-badge);
 }
 
 /* ============================================================================
@@ -528,6 +538,7 @@
 .rule-builder-enabled {
   flex-shrink: 0;
   padding-bottom: 10px;
+  font-size: var(--type-label-size);
 }
 
 .rule-active-window {
@@ -539,6 +550,8 @@
 .rule-active-window legend {
   margin-bottom: 0.35rem;
   font-weight: 600;
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
 }
 
 .rule-active-window-fields {
@@ -547,7 +560,19 @@
   gap: 0.75rem;
 }
 
-@media (max-width: 640px) {
+/* Zoom/reflow tier. Footer actions and the active-window fields stack before
+   the 640 CSS-pixel viewport produced by 200% browser zoom. */
+@media (max-width: 700px) {
+  .rule-builder-footer,
+  .rule-builder-footer-nav {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+
+  .rule-builder-footer .btn {
+    width: 100%;
+  }
+
   .rule-active-window-fields {
     grid-template-columns: 1fr;
   }
@@ -560,18 +585,21 @@
   scroll-margin-top: 8px;
 }
 
+/* Section role. 15px -> 15px. */
 .rule-phase-title {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 15px;
-  font-weight: 700;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--text-primary);
   margin: 0 0 16px;
 }
 
+/* Meta role. 12px -> 11px. */
 .rule-phase-num {
   display: inline-flex;
   align-items: center;
@@ -581,21 +609,25 @@
   border-radius: 50%;
   background: var(--button-primary-bg, #6366f1);
   color: var(--button-primary-text, #fff);
-  font-size: 12px;
-  font-weight: 700;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   flex-shrink: 0;
 }
 
 /* Collapsible "Why / when to use" body text. */
+/* Meta role. 12px -> 11px. */
 .rule-why-body {
   margin: 0;
   padding: 8px 10px 10px;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
 /* Rail: advisory save hint. */
+/* Meta role. 12px -> 11px. */
 .rule-save-hint {
   display: flex;
   align-items: flex-start;
@@ -605,12 +637,14 @@
   border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .rule-save-hint .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
   color: var(--info, #3b82f6);
   flex-shrink: 0;
 }

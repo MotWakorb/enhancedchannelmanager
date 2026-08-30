@@ -29,6 +29,26 @@ vi.mock('../hooks/useNavigateAwayGuard', () => ({ useNavigateAwayGuard: () => {}
 
 import * as api from '../services/api';
 import { DbasRestoreModal } from './DbasRestoreModal';
+import {
+  useServerDataInvalidation,
+  type ServerDataKey,
+} from '../hooks/useServerDataInvalidation';
+
+/**
+ * Subscribe to an invalidation key outside a component tree.
+ *
+ * The hook is the only public subscriber, so a throwaway host component
+ * registers the listener and unmounting it unregisters — no test-only export on
+ * the hook module, and the real registration path is what gets exercised.
+ */
+function subscribeForTest(key: ServerDataKey, reload: () => void): () => void {
+  function Listener() {
+    useServerDataInvalidation(key, reload);
+    return null;
+  }
+  const host = render(<Listener />);
+  return () => host.unmount();
+}
 
 function view(over: Record<string, unknown> = {}) {
   return {
@@ -53,6 +73,41 @@ const dryRunReport = {
   categories: [], logo_misses: 0, notes: [],
 };
 
+// A dry-run report that WOULD replace guide data on channels the operator
+// already has — the state whose remedy copy has to name a reachable control.
+const touchedDryRunReport = {
+  contract_version: 1, is_dry_run: true, outcome: null,
+  categories: [], logo_misses: 0, notes: [],
+  epg_link_reattach: {
+    mode: 'overwrite', created_channels: 0, existing_channels: 2,
+    preserved_channels: 0, existing_channels_named: ['FOX News', 'CNN'],
+    preserved_channels_named: [],
+  },
+};
+
+/**
+ * A view for a task the BACKEND reported as failed.
+ *
+ * It carries a `progress` payload, because the real hook only ever produces a
+ * terminal error through `viewFromProgress`, which always has one. A view with
+ * `isError: true` and `progress: null` is not a state the hook can reach from a
+ * backend status — that shape is reserved for, and now means, "the hook gave up
+ * waiting for the run to start", which the modals must NOT treat as a run result
+ * (bead dfkbn, review round 5). Fixtures have to respect that distinction or
+ * they assert against an impossible state.
+ */
+function backendFailedView() {
+  return view({
+    isError: true,
+    status: 'failed',
+    progress: {
+      total: 13, current: 3, percentage: 23, status: 'failed',
+      current_item: 'channel', success_count: 0, failed_count: 1,
+      skipped_count: 0, started_at: '2026-08-05T10:00:00Z',
+    },
+  });
+}
+
 describe('DbasRestoreModal', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -62,6 +117,7 @@ describe('DbasRestoreModal', () => {
 
   it('renders the upload dropzone first', async () => {
     render(<DbasRestoreModal onClose={vi.fn()} />);
+    expect(screen.getByRole('dialog', { name: 'Restore DBAS Backup' })).toHaveAttribute('aria-modal', 'true');
     expect(screen.getByText(/drag & drop a backup artifact/i)).toBeInTheDocument();
 
     // Let the mount-time getSettings() fetch settle so the resulting state
@@ -106,12 +162,99 @@ describe('DbasRestoreModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     await waitFor(() =>
-      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), false, undefined),
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), false, undefined, 'preserve'),
     );
     // Dry-run summary + the apply follow-through.
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
     );
+  });
+
+  it('applying from a completed dry-run requires typing the exact file name in the confirm dialog', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockClear();
+    fireEvent.click(screen.getByRole('button', { name: /apply these changes/i }));
+
+    expect(api.startDbasRestore).not.toHaveBeenCalled();
+    const dialogs = screen.getAllByRole('dialog');
+    expect(dialogs).toHaveLength(2);
+    expect(screen.getByRole('dialog', { name: 'Restore DBAS Backup' })).toBe(dialogs[0]);
+    expect(screen.getByRole('dialog', { name: 'Apply DBAS Restore' })).toBe(dialogs[1]);
+    expect(dialogs[0].getAttribute('aria-labelledby')).not.toBe(dialogs[1].getAttribute('aria-labelledby'));
+    const applyConfirm = screen.getByRole('button', { name: 'Apply restore' });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'wrong-name.zip' } });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'backup.zip' } });
+    expect(applyConfirm).toBeEnabled();
+    fireEvent.click(applyConfirm);
+
+    await waitFor(() =>
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), true, undefined, 'preserve'),
+    );
+  });
+
+  it('selecting Apply at the configure step also gates the mutation behind the confirm dialog', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+    });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('radio', { name: /^apply/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^apply restore/i }));
+
+    // No mutation yet — the confirm dialog must appear first.
+    expect(api.startDbasRestore).not.toHaveBeenCalled();
+    const applyConfirm = screen.getByRole('button', { name: 'Apply restore' });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'wrong-name.zip' } });
+    expect(applyConfirm).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/type/i), { target: { value: 'backup.zip' } });
+    expect(applyConfirm).toBeEnabled();
+    fireEvent.click(applyConfirm);
+
+    await waitFor(() =>
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), true, undefined, 'preserve'),
+    );
+  });
+
+  it('Preview (dry run) remains one click even with the confirm gate in place', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), false, undefined, 'preserve'),
+    );
+    expect(screen.queryByRole('button', { name: 'Apply restore' })).not.toBeInTheDocument();
   });
 
   it('passes the passphrase through for an encrypted artifact', async () => {
@@ -130,7 +273,7 @@ describe('DbasRestoreModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
 
     await waitFor(() =>
-      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), false, 'sekret-passphrase'),
+      expect(api.startDbasRestore).toHaveBeenCalledWith(expect.any(File), false, 'sekret-passphrase', 'preserve'),
     );
   });
 
@@ -144,7 +287,7 @@ describe('DbasRestoreModal', () => {
         error: 'Could not decrypt backup: wrong passphrase or corrupted artifact',
       }],
     });
-    mockView = view({ isError: true, status: 'failed' });
+    mockView = backendFailedView();
 
     render(<DbasRestoreModal onClose={vi.fn()} />);
     dropFile(zip('enc.zip', 'ECMBKENC'));
@@ -155,5 +298,252 @@ describe('DbasRestoreModal', () => {
     await waitFor(() =>
       expect(screen.getByText(/wrong passphrase or corrupted artifact/i)).toBeInTheDocument(),
     );
+  });
+  it('reaches the results step when the run finished with warnings', async () => {
+    // Bead fexq1: a degraded restore's history row now reads
+    // `completed_with_warnings`. The terminal check used to accept only
+    // `completed` and `failed`, so the drill's degraded restore would poll
+    // until the retries ran out and land back on configure with
+    // "Restore failed" — for a restore that completed and rolled nothing back.
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed_with_warnings', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+  });
+
+  // --- Channel-reattach mode (bead dfkbn, PR review W1) -------------------
+
+  it('defaults the reattach mode to keeping existing channels as they are', async () => {
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+    const keep = screen.getByLabelText(/keep their current guide data, logos, and grouping/i);
+    const replace = screen.getByLabelText(/replace their guide data, logos, and grouping/i);
+    expect(keep).toBeChecked();
+    expect(replace).not.toBeChecked();
+  });
+
+  it('sends overwrite only when the operator explicitly picks it', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText(/replace their guide data, logos, and grouping/i));
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(api.startDbasRestore).toHaveBeenCalledWith(
+        expect.any(File), false, undefined, 'overwrite',
+      ),
+    );
+  });
+
+  it('the mode picker names the consequence, never the enum value', async () => {
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+    // The wire values are an implementation detail; an operator deciding
+    // whether to keep their own guide links must not have to map an enum.
+    const picker = screen.getByRole('group', { name: /channels that already exist/i });
+    expect(picker.textContent).not.toMatch(/\bpreserve\b/i);
+    expect(picker.textContent).not.toMatch(/\boverwrite\b/i);
+  });
+  // --- The preview's advice must name a control that EXISTS (bead dfkbn) -----
+  //
+  // The component-level notice test hand-supplies `mode`, so it structurally
+  // cannot see whether the control its copy names is reachable from the step it
+  // renders on. These drive the real modal to the dry-run results step.
+
+  it('offers a way back to the options from a dry-run result', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed', details: { restore_report: touchedDryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    // The summary warns, and its remedy names "Back to options"...
+    const notice = await screen.findByTestId('existing-channel-reattach-notice');
+    expect(notice.textContent).toMatch(/back to options/i);
+
+    // ...which is a real, enabled control on this step.
+    const back = screen.getByRole('button', { name: /back to options/i });
+    expect(back).toBeEnabled();
+
+    // And it lands back on the picker, so the advice can be acted on.
+    fireEvent.click(back);
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText(/keep their current guide data, logos, and grouping/i),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  it('offers no way back from an APPLIED result, and says so', async () => {
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{
+        status: 'completed',
+        details: { restore_report: { ...touchedDryRunReport, is_dry_run: false, outcome: 'success' } },
+      }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+
+
+    // Reaching the results step. Both footer branches key off the REPORT's
+    // is_dry_run, which is what an applied run returns, so this is the applied
+    // results step without re-driving the type-to-confirm apply gate.
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    const notice = await screen.findByTestId('existing-channel-reattach-notice');
+    // Nothing to go back to once it has run, so the copy must not pretend.
+    expect(notice.textContent).toMatch(/run the restore again/i);
+    expect(notice.textContent).not.toMatch(/back to options/i);
+    expect(screen.queryByRole('button', { name: /back to options/i })).toBeNull();
+  });
+
+  /**
+   * A restore that APPLIED changed the channel groups (bead
+   * enhancedchannelmanager-3vtim). The Channel Manager's group filter holds its
+   * own pre-restore copy of that list and cannot see a write made from the
+   * Settings tab, so drill run 2026-08-08-run17 reported "No groups match
+   * Drill17" for groups the restore had just created — until a full page reload,
+   * which the modal's neighbouring copy had led the operator to expect anyway.
+   */
+  it('publishes channel-groups after an APPLIED restore', async () => {
+    const reload = vi.fn();
+    const unsubscribe = subscribeForTest('channel-groups', reload);
+
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{
+        status: 'completed',
+        details: { restore_report: { ...dryRunReport, is_dry_run: false, outcome: 'success' } },
+      }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    unsubscribe();
+  });
+
+  it('publishes nothing after a DRY RUN — a preview changed no group', async () => {
+    const reload = vi.fn();
+    const unsubscribe = subscribeForTest('channel-groups', reload);
+
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+    expect(reload).not.toHaveBeenCalled();
+    unsubscribe();
+  });
+  /**
+   * And the channels those groups hold. Publishing only `channel-groups` left
+   * drill run 2026-08-09-run18 looking at "CHANNELS 0 / Empty" behind a
+   * correctly-refreshed group filter, straight after a restore whose own modal
+   * said "Channels 12 CREATED". The Channels pane has no refresh control, so
+   * the only cure was a full reload — which signs the operator out (bead
+   * enhancedchannelmanager-eelgi).
+   */
+  it('publishes channels after an APPLIED restore', async () => {
+    const reload = vi.fn();
+    const unsubscribe = subscribeForTest('channels', reload);
+
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{
+        status: 'completed',
+        details: { restore_report: { ...dryRunReport, is_dry_run: false, outcome: 'success' } },
+      }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    unsubscribe();
+  });
+
+  it('publishes no channels refetch after a DRY RUN', async () => {
+    const reload = vi.fn();
+    const unsubscribe = subscribeForTest('channels', reload);
+
+    (api.startDbasRestore as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+    });
+    (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
+      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+    });
+    mockView = view({ isComplete: true, status: 'completed' });
+
+    render(<DbasRestoreModal onClose={vi.fn()} />);
+    dropFile(zip('backup.zip', 'PK'));
+    await waitFor(() => expect(screen.getByText('backup.zip')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: /run preview/i }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /apply these changes/i })).toBeInTheDocument(),
+    );
+    expect(reload).not.toHaveBeenCalled();
+    unsubscribe();
   });
 });

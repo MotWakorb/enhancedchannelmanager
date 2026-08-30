@@ -3,30 +3,30 @@
 **Status:** Initial scaffold (v1). Targets are conservative and MUST be recalibrated against 30+ days of production metrics before being treated as commitments.
 **Owner:** SRE persona.
 **Baseline:** Built on the observability substrate shipped in [PR #80](https://github.com/MotWakorb/enhancedchannelmanager/pull/80) (bd-ak1db). The four `ecm_*` series exposed on `/metrics` are the foundation for every SLI below.
-**Last updated:** 2026-05-16 (bd-ft3hk — added SLO-10 Interactive Stream Dedup section).
+**Last updated:** 2026-05-16 (bd-ft3hk: added SLO-10 Interactive Stream Dedup section).
 
 ## Why this exists
 
-The observability baseline gave ECM *signal*: we can see request rate, latency distributions, error rate, and readiness state on a Prometheus-compatible endpoint. Signal without thresholds is not reliability — it's just telemetry. This document turns signal into **commitments**: what "good" looks like, how much bad we tolerate (error budget), and what we do when the budget burns.
+The observability baseline gave ECM *signal*: we can see request rate, latency distributions, error rate, and readiness state on a Prometheus-compatible endpoint. Signal without thresholds is not reliability: it's just telemetry. This document turns signal into **commitments**: what "good" looks like, how much bad we tolerate (error budget), and what we do when the budget burns.
 
 Without SLOs, on-call has no objective criterion for paging. "The app feels slow" is not an incident; "p95 latency breached 500ms for 10 minutes, consuming 15% of the weekly error budget" is. This document exists so that answer is computable, not negotiated.
 
 ## Definitions
 
-- **SLI — Service Level Indicator.** The raw metric we measure (e.g., ratio of successful readiness probes to total probes).
-- **SLO — Service Level Objective.** The target we commit to for an SLI over a rolling window (e.g., 99% over 30 days).
+- **SLI: Service Level Indicator.** The raw metric we measure (e.g., ratio of successful readiness probes to total probes).
+- **SLO: Service Level Objective.** The target we commit to for an SLI over a rolling window (e.g., 99% over 30 days).
 - **Error budget.** `1 - SLO`. The amount of failure we can absorb without breaching the commitment. For a 99% / 30d SLO, the budget is 1% of 30 days = ~7.2 hours of downtime per 30 days.
 - **Burn rate.** Current rate of budget consumption relative to the steady-state burn that would exhaust the budget exactly at window close. A burn rate of 1.0 means we're consuming budget at exactly the rate the SLO allows; 14.4 means we'd exhaust a 30-day budget in ~2 days.
 
 ## Scope
 
-These SLOs apply to the `ecm` FastAPI backend (`ecm-ecm-1` container) serving `/api/*` and `/api/health/*` endpoints on the port configured by the container. The `/metrics` endpoint itself is **excluded** from all SLO calculations — the HTTP middleware self-skips it (see `backend/main.py:255`), and it must not influence availability or latency numbers.
+These SLOs apply to the `ecm` FastAPI backend (`ecm-ecm-1` container) serving `/api/*` and `/api/health/*` endpoints on the port configured by the container. The `/metrics` endpoint itself is **excluded** from all SLO calculations: the HTTP middleware self-skips it (see `backend/main.py:255`), and it must not influence availability or latency numbers.
 
 Out of scope for v1:
 
 - Frontend asset delivery (served statically; different failure mode).
-- WebSocket long-lived connections (`/ws/*` — no histogram coverage yet).
-- Background task success rate (task scheduler has no `ecm_task_*` metrics yet — separate bead when we instrument it).
+- WebSocket long-lived connections (`/ws/*`; no histogram coverage yet).
+- Background task success rate (task scheduler has no `ecm_task_*` metrics yet; separate bead when we instrument it).
 
 ---
 
@@ -34,7 +34,7 @@ Out of scope for v1:
 
 **The SLO targets below are ECM's commitments. The *alerting* on those targets is operator-responsibility.**
 
-ECM emits Prometheus-compatible SLI metrics — the `ecm_*` family defined in [`backend/observability.py`](../../backend/observability.py) (`ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`, `ecm_health_ready_check_duration_seconds`, and the `ecm_normalization_*` family) — on the unauthenticated `/metrics` endpoint mounted by `backend/main.py`. That endpoint is the SLI substrate; every SLI expression in this catalog resolves against it.
+ECM emits Prometheus-compatible SLI metrics (the `ecm_*` family defined in [`backend/observability.py`](../../backend/observability.py): `ecm_http_requests_total`, `ecm_http_request_duration_seconds`, `ecm_health_ready_ok`, `ecm_health_ready_check_duration_seconds`, and the `ecm_normalization_*` family) on the unauthenticated `/metrics` endpoint mounted by `backend/main.py`. That endpoint is the SLI substrate; every SLI expression in this catalog resolves against it.
 
 What ECM does **not** ship today:
 
@@ -46,19 +46,19 @@ What ECM does **not** ship today:
 What ECM **does** ship:
 
 - The `/metrics` endpoint (always-on, no feature flag).
-- [`docs/sre/prometheus_rules.yaml`](./prometheus_rules.yaml) — the burn-rate and window-based alert rules that correspond to SLO-1, SLO-2, SLO-3, and SLO-4. This is *rules-as-code*: a YAML file intended to be loaded by a Prometheus instance the operator runs, not a live alerting system.
-- The runbooks in [`docs/runbooks/`](../runbooks/) — each alert in `prometheus_rules.yaml` carries a `runbook_url` annotation that resolves to one of them.
+- [`docs/sre/prometheus_rules.yaml`](./prometheus_rules.yaml): the burn-rate and window-based alert rules that correspond to SLO-1, SLO-2, SLO-3, and SLO-4. This is *rules-as-code*: a YAML file intended to be loaded by a Prometheus instance the operator runs, not a live alerting system.
+- The runbooks in [`docs/runbooks/`](../runbooks/): each alert in `prometheus_rules.yaml` carries a `runbook_url` annotation that resolves to one of them.
 
-**Implication:** if an operator does not run their own Prometheus + Alertmanager (or a compatible pull-based scraper) and point it at `/metrics` with `prometheus_rules.yaml` loaded, **no alerts fire**. The SLI data is still emitted — the metrics can be scraped at any time — but nothing is watching it on ECM's behalf. This is consistent with how the rollback runbooks ([dep-bump backend ASGI](../runbooks/dep-bump-backend-asgi-regression.md), [dep-bump frontend](../runbooks/dep-bump-frontend-regression.md)) describe detection: there is always a "with Prometheus scrape" and a "without Prometheus scrape" column, because both are live deployment modes in the field.
+**Implication:** if an operator does not run their own Prometheus + Alertmanager (or a compatible pull-based scraper) and point it at `/metrics` with `prometheus_rules.yaml` loaded, **no alerts fire**. The SLI data is still emitted, the metrics can be scraped at any time, but nothing is watching it on ECM's behalf. This is consistent with how the rollback runbooks ([dep-bump backend ASGI](../runbooks/dep-bump-backend-asgi-regression.md), [dep-bump frontend](../runbooks/dep-bump-frontend-regression.md)) describe detection: there is always a "with Prometheus scrape" and a "without Prometheus scrape" column, because both are live deployment modes in the field.
 
 ### How to get alerting (operator checklist)
 
-Step-by-step Prometheus/Alertmanager deployment is out of scope for this doc — it depends on the operator's environment (bare Docker, Compose alongside ECM, Kubernetes, already-existing home-lab Prometheus, etc.). The two artifacts operators need from ECM are:
+Step-by-step Prometheus/Alertmanager deployment is out of scope for this doc: it depends on the operator's environment (bare Docker, Compose alongside ECM, Kubernetes, already-existing home-lab Prometheus, etc.). The two artifacts operators need from ECM are:
 
 1. **Scrape target:** point a Prometheus instance at `http://<ecm-host>:<ECM_PORT>/metrics`. The endpoint is intentionally unauthenticated so scrapers have no session context (see `backend/main.py` near the `/metrics` mount); operators who need to gate it should front it with their own network policy / reverse-proxy rule rather than expecting ECM to negotiate auth with a scraper.
 2. **Alert rules:** load [`docs/sre/prometheus_rules.yaml`](./prometheus_rules.yaml) into Prometheus (`rule_files:` entry) and route the resulting alerts to an Alertmanager of the operator's choosing. Validate syntax locally with `promtool check rules docs/sre/prometheus_rules.yaml` before loading.
 
-Everything downstream of that — severity routing, on-call rotations, Slack/email/Discord integrations, silences, dashboards — is the operator's infrastructure.
+Everything downstream of that (severity routing, on-call rotations, Slack/email/Discord integrations, silences, dashboards) is the operator's infrastructure.
 
 ### Per-SLO alerting ownership
 
@@ -72,9 +72,9 @@ Everything downstream of that — severity routing, on-call rotations, Slack/ema
 | SLO-7: Stats v2 Telemetry Write Success Rate | `prometheus_rules.yaml` group `ecm_stats_v2_write` | Prometheus window-based (5m failure-ratio threshold, promotes to page if sustained 30m) | Operator-provisioned |
 | SLO-8: Provider Attribution Rate | `prometheus_rules.yaml` group `ecm_stats_v2_provider_resolution` | Prometheus window-based (1h ratio threshold) | Operator-provisioned, **warn-only** |
 | SLO-9: Stats v2 Query Latency | `prometheus_rules.yaml` group `ecm_stats_v2_query_latency` | Prometheus window-based (p95 over 15m) | Operator-provisioned, **warn-only** |
-| SLO-10: Channel Deduplication | `prometheus_rules.yaml` group `ecm_dedup` | Prometheus window-based (3 alerts: candidate-lookup p99, pending resolution rate, merge API error rate) | Operator-provisioned. Rules ship vacuous until BD-D/E/F emit the metrics (intentional — see SLO-10 below). |
+| SLO-10: Channel Deduplication | `prometheus_rules.yaml` group `ecm_dedup` | Prometheus window-based (3 alerts: candidate-lookup p99, pending resolution rate, merge API error rate) | Operator-provisioned. Rules ship vacuous until BD-D/E/F emit the metrics (intentional; see SLO-10 below). |
 
-This keeps the SLO *targets* credible regardless of what infrastructure the operator runs — the metrics are emitted, the rules are authored, the runbooks exist. Whether an alert actually wakes someone up at 3 AM depends on a scraper that ECM does not ship.
+This keeps the SLO *targets* credible regardless of what infrastructure the operator runs: the metrics are emitted, the rules are authored, the runbooks exist. Whether an alert actually wakes someone up at 3 AM depends on a scraper that ECM does not ship.
 
 ---
 
@@ -94,7 +94,7 @@ avg_over_time(ecm_health_ready_ok[30d])
 **Why this target (initial):** 99.0% is a deliberately conservative starting point. Mature SaaS SLOs for readiness sit at 99.9% (~43 min/month) or higher, but:
 
 1. ECM is a self-hosted LAN app that frequently runs on consumer hardware with non-trivial restart windows (container updates, host reboots, power events). A three-nines commitment would be ambitious without redundancy we haven't built.
-2. The readiness probe includes a Dispatcharr dependency — ECM's availability is bounded above by Dispatcharr's availability, which is outside our control.
+2. The readiness probe includes a Dispatcharr dependency: ECM's availability is bounded above by Dispatcharr's availability, which is outside our control.
 3. We have **zero days** of real production metrics at the time of writing. The target must be calibrated against observed behavior before tightening.
 
 Re-tune after 30 days of production data. If we sustain 99.9% comfortably, tighten to 99.5%; revisit every quarter.
@@ -103,7 +103,7 @@ Re-tune after 30 days of production data. If we sustain 99.9% comfortably, tight
 
 - Database file lock contention (`/config/journal.db` under heavy Channel Pipeline load).
 - Dispatcharr unreachable (network partition, Dispatcharr restart, bad credentials).
-- ffprobe binary missing or permissions broken (degrades but does not fail readiness — see `routers/health.py` skip-vs-fail semantics).
+- ffprobe binary missing or permissions broken (degrades but does not fail readiness; see `routers/health.py` skip-vs-fail semantics).
 
 **Runbook:** [`docs/runbooks/readiness_availability.md`](../runbooks/readiness_availability.md)
 
@@ -111,7 +111,7 @@ Re-tune after 30 days of production data. If we sustain 99.9% comfortably, tight
 
 ## SLO-2: HTTP Request Latency
 
-**SLI:** 95th percentile request latency over `ecm_http_request_duration_seconds`, across all methods and route patterns (excluding `/metrics` and `/api/health/*` — those are instrumented separately and have different SLOs).
+**SLI:** 95th percentile request latency over `ecm_http_request_duration_seconds`, across all methods and route patterns (excluding `/metrics` and `/api/health/*`; those are instrumented separately and have different SLOs).
 
 **Prometheus expression:**
 ```promql
@@ -127,7 +127,7 @@ histogram_quantile(
 
 **Error budget:** 1% of 30d * 5m windows = ~86 minutes of windows where p95 ≥ 500ms per 30d.
 
-**Why this target (initial):** The latency histogram buckets ak1db shipped (`0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0`) were tuned for "local web app hitting SQLite + LAN Dispatcharr" where most requests land under 100ms. A 500ms p95 ceiling gives comfortable headroom: if we breach it routinely, we've got a real slowdown worth investigating. This bucket layout also means `histogram_quantile` interpolation is reasonable around the 500ms boundary — the 0.25 and 0.5 buckets straddle it cleanly.
+**Why this target (initial):** The latency histogram buckets ak1db shipped (`0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0`) were tuned for "local web app hitting SQLite + LAN Dispatcharr" where most requests land under 100ms. A 500ms p95 ceiling gives comfortable headroom: if we breach it routinely, we've got a real slowdown worth investigating. This bucket layout also means `histogram_quantile` interpolation is reasonable around the 500ms boundary: the 0.25 and 0.5 buckets straddle it cleanly.
 
 Tighten to p95 < 250ms once we have baseline data showing we comfortably beat 500ms.
 
@@ -135,7 +135,7 @@ Tighten to p95 < 250ms once we have baseline data showing we comfortably beat 50
 
 - SQLite write amplification during bulk Channel Pipeline runs (lots of small transactions).
 - Dispatcharr API slowness (ECM proxies many requests).
-- N+1 query patterns in frontends (often the real culprit — a single user view hitting `/api/channels/*` 500 times serially).
+- N+1 query patterns in frontends (often the real culprit: a single user view hitting `/api/channels/*` 500 times serially).
 
 **Runbook:** [`docs/runbooks/http_latency.md`](../runbooks/http_latency.md)
 
@@ -154,7 +154,7 @@ sum(rate(ecm_http_requests_total[5m]))
 
 **SLO target:** **5xx error rate < 1%** over rolling 5-minute windows, for **99%** of windows over 30 days.
 
-**Error budget:** Same as SLO-2 structurally — ~86 minutes of > 1% 5xx windows per 30d.
+**Error budget:** Same as SLO-2 structurally: ~86 minutes of > 1% 5xx windows per 30d.
 
 **Why this target (initial):** 1% is intentionally loose for a scaffold. A mature SLO would target 0.1% or tighter, but:
 
@@ -164,13 +164,13 @@ sum(rate(ecm_http_requests_total[5m]))
 
 A follow-up bead should split this SLO by `path` label once we've observed which routes dominate the error budget, and introduce per-route sub-objectives (e.g., `/api/auth/login` should be far stricter than `/api/stream/probe`).
 
-4xx responses are **not** counted — they reflect client behavior, not service reliability. A spike in 401s during a credential-rotation event is correct behavior, not an SLO breach.
+4xx responses are **not** counted: they reflect client behavior, not service reliability. A spike in 401s during a credential-rotation event is correct behavior, not an SLO breach.
 
 **What breaks this SLO:**
 
 - Database session exhaustion / pool timeouts.
 - Dispatcharr returning 5xx (we pass through).
-- Unhandled exceptions in routers (caught by the OWASP 500-scrubber middleware — still counts as a 5xx for this SLO, which is correct).
+- Unhandled exceptions in routers (caught by the OWASP 500-scrubber middleware; still counts as a 5xx for this SLO, which is correct).
 
 **Runbook:** [`docs/runbooks/http_error_rate.md`](../runbooks/http_error_rate.md)
 
@@ -196,7 +196,7 @@ histogram_quantile(
 - `dispatcharr` sub-check p95 < 500ms
 - `ffprobe` sub-check p95 < 100ms
 
-**Why informational only:** These are diagnostic signals — a slow readiness sub-check is a leading indicator for SLO-1 and SLO-2, but users don't directly experience readiness probe latency. We alert **warning** (not page) on breach so on-call gets situational awareness without being woken up.
+**Why informational only:** These are diagnostic signals: a slow readiness sub-check is a leading indicator for SLO-1 and SLO-2, but users don't directly experience readiness probe latency. We alert **warning** (not page) on breach so on-call gets situational awareness without being woken up.
 
 **Runbook:** [`docs/runbooks/readiness_subcheck_latency.md`](../runbooks/readiness_subcheck_latency.md)
 
@@ -204,7 +204,7 @@ histogram_quantile(
 
 ## SLO-5: Normalization Correctness
 
-**SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the Channel Pipeline executor path (`engine.normalize`) produce byte-identical output — **including identical `matched_rule_ids`** — across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
+**SLI:** Fraction of nightly canary runs where the Test Rules preview path (`engine.test_rule` / `engine.test_rules_batch`) and the Channel Pipeline executor path (`engine.normalize`) produce byte-identical output (**including identical `matched_rule_ids`**) across the full shared Unicode fixture bank (`backend/tests/fixtures/unicode_fixtures.py`). A single fixture diverging in a single run counts as a full-run failure for the purpose of this SLI.
 
 **Prometheus expression (SLI numerator over denominator):**
 ```promql
@@ -221,23 +221,23 @@ histogram_quantile(
 ```
 
 For SLO evaluation without the recording rule (interim), compute the
-numerator directly — the `ecm_normalization_canary_divergence_total`
+numerator directly: the `ecm_normalization_canary_divergence_total`
 counter increments by 1 per divergent canary run, never per-fixture, so
 `increase(ecm_normalization_canary_divergence_total[7d])` is the
 human-readable number of SLO-5 breaches in the last 7 days.
 
-**SLO target:** **100.0% parity** over a rolling 7-day window — any single divergent canary run is an SLO breach. (Unlike latency/availability SLOs where "99.9%" accepts a statistical tail, correctness is an invariant — the two paths share one NormalizationPolicy by construction; divergence is a structural bug, not a probabilistic event.)
+**SLO target:** **100.0% parity** over a rolling 7-day window: any single divergent canary run is an SLO breach. (Unlike latency/availability SLOs where "99.9%" accepts a statistical tail, correctness is an invariant: the two paths share one NormalizationPolicy by construction; divergence is a structural bug, not a probabilistic event.)
 
 **Error budget:** **Zero.** There is no tolerable rate of Test-Rules vs. Auto-Create divergence. The error budget policy below is punitive because a single divergence reproduces the exact failure mode behind GH #104.
 
-**Why this target:** The entire point of bd-eio04 (epic: "Normalization parity") was to eliminate the divergence class that made Settings → Normalization Test and the Channel Pipeline executor produce different outputs. A non-zero SLI means the unification regressed. 99.9% is not an acceptable answer — it means one bad deploy per thousand canary cycles silently slips through. Correctness is binary.
+**Why this target:** The entire point of bd-eio04 (epic: "Normalization parity") was to eliminate the divergence class that made Settings → Normalization Test and the Channel Pipeline executor produce different outputs. A non-zero SLI means the unification regressed. 99.9% is not an acceptable answer: it means one bad deploy per thousand canary cycles silently slips through. Correctness is binary.
 
-**Why this uses SLO-5 (not SLO-4):** SLO-4 is already claimed by Readiness Sub-check Latency above — renaming bd-eio04.9 to the next free slot was called out in the grooming comment on the bead.
+**Why this uses SLO-5 (not SLO-4):** SLO-4 is already claimed by Readiness Sub-check Latency above: renaming bd-eio04.9 to the next free slot was called out in the grooming comment on the bead.
 
 **What breaks this SLO:**
 
 - A commit to `backend/normalization_engine.py` that changes the Test Rules or Auto-Create preprocessing path without updating the other.
-- An operator disabling the unified policy flag on one path (`ECM_NORMALIZATION_UNIFIED_POLICY`) without disabling it on the other — policy version is logged into the decision record for exactly this correlation.
+- An operator disabling the unified policy flag on one path (`ECM_NORMALIZATION_UNIFIED_POLICY`) without disabling it on the other: policy version is logged into the decision record for exactly this correlation.
 - A new rule type or action that the two code paths interpret differently.
 - Adding a fixture to `unicode_fixtures.py` whose `expected_normalized` value one path produces but the other does not.
 
@@ -250,23 +250,23 @@ human-readable number of SLO-5 breaches in the last 7 days.
 | **Healthy** | Zero divergences in window | Normal work. |
 | **Breached** | One or more divergences | File a P2 ticket, open the runbook, **block the next release cut until resolved**. A blameless postmortem is recommended but not mandatory at first occurrence; the second occurrence within 30 days upgrades to mandatory postmortem. |
 
-The "block release cut" rule overrides the normal 25%/50%/75%/100% budget bands above — correctness cannot be deferred by budget math. The standard policy resumes once the breach is closed out (root cause identified, regression test added, canary green for one consecutive run).
+The "block release cut" rule overrides the normal 25%/50%/75%/100% budget bands above: correctness cannot be deferred by budget math. The standard policy resumes once the breach is closed out (root cause identified, regression test added, canary green for one consecutive run).
 
 **Supplementary diagnostic signal (not the SLI):**
 
-A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (channel_pipeline_runs_30d)` — is tracked on the normalization dashboard for trend analysis. This is **not** part of the SLI because bug reports lag the incident by days and are subject to reporter self-selection; it's useful as a leading indicator of user-perceived correctness but cannot be the thing we page on.
+A bug-report ratio (`1 - (bug_reports_containing_normaliz_30d) / (channel_pipeline_runs_30d)`) is tracked on the normalization dashboard for trend analysis. This is **not** part of the SLI because bug reports lag the incident by days and are subject to reporter self-selection; it's useful as a leading indicator of user-perceived correctness but cannot be the thing we page on.
 
 ---
 
 ## SLO-6: Frontend Error-free Session Rate
 
-**SLI:** Fraction of unique frontend sessions that report zero client errors over a rolling 28-day window. A "session" is defined per the [SLO-6 session-semantics spike](./spike-slo-6-session-semantics.md) (bd-1tl01) as one `sessionStorage` lifetime in a single browser tab — the frontend generates a SubtleCrypto-backed UUIDv4 on first SPA mount and POSTs it once to `/api/session-start`, where the backend deduplicates via a 24h in-memory TTL set before incrementing `ecm_session_starts_total`. The SLI is computed as:
+**SLI:** Fraction of unique frontend sessions that report zero client errors over a rolling 28-day window. A "session" is defined per the [SLO-6 session-semantics spike](./spike-slo-6-session-semantics.md) (bd-1tl01) as one `sessionStorage` lifetime in a single browser tab: the frontend generates a SubtleCrypto-backed UUIDv4 on first SPA mount and POSTs it once to `/api/session-start`, where the backend deduplicates via a 24h in-memory TTL set before incrementing `ecm_session_starts_total`. The SLI is computed as:
 
 ```
 1 - (sessions_with_boundary_errors / total_sessions)
 ```
 
-**Prometheus expression (SLI — PromQL-native, bd-arp3o):**
+**Prometheus expression (SLI: PromQL-native, bd-arp3o):**
 ```promql
 1
 -
@@ -277,25 +277,25 @@ A bug-report ratio — `1 - (bug_reports_containing_normaliz_30d) / (channel_pip
 )
 ```
 
-The numerator filters on `kind="boundary"` because React-tree boundary errors are the single most operationally-meaningful failure class — the user saw the fallback UI, not what they asked for. Other `kind` values (`chunk_load`, `unhandled_rejection`, `resource`, `other`) are tracked on the same counter family and surfaced via the alert rules in `prometheus_rules.yaml`, but `boundary` is the SLO-6 numerator by construction. Revisit if 30 days of production data shows the other kinds dominate user-perceived breakage.
+The numerator filters on `kind="boundary"` because React-tree boundary errors are the single most operationally-meaningful failure class: the user saw the fallback UI, not what they asked for. Other `kind` values (`chunk_load`, `unhandled_rejection`, `resource`, `other`) are tracked on the same counter family and surfaced via the alert rules in `prometheus_rules.yaml`, but `boundary` is the SLO-6 numerator by construction. Revisit if 30 days of production data shows the other kinds dominate user-perceived breakage.
 
 **SLO target:** **99.0%** error-free sessions over a rolling 28-day window, **marked uncalibrated** until 30 days of production data exists.
 
-**Why 99.0% (initial):** Consistent with SLO-1 (readiness availability) and SLO-3 (5xx error rate) at 99.0% — we have no production baseline for frontend crash rate, and a 99.5% target would front-run data we don't have. ADR-006 explicitly calls the SLO target "placeholder until 30 days of production data exists". Once baselined, the SLRE persona tightens to 99.5% (or looser — if LAN instances see 10%+ error rates, 99% is fiction).
+**Why 99.0% (initial):** Consistent with SLO-1 (readiness availability) and SLO-3 (5xx error rate) at 99.0%: we have no production baseline for frontend crash rate, and a 99.5% target would front-run data we don't have. ADR-006 explicitly calls the SLO target "placeholder until 30 days of production data exists". Once baselined, the SLRE persona tightens to 99.5% (or looser; if LAN instances see 10%+ error rates, 99% is fiction).
 
 **Why 28-day window (not 30):** 28 days is four weekly cycles. A deploy cadence that ships one release per week produces four full cycles in the window, letting the SLO absorb a single bad week without triggering alert noise. 30 days is a slightly-off-cycle window that conflates weekly patterns with the rolling boundary.
 
-**Error budget:** 1% = up to 1 session in 100 reporting ≥1 client error, per 28d. On a LAN instance with 3 sessions/day (~84 sessions/28d), the budget is ≤0.84 error-affected sessions — functionally "one bad session per month". The `sessions >= 50/day` evaluation gate (below) prevents the SLO from reporting nonsense on instances too small for statistical meaning.
+**Error budget:** 1% = up to 1 session in 100 reporting ≥1 client error, per 28d. On a LAN instance with 3 sessions/day (~84 sessions/28d), the budget is ≤0.84 error-affected sessions: functionally "one bad session per month". The `sessions >= 50/day` evaluation gate (below) prevents the SLO from reporting nonsense on instances too small for statistical meaning.
 
-**Evaluation gate:** Per ADR-006 §11, the SLI is computed only when the window contains **sessions ≥ 50/day** (1,400+ sessions over 28d). Below the gate, SLO-6 reports **insufficient-data** rather than a value — a LAN instance with 3 daily sessions cannot produce a statistically meaningful error-free-session rate. Operators below the gate still see the raw `ecm_client_errors_total` counter on `/metrics`; they just don't get a computed SLO.
+**Evaluation gate:** Per ADR-006 §11, the SLI is computed only when the window contains **sessions ≥ 50/day** (1,400+ sessions over 28d). Below the gate, SLO-6 reports **insufficient-data** rather than a value: a LAN instance with 3 daily sessions cannot produce a statistically meaningful error-free-session rate. Operators below the gate still see the raw `ecm_client_errors_total` counter on `/metrics`; they just don't get a computed SLO.
 
 **Instrumentation status:** PromQL-native as of bd-arp3o. The denominator counter `ecm_session_starts_total` is registered in `backend/observability.py` and incremented by `POST /api/session-start` (`backend/routers/session_starts.py`); the operational gauge `ecm_session_dedup_set_size` exposes the in-memory dedup set's current cardinality so SRE can spot pruner regressions. The frontend tracker in `frontend/src/services/sessionTracker.ts` emits the beacon once per `sessionStorage` lifetime per spike Option C. The SLI no longer depends on a log-aggregation substrate.
 
-**Known measurement bias (bd-m3vej, follow-up to bd-arp3o):** the denominator and numerator have asymmetric auth posture by design. `POST /api/session-start` is in `AUTH_EXEMPT_PATHS` (per the bd-m3vej ADR-006 §1 amendment), so **pre-auth sessions ARE counted in the denominator** — login-page mounts, login-page hard-refreshes, and pre-auth chunk loads all bump `ecm_session_starts_total`. `POST /api/client-errors` remains JWT-required (the PO chose option B over option A), so **pre-auth client errors are NOT counted in the numerator** — a stale-bundle chunk-load failure that crashes the login page itself produces a denominator increment with no matching numerator event. The net effect is that the computed error-free-session rate is **biased LOW** (looks healthier than reality) for any operator who experiences pre-auth bootstrap failures at a non-trivial rate. Implications:
+**Known measurement bias (bd-m3vej, follow-up to bd-arp3o):** the denominator and numerator have asymmetric auth posture by design. `POST /api/session-start` is in `AUTH_EXEMPT_PATHS` (per the bd-m3vej ADR-006 §1 amendment), so **pre-auth sessions ARE counted in the denominator**: login-page mounts, login-page hard-refreshes, and pre-auth chunk loads all bump `ecm_session_starts_total`. `POST /api/client-errors` remains JWT-required (the PO chose option B over option A), so **pre-auth client errors are NOT counted in the numerator**: a stale-bundle chunk-load failure that crashes the login page itself produces a denominator increment with no matching numerator event. The net effect is that the computed error-free-session rate is **biased LOW** (looks healthier than reality) for any operator who experiences pre-auth bootstrap failures at a non-trivial rate. Implications:
 
 - Set alert thresholds with this bias in mind. A `ratio < 99%` breach is a stronger signal than the math implies (pre-auth failures inflate the denominator without inflating the numerator), while a `ratio == 100%` reading does NOT mean zero pre-auth failures occurred.
-- Per-`kind` decomposition in PromQL still reflects only authenticated events; if pre-auth chunk-load errors become a triage concern, the only operator-visible signal is the `ecm_session_starts_total` rate (denominator) climbing without a matching `ecm_client_errors_total{kind="chunk_load"}` rise — counterintuitive but real.
-- The asymmetry is fixed by either (a) opening `/api/client-errors` to unauthenticated POSTs (rejected by the PO due to payload-richness threat-model concerns; see ADR-006 §1 amendment) or (b) adding a separate pre-auth error sink with a narrower payload (deferred — would require its own ADR).
+- Per-`kind` decomposition in PromQL still reflects only authenticated events; if pre-auth chunk-load errors become a triage concern, the only operator-visible signal is the `ecm_session_starts_total` rate (denominator) climbing without a matching `ecm_client_errors_total{kind="chunk_load"}` rise: counterintuitive but real.
+- The asymmetry is fixed by either (a) opening `/api/client-errors` to unauthenticated POSTs (rejected by the PO due to payload-richness threat-model concerns; see ADR-006 §1 amendment) or (b) adding a separate pre-auth error sink with a narrower payload (deferred; would require its own ADR).
 
 **What breaks this SLO:**
 
@@ -304,7 +304,7 @@ The numerator filters on `kind="boundary"` because React-tree boundary errors ar
 - Unhandled promise rejections from an API client contract change (`kind: 'unhandled_rejection'`).
 - Pre-mount bundle load failures (`kind: 'resource'`, emitted by the inline script in `index.html`).
 
-**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md) — covers the `ECMClientErrorRatioElevated` (ticket) and `ECMClientErrorRatioCritical` (page) alerts in `prometheus_rules.yaml` group `ecm_client_error_rate`: triage by `kind` × `release`, kind-by-kind common causes, rollback / cache-flush / suppression mitigation patterns, and the severity-promotion ladder (bd-pls9m). Alert names changed from `Rate*` to `Ratio*` in bd-arp3o when the alerts switched from absolute-rate to ratio-based; the runbook update is tracked under a separate follow-up bead per spike §6.7.
+**Runbook:** [`docs/runbooks/frontend_error_rate.md`](../runbooks/frontend_error_rate.md): covers the `ECMClientErrorRatioElevated` (ticket) and `ECMClientErrorRatioCritical` (page) alerts in `prometheus_rules.yaml` group `ecm_client_error_rate`: triage by `kind` × `release`, kind-by-kind common causes, rollback / cache-flush / suppression mitigation patterns, and the severity-promotion ladder (bd-pls9m). Alert names changed from `Rate*` to `Ratio*` in bd-arp3o when the alerts switched from absolute-rate to ratio-based; the runbook update is tracked under a separate follow-up bead per spike §6.7.
 
 ---
 
@@ -321,9 +321,9 @@ sum(rate(ecm_session_telemetry_writes_total[30d]))
 
 **SLO target:** **99.5%** over a rolling 30-day window.
 
-**Error budget:** 0.5% = ~0.5 of every 100 write cycles is allowed to fail. At a 60-second BandwidthTracker poll cadence (~43,200 cycles/30d), the budget is ~216 failed cycles per 30d — a wide-but-not-infinite buffer for transient SQLite contention or Dispatcharr blips.
+**Error budget:** 0.5% = ~0.5 of every 100 write cycles is allowed to fail. At a 60-second BandwidthTracker poll cadence (~43,200 cycles/30d), the budget is ~216 failed cycles per 30d: a wide-but-not-infinite buffer for transient SQLite contention or Dispatcharr blips.
 
-**Why this target (initial):** 99.5% is conservative for a write path that lives entirely inside the same container as the database it writes to. There are only three failure-mode classes ECM can introduce on its own (SQLite lock contention, schema drift after a botched migration, disk full); everything else is upstream (Dispatcharr unreachable while the resolver is mid-call, host crash). 99.5% leaves room for those upstream-attributable failures without making the SLI noisy on every Dispatcharr restart. Re-tune after 30 days of production data — if we sustain 99.9% comfortably, tighten to 99.9%.
+**Why this target (initial):** 99.5% is conservative for a write path that lives entirely inside the same container as the database it writes to. There are only three failure-mode classes ECM can introduce on its own (SQLite lock contention, schema drift after a botched migration, disk full); everything else is upstream (Dispatcharr unreachable while the resolver is mid-call, host crash). 99.5% leaves room for those upstream-attributable failures without making the SLI noisy on every Dispatcharr restart. Re-tune after 30 days of production data: if we sustain 99.9% comfortably, tighten to 99.9%.
 
 **Why this is not a correctness invariant:** Unlike SLO-5 (normalization correctness), where the two paths share a policy by construction and divergence is a structural bug, write failures here can legitimately occur from infrastructure events outside ECM's control. A budget-based SLO is correct; a zero-tolerance SLO would page on every Dispatcharr restart, which is not actionable.
 
@@ -341,9 +341,9 @@ The single alert in `prometheus_rules.yaml` uses the simpler form "failure rate 
 - SQLite WAL contention from concurrent writes (Channel Pipeline bulk operations during a poll cycle).
 - Migration mismatch (a poll runs against a database schema that doesn't yet have the columns the writer expects).
 - Disk full (`/config/journal.db` partition).
-- Dispatcharr unreachable mid-resolver call — the resolver returns unresolved and the writer still completes, so this does NOT increment `result="failure"`; it shows up in SLO-8 instead.
+- Dispatcharr unreachable mid-resolver call: the resolver returns unresolved and the writer still completes, so this does NOT increment `result="failure"`; it shows up in SLO-8 instead.
 
-**Cardinality discipline:** The `result` label is bounded to two values (`success`, `failure`). No per-channel, per-user, or per-stream labels — those would explode cardinality. Per-channel attribution belongs in logs (`[STATS_V2] session_telemetry_write_failed channel=...`), not metrics. The cardinality veto on the parent bead (skqln.11) is reaffirmed here: write-path metrics never carry `channel_id` or `user_id` labels.
+**Cardinality discipline:** The `result` label is bounded to two values (`success`, `failure`). No per-channel, per-user, or per-stream labels: those would explode cardinality. Per-channel attribution belongs in logs (`[STATS_V2] session_telemetry_write_failed channel=...`), not metrics. The cardinality veto on the parent bead (skqln.11) is reaffirmed here: write-path metrics never carry `channel_id` or `user_id` labels.
 
 **Runbook:** [`docs/runbooks/stats-v2-write-failures.md`](../runbooks/stats-v2-write-failures.md)
 
@@ -351,7 +351,7 @@ The single alert in `prometheus_rules.yaml` uses the simpler form "failure rate 
 
 ## SLO-8: Provider Attribution Rate
 
-**SLI:** Ratio of `resolved` provider-resolution outcomes to total resolution outcomes (`resolved` + `unresolved`). Incremented once per channel per BandwidthTracker poll cycle by the active-stream → provider resolver shipped in skqln.14. An "unresolved" outcome means the channel's active stream could not be mapped to an M3U provider — the `session_telemetry` row is still written with `provider_id=NULL`, which surfaces in the Providers panel as the "Unknown" bucket.
+**SLI:** Ratio of `resolved` provider-resolution outcomes to total resolution outcomes (`resolved` + `unresolved`). Incremented once per channel per BandwidthTracker poll cycle by the active-stream → provider resolver shipped in skqln.14. An "unresolved" outcome means the channel's active stream could not be mapped to an M3U provider: the `session_telemetry` row is still written with `provider_id=NULL`, which surfaces in the Providers panel as the "Unknown" bucket.
 
 **Prometheus expression (SLI numerator over denominator):**
 ```promql
@@ -364,7 +364,7 @@ sum(rate(ecm_provider_resolution_total[24h]))
 
 **Error budget:** 5% = up to 1 in 20 channel-polls may be unresolved without breaching the target. On a deployment with 50 active channels polled every 60s (~72,000 channel-polls/day), the budget is ~3,600 unresolved channel-polls/day before SLO-8 is breached.
 
-**Why this target (initial):** Provider attribution is "useful, not load-bearing." A `NULL` provider_id is **correct behavior** when ECM genuinely cannot map a stream to a provider — for example, the very first poll after a Dispatcharr stream-ID change, or a stream the operator added manually without an M3U source. The 95% floor exists so the Providers panel remains *interpretable* (the "Unknown" bucket is a minority slice, not the dominant one); below 95% the panel becomes meaningless. Re-tune once 90 days of session_telemetry history exists and operators have feedback on what fraction of "Unknown" they consider acceptable.
+**Why this target (initial):** Provider attribution is "useful, not load-bearing." A `NULL` provider_id is **correct behavior** when ECM genuinely cannot map a stream to a provider: for example, the very first poll after a Dispatcharr stream-ID change, or a stream the operator added manually without an M3U source. The 95% floor exists so the Providers panel remains *interpretable* (the "Unknown" bucket is a minority slice, not the dominant one); below 95% the panel becomes meaningless. Re-tune once 90 days of session_telemetry history exists and operators have feedback on what fraction of "Unknown" they consider acceptable.
 
 **Why this is warn-only, never page:** Degraded provider resolution surfaces to the user as a larger "Unknown" bucket on the Providers panel. The panel still renders, the watch-time numbers are still correct, the channels and users panels are unaffected. There is no user-facing outage. Paging on this is alert fatigue. The runbook covers triage so on-call has context the *next* business hour, not at 3 AM.
 
@@ -375,7 +375,7 @@ sum(rate(ecm_provider_resolution_total[24h]))
 - Mid-failover storm (operator is migrating providers; many streams temporarily have no upstream M3U row).
 - An M3U source that just rotated upstream URLs and ECM hasn't re-synced yet.
 
-**Cardinality discipline:** The `result` label is bounded to two values (`resolved`, `unresolved`). No per-channel or per-stream labels — `channel_id` is logged in the `[STATS_V2] provider_resolution_failed channel=...` structured log when an individual channel needs triage; the metric is aggregate-only.
+**Cardinality discipline:** The `result` label is bounded to two values (`resolved`, `unresolved`). No per-channel or per-stream labels: `channel_id` is logged in the `[STATS_V2] provider_resolution_failed channel=...` structured log when an individual channel needs triage; the metric is aggregate-only.
 
 **Runbook:** [`docs/runbooks/stats-v2-provider-resolution-degraded.md`](../runbooks/stats-v2-provider-resolution-degraded.md)
 
@@ -404,13 +404,13 @@ histogram_quantile(
 )
 ```
 
-**SLO target:** **p95 < 800ms** and **p99 < 2s** on `/api/stats/*` paths, sustained over a rolling 7-day window. Both thresholds must hold concurrently — a p99 breach with a healthy p95 still indicates pathological tail latency worth investigating.
+**SLO target:** **p95 < 800ms** and **p99 < 2s** on `/api/stats/*` paths, sustained over a rolling 7-day window. Both thresholds must hold concurrently: a p99 breach with a healthy p95 still indicates pathological tail latency worth investigating.
 
-**Error budget:** 1% of 7d * 5m windows = ~20 minutes of windows where p95 ≥ 800ms per 7d. The p99 budget is the same structurally — ~20 minutes of windows where p99 ≥ 2s per 7d.
+**Error budget:** 1% of 7d * 5m windows = ~20 minutes of windows where p95 ≥ 800ms per 7d. The p99 budget is the same structurally: ~20 minutes of windows where p99 ≥ 2s per 7d.
 
-**Why these targets (initial):** The stats query histogram inherits the `_HTTP_LATENCY_BUCKETS` bucket layout (same as `ecm_http_request_duration_seconds`), so the `histogram_quantile` interpolation is well-defined at both 800ms and 2s. The 800ms p95 target leaves visible headroom on top of skqln.10's perf-benchmark gate (which sets a tighter regression-gate floor on local CI runs); a production breach of 800ms therefore means the in-CI floor has shifted upward in real workloads. The 2s p99 target catches the "one query just blew the budget" failure mode — a single 10s query on a panel load is operator-visible even if 95% of queries are fast.
+**Why these targets (initial):** The stats query histogram inherits the `_HTTP_LATENCY_BUCKETS` bucket layout (same as `ecm_http_request_duration_seconds`), so the `histogram_quantile` interpolation is well-defined at both 800ms and 2s. The 800ms p95 target leaves visible headroom on top of skqln.10's perf-benchmark gate (which sets a tighter regression-gate floor on local CI runs); a production breach of 800ms therefore means the in-CI floor has shifted upward in real workloads. The 2s p99 target catches the "one query just blew the budget" failure mode: a single 10s query on a panel load is operator-visible even if 95% of queries are fast.
 
-Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat 800ms — the in-CI benchmark already constrains the median down by an order of magnitude.
+Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat 800ms: the in-CI benchmark already constrains the median down by an order of magnitude.
 
 **Why this is warn-only:** Stats v2 is an admin tool. Slow stats panels are annoying, not user-facing outages. The runbook covers triage; paging on this is alert fatigue.
 
@@ -419,11 +419,11 @@ Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat
 - `session_telemetry` table growth past where the existing indexes serve the query (the rollup tables in bd-7i2vv address this structurally; until they ship, large queries may scan more rows than budgeted).
 - SQLite WAL checkpoint stalling a long-running stats query.
 - A new aggregate endpoint shipped without a perf-benchmark gate (skqln.10's regression-gate is the structural defense; alert-time discovery means the gate was bypassed or the bench is wrong).
-- N+1 query pattern in a Stats panel frontend (often the real culprit — same as SLO-2 but scoped to stats endpoints).
+- N+1 query pattern in a Stats panel frontend (often the real culprit, same as SLO-2 but scoped to stats endpoints).
 
-**Cardinality discipline:** The `endpoint` label is bounded to ~5 stats endpoints; `granularity` is bounded to 3 values (`total`, `day`, `none`). Combined ceiling is ~15 series per bucket × ~15 buckets = ~225 series. No `user_id` label on the metric (the URL path `{user_id}` is the *parameterized* route pattern, not the resolved value — see observability.py for the route-template logic).
+**Cardinality discipline:** The `endpoint` label is bounded to ~5 stats endpoints; `granularity` is bounded to 3 values (`total`, `day`, `none`). Combined ceiling is ~15 series per bucket × ~15 buckets = ~225 series. No `user_id` label on the metric (the URL path `{user_id}` is the *parameterized* route pattern, not the resolved value; see observability.py for the route-template logic).
 
-**Runbook:** [`docs/runbooks/stats-v2-query-latency.md`](../runbooks/stats-v2-query-latency.md) — covers the query-latency failure modes (table growth past index, WAL checkpoint stall, missing index, N+1 frontend pattern). For write-side root causes that cascade into query slowness, see also [`docs/runbooks/stats-v2-write-failures.md`](../runbooks/stats-v2-write-failures.md).
+**Runbook:** [`docs/runbooks/stats-v2-query-latency.md`](../runbooks/stats-v2-query-latency.md): covers the query-latency failure modes (table growth past index, WAL checkpoint stall, missing index, N+1 frontend pattern). For write-side root causes that cascade into query slowness, see also [`docs/runbooks/stats-v2-write-failures.md`](../runbooks/stats-v2-write-failures.md).
 
 ---
 
@@ -431,7 +431,7 @@ Tighten to p95 < 400ms once 30 days of production data shows we comfortably beat
 
 **Status:** Defined ahead of the metric-emitting code (BD-D / BD-E / BD-F land the candidate-lookup endpoint, the merge endpoint, and the pending-merges queue respectively). Alert rules ship vacuous until those beads emit the metrics. This is deliberate per the team-plan SRE position: rules-without-metrics fire nothing and cost nothing; alert-rule definitions are how downstream engineers learn which metric names and labels to emit. Rules become live signal automatically on the first scrape after BD-D/E/F deploy.
 
-**SLI-10a — Candidate lookup latency.** 99th percentile latency of the `POST /api/channel-merges/candidates` request that surfaces the merge prompt on drag-drop / add-stream / bulk M3U triggers. This is the operator-visible "did the modal pop instantly or did it stutter" signal.
+**SLI-10a: Candidate lookup latency.** 99th percentile latency of the `POST /api/channel-merges/candidates` request that surfaces the merge prompt on drag-drop / add-stream / bulk M3U triggers. This is the operator-visible "did the modal pop instantly or did it stutter" signal.
 
 **Prometheus expression (SLI-10a):**
 ```promql
@@ -445,7 +445,7 @@ histogram_quantile(
 
 **SLO-10a target:** **p99 < 500ms** over a rolling 7-day window, for at least **99%** of evaluations.
 
-**SLI-10b — Pending merge resolution rate.** Ratio of merge requests that reach a terminal state (`success` or `dismissed`) to merge requests that entered the pending queue over a 24h window. A "pending" merge that lingers indefinitely is a UX failure — the operator either accepts (merge) or dismisses (intentional skip); both are valid, both are tracked. The denominator is the count of items added to the pending-merges queue depth; the numerator is the count of terminal-state transitions out of that queue.
+**SLI-10b: Pending merge resolution rate.** Ratio of merge requests that reach a terminal state (`success` or `dismissed`) to merge requests that entered the pending queue over a 24h window. A "pending" merge that lingers indefinitely is a UX failure: the operator either accepts (merge) or dismisses (intentional skip); both are valid, both are tracked. The denominator is the count of items added to the pending-merges queue depth; the numerator is the count of terminal-state transitions out of that queue.
 
 **Prometheus expression (SLI-10b):**
 ```promql
@@ -456,7 +456,18 @@ sum(increase(ecm_pending_merges_queue_depth_added_total[24h]))
 
 **SLO-10b target:** **95% resolution within 24h** of the merge request entering the pending queue, evaluated weekly.
 
-**SLI-10c — Merge API error rate.** Ratio of failed `POST /api/channel-merges/{id}/accept` calls to total accept calls over a rolling 5m window. The error mode is the merge endpoint returning 5xx (a Dispatcharr proxy failure, a database lock, an internal exception) or the merge body raising an unhandled exception that gets logged with `status="error"`. 4xx responses are explicitly excluded — a 422 on stale source IDs (bd-ozhkf / bd-ct9wl pattern) is correct backend behavior, not service unreliability.
+**`status="unapplied"` is deliberately outside the numerator (added 2026-08-16, bead `enhancedchannelmanager-i5ic0`, PO-ratified).** An accept that ECM could not apply to Dispatcharr no longer transitions the queue row at all: the row stays `pending`, flagged with an `unapplied_reason`, and remains retryable. It is therefore not a terminal-state transition out of the queue, which is exactly what this SLI's numerator counts, so it gets its own label value rather than being folded into `success`.
+
+Counting it as `success` would have reported the queue as clearing while flagged rows accumulated in it, and would have suppressed `ECMDedupPendingMergeResolutionStale` on precisely the installs that most need it. Dropping the emit entirely was the alternative and is worse: the request happened, and omitting it shrinks SLI-10c's error-rate **denominator** instead. Two properties to rely on when reading dashboards:
+
+- **Additive for every existing query.** `{status=~"success|dismissed"}` and `{status="error"}` are unchanged in meaning and become more accurate. Nothing that was counted before is counted differently now.
+- **A rising `unapplied` rate against a flat `success` rate is a real signal**, not noise: operators are accepting merges that Dispatcharr never receives. Read `unapplied` alongside the resolution ratio rather than instead of it, then go to [`dedup-pending-merge-resolution-stale.md`](../runbooks/dedup-pending-merge-resolution-stale.md).
+
+```promql
+sum(rate(ecm_dedup_merge_requests_total{status="unapplied"}[1h]))
+```
+
+**SLI-10c: Merge API error rate.** Ratio of failed `POST /api/channel-merges/{id}/accept` calls to total accept calls over a rolling 5m window. The error mode is the merge endpoint returning 5xx (a Dispatcharr proxy failure, a database lock, an internal exception) or the merge body raising an unhandled exception that gets logged with `status="error"`. 4xx responses are explicitly excluded: a 422 on stale source IDs (bd-ozhkf / bd-ct9wl pattern) is correct backend behavior, not service unreliability.
 
 **Prometheus expression (SLI-10c):**
 ```promql
@@ -469,9 +480,9 @@ sum(rate(ecm_dedup_merge_requests_total[5m]))
 
 **Why these targets (initial):**
 
-- **p99 < 500ms (SLI-10a):** the dedup matcher runs server-side and reads channels/streams from the same SQLite instance ECM already queries on every page load. 500ms is the "user perceives the modal as instant" threshold — beyond that, the drag-drop interaction stalls visibly. Tighten to p99 < 250ms after 30 days of production data if the matcher comfortably beats 500ms.
-- **95% / 24h resolution (SLI-10b):** below 95%, the pending-merges queue accumulates faster than operators clear it — the modal becomes a backlog inbox instead of an interrupt. The 24h horizon matches operator daily-attention patterns; a merge sitting longer than a day is functionally abandoned.
-- **<1% error rate (SLI-10c):** the merge endpoint is the dedup epic's load-bearing write path. A failed accept means the channel is in a half-merged state from the operator's perspective (target may already have the streams, sources may already be deleted) — the highest-stakes failure mode in the epic. 1% is the same floor as SLO-3 (HTTP 5xx rate); the dedup-specific alert exists so the merge-failure signal is not buried in general 5xx noise.
+- **p99 < 500ms (SLI-10a):** the dedup matcher runs server-side and reads channels/streams from the same SQLite instance ECM already queries on every page load. 500ms is the "user perceives the modal as instant" threshold: beyond that, the drag-drop interaction stalls visibly. Tighten to p99 < 250ms after 30 days of production data if the matcher comfortably beats 500ms.
+- **95% / 24h resolution (SLI-10b):** below 95%, the pending-merges queue accumulates faster than operators clear it: the modal becomes a backlog inbox instead of an interrupt. The 24h horizon matches operator daily-attention patterns; a merge sitting longer than a day is functionally abandoned.
+- **<1% error rate (SLI-10c):** the merge endpoint is the dedup epic's load-bearing write path. A failed accept means the channel is in a half-merged state from the operator's perspective (target may already have the streams, sources may already be deleted): the highest-stakes failure mode in the epic. 1% is the same floor as SLO-3 (HTTP 5xx rate); the dedup-specific alert exists so the merge-failure signal is not buried in general 5xx noise.
 
 **Error budget:**
 
@@ -484,38 +495,38 @@ sum(rate(ecm_dedup_merge_requests_total[5m]))
 **What breaks this SLO:**
 
 - The candidate matcher executes a query that does not use the dedup index (the index design is BD-B's; a regression at query-time shows up here first).
-- The merge endpoint runs without a transaction boundary and a Dispatcharr-proxy failure leaves the channel half-merged — the `status="error"` series climbs.
-- The pending-merges queue depth gauge grows without operator-side action — typically means the modal is broken (errors out before the operator can act) or the operator is overwhelmed and the queue cap should be enforced.
-- The candidate-lookup endpoint is called inside a request-handler loop instead of once per trigger (regression class — would show as a sustained rate-of-call spike against a flat trigger rate).
+- The merge endpoint runs without a transaction boundary and a Dispatcharr-proxy failure leaves the channel half-merged: the `status="error"` series climbs.
+- The pending-merges queue depth gauge grows without operator-side action: typically means the modal is broken (errors out before the operator can act) or the operator is overwhelmed and the queue cap should be enforced.
+- The candidate-lookup endpoint is called inside a request-handler loop instead of once per trigger (regression class; would show as a sustained rate-of-call spike against a flat trigger rate).
 
 **Cardinality discipline:**
 
-- `ecm_dedup_candidate_lookup_duration_seconds`: no labels beyond `le`. The trigger source belongs in a separate counter (`ecm_dedup_candidate_lookup_total{trigger}`) — splitting cardinality across two series keeps the histogram cheap.
-- `ecm_dedup_merge_requests_total{status}`: `status` bounded to ~4 values (`success`, `error`, `dismissed`, `cancelled`).
+- `ecm_dedup_candidate_lookup_duration_seconds`: no labels beyond `le`. The trigger source belongs in a separate counter (`ecm_dedup_candidate_lookup_total{trigger}`): splitting cardinality across two series keeps the histogram cheap.
+- `ecm_dedup_merge_requests_total{status}`: `status` bounded to ~5 values (`success`, `error`, `dismissed`, `unapplied`, `cancelled`).
 - `ecm_pending_merges_queue_depth_added_total`: label-free counter. Per-source attribution belongs in structured logs (`[DEDUP] merge_request_queued source=drag_drop target_channel=...`), not the metric.
 
-**Companion gauge (bd-wvr1d) — NOT a contract SLI:**
+**Companion gauge (bd-wvr1d): NOT a contract SLI:**
 
-`ecm_pending_merges_queue_depth` is a diagnostic gauge that reflects the current number of `pending_merges` rows with `status='pending'`. It is set after every BD-F insert and BD-E accept/dismiss commit, and seeded on app startup. This gauge is **not** a contract SLI — the counter `ecm_pending_merges_queue_depth_added_total` remains the SLI-10b source. Alerts and runbooks **must not** take a dependency on the gauge without explicit cross-team review: gauge accuracy is best-effort (failed DB reads leave it stale rather than crashing the write path) and there is no atomic "flip + read" guarantee against concurrent transitions. Use the counter for SLI math; use the gauge for dashboard visualization.
+`ecm_pending_merges_queue_depth` is a diagnostic gauge that reflects the current number of `pending_merges` rows with `status='pending'`. It is set after every BD-F insert and BD-E accept/dismiss commit, and seeded on app startup. This gauge is **not** a contract SLI: the counter `ecm_pending_merges_queue_depth_added_total` remains the SLI-10b source. Alerts and runbooks **must not** take a dependency on the gauge without explicit cross-team review: gauge accuracy is best-effort (failed DB reads leave it stale rather than crashing the write path) and there is no atomic "flip + read" guarantee against concurrent transitions. Use the counter for SLI math; use the gauge for dashboard visualization.
 
 **Runbooks:**
 
-- [`docs/runbooks/dedup-candidate-lookup-latency.md`](../runbooks/dedup-candidate-lookup-latency.md) — SLI-10a / `ECMDedupCandidateLookupLatencyHigh`
-- [`docs/runbooks/dedup-pending-merge-resolution-stale.md`](../runbooks/dedup-pending-merge-resolution-stale.md) — SLI-10b / `ECMDedupPendingMergeResolutionStale`
-- [`docs/runbooks/dedup-merge-api-error-rate-high.md`](../runbooks/dedup-merge-api-error-rate-high.md) — SLI-10c / `ECMDedupMergeApiErrorRateHigh`
+- [`docs/runbooks/dedup-candidate-lookup-latency.md`](../runbooks/dedup-candidate-lookup-latency.md): SLI-10a / `ECMDedupCandidateLookupLatencyHigh`
+- [`docs/runbooks/dedup-pending-merge-resolution-stale.md`](../runbooks/dedup-pending-merge-resolution-stale.md): SLI-10b / `ECMDedupPendingMergeResolutionStale`
+- [`docs/runbooks/dedup-merge-api-error-rate-high.md`](../runbooks/dedup-merge-api-error-rate-high.md): SLI-10c / `ECMDedupMergeApiErrorRateHigh`
 
-All three runbooks ship as **stubs** at v0.17.1 — section structure is present, real triage and resolution procedures land as the team accumulates incident experience after BD-D/E/F deploy the metric emitters. Stubs explicitly self-identify at the top of each file so a 3 AM responder knows they have a skeleton, not a complete playbook.
+All three runbooks ship as **stubs** at v0.17.1: section structure is present, real triage and resolution procedures land as the team accumulates incident experience after BD-D/E/F deploy the metric emitters. Stubs explicitly self-identify at the top of each file so a 3 AM responder knows they have a skeleton, not a complete playbook.
 
 ---
 
 ## Capacity planning: Database file size (bd-ygoqr)
 
-**Class:** Capacity-planning, not a numbered SLO. Same posture as the Stats v2 storage-growth alert (`ECMStatsRowCountGrowthAnomaly`) — we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action, not a user-facing reliability commitment.
+**Class:** Capacity-planning, not a numbered SLO. Same posture as the Stats v2 storage-growth alert (`ECMStatsRowCountGrowthAnomaly`): we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action, not a user-facing reliability commitment.
 
-**SLI:** Two gauges emitted by `observability.update_database_size_metrics` (no labels) — sampled at process startup post-`_perform_maintenance` and after the weekly `CleanupTask` VACUUM:
+**SLI:** Two gauges emitted by `observability.update_database_size_metrics` (no labels), sampled at process startup post-`_perform_maintenance` and after the weekly `CleanupTask` VACUUM:
 
-- `ecm_database_size_bytes` — size of the SQLite database file (`journal.db`).
-- `ecm_database_wal_size_bytes` — size of the WAL file (`journal.db-wal`).
+- `ecm_database_size_bytes`: size of the SQLite database file (`journal.db`).
+- `ecm_database_wal_size_bytes`: size of the WAL file (`journal.db-wal`).
 
 **Prometheus expression (recording rule):**
 ```promql
@@ -531,30 +542,30 @@ ecm:database_size_bytes:weekly_delta = ecm_database_size_bytes - ecm_database_si
 | `ECMDatabaseWALSizeWarn` | WAL > 200 MB | 15m | warning |
 | `ECMDatabaseSizeGrowthAnomaly` | weekly delta > 200 MB | 24h | warning |
 
-**Why these thresholds (initial):** The typical post-VACUUM steady-state for a long-running install is 50-200 MB body + < 50 MB WAL (with bd-7i2vv's 30-day Stats v2 raw-row retention and bd-dmu8w's 90-day journal-entry retention applied weekly). The 500 MB warn is "the steady state has drifted high enough to investigate" — usually means a contributor table has lost its retention boundary. The 2 GB page is "the weekly VACUUM is no longer keeping up and the lock duration is starting to disrupt streaming" (per the DBA spike note that VACUUM holds an exclusive lock for seconds-to-minutes on multi-GB SQLite files). The WAL threshold is anchored on SQLite's default `wal_autocheckpoint=1000` — a 200 MB WAL means autocheckpoint is not firing, which is structurally different from "the working set grew."
+**Why these thresholds (initial):** The typical post-VACUUM steady-state for a long-running install is 50-200 MB body + < 50 MB WAL (with bd-7i2vv's 30-day Stats v2 raw-row retention and bd-dmu8w's 90-day journal-entry retention applied weekly). The 500 MB warn is "the steady state has drifted high enough to investigate": usually means a contributor table has lost its retention boundary. The 2 GB page is "the weekly VACUUM is no longer keeping up and the lock duration is starting to disrupt streaming" (per the DBA spike note that VACUUM holds an exclusive lock for seconds-to-minutes on multi-GB SQLite files). The WAL threshold is anchored on SQLite's default `wal_autocheckpoint=1000`: a 200 MB WAL means autocheckpoint is not firing, which is structurally different from "the working set grew."
 
 **Why this is not a numbered SLO:** Disk-pressure failure modes are operator-environment-dependent (SSD vs HDD, container volume sizing, filesystem-level reservations) and ECM cannot make a portable commitment about them. The signal is exposed so operators can build their own commitments against the disk substrate they actually run on.
 
 **What breaks these thresholds:**
 
-- The bd-ygoqr CleanupTask CRON default flip is moot for any pre-existing operator who explicitly persisted MANUAL — they keep their MANUAL choice and journal/task-execution history grows unboundedly until they re-enable scheduling. The `ECMDatabaseSizeGrowthAnomaly` alert is the leading indicator for that scenario.
-- Cross-reference bd-ej995 (WAL checkpoint at startup) — when shipped, will compress the typical post-startup WAL size and may require re-tuning the WAL warn threshold downward.
-- Cross-reference bd-7i2vv (session_telemetry retention) — operators who disable the StatsV2RollupTask will see the body size grow at the per-poll telemetry rate without bound.
+- The bd-ygoqr CleanupTask CRON default flip is moot for any pre-existing operator who explicitly persisted MANUAL: they keep their MANUAL choice and journal/task-execution history grows unboundedly until they re-enable scheduling. The `ECMDatabaseSizeGrowthAnomaly` alert is the leading indicator for that scenario.
+- Cross-reference bd-ej995 (WAL checkpoint at startup): when shipped, will compress the typical post-startup WAL size and may require re-tuning the WAL warn threshold downward.
+- Cross-reference bd-7i2vv (session_telemetry retention): operators who disable the StatsV2RollupTask will see the body size grow at the per-poll telemetry rate without bound.
 
-**Cardinality discipline:** Both gauges are label-free. The DB is a single process-global file — there is nothing meaningful to label by. Future per-table size attribution belongs in the `database-size-warn` runbook's diagnostic step, NOT as a metric label (table count is bounded but the cardinality budget is better spent on actually-orthogonal signals).
+**Cardinality discipline:** Both gauges are label-free. The DB is a single process-global file: there is nothing meaningful to label by. Future per-table size attribution belongs in the `database-size-warn` runbook's diagnostic step, NOT as a metric label (table count is bounded but the cardinality budget is better spent on actually-orthogonal signals).
 
-**Runbook:** [`docs/runbooks/database-size-warn.md`](../runbooks/database-size-warn.md) — covers the WAL-vs-body triage table, the "manual checkpoint" command, and the per-table size-attribution query for the body-large case.
+**Runbook:** [`docs/runbooks/database-size-warn.md`](../runbooks/database-size-warn.md): covers the WAL-vs-body triage table, the "manual checkpoint" command, and the per-table size-attribution query for the body-large case.
 
 ---
 
 ## Capacity planning: Task scheduler health (bd-qxi02)
 
-**Class:** Capacity-planning / operational-health, not a numbered SLO. Same posture as `database_capacity` above and the `ecm_stats_v2_storage` group — we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action rather than a user-facing reliability commitment per se. Surfaces a class of regression (silent scheduler stall) that bd-p5b8i demonstrated existing observability did not catch — the scheduling subsystem was broken for 39+ days on the PO's install (4 months across all operators) before manual investigation found it.
+**Class:** Capacity-planning / operational-health, not a numbered SLO. Same posture as `database_capacity` above and the `ecm_stats_v2_storage` group: we expose the signal and ship the alert rule, but the threshold is a leading indicator for operator action rather than a user-facing reliability commitment per se. Surfaces a class of regression (silent scheduler stall) that bd-p5b8i demonstrated existing observability did not catch: the scheduling subsystem was broken for 39+ days on the PO's install (4 months across all operators) before manual investigation found it.
 
 **SLI:** Two gauges emitted by the task subsystem:
 
-- `ecm_task_schedule_last_success_timestamp{task_id}` — Unix-epoch seconds of the most recent successful execution per task. Stamped by `task_engine._execute_task` on every successful TaskResult. Per-task so SRE can distinguish a stuck `stats_v2_rollup` from a stuck `cleanup` from a stuck `stream_probe` — each has a different cadence and a different acceptable staleness window.
-- `ecm_task_schedule_next_run_null_count` — Count of `task_schedules` rows where `next_run_at IS NULL AND enabled=1 AND schedule_type != 'manual'`. Any non-zero value is the canonical "scheduler subsystem is broken" signal (the exact bd-p5b8i symptom). Emitted at startup post-`_run_migrations` and on every `TaskRegistry.sync_from_database`.
+- `ecm_task_schedule_last_success_timestamp{task_id}`: Unix-epoch seconds of the most recent successful execution per task. Stamped by `task_engine._execute_task` on every successful TaskResult. Per-task so SRE can distinguish a stuck `stats_v2_rollup` from a stuck `cleanup` from a stuck `stream_probe`: each has a different cadence and a different acceptable staleness window.
+- `ecm_task_schedule_next_run_null_count`: Count of `task_schedules` rows where `next_run_at IS NULL AND enabled=1 AND schedule_type != 'manual'`. Any non-zero value is the canonical "scheduler subsystem is broken" signal (the exact bd-p5b8i symptom). Emitted at startup post-`_run_migrations` and on every `TaskRegistry.sync_from_database`.
 
 **Prometheus expression (recording rule):**
 ```promql
@@ -569,18 +580,18 @@ ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success
 | `ECMTaskScheduleStaleStatsRollup` | `stats_v2_rollup` last success > 25h ago | 1h | warning |
 | `ECMTaskScheduleStaleCleanup` | `cleanup` last success > 8d ago | 24h | warning |
 | `ECMTaskScheduleStaleM3UMonitor` | `m3u_change_monitor` last success > 30m ago | 1h | warning |
-| `ECMTaskScheduleStaleStreamProbe` | `stream_probe` last success > 48h ago (guarded — see below) | 6h | warning |
-| `ECMSyncStalledTargetDrift` | `dbas_sync` last success > 3h ago (guarded — see below) | 1h | warning |
+| `ECMTaskScheduleStaleStreamProbe` | `stream_probe` last success > 48h ago (guarded; see below) | 6h | warning |
+| `ECMSyncStalledTargetDrift` | a sync target's last FULL APPLIED sync > 3h ago (`ecm_sync_last_full_success_timestamp{sync_target_id}`), evaluated per target series (guarded; see below) | 1h | warning |
 
-**Why these thresholds (initial):** Each per-task staleness budget is sized against the actual cadence in code, not aspirational defaults — `stats_v2_rollup` nightly → 25h budget (≈ 1.04× the 24h cadence); `cleanup` weekly → 8d budget (≈ 1.14× the 7d cadence); `m3u_change_monitor` 5-min cadence → 30-min budget = 6 missed runs (room for transient slowness without paging on every blip; previously documented as "6h interval → 12h budget," which was incorrect and would have hidden ~144 missed runs); `stream_probe` defaults to MANUAL in code, so the 48h budget only applies once an operator has scheduled it on a recurring cadence; `dbas_sync` (cross-instance A→B sync, epic i39wu) defaults to MANUAL in code with no in-code interval, so the budget is sized against the cheapest-reads convergence cadence the operator is expected to pick — hourly (ADR-013 S9: config categories are cheap reads every cycle) → 3h budget = 3 missed runs. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
+**Why these thresholds (initial):** Each per-task staleness budget is sized against the actual cadence in code, not aspirational defaults: `stats_v2_rollup` nightly → 25h budget (≈ 1.04× the 24h cadence); `cleanup` weekly → 8d budget (≈ 1.14× the 7d cadence); `m3u_change_monitor` 5-min cadence → 30-min budget = 6 missed runs (room for transient slowness without paging on every blip; previously documented as "6h interval → 12h budget," which was incorrect and would have hidden ~144 missed runs); `stream_probe` defaults to MANUAL in code, so the 48h budget only applies once an operator has scheduled it on a recurring cadence; the per-target sync tasks `dbas_sync_<sync_target_id>` (cross-instance A→B sync, epic i39wu; one registered task per `SyncTarget` per ADR-013 S6 / bead 7ipq2.3, so the staleness alert evaluates per target and one healthy target cannot mask another's drift) default to MANUAL in code with no in-code interval, so the budget is sized against the cheapest-reads convergence cadence the operator is expected to pick: hourly (ADR-013 S9: config categories are cheap reads every cycle) → 3h budget = 3 missed runs. `ECMTaskSchedulerNextRunNull` is severity `page` because it indicates a *structural* break (the scheduler never picks the row up at all) rather than a delayed run.
 
-**`ECMSyncStalledTargetDrift` — partial-apply caveat:** Only a FULL success stamps `ecm_task_schedule_last_success_timestamp` (the task_engine stamps it on `TaskResult.success`). A tri-state `partial` run — an APPLY that mixed/rolled-back — does NOT stamp it, so a *sustained partial-apply loop* also trips this alert even though the task is "running." This is intentional: target B is drifting from A whether the cycle failed outright or only half-applied. The companion counter `ecm_sync_runs_total{result}` (tri-state `success`/`partial`/`failed`, mirrors `ecm_backup_runs_total`) lets the responder tell "B unreachable / aborting" (`failed`) from "applies but keeps half-failing" (`partial`). The runbook is [`sync-target-stalled-drift.md`](../runbooks/sync-target-stalled-drift.md).
+**`ECMSyncStalledTargetDrift`: preview and partial-apply caveats:** The alert's SLI is the dedicated `ecm_sync_last_full_success_timestamp{sync_target_id}` gauge, stamped only by a `confirm_apply` run whose report outcome was a clean `SUCCESS`. It is deliberately NOT the generic `ecm_task_schedule_last_success_timestamp`, which the task_engine stamps on any `TaskResult.success`, including a dry-run **preview**, which writes nothing to B; keying the drift alert on that gauge would let a recurring preview reset the clock while B diverged (PR #752 review). A tri-state `partial` run (an APPLY that mixed/rolled-back) likewise does not stamp it, so a *sustained partial-apply loop* also trips this alert even though the task is "running." This is intentional: target B is drifting from A whether the cycle failed outright or only half-applied. The companion counter `ecm_sync_runs_total{result, sync_target_id}` (tri-state `success`/`partial`/`failed`, mirrors `ecm_backup_runs_total`, keyed on the same target pk as the gauge) lets the responder tell "B unreachable / aborting" (`failed`) from "applies but keeps half-failing" (`partial`), **for the specific replica that alerted**, since both signals now share one granularity. The runbook is [`sync-target-stalled-drift.md`](../runbooks/sync-target-stalled-drift.md).
 
-**Fresh-install / operator-disabled-task guard:** Every per-task staleness alert in `prometheus_rules.yaml` includes `AND ecm_task_schedule_last_success_timestamp{task_id="..."} > 0` so the alert only fires after the task has succeeded at least once on this install. This prevents false pages on fresh installs (where the gauge defaults to 0 because nothing has ever run) and on operator-disabled or MANUAL-mode tasks (where the gauge legitimately stays at 0 forever). Without this guard, `ECMTaskScheduleStaleStreamProbe` would page every fresh-install operator 48h after first boot because `stream_probe` defaults to MANUAL.
+**Fresh-install / operator-disabled-task guard:** Every per-task staleness alert in `prometheus_rules.yaml` includes `AND ecm_task_schedule_last_success_timestamp{task_id="..."} > 0` so the alert only fires after the task has succeeded at least once on this install. `ECMSyncStalledTargetDrift` carries the same guard on **its own** SLI (`AND ecm_sync_last_full_success_timestamp > 0`), not on the generic gauge, so a target that has only ever been previewed (or left MANUAL) stays silent until its first clean full apply. This prevents false pages on fresh installs (where the gauge defaults to 0 because nothing has ever run) and on operator-disabled or MANUAL-mode tasks (where the gauge legitimately stays at 0 forever). Without this guard, `ECMTaskScheduleStaleStreamProbe` would page every fresh-install operator 48h after first boot because `stream_probe` defaults to MANUAL.
 
 **Why this is not a numbered SLO:** Task cadence is operator-configurable (Settings → Tasks lets the operator change every interval and disable any task). ECM cannot make a portable commitment about "the cleanup task ran in the last 8 days" when an operator's documented choice may be MANUAL, monthly, or a non-default cron. The signal is exposed so operators can build their own commitments against their configured schedule.
 
-**Deploy order — RESOLVED at v0.17.1 (bd-ft3hk):** `ECMTaskSchedulerNextRunNull` shipped commented-out at v0.17.0 to avoid paging existing installs before they had a chance to restart into a heal-bearing build (Bundle H, bd-1weac). v0.17.0 has now shipped, the heal is in operators' hands, and the alert is uncommented as part of BD-M (the SLO-10 + alert-rules consolidation). A fresh operator who adopts this rules file before they have restarted into v0.17.0+ will page on their first scrape; the runbook covers the heal path and one container restart clears the condition.
+**Deploy order: RESOLVED at v0.17.1 (bd-ft3hk):** `ECMTaskSchedulerNextRunNull` shipped commented-out at v0.17.0 to avoid paging existing installs before they had a chance to restart into a heal-bearing build (Bundle H, bd-1weac). v0.17.0 has now shipped, the heal is in operators' hands, and the alert is uncommented as part of BD-M (the SLO-10 + alert-rules consolidation). A fresh operator who adopts this rules file before they have restarted into v0.17.0+ will page on their first scrape; the runbook covers the heal path and one container restart clears the condition.
 
 **What breaks these thresholds:**
 
@@ -588,9 +599,9 @@ ecm:task_schedule:hours_since_success = (time() - ecm_task_schedule_last_success
 - Bundle H's heal hasn't landed → `next_run_at IS NULL` count is non-zero on every existing install. Do not enable `ECMTaskSchedulerNextRunNull` until the heal is deployed.
 - A task is renamed in the registry → its `task_id` label changes. The old series ages out at the Prometheus retention horizon; the new series starts fresh. A burst of staleness alerts in the changeover window is expected and self-resolves.
 
-**Cardinality discipline:** `task_id` is bounded — values are code constants drawn from `task_registry.TaskScheduler.task_id` class attributes (~15 distinct tasks at this time). The label space cannot grow at runtime (no user-derived input). `ecm_task_schedule_next_run_null_count` is label-free — there is exactly one count process-wide.
+**Cardinality discipline:** `task_id` is bounded: values are code constants drawn from `task_registry.TaskScheduler.task_id` class attributes (~15 distinct tasks at this time). The label space cannot grow at runtime (no user-derived input). `ecm_task_schedule_next_run_null_count` is label-free: there is exactly one count process-wide.
 
-**Runbook:** [`docs/runbooks/task_scheduler_stalled.md`](../runbooks/task_scheduler_stalled.md) — covers the NULL `next_run_at` diagnostic query, the bd-p5b8i / Bundle H heal recovery path, and per-task triage for the staleness alerts.
+**Runbook:** [`docs/runbooks/task_scheduler_stalled.md`](../runbooks/task_scheduler_stalled.md): covers the NULL `next_run_at` diagnostic query, the bd-p5b8i / Bundle H heal recovery path, and per-task triage for the staleness alerts.
 
 ---
 
@@ -606,15 +617,15 @@ What happens when the error budget burns? The rules below apply per-SLO; burns a
 | **Critical** | 75–100% consumed | All feature work stops. Incident review. Reliability fixes ship before anything else resumes. |
 | **Exhausted** | 100%+ consumed (SLO breached) | Blameless postmortem within 5 business days. Freeze on new deployments except reliability fixes until the budget resets or recovers by ≥10 percentage points. |
 
-**Budget resets** on a rolling basis — the 30-day window always looks at the last 30 days, so a burn today drops out 30 days from now if no new burn occurs.
+**Budget resets** on a rolling basis: the 30-day window always looks at the last 30 days, so a burn today drops out 30 days from now if no new burn occurs.
 
-**Exceptions:** Security fixes always ship regardless of budget state. A zero-day 4pm on Friday doesn't wait for the error budget to heal — but it's tracked and the postmortem captures the reliability cost.
+**Exceptions:** Security fixes always ship regardless of budget state. A zero-day 4pm on Friday doesn't wait for the error budget to heal, but it's tracked and the postmortem captures the reliability cost.
 
 ---
 
 ## Alerting strategy
 
-Alert rules are defined in [`prometheus_rules.yaml`](./prometheus_rules.yaml) — rules-as-code only. See the [Alerting posture](#alerting-posture) section above for why ECM ships the rules file but not a Prometheus/Alertmanager runtime: operators wire the scrape and routing themselves. The strategy embedded in the rules file is multi-window multi-burn-rate (MWMBR) where feasible:
+Alert rules are defined in [`prometheus_rules.yaml`](./prometheus_rules.yaml): rules-as-code only. See the [Alerting posture](#alerting-posture) section above for why ECM ships the rules file but not a Prometheus/Alertmanager runtime: operators wire the scrape and routing themselves. The strategy embedded in the rules file is multi-window multi-burn-rate (MWMBR) where feasible:
 
 - **Fast burn (page):** If the current burn rate would consume 2% of a 30-day budget in 1 hour (14.4x burn), page immediately. This catches acute incidents.
 - **Slow burn (ticket):** If the current burn rate would consume 10% of a 30-day budget in 6 hours (6x burn) sustained, open a ticket / warning alert. This catches chronic degradation.
@@ -626,19 +637,21 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
 ## Open questions / known gaps
 
 - **No traffic-weighted availability.** SLO-1 treats every 15-second scrape of `ecm_health_ready_ok` as equal weight, regardless of how many user requests landed during that interval. A future refinement: weight by `ecm_http_requests_total` rate.
-- **No per-tenant SLO.** ECM is single-tenant by deployment, but the SLOs above are global — they don't distinguish a power user from a casual one. Fine for v1; revisit if we ship multi-tenant.
+- **No per-tenant SLO.** ECM is single-tenant by deployment, but the SLOs above are global: they don't distinguish a power user from a casual one. Fine for v1; revisit if we ship multi-tenant.
 - **No Dispatcharr-upstream vs ECM-self attribution.** When `ecm_http_requests_total{status="502"}` fires because Dispatcharr returned 502, it still counts against our SLO. The fix is a separate label or metric, tracked as a follow-up.
 - **No SLO for long-running tasks.** Task success rate matters (restore jobs, Channel Pipeline runs) but has no metric today. Separate bead.
 
 ## Changelog
 
+- **2026-08-16 (bead `enhancedchannelmanager-i5ic0`):** `ecm_dedup_merge_requests_total` gained the label value **`status="unapplied"`**, PO-ratified against the standing BD-M locked contract. It is emitted when an accept is recorded but could not be applied to Dispatcharr, which under the same day's PO decision leaves the queue row `pending` and flagged rather than transitioning it. SLI-10b's numerator counts terminal transitions out of the queue, so such an accept is not one; counting it as `success` would have reported the queue clearing while flagged rows accumulated and suppressed `ECMDedupPendingMergeResolutionStale`. Additive: `{status=~"success|dismissed"}` and `{status="error"}` are unaffected, no alert rule or recording rule changed, and the cardinality bound in SLO-10 moves from ~4 to ~5. Documented in the SLI-10b entry above and in [`dedup-pending-merge-resolution-stale.md`](../runbooks/dedup-pending-merge-resolution-stale.md) / [`dedup-merge-api-error-rate-high.md`](../runbooks/dedup-merge-api-error-rate-high.md).
+
 - **2026-05-25 (bd-31u6u / bd-zppgx):** SLO-4 (Readiness Sub-check Latency) moved to its numeric position between SLO-3 and SLO-5 (was appended after Capacity planning sections; cosmetic order fix, no contract change). New runbook `stats-v2-query-latency.md` authored for SLO-9 query-latency failure modes (table growth, WAL stall, missing index, N+1 pattern). `ECMStatsQueryLatencyHigh` and `ECMStatsQueryLatencyP99High` alerts in `prometheus_rules.yaml` updated to point at the new runbook (previously pointed at `stats-v2-write-failures.md` by mistake). SLO-9 runbook reference in this file updated accordingly.
 
-- **2026-05-16 (bd-ft3hk / BD-M):** Added **SLO-10: Channel Deduplication** for the v0.17.1 dedup epic (bd-1v4ht). Three SLIs: SLI-10a candidate lookup p99 latency (<500ms / 7d / 99%), SLI-10b pending merge resolution rate (95% within 24h), SLI-10c merge API error rate (<1% / 5m / 99%). New alert group `ecm_dedup` in `prometheus_rules.yaml` with corresponding alerts (`ECMDedupCandidateLookupLatencyHigh` warn, `ECMDedupPendingMergeResolutionStale` warn, `ECMDedupMergeApiErrorRateHigh` page). Metrics `ecm_dedup_candidate_lookup_duration_seconds`, `ecm_dedup_merge_requests_total{status}`, `ecm_pending_merges_queue_depth_added_total` are spec'd here; emission lands with BD-D/E/F — alert rules are intentionally vacuous until then so engineers wiring the emitters have a contract to match. Three runbook stubs at `docs/runbooks/dedup-*.md`. **Also resolves the v0.17.0 deploy-gated alert:** `ECMTaskSchedulerNextRunNull` is uncommented in `prometheus_rules.yaml` now that v0.17.0's Bundle H heal (bd-1weac) has shipped to operators. The "Deploy order" note in the Task scheduler health entry is updated accordingly.
+- **2026-05-16 (bd-ft3hk / BD-M):** Added **SLO-10: Channel Deduplication** for the v0.17.1 dedup epic (bd-1v4ht). Three SLIs: SLI-10a candidate lookup p99 latency (<500ms / 7d / 99%), SLI-10b pending merge resolution rate (95% within 24h), SLI-10c merge API error rate (<1% / 5m / 99%). New alert group `ecm_dedup` in `prometheus_rules.yaml` with corresponding alerts (`ECMDedupCandidateLookupLatencyHigh` warn, `ECMDedupPendingMergeResolutionStale` warn, `ECMDedupMergeApiErrorRateHigh` page). Metrics `ecm_dedup_candidate_lookup_duration_seconds`, `ecm_dedup_merge_requests_total{status}`, `ecm_pending_merges_queue_depth_added_total` are spec'd here; emission lands with BD-D/E/F: alert rules are intentionally vacuous until then so engineers wiring the emitters have a contract to match. Three runbook stubs at `docs/runbooks/dedup-*.md`. **Also resolves the v0.17.0 deploy-gated alert:** `ECMTaskSchedulerNextRunNull` is uncommented in `prometheus_rules.yaml` now that v0.17.0's Bundle H heal (bd-1weac) has shipped to operators. The "Deploy order" note in the Task scheduler health entry is updated accordingly.
 
-- **2026-05-15 (bd-ygoqr):** Added **Capacity planning: Database file size** entry — two new label-free gauges (`ecm_database_size_bytes`, `ecm_database_wal_size_bytes`) emitted by `observability.update_database_size_metrics` from `database._perform_maintenance` (post-startup VACUUM) and `tasks.cleanup.CleanupTask.execute` (post-weekly VACUUM). New alert rules in `prometheus_rules.yaml` group `ecm_database_size`: `ECMDatabaseSizeWarn` (>500 MB / 30m), `ECMDatabaseSizePage` (>2 GB / 10m), `ECMDatabaseWALSizeWarn` (>200 MB / 15m), `ECMDatabaseSizeGrowthAnomaly` (weekly delta >200 MB / 24h). New recording rule `ecm:database_size_bytes:weekly_delta`. New runbook `database-size-warn.md` covers the WAL-vs-body triage and per-table size attribution. Capacity-planning class, NOT a numbered SLO — disk-pressure failure modes are environment-dependent and ECM cannot make a portable commitment about them. Companion to the bd-ygoqr CleanupTask CRON default flip (Sun 02:00 UTC for fresh installs).
+- **2026-05-15 (bd-ygoqr):** Added **Capacity planning: Database file size** entry: two new label-free gauges (`ecm_database_size_bytes`, `ecm_database_wal_size_bytes`) emitted by `observability.update_database_size_metrics` from `database._perform_maintenance` (post-startup VACUUM) and `tasks.cleanup.CleanupTask.execute` (post-weekly VACUUM). New alert rules in `prometheus_rules.yaml` group `ecm_database_size`: `ECMDatabaseSizeWarn` (>500 MB / 30m), `ECMDatabaseSizePage` (>2 GB / 10m), `ECMDatabaseWALSizeWarn` (>200 MB / 15m), `ECMDatabaseSizeGrowthAnomaly` (weekly delta >200 MB / 24h). New recording rule `ecm:database_size_bytes:weekly_delta`. New runbook `database-size-warn.md` covers the WAL-vs-body triage and per-table size attribution. Capacity-planning class, NOT a numbered SLO: disk-pressure failure modes are environment-dependent and ECM cannot make a portable commitment about them. Companion to the bd-ygoqr CleanupTask CRON default flip (Sun 02:00 UTC for fresh installs).
 
-- **2026-05-13 (bd-skqln.11):** Added **SLO-7 (Stats v2 telemetry write success rate, 99.5% / 30d)**, **SLO-8 (provider attribution rate, 95% / 24h, warn-only)**, and **SLO-9 (Stats v2 query latency, p95<800ms / p99<2s / 7d, warn-only)**. All three resolve against metrics shipped in skqln.12 (`ecm_session_telemetry_writes_total`, `ecm_session_telemetry_row_count`, `ecm_provider_resolution_total`, `ecm_stats_query_duration_seconds`). Companion alert rules shipped in `prometheus_rules.yaml` groups `ecm_stats_v2_write`, `ecm_stats_v2_provider_resolution`, `ecm_stats_v2_query_latency`, `ecm_stats_v2_storage`. New runbooks: `stats-v2-write-failures.md`, `stats-v2-provider-resolution-degraded.md`, `stats-v2-row-growth.md`, `stats-v2-deployment-safety.md`. The bead's original "dual-write divergence SLI" was obsoleted by skqln.3 step (d), which retired the legacy `ChannelWatchStats` writer — the data-consistency SLI is now the resolver success rate (SLO-8), not a divergence gauge.
+- **2026-05-13 (bd-skqln.11):** Added **SLO-7 (Stats v2 telemetry write success rate, 99.5% / 30d)**, **SLO-8 (provider attribution rate, 95% / 24h, warn-only)**, and **SLO-9 (Stats v2 query latency, p95<800ms / p99<2s / 7d, warn-only)**. All three resolve against metrics shipped in skqln.12 (`ecm_session_telemetry_writes_total`, `ecm_session_telemetry_row_count`, `ecm_provider_resolution_total`, `ecm_stats_query_duration_seconds`). Companion alert rules shipped in `prometheus_rules.yaml` groups `ecm_stats_v2_write`, `ecm_stats_v2_provider_resolution`, `ecm_stats_v2_query_latency`, `ecm_stats_v2_storage`. New runbooks: `stats-v2-write-failures.md`, `stats-v2-provider-resolution-degraded.md`, `stats-v2-row-growth.md`, `stats-v2-deployment-safety.md`. The bead's original "dual-write divergence SLI" was obsoleted by skqln.3 step (d), which retired the legacy `ChannelWatchStats` writer: the data-consistency SLI is now the resolver success rate (SLO-8), not a divergence gauge.
 
 - **2026-04-24 (bd-m3vej, follow-up to bd-arp3o):** SLO-6 entry gained
   a **Known measurement bias** section. `POST /api/session-start` was
@@ -660,7 +673,7 @@ For the scaffold we ship simpler single-window thresholds for SLO-2/3 (p95 laten
   `prometheus_rules.yaml` group `ecm_client_error_rate` swapped from
   absolute-rate alerts to ratio-based alerts so the alert thresholds
   match the SLO-6 ratio target.
-- **2026-04-24 (bd-i6a1m):** Added **SLO-6: Frontend Error-free Session Rate** — 99.0% error-free sessions over 28d, uncalibrated until 30d of data, gated at sessions ≥ 50/day. Supported by the new `/api/client-errors` router + `ecm_client_errors_total{kind,release}` counter from ADR-006 Phase 1. Instrumentation gap: a session-start counter is a follow-up bead; until then the SLI denominator lives in the log-aggregation substrate. Companion alert rule shipped in `prometheus_rules.yaml` (group `ecm_client_error_rate`).
-- **2026-04-24 (bd-5uxwh, absorbs bd-9mi6f):** Added **Alerting posture** section. Makes explicit that ECM emits SLI metrics on `/metrics` and ships `prometheus_rules.yaml` as rules-as-code, but does not ship a Prometheus/Alertmanager runtime — operators provision their own scraper if they want alerts to fire. Per-SLO ownership table added. SLO-5 noted as the edge case: its breach signal is the nightly CI canary, not Prometheus-primary.
-- **2026-04-22 (bd-eio04.9):** Added **SLO-5: Normalization Correctness** — canary-based parity SLI with zero-tolerance target. Supported by new metrics in `observability.py` (`ecm_normalization_canary_divergence_total`, plus rule-match / no-change / duration / per-creation-normalized counters), a structured decision log (see `NORMALIZATION_DECISION_LOGGER`), and a nightly CI canary (`.github/workflows/normalization-canary.yml`). Runbook at `docs/runbooks/normalization-canary-divergence.md`.
-- **2026-04-20 (bd-dl1bd):** Initial scaffold. Four SLOs defined, targets conservative, error-budget policy drafted, alert rules shipped in sibling YAML. **Not yet calibrated against real traffic** — targets must be revisited once 30 days of production metrics exist.
+- **2026-04-24 (bd-i6a1m):** Added **SLO-6: Frontend Error-free Session Rate**: 99.0% error-free sessions over 28d, uncalibrated until 30d of data, gated at sessions ≥ 50/day. Supported by the new `/api/client-errors` router + `ecm_client_errors_total{kind,release}` counter from ADR-006 Phase 1. Instrumentation gap: a session-start counter is a follow-up bead; until then the SLI denominator lives in the log-aggregation substrate. Companion alert rule shipped in `prometheus_rules.yaml` (group `ecm_client_error_rate`).
+- **2026-04-24 (bd-5uxwh, absorbs bd-9mi6f):** Added **Alerting posture** section. Makes explicit that ECM emits SLI metrics on `/metrics` and ships `prometheus_rules.yaml` as rules-as-code, but does not ship a Prometheus/Alertmanager runtime: operators provision their own scraper if they want alerts to fire. Per-SLO ownership table added. SLO-5 noted as the edge case: its breach signal is the nightly CI canary, not Prometheus-primary.
+- **2026-04-22 (bd-eio04.9):** Added **SLO-5: Normalization Correctness**: canary-based parity SLI with zero-tolerance target. Supported by new metrics in `observability.py` (`ecm_normalization_canary_divergence_total`, plus rule-match / no-change / duration / per-creation-normalized counters), a structured decision log (see `NORMALIZATION_DECISION_LOGGER`), and a nightly CI canary (`.github/workflows/normalization-canary.yml`). Runbook at `docs/runbooks/normalization-canary-divergence.md`.
+- **2026-04-20 (bd-dl1bd):** Initial scaffold. Four SLOs defined, targets conservative, error-budget policy drafted, alert rules shipped in sibling YAML. **Not yet calibrated against real traffic**: targets must be revisited once 30 days of production metrics exist.

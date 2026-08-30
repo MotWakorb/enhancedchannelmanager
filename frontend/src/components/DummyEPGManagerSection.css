@@ -14,7 +14,8 @@
   gap: 0.5rem;
   padding: 1.5rem;
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }
 
 .dep-empty-state {
@@ -34,7 +35,8 @@
 
 .dep-empty-state p {
   margin: 0;
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   color: var(--text-secondary);
 }
 
@@ -75,7 +77,7 @@
 }
 
 .dep-profile-status .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .dep-profile-status.active {
@@ -90,8 +92,11 @@
   min-width: 0;
 }
 
+/* Had no font-size at all, so it rendered at the UA default 16px. */
 .dep-profile-name {
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   margin-bottom: 0.25rem;
 }
@@ -100,7 +105,9 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.75rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
   color: var(--text-secondary);
 }
 
@@ -108,16 +115,18 @@
   background-color: var(--border-primary);
   padding: 0.125rem 0.375rem;
   border-radius: var(--radius-md);
-  font-weight: 500;
+  font-weight: 600;
   color: var(--accent-primary);
 }
 
+/* --text-secondary, not --text-muted: in the light theme --text-muted
+   measures 2.61:1 on --bg-secondary, below the AA floor. */
 .dep-profile-channels {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .dep-profile-subs {
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .dep-profile-actions {
@@ -144,4 +153,8 @@
 .dep-export-textarea:focus {
   outline: none;
   border-color: var(--accent-primary);
+}
+.dummy-epg-delete-confirm > .modal-body > p {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
 }

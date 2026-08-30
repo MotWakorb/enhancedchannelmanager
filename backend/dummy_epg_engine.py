@@ -153,18 +153,13 @@ def extract_groups(
     return groups
 
 
-def render_template(
-    template: str,
-    groups: dict,
-    lookups: dict[str, dict[str, str]] | None = None,
-) -> str:
+def render_template(template: str, groups: dict) -> str:
     """
     Render a dummy-EPG template through the shared template engine.
 
     Supports all of ``template_engine.TemplateEngine``:
       - {key} placeholder, {key_normalize} legacy suffix
       - Chained pipes: {key|uppercase|trim|strip:-}
-      - Lookup tables: {key|lookup:tablename} — requires lookups dict
       - Conditionals: {if:key}, {if:key=value}, {if:key~regex}
 
     Template syntax errors fall back to the raw template so a typo in a
@@ -175,7 +170,7 @@ def render_template(
     from template_engine import TemplateEngine, TemplateSyntaxError
     engine = TemplateEngine()
     try:
-        return engine.render(template, groups, lookups=lookups)
+        return engine.render(template, groups)
     except TemplateSyntaxError:
         logger.warning("[DUMMY-EPG] Template syntax error; falling back to raw: %r", template)
         return template
@@ -409,7 +404,6 @@ def generate_channel_xml(
     tvg_id: str,
     profile: dict,
     streams: list[dict] = None,
-    lookups: dict[str, dict[str, str]] | None = None,
 ) -> tuple[ET.Element, list[ET.Element]]:
     """
     Generate XMLTV <channel> and <programme> elements for one channel.
@@ -500,9 +494,8 @@ def generate_channel_xml(
                 return val
         return profile.get(field, "") or ""
 
-    # All template rendering inside this function binds the same lookups dict.
     def _render(template: str, groups: dict) -> str:
-        return render_template(template, groups, lookups=lookups)
+        return render_template(template, groups)
 
     if groups is not None:
         # Matched -- compute times and render templates
@@ -690,7 +683,6 @@ def generate_xmltv(
 def preview_pipeline(
     config: dict,
     sample_name: str,
-    lookups: dict[str, dict[str, str]] | None = None,
     include_trace: bool = False,
 ) -> dict:
     """
@@ -778,13 +770,13 @@ def preview_pipeline(
             if include_trace and tpl:
                 try:
                     from template_engine import TemplateEngine, TemplateSyntaxError
-                    out, steps = TemplateEngine().render_with_trace(tpl, template_groups, lookups=lookups)
+                    out, steps = TemplateEngine().render_with_trace(tpl, template_groups)
                     traces[field] = steps
                     return out
                 except TemplateSyntaxError:
                     traces[field] = [{"kind": "error", "message": "template syntax error"}]
                     return tpl
-            return render_template(tpl, template_groups, lookups=lookups)
+            return render_template(tpl, template_groups)
 
         for field in (
             "title_template", "description_template",
@@ -810,13 +802,13 @@ def preview_pipeline(
             if include_trace and tpl:
                 from template_engine import TemplateEngine, TemplateSyntaxError
                 try:
-                    out, steps = TemplateEngine().render_with_trace(tpl, template_groups, lookups=lookups)
+                    out, steps = TemplateEngine().render_with_trace(tpl, template_groups)
                     traces[field] = steps
                     return out
                 except TemplateSyntaxError:
                     traces[field] = [{"kind": "error", "message": "template syntax error"}]
                     return tpl
-            return render_template(tpl, template_groups, lookups=lookups)
+            return render_template(tpl, template_groups)
 
         rendered["fallback_title"] = _render_field_fb("fallback_title_template")
         rendered["fallback_description"] = _render_field_fb("fallback_description_template")
@@ -843,7 +835,6 @@ def preview_pipeline(
 def preview_pipeline_batch(
     config: dict,
     sample_names: list[str],
-    lookups: dict[str, dict[str, str]] | None = None,
 ) -> list[dict]:
     """
     Run the preview pipeline on multiple sample names.
@@ -851,9 +842,8 @@ def preview_pipeline_batch(
     Args:
         config: Profile configuration dict.
         sample_names: List of sample names to test.
-        lookups: Optional merged lookup-table dict (see preview_pipeline).
 
     Returns:
         List of preview result dicts, one per sample name.
     """
-    return [preview_pipeline(config, name, lookups=lookups) for name in sample_names]
+    return [preview_pipeline(config, name) for name in sample_names]

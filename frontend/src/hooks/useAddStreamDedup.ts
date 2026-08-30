@@ -54,6 +54,24 @@ export interface AddStreamRequestStream {
 /** Caller-supplied callback that runs the original "Add Stream" creation path. */
 export type OnProceedCreate = () => void | Promise<void>;
 
+/**
+ * What the dedup lookup actually did, reported back to the caller
+ * (bead enhancedchannelmanager-ok8tj).
+ *
+ * All three outcomes used to look identical from outside the hook: the
+ * create path ran and nothing was said. An operator who saw no merge prompt
+ * could not tell "nothing in the group was similar enough" from "the check
+ * never happened", which is exactly the report this bead was filed on. The
+ * caller decides what to show; the hook only says which case it was.
+ */
+export type AddStreamDedupOutcome =
+  /** A candidate cleared the threshold and the modal is open. */
+  | 'candidate'
+  /** The lookup ran and nothing in the target group cleared the threshold. */
+  | 'no_candidate'
+  /** The lookup itself failed; the create path ran without a dedup check. */
+  | 'lookup_failed';
+
 export interface UseAddStreamDedupReturn {
   modalState: AddStreamDedupModalState;
   /**
@@ -68,12 +86,14 @@ export interface UseAddStreamDedupReturn {
    *   candidate is returned, when the operator picks "Create New", or when
    *   the candidate lookup itself fails (so the operator action is never
    *   silently swallowed).
+   * @returns which of the three outcomes happened, so the caller can make it
+   *   visible to the operator (bead enhancedchannelmanager-ok8tj).
    */
   requestAddStream: (
     stream: AddStreamRequestStream,
     groupId: number | null,
     onProceed: OnProceedCreate,
-  ) => Promise<void>;
+  ) => Promise<AddStreamDedupOutcome>;
   /** Operator chose Merge: append the source stream to the candidate channel. */
   handleMerge: (channelId: string) => Promise<void>;
   /** Operator chose Create New: run the original create-channel path. */
@@ -88,7 +108,23 @@ const CLOSED_STATE: AddStreamDedupModalState = {
   candidate: null,
 };
 
-export function useAddStreamDedup(): UseAddStreamDedupReturn {
+export interface UseAddStreamDedupOptions {
+  /**
+   * Stage the stream assignment instead of writing it, when Edit Mode is on
+   * (bead enhancedchannelmanager-kz089).
+   *
+   * The "Create in..." menu this flow hangs off renders ONLY in Edit Mode, so
+   * every merge it performs happens inside the staging area — and it wrote
+   * straight to the server, uncounted by the change count and out of reach of
+   * Discard, Cancel and Undo. Absent, the immediate write is correct: the same
+   * merge outside Edit Mode has no staging promise to keep.
+   */
+  stageAddStream?: (channelId: number, streamId: number, description: string) => void;
+}
+
+export function useAddStreamDedup(
+  { stageAddStream }: UseAddStreamDedupOptions = {},
+): UseAddStreamDedupReturn {
   const [modalState, setModalState] = useState<AddStreamDedupModalState>(CLOSED_STATE);
   // Pending context for the open modal. Held in component state (not a ref)
   // so a re-render after the candidate fetch sees a consistent snapshot.
@@ -106,7 +142,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
       stream: AddStreamRequestStream,
       groupId: number | null,
       onProceed: OnProceedCreate,
-    ): Promise<void> => {
+    ): Promise<AddStreamDedupOutcome> => {
       let response;
       try {
         response = await getChannelMergeCandidates(stream.name, groupId);
@@ -119,7 +155,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
           err,
         );
         await onProceed();
-        return;
+        return 'lookup_failed';
       }
 
       const candidate = response.candidates[0] ?? null;
@@ -127,7 +163,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
         // No candidate cleared the §D2 floor — proceed with the original
         // create-channel path (auto-creation rules apply there as usual).
         await onProceed();
-        return;
+        return 'no_candidate';
       }
 
       setPendingStream(stream);
@@ -140,6 +176,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
         streamName: stream.name,
         candidate,
       });
+      return 'candidate';
     },
     [],
   );
@@ -157,6 +194,15 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
       // base-10 explicitly; a string like "0x" would otherwise produce NaN
       // and surface as a 422 from the backend, which is at least visible.
       const numericId = parseInt(channelId, 10);
+      if (stageAddStream) {
+        stageAddStream(
+          numericId,
+          pendingStream.id,
+          `Add stream "${pendingStream.name}" to channel ${numericId}`,
+        );
+        close();
+        return;
+      }
       try {
         await addStreamToChannel(numericId, pendingStream.id);
       } finally {
@@ -167,7 +213,7 @@ export function useAddStreamDedup(): UseAddStreamDedupReturn {
         close();
       }
     },
-    [pendingStream, close],
+    [pendingStream, close, stageAddStream],
   );
 
   const handleCreateNew = useCallback(async (): Promise<void> => {

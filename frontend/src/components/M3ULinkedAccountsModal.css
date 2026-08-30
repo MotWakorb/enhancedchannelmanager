@@ -34,12 +34,13 @@
   margin-bottom: 0.75rem;
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .link-group-label {
-  font-size: 0.75rem;
-  font-weight: 600;
+  font-size: var(--type-micro-size);
+  font-weight: var(--type-micro-weight);
   color: var(--text-secondary);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .link-group-actions {
@@ -47,32 +48,12 @@
   gap: 0.25rem;
 }
 
-.btn-icon {
-  background: none;
-  border: none;
-  padding: 0.25rem;
-  cursor: pointer;
-  color: var(--text-secondary);
-  border-radius: var(--radius-md);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color 0.15s, color 0.15s;
-}
-
-.btn-icon:hover {
-  background-color: var(--border-primary);
-  color: var(--text-primary);
-}
-
-.btn-icon.delete:hover {
-  background-color: var(--error-bg);
-  color: var(--error);
-}
-
-.btn-icon .material-icons {
-  font-size: 18px;
-}
+/* `.btn-icon`, `.btn-icon.delete` and the glyph size are owned by
+   shared/common.css § 3 BUTTONS. Three files declared `.btn-icon` bare —
+   this one, the since-removed LookupTableSection.css and TagEngineSection.css
+   — the latter two in the SAME lazy Settings chunk, where whichever imported later silently
+   won, and all three disagreed on padding, colour and glyph size
+   (bead enhancedchannelmanager-6z299). */
 
 .link-group-accounts {
   display: flex;
@@ -80,6 +61,7 @@
   gap: 0.5rem;
 }
 
+/* Badge role. 13px -> 10px. */
 .account-chip {
   display: inline-flex;
   align-items: center;
@@ -88,11 +70,13 @@
   background-color: var(--button-primary-bg);
   color: var(--button-primary-text);
   border-radius: 16px;
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: var(--type-badge-size);
+  line-height: var(--type-badge-line-height);
+  font-weight: var(--type-badge-weight);
 }
 
 /* Create Group Button */
+/* Control: body role's SIZE only, authored weight kept. 14px -> 13px. */
 .btn-create-group {
   display: flex;
   align-items: center;
@@ -103,7 +87,7 @@
   border: 1px dashed var(--border-secondary);
   border-radius: var(--radius-xl);
   color: var(--text-secondary);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
@@ -119,22 +103,28 @@
   cursor: not-allowed;
 }
 
+/* Button/inline-action glyph -> --icon-action. 18px -> 16px. */
 .btn-create-group .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-action);
 }
 
 /* Edit Mode */
+/* Section role. 16px -> 15px. */
 .edit-mode h3 {
   margin: 0 0 0.5rem 0;
-  font-size: 1rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary);
 }
 
+/* Meta role. 14px -> 11px. */
 .edit-description {
   margin: 0 0 1rem 0;
-  font-size: 0.875rem;
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
   color: var(--text-secondary);
-  line-height: 1.5;
+  line-height: var(--type-meta-line-height);
 }
 
 .account-selection {
@@ -165,22 +155,26 @@
 }
 
 .account-checkbox input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
   cursor: pointer;
   accent-color: var(--accent-primary);
 }
 
+/* Item-title role. 14.4px -> 13px. */
 .account-checkbox .account-name {
-  font-size: 0.9rem;
+  font-size: var(--type-item-title-size);
+  line-height: var(--type-item-title-line-height);
+  font-weight: var(--type-item-title-weight);
   color: var(--text-primary);
 }
 
+/* Body role. 14px -> 13px. */
 .no-accounts {
   padding: 1rem;
   text-align: center;
   color: var(--text-muted);
-  font-size: 0.875rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .edit-actions {

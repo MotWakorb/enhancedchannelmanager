@@ -2,19 +2,39 @@
  * User menu component for header.
  *
  * Shows current user info, profile editing, password change, and logout.
- * Hidden when auth is not required or user not logged in.
+ *
+ * With no signed-in user it falls back to a "Sign in" button when the instance
+ * has an operator identity to sign in as, and renders nothing otherwise. This
+ * is the app shell's only sign-in affordance; see the branch below.
  */
 import { logger } from '../utils/logger';
 import React, { useState, useRef, useEffect } from 'react';
-import { useAuth, useAuthRequired } from '../hooks/useAuth';
+import { useAuth } from '../hooks/useAuth';
 import { useNotifications } from '../contexts/NotificationContext';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './UserMenu.css';
 
-export function UserMenu() {
-  const { user, logout, isLoading, refreshUser } = useAuth();
-  const authRequired = useAuthRequired();
+export interface UserMenuProps {
+  /**
+   * Ask the host whether the session may end, handing it the sign-out to run.
+   *
+   * Signing out unmounts the app and takes the in-memory Edit Mode ledger with
+   * it, discarding staged channel work with no warning — an SPA state
+   * transition, so `beforeunload` never fires (bead epic
+   * enhancedchannelmanager-r93hq). The host either runs `proceed` immediately
+   * or holds it until the operator answers its exit dialog.
+   *
+   * Optional so the dev harness, and this component's own tests, can render a
+   * UserMenu with no host: without it the sign-out runs unguarded, which is
+   * correct in a context that has no staged work to lose.
+   */
+  onRequestSignOut?: (proceed: () => void | Promise<void>) => void;
+}
+
+export function UserMenu({ onRequestSignOut }: UserMenuProps = {}) {
+  const { user, authStatus, logout, isLoading, refreshUser } = useAuth();
   const notifications = useNotifications();
   const [isOpen, setIsOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -23,6 +43,8 @@ export function UserMenu() {
   // Modal states
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const { titleId: profileTitleId, containerRef: profileContainerRef } = useOwnedDialog(showProfileModal);
+  const { titleId: passwordTitleId, containerRef: passwordContainerRef } = useOwnedDialog(showPasswordModal);
 
   // Profile form state
   const [displayName, setDisplayName] = useState('');
@@ -34,6 +56,8 @@ export function UserMenu() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [savingPassword, setSavingPassword] = useState(false);
+  const closeProfile = () => { if (!savingProfile) setShowProfileModal(false); };
+  const closePassword = () => { if (!savingPassword) setShowPasswordModal(false); };
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -60,12 +84,63 @@ export function UserMenu() {
     }
   }, [showProfileModal, user]);
 
-  // Don't show if loading, auth not required, or user not logged in
-  if (isLoading || !authRequired || !user) {
+  // Show whenever there is a real session to act on.
+  //
+  // This used to also require useAuthRequired(), which was harmless only
+  // because `user` was necessarily null whenever auth was not required. That
+  // is no longer true: bead enhancedchannelmanager-p388h makes /login
+  // reachable on an auth-disabled instance that holds an operator identity,
+  // so an operator can now hold a genuine session in that mode (which is how
+  // bead jy006's three gated surfaces are meant to be reached). Keeping the
+  // extra condition would have shown that operator no identity and, worse, no
+  // way to sign out. `user` alone is the correct gate, and it already covers
+  // the unresolved and auth-disabled cases, where it stays null.
+  if (isLoading) {
     return null;
   }
 
-  const handleLogout = async () => {
+  // No session, but this instance HAS an operator identity to sign in as.
+  //
+  // Live QA on an auth-disabled instance (bead enhancedchannelmanager-9kwzp)
+  // found the app shell offered zero sign-in affordances in this state: this
+  // component correctly returned null with no user, nothing else in the header
+  // links to /login, and ProtectedRoute's auth-off branch only renders the
+  // login page for a path the operator has to type by hand. The route p388h
+  // reopened was therefore reachable only by someone who already knew the URL
+  // existed.
+  //
+  // `authStatus.setup_complete` is the whole condition. Without it there is no
+  // account to sign in as and the button would lead to a login form nobody can
+  // satisfy. When auth IS required and there is no session, ProtectedRoute
+  // renders the login page instead of the app shell, so this button is not
+  // reachable in that mode and does not duplicate it.
+  if (!user) {
+    if (!authStatus?.setup_complete) {
+      return null;
+    }
+    return (
+      <div className="user-menu">
+        {/* `.user-menu-trigger` alone: this is the same header-band chrome as
+            the signed-in trigger and wants no visual variant, so it carries no
+            modifier class that the stylesheet would never define. */}
+        <button
+          className="user-menu-trigger"
+          onClick={() => {
+            // Same SPA navigation idiom LoginPage and ProtectedRoute use:
+            // push the path, then wake the popstate listeners.
+            window.history.pushState({}, '', '/login');
+            window.dispatchEvent(new PopStateEvent('popstate'));
+          }}
+          title="Sign in"
+        >
+          <span className="material-icons user-menu-icon">login</span>
+          <span className="user-menu-name">Sign in</span>
+        </button>
+      </div>
+    );
+  }
+
+  const performLogout = async () => {
     setIsLoggingOut(true);
     try {
       await logout();
@@ -78,13 +153,31 @@ export function UserMenu() {
     }
   };
 
+  // Ask before ending the session, never after. `logout()` used to be called
+  // straight from here; by the time it resolved, ProtectedRoute had swapped
+  // the app for the login page and any staged Edit Mode work was gone (bead
+  // epic enhancedchannelmanager-r93hq). The menu closes either way — a
+  // dropdown left hanging over the host's exit dialog is nobody's idea of a
+  // confirmation — and `performLogout` is handed over rather than run, so the
+  // host can hold it until the operator answers.
+  const handleLogout = () => {
+    setIsOpen(false);
+    if (onRequestSignOut) {
+      onRequestSignOut(performLogout);
+      return;
+    }
+    void performLogout();
+  };
+
   const handleOpenProfile = () => {
     setIsOpen(false);
+    menuRef.current?.querySelector<HTMLButtonElement>('.user-menu-trigger')?.focus();
     setShowProfileModal(true);
   };
 
   const handleOpenPassword = () => {
     setIsOpen(false);
+    menuRef.current?.querySelector<HTMLButtonElement>('.user-menu-trigger')?.focus();
     setShowPasswordModal(true);
     setCurrentPassword('');
     setNewPassword('');
@@ -194,13 +287,14 @@ export function UserMenu() {
 
       {/* Profile Edit Modal */}
       {showProfileModal && (
-        <ModalOverlay onClose={() => setShowProfileModal(false)} className="user-modal-overlay">
-          <div className="user-modal">
+        <ModalOverlay onClose={closeProfile} className="user-modal-overlay" role="dialog" aria-modal="true" aria-labelledby={profileTitleId}>
+          <div className="user-modal" ref={profileContainerRef}>
             <div className="user-modal-header">
-              <h3>Edit Profile</h3>
+              <h3 id={profileTitleId}>Edit Profile</h3>
               <button
                 className="user-modal-close"
-                onClick={() => setShowProfileModal(false)}
+                onClick={closeProfile}
+                disabled={savingProfile}
                 aria-label="Close profile dialog"
                 title="Close profile dialog"
               >
@@ -239,7 +333,8 @@ export function UserMenu() {
                 <button
                   type="button"
                   className="user-modal-btn user-modal-btn-secondary"
-                  onClick={() => setShowProfileModal(false)}
+                  onClick={closeProfile}
+                  disabled={savingProfile}
                 >
                   Cancel
                 </button>
@@ -258,13 +353,14 @@ export function UserMenu() {
 
       {/* Change Password Modal */}
       {showPasswordModal && (
-        <ModalOverlay onClose={() => setShowPasswordModal(false)} className="user-modal-overlay">
-          <div className="user-modal">
+        <ModalOverlay onClose={closePassword} className="user-modal-overlay" role="dialog" aria-modal="true" aria-labelledby={passwordTitleId}>
+          <div className="user-modal" ref={passwordContainerRef}>
             <div className="user-modal-header">
-              <h3>Change Password</h3>
+              <h3 id={passwordTitleId}>Change Password</h3>
               <button
                 className="user-modal-close"
-                onClick={() => setShowPasswordModal(false)}
+                onClick={closePassword}
+                disabled={savingPassword}
                 aria-label="Close password dialog"
                 title="Close password dialog"
               >
@@ -295,7 +391,11 @@ export function UserMenu() {
                     required
                     minLength={8}
                   />
-                  <p className="user-modal-hint">Minimum 8 characters</p>
+                  {/* Same enforced policy as SetupPage; bead enhancedchannelmanager-mkocf. */}
+                  <p className="user-modal-hint">
+                    At least 8 characters. Common and previously breached passwords are
+                    rejected, and it cannot contain your username.
+                  </p>
                 </div>
                 <div className="user-modal-field">
                   <label htmlFor="confirm-password">Confirm New Password</label>
@@ -313,7 +413,8 @@ export function UserMenu() {
                 <button
                   type="button"
                   className="user-modal-btn user-modal-btn-secondary"
-                  onClick={() => setShowPasswordModal(false)}
+                  onClick={closePassword}
+                  disabled={savingPassword}
                 >
                   Cancel
                 </button>

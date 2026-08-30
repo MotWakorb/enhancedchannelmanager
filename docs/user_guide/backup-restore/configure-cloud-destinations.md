@@ -1,8 +1,6 @@
 # Configure Cloud Destinations
 
-> **Audience:** Operator who wants backup artifacts uploaded to off-host storage automatically after each backup run.
->
-> **Status:** Shipped in v0.18.0. **S3 (including S3-compatible), Google Drive, and WebDAV are fully shipped. Dropbox and OneDrive adapters exist in the codebase but are deferred — see the per-provider notes below.**
+> **Status:** Shipped in v0.18.0. **S3 (including S3-compatible), Google Drive, and WebDAV are fully shipped. Dropbox and OneDrive adapters exist in the codebase but are deferred. See the per-provider notes below.**
 
 ---
 
@@ -18,9 +16,9 @@ You can configure multiple cloud destinations. Each destination applies the rete
 
 Every cloud destination URL passes through ECM's SSRF (Server-Side Request Forgery) chokepoint before any connection is made. This is a non-bypassable security control:
 
-- **Always-blocked addresses** (in both LAN-friendly and public-only mode): loopback (`127.x.x.x`), link-local (`169.254.x.x` — includes the AWS/cloud metadata endpoint), CGNAT (`100.64.x.x/10`), multicast, IPv6 ULA/link-local, and non-http(s) URL schemes.
-- **LAN-friendly mode (default):** RFC 1918 private addresses (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`) are allowed. Use this when your WebDAV server or S3-compatible endpoint is on a local NAS.
-- **Public-only mode:** RFC 1918 addresses are blocked. Switch to this mode if your threat model requires it: Settings → Backup & Restore → "Where backups can be sent".
+- **Always-blocked addresses** (in both LAN-friendly and public-only mode): link-local (`169.254.x.x`, which includes the AWS/cloud metadata endpoint), multicast, IPv6 ULA/link-local, unspecified addresses, and non-http(s) URL schemes.
+- **LAN-friendly mode (default):** loopback, RFC 1918 private addresses (`192.168.x.x`, `10.x.x.x`, `172.16-31.x.x`), and RFC 6598 shared addresses (`100.64.0.0/10`) are allowed. Use this when your WebDAV server, S3-compatible endpoint, VPN peer, or second ECM instance is reachable through one of those ranges.
+- **Public-only mode:** loopback, RFC 1918, and RFC 6598 addresses are blocked. Switch to this mode if your threat model requires it: Settings → Backup & Restore → "Where backups can be sent".
 
 DNS-rebinding is mitigated by resolving the endpoint hostname before connecting and then connecting by the resolved IP address, not by re-resolving at connection time.
 
@@ -28,7 +26,6 @@ DNS-rebinding is mitigated by resolving the endpoint hostname before connecting 
 
 ## S3 and S3-compatible (MinIO, Backblaze B2)
 
-**Status: Shipped (v0.18.0)**
 
 The S3 adapter supports AWS S3, MinIO, and Backblaze B2. Any service that implements the S3 API is supported via a custom endpoint URL.
 
@@ -67,7 +64,6 @@ On the next scheduled backup, ECM uploads the artifact to this bucket and verifi
 
 ## WebDAV
 
-**Status: Shipped (v0.18.0)**
 
 The WebDAV adapter works with any RFC 4918 WebDAV server: Nextcloud, ownCloud, Apache `mod_dav`, `rclone serve webdav`, a NAS's built-in WebDAV service, and others.
 
@@ -88,7 +84,7 @@ The WebDAV adapter works with any RFC 4918 WebDAV server: Nextcloud, ownCloud, A
 ### Security notes
 
 - The base URL is validated through the SSRF chokepoint before any connection is made.
-- Uploads are streamed from disk — the artifact is never read whole into RAM.
+- Uploads are streamed from disk. The artifact is never read whole into RAM.
 - The `Authorization` header value is masked before logging.
 
 ### Setup walkthrough
@@ -104,7 +100,6 @@ The WebDAV adapter works with any RFC 4918 WebDAV server: Nextcloud, ownCloud, A
 
 ## Google Drive
 
-**Status: Shipped (v0.18.0)**
 
 The Google Drive adapter uses service account (app-only) authentication.
 
@@ -136,7 +131,7 @@ The Google Drive adapter uses service account (app-only) authentication.
 
 **Status: Code exists but DEFERRED in v0.18.0. Configuring an OneDrive target will produce a per-target failure on each backup run without uploading anything.**
 
-OneDrive support using the Microsoft Graph API (client credentials OAuth2 flow) is planned but not wired for upload in v0.18.0. The adapter code is present (`backend/cloud_storage/onedrive_adapter.py`) and will be connected in a follow-up release.
+OneDrive support using the Microsoft Graph API (client credentials OAuth2 flow) is planned but not wired for upload in v0.18.0. It will be connected in a follow-up release.
 
 Do not configure an OneDrive cloud destination in v0.18.0. If you have one configured, remove it or switch to a different provider until this is resolved.
 
@@ -146,7 +141,7 @@ Do not configure an OneDrive cloud destination in v0.18.0. If you have one confi
 
 **Status: Code exists but DEFERRED in v0.18.0. Configuring a Dropbox target will produce a per-target failure on each backup run without uploading anything.**
 
-Dropbox support is planned but not wired for upload in v0.18.0. The adapter code is present (`backend/cloud_storage/dropbox_adapter.py`) and will be connected in a follow-up release.
+Dropbox support is planned but not wired for upload in v0.18.0. It will be connected in a follow-up release.
 
 Do not configure a Dropbox cloud destination in v0.18.0. If you have one configured, remove it or switch to a different provider until this is resolved.
 
@@ -165,8 +160,8 @@ Retention is applied independently per cloud destination. A failed upload to one
 
 ## Testing and troubleshooting
 
-- **Test connection button** — use this before saving a new destination. It confirms ECM can reach the endpoint and authenticate.
-- **Task history** — after a backup run, check **Settings → Task History** for per-destination upload results.
-- **Notifications** — a failure notification is emitted when an upload fails. The notification includes the destination name (never the URL or credentials).
+- **Test connection button**: use this before saving a new destination. It confirms ECM can reach the endpoint and authenticate.
+- **Task history**: after a backup run, check the DBAS Backup task card's own **History** expander under **Settings → Scheduled Tasks** for per-destination upload results. There is no separate "Task History" destination in Settings; run history lives per-task.
+- **Notifications**: a failure notification is emitted when an upload fails. The notification includes the destination name (never the URL or credentials).
 
 See [Troubleshoot a restore](troubleshoot-restore.md) for further diagnostic patterns.

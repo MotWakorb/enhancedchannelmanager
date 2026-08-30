@@ -116,14 +116,141 @@ _SETTINGS_HASH_KEY: bytes = secrets.token_bytes(32)
 # DBAS-restore endpoint paths (enhancedchannelmanager-0i2vt.13). Isolated as
 # constants so a single live-verification follow-up can correct any path string
 # without editing the methods. Dispatcharr groups core resources under
-# ``/api/core/`` (confirmed for streamprofiles/version/system-events); the DVR
-# module lives under ``/api/dvr/``. These specific paths are best-known and not
-# yet live-confirmed — see the method block for the deferred-verification note.
+# ``/api/core/`` (confirmed for streamprofiles/version/system-events).
+#
+# DVR (enhancedchannelmanager-lsa0s): this used to read ``/api/dvr/rules/``, a
+# guessed path with NO route on Dispatcharr 0.28.2 — it fell through to the
+# frontend SPA catch-all, which answers 200 ``text/html``, so every
+# ``get_dvr_rules()`` died inside ``response.json()`` instead of raising an
+# honest 404. Dispatcharr's DVR-rule resource is a ModelViewSet under the
+# channels app: ``/api/channels/recurring-rules/`` (a RecurringRecordingRule —
+# optional ``name``, one integer ``channel`` FK, ``days_of_week``, start/end
+# time and date, ``enabled``), with list/create on the collection and delete on
+# ``{id}/``. Live-verified against 0.28.2 and recorded in
+# ``tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json``.
+#
+# One neighbouring DVR surface is deliberately NOT bound here:
+#   * ``/api/channels/series-rules/`` — series rules are stored INSIDE the
+#     ``dvr_settings`` core-settings row, which the ``core_settings`` backup
+#     category already carries and the settings importer already applies. Going
+#     through this client too would apply the same state twice.
+#
+# RECORDINGS (enhancedchannelmanager-ciabe): ``/api/channels/recordings/`` IS
+# bound, below. It used to be excluded alongside series rules on the grounds that
+# a recording is per-instance state rather than configuration — which is true of
+# a COMPLETED recording (it names a media file on the source's own disk) and
+# false of an UPCOMING one, whose loss on restore is a silently missed recording.
+# ADR-013's governing principle splits the two: the upcoming half replicates
+# through the ``upcoming_recordings`` backup category, the completed half is a
+# named technical impossibility. See routers/backup.py's category note.
 _USER_AGENTS_PATH = "/api/core/useragents/"
 _CORE_SETTINGS_PATH = "/api/core/settings/"
-_DVR_RULES_PATH = "/api/dvr/rules/"
+_DVR_RECURRING_RULES_PATH = "/api/channels/recurring-rules/"
+_RECORDINGS_PATH = "/api/channels/recordings/"
+# Defensive cap on how many DRF-paginated pages ``get_core_setting_id_map`` will
+# follow via ``next`` before giving up loudly. The recorded live response is a
+# bare (unpaginated) list of ~7 rows (see
+# ``tests/fixtures/dispatcharr_core_settings_recorded.json``), so this never
+# bites today -- it exists so a future, much larger settings list fails LOUD
+# (a raised error the resolver's broad except turns into UPSTREAM_API_ERROR for
+# every key) instead of silently resolving only the first page and failing
+# every key past it as DEPENDENCY_UNRESOLVED.
+_CORE_SETTINGS_MAX_PAGES = 20
 _EPG_DATA_BYTES_PER_RESULT = 2048
 _EPG_DATA_MIN_RESPONSE_BYTES = 1024 * 1024
+
+# ---------------------------------------------------------------------------
+# Dispatcharr version advisory (ADR-014 option c, bead ax0kf)
+#
+# ECM's recorded contract fixtures -- the paths manifest the client contract
+# sweep checks every URL template against, and the deep response fixtures --
+# were all captured from ONE Dispatcharr version. That leaves a silent-upgrade
+# gap: the operator upgrades Dispatcharr underneath ECM, CI stays green against
+# the recorded snapshot, and nothing says a word until something breaks.
+#
+# The advisory is WARN-ONLY and must stay that way (PO decision 2026-08-03,
+# home-lab tier). ECM has no way to know a new Dispatcharr is actually
+# incompatible, and locking an operator out of their own tool over a version
+# tuple is a worse failure than the drift it would be guarding against.
+#
+# EDIT THIS CONSTANT when adopting a new Dispatcharr version -- in the same
+# change that re-records
+# ``tests/fixtures/dispatcharr_openapi_paths_manifest.json``
+# (see scripts/record_dispatcharr_openapi_manifest.py and docs/dispatcharr_api.md).
+# Entries are MAJOR.MINOR *series*, not full versions: Dispatcharr is 0.x, so
+# the MINOR is its breaking-change axis, and a patch release must never nag.
+TESTED_DISPATCHARR_SERIES = ("0.28",)
+
+_VERSION_SERIES_RE = re.compile(r"^v?(\d+)\.(\d+)")
+
+# The version string is UPSTREAM-CONTROLLED text that lands in two places a
+# blob of attacker-chosen bytes has no business reaching: an operator-facing
+# notification and a ``logger.warning`` line. ``/api/core/version/`` returns a
+# short semver on 0.28.2, but nothing in the transport guarantees that, so the
+# value is clamped to one short line before it reaches EITHER sink -- otherwise
+# a 5 kB "version" becomes a 5 kB notification, and an embedded newline forges
+# a second log record.
+_MAX_VERSION_STRING_LENGTH = 32
+_VERSION_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+_VERSION_TRUNCATION_MARKER = "..."
+
+
+def clamp_dispatcharr_version(version) -> Optional[str]:
+    """Return a short, single-line, log-safe rendering of an upstream version.
+
+    Control characters (CR/LF included) collapse to spaces so the value cannot
+    forge a log record, and the result is capped at
+    :data:`_MAX_VERSION_STRING_LENGTH` characters. Returns ``None`` for a
+    non-string or a value that is empty once cleaned — callers treat that as
+    "version undeterminable", which is silence, not an advisory.
+    """
+    if not isinstance(version, str):
+        return None
+    cleaned = _VERSION_CONTROL_CHARS_RE.sub(" ", version).strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > _MAX_VERSION_STRING_LENGTH:
+        cleaned = cleaned[:_MAX_VERSION_STRING_LENGTH] + _VERSION_TRUNCATION_MARKER
+    return cleaned
+
+
+def dispatcharr_version_series(version) -> Optional[str]:
+    """Return the ``MAJOR.MINOR`` series of a Dispatcharr version string.
+
+    Returns ``None`` for anything that is not a parseable version string --
+    ``None``, a non-string, an empty body, or a value like ``"unknown"``.
+    """
+    clamped = clamp_dispatcharr_version(version)
+    if clamped is None:
+        return None
+    match = _VERSION_SERIES_RE.match(clamped)
+    if match is None:
+        return None
+    return f"{match.group(1)}.{match.group(2)}"
+
+
+def dispatcharr_version_advisory(version) -> Optional[str]:
+    """Return a non-blocking notice if ``version`` is outside the tested set.
+
+    Returns ``None`` -- meaning "say nothing" -- when the version is in a
+    tested series OR cannot be determined at all. An undeterminable version is
+    deliberately silent: a Dispatcharr old enough to lack ``/api/core/version/``,
+    a timeout, or an unparseable body would otherwise produce a nag the operator
+    cannot act on.
+
+    The version is embedded via :func:`clamp_dispatcharr_version`, never raw.
+    """
+    series = dispatcharr_version_series(version)
+    if series is None or series in TESTED_DISPATCHARR_SERIES:
+        return None
+    tested = ", ".join(f"{entry}.x" for entry in TESTED_DISPATCHARR_SERIES)
+    return (
+        f"Connected to Dispatcharr {clamp_dispatcharr_version(version)}. ECM's "
+        f"Dispatcharr API contract is recorded against {tested}, so this version "
+        "has not been tested. The connection works and nothing is being held "
+        "back -- but if something Dispatcharr-related misbehaves, mention this "
+        "version when you report it."
+    )
 
 
 class DispatcharrClient:
@@ -131,6 +258,9 @@ class DispatcharrClient:
 
     def __init__(self, settings: DispatcharrSettings):
         self.settings = settings
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(settings.model_dump())
         self.base_url = self.settings.url.rstrip("/")
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -186,6 +316,9 @@ class DispatcharrClient:
             data = response.json()
             self.access_token = data["access"]
             self.refresh_token = data.get("refresh")
+            from log_utils import register_sensitive_values
+
+            register_sensitive_values(self.access_token, self.refresh_token)
             logger.info("[DISPATCHARR] Successfully authenticated to Dispatcharr - username: %s", self.settings.username)
         except httpx.HTTPStatusError as e:
             logger.error("[DISPATCHARR] Authentication failed - status: %s", e.response.status_code)
@@ -209,6 +342,9 @@ class DispatcharrClient:
         if response.status_code == 200:
             data = response.json()
             self.access_token = data["access"]
+            from log_utils import register_sensitive_values
+
+            register_sensitive_values(self.access_token)
             logger.debug("[DISPATCHARR] Access token refreshed successfully")
         else:
             # Refresh token expired, do full login
@@ -219,14 +355,28 @@ class DispatcharrClient:
         self,
         method: str,
         path: str,
+        *,
+        retry_on_401: bool = True,
         **kwargs,
     ) -> httpx.Response:
-        """Make an authenticated request with automatic token refresh."""
+        """Make an authenticated request with automatic token refresh.
+
+        ``retry_on_401`` (JWT mode only; a 401 is always terminal in API-key
+        mode) controls the refresh-and-retry branch below. It exists because
+        that branch can spend a LOGIN: with no refresh token,
+        :meth:`_refresh_access_token` falls through to :meth:`_login`, a fresh
+        ``POST /api/accounts/token/`` with the operator's credentials — and
+        Dispatcharr rate-limits login at 3/min per IP. A caller that is
+        best-effort (the connection test's version advisory, ADR-014 option c)
+        must not be able to burn that budget and fail the operator's next real
+        request, so it passes ``retry_on_401=False`` and takes the 401 as its
+        answer. Ordinary callers leave it on: they hold a long-lived client
+        whose access token legitimately expires mid-session.
+        """
         # Clear-text-logging hygiene (bead 0i2vt.13): NEVER log ``path`` at any
         # sink in this method. ``path`` is attacker-influenced/credential-tainted
-        # in practice -- callers such as ``update_core_setting`` build it from a
-        # settings key (``f"{_CORE_SETTINGS_PATH}{setting_name}/"``), and a path
-        # *could* in principle carry a query string with a token. CodeQL's
+        # in practice -- callers interpolate caller-supplied identifiers into it,
+        # and a path *could* in principle carry a query string with a token. CodeQL's
         # py/clear-text-logging-sensitive-data correctly traces that credential
         # source into ``path`` and flags every ``logger.*(..., path)`` sink here.
         # These logs use only NON-sensitive fields -- HTTP method, status code,
@@ -266,8 +416,10 @@ class DispatcharrClient:
             )
 
             # If unauthorized in JWT mode, try refreshing token and retry.
-            # In api-key mode a 401 is terminal (the key is invalid or revoked).
-            if response.status_code == 401 and not self._uses_api_key:
+            # In api-key mode a 401 is terminal (the key is invalid or revoked),
+            # and callers that opted out of the retry take the 401 as terminal
+            # too rather than risk a rate-limited re-login (see the docstring).
+            if response.status_code == 401 and not self._uses_api_key and retry_on_401:
                 logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
                 await self._refresh_access_token()
                 headers["Authorization"] = f"Bearer {self.access_token}"
@@ -392,7 +544,31 @@ class DispatcharrClient:
     async def assign_channel_numbers(
         self, channel_ids: list[int], starting_number: Optional[float] = None
     ) -> dict:
-        """Bulk assign channel numbers."""
+        """Bulk assign channel numbers.
+
+        A BODYLESS 2xx IS THE DOCUMENTED SUCCESS, not a fault. Dispatcharr's
+        ``POST /api/channels/channels/assign/`` declares no response body
+        beyond the string "Channels have been auto-assigned!"
+        (``swagger.json``) — which is exactly why ``routers/channels.py`` reads
+        the assigned numbers back one channel at a time when the caller lets
+        Dispatcharr choose them. A bare ``response.json()`` therefore raised
+        ``JSONDecodeError`` on the success this method exists to handle, the
+        router's ``except Exception`` turned it into a 500 **before the
+        read-back loop was entered**, and the landed renumber left no Journal
+        row at all — not the numbers, and not even the honest "ECM has not read
+        it back". Both sentences ``docs/api.md`` writes for this path were
+        false in precisely the case they describe.
+
+        The stand-in envelope says only that the call succeeded. It must not
+        name or imply a channel number: nothing observed one, and inventing one
+        here is the same false claim the read-back exists to avoid. Callers
+        rely on a dict coming back — the router stamps ``journalRowsUnwritten``
+        onto it, which is how a caller whose rows were lost is told.
+
+        Pinned by ``tests/unit/test_dispatcharr_client_bodyless_success.py``
+        and, across the router seam,
+        ``tests/routers/test_bodyless_assign_still_journals.py``.
+        """
         data = {"channel_ids": channel_ids}
         if starting_number is not None:
             data["starting_number"] = starting_number
@@ -401,7 +577,7 @@ class DispatcharrClient:
             "POST", "/api/channels/channels/assign/", json=data
         )
         response.raise_for_status()
-        return response.json()
+        return response.json() if response.content else {"success": True}
 
     # -------------------------------------------------------------------------
     # Channel Groups
@@ -639,15 +815,19 @@ class DispatcharrClient:
         response = await self._request("GET", "/api/m3u/accounts/")
         response.raise_for_status()
         accounts = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(accounts)
         logger.debug("[DISPATCHARR] Dispatcharr returned %s M3U accounts", len(accounts))
         for account in accounts:
             logger.debug("[DISPATCHARR]   M3U Account: id=%s, name=%s, server_url=%s", account.get('id'), account.get('name'), account.get('server_url'))
         return accounts
 
-    async def get_all_m3u_group_settings(self) -> dict:
+    async def get_all_m3u_group_settings(self, accounts: Optional[list] = None) -> dict:
         """Get group settings for all M3U accounts, returns dict mapping channel_group_id to settings.
 
         The channel_groups data is embedded in the accounts response, so we extract it from there.
+        Callers that already fetched the account list may pass it to avoid a duplicate request.
 
         GLOBAL-PER-CHANNEL-GROUP contract (GH #720 Part B, decision "global per
         group"): when multiple accounts carry settings for the SAME global
@@ -659,7 +839,8 @@ class DispatcharrClient:
         when two account rows for the group hold DIFFERENT non-empty
         ``channel_profile_ids`` selections, so the profile reconcile can warn.
         """
-        accounts = await self.get_m3u_accounts()
+        if accounts is None:
+            accounts = await self.get_m3u_accounts()
         logger.info("[DISPATCHARR] get_all_m3u_group_settings: Processing %s M3U accounts", len(accounts))
 
         # Gather ALL account rows per global group id first, then pick a
@@ -719,10 +900,6 @@ class DispatcharrClient:
                 s for s in (_row_selection(r) for r in rows) if s is not None
             }
             winner_selection = _row_selection(winner)
-            # Conflict when either two rows carry DIFFERENT non-empty selections,
-            # OR some row carries a selection but the chosen winner does not
-            # (a selection-vs-no-selection disagreement that would otherwise
-            # silently ignore the operator's choice — Should-Fix 3).
             conflict = len(distinct_selections) > 1 or (
                 bool(distinct_selections) and winner_selection is None
             )
@@ -738,7 +915,84 @@ class DispatcharrClient:
             # Dispatcharr group-settings PATCH (NIT 9). Today's save paths build
             # explicit payloads and never round-trip it; a future consumer that
             # forwards a collapsed row wholesale must drop this key first.
-            all_settings[channel_group_id] = {**winner, "_ecm_channel_profile_conflict": conflict}
+            all_settings[channel_group_id] = {
+                **winner,
+                "_ecm_channel_profile_conflict": conflict,
+                "_ecm_profile_source_rows": [
+                    {**row, "source_group_id": channel_group_id}
+                    for row in rows
+                ],
+            }
+
+        # A raw group conflict is only half the safety boundary. Distinct source
+        # groups can redirect into the same effective target and carry different
+        # selections. Bucket the already-collapsed raw groups by that effective
+        # target, then stamp every participant so no representative can write.
+        from services.event_sync_preflight import resolve_effective_master_group_id
+
+        by_effective: dict[int, list[int]] = {}
+        for gid in all_settings:
+            effective_gid = resolve_effective_master_group_id(all_settings, gid)
+            by_effective.setdefault(effective_gid, []).append(gid)
+
+        for effective_gid, source_gids in by_effective.items():
+            choices: dict[tuple[int, ...], list[dict]] = {}
+            raw_conflict = any(
+                all_settings[gid].get("_ecm_channel_profile_conflict")
+                for gid in source_gids
+            )
+            target = all_settings.get(effective_gid)
+            target_selection = _row_selection(target) if target is not None else None
+            target_raw_conflict = bool(
+                isinstance(target, dict) and target.get("_ecm_channel_profile_conflict")
+            )
+            for gid in source_gids:
+                source_rows = all_settings[gid].get("_ecm_profile_source_rows", [])
+                for row in source_rows:
+                    selection = _row_selection(row)
+                    profile_ids = tuple(selection or ())
+                    choices.setdefault(profile_ids, []).append({
+                        "source_group_id": gid,
+                        "m3u_account_id": row.get("m3u_account_id"),
+                        "m3u_account_name": row.get("m3u_account_name", ""),
+                    })
+
+            # A target group's own explicit selection is already the established
+            # winner used by reconcile. Redirected source groups cannot turn it
+            # into an operator question. A conflict within the target's own
+            # account rows still needs review.
+            effective_conflict = target_raw_conflict or (
+                target_selection is None and (raw_conflict or len(choices) > 1)
+            )
+            if not effective_conflict:
+                continue
+            shape = {
+                "effective_group_id": effective_gid,
+                "source_group_ids": sorted(source_gids),
+                "choices": [
+                    {
+                        "profile_ids": list(profile_ids),
+                        "sources": sorted(
+                            sources,
+                            key=lambda source: (
+                                source.get("source_group_id") or 0,
+                                source.get("m3u_account_id") or 0,
+                            ),
+                        ),
+                    }
+                    for profile_ids, sources in sorted(choices.items())
+                ],
+            }
+            for gid in source_gids:
+                all_settings[gid]["_ecm_channel_profile_conflict"] = True
+                all_settings[gid]["_ecm_profile_conflict_shape"] = shape
+            logger.warning(
+                "[DISPATCHARR] effective group %s has CONFLICTING "
+                "channel_profile_ids across source groups %s (selections=%s)",
+                effective_gid,
+                sorted(source_gids),
+                sorted(choices),
+            )
 
         logger.info("[DISPATCHARR]   Total channel_groups entries across all accounts: %s", total_groups_found)
         logger.info("[DISPATCHARR]   Unique channel group IDs extracted: %s", len(all_settings))
@@ -771,29 +1025,48 @@ class DispatcharrClient:
         """Get a single M3U account by ID."""
         response = await self._request("GET", f"/api/m3u/accounts/{account_id}/")
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(account)
+        return account
 
     async def create_m3u_account(self, data: dict) -> dict:
         """Create a new M3U account."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request("POST", "/api/m3u/accounts/", json=data)
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        register_sensitive_values_from_object(account)
+        return account
 
     async def update_m3u_account(self, account_id: int, data: dict) -> dict:
         """Update an M3U account (full update)."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request(
             "PUT", f"/api/m3u/accounts/{account_id}/", json=data
         )
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        register_sensitive_values_from_object(account)
+        return account
 
     async def patch_m3u_account(self, account_id: int, data: dict) -> dict:
         """Partially update an M3U account (e.g., toggle is_active)."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request(
             "PATCH", f"/api/m3u/accounts/{account_id}/", json=data
         )
         response.raise_for_status()
-        return response.json()
+        account = response.json()
+        register_sensitive_values_from_object(account)
+        return account
 
     async def delete_m3u_account(self, account_id: int) -> None:
         """Delete an M3U account."""
@@ -1024,6 +1297,61 @@ class DispatcharrClient:
             raise Exception(f"Logo upload failed: {response.status_code} - {error_body}")
         return response.json()
 
+    async def fetch_logo_image(
+        self,
+        logo_id: int,
+        *,
+        timeout: Optional[float] = None,
+    ) -> Optional[bytes]:
+        """Fetch ONE logo's image BYTES from Dispatcharr's cache endpoint.
+
+        Dispatcharr is the source of truth for logo images, including the ones
+        ECM's own Logo Manager uploads (those land in Dispatcharr's
+        ``/data/logos/``, not in ECM's config volume). This is the read side of
+        that: ``GET /api/channels/logos/{id}/cache/`` returns the image for BOTH
+        a Dispatcharr-hosted file and a remote original it has cached, using the
+        API key the client already holds.
+
+        Used by the DBAS backup builder to archive the bytes of a
+        Dispatcharr-hosted logo (bead ``enhancedchannelmanager-xb58a``) and by
+        ECM's same-origin logo image proxy (``routers.channels``), which calls
+        the same upstream path directly because it also needs the response
+        headers.
+
+        Args:
+            logo_id: The Dispatcharr logo id.
+            timeout: Maximum total seconds for authentication, request, and any
+                401 retry. ``None`` uses the client's normal request timeout.
+
+        Returns:
+            The image bytes, or ``None`` when the upstream returned any error
+            status (a deleted logo, a cache miss Dispatcharr could not fill).
+            A TRANSPORT failure raises, so a caller that must not fail hard
+            wraps the call.
+        """
+        try:
+            if timeout is None:
+                response = await self._request(
+                    "GET", f"/api/channels/logos/{logo_id}/cache/"
+                )
+            else:
+                async with asyncio.timeout(timeout):
+                    response = await self._request(
+                        "GET",
+                        f"/api/channels/logos/{logo_id}/cache/",
+                        timeout=timeout,
+                    )
+        except httpx.TimeoutException as e:
+            raise TimeoutError from e
+        if response.status_code >= 400:
+            # Never log the url or the body: both can carry a path or a token.
+            logger.warning(
+                "[DISPATCHARR] Logo image fetch failed for id=%s: status %s",
+                logo_id, response.status_code,
+            )
+            return None
+        return response.content
+
     async def find_logo_by_url(self, url: str) -> Optional[dict]:
         """Find an existing logo by its URL.
 
@@ -1112,25 +1440,43 @@ class DispatcharrClient:
         """Get all EPG sources."""
         response = await self._request("GET", "/api/epg/sources/")
         response.raise_for_status()
-        return response.json()
+        sources = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(sources)
+        return sources
 
     async def get_epg_source(self, source_id: int) -> dict:
         """Get a single EPG source by ID."""
         response = await self._request("GET", f"/api/epg/sources/{source_id}/")
         response.raise_for_status()
-        return response.json()
+        source = response.json()
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(source)
+        return source
 
     async def create_epg_source(self, data: dict) -> dict:
         """Create a new EPG source."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request("POST", "/api/epg/sources/", json=data)
         response.raise_for_status()
-        return response.json()
+        source = response.json()
+        register_sensitive_values_from_object(source)
+        return source
 
     async def update_epg_source(self, source_id: int, data: dict) -> dict:
         """Update an EPG source."""
+        from log_utils import register_sensitive_values_from_object
+
+        register_sensitive_values_from_object(data)
         response = await self._request("PATCH", f"/api/epg/sources/{source_id}/", json=data)
         response.raise_for_status()
-        return response.json()
+        source = response.json()
+        register_sensitive_values_from_object(source)
+        return source
 
     async def delete_epg_source(self, source_id: int) -> None:
         """Delete an EPG source."""
@@ -1543,20 +1889,30 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def create_user(self, data: dict) -> dict:
-        """Create a Dispatcharr (Django) user account — NO password ever sent.
+    async def create_user(self, data: dict, *, password: str | None = None) -> dict:
+        """Create a Dispatcharr (Django) user account.
 
         Used by the Users restore importer (enhancedchannelmanager-l1p4p). Per
         spike tsfv0 (live-confirmed vs Dispatcharr 0.26.0): the User serializer
         exposes ``password`` as a WRITE-ONLY plaintext field and there is no
-        retrievable hash, so a restored user is created OMITTING ``password``
-        entirely -> Django stores an unusable password and the operator resets it
-        out-of-band (force-reset).
+        retrievable hash, so the SOURCE instance's password is unrecoverable and
+        is never carried across.
 
-        This method **strips ``password`` and any ``password_hash`` key** from the
-        payload defensively, so a password/hash can never cross the boundary even
-        if a caller accidentally includes one. NEVER fabricate, derive, or rehash
-        a password; never forward an incoming hash field.
+        ``data`` is therefore **stripped of ``password`` and any
+        ``password_hash`` key**, so archive secret material can never cross the
+        boundary even if a caller accidentally includes it. NEVER fabricate,
+        derive, or rehash a password from archive data; never forward an incoming
+        hash field.
+
+        The separate ``password`` KEYWORD carries a value the CALLER generated
+        fresh (``dbas.importers.users`` uses :mod:`secrets`) and is the only way a
+        password reaches the wire. It exists because Dispatcharr 0.28.2's
+        user-create serializer reads ``validated_data['password']``
+        unconditionally: omitting the key raises an uncaught ``KeyError`` that
+        surfaces as an HTTP 500 and used to abort the whole restore
+        (enhancedchannelmanager-y65si). The value is written, never read back
+        (write-only upstream), never logged, and never recorded by ECM — the
+        restored account still requires an operator-driven password reset.
 
         The error message uses the same ``"<thing> failed: <status> - <body>"``
         shape as ``create_channel`` / ``create_stream`` so ``upstream_http_exception``
@@ -1564,14 +1920,16 @@ class DispatcharrClient:
         """
         if not isinstance(data, dict):
             raise ValueError("create_user requires a dict payload")
-        # Defense in depth: never let a secret cross the boundary, regardless of
-        # what the caller passed. The importer already omits these; this is the
-        # last line of defense at the client edge.
+        # Defense in depth: never let ARCHIVE secret material cross the boundary,
+        # regardless of what the caller passed. The importer already omits these;
+        # this is the last line of defense at the client edge.
         payload = {
             k: v for k, v in data.items() if k not in ("password", "password_hash")
         }
         if not payload.get("username"):
             raise ValueError("create_user requires a username")
+        if password is not None:
+            payload["password"] = password
         response = await self._request("POST", "/api/accounts/users/", json=payload)
         if response.status_code >= 400:
             error_body = response.text
@@ -1605,7 +1963,15 @@ class DispatcharrClient:
         Returns an empty set if the schema cannot be parsed — the importer treats
         an unparseable schema as "cannot confirm safety" and also fails closed.
         """
-        response = await self._request("GET", "/api/schema/")
+        # ``?format=json`` is REQUIRED (enhancedchannelmanager-q6xjl).
+        # drf-spectacular's default renderer for /api/schema/ is YAML
+        # (content-type ``application/vnd.oai.openapi``), so a bare GET returns a
+        # YAML document and ``.json()`` raises "Expecting value: line 1 column 1
+        # (char 0)". That exception failed the whole dispatcharr_users restore
+        # category CLOSED on every run against Dispatcharr 0.28.2.
+        response = await self._request(
+            "GET", "/api/schema/", params={"format": "json"}
+        )
         response.raise_for_status()
         doc = response.json()
         if not isinstance(doc, dict):
@@ -1666,6 +2032,36 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
+    async def get_version(
+        self, timeout: Optional[float] = None, retry_on_401: bool = True
+    ) -> dict:
+        """Return Dispatcharr's self-reported version.
+
+        ``GET /api/core/version/`` -> ``{"version": "0.28.2", "timestamp": null}``
+        on 0.28.2. Backs the non-blocking version advisory (ADR-014 option c);
+        see :func:`dispatcharr_version_advisory`. Raises on a non-2xx rather
+        than degrading here — the advisory's caller decides what an
+        undeterminable version means, and for the connection test that is
+        "stay silent".
+
+        ``timeout`` is forwarded to :meth:`_request` as a per-request override.
+        The connection test passes a short one (5s): the operator is watching a
+        button spin, and an advisory is never worth making them wait for. Note
+        that ``timeout=None`` means "no override supplied", and ``_request``
+        forwards that ``None`` straight to httpx — which reads it as *no
+        timeout*, not "use the client default" (pre-existing, tracked as
+        ``enhancedchannelmanager-6imr3``). Every caller today passes a value.
+
+        ``retry_on_401=False`` forbids :meth:`_request`'s refresh-and-retry
+        branch, which can otherwise spend one of Dispatcharr's 3/min logins.
+        Best-effort callers pass it; see :meth:`_request`.
+        """
+        response = await self._request(
+            "GET", "/api/core/version/", timeout=timeout, retry_on_401=retry_on_401
+        )
+        response.raise_for_status()
+        return response.json()
+
     async def get_system_events(
         self,
         limit: int = 100,
@@ -1708,15 +2104,16 @@ class DispatcharrClient:
     # user_agent / comskip / dvr / core_settings dispatcharr_client.py`` = 0
     # method hits at the start of the bead).
     #
-    # ENDPOINT NOTE (verify-then-size): Dispatcharr groups core resources under
-    # the ``/api/core/`` namespace (confirmed live for ``streamprofiles``,
-    # ``version``, ``system-events`` — see those methods above), so user agents and
-    # core settings are placed there. The DVR-rules path lives under Dispatcharr's
-    # DVR module (``/api/dvr/``). The exact path strings below are the best-known
-    # values from the Dispatcharr REST surface; they are isolated to module-level
-    # constants so a single live-verification follow-up can correct any one path
-    # without touching the importer. No live Dispatcharr instance was available to
-    # confirm them tonight — flagged as a deferred verification follow-up.
+    # ENDPOINT NOTE: Dispatcharr groups core resources under the ``/api/core/``
+    # namespace (confirmed live for ``streamprofiles``, ``version``,
+    # ``system-events`` — see those methods above), so user agents and core
+    # settings are placed there. Every path used below is now LIVE-VERIFIED
+    # against Dispatcharr 0.28.2 and pinned by a recorded fixture; the
+    # deferred-verification note that used to stand here was closed by
+    # enhancedchannelmanager-q6xjl (core settings) and
+    # enhancedchannelmanager-lsa0s (DVR rules — the one guessed path that was
+    # actually wrong). Paths stay isolated in module-level constants so a future
+    # upstream move is a one-line correction.
     # -------------------------------------------------------------------------
 
     async def get_user_agents(self) -> list:
@@ -1751,22 +2148,35 @@ class DispatcharrClient:
         response.raise_for_status()
 
     async def get_dvr_rules(self) -> list:
-        """Get all Dispatcharr DVR / recording rules.
+        """Get all Dispatcharr DVR rules (recurring recording rules).
 
-        Used by the DBAS restore importer (enhancedchannelmanager-0i2vt.13) to
-        detect collisions by name/title before creating.
+        Used by the backup producer (``routers.backup``) and by the DBAS restore
+        importer (enhancedchannelmanager-0i2vt.13) to detect collisions before
+        creating. Targets :data:`_DVR_RECURRING_RULES_PATH` — see that constant
+        for why the original ``/api/dvr/rules/`` guess produced a warning stub on
+        every backup (enhancedchannelmanager-lsa0s).
+
+        ALWAYS returns a list. The live 0.28.2 response is a bare JSON array
+        (recorded fixture), but a destination that paginates this ViewSet would
+        answer a DRF ``{"results": [...]}`` envelope; returning that dict raw
+        would make the importer's collision index empty and duplicate every rule
+        on restore, so both shapes normalize to a list here.
         """
-        response = await self._request("GET", _DVR_RULES_PATH)
+        response = await self._request("GET", _DVR_RECURRING_RULES_PATH)
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if isinstance(payload, dict):
+            results = payload.get("results")
+            return results if isinstance(results, list) else []
+        return payload if isinstance(payload, list) else []
 
     async def create_dvr_rule(self, data: dict) -> dict:
-        """Create a Dispatcharr DVR / recording rule.
+        """Create a Dispatcharr DVR rule (recurring recording rule).
 
         FK references (e.g. ``channel``) MUST already be remapped to destination
         ids by the caller — this method forwards the payload as given.
         """
-        response = await self._request("POST", _DVR_RULES_PATH, json=data)
+        response = await self._request("POST", _DVR_RECURRING_RULES_PATH, json=data)
         response.raise_for_status()
         return response.json()
 
@@ -1775,7 +2185,60 @@ class DispatcharrClient:
 
         A 404 means already-gone — treated as successful idempotent compensation.
         """
-        response = await self._request("DELETE", f"{_DVR_RULES_PATH}{rule_id}/")
+        response = await self._request(
+            "DELETE", f"{_DVR_RECURRING_RULES_PATH}{rule_id}/"
+        )
+        response.raise_for_status()
+
+    async def get_recordings(self) -> list:
+        """Get all Dispatcharr recording INSTANCES (scheduled, running, finished).
+
+        The caller decides which of them are portable — this method returns the
+        upstream population unfiltered. ``routers.backup`` keeps only the ones
+        that have not started yet (the ``upcoming_recordings`` category, bead
+        enhancedchannelmanager-ciabe); the restore importer reads the same shape
+        back out of the archive.
+
+        ALWAYS returns a list. Measured against 0.29.0 the live response is a
+        bare JSON array (``tests/fixtures/dispatcharr_recordings_recorded.json``
+        -> ``populated_list_response``), but a destination that paginates this
+        ViewSet would answer a DRF ``{"results": [...]}`` envelope; returning
+        that dict raw would make the importer's collision index empty and
+        duplicate every recording on restore, so both shapes normalize here —
+        the same normalization, for the same reason, as ``get_dvr_rules``.
+        """
+        response = await self._request("GET", _RECORDINGS_PATH)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            results = payload.get("results")
+            return results if isinstance(results, list) else []
+        return payload if isinstance(payload, list) else []
+
+    async def create_recording(self, data: dict) -> dict:
+        """Schedule one Dispatcharr recording.
+
+        FK references (``channel``) MUST already be remapped to destination ids
+        by the caller — this method forwards the payload as given. ``id`` and
+        ``task_id`` are assigned by the destination and must not be sent (both
+        are ``readOnly`` in the recorded 0.29.0 schema).
+
+        The destination REFUSES a recording whose ``end_time`` has already passed
+        (``400 {"non_field_errors": ["End time must be in the future."]}`` —
+        recorded live). Callers filter stale rows out rather than relying on that
+        refusal, so a restore of a week-old archive skips them instead of
+        reporting a wall of upstream failures.
+        """
+        response = await self._request("POST", _RECORDINGS_PATH, json=data)
+        response.raise_for_status()
+        return response.json()
+
+    async def delete_recording(self, recording_id: int) -> None:
+        """Delete a Dispatcharr recording by ID (rollback compensation).
+
+        A 404 means already-gone — treated as successful idempotent compensation.
+        """
+        response = await self._request("DELETE", f"{_RECORDINGS_PATH}{recording_id}/")
         response.raise_for_status()
 
     async def get_core_settings(self) -> dict:
@@ -1791,30 +2254,128 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def update_core_setting(self, setting_name: str, setting_value) -> dict:
-        """Apply ONE core setting name->value via PATCH.
+    async def get_core_setting_id_map(self) -> dict:
+        """Return a ``{setting key -> destination row id}`` map, ONE run.
 
-        Per-key application (NOT a bulk PUT that could clobber unrelated keys).
-        The DBAS importer only calls this for ALLOWLISTED safe keys — never for a
-        credential/auth/instance-identity key. ``setting_value`` is forwarded
-        as-is; this method NEVER logs the value (it may be sensitive for a
-        non-allowlisted key if a future caller misuses it).
+        Dispatcharr's ``CoreSettingsViewSet`` is a plain DRF ``ModelViewSet``
+        with the default ``pk`` lookup, so the detail route is
+        ``/api/core/settings/{integer id}/`` — there is NO key-string detail
+        route (see ``tests/fixtures/dispatcharr_openapi_recorded.json``). Ids are
+        per-instance and are deliberately NOT carried in a backup artifact
+        (``routers.backup`` flattens core settings to key->value), so a restore
+        must resolve them against the DESTINATION at apply time. Callers hold the
+        returned map for the whole apply run — one fetch, never one per key
+        (enhancedchannelmanager-q6xjl).
+
+        Accepts either a bare list of rows or a DRF-paginated
+        ``{"results": [...], "next": ...}`` envelope. When paginated, EVERY page
+        is fetched until exhausted (the live recorded response is a bare list
+        today, but the docstring has long claimed paginated-envelope support
+        and a future/larger settings list could genuinely paginate): a non-null
+        ``next`` is treated as a more-pages SIGNAL, not a URL to dereference —
+        this client's ``_request`` convention takes a path only, so each
+        subsequent page is re-requested against the SAME ``_CORE_SETTINGS_PATH``
+        with an incrementing ``page`` query param, never the literal ``next``
+        URL. This assumes Dispatcharr's page-numbered DRF pagination; it would
+        stop working (falsely conclude "no more pages" after page 1) if a
+        future Dispatcharr switched this endpoint to cursor/offset-based
+        pagination, where ``next`` doesn't correspond to a plain incrementing
+        page number — the :data:`_CORE_SETTINGS_MAX_PAGES` cap below is the
+        backstop for a runaway/mismatched pagination scheme, not a fix for that
+        case. Bounded by :data:`_CORE_SETTINGS_MAX_PAGES` so a misbehaving or
+        infinitely-linking destination cannot hang a restore run; exceeding the
+        cap raises loudly rather than silently returning a partial map. A row
+        without a usable string key or an integer id is DROPPED rather than
+        guessed at — an absent key makes the caller fail that key explicitly,
+        whereas a guessed id would PATCH an unrelated setting.
+
+        Raises:
+            RuntimeError: the destination's ``next`` chain exceeds
+                :data:`_CORE_SETTINGS_MAX_PAGES` pages.
+        """
+        id_map: dict = {}
+        page = 1
+        params = None
+        while True:
+            response = await self._request(
+                "GET", _CORE_SETTINGS_PATH, params=params
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+            if isinstance(payload, dict):
+                rows = payload.get("results")
+                next_link = payload.get("next")
+            elif isinstance(payload, list):
+                rows = payload
+                next_link = None
+            else:
+                rows = None
+                next_link = None
+
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    setting_name = row.get("key")
+                    if not isinstance(setting_name, str) or not setting_name:
+                        continue
+                    row_id = row.get("id")
+                    # bool is an int subclass; a boolean id is not a row id.
+                    if not isinstance(row_id, int) or isinstance(row_id, bool):
+                        continue
+                    # zt3kf parked note: assumes ``key`` is UNIQUE per Dispatcharr
+                    # core-settings row. On a duplicate key across rows/pages this
+                    # is last-write-wins (the later row's id silently replaces the
+                    # earlier one) — never validated against a live Dispatcharr
+                    # instance, carried forward as a documented assumption rather
+                    # than defended against.
+                    id_map[setting_name] = row_id
+
+            if not next_link:
+                break
+
+            page += 1
+            if page > _CORE_SETTINGS_MAX_PAGES:
+                logger.warning(
+                    "[DISPATCHARR] Core-settings list exceeded %d pages; "
+                    "refusing to keep paginating.",
+                    _CORE_SETTINGS_MAX_PAGES,
+                )
+                raise RuntimeError(
+                    "Core-settings list exceeded "
+                    f"{_CORE_SETTINGS_MAX_PAGES} pages while paginating; "
+                    "refusing to continue."
+                )
+            params = {"page": page}
+
+        return id_map
+
+    async def update_core_setting(self, setting_id: int, setting_value) -> dict:
+        """Apply ONE core setting by its destination row id via PATCH.
+
+        Per-row application (NOT a bulk PUT that could clobber unrelated keys).
+        ``setting_id`` is the destination's own integer row id, resolved by
+        :meth:`get_core_setting_id_map` — a key-string URL matches no route and
+        404s (enhancedchannelmanager-q6xjl). The DBAS importer only calls this for
+        ALLOWLISTED safe keys — never for a credential/auth/instance-identity key.
+        ``setting_value`` is forwarded as-is; this method NEVER logs the value (it
+        may be sensitive for a non-allowlisted key if a future caller misuses it).
 
         Clear-text-logging hygiene (bead 0i2vt.13): the parameters are named
-        ``setting_name`` / ``setting_value`` — deliberately NOT ``key`` /
-        ``value``. CodeQL's py/clear-text-logging-sensitive-data taints any value
-        flowing from a ``key``-named variable as a secret; a ``key`` parameter
-        here would taint the request ``path`` (and the JSON body the
-        ``setting_value``), both of which reach the shared ``_request`` log/exc
-        sinks. We also catch any upstream error and re-raise a generic,
-        payload-free message so neither the setting name, the setting value, nor
-        an upstream response body can propagate into ``_request``'s
-        ``logger.exception(..., e)`` sink via the raised exception.
+        ``setting_id`` / ``setting_value`` — deliberately NOT ``key`` / ``value``.
+        CodeQL's py/clear-text-logging-sensitive-data taints any value flowing
+        from a ``key``-named variable as a secret; such a parameter here would
+        taint the request ``path`` (and the JSON body the ``setting_value``), both
+        of which reach the shared ``_request`` log/exc sinks. We also catch any
+        upstream error and re-raise a generic, payload-free message so neither the
+        setting value nor an upstream response body can propagate into
+        ``_request``'s ``logger.exception(..., e)`` sink via the raised exception.
         """
         try:
             response = await self._request(
                 "PATCH",
-                f"{_CORE_SETTINGS_PATH}{setting_name}/",
+                f"{_CORE_SETTINGS_PATH}{setting_id}/",
                 json={"value": setting_value},
             )
             response.raise_for_status()

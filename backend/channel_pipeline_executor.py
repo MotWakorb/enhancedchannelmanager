@@ -8,11 +8,19 @@ potential rollback.
 import contextlib
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any, Iterable, Optional, Union
 import re
 
 import safe_regex
 import journal
+from channel_number import (
+    CHANNEL_NUMBER_TICKS_PER_UNIT,
+    InvalidChannelNumberError,
+    channel_number_from_ticks,
+    channel_number_ticks,
+    is_valid_channel_number,
+    parse_channel_number_text,
+)
 from epg_matching import detect_region
 from match_fold import fold_match_key
 from channel_pipeline_schema import Action, ActionType, TemplateVariables
@@ -29,6 +37,79 @@ from services.dedup_matcher import (
 
 
 logger = logging.getLogger(__name__)
+
+
+# A whole-number "min-max" channel-number range, the only range shape a rule's
+# channel-number spec honours. Kept shape-identical to
+# ``channel_pipeline_schema._CHANNEL_NUMBER_RANGE_RE``, which decides what an
+# operator is allowed to store.
+_CHANNEL_NUMBER_RANGE_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d+)\s*$")
+
+# Any two numbers joined by a hyphen, honoured or not, so that a range naming a
+# tenth still reads as a range rather than as an unrecognised string. Used ONLY
+# to decide whether an unhonoured spec deserves a warning or a debug line, which
+# is why it is looser than the range shape actually honoured above. A non-range
+# literal needs no pattern: ``float()`` recognises those directly.
+_RANGE_SHAPED_SPEC_RE = re.compile(r"^\s*[+-]?[\d.]+\s*-\s*[+-]?[\d.]+\s*$")
+
+
+def _channel_number_spec_ticks(spec: Any) -> Optional[tuple[int, int]]:
+    """Return ``(start_tick, step_ticks)`` for a literal-number channel spec.
+
+    ``None`` means the spec is not a literal number this engine can honour:
+    ``"auto"``, a range, a template, or a number outside the canonical contract.
+    Every caller treats ``None`` as "not a literal", not as "invalid".
+
+    The step is one tick (a tenth) when the literal names a tenth and one whole
+    number otherwise, which is the frontend's
+    ``step: startingNumber % 1 !== 0 ? 0.1 : 1``.
+    """
+    if isinstance(spec, bool):
+        # ``bool`` is an ``int`` subclass, and the canonical contract excludes
+        # it. A rule carrying ``true`` here names no number, so it numbers
+        # automatically like any other unusable spec.
+        return None
+    if isinstance(spec, (int, float)):
+        number = spec
+    elif isinstance(spec, str):
+        try:
+            # Accepts only the plain decimal forms (``"800"``, ``"1.1"``), which
+            # are exactly the ones this function can honour as written.
+            number = parse_channel_number_text(spec, allow_empty=False)
+        except InvalidChannelNumberError:
+            return None
+    else:
+        return None
+
+    if not is_valid_channel_number(number):
+        return None
+    start_ticks = channel_number_ticks(number)
+    step_ticks = (
+        1 if start_ticks % CHANNEL_NUMBER_TICKS_PER_UNIT else CHANNEL_NUMBER_TICKS_PER_UNIT
+    )
+    return start_ticks, step_ticks
+
+
+def _looks_like_a_number_spec(spec: Any) -> bool:
+    """Whether an unhonoured channel-number spec was plainly MEANT as a number.
+
+    Decides between a warning and a debug line, nothing else. ``"{auto}"`` is
+    documented rule vocabulary and must not warn; ``"1.1-1.9"`` and ``"1e3"``
+    must.
+    """
+    if isinstance(spec, bool):
+        return False
+    if isinstance(spec, (int, float)):
+        return True
+    if not isinstance(spec, str):
+        return False
+    if _RANGE_SHAPED_SPEC_RE.match(spec):
+        return True
+    try:
+        float(spec)
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 @dataclass
@@ -267,7 +348,9 @@ class ActionExecutor:
                  normalization_engine=None, settings=None, all_profile_ids: list[int] | None = None,
                  epg_data: list = None, epg_sources: list = None,
                  triggered_by: str = "manual", execution_id: int | None = None,
-                 channel_profile_membership: dict[int, set[int]] | None = None):
+                 channel_profile_membership: dict[int, set[int]] | None = None,
+                 managed_channel_ids: Iterable[int] | None = None,
+                 plan_only: bool = False):
         """
         Initialize the executor.
 
@@ -307,6 +390,14 @@ class ActionExecutor:
                 ``channels_updated``. ``None``/absent falls back to no-diff for
                 unknown channels (write-all), preserving prior behavior for
                 direct-construct callers/tests.
+            managed_channel_ids: Channel ids ECM's pipeline already owns, from
+                the union of every rule's persisted ``managed_channel_ids``
+                ledger (GH #801 / bead 0ippw). Cross-run provenance for
+                ``_is_manual_channel``: Dispatcharr does not persist the
+                in-memory ``auto_created`` marker, so without this a rule reads
+                its OWN channels as hand-built on the next run. ``None`` (the
+                default for direct-construct callers/tests) means "no ledger
+                supplied" and preserves the marker-only behavior.
         """
         self.client = client
         self.existing_channels = existing_channels or []
@@ -327,6 +418,12 @@ class ActionExecutor:
         self._all_profile_ids = all_profile_ids
         self._triggered_by = triggered_by
         self._execution_id = execution_id
+        self._plan_only = plan_only
+        # GH #801 / bead 0ippw: durable ECM provenance for _is_manual_channel.
+        # Populated by the engine from every rule's persisted
+        # managed_channel_ids; grows as this run creates channels so the marker
+        # and the ledger never disagree within a run either.
+        self._pipeline_managed_channel_ids: set[int] = set(managed_channel_ids or ())
         # y3m6o.1 review follow-up: current channel-profile membership at RUN
         # START — ``channel_id -> set(profile_ids the channel is ENABLED in)``,
         # built from the SAME ``get_channel_profiles()`` fetch the engine already
@@ -556,15 +653,49 @@ class ActionExecutor:
         self._last_name_transform_error: Optional[str] = None
         self._journaled_transform_failure_keys: set[tuple] = set()
 
-        # Channel number tracking
-        self._used_channel_numbers = set()
+        # Channel number tracking, held as TICKS (one per tenth) rather than as
+        # the numbers themselves. A rule may name a tenth, so occupancy has to
+        # answer "is 1.1 taken" without a float comparison deciding it: see
+        # ``channel_number_ticks`` in backend/channel_number.py.
+        self._used_channel_number_ticks: set[int] = set()
         for c in self.existing_channels:
-            if c.get("channel_number"):
-                self._used_channel_numbers.add(c["channel_number"])
+            # Presence, not truthiness. ``0`` is a channel number the canonical
+            # contract holds (non-negative, at most one decimal place) and it is
+            # falsy, so the old ``if c.get("channel_number")`` read an occupied
+            # channel 0 as free and let a rule naming ``0`` create a second one.
+            # ``None`` is the genuine "unassigned" state and stays excluded;
+            # anything else Dispatcharr may have stored is handed to
+            # ``_mark_channel_number_used``, which already absorbs a value that
+            # occupies no number this engine could hand out.
+            number = c.get("channel_number")
+            if number is not None:
+                self._mark_channel_number_used(number)
         self._channel_assigned_numbers = {}  # channel_id -> number (set_channel_number dedup)
+
+    def _mark_channel_number_used(self, number: Any) -> None:
+        """Record ``number`` as taken, on the tenths grid."""
+        try:
+            self._used_channel_number_ticks.add(channel_number_ticks(number))
+        except InvalidChannelNumberError:
+            # Dispatcharr enforces nothing on this column, so a non-numeric or
+            # non-finite value can come back from it. It occupies no number this
+            # engine could hand out, so there is nothing to record.
+            logger.debug(
+                "[AUTO-CREATE-EXEC] Ignoring unusable channel number %r", number
+            )
+
+    def _is_channel_number_used(self, number: Any) -> bool:
+        """Whether a channel already occupies ``number``, compared on the grid."""
+        try:
+            return channel_number_ticks(number) in self._used_channel_number_ticks
+        except InvalidChannelNumberError:
+            return False
 
     def _flush_journal_buffer(self) -> None:
         """Flush buffered journal entries in one transaction."""
+        if self._plan_only:
+            self._journal_buffer.clear()
+            return
         if not self._journal_buffer:
             return
 
@@ -1088,6 +1219,16 @@ class ActionExecutor:
                                 len(normalization_group_ids), channel_name)
             except Exception as e:
                 logger.warning("[AUTO-CREATE-EXEC] Failed to normalize channel name '%s': %s", channel_name, e)
+                # The channel is still created, under the un-normalized name.
+                # Say so in the execution log: a warning in the container log
+                # is not a report, and without this line the operator cannot
+                # tell "normalization ran and changed nothing" from
+                # "normalization never ran" (bead enhancedchannelmanager-e9e5o).
+                # Same channel `_last_name_transform_error` uses above.
+                action_details.append(
+                    f"Normalization did not run for '{channel_name}', so the name "
+                    f"was used as given: {e}"
+                )
         elif self._normalization_engine:
             logger.debug("[AUTO-CREATE-EXEC] Normalization skipped for '%s' (no groups selected)", channel_name)
 
@@ -1343,7 +1484,7 @@ class ActionExecutor:
             self._fold_key_to_channel.setdefault(_fold_key(base_name), simulated)
             self._add_candidate(self._fold_key_candidates, _fold_key(channel_name), simulated)
             self._add_candidate(self._fold_key_candidates, _fold_key(base_name), simulated)
-            self._used_channel_numbers.add(channel_number)
+            self._mark_channel_number_used(channel_number)
             exec_ctx.current_channel_id = dry_id
             exec_ctx.created_channel_ids.add(dry_id)
             return ActionResult(
@@ -1394,6 +1535,11 @@ class ActionExecutor:
             # "manual/protected" and block later same-run streams from
             # dedup-merging into this freshly-created channel.
             new_channel["auto_created"] = True
+            # GH #801 / bead 0ippw: record the same fact in the durable
+            # provenance set. The engine persists this run's created ids into
+            # the rule's managed_channel_ids ledger, so keeping the in-memory
+            # set in step means the two provenance sources never disagree.
+            self._pipeline_managed_channel_ids.add(new_channel["id"])
             self._created_channels[channel_name.lower()] = new_channel
             self._channel_by_id[new_channel["id"]] = new_channel
             # bead g0uuf: register in the multi-candidate index so a scoped
@@ -1410,7 +1556,7 @@ class ActionExecutor:
             self._fold_key_to_channel.setdefault(_fold_key(base_name), new_channel)
             self._add_candidate(self._fold_key_candidates, _fold_key(channel_name), new_channel)
             self._add_candidate(self._fold_key_candidates, _fold_key(base_name), new_channel)
-            self._used_channel_numbers.add(channel_number)
+            self._mark_channel_number_used(channel_number)
             self._channel_assigned_numbers[new_channel["id"]] = channel_number
             exec_ctx.current_channel_id = new_channel["id"]
             exec_ctx.created_channel_ids.add(new_channel["id"])
@@ -1893,7 +2039,11 @@ class ActionExecutor:
         if target == "existing_channel" or target == "auto":
             channel = None
 
-            if find_channel_by == "name_exact":
+            # Explicit find fields belong only to existing_channel. The UI
+            # hides but historically retained them when switching to auto;
+            # consuming that stale state (often name_exact with no value)
+            # suppressed auto's normalized-identity lookup entirely (GH #845).
+            if target == "existing_channel" and find_channel_by == "name_exact":
                 expanded_name = TemplateVariables.expand_template(find_channel_value or "", template_ctx, exec_ctx.custom_variables)
                 channel = self._find_channel_by_name(
                     expanded_name, scope_group_id=effective_scope_group_id,
@@ -1901,9 +2051,9 @@ class ActionExecutor:
                 )
                 if channel is None:
                     blocked_manual = self._last_manual_block
-            elif find_channel_by == "name_regex":
+            elif target == "existing_channel" and find_channel_by == "name_regex":
                 channel = self._find_channel_by_regex(find_channel_value)
-            elif find_channel_by == "tvg_id":
+            elif target == "existing_channel" and find_channel_by == "tvg_id":
                 channel = self._find_channel_by_tvg_id(find_channel_value or stream_ctx.tvg_id)
 
             # enhancedchannelmanager-jnzst: SCORED-FUZZY resolution. When a
@@ -1927,25 +2077,20 @@ class ActionExecutor:
             # Auto-fallback: if no find_channel_by was specified and target is "auto",
             # try to find by normalized stream name (strips prefixes, applies normalization)
             # Skipped on the scored-fuzzy path — the scored resolver above owns it.
-            if not scored_fuzzy and not channel and target == "auto" and not find_channel_by:
-                lookup_name = stream_ctx.normalized_name or stream_ctx.stream_name
-                # Also try running normalization engine if available
-                if self._normalization_engine and not stream_ctx.normalized_name:
-                    try:
-                        norm_result = self._normalization_engine.normalize(stream_ctx.stream_name)
-                        if norm_result.normalized:
-                            lookup_name = norm_result.normalized
-                    except Exception as e:
-                        logger.warning("[AUTO-CREATE-EXEC] Normalization failed for stream '%s': %s", stream_ctx.stream_name, e)
+            if not scored_fuzzy and not channel and target == "auto":
+                # Use the exact rule-scoped identity already computed at the
+                # action chokepoint. Re-normalizing here without group_ids made
+                # a normalized_name_in_group condition and its merge action
+                # disagree about the same stream (GH #845).
+                lookup_name = template_ctx[TemplateVariables.NORMALIZED_NAME]
                 logger.debug("[AUTO-CREATE-EXEC] Auto-lookup by normalized name: '%s'", lookup_name)
                 # bd-0emgo.1: default to exact normalized-name equality. With
                 # exact_only=True the GH-104 re-normalize/core-name fuzzy
                 # fallbacks inside _find_channel_by_name are skipped; only the
                 # exact-key indices are consulted. loose_name_match=True restores
                 # the legacy fuzzy lookup.
-                channel = self._find_channel_by_name(
+                channel = self._find_unique_channel_by_exact_identity(
                     lookup_name, scope_group_id=effective_scope_group_id,
-                    exact_only=not loose_name_match,
                     block_manual=not allow_manual_channel_merge,
                 )
                 if channel is None:
@@ -3297,7 +3442,7 @@ class ActionExecutor:
 
             await self.client.update_channel(exec_ctx.current_channel_id, {"channel_number": channel_number})
             channel["channel_number"] = channel_number
-            self._used_channel_numbers.add(channel_number)
+            self._mark_channel_number_used(channel_number)
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
 
             return ActionResult(
@@ -3856,8 +4001,15 @@ class ActionExecutor:
     # Helper Methods
     # =========================================================================
 
-    def _apply_channel_number_in_name(self, channel_name: str, channel_number: int) -> str:
-        """Prepend channel number to name if settings.include_channel_number_in_name is enabled."""
+    def _apply_channel_number_in_name(
+        self, channel_name: str, channel_number: Union[int, float]
+    ) -> str:
+        """Prepend channel number to name if settings.include_channel_number_in_name is enabled.
+
+        A number that carries a tenth renders as the tenth (``1.1``); a whole
+        number renders without a decimal point (``800``, not ``800.0``), whether
+        it arrives as an ``int`` or a ``float``.
+        """
         if not self._settings or not getattr(self._settings, 'include_channel_number_in_name', False):
             return channel_name
 
@@ -4720,11 +4872,17 @@ class ActionExecutor:
         * **Create-or-adopt** per unit via a constructed
           ``Action(type="create_channel", if_exists="skip")`` through
           :meth:`_execute_create_channel`'s existing group-scoped duplicate
-          lookup (``match_scope_target_group``). ``allow_manual_channel_merge``
-          is True: a previously-promoted channel reads as "manual" on later
-          runs (Dispatcharr does not persist ECM's in-run auto_created
-          marker), and adopting it by name IS the idempotence mechanism —
-          the promotion target group is documented ECM-owned space.
+          lookup (``match_scope_target_group``). Adopting a previously
+          promoted channel by name IS the idempotence mechanism. This path
+          used to force ``allow_manual_channel_merge=True`` because such a
+          channel read as "manual" on later runs (Dispatcharr does not
+          persist ECM's in-run ``auto_created`` marker). GH #801 / bead 0ippw
+          made provenance authoritative at :meth:`_is_manual_channel` via the
+          persisted ``managed_channel_ids`` ledger — which for this rule kind
+          holds exactly the promoted channels — so the override is gone. It
+          was also strictly harmful: it let a genuinely hand-built channel
+          sitting in the promotion target group be adopted AND registered in
+          the managed set, putting it in scope for Pass 4 deletion.
         * **Attach** every unit stream via :meth:`_add_stream_to_channel`
           with provenance ``kind="event_sync_promote"`` (content fingerprint
           + names; IDs display-only) under journal category ``event_sync``.
@@ -4825,7 +4983,6 @@ class ActionExecutor:
                 create_action, first_ctx, exec_ctx, template_ctx={},
                 rule_target_group_id=target_group_id,
                 match_scope_target_group=True,
-                allow_manual_channel_merge=True,
             )
             exec_ctx.add_result(result)
             if not result.success:
@@ -5107,8 +5264,7 @@ class ActionExecutor:
 
         return summary
 
-    @staticmethod
-    def _is_manual_channel(channel: Optional[dict]) -> bool:
+    def _is_manual_channel(self, channel: Optional[dict]) -> bool:
         """True when ``channel`` is a hand-built MANUAL channel (protected).
 
         enhancedchannelmanager-orzck: a channel is MANUAL when its
@@ -5117,10 +5273,41 @@ class ActionExecutor:
         ``not ch.get("auto_created", False)``): a missing key means manual /
         protected, NOT auto. Only an explicit truthy ``auto_created`` makes a
         channel an unprotected auto-created merge candidate.
+
+        GH #801 / bead 0ippw: the marker alone cannot answer this question
+        across runs. ``_execute_create_channel`` stamps ``auto_created`` on the
+        in-memory dict only; the create payload never carries it and
+        Dispatcharr neither stores nor echoes it (confirmed at the API level by
+        the GH #801 reporter). Every ECM-created channel therefore reloads
+        WITHOUT the marker on the next run, reads as MANUAL here, and gets
+        rejected by the ``block_manual`` gate — so a rule could not see the
+        channels it created last run, re-created its whole set every run, and
+        the orphan pass deleted the previous set right after.
+
+        ``self._pipeline_managed_channel_ids`` closes that gap. It is the union
+        of every rule's persisted ``managed_channel_ids`` ledger, which already
+        existed, already survives runs, and is populated ONLY with channels a
+        rule created or already managed (``channel_pipeline_engine``'s
+        ``owned_by_this_rule`` gate) — never with a hand-built channel a rule
+        merely merged into. Membership is therefore durable proof of ECM
+        provenance, and it is checked by channel id, not by name.
+
+        The union rather than the firing rule's ledger alone is deliberate:
+        "was this hand-built?" is a property of the channel, not of whoever is
+        asking. Scoping it per rule would let the same channel answer
+        differently depending on the caller, which is the exact divergence that
+        produced this bug, and it would also diverge from within-run behavior,
+        where the in-memory marker is visible to every rule in the run.
         """
         if channel is None:
             return False
-        return not channel.get("auto_created", False)
+        if channel.get("auto_created", False):
+            return False
+        channel_id = channel.get("id")
+        return not (
+            channel_id is not None
+            and channel_id in self._pipeline_managed_channel_ids
+        )
 
     @staticmethod
     def _add_candidate(candidates: dict, key: str, channel: dict) -> None:
@@ -5135,6 +5322,51 @@ class ActionExecutor:
         lst = candidates.setdefault(key, [])
         if not any(existing is channel for existing in lst):
             lst.append(channel)
+
+    def _find_unique_channel_by_exact_identity(
+        self,
+        name: str,
+        *,
+        scope_group_id: Optional[int] = None,
+        block_manual: bool = True,
+    ) -> Optional[dict]:
+        """Resolve one exact post-normalization identity, never a collision."""
+        key = name.lower()
+        candidates: list[dict] = []
+        created = self._created_channels.get(key)
+        if created is not None:
+            candidates.append(created)
+        for mapping in (
+            self._base_name_candidates,
+            self._by_name_candidates,
+            self._normalized_name_candidates,
+        ):
+            candidates.extend(mapping.get(key, ()))
+
+        unique: list[dict] = []
+        seen: set[int] = set()
+        for candidate in candidates:
+            identity = candidate.get("id")
+            marker = id(candidate) if identity is None else int(identity)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            if scope_group_id is not None and candidate.get("channel_group_id") != scope_group_id:
+                continue
+            if block_manual and self._is_manual_channel(candidate):
+                self._last_manual_block = candidate
+                continue
+            unique.append(candidate)
+
+        if len(unique) == 1:
+            return unique[0]
+        if len(unique) > 1:
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Exact normalized channel identity is "
+                "ambiguous across %d eligible channels; stream skipped.",
+                len(unique),
+            )
+        return None
 
     def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
                               exact_only: bool = False,
@@ -5422,7 +5654,7 @@ class ActionExecutor:
                 candidates=candidates,
                 threshold=threshold,
                 triggered_by=self._triggered_by,
-                dry_run=exec_ctx.dry_run,
+                dry_run=exec_ctx.dry_run or self._plan_only,
                 db_session=db_session,
             )
         finally:
@@ -5509,58 +5741,174 @@ class ActionExecutor:
             return self._created_groups[name_lower]
         return self._group_by_name.get(name_lower)
 
-    def _get_next_channel_number(self, spec: Any) -> int:
-        """
-        Get next available channel number based on spec.
+    def _next_free_number_from_ticks(self, start_ticks: int, step_ticks: int) -> Union[int, float]:
+        """Walk up the tenths grid to the first free number a float can hold.
 
-        Args:
-            spec: "auto", specific int, or "min-max" range string
+        A tick is only usable if the number it divides back to lands on that
+        same tick. Below ``2**49`` every tick does, because adjacent floats
+        there are at most 0.0625 apart, narrower than a tenth, so distinct
+        tenths keep distinct floats. From ``2**49`` up the gap is 0.125, wider
+        than a tenth, so a run of ticks collapses onto one float and that float
+        reports the tick of whichever tenth it landed nearest. Handing such a
+        float back would return a number this walk had already established was
+        taken: the occupied value's own tick is one of the ticks that collapse
+        onto it. ``channel_number_from_ticks`` in backend/channel_number.py
+        carries the measurements on both sides of that bound, and
+        ``TestChannelNumberTicks`` in backend/tests/unit/test_channel_number.py
+        asserts them.
+
+        So a tick with no float of its own is stepped over, and the walk drops
+        to whole numbers from there. Whole numbers stay exact at every
+        magnitude, because a whole tick divides back to a Python ``int`` and
+        never touches a float at all.
+
+        Termination, at any magnitude: the collapse branch runs at most once,
+        since every tick it can move to afterwards is a whole tick, and the
+        guard below rules out a whole tick reaching it a second time. Every
+        other iteration consumes one distinct member of a finite occupied set,
+        ascending.
 
         Returns:
-            Next available channel number
+            A free channel number, always on the canonical grid: an ``int`` on a
+            whole number, a ``float`` on a tenth. Never a number
+            :meth:`_is_channel_number_used` reports as taken.
+
+        Raises:
+            RuntimeError: If a whole tick fails to round-trip, which the ``int``
+                path in ``channel_number_from_ticks`` makes impossible. It is
+                checked anyway because the alternative to failing there is a
+                walk that cannot advance.
         """
-        if isinstance(spec, int):
-            num = spec
-            while num in self._used_channel_numbers:
-                num += 1
-            logger.debug("[AUTO-CREATE-EXEC] spec=%s (int) -> %s", spec, num)
+        tick = start_ticks
+        unit = CHANNEL_NUMBER_TICKS_PER_UNIT
+        collapsed_from: Optional[int] = None
+        while True:
+            number = channel_number_from_ticks(tick)
+            if channel_number_ticks(number) != tick:
+                if tick % unit == 0:
+                    raise RuntimeError(
+                        f"Channel number tick {tick} is whole but does not "
+                        "round-trip, so the tenths grid cannot be walked"
+                    )
+                # This tenth has no float of its own at this magnitude. Move to
+                # the next whole tick above it and walk whole numbers from here.
+                if collapsed_from is None:
+                    collapsed_from = tick
+                tick += unit - (tick % unit)
+                step_ticks = unit
+                continue
+            if not self._is_channel_number_used(number):
+                if collapsed_from is not None:
+                    logger.warning(
+                        "[AUTO-CREATE-EXEC] A tenth is not representable at this "
+                        "magnitude (tick %s is not a distinct floating-point "
+                        "value), so the search stepped by whole numbers and "
+                        "assigned %s instead. Channel numbers this large carry "
+                        "no tenths place.", collapsed_from, number
+                    )
+                return number
+            tick += step_ticks
+
+    def _get_next_channel_number(self, spec: Any) -> Union[int, float]:
+        """
+        Get the next available channel number for a rule's channel-number spec.
+
+        The spec vocabulary is ``"auto"``, a literal number, a whole-number
+        ``"min-max"`` range, or a template such as ``"{auto}"`` that names none
+        of those. A literal may carry one decimal place, which is the whole
+        canonical channel-number contract (``backend/channel_number.py``), and a
+        literal that names a tenth walks the grid BY tenths: a rule set to
+        ``1.1`` lands on ``1.1``, or on ``1.2`` when ``1.1`` is taken, never on
+        an unrelated integer. A whole literal still walks by whole numbers. That
+        is the ``step: startingNumber % 1 !== 0 ? 0.1 : 1`` rule
+        ``frontend/src/App.tsx`` and ``frontend/src/utils/channelNumberShift.ts``
+        already apply to a manual insert, on the same grid, and bead
+        ``enhancedchannelmanager-ay3iq`` is where the PO settled that a pipeline
+        rule should be able to say the same thing the UI can.
+
+        Ranges stay whole-number. Widening the range vocabulary is a separate
+        question from honouring a fractional literal, and the schema rejects a
+        fractional range rather than letting it arrive here. A range that is
+        fully occupied spills above its own top and keeps walking from there,
+        so "exhausted" never means "hand back an occupied number".
+
+        Args:
+            spec: ``"auto"``, a literal number (``int``, ``float`` or the text
+                of one), or a whole-number ``"min-max"`` range string.
+
+        Returns:
+            The next free channel number: an ``int`` when it lands on a whole
+            number, a ``float`` when it carries a tenth. Always in contract, so
+            ``is_valid_channel_number`` holds for it, and never a number an
+            existing channel already occupies. At or above ``2**49`` a tenth has
+            no distinct floating-point value, so the answer there is a whole
+            number and the walk says so in the log rather than handing back a
+            duplicate: see :meth:`_next_free_number_from_ticks`.
+        """
+        literal = _channel_number_spec_ticks(spec)
+        if literal is not None:
+            start_ticks, step_ticks = literal
+            num = self._next_free_number_from_ticks(start_ticks, step_ticks)
+            logger.debug("[AUTO-CREATE-EXEC] spec=%r (literal) -> %s", spec, num)
             return num
 
         if isinstance(spec, str):
-            if spec == "auto":
-                # Find next available number starting from 1
-                num = 1
-                while num in self._used_channel_numbers:
-                    num += 1
-                logger.debug("[AUTO-CREATE-EXEC] spec='auto' -> %s (skipped %s used numbers)", num, num - 1)
+            # Stripped, so that the shapes this honours are exactly the shapes
+            # ``channel_pipeline_schema.validate_channel_number_spec`` accepts.
+            # The two diverging is how a spec passes validation and is then
+            # renumbered at execution, which is the defect class this whole
+            # function exists to close.
+            text = spec.strip()
+            if text == "auto":
+                num = self._next_free_number_from_ticks(
+                    CHANNEL_NUMBER_TICKS_PER_UNIT, CHANNEL_NUMBER_TICKS_PER_UNIT
+                )
+                logger.debug("[AUTO-CREATE-EXEC] spec='auto' -> %s", num)
                 return num
 
             # Check for range format "min-max"
-            match = re.match(r"^(\d+)-(\d+)$", spec)
+            match = _CHANNEL_NUMBER_RANGE_RE.match(text)
             if match:
                 min_num = int(match.group(1))
                 max_num = int(match.group(2))
                 for num in range(min_num, max_num + 1):
-                    if num not in self._used_channel_numbers:
+                    if channel_number_ticks(num) not in self._used_channel_number_ticks:
                         logger.debug("[AUTO-CREATE-EXEC] spec='%s' (range) -> %s", spec, num)
                         return num
-                # Range exhausted, use next after max
-                logger.debug("[AUTO-CREATE-EXEC] spec='%s' range exhausted -> %s", spec, max_num + 1)
-                return max_num + 1
-
-            # Try parsing as int — auto-increment from this starting number
-            try:
-                num = int(spec)
-                while num in self._used_channel_numbers:
-                    num += 1
-                logger.debug("[AUTO-CREATE-EXEC] spec='%s' (parsed int) -> %s", spec, num)
+                # Range exhausted. Spilling past the top of the range is the
+                # intended behaviour — a full range assigns above itself rather
+                # than failing — but the spill has to keep searching, because
+                # ``max_num + 1`` can be occupied just as easily as anything
+                # inside the range. Returning it raw handed back a number this
+                # engine had already recorded as taken (a range of "1-2" against
+                # channels 1, 2, 3 answered 3), so two channels ended up sharing
+                # a number and nothing said so. Same walk the literal and
+                # ``auto`` branches use, by whole numbers because ranges are
+                # whole-number: never occupied, and it terminates.
+                num = self._next_free_number_from_ticks(
+                    channel_number_ticks(max_num + 1), CHANNEL_NUMBER_TICKS_PER_UNIT
+                )
+                logger.debug("[AUTO-CREATE-EXEC] spec='%s' range exhausted -> %s", spec, num)
                 return num
-            except ValueError:
-                logger.debug("[AUTO-CREATE-EXEC] Non-numeric channel number spec %r, falling back to auto", spec)
 
-        # Fallback to auto
-        num = 1
-        while num in self._used_channel_numbers:
-            num += 1
-        logger.debug("[AUTO-CREATE-EXEC] spec=%r (fallback auto) -> %s", spec, num)
+        # Fallback to auto. A template such as "{auto}" is documented rule
+        # vocabulary and belongs here, so the fallback itself is not a defect.
+        # A spec that was MEANT as a number and still landed here is: it can
+        # only be a shape the rule schema rejects (a fractional range, a literal
+        # not written as plain digits) reaching execution from a rule stored
+        # before that check existed. Assigning automatically and saying nothing
+        # is the silent wrong result bead enhancedchannelmanager-ay3iq exists to
+        # remove, so that case is audible.
+        num = self._next_free_number_from_ticks(
+            CHANNEL_NUMBER_TICKS_PER_UNIT, CHANNEL_NUMBER_TICKS_PER_UNIT
+        )
+        if _looks_like_a_number_spec(spec):
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Channel number spec %r is not one this engine can "
+                "honour (a number with at most one decimal place, a whole-number "
+                "'min-max' range, or 'auto'); assigned %s automatically instead. "
+                "Re-saving the rule will report the reason.", spec, num
+            )
+        else:
+            logger.debug("[AUTO-CREATE-EXEC] spec=%r (fallback auto) -> %s", spec, num)
         return num

@@ -70,6 +70,11 @@ from __future__ import annotations
 
 import logging
 
+from credential_sentinel import (
+    credential_is_present,
+    strip_redaction_sentinels,
+    value_at_path,
+)
 from dbas.restore_contracts import (
     EntityType,
     FailureDetail,
@@ -152,7 +157,9 @@ def _existing_by_identity(existing_sources: list[dict]) -> dict[tuple, dict]:
     return index
 
 
-def _build_create_payload(archive_source: dict, m3u_dest_id: int | None) -> dict:
+def _build_create_payload(
+    archive_source: dict, m3u_dest_id: int | None
+) -> tuple[dict, list[str]]:
     """Build the create_epg_source payload from an archive source record.
 
     Drops the archive source id and read-only / derived fields. Keeps the
@@ -160,6 +167,20 @@ def _build_create_payload(archive_source: dict, m3u_dest_id: int | None) -> dict
     source to function — but they are NEVER logged or reported. The
     ``m3u_account`` FK, if present, is rewritten in place to the remapped
     destination id (``m3u_dest_id``).
+
+    Any ``***REDACTED***``-valued key is STRIPPED rather than written through
+    (bead ``…-6pilh``), so a redacted artifact leaves the credential visibly
+    unset instead of populating it with ECM's own placeholder.
+
+    Dispatcharr 0.28.2's ``EPGSourceSerializer`` marks ``password`` ``write_only``
+    with NO admin re-add in ``to_representation`` (unlike ``M3UAccountSerializer``,
+    which re-adds it for ``user_level >= 10``), so a live gather does not normally
+    carry an EPG password at all and there is usually nothing here to strip. The
+    guard is by VALUE and does not depend on that upstream behaviour holding.
+
+    Returns:
+        ``(payload, redacted_fields)`` — the create payload, and the credential
+        field NAMES that were stripped (never their values).
     """
     payload = {
         k: v for k, v in archive_source.items() if k not in _DROPPED_CREATE_KEYS
@@ -169,7 +190,58 @@ def _build_create_payload(archive_source: dict, m3u_dest_id: int | None) -> dict
         # association — preserved as-is so a free-standing source stays
         # free-standing).
         payload[_M3U_ACCOUNT_FK] = m3u_dest_id
-    return payload
+    return strip_redaction_sentinels(payload)
+
+
+def _report_credentials_still_missing(
+    *,
+    report,
+    archive_source: dict,
+    m3u_dest_id: int | None,
+    existing_src: dict,
+    label: str,
+    source_id,
+) -> None:
+    """Report the credentials the DESTINATION source is still missing (…-ukjx5).
+
+    The EPG twin of ``dbas.importers.m3u_accounts._report_credentials_still_missing``,
+    and written the same way for the same reason: what the artifact could not
+    carry comes from the SAME :func:`_build_create_payload` the create path uses,
+    and what the destination still lacks is read off the row its own list
+    endpoint returned, through
+    :func:`credential_sentinel.credential_is_present` so ECM's own placeholder
+    reads as ABSENT.
+
+    A source whose redacted fields have all since been filled in reports nothing
+    — :meth:`RestoreReport.record_credential_reentry` is a no-op on an empty
+    list — and a source the artifact carried whole was never an action item.
+
+    Measured on Dispatcharr 0.29.0: ``/api/epg/sources/`` returns ``url`` and
+    ``username``. It does NOT return ``password`` (the serializer marks it
+    write-only), which is also why a live gather does not normally carry one, so
+    there is usually nothing at that path to strip OR to re-check.
+    """
+    _, redacted_fields = _build_create_payload(archive_source, m3u_dest_id)
+    still_missing = [
+        field
+        for field in redacted_fields
+        if not credential_is_present(value_at_path(existing_src, field))
+    ]
+    if not still_missing:
+        return
+    logger.warning(
+        "[DBAS-EPG] Source '%s' (id=%s) already exists on the destination but "
+        "still has %s unset; it will not refresh until they are re-entered.",
+        label, existing_src.get("id"), ", ".join(still_missing),
+    )
+    dest_id = existing_src.get("id")
+    report.record_credential_reentry(
+        EntityType.EPG_SOURCE,
+        label,
+        still_missing,
+        source_export_id=source_id,
+        destination_id=int(dest_id) if isinstance(dest_id, int) else None,
+    )
 
 
 def _resolve_m3u_fk(
@@ -286,12 +358,24 @@ async def import_epg_sources(
         # FK resolution first — an unresolved m3u_account is a hard skip, no create.
         resolved, m3u_dest_id = _resolve_m3u_fk(archive_source, remap)
         if not resolved:
-            _skip(cat, SkipReason.DEPENDENCY_UNRESOLVED, label, source_id, is_dry_run)
+            # An EPG SOURCE is a first-class entity the operator selected, so its
+            # absence is a loss whether or not the M3U category was deselected
+            # (bead …-4mkoe); ``record_dependency_unresolved`` reaches that from
+            # ``recorded_under != dependency``, with no special case here.
+            reason = report.record_dependency_unresolved(
+                recorded_under=EntityType.EPG_SOURCE,
+                dependency=EntityType.M3U_ACCOUNT,
+                label=label,
+                remap=remap,
+                is_dry_run=is_dry_run,
+                source_export_id=source_id,
+            )
             logger.info(
-                "[DBAS-EPG] Source '%s' (type=%s) skipped: m3u_account dependency "
-                "unresolved.",
+                "[DBAS-EPG] Source '%s' (type=%s) skipped (%s): its m3u_account "
+                "is not on the destination.",
                 label,
                 archive_source.get("source_type"),
+                reason.value,
             )
             continue
 
@@ -305,6 +389,21 @@ async def import_epg_sources(
             existing_id = existing_src.get("id")
             if source_id is not None and existing_id is not None:
                 remap.add(EntityType.EPG_SOURCE, int(source_id), int(existing_id))
+            # THE ACTION ITEM SURVIVES THE SKIP (bead …-ukjx5) — see the M3U
+            # sibling for the full reasoning. It matters more here than there: an
+            # Xtream Codes guide URL authenticates by query string, so redaction
+            # takes the WHOLE address and the destination source has nothing to
+            # point at. That is what left 53 of 59 replica channels with no EPG
+            # link (bead …-v7d37), and on cycle two it was reported as nothing at
+            # all.
+            _report_credentials_still_missing(
+                report=report,
+                archive_source=archive_source,
+                m3u_dest_id=m3u_dest_id,
+                existing_src=existing_src,
+                label=label,
+                source_id=source_id,
+            )
             logger.info(
                 "[DBAS-EPG] Source '%s' (type=%s) already exists (dest id=%s); skipped.",
                 label,
@@ -313,8 +412,18 @@ async def import_epg_sources(
             )
             continue
 
+        payload, redacted_fields = _build_create_payload(archive_source, m3u_dest_id)
+
         if is_dry_run:
             cat.would_create += 1
+            # Same action item on the PREVIEW, so the operator can tell a redacted
+            # artifact from a credential-bearing one before applying (…-6pilh).
+            report.record_credential_reentry(
+                EntityType.EPG_SOURCE,
+                label,
+                redacted_fields,
+                source_export_id=source_id,
+            )
             # Provisional remap so a downstream FK to this would-be-created source
             # resolves on the dry-run as it would on apply (anti-drift). Source id
             # used as a stable provisional destination id — never sent upstream.
@@ -322,7 +431,6 @@ async def import_epg_sources(
                 remap.add(EntityType.EPG_SOURCE, int(source_id), int(source_id))
             continue
 
-        payload = _build_create_payload(archive_source, m3u_dest_id)
         try:
             created = await client.create_epg_source(payload)
         except Exception as exc:
@@ -351,12 +459,27 @@ async def import_epg_sources(
             if source_id is not None:
                 remap.add(EntityType.EPG_SOURCE, int(source_id), dest_id)
             ledger.record_created(EntityType.EPG_SOURCE, dest_id, label)
+            report.record_credential_reentry(
+                EntityType.EPG_SOURCE,
+                label,
+                redacted_fields,
+                source_export_id=source_id,
+                destination_id=dest_id,
+            )
         logger.info(
             "[DBAS-EPG] Restored EPG source '%s' (type=%s, id=%s).",
             label,
             archive_source.get("source_type"),
             dest_id,
         )
+        if redacted_fields:
+            # WARN, never silent — field NAMES only (…-6pilh).
+            logger.warning(
+                "[DBAS-EPG] Source '%s' (id=%s) was restored from a REDACTED "
+                "artifact; %s left unset and must be re-entered before it will "
+                "refresh.",
+                label, dest_id, ", ".join(redacted_fields),
+            )
 
 
 def _skip(

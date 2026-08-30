@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { BackupRestoreSection } from './BackupRestoreSection';
+import { settingsSectionHeading } from '../settingsSections';
 
 // Mock the API module
 vi.mock('../../services/api', () => ({
@@ -57,11 +58,12 @@ vi.mock('../DbasRestoreSavedModal', () => ({
 // Mock notification context
 const mockSuccess = vi.fn();
 const mockError = vi.fn();
+const mockWarning = vi.fn();
 vi.mock('../../contexts/NotificationContext', () => ({
   useNotifications: () => ({
     success: mockSuccess,
     error: mockError,
-    warning: vi.fn(),
+    warning: mockWarning,
     info: vi.fn(),
   }),
 }));
@@ -73,6 +75,18 @@ vi.mock('../../contexts/BackupDestinationPromptContext', () => ({
 }));
 
 import * as api from '../../services/api';
+
+/**
+ * Clear the scoped restore/delete confirmation (bead
+ * enhancedchannelmanager-04c0u.12). Typing the artifact's own name is what
+ * enables the confirm button, so the helper takes the name it must match.
+ */
+function confirmFullRestoreOf(filename: string) {
+  fireEvent.change(screen.getByLabelText(new RegExp(`type ${filename} to confirm`, 'i')), {
+    target: { value: filename },
+  });
+  fireEvent.click(screen.getByRole('button', { name: /^restore this backup$/i }));
+}
 
 describe('BackupRestoreSection', () => {
   beforeEach(() => {
@@ -119,9 +133,13 @@ describe('BackupRestoreSection', () => {
       expect(screen.getByTestId('outbound-mode-public_only')).toBeInTheDocument();
     });
 
-    it('renders page header', async () => {
+    // The section's own "Backup & Restore" heading moved into the route
+    // breadcrumb (SYSTEM / SETTINGS / BACKUP & RESTORE), so the section must no
+    // longer render it itself — and the breadcrumb source must still supply it.
+    it('does not render its own page heading, leaving it to the route breadcrumb', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText('Backup & Restore')).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Backup & Restore' })).not.toBeInTheDocument();
+      expect(settingsSectionHeading('backup-restore').title).toBe('Backup & Restore');
 
       // Let mount-time fetches settle.
       await waitFor(() => {
@@ -138,6 +156,120 @@ describe('BackupRestoreSection', () => {
       expect(within(chooserCard).getByText(/DBAS Backup \(\.zip artifact\)/)).toBeInTheDocument();
       expect(within(chooserCard).getByText(/Full Backup \(legacy \.zip\)/)).toBeInTheDocument();
 
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-pui76. Seven action buttons on this page and
+    // exactly one produced a DBAS artifact — the encrypted one, behind a
+    // 12-character passphrase and an unrecoverable-loss acknowledgement. The
+    // page's own "Which one do I need?" helper recommends the DBAS format for
+    // disaster recovery and then offered no control that produced it.
+    it('offers a one-click configuration backup, placed above the encrypted card (bead pui76)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const configCard = screen.getByTestId('configuration-backup-card');
+      const encryptedHeading = screen.getByRole('heading', { name: 'Encrypted Backup (Migration)' });
+      expect(configCard).toBeInTheDocument();
+      expect(
+        configCard.compareDocumentPosition(encryptedHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-pui76, review round 2. The page's own "Which
+    // one do I need?" helper recommends the DBAS format for disaster recovery
+    // and reserves the full backup for restoring pre-v0.18.0 files — while the
+    // deprecated producer rendered first, so it was the first backup control
+    // an operator met. It is also the riskier artifact to hold — plaintext, and
+    // not a redacted artifact — which makes it the last thing that should sit
+    // next to the DBAS cards' redaction language. (The "TLS private keys,
+    // uploaded playlists" reason this comment used to give stopped being true in
+    // 0.18.1: BACKUP_DIRS is ["uploads/logos"], bead 04c0u.13. A pre-v0.18.0
+    // .zip on disk still carries them, which is what the caption test below is
+    // about.)
+    it('renders the deprecated full-backup producer last, below both DBAS cards (bead pui76)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const configCard = screen.getByTestId('configuration-backup-card');
+      const encryptedHeading = screen.getByRole('heading', { name: 'Encrypted Backup (Migration)' });
+      const fullBackupHeading = screen.getByRole('heading', { name: 'Create Full Backup' });
+
+      for (const dbasCard of [configCard, encryptedHeading]) {
+        expect(
+          dbasCard.compareDocumentPosition(fullBackupHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+      }
+
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-pui76, review round 2. `list_saved_backups`
+    // globs ecm-backup-*.zip as well as *.yaml, so a pre-v0.18.0 full backup —
+    // TLS private keys, raw uploads — is listed in this card too. Calling every
+    // .zip here a DBAS artifact tells the operator the riskiest file on the
+    // list is the redacted one.
+    it('does not claim every listed .zip is a DBAS artifact (bead pui76)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const savedCard = screen
+        .getByRole('heading', { name: 'Saved Backups' })
+        .closest('.backup-card') as HTMLElement;
+      const caption = within(savedCard).getByText(/Backups saved on the server/i);
+
+      expect(caption).not.toHaveTextContent(/DBAS \.zip artifacts and YAML/i);
+      // A .zip on this list is one of two formats, and the caption says which
+      // and what the other one carries.
+      expect(caption).toHaveTextContent(/DBAS artifact/i);
+      expect(caption).toHaveTextContent(/full backup/i);
+      expect(caption).toHaveTextContent(/TLS certificates/i);
+
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-e4iok. The caption called the card YAML-only
+    // while the list beneath it renders DBAS .zip artifacts with restore,
+    // download and delete actions, and the empty state named a "YAML Backup"
+    // scheduled task as the way to get one — which is not the task that writes
+    // what this card shows.
+    it('describes Saved Backups by what it actually lists (bead e4iok)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const savedCard = screen
+        .getByRole('heading', { name: 'Saved Backups' })
+        .closest('.backup-card') as HTMLElement;
+      expect(savedCard).not.toBeNull();
+      expect(savedCard).not.toHaveTextContent(/YAML backups saved on the server/i);
+      expect(savedCard).not.toHaveTextContent(/Enable the YAML Backup scheduled task/i);
+
+      await waitFor(() => {
+        expect(within(savedCard).getByText(/No saved backups yet/i)).toBeInTheDocument();
+      });
+      // The empty state points at the two things that actually produce one.
+      expect(within(savedCard).getByText(/Configuration Backup/i)).toBeInTheDocument();
+      expect(within(savedCard).getByText(/DBAS Backup/i)).toBeInTheDocument();
+    });
+
+    it('names every current DBAS artifact producer in the restore guidance', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const restoreCard = screen
+        .getByRole('heading', { name: 'Restore DBAS Backup' })
+        .closest('.backup-card') as HTMLElement;
+      expect(restoreCard).not.toBeNull();
+      expect(restoreCard).toHaveTextContent(/Configuration Backup/i);
+      expect(restoreCard).toHaveTextContent(/scheduled backups/i);
+      expect(restoreCard).toHaveTextContent(/Encrypted Backup \(Migration\)/i);
+
+      // Let the section's mount-time requests settle before teardown.
       await waitFor(() => {
         expect(screen.getByText('Settings')).toBeInTheDocument();
       });
@@ -163,9 +295,21 @@ describe('BackupRestoreSection', () => {
       });
     });
 
-    it('shows sensitive data warning on YAML export', async () => {
+    // Bead enhancedchannelmanager-gi4zn. The previous assertion matched
+    // /redacted in the export/i, which the SUPERSEDED copy ("sensitive data
+    // (passwords, API keys) are redacted in the export") satisfied — so it
+    // could not fail while the panel described the old, narrower contract.
+    // These assert the two rules that copy omitted (provider identity, and
+    // credentials inside a URL value) plus the re-entry consequence, so
+    // reverting to a credentials-only sentence fails the test.
+    it('tells the operator the YAML export drops provider identity and URL credentials too', async () => {
       render(<BackupRestoreSection isAdmin={true} />);
-      expect(screen.getByText(/redacted in the export/i)).toBeInTheDocument();
+      const warning = screen.getByText(/No working credentials leave in this file/i)
+        .closest('.backup-sensitive-warning') as HTMLElement;
+      expect(warning).not.toBeNull();
+      expect(warning.textContent).toMatch(/provider usernames/i);
+      expect(warning.textContent).toMatch(/inside a URL/i);
+      expect(warning.textContent).toMatch(/re-enter/i);
 
       // Let mount-time fetches settle.
       await waitFor(() => {
@@ -178,6 +322,39 @@ describe('BackupRestoreSection', () => {
       expect(screen.getByText(/contains sensitive data/i)).toBeInTheDocument();
 
       // Let mount-time fetches settle.
+      await waitFor(() => {
+        expect(screen.getByText('Settings')).toBeInTheDocument();
+      });
+    });
+
+    // Bead enhancedchannelmanager-04c0u.13. This card is where an operator
+    // decides whether the full backup covers their TLS material, and it promised
+    // "TLS certificates, and M3U files" for a build whose BACKUP_DIRS is
+    // ["uploads/logos"]. Believing it costs the operator their only copy of a
+    // TLS private key on the next container rebuild. Nothing pinned the string,
+    // so the code narrowed and the promise stayed. Now it is pinned in the
+    // direction that matters: the card may not claim material the archive does
+    // not carry.
+    it('does not promise TLS certificates or M3U files in the full backup (bead 04c0u.13)', async () => {
+      render(<BackupRestoreSection isAdmin={true} />);
+
+      const fullBackupCard = screen
+        .getByRole('heading', { name: 'Create Full Backup' })
+        .closest('.backup-card') as HTMLElement;
+      expect(fullBackupCard).not.toBeNull();
+
+      const description = fullBackupCard.querySelector(
+        '.backup-card-description',
+      ) as HTMLElement;
+      expect(description.textContent).toMatch(/uploaded logos/i);
+      expect(description.textContent).toMatch(/not\s+include TLS certificates or uploaded M3U files/i);
+
+      const warning = fullBackupCard.querySelector(
+        '.backup-sensitive-warning',
+      ) as HTMLElement;
+      expect(warning.textContent).not.toMatch(/certificate/i);
+      expect(warning.textContent).toMatch(/plaintext/i);
+
       await waitFor(() => {
         expect(screen.getByText('Settings')).toBeInTheDocument();
       });
@@ -382,6 +559,7 @@ describe('BackupRestoreSection', () => {
       Object.defineProperty(input, 'files', { value: [file] });
 
       fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
 
       await waitFor(() => {
         expect(api.restoreBackup).toHaveBeenCalledWith(file);
@@ -402,10 +580,64 @@ describe('BackupRestoreSection', () => {
       Object.defineProperty(input, 'files', { value: [file] });
 
       fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
 
       await waitFor(() => {
         expect(mockError).toHaveBeenCalledWith('Server error', 'Restore Failed');
       });
+    });
+
+    // Bead enhancedchannelmanager-gi4zn. A standard artifact carries no ECM
+    // account credentials, so a restore can report success and still leave
+    // nobody able to log in until first-run setup runs. The success toast
+    // counts FILES and structurally cannot say that; the server's `notices`
+    // can, and are worthless if nothing renders them.
+    it('surfaces the server notices a restore returns', async () => {
+      const notice =
+        'This instance has no ECM user account. Create your admin account ' +
+        'through first-run setup.';
+      vi.mocked(api.restoreBackup).mockResolvedValue({
+        status: 'ok',
+        backup_version: '0.18.1',
+        backup_date: '2026-08-17T00:00:00Z',
+        restored_files: ['settings.json', 'journal.db'],
+        notices: [notice],
+      });
+
+      render(<BackupRestoreSection isAdmin={true} />);
+      const file = new File(['zip-content'], 'backup.zip', { type: 'application/zip' });
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [file] });
+      fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
+
+      await waitFor(() => {
+        expect(mockWarning).toHaveBeenCalledWith(notice, 'Account Setup Required');
+      });
+      expect(await screen.findByText(notice)).toBeInTheDocument();
+    });
+
+    // The same restore against a backend that predates the field: `notices` is
+    // absent, not empty, and the component must not warn or throw on it.
+    it('warns about nothing when the response carries no notices', async () => {
+      vi.mocked(api.restoreBackup).mockResolvedValue({
+        status: 'ok',
+        backup_version: '0.18.1',
+        backup_date: '2026-08-17T00:00:00Z',
+        restored_files: ['settings.json'],
+      });
+
+      render(<BackupRestoreSection isAdmin={true} />);
+      const file = new File(['zip-content'], 'backup.zip', { type: 'application/zip' });
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      Object.defineProperty(input, 'files', { value: [file] });
+      fireEvent.click(screen.getByText('Restore'));
+      confirmFullRestoreOf('backup.zip');
+
+      await waitFor(() => {
+        expect(mockSuccess).toHaveBeenCalledWith('Restored 1 files from backup');
+      });
+      expect(mockWarning).not.toHaveBeenCalled();
     });
   });
 
@@ -509,5 +741,69 @@ describe('BackupRestoreSection', () => {
         expect(api.saveSecurityMode).toHaveBeenCalledWith('public_only');
       });
     });
+  });
+});
+
+describe('BackupRestoreSection — scoped destructive confirmations (04c0u.12)', () => {
+  const savedZip = {
+    filename: 'ecm-backup-2026-01-01_000000.zip',
+    size_bytes: 1024,
+    created_at: '2026-01-01T00:00:00Z',
+    type: 'zip' as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.listSavedBackups).mockResolvedValue([savedZip]);
+    vi.mocked(api.deleteSavedBackup).mockResolvedValue(undefined as never);
+  });
+
+  it('names the artifact before deleting it, and deletes nothing until confirmed', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    fireEvent.click(await screen.findByLabelText('Delete backup'));
+
+    const dialog = await screen.findByRole('dialog', { name: /delete saved backup/i });
+    expect(dialog).toHaveTextContent(savedZip.filename);
+    expect(api.deleteSavedBackup).not.toHaveBeenCalled();
+  });
+
+  it('deletes the named artifact once its exact filename is typed', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    fireEvent.click(await screen.findByLabelText('Delete backup'));
+    await screen.findByRole('dialog', { name: /delete saved backup/i });
+
+    fireEvent.change(screen.getByLabelText(new RegExp(`type ${savedZip.filename} to confirm`, 'i')), {
+      target: { value: savedZip.filename },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^delete this backup$/i }));
+
+    await waitFor(() => expect(api.deleteSavedBackup).toHaveBeenCalledWith(savedZip.filename));
+  });
+
+  it('keeps the artifact when the delete confirmation is cancelled', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    fireEvent.click(await screen.findByLabelText('Delete backup'));
+    await screen.findByRole('dialog', { name: /delete saved backup/i });
+
+    fireEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /delete saved backup/i })).not.toBeInTheDocument(),
+    );
+    expect(api.deleteSavedBackup).not.toHaveBeenCalled();
+  });
+
+  it('names the uploaded file before replacing all ECM state with it', async () => {
+    render(<BackupRestoreSection isAdmin={true} />);
+    const file = new File(['zip'], 'operator-full-backup.zip', { type: 'application/zip' });
+    const input = document.querySelector('input[accept=".zip"]') as HTMLInputElement;
+    Object.defineProperty(input, 'files', { value: [file] });
+
+    fireEvent.click(screen.getByText('Restore'));
+
+    const dialog = await screen.findByRole('dialog', { name: /restore full backup/i });
+    expect(dialog).toHaveTextContent('operator-full-backup.zip');
+    expect(dialog).toHaveTextContent(/replace all current settings/i);
+    expect(api.restoreBackup).not.toHaveBeenCalled();
   });
 });

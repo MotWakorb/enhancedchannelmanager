@@ -92,6 +92,19 @@ class TaskResult:
     # channel-pipeline post-refresh path when a run is BOTH capped AND has
     # failed actions, to avoid emitting two separate warnings.
     suppress_completion_notification: bool = False
+    # daziw (PO decision 2): the run did NOT succeed, but it ran to completion
+    # and left real, kept state — it is DEGRADED, not failed. Set by the task,
+    # read ONLY by the task engine's unsuccessful-result branch, where it selects
+    # the "Task Completed with Warnings" / notification_type="warning" alert
+    # instead of the red "Task Failed" / notification_type="error" one. Default
+    # False, so every task that does not set it — and every other failure mode of
+    # the tasks that do — keeps the error branch unchanged.
+    #
+    # Distinct from failed_count > 0, which describes a SUCCESSFUL run with some
+    # failed items. This describes an UNSUCCESSFUL run with no failed items:
+    # a DBAS restore that applied everything cleanly and still left a channel
+    # with no playable stream.
+    completed_degraded: bool = False
 
     @property
     def duration_seconds(self) -> Optional[float]:
@@ -115,6 +128,137 @@ class TaskResult:
             "error": self.error,
             "details": self.details,
         }
+
+
+class TaskOutcome(str, Enum):
+    """How a finished run ENDED — the run's severity, named once.
+
+    Bead ``enhancedchannelmanager-fexq1``. Before this, four surfaces each
+    re-derived severity from two fields that do not carry it
+    (:attr:`TaskResult.success` and :attr:`TaskResult.failed_count`), and they
+    disagreed: drill run ``2026-08-06-run9`` produced a DBAS restore whose alert
+    was correctly ``warning`` / "Task Completed with Warnings" and whose
+    task-history row read ``status: "failed"``, ``success: false`` — for the
+    same run. ``failed_count > 0`` was doing the work of a severity field, which
+    is why a degraded run with CLEAN counts (a restore where every row applied
+    and not one channel could play) could not be expressed at all.
+
+    Every terminal surface now maps from THIS: the notification severity
+    (:func:`completion_notification_type`), the persisted history row
+    (:func:`execution_status` / :func:`execution_succeeded`), and the Journal.
+
+    * ``SUCCESS`` — every item did what it was asked to. Nothing to report.
+    * ``WARNING`` — the run RAN TO COMPLETION and left real, kept state, but the
+      result is not clean: some items failed, or the task declared itself
+      degraded (:attr:`TaskResult.completed_degraded`). An action item, not a
+      failure, and never announced as one.
+    * ``ERROR`` — the run did not produce what it was asked for. This is the
+      only outcome that says "failed" to an operator.
+    * ``CANCELLED`` — an operator stopped it. Neither success nor failure.
+    """
+
+    SUCCESS = "success"
+    WARNING = "warning"
+    ERROR = "error"
+    CANCELLED = "cancelled"
+
+
+def task_outcome(result: 'TaskResult') -> TaskOutcome:
+    """Derive a finished run's :class:`TaskOutcome`. The ONE derivation.
+
+    Deliberately computed from the fields tasks ALREADY set, so no task has to
+    be changed and no existing run's severity moves: this is the same ladder
+    ``completion_notification_type`` has always applied, given a name and a
+    single home.
+
+    * cancelled -> ``CANCELLED`` (the run stopped, it did not fail)
+    * succeeded, some items failed -> ``WARNING``
+    * succeeded cleanly -> ``SUCCESS``
+    * unsuccessful but ``completed_degraded`` -> ``WARNING`` (bead
+      ``…-daziw``: the applied state stands and the message names the shortfall)
+    * unsuccessful -> ``ERROR``
+
+    Note the third and fourth rules are the SAME severity reached two ways, and
+    that is the point: a warning-level run is one that completed and left kept
+    state, whether or not any individual item failed.
+    """
+    if result.error == "CANCELLED":
+        return TaskOutcome.CANCELLED
+    if result.success:
+        return TaskOutcome.WARNING if result.failed_count > 0 else TaskOutcome.SUCCESS
+    if getattr(result, "completed_degraded", False):
+        return TaskOutcome.WARNING
+    return TaskOutcome.ERROR
+
+
+def completion_notification_type(result: 'TaskResult') -> str:
+    """Map a finished :class:`TaskResult` to the severity the operator sees.
+
+    Single source of truth for the NOTIFICATION severity (bead
+    ``enhancedchannelmanager-asf3n``). A run touches TWO notification records —
+    the completion notification the task engine creates, and the progress
+    notification the scheduler created at start and re-types at the end — and
+    each used to decide severity on its own. Only the engine learned the
+    ``completed_degraded`` rule from bead ``enhancedchannelmanager-daziw``, so a
+    degraded DBAS restore showed the operator a ``warning`` and an ``error``
+    side by side for one event, with nothing to say which was authoritative.
+
+    Now a thin projection of :func:`task_outcome` onto the notification
+    vocabulary, which has no "cancelled" severity of its own: a cancelled run is
+    shown as a ``warning`` and titled "Task Cancelled". Outputs are unchanged.
+    """
+    outcome = task_outcome(result)
+    if outcome is TaskOutcome.CANCELLED:
+        return "warning"
+    return outcome.value
+
+
+def execution_status(result: 'TaskResult') -> str:
+    """Map a finished run to its TERMINAL STATUS (…-fexq1, …-bdmby).
+
+    The status vocabulary is a closed set consumed by the Task History panel,
+    the DBAS restore modals, and the MCP ``get_task_history`` tool:
+    ``running`` / ``completed`` / ``completed_with_warnings`` / ``failed`` /
+    ``cancelled``.
+
+    ``completed_with_warnings`` is the member added by fexq1. Without it the row
+    had to round a warning-level run to one of its neighbours, and it rounded
+    the wrong way: a degraded restore was stored as ``failed`` while its own
+    alert said "Task Completed with Warnings". The browser was left inferring
+    the middle state from ``success && failed_count > 0``, which cannot see a
+    degraded run with clean counts at all.
+
+    Bead ``…-bdmby`` widened the callers rather than the vocabulary: the
+    persisted ``TaskExecution.status``, the LIVE ``TaskProgress.status`` that
+    ``GET /api/tasks/{id}`` publishes, and the finalized progress notification
+    all read this one function. They used to end a run with three independently
+    written strings, and drill run ``2026-08-08-run16`` caught them disagreeing —
+    a restore that rolled nothing back published ``progress.status: "failed"``
+    with ``failed_count: 0`` beside a history row reading
+    ``completed_with_warnings``. One derivation, so they cannot drift again.
+    """
+    outcome = task_outcome(result)
+    if outcome is TaskOutcome.CANCELLED:
+        return "cancelled"
+    if outcome is TaskOutcome.ERROR:
+        return "failed"
+    if outcome is TaskOutcome.WARNING:
+        return "completed_with_warnings"
+    return "completed"
+
+
+def execution_succeeded(result: 'TaskResult') -> bool:
+    """Map a finished run to its persisted ``TaskExecution.success`` (…-fexq1).
+
+    Answers "did this run produce what it was asked for?" — TRUE for a
+    warning-level run, whose applied state is real and kept. It is NOT the same
+    question as :attr:`TaskResult.success`, which means "cleanly, with nothing
+    to report", and it is NOT the question the
+    ``ecm_task_schedule_last_success_timestamp`` gauge answers (that one is
+    narrower still — "when did this task last run CLEANLY" — and deliberately
+    keeps its own trigger; see ``task_engine``).
+    """
+    return task_outcome(result) in (TaskOutcome.SUCCESS, TaskOutcome.WARNING)
 
 
 @dataclass
@@ -164,6 +308,25 @@ class TaskScheduler(ABC):
     task_description: str = ""
     default_enabled: bool = True  # Whether new installs start with this task enabled
 
+    # Ad-hoc parameters this task honours in the ``parameters`` body of
+    # POST /api/tasks/{task_id}/run but which are deliberately NOT
+    # schedule-configurable (bead ``enhancedchannelmanager-sdpzy``). Declared on
+    # the task itself so the discoverability endpoint cannot drift from what
+    # ``update_config`` actually reads.
+    #
+    # Shape mirrors ``routers.tasks.TASK_PARAMETER_SCHEMAS`` entries:
+    #   {"description": str,
+    #    "parameters": [{"name", "type", "label", "description",
+    #                    "required", "default"}, ...]}
+    #
+    # GET /api/tasks/{task_id}/parameter-schema surfaces these under a SEPARATE
+    # ``run_parameters`` key. They are never merged into ``parameters``, which
+    # the schedule editor renders and PERSISTS into ``task_schedules.parameters``
+    # — the dbas_backup passphrase is a manual-run transient that must never be
+    # written to a schedule.
+    run_parameter_schema: Optional[dict] = None
+    schedule_parameter_schema: Optional[dict] = None
+
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         """Initialize the task scheduler."""
         self.schedule_config = schedule_config or ScheduleConfig()
@@ -185,6 +348,11 @@ class TaskScheduler(ABC):
         self._send_alerts: bool = True  # Whether to send external alerts (Discord, Telegram, etc.)
         self._last_notification_update: float = 0
         self._notification_update_interval: float = 2.0  # Update every 2 seconds max
+        self._run_trigger = "manual"
+
+    def set_run_trigger(self, triggered_by: str) -> None:
+        """Set whether the current invocation is manual or scheduler-driven."""
+        self._run_trigger = triggered_by
 
     # -------------------------------------------------------------------------
     # Abstract methods (must be implemented by subclasses)
@@ -284,6 +452,16 @@ class TaskScheduler(ABC):
         """
         pass
 
+    def restore_invocation_config(self, config: dict) -> None:
+        """Restore a config snapshot after an invocation-specific overlay.
+
+        The task engine uses this after every run so schedule and ad-hoc
+        parameters cannot become state on the registry singleton. Subclasses
+        only need to override this when ``update_config(get_config())`` is not
+        round-trippable.
+        """
+        self.update_config(config)
+
     # -------------------------------------------------------------------------
     # Notification Callbacks (set by task_engine for progress notifications)
     # -------------------------------------------------------------------------
@@ -381,23 +559,26 @@ class TaskScheduler(ABC):
             return
 
         try:
-            # Determine final type and message
+            # Severity comes from the shared map so this notification can never
+            # contradict the engine's completion notification for the same run
+            # (asf3n), and ``status`` comes from the same closed set as the
+            # history row (bdmby) so it cannot contradict that either. It used to
+            # be written here by hand, which spelled a degraded run "failed" —
+            # the one member that means the run did not produce what it was
+            # asked for. The frontend reads this value as a terminal state
+            # (notificationGrouping.FINAL_PROGRESS_STATUSES) and knows the whole
+            # vocabulary.
+            notification_type = completion_notification_type(result)
+            status = execution_status(result)
             if result.error == "CANCELLED":
-                notification_type = "warning"
                 message = f"Cancelled: {result.success_count} completed"
-                status = "cancelled"
             elif result.success:
-                notification_type = "success"
                 if result.failed_count > 0:
-                    notification_type = "warning"
                     message = f"Completed: {result.success_count} ok, {result.failed_count} failed"
                 else:
                     message = f"Completed: {result.success_count} ok"
-                status = "completed"
             else:
-                notification_type = "error"
                 message = result.message or "Task failed"
-                status = "failed"
 
             await self._update_notification_callback(
                 notification_id=self._notification_id,
@@ -581,6 +762,18 @@ class TaskScheduler(ABC):
                 self._status = TaskStatus.COMPLETED
                 await self.on_complete(result)
                 logger.info("[%s] Task completed successfully: %s", self.task_id, result.message)
+            elif task_outcome(result) is TaskOutcome.WARNING:
+                # The run did not succeed CLEANLY, but it ran to completion and
+                # left real, kept state (bead …-daziw). Calling that "Task
+                # failed" was the false positive bead …-bdmby closes:
+                # ``docs/user_guide/troubleshooting/read-the-logs.md`` tells
+                # operators to grep the log, and every degraded DBAS restore hit.
+                # ``on_complete`` stays gated on ``result.success`` — a task's
+                # own success hook is not this line's question.
+                self._status = TaskStatus.COMPLETED
+                logger.warning(
+                    "[%s] Task completed with warnings: %s", self.task_id, result.message
+                )
             else:
                 self._status = TaskStatus.FAILED
                 logger.warning("[%s] Task failed: %s", self.task_id, result.message)
@@ -600,7 +793,12 @@ class TaskScheduler(ABC):
             # Record history
             self._add_to_history(result)
             self._last_run = result.completed_at or datetime.utcnow()
-            self._progress.status = "completed" if result.success else "failed"
+            # The live terminal status is the history row's status (bdmby). It
+            # used to be written from ``result.success`` alone, which spelled
+            # BOTH a degraded run and a cancelled one "failed" — the field a
+            # script polls to know a restore finished said the restore failed
+            # while the row, the alert and the dialog all said it had not.
+            self._progress.status = execution_status(result)
 
             # Calculate next run if scheduled
             if self._enabled and self.schedule_config.schedule_type != ScheduleType.MANUAL:

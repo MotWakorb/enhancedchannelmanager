@@ -41,8 +41,13 @@
   cursor: pointer;
 }
 
-.dropzone-icon {
-  font-size: 48px;
+/* MEASURED DEAD, now fixed (bead enhancedchannelmanager-xhldy) — 0-1-0 in an
+   eager stylesheet, so `index.css`'s base `.material-icons` 24px won on byte
+   order and the harness measured 24px, not 48px. Scoped to `.csv-dropzone`
+   for the required second class of depth, on the --icon-empty illustration
+   role. 24px -> 64px. */
+.csv-dropzone .dropzone-icon {
+  font-size: var(--icon-empty);
   color: var(--text-muted, #666);
 }
 
@@ -50,32 +55,30 @@
   color: var(--success, #4ade80);
 }
 
+/* Section role. 16px -> 15px. */
 .dropzone-text {
-  font-size: 1rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Meta role. 12.8px -> 11px. */
 .dropzone-hint {
-  font-size: 0.8rem;
+  font-size: var(--type-meta-size);
+  line-height: var(--type-meta-line-height);
+  font-weight: var(--type-meta-weight);
   color: var(--text-muted, #666);
 }
 
-.file-info {
-  display: flex;
-  flex-direction: column;
+/* `.file-info`, `.file-name` and `.file-size` are owned by shared/common.css
+   § 17. Both this file and LogoModal.css declared the whole family bare in
+   the eager bundle and disagreed on the filename size (16px here, 14.4px
+   there) and on the size string's colour; only the layout bit that is
+   genuinely local to this dropzone stays
+   (bead enhancedchannelmanager-6z299). */
+.csv-dropzone .file-info {
   align-items: center;
-  gap: 0.25rem;
-}
-
-.file-name {
-  font-size: 1rem;
-  font-weight: 500;
-  color: var(--text-primary, #fff);
-}
-
-.file-size {
-  font-size: 0.8rem;
-  color: var(--text-secondary, #888);
 }
 
 /* Preview Table */
@@ -83,18 +86,21 @@
   margin-top: 1rem;
 }
 
+/* Section role. 14.4px -> 15px. */
 .preview-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.9rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--text-primary, #fff);
   margin-bottom: 0.75rem;
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .preview-header .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
   color: var(--accent-primary, #6366f1);
 }
 
@@ -104,10 +110,13 @@
   overflow: hidden;
 }
 
+/* Body role. 13.6px -> 13px. */
 .csv-preview-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
 }
 
 .csv-preview-table th,
@@ -117,13 +126,14 @@
   border-bottom: 1px solid var(--border-primary, #2a2a4a);
 }
 
+/* Micro role — the tracked uppercase label idiom. 12px -> 10px/700, tracking 0.08em. text-transform stays at the call site. */
 .csv-preview-table th {
   background: var(--bg-secondary, #252540);
   color: var(--text-secondary, #888);
-  font-weight: 500;
-  font-size: 0.75rem;
+  font-weight: var(--type-micro-weight);
+  font-size: var(--type-micro-size);
   text-transform: uppercase;
-  letter-spacing: 0.05em;
+  letter-spacing: var(--type-micro-tracking);
 }
 
 .csv-preview-table tr:last-child td {
@@ -139,13 +149,11 @@
   font-style: italic;
 }
 
-.preview-more {
-  padding: 0.5rem 0.75rem;
-  font-size: 0.8rem;
-  color: var(--text-muted, #666);
-  background: var(--bg-secondary, #252540);
-  text-align: center;
-}
+/* `.preview-more` is owned by shared/common.css § 17 PREVIEW LISTS. This copy
+   and StreamsPane.css's were both bare and eager; StreamsPane won padding,
+   size and colour, and only the background and centring here survived. The
+   merged result — which is what this modal was already showing — is now the
+   single rule in common.css (bead enhancedchannelmanager-87o0c). */
 
 /* Validation Errors */
 .csv-validation-errors {
@@ -165,8 +173,9 @@
   border-bottom: 1px solid rgba(239, 68, 68, 0.2);
 }
 
+/* Status/panel glyph -> --icon-status. 20px -> 18px. */
 .errors-header .material-icons {
-  font-size: 20px;
+  font-size: var(--icon-status);
 }
 
 .errors-list {
@@ -175,9 +184,12 @@
   padding: 0.5rem 1rem;
 }
 
+/* Body role. 13.6px -> 13px. */
 .errors-list li {
   padding: 0.25rem 0;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-secondary, #888);
 }
 
@@ -201,8 +213,9 @@
   border-radius: var(--radius-xl);
 }
 
+/* Illustration glyph -> --icon-empty. 36px -> 64px. */
 .csv-import-success > .material-icons {
-  font-size: 36px;
+  font-size: var(--icon-empty);
   color: var(--success, #4ade80);
 }
 
@@ -212,25 +225,35 @@
   gap: 0.5rem;
 }
 
+/* Section role. 17.6px -> 15px. */
 .success-details strong {
-  font-size: 1.1rem;
+  font-size: var(--type-section-size);
+  line-height: var(--type-section-line-height);
+  font-weight: var(--type-section-weight);
   color: var(--success, #4ade80);
 }
 
+/* Body role. 15.2px -> 13px. */
 .success-details p {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--text-primary, #fff);
 }
 
+/* Body role. 13.6px -> 13px. */
 .success-warnings {
   display: flex;
   align-items: center;
   gap: 0.25rem;
-  font-size: 0.85rem;
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
+  font-weight: var(--type-body-weight);
   color: var(--warning, #f59e0b);
 }
 
+/* Status/panel glyph -> --icon-status. 16px -> 18px. */
 .success-warnings .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-status);
 }

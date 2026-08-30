@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import './ModalBase.css';
 import './VLCProtocolHelperModal.css';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 
 interface VLCProtocolHelperModalProps {
   isOpen: boolean;
@@ -18,6 +19,7 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
   onDownloadM3U,
   streamName: _streamName,
 }: VLCProtocolHelperModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const [activeTab, setActiveTab] = useState<OSTab>('windows');
   const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
 
@@ -72,10 +74,10 @@ export const VLCProtocolHelperModal = memo(function VLCProtocolHelperModal({
   );
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-lg">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-lg" ref={containerRef}>
         <div className="modal-header">
-          <h2>VLC Protocol Not Available</h2>
+          <h2 id={titleId}>VLC Protocol Not Available</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

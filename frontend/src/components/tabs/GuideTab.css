@@ -34,26 +34,23 @@
   gap: 0.5rem;
 }
 
+/* The caption on a toolbar control, so the label role — the same treatment
+   `.form-group label` takes in shared/common.css § 4. It was 14px/500; the
+   role is 13px/500 (bead enhancedchannelmanager-6z299.3). */
 .control-group label {
-  font-size: 0.875rem;
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   color: var(--text-secondary);
-  font-weight: 500;
 }
 
-.control-group select {
-  padding: 0.5rem 0.75rem;
-  background-color: var(--input-bg);
-  border: 1px solid var(--border-secondary);
-  border-radius: var(--radius-lg);
-  color: var(--text-primary);
-  font-size: 0.875rem;
-  cursor: pointer;
-}
-
-.control-group select:focus {
-  outline: none;
-  border-color: var(--accent-primary);
-}
+/* `.control-group select` and its `:focus` deleted, not remapped: every
+   control in this toolbar is a `CustomSelect`, which renders a <button> plus
+   a listbox — GuideTab.tsx renders no native <select> anywhere. Dead is not
+   harmless when it is bare in a lazy chunk: an element rule on `select`
+   inside any `.control-group` competed with the real form-control rules in
+   shared/common.css § 4 on every page visited after the Guide
+   (bead enhancedchannelmanager-6z299.3). */
 
 /* Group filter with mode toggle */
 .control-group.group-filter {
@@ -94,11 +91,22 @@
   color: var(--button-primary-text);
 }
 
+/* Glyph in a row-sized control — the action icon size, which is the 16px it
+   already was (bead enhancedchannelmanager-6z299.3). */
 .group-mode-toggle .mode-btn .material-icons {
-  font-size: 16px;
+  font-size: var(--icon-action);
 }
 
-.refresh-btn {
+/* Scoped to the page root. `.refresh-btn` was declared bare in this lazy chunk
+   while `.watch-history-panel .refresh-btn` and `.bandwidth-panel .refresh-btn`
+   in the Stats chunk style their own, differently — those two set no
+   font-size/weight, so after one visit to the Guide they inherited this
+   accent-filled 14px/500 treatment instead of their own
+   (bead enhancedchannelmanager-6z299.2). Guide's toolbar is the one route
+   toolbar that renders INLINE in the content pane rather than through
+   RouteHeaderSlot, so `.guide-tab` really is an ancestor (GuideTab.tsx:554,
+   :642). `:where()` keeps every selector at the specificity it had. */
+:where(.guide-tab) .refresh-btn {
   display: flex;
   align-items: center;
   gap: 0.375rem;
@@ -107,23 +115,29 @@
   border: none;
   border-radius: var(--radius-lg);
   color: var(--button-primary-text);
-  font-size: 0.875rem;
+  /* Body role, weight 500 — the shape `.btn-primary`/`.btn-secondary` take in
+     shared/common.css § 3. The body role's own definition covers buttons, so
+     14px goes to 13px rather than to whichever token is numerically nearest
+     (bead enhancedchannelmanager-6z299.3). */
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: opacity 0.15s;
 }
 
-.refresh-btn:hover:not(:disabled) {
+:where(.guide-tab) .refresh-btn:hover:not(:disabled) {
   opacity: 0.9;
 }
 
-.refresh-btn:disabled {
+:where(.guide-tab) .refresh-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
 }
 
-.refresh-btn .material-icons {
-  font-size: 18px;
+/* 18px is the status icon size, which is what every shared button glyph in
+   shared/common.css § 3 already uses — tokenised, not resized. */
+:where(.guide-tab) .refresh-btn .material-icons {
+  font-size: var(--icon-status);
 }
 
 .print-btn {
@@ -135,7 +149,8 @@
   border: 1px solid var(--border-secondary);
   border-radius: var(--radius-lg);
   color: var(--text-primary);
-  font-size: 0.875rem;
+  /* Body role, weight 500 — same call as `.refresh-btn` above. */
+  font-size: var(--type-body-size);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s, border-color 0.15s;
@@ -147,14 +162,14 @@
 }
 
 .print-btn .material-icons {
-  font-size: 18px;
+  font-size: var(--icon-status);
 }
 
-.error-message {
-  color: var(--error);
-  font-size: 0.875rem;
-  margin-left: auto;
-}
+/* `.error-message` deleted, not remapped: the Guide renders no
+   `.error-message` element, so this was dead CSS — but declared bare in a
+   lazy chunk it was not harmless, because it overrode the real shared
+   banner in shared/common.css § 8 for every page visited after the Guide
+   (bead enhancedchannelmanager-6z299). */
 
 /* Guide Container */
 .guide-container {
@@ -190,13 +205,23 @@
   display: flex;
 }
 
+/* Layout only. GuideTab.tsx:678 already carries `micro-label` on this element,
+   and shared/common.css § 24 owns that idiom's size, weight, case and
+   tracking — but this rule still declared its own font-size and font-weight,
+   and this file is a lazy chunk appended after the eager bundle, so at equal
+   specificity it won. It did NOT redeclare letter-spacing or text-transform,
+   so those two DID come from `.micro-label`: the header was rendering a
+   hybrid, 12.8px/600 uppercase with the micro role's 0.08em tracking, which
+   is neither the treatment it had before nor the one it was moved onto.
+   Measured in the running app. The colour is set explicitly because
+   `.micro-label` deliberately sets none — a micro label takes the colour of
+   what it labels, and a column header's is --text-secondary
+   (bead enhancedchannelmanager-6z299.3). */
 .time-slot-header {
   width: 200px;
   flex-shrink: 0;
   padding: 0.75rem 0.5rem;
   text-align: center;
-  font-size: 0.8rem;
-  font-weight: 600;
   color: var(--text-secondary);
   border-right: 1px solid var(--border-primary);
 }
@@ -284,8 +309,11 @@
   padding: 0 0.375rem;
   background-color: var(--button-primary-bg);
   border-radius: var(--radius-md);
-  font-size: 0.7rem;
-  font-weight: 600;
+  /* Text inside a pill — the badge role. The pill's 36x22 box is fixed, so
+     the row does not move (bead enhancedchannelmanager-6z299.3). */
+  font-size: var(--type-badge-size);
+  font-weight: var(--type-badge-weight);
+  line-height: var(--type-badge-line-height);
   color: var(--button-primary-text);
   flex-shrink: 0;
 }
@@ -297,8 +325,12 @@
   flex-shrink: 0;
 }
 
+/* The name of a row in a list — the item-title role
+   (bead enhancedchannelmanager-6z299.3). */
 .guide-row .channel-name {
-  font-size: 0.8rem;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -340,18 +372,38 @@
   box-shadow: 0 0 8px var(--accent-40);
 }
 
+/* The programme's name inside its block — an item title.
+   On the geometry: `ROW_HEIGHT = 60` in GuideTab.tsx:16 drives the
+   virtualiser's offsets while `.guide-row` is only `min-height: 60px`, so a
+   row that outgrew 60px would desynchronise the scroll and the now-indicator.
+   Measured in the running app rather than calculated: a `.program-block` is
+   `position: absolute` with BOTH `top` and `bottom` pinned and
+   `overflow: hidden`, so its box is 47px (35px of content) whatever it
+   contains — programme text cannot push a row taller, and forcing a subtitle
+   onto all 44 blocks plus oversized names into every `.channel-info` left all
+   22 rows at exactly 60px. What the roles do change is clipping, in the right
+   direction: a two-line block needs 37.98px of content box before this change
+   and 36.69px after, against the same 35px, so forced two-line blocks that
+   clipped went from 43/44 to 22/44
+   (bead enhancedchannelmanager-6z299.3). */
 .program-title {
-  font-size: 0.8rem;
-  font-weight: 500;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* Supporting detail under an item title — the meta role. --text-secondary,
+   not --text-muted: in the light theme --text-muted measures 2.61:1 on
+   --bg-secondary, below the AA floor. */
 .program-subtitle {
-  font-size: 0.7rem;
-  color: var(--text-muted);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -373,11 +425,12 @@
   border-radius: var(--radius-md);
 }
 
-.no-epg-text {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  font-style: italic;
-}
+/* `.no-epg-text` deleted, not remapped: it is one of the six spellings of the
+   one-line "nothing here" string that shared/common.css § 7 `.empty-inline`
+   now owns, and it is named in that rule's comment. GuideTab.tsx:514 carries
+   `empty-inline` instead. The italic goes with it — it was the only italic
+   body text in the product and it made an already small string harder to
+   read (bead enhancedchannelmanager-6z299.3). */
 
 /* Footer */
 .guide-footer {
@@ -390,9 +443,18 @@
   flex-shrink: 0;
 }
 
-.channel-count {
-  font-size: 0.75rem;
-  color: var(--text-muted);
+/* Scoped to the page root. `.channel-count` was bare in this lazy chunk and is
+   also rendered by ChannelProfilesListModal, whose own
+   `.profile-channels .channel-count` sets no font-size — so that modal's count
+   dropped to 12px for the rest of the session once the Guide had been visited
+   (bead enhancedchannelmanager-6z299.2). `:where()` keeps this at (0,1,0). */
+/* Meta role for the footer count, and --text-secondary rather than
+   --text-muted (2.61:1 on --bg-secondary in the light theme). */
+:where(.guide-tab) .channel-count {
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+  color: var(--text-secondary);
 }
 
 /* Wider channel-name column on desktop viewports (bead 09x38.15 item 8):
@@ -424,7 +486,10 @@
     height: 24px;
   }
 
-  .guide-row .channel-name {
-    font-size: 0.75rem;
-  }
+  /* The `.guide-row .channel-name` font-size override that stood here is
+     gone. It dropped the name to 12px in the narrowed 150px column, which
+     made sense against a 12.8px base; the item-title role is 13px, and a
+     role does not have a per-breakpoint variant — one number for a list-row
+     name is the whole point of the scale. The name ellipsises with a title
+     tooltip either way (bead enhancedchannelmanager-6z299.3). */
 }

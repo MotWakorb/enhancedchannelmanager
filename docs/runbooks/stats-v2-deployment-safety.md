@@ -12,7 +12,7 @@
 - Before any v0.17.0+ deploy that includes a `session_telemetry` schema change.
 - Before any deploy that changes `backend/bandwidth_tracker.py` write path.
 - Before any deploy that changes the active-stream → provider resolver.
-- After any incident involving Stats v2 — re-read to verify the deploy preconditions still hold.
+- After any incident involving Stats v2: re-read to verify the deploy preconditions still hold.
 
 ---
 
@@ -20,9 +20,9 @@
 
 Stats v2 has structural deploy hazards that are unique to its architecture:
 
-1. **The writer runs on a poll loop**, not on user request. A migration mismatch surfaces inside a background task, not on a user-visible API call — easy to miss without instrumentation.
-2. **The `ECM_SESSION_TELEMETRY_WRITE_ENABLED` flag is retired** (skqln.3 step (d)). There is no kill-switch. If the writer ships broken, the only mitigation is rollback or hotfix — you cannot env-disable it.
-3. **Popularity rankings shift on first deploy after upgrade**, because the new data shape changes how the panels aggregate. See [stats-v2-history-cutover](../user_guide/stats/stats-v2-history-cutover.md) — operators should be warned in release notes.
+1. **The writer runs on a poll loop**, not on user request. A migration mismatch surfaces inside a background task, not on a user-visible API call. This makes it easy to miss without instrumentation.
+2. **The `ECM_SESSION_TELEMETRY_WRITE_ENABLED` flag is retired** (skqln.3 step (d)). There is no kill-switch. If the writer ships broken, the only mitigation is rollback or hotfix. You cannot env-disable it.
+3. **Popularity rankings shift on first deploy after upgrade**, because the new data shape changes how the panels aggregate. See [stats-v2-history-cutover](../user_guide/stats/stats-v2-history-cutover.md); operators should be warned in release notes.
 
 This runbook codifies the pre-deploy and post-deploy checks that catch the common failure modes.
 
@@ -60,7 +60,7 @@ docker exec <scratch> alembic upgrade head
 
 - Add it to a `docker-compose.yml` thinking it disables the writer.
 - Tell an operator "if Stats v2 is broken, set the flag to false."
-- Reintroduce it as a kill-switch — that ship has sailed and the writer's try/except is the architectural replacement.
+- Reintroduce it as a kill-switch. That ship has sailed, and the writer's try/except is the architectural replacement.
 
 Confirm the flag does not appear in any deployment manifest:
 ```bash
@@ -75,10 +75,10 @@ If you find it: remove it. It does nothing, and leaving it gives the next operat
 
 On the first deploy after upgrade, popularity rankings on the Stats panels will shift. This is **expected behavior** and is documented in:
 
-- [`docs/user_guide/stats/stats-v2-history-cutover.md`](../user_guide/stats/stats-v2-history-cutover.md) — the operator-facing "useful in 30d, fully useful in 90d" framing.
+- [`docs/user_guide/stats/stats-v2-history-cutover.md`](../user_guide/stats/stats-v2-history-cutover.md): the operator-facing "useful in 30d, fully useful in 90d" framing.
 - ADR-007 (retention policy for `session_telemetry`).
 
-The release notes for the deploy must call this out — see [`docs/discord_release_notes.md`](../discord_release_notes.md) for the release-note template. Pre-deploy: confirm the release-notes draft includes a cutover note for Stats v2 changes.
+The release notes for the deploy must call this out. See [`docs/discord_release_notes.md`](../discord_release_notes.md) for the release-note template. Pre-deploy: confirm the release-notes draft includes a cutover note for Stats v2 changes.
 
 ### 4. Perf-benchmark gate is green
 
@@ -132,7 +132,7 @@ histogram_quantile(0.95,
   sum by (le) (rate(ecm_stats_query_duration_seconds_bucket[5m])))
 ```
 
-Expected: < 0.8 (800ms) for all stats endpoints. If > 0.8, the perf-benchmark gate may have been bypassed — investigate the deployed code matches the gate-passing commit.
+Expected: < 0.8 (800ms) for all stats endpoints. If > 0.8, the perf-benchmark gate may have been bypassed. Investigate whether the deployed code matches the gate-passing commit.
 
 ### 5. Row growth is sane
 
@@ -167,16 +167,16 @@ If post-deploy verification fails:
    docker logs ecm-ecm-1 --since 1h > /tmp/stats-v2-deploy-rollback.log
    ```
 
-2. **Rollback via the standard ECM rollback flow.** See [`docs/runbooks/v0.16.0-rollback.md`](./v0.16.0-rollback.md) for the rollback pattern (frontend `dist/`, backend `/app/`, container restart). The Stats v2 case has no special rollback — the same `docker cp` of the prior bundle + `docker restart` works.
+2. **Rollback via the standard ECM rollback flow.** See [`docs/runbooks/v0.16.0-rollback.md`](./v0.16.0-rollback.md) for the rollback pattern (frontend `dist/`, backend `/app/`, container restart). The Stats v2 case has no special rollback: the same `docker cp` of the prior bundle + `docker restart` works.
 
 3. **If the rollback also fails** (rare, but possible if the schema migrated and the prior code can't read the new schema):
    - The Alembic `current` version is now newer than the prior code expects.
    - Either re-apply the new code (try again, fix forward) OR `alembic downgrade <prior-rev>` and restart with the old code.
-   - **Capture log snapshot before any downgrade** — Alembic downgrades can lose data.
+   - **Capture log snapshot before any downgrade**: Alembic downgrades can lose data.
 
 4. **Notify the operator** of the cutover behavior:
-   - If you rolled back after data was already written under the new schema, the prior code may not see the post-upgrade rows. This is normal — when the new code re-deploys, the rows are still there.
-   - The Providers/Users panel "useful in 30d, fully useful in 90d" framing in the release notes assumes monotonic forward progress — a rollback resets that clock for any rows the prior code can't read.
+   - If you rolled back after data was already written under the new schema, the prior code may not see the post-upgrade rows. This is normal. When the new code re-deploys, the rows are still there.
+   - The Providers/Users panel "useful in 30d, fully useful in 90d" framing in the release notes assumes monotonic forward progress. A rollback resets that clock for any rows the prior code can't read.
 
 ## Common deploy-time failure patterns
 
@@ -195,18 +195,18 @@ curl -sS http://<host>:<port>/metrics | grep -c ecm_session_telemetry
 # Expected: > 0 metric lines.
 ```
 
-If zero: the observability module didn't register the metrics. This is a code-side regression — file a bead and rollback.
+If zero: the observability module didn't register the metrics. This is a code-side regression. File a bead and roll back.
 
 ### Stats panel renders but data is "Unknown" for everything
 
-This is a misleading signal in fresh deploys — see the "useful in 30d, fully useful in 90d" framing. But if **previously-populated** provider data has suddenly become "Unknown" after a deploy, it's likely [stats-v2-provider-resolution-degraded runbook](./stats-v2-provider-resolution-degraded.md) territory.
+This is a misleading signal in fresh deploys. See the "useful in 30d, fully useful in 90d" framing. But if **previously-populated** provider data has suddenly become "Unknown" after a deploy, it's likely [stats-v2-provider-resolution-degraded runbook](./stats-v2-provider-resolution-degraded.md) territory.
 
 ## Escalation
 
 If post-deploy verification fails AND rollback fails:
 
-- This is now a P1 incident — the deploy substrate is broken.
-- Page the SRE persona via the operator's chosen channel (no rotation defined yet — routes to `curt@lecaptain.org`).
+- This is now a P1 incident: the deploy substrate is broken.
+- Page the SRE persona via the operator's chosen channel. There is no on-call rotation yet, so pages route to the instance operator directly.
 - Capture all artifacts: logs, `alembic current` output, `/metrics` snapshot, `docker ps` output.
 
 ## See also
@@ -217,7 +217,7 @@ If post-deploy verification fails AND rollback fails:
 - [stats-v2-write-failures runbook](./stats-v2-write-failures.md)
 - [stats-v2-provider-resolution-degraded runbook](./stats-v2-provider-resolution-degraded.md)
 - [stats-v2-row-growth runbook](./stats-v2-row-growth.md)
-- [`docs/user_guide/stats/stats-v2-history-cutover.md`](../user_guide/stats/stats-v2-history-cutover.md) — operator-facing cutover narrative
-- [`docs/database_migrations.md`](../database_migrations.md) — Alembic migration ordering
-- [`docs/runbooks/v0.16.0-rollback.md`](./v0.16.0-rollback.md) — generic rollback procedure for ECM releases
-- [`docs/discord_release_notes.md`](../discord_release_notes.md) — release-notes template (must call out Stats v2 cutover behavior)
+- [`docs/user_guide/stats/stats-v2-history-cutover.md`](../user_guide/stats/stats-v2-history-cutover.md): operator-facing cutover narrative
+- [`docs/database_migrations.md`](../database_migrations.md): Alembic migration ordering
+- [`docs/runbooks/v0.16.0-rollback.md`](./v0.16.0-rollback.md): generic rollback procedure for ECM releases
+- [`docs/discord_release_notes.md`](../discord_release_notes.md): release-notes template (must call out Stats v2 cutover behavior)

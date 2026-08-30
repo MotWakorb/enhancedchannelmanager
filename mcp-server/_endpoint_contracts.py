@@ -127,12 +127,48 @@ _AC_RULE_CREATE_FIELDS = frozenset(
         "skip_struck_streams",
         "orphan_action",
         "match_scope_target_group",
+        # GH #801 / bead 0fn69: the tool signatures already forward this and the
+        # backend PUT accepts it, but omitting it here made call_endpoint reject
+        # the request client-side, which left the documented churn workaround
+        # unreachable through the sidecar.
+        "allow_manual_channel_merge",
     }
 )
 
 # backend/routers/auto_creation.py :: UpdateAutoCreationRuleRequest — same
 # field names as create, all Optional.
 _AC_RULE_UPDATE_FIELDS = _AC_RULE_CREATE_FIELDS
+
+# Rule fields the backend's Create/UpdateChannelPipelineRuleRequest models
+# accept but the MCP sidecar deliberately does NOT expose: no tool signature
+# takes them, so declaring them above would advertise keys no tool can send.
+#
+# This set is the documented half of the GH #801 / bead 0fn69 guard. The
+# contract test (backend/tests/integration/test_mcp_tool_contracts.py) asserts
+# that every field the backend rule body accepts is either in
+# _AC_RULE_CREATE_FIELDS or named here, so a newly added backend field cannot
+# go silently unreachable through the sidecar the way
+# allow_manual_channel_merge did. Adding a name here is a decision, not a
+# formality: it means "the sidecar cannot set this field".
+#
+#   active_from / active_until  Rule activation window. Date-typed scheduling,
+#                               no MCP tool parameter.
+#   match_scope_group_id        Explicit merge-lookup scope group (GH #298).
+#                               Set through the UI; the sidecar exposes only
+#                               the match_scope_target_group boolean.
+#   fold_match_key              Fold-match opt-in (GH #645).
+#   event_sync_config           Event Sync rule config. A nested object edited
+#                               through its own preview/config tooling, not a
+#                               scalar the rule tools set.
+AC_RULE_FIELDS_NOT_EXPOSED = frozenset(
+    {
+        "active_from",
+        "active_until",
+        "match_scope_group_id",
+        "fold_match_key",
+        "event_sync_config",
+    }
+)
 
 # backend/routers/dummy_epg.py :: ProfileCreateRequest / ProfileUpdateRequest —
 # identical field names between create and update (update makes every field
@@ -337,6 +373,14 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/channel-pipeline/run",
         request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
+    ),
+    "ac_prepare_run": Endpoint(
+        name="ac_prepare_run", method="POST", path="/api/channel-pipeline/run/prepare",
+        request_fields=frozenset({"dry_run", "m3u_account_ids", "rule_ids"}),
+    ),
+    "ac_commit_run": Endpoint(
+        name="ac_commit_run", method="POST", path="/api/channel-pipeline/run/commit",
+        request_fields=frozenset({"plan_id", "plan_hash", "phase"}),
     ),
     # enhancedchannelmanager-jnzst Component B: no-write scored fuzzy preview.
     # The MCP preview_fuzzy_matches tool + the dry-run path of
@@ -585,6 +629,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="dummy_epg_generate",
         method="POST",
         path="/api/dummy-epg/generate",
+        request_fields=frozenset({"profile_ids"}),
     ),
     # -- enhancedchannelmanager-omxy5: dummy-EPG profile CRUD --------------
     "dummy_epg_get_profile": Endpoint(
@@ -622,7 +667,7 @@ ENDPOINTS: dict[str, Endpoint] = {
             "fallback_title_template", "fallback_description_template",
             "event_timezone", "output_timezone", "program_duration",
             "channel_logo_url_template", "program_poster_url_template",
-            "pattern_variants", "inline_lookups", "global_lookup_ids", "include_trace",
+            "pattern_variants", "include_trace",
         }),
         response_fields=frozenset({
             "original_name", "substituted_name", "matched", "matched_variant",
@@ -693,6 +738,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/sync-targets",
         request_fields=frozenset({
             "name", "base_url", "credentials", "enabled", "insecure", "fuzzy_stream_matching",
+            "sync_logos",
         }),
     ),
     "sync_update_target": Endpoint(
@@ -701,6 +747,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         path="/api/sync-targets/{target_id}",
         request_fields=frozenset({
             "name", "base_url", "credentials", "enabled", "insecure", "fuzzy_stream_matching",
+            "sync_logos",
         }),
     ),
     "sync_delete_target": Endpoint(
@@ -880,7 +927,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         # ``dry_run`` is a QUERY param (FastAPI ``Query``, default True); the
         # per-channel execute-mode decisions live in the body's ``actions``.
         query_params=frozenset({"dry_run"}),
-        request_fields=frozenset({"actions"}),  # ApplyToChannelsRequest
+        request_fields=frozenset({"actions", "plan_id", "plan_hash"}),
     ),
     # -- notifications domain ---------------------------------------------
     "notifications_list": Endpoint(
@@ -893,6 +940,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="notifications_mark_all_read",
         method="PATCH",
         path="/api/notifications/mark-all-read",
+        request_fields=frozenset({"notification_ids"}),
     ),
     "notifications_delete_all": Endpoint(
         name="notifications_delete_all",
@@ -901,6 +949,7 @@ ENDPOINTS: dict[str, Endpoint] = {
         # Backend DELETE /api/notifications accepts read_only (bool, default True)
         # to control whether unread notifications are included (bd-1wq7z.14).
         query_params=frozenset({"read_only"}),
+        request_fields=frozenset({"notification_ids"}),
     ),
     "alert_methods_list": Endpoint(
         name="alert_methods_list",
@@ -1274,7 +1323,20 @@ ENDPOINTS: dict[str, Endpoint] = {
         method="POST",
         path="/api/channel-merges/{merge_id}/accept",
         response_fields=frozenset(
-            {"merged_into_channel_id", "journal_entry_id", "source_stream_id", "confidence", "status"}
+            {
+                "merged_into_channel_id", "journal_entry_id", "source_stream_id",
+                "confidence", "status",
+                # Whether DISPATCHARR was actually updated, and why not when it
+                # was not. `status` describes the QUEUE ROW; an accept whose
+                # stream-name match was zero or ambiguous used to return
+                # `'merged'` with nothing anywhere saying the upstream write
+                # never happened (bead enhancedchannelmanager-i5ic0). `status`
+                # is now `'merged'` or `'pending'` — a merge ECM could not
+                # apply stays queued, flagged, and retryable (PO decision
+                # 2026-08-16).
+                "dispatcharr_updated", "unapplied_reason",
+                "journal_rows_unwritten",
+            }
         ),
     ),
     "channel_merges_dismiss": Endpoint(
@@ -1442,7 +1504,11 @@ ENDPOINTS: dict[str, Endpoint] = {
         name="emby_clear_logos",
         method="POST",
         path="/api/emby/clear-logos",
-        request_fields=frozenset({"logo_types", "channel_ids"}),
+        request_fields=frozenset({"logo_types", "channel_ids", "plan_id", "plan_hash"}),
+    ),
+    "emby_prepare_clear_logos": Endpoint(
+        name="emby_prepare_clear_logos", method="POST", path="/api/emby/clear-logos/prepare",
+        request_fields=frozenset({"logo_types", "channel_ids", "plan_id", "plan_hash"}),
     ),
     # -- event_sync team-alias dictionary (bead ti939.4.2) ------------------
     # Deliberately placed at the very END of the registry, away from the

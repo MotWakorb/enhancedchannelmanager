@@ -5,12 +5,13 @@ Scheduled task to export ECM configuration as YAML and save to /config/backups/.
 Supports selective section export and automatic retention cleanup.
 """
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
 from config import CONFIG_DIR
-from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
 from task_registry import register_task
+from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,24 @@ class YamlBackupTask(TaskScheduler):
             now = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
             filename = f"ecm-backup-{now}.yaml"
             filepath = BACKUPS_DIR / filename
-            filepath.write_text(yaml_str)
+            # Owner-only from creation, and an explicit fchmod so an existing
+            # file with a broader mode is corrected rather than reused. The
+            # descriptor is closed exactly once: by os.close only if fdopen
+            # never took ownership of it, by the context manager otherwise.
+            # O_NOFOLLOW because this path, unlike save_backup, has no
+            # resolve()+relative_to check in front of it: without the flag a
+            # symlink planted here is followed and its target truncated.
+            fd = os.open(
+                filepath, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600
+            )
+            try:
+                os.fchmod(fd, 0o600)
+                backup_file = os.fdopen(fd, "w", encoding="utf-8")
+            except BaseException:
+                os.close(fd)
+                raise
+            with backup_file:
+                backup_file.write(yaml_str)
             logger.info("[YAML_BACKUP] Saved backup: %s (%d bytes)", filename, len(yaml_str))
 
             # Retention cleanup

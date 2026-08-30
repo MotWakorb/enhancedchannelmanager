@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import * as api from '../services/api';
 import type { ChannelPopularityScore } from '../types';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './ChannelStatsDetailModal.css';
 
@@ -30,6 +31,7 @@ interface ChannelStatsDetailModalProps {
  * fully-designed summary since ChannelPopularityScore IS a stable contract.
  */
 export function ChannelStatsDetailModal({ channelId, uuid, name, onClose }: ChannelStatsDetailModalProps) {
+  const { titleId, containerRef } = useOwnedDialog();
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [popularity, setPopularity] = useState<ChannelPopularityScore | null>(null);
@@ -64,10 +66,10 @@ export function ChannelStatsDetailModal({ channelId, uuid, name, onClose }: Chan
   }, [channelId, uuid]);
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md channel-stats-detail-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container modal-md channel-stats-detail-modal" ref={containerRef}>
         <div className="modal-header">
-          <h3 className="modal-title">Channel Details — {name}</h3>
+          <h3 className="modal-title" id={titleId}>Channel Details — {name}</h3>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
@@ -122,7 +124,7 @@ export function ChannelStatsDetailModal({ channelId, uuid, name, onClose }: Chan
         </div>
 
         <div className="modal-footer">
-          <button className="modal-btn-secondary" onClick={onClose}>Close</button>
+          <button className="modal-btn modal-btn-secondary" onClick={onClose}>Close</button>
         </div>
       </div>
     </ModalOverlay>

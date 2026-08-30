@@ -1,0 +1,46 @@
+{
+  "schema": 1,
+  "version": "0.18.1-0169",
+  "created": "2026-08-29T16:26:09Z",
+  "kind": "source-manifest",
+  "channel": "dev",
+  "permanent": false,
+  "channelNote": "Transient snapshot of the dev branch, NOT an artifact of record. There is at most one and it is superseded rather than accumulated. The version below names the build this snapshot was taken at, not what dev carries now; the binding that matters is the source-manifest hashes.",
+  "subject": {
+    "type": "source-tree",
+    "note": "These documents describe the dependency manifests of the release source tree. They do NOT describe a container image and assert no subject image digest. Digest-pinned base and build image references are recorded; see sbom/README.md."
+  },
+  "coverage": {
+    "includes": [
+      "Python distributions pinned in the image's requirements.txt, with versions",
+      "npm packages resolved in frontend/package-lock.json, with versions (ECM only)",
+      "Base and build images referenced by digest in the Dockerfile"
+    ],
+    "excludes": [
+      "Operating-system packages inside the base images (apt/apk); the Dockerfiles also run `apt-get upgrade` / `apk upgrade` at build time, so the installed OS package set is not derivable from the source tree at all",
+      "Transitive native libraries vendored inside Python wheels",
+      "Published subject image digest: no release image exists when this document is cut"
+    ]
+  },
+  "sources": {
+    "Dockerfile": "sha256:c1d48b34c475b42239d5757a89994d064395ea784cf05f6533ab886dfb427088",
+    "backend/requirements.txt": "sha256:d1dcc0302cbbe2714a411404d7aad01eb3448cabb5e9f33e1625332bed287599",
+    "frontend/package-lock.json": "sha256:c1c0ac5f168feadf122bd32c1b8e714916b0a513d3c212a9e518afd10ebc7140",
+    "mcp-server/Dockerfile": "sha256:c475206aed271a9593e0dfa530c0f33dbe5f911d648871c9311d055b210ab2d2",
+    "mcp-server/requirements.txt": "sha256:c226a10129c51750977051f1d5efe54f1e9177f4ed240400ab3a89c56a6f1a37"
+  },
+  "documents": [
+    {
+      "path": "ecm.spdx.json",
+      "subject": "ecm",
+      "packages": 445,
+      "sha256": "05d8341797886904d4f8be33e264a9f9076d80861b008eab075b86cd064dd95d"
+    },
+    {
+      "path": "mcp.spdx.json",
+      "subject": "mcp",
+      "packages": 43,
+      "sha256": "4d99176021ef65bc2439d1274d3bfd55a00f1e344e95226627328651c66d29ff"
+    }
+  ]
+}

@@ -2,6 +2,7 @@ import { useState, useEffect, memo } from 'react';
 import type { EPGSource, DummyEPGCustomProperties, DummyEPGProfile } from '../types';
 import * as api from '../services/api';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import './ModalBase.css';
 import './ImportDummyEPGModal.css';
 
@@ -53,6 +54,7 @@ function ImportDummyEPGModalInner({
   onClose,
   onImport,
 }: Omit<ImportDummyEPGModalProps, 'isOpen'>) {
+  const { titleId, containerRef } = useOwnedDialog();
   const [sources, setSources] = useState<EPGSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -83,10 +85,10 @@ function ImportDummyEPGModalInner({
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container import-dummy-epg-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container import-dummy-epg-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>Import from Dispatcharr</h2>
+          <h2 id={titleId}>Import from Dispatcharr</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>

@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/event-sync", tags=["Event Sync"])
 
-# Caps mirror the lookup-tables posture: generous for real dictionaries,
+# Caps are generous for real dictionaries,
 # bounded against unbounded settings.json growth.
 _MAX_GROUPS = 200
 _MAX_TERMS_PER_GROUP = 50

@@ -4,22 +4,13 @@ import type { M3UAccount, M3UAccountType, M3UAccountCreateRequest, ServerGroup }
 import * as api from '../services/api';
 import { useAsyncOperation } from '../hooks/useAsyncOperation';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
+import { isHDHomerunLineupUrl } from '../utils/hdhomerun';
 import './ModalBase.css';
 import './M3UAccountModal.css';
 
 // UI-only account type that includes HDHR (which gets converted to STD for API)
 type UIAccountType = M3UAccountType | 'HDHR';
-
-// Helper to detect if a URL is an HD Homerun lineup URL
-function isHDHomerunUrl(url: string): boolean {
-  if (!url) return false;
-  try {
-    const parsed = new URL(url);
-    return parsed.pathname === '/lineup.m3u' || parsed.pathname === '/lineup.m3u8';
-  } catch {
-    return false;
-  }
-}
 
 // Helper to extract IP/host from HD Homerun URL
 function extractHDHomerunIP(url: string): string {
@@ -47,7 +38,17 @@ export const M3UAccountModal = memo(function M3UAccountModal({
   account,
   serverGroups,
 }: M3UAccountModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const isEdit = account !== null;
+
+  // The account holds no provider password (bead
+  // enhancedchannelmanager-tsbdq). "Leave blank to keep current" is the right
+  // hint only when there IS a current value; after restoring a standard
+  // (redacted) artifact there is not, and following that hint guarantees the
+  // account keeps failing to authenticate. The account's own `password` field
+  // is the signal and it is truthful — the API reports a real value when one
+  // exists and null/empty when it does not, never a redaction sentinel.
+  const storedPasswordMissing = isEdit && !account.password;
 
   // Form state
   const [name, setName] = useState('');
@@ -99,8 +100,12 @@ export const M3UAccountModal = memo(function M3UAccountModal({
         setAutoEnableSeries(account.auto_enable_new_groups_series);
         setIsActive(account.is_active);
 
-        // Detect if this is an HD Homerun account (STD with lineup.m3u URL)
-        if (account.account_type === 'STD' && isHDHomerunUrl(account.server_url || '')) {
+        // Detect if this is an HD Homerun account (STD with lineup.m3u URL).
+        // Deliberately the narrow lineup test, not `isHDHomerunUrl` — HD
+        // Homerun mode rewrites the URL on save, so anything it opens must be
+        // a URL it can reconstruct from the host alone (bead
+        // enhancedchannelmanager-sccol).
+        if (account.account_type === 'STD' && isHDHomerunLineupUrl(account.server_url)) {
           setAccountType('HDHR');
           setHdhrIP(extractHDHomerunIP(account.server_url || ''));
           setServerUrl('');
@@ -272,10 +277,10 @@ export const M3UAccountModal = memo(function M3UAccountModal({
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container m3u-account-modal">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="modal-container m3u-account-modal" ref={containerRef}>
         <div className="modal-header">
-          <h2>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>
+          <h2 id={titleId}>{isEdit ? 'Edit M3U Account' : 'Add M3U Account'}</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
@@ -411,11 +416,21 @@ export const M3UAccountModal = memo(function M3UAccountModal({
                 <input
                   id="xcPassword"
                   type="password"
-                  placeholder={isEdit ? 'Leave blank to keep current' : 'password'}
+                  placeholder={storedPasswordMissing
+                    ? 'No stored password — enter it'
+                    : isEdit ? 'Leave blank to keep current' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                 />
-                {isEdit && <span className="form-hint">Only fill in if changing password</span>}
+                {storedPasswordMissing ? (
+                  <span className="form-hint form-hint-warning" role="alert">
+                    This account has no stored password and must be re-entered before it can
+                    authenticate. A standard (redacted) backup does not carry provider
+                    credentials, so a restore leaves this field empty on purpose.
+                  </span>
+                ) : isEdit ? (
+                  <span className="form-hint">Only fill in if changing password</span>
+                ) : null}
               </div>
             </>
           )}

@@ -1,5 +1,5 @@
 # =============================================================================
-# DBAS round-trip test stack — a pinned, throwaway Dispatcharr instance
+# DBAS round-trip test stack — a throwaway Dispatcharr instance on `latest`
 # =============================================================================
 #
 # Purpose
@@ -18,25 +18,34 @@
 # resources (no networks, no volumes, no ports, no project name) with the
 # production stack or the live ecm-ecm-1 container.
 #
-# Version pin
-# -----------
-# Pinned to Dispatcharr 0.26.0 — the operator's live instance version
-# (GET /api/core/version/ -> 0.26.0; spike enhancedchannelmanager-tsfv0).
+# Version — TRACKS `latest` LITERALLY (PO decision, bead
+# enhancedchannelmanager-xvuk1)
+# -----------------------------------------------------------------------------
+# Runs `ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}` — the
+# same default as docker-compose.dbas-sync-test.yml (A + B) and
+# docker-compose.xc-provider.yml (P), so everything under tests/dbas-test-env/
+# resolves the same artifact. ghcr.io is the registry the operator's production
+# Dispatcharr pulls from. There is NO hand-maintained version pin here any more;
+# do not reinstate one.
+#
+#   * `latest` is the DEFAULT so nobody has to remember a flag.
+#   * To deliberately reproduce an OLD finding, pass the override explicitly:
+#       DISPATCHARR_VERSION=0.28.2 docker compose -p dbas-testenv ... up -d
+#   * `:latest` is only as fresh as your last pull. `docker compose up` reuses a
+#     locally-cached `latest`; run `docker compose ... pull` first when you mean
+#     to be current.
+#   * BECAUSE the tag floats, every validation run MUST read and report the
+#     version it actually ran against:
+#       curl -s http://127.0.0.1:9591/api/core/version/
+#     A run that cannot name its Dispatcharr is not a result. Do NOT read
+#     /api/version's git_commit as proof of what is running — that is baked-in
+#     build metadata and has misled three engineers on this work.
+#
 # The ECM code encodes a 0.23.0+ behavioral FLOOR (config.py login throttle;
 # auth/providers/dispatcharr.py /api/accounts/users/me/ with /api/accounts/me/
-# fallback); 0.26.0 is the validation TARGET. Re-validate the 0.23.0-era
-# behaviors against 0.26.0 — they may have changed across 0.24–0.26.
-#
-# Bump procedure: when the operator upgrades, change DISPATCHARR_VERSION in
-# .env (or override at the command line) and re-run the validation suite. The
-# digest pin in the comment below should be refreshed at the same time for an
-# immutable-tag guarantee.
-#
-# Image: dispatcharr/dispatcharr (Docker Hub) — mirror of
-#        ghcr.io/dispatcharr/dispatcharr.
-#   0.26.0 digest (2026-06-07):
-#   sha256:9275b0c1f5319a84b412af6839a1364ef25b61d8d6ff0d2130a6c2b2504a8b07
-#   For an immutable pin in CI, replace the tag with @<digest>.
+# fallback). Whatever `latest` resolves to is the validation TARGET; re-run
+# validate-version-behaviors.py after any platform move and record the version
+# the run reported.
 #
 # Isolation contract (NON-NEGOTIABLE — must never touch ecm-ecm-1)
 # ----------------------------------------------------------------
@@ -58,7 +67,7 @@ services:
   # talks to. Exposed on host 9591 (NOT the operator's 9191).
   # ---------------------------------------------------------------------------
   dispatcharr-web:
-    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+    image: ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}
     restart: "no"
     ports:
       - "${DBAS_TEST_HTTP_PORT:-9591}:9191"
@@ -103,7 +112,7 @@ services:
   # validated — the whole point of this stack.
   # ---------------------------------------------------------------------------
   dispatcharr-celery:
-    image: dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-0.26.0}
+    image: ghcr.io/dispatcharr/dispatcharr:${DISPATCHARR_VERSION:-latest}
     restart: "no"
     depends_on:
       dispatcharr-db:

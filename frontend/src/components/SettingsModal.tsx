@@ -2,7 +2,9 @@ import { logger } from '../utils/logger';
 import { useState, useEffect, useRef, memo } from 'react';
 import * as api from '../services/api';
 import { useNotifications } from '../contexts/NotificationContext';
+import { invalidateServerData } from '../hooks/useServerDataInvalidation';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import type { DispatcharrAuthMethod, Theme } from '../services/api';
 import './ModalBase.css';
 import './SettingsModal.css';
@@ -14,6 +16,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSaved }: SettingsModalProps) {
+  const { titleId, containerRef } = useOwnedDialog(isOpen);
   const notifications = useNotifications();
   const [url, setUrl] = useState('');
   const [authMethod, setAuthMethod] = useState<DispatcharrAuthMethod>('password');
@@ -118,6 +121,12 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
       if (!result.success && result.message) {
         notifications.error(result.message, 'Connection Failed');
       }
+      // ADR-014: a successful connection can still carry a non-blocking notice
+      // (an untested Dispatcharr version). Surface it without touching the
+      // verified state — saving stays enabled.
+      if (result.success && result.warning) {
+        notifications.warning(result.warning, 'Dispatcharr Version');
+      }
     } catch (err) {
       logger.error('SettingsModal: connection test failed', err);
       setConnectionVerified(false);
@@ -160,6 +169,12 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
         hide_auto_sync_groups: hideAutoSyncGroups,
         theme: theme,
       } as Parameters<typeof api.saveSettings>[0]);
+      // This modal is rendered in two places — behind the Settings tab's Edit
+      // button, and by App, which opens it unprompted on a first run. Only one
+      // of those owners refreshes the Settings tab's connection summary card,
+      // so a save through the other left the card reading "Not configured"
+      // until a page reload (bead enhancedchannelmanager-5z7c9, instance 1).
+      invalidateServerData('settings');
       onSaved();
       onClose();
       notifications.success('Settings saved successfully');
@@ -188,6 +203,14 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
     try {
       const result = await api.restoreBackupInitial(file);
       notifications.success(`Restored ${result.restored_files.length} files from backup`);
+      // What the artifact could NOT carry (bead enhancedchannelmanager-gi4zn).
+      // This is the disaster-recovery path, a fresh instance with no accounts,
+      // so a standard (non-encrypted) artifact always lands here needing
+      // first-run setup, and the file count alone never says so. `?? []`
+      // because a backend predating the field omits it.
+      for (const notice of result.notices ?? []) {
+        notifications.warning(notice, 'Account Setup Required');
+      }
       onSaved();
       onClose();
     } catch (err) {
@@ -200,10 +223,10 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
   if (!isOpen) return null;
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="settings-modal modal-container modal-md">
+    <ModalOverlay onClose={onClose} role="dialog" aria-modal="true" aria-labelledby={titleId}>
+      <div className="settings-modal modal-container modal-md" ref={containerRef}>
         <div className="modal-header">
-          <h2>Dispatcharr Connection Settings</h2>
+          <h2 id={titleId}>Dispatcharr Connection Settings</h2>
           <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
@@ -337,14 +360,14 @@ export const SettingsModal = memo(function SettingsModal({ isOpen, onClose, onSa
               <button className="modal-btn modal-btn-primary btn-primary" onClick={handleSave} disabled={loading || connectionVerified !== true}>
                 {loading ? 'Saving...' : 'Save'}
               </button>
-              <button className="modal-btn btn-secondary settings-modal-restore-toggle" onClick={() => setShowRestore(true)}>
+              <button className="modal-btn modal-btn-secondary settings-modal-restore-toggle" onClick={() => setShowRestore(true)}>
                 <span className="material-icons" style={{ fontSize: '1rem', marginRight: '0.25rem' }}>restore</span>
                 Restore from Backup
               </button>
             </>
           ) : (
             <>
-              <button className="modal-btn btn-secondary" onClick={() => setShowRestore(false)} disabled={restoring}>
+              <button className="modal-btn modal-btn-secondary" onClick={() => setShowRestore(false)} disabled={restoring}>
                 Back
               </button>
               <button className="modal-btn modal-btn-primary btn-primary" onClick={handleRestoreFromBackup} disabled={restoring}>

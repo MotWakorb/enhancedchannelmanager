@@ -16,19 +16,53 @@ from sqlalchemy.pool import StaticPool
 backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
-# Set test config directory before importing modules
-os.environ["CONFIG_DIR"] = "/tmp/ecm_test_config"
+# Create a new, explicit test posture before importing application modules.
+# Never reuse CONFIG_DIR from the host: auth settings are persistent state and
+# a stale developer/runner directory can silently turn broad API tests into an
+# authenticated deployment (and make the suite order-dependent).
+from tests._config_harness import cleanup_test_config, initialize_test_config
+
+_TEST_CONFIG_DIR = initialize_test_config()
 # Disable rate limiting in tests
 os.environ["RATE_LIMIT_ENABLED"] = "0"
-
-# Ensure test config directory exists
-Path("/tmp/ecm_test_config").mkdir(parents=True, exist_ok=True)
 
 import database
 import models  # noqa: F401 — registers all tables with SQLAlchemy Base
 import export_models  # noqa: F401 — registers export tables with SQLAlchemy Base
 # Reference side-effect imports so static analysis sees them as used
 assert models and export_models
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Clean up only the uniquely marked directory this process created."""
+    del session, exitstatus
+    cleanup_test_config(_TEST_CONFIG_DIR)
+
+
+def patch_ssrf_dns(*ips: str):
+    """Pin the SSRF chokepoint's resolver so host policy tests are deterministic.
+
+    ``security.ssrf`` resolves a hostname once and rejects the whole URL if ANY
+    returned record is denied (threat model §9.4 item 3). Whether ``localhost``
+    resolves dual-stack therefore decides the outcome — and that depends on the
+    runner's ``/etc/hosts``: a ``network_mode: host`` box answers ``127.0.0.1``
+    only, while Docker's generated hosts file answers ``::1`` THEN
+    ``127.0.0.1``. GH #754 was only reproducible on the latter, so tests that
+    care about host policy pin the record set explicitly instead of inheriting
+    whatever the runner happens to be.
+
+    Args:
+        *ips: the records the resolver should return, in order.
+    """
+    import ipaddress
+    from unittest.mock import patch
+
+    from security import ssrf
+
+    return patch.object(
+        ssrf, "_resolve",
+        lambda host, port: [ipaddress.ip_address(i) for i in ips],
+    )
 
 
 def closing_create_task_mock() -> MagicMock:
@@ -260,6 +294,27 @@ def admin_client(async_client, test_session):
     finally:
         auth_patch.stop()
         user_patch.stop()
+
+
+@pytest.fixture
+def debug_bundle_admin():
+    """Authorize debug-bundle endpoint tests with a stable human principal."""
+    from auth.dependencies import require_authenticated_human_admin
+    from main import app
+    from models import User
+
+    admin = User(
+        id=5150,
+        username="debug-bundle-admin",
+        is_admin=True,
+        is_active=True,
+        auth_provider="local",
+    )
+    app.dependency_overrides[require_authenticated_human_admin] = lambda: admin
+    try:
+        yield admin
+    finally:
+        app.dependency_overrides.pop(require_authenticated_human_admin, None)
 
 
 @pytest.fixture

@@ -268,6 +268,9 @@ class ChannelPipelineEngine:
         m3u_account_ids: list[int] = None,
         rule_ids: list[int] = None,
         execution_id: int | None = None,
+        record_execution: bool = True,
+        plan_only: bool = False,
+        skip_prerefresh: bool = False,
     ) -> dict:
         """
         Run the full auto-creation pipeline.
@@ -434,7 +437,15 @@ class ChannelPipelineEngine:
         # Reuse pre-created execution record (bd-enfsy 202+poll path) when
         # the router has supplied an id; otherwise create one ourselves
         # (synchronous /tasks/scheduled path remains unchanged).
-        if execution_id is not None:
+        if not record_execution:
+            if not dry_run and not plan_only:
+                raise ValueError("record_execution=False is permitted only for dry runs")
+            from models import ChannelPipelineExecution
+            execution = ChannelPipelineExecution(
+                mode="dry_run", triggered_by=triggered_by,
+                started_at=started_at, status="running",
+            )
+        elif execution_id is not None:
             execution = await self._load_execution(execution_id)
             if execution is None:
                 # The pre-created row was deleted between enqueue and run —
@@ -469,7 +480,7 @@ class ChannelPipelineEngine:
         # Dispatcharr-auto-created (normally §D3-excluded) — the attach phase
         # mutates their stream lists, so rollback/restore needs their pre-run
         # state to undo attaches.
-        if not dry_run:
+        if not dry_run and not plan_only:
             event_sync_master_group_ids: set[int] = set()
             for r in event_sync_to_run:
                 cfg = r.get_event_sync_config()
@@ -483,9 +494,19 @@ class ChannelPipelineEngine:
         # Process streams through rules (+ the event_sync attach phase,
         # ti939.2.1 — runs inside _process_streams so its merges share the
         # same executor, journal buffer/flush and results plumbing).
+        process_options = {
+            "triggered_by": triggered_by,
+            "event_sync_rules": event_sync_to_run,
+        }
+        # Preserve the long-standing internal call contract for ordinary API
+        # runs and test/custom subclasses. Planning-only controls are supplied
+        # only by the new prepare path that needs them.
+        if plan_only:
+            process_options["plan_only"] = True
+        if skip_prerefresh:
+            process_options["skip_prerefresh"] = True
         results = await self._process_streams(
-            streams, rules, execution, dry_run, triggered_by=triggered_by,
-            event_sync_rules=event_sync_to_run,
+            streams, rules, execution, dry_run, **process_options,
         )
 
         # Prepend exclusion log entries and set streams_excluded count
@@ -628,12 +649,13 @@ class ChannelPipelineEngine:
         if dry_run:
             execution.set_dry_run_results(results["dry_run_results"])
 
-        await self._save_execution(execution)
+        if record_execution:
+            await self._save_execution(execution)
 
         # Update rule stats. event_sync rules that ran get last_run_at /
         # match_count too (ti939.2.1) — _run_event_sync_rules recorded their
         # attach counts in results["rule_match_counts"].
-        if not dry_run:
+        if not dry_run and not plan_only:
             await self._update_rule_stats(rules + event_sync_to_run, results)
 
         removed = results.get('channels_removed', 0)
@@ -659,7 +681,7 @@ class ChannelPipelineEngine:
             "success": not failed_actions,
             "status": execution.status,
             "failed_action_count": len(failed_actions),
-            "execution_id": execution.id,
+            "execution_id": execution.id if record_execution else None,
             "mode": execution.mode,
             "duration_seconds": execution.duration_seconds,
             "normalization_warnings": normalization_warnings,
@@ -2076,6 +2098,8 @@ class ChannelPipelineEngine:
         dry_run: bool,
         triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         event_sync_rules: list[ChannelPipelineRule] = None,
+        plan_only: bool = False,
+        skip_prerefresh: bool = False,
     ) -> dict:
         """
         Process streams through the rules pipeline.
@@ -2098,6 +2122,8 @@ class ChannelPipelineEngine:
         Returns:
             Dict with processing results
         """
+        from services.pipeline_write_plan import PlanningContext
+        planning = PlanningContext(enabled=plan_only)
         # Load user settings once for the entire pipeline run
         settings = get_settings()
         logger.debug(
@@ -2248,6 +2274,21 @@ class ChannelPipelineEngine:
             if getattr(s, "is_catchup", False):
                 catchup_stream_ids.add(s.stream_id)
 
+        # GH #801 / bead 0ippw: durable ECM provenance for the executor's
+        # manual-channel gate. Dispatcharr never persists the in-run
+        # ``auto_created`` marker, so every ECM-created channel reloads without
+        # it and a rule reads its OWN channels as hand-built on the next run.
+        # The managed_channel_ids ledgers already survive runs and already hold
+        # exactly the channels the pipeline created or manages, so their union
+        # is the provenance source. Union rather than per-rule because "was
+        # this hand-built?" is a property of the channel, not of the asker;
+        # see ActionExecutor._is_manual_channel.
+        pipeline_managed_channel_ids: set[int] = set()
+        for _ledger_rule in list(rules) + list(event_sync_rules or []):
+            pipeline_managed_channel_ids.update(
+                _ledger_rule.get_managed_channel_ids() or []
+            )
+
         executor = ActionExecutor(
             self.client, self._existing_channels, self._existing_groups,
             normalization_engine=norm_engine,
@@ -2268,6 +2309,8 @@ class ChannelPipelineEngine:
             # assign_channel_profile writes only actual flips (no channels_updated
             # inflation on idempotent reconciles).
             channel_profile_membership=channel_profile_membership,
+            managed_channel_ids=pipeline_managed_channel_ids,
+            plan_only=plan_only,
         )
 
         # Results tracking
@@ -2480,7 +2523,10 @@ class ChannelPipelineEngine:
         # =====================================================================
         # Pass 1.5: Probe unprobed streams (for rules with probe_on_sort)
         # =====================================================================
-        await self._probe_unprobed_streams(matched_entries, rules, results, dry_run)
+        await self._probe_unprobed_streams(
+            matched_entries, rules, results,
+            dry_run or not planning.allow_internal_side_effects,
+        )
 
         # =====================================================================
         # Between passes: Sort matched entries by rule's sort configuration
@@ -2625,13 +2671,22 @@ class ChannelPipelineEngine:
 
             # Record conflict if multiple rules matched
             if losing_rules:
-                await self._record_conflict(
-                    execution=execution,
-                    stream=stream,
-                    winning_rule=winning_rule,
-                    losing_rules=losing_rules,
-                    conflict_type="duplicate_match"
-                )
+                if plan_only:
+                    results.setdefault("planned_conflicts", []).append({
+                        "stream_id": stream.stream_id,
+                        "stream_name": stream.stream_name,
+                        "winning_rule_id": winning_rule.id,
+                        "losing_rule_ids": [rule.id for rule in losing_rules],
+                        "conflict_type": "duplicate_match",
+                    })
+                else:
+                    await self._record_conflict(
+                        execution=execution,
+                        stream=stream,
+                        winning_rule=winning_rule,
+                        losing_rules=losing_rules,
+                        conflict_type="duplicate_match"
+                    )
                 results["conflicts"].append({
                     "stream_id": stream.stream_id,
                     "stream_name": stream.stream_name,
@@ -2835,12 +2890,14 @@ class ChannelPipelineEngine:
                 # PROMOTED channel ids here — the managed set Pass 4
                 # reconciles. Attach-only rules never write it.
                 rule_channel_order=rule_channel_order,
+                plan_only=plan_only,
+                skip_prerefresh=skip_prerefresh,
             )
 
         # =====================================================================
         # Pass 2.5: Verify EPG assignments on newly created channels
         # =====================================================================
-        if not dry_run:
+        if not dry_run and planning.allow_internal_side_effects:
             verified_ok, re_patched, failed = await executor.verify_epg_assignments()
             if re_patched or failed:
                 logger.info(
@@ -3017,7 +3074,7 @@ class ChannelPipelineEngine:
                 )
             await self._reconcile_orphans(
                 pass4_rules, rule_channel_order, executor, execution, results,
-                dry_run, settings=settings
+                dry_run, settings=settings, planning=planning,
             )
 
             # =================================================================
@@ -3028,14 +3085,18 @@ class ChannelPipelineEngine:
                     "[AUTO-CREATE-ENGINE] Pass 5: %s deferred EPG assignments to retry",
                     len(executor._deferred_epg_assignments)
                 )
-                await self._refresh_dummy_epg_and_retry(executor, results, epg_sources, dry_run)
+                await self._refresh_dummy_epg_and_retry(
+                    executor, results, epg_sources,
+                    dry_run or not planning.allow_internal_side_effects,
+                )
 
             # =================================================================
             # Pass 6: Batch probe streams queued by probe_streams actions
             # =================================================================
             if results["probe_stream_ids"]:
                 await self._batch_probe_streams(
-                    results["probe_stream_ids"], streams, results, dry_run
+                    results["probe_stream_ids"], streams, results,
+                    dry_run or not planning.allow_internal_side_effects,
                 )
 
             # Clean up non-serializable set before returning
@@ -3458,6 +3519,8 @@ class ChannelPipelineEngine:
         rule_channel_order_streams: dict = None,
         stream_m3u_map: dict = None,
         rule_channel_order: dict = None,
+        plan_only: bool = False,
+        skip_prerefresh: bool = False,
     ) -> None:
         """Execute the event_sync attach phase (bead ti939.2.1 — Phase 1B).
 
@@ -3724,7 +3787,10 @@ class ChannelPipelineEngine:
             # warns but the run PROCEEDS against current data (mirrors the M3U
             # refresh watermark's partial-success posture). Runs before the
             # secondary fetch below so the fetch sees post-refresh streams.
-            if not unattended and config.get("refresh_providers_before_run"):
+            if (
+                not unattended and config.get("refresh_providers_before_run")
+                and not skip_prerefresh
+            ):
                 await self._prerefresh_event_sync_providers(
                     rule, config, results, prerefresh_provider_cache
                 )
@@ -3799,12 +3865,17 @@ class ChannelPipelineEngine:
             # pending AND answered fingerprints is DB-enforced by the
             # unique fingerprint index + the store's status check.
             review_payloads = summary.pop("review_candidates", [])
+            if plan_only and review_payloads:
+                results.setdefault("planned_review_candidates", []).append({
+                    "rule_id": rule.id,
+                    "candidates": review_payloads,
+                })
             summary["review_enqueued"] = 0
             summary["review_refreshed"] = 0
             summary["review_would_enqueue"] = (
                 len(review_payloads) if dry_run else 0
             )
-            if review_payloads and not dry_run:
+            if review_payloads and not dry_run and not plan_only:
                 from services.event_sync_review import (
                     MAX_REVIEW_ENQUEUE_PER_RUN,
                 )
@@ -5106,7 +5177,8 @@ class ChannelPipelineEngine:
         execution: ChannelPipelineExecution,
         results: dict,
         dry_run: bool,
-        settings=None
+        settings=None,
+        planning=None,
     ):
         """
         Reconcile orphaned channels after pipeline execution.
@@ -5115,6 +5187,9 @@ class ChannelPipelineEngine:
         with the current set of channel IDs. Orphans (previous - current) are
         cleaned up according to the rule's orphan_action setting.
         """
+        from services.pipeline_write_plan import PlanningContext
+        planning = planning or PlanningContext()
+        persist = not dry_run and planning.allow_internal_side_effects
         session = get_session()
         try:
             for rule in rules:
@@ -5253,7 +5328,7 @@ class ChannelPipelineEngine:
 
                 if not orphan_ids:
                     # No orphans — just update managed set
-                    if not dry_run and current_ids != previous_ids:
+                    if persist and current_ids != previous_ids:
                         rule.set_managed_channel_ids(list(current_ids))
                         session.merge(rule)
                     continue
@@ -5344,7 +5419,12 @@ class ChannelPipelineEngine:
                 remaining_channel_ids = [cid for cid in remaining_channel_ids if cid not in orphan_ids]
                 starting_number = _get_rule_starting_number(rule)
 
-                if remaining_channel_ids and starting_number is not None:
+                # GH #833: a fixed/range create number controls allocation of
+                # genuinely new channels; it is not permission to rewrite the
+                # manual numbers of surviving channels.  Post-cleanup gap
+                # closing belongs to channel sorting and therefore requires the
+                # same explicit sort_field opt-in as Pass 3.
+                if remaining_channel_ids and starting_number is not None and rule.sort_field:
                     if dry_run:
                         results["dry_run_results"].append({
                             "stream_id": None,
@@ -5428,11 +5508,12 @@ class ChannelPipelineEngine:
                 # (degrading orphan detection) without actually gating any retry.
                 # The failure is no longer silent: it is now logged, recorded in
                 # the execution_log, and aggregated into completed_with_errors.
-                if not dry_run:
+                if persist:
                     rule.set_managed_channel_ids(list(current_ids))
                     session.merge(rule)
 
-            session.commit()
+            if persist:
+                session.commit()
         except Exception as e:
             session.rollback()
             logger.exception("[AUTO-CREATE-ENGINE] Failed to sync managed channel IDs: %s", e)
@@ -6363,15 +6444,29 @@ def _sort_key(stream: StreamContext, sort_field: str, sort_regex=None):
 def _get_rule_starting_number(rule) -> Optional[int]:
     """Extract the starting channel number from a rule's create_channel action.
 
-    Returns the integer starting number, or None if the rule uses "auto" numbering
-    or has no create_channel action.
+    Returns the integer starting number, or None if the rule uses "auto"
+    numbering, names a tenth, or has no create_channel action.
+
+    A rule may name a tenth since bead enhancedchannelmanager-ay3iq, and that
+    number is honoured at creation. It is deliberately NOT carried into the
+    rule-level renumber pass: this value is handed to Dispatcharr's bulk
+    ``assign/`` endpoint, which counts up in whole numbers from wherever it is
+    told to start, so a start of 1.1 would renumber into 1.1, 2.1, 3.1 rather
+    than along the tenths grid. Returning None instead skips the renumber pass,
+    which is exactly what an "auto" rule already does (see the Auto gotcha in
+    docs/user_guide/channel-pipeline/sort-vs-numbering.md). The numbers assigned
+    at creation stand.
     """
     for action_data in rule.get_actions():
         if action_data.get("type") != "create_channel":
             continue
         spec = action_data.get("channel_number", "auto")
+        if isinstance(spec, bool):
+            return None
         if isinstance(spec, int):
             return spec
+        if isinstance(spec, float):
+            return int(spec) if spec.is_integer() else None
         if isinstance(spec, str):
             if spec == "auto":
                 return None

@@ -3,7 +3,7 @@
  *
  * These tests define the expected behavior of the hook BEFORE implementation.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { http, HttpResponse } from 'msw';
 import {
@@ -426,6 +426,188 @@ describe('useChannelPipelineRules', () => {
       expect(sorted[0].id).toBe(rule3.id);
       expect(sorted[1].id).toBe(rule1.id);
       expect(sorted[2].id).toBe(rule2.id);
+    });
+  });
+
+  /**
+   * GH #755 — copying or reordering pipeline rules flooded the server.
+   *
+   * The shipped v0.18.0 implementation issued one `PUT /rules/{id}` per rule
+   * inside a single `Promise.all`, so one reorder produced N concurrent writes.
+   * Once an instance had more than ~100 rules the burst exceeded uvicorn's
+   * `--limit-concurrency` (`backend/entrypoint.sh`, `ECM_LIMIT_CONCURRENCY`,
+   * default 100); the refused writes came back 503 and surfaced as an error
+   * toast while the accepted ones still landed.
+   *
+   * RULE_COUNT is load-bearing, not incidental: a three-rule fixture cannot
+   * exceed the limit, which is why the defect reached a release. Keep it above
+   * the default limit so these guards exercise the condition that failed.
+   */
+  describe('GH #755 reorder write amplification', () => {
+    const RULE_COUNT = 120;
+
+    let observed: { method: string; path: string }[] = [];
+    const recordRequest = ({ request }: { request: Request }) => {
+      observed.push({ method: request.method, path: new URL(request.url).pathname });
+    };
+
+    beforeEach(() => {
+      observed = [];
+      server.events.on('request:start', recordRequest);
+    });
+
+    afterEach(() => {
+      server.events.removeListener('request:start', recordRequest);
+    });
+
+    /** Seed `count` rules at contiguous priorities and return them in order. */
+    const seedRules = (count: number): ChannelPipelineRule[] => {
+      const seeded: ChannelPipelineRule[] = [];
+      for (let i = 0; i < count; i++) {
+        const rule = createMockChannelPipelineRule({
+          name: `Seeded Rule ${i}`,
+          priority: i,
+        });
+        mockDataStore.channelPipelineRules.push(rule);
+        seeded.push(rule as ChannelPipelineRule);
+      }
+      return seeded;
+    };
+
+    const perRuleWrites = () =>
+      observed.filter(r => r.method === 'PUT' && /\/channel-pipeline\/rules\/\d+$/.test(r.path));
+    const bulkReorderWrites = () =>
+      observed.filter(r => r.method === 'POST' && r.path.endsWith('/channel-pipeline/rules/reorder'));
+
+    it('reorders via a single bulk write instead of one request per rule', async () => {
+      const seeded = seedRules(RULE_COUNT);
+      expect(seeded.length).toBeGreaterThan(100); // must exceed the concurrency limit
+
+      const { result } = renderHook(() => useChannelPipelineRules());
+      await act(async () => {
+        await result.current.fetchRules();
+      });
+
+      observed = [];
+      const moved = [seeded[seeded.length - 1], ...seeded.slice(0, seeded.length - 1)];
+      await act(async () => {
+        await result.current.reorderRules(moved.map(r => r.id));
+      });
+
+      expect(perRuleWrites()).toHaveLength(0);
+      expect(bulkReorderWrites()).toHaveLength(1);
+    });
+
+    it('sends the complete new order in the single reorder request', async () => {
+      const seeded = seedRules(RULE_COUNT);
+      let sentIds: number[] | null = null;
+      server.use(
+        http.post('/api/channel-pipeline/rules/reorder', async ({ request }) => {
+          sentIds = (await request.json()) as number[];
+          return HttpResponse.json({ status: 'reordered', rule_ids: sentIds });
+        })
+      );
+
+      const { result } = renderHook(() => useChannelPipelineRules());
+      await act(async () => {
+        await result.current.fetchRules();
+      });
+
+      const moved = [seeded[seeded.length - 1], ...seeded.slice(0, seeded.length - 1)];
+      const expectedIds = moved.map(r => r.id);
+      await act(async () => {
+        await result.current.reorderRules(expectedIds);
+      });
+
+      expect(sentIds).toEqual(expectedIds);
+    });
+
+    it('duplicates a rule without a per-rule write for every other rule', async () => {
+      const seeded = seedRules(RULE_COUNT);
+
+      const { result } = renderHook(() => useChannelPipelineRules());
+      await act(async () => {
+        await result.current.fetchRules();
+      });
+
+      observed = [];
+      await act(async () => {
+        await result.current.duplicateRule(seeded[0].id);
+      });
+
+      expect(perRuleWrites()).toHaveLength(0);
+      expect(bulkReorderWrites()).toHaveLength(1);
+    });
+
+    /**
+     * GH #755 second defect: the copy appeared at the bottom of the list and
+     * only sorted correctly after a page refresh. The local state update sat
+     * *after* the awaited writes, so any rejection skipped it and left the UI
+     * showing an order the server did not have.
+     */
+    it('places the copy directly after the original without a refetch', async () => {
+      const seeded = seedRules(RULE_COUNT);
+      const original = seeded[3];
+
+      const { result } = renderHook(() => useChannelPipelineRules());
+      await act(async () => {
+        await result.current.fetchRules();
+      });
+
+      let copy: ChannelPipelineRule | undefined;
+      await act(async () => {
+        copy = await result.current.duplicateRule(original.id);
+      });
+
+      // No reload, no extra GET — read the list the operator is looking at.
+      expect(observed.filter(r => r.method === 'GET' && r.path.endsWith('/channel-pipeline/rules')))
+        .toHaveLength(1);
+
+      const order = result.current.getRulesByPriority().map(r => r.id);
+      expect(order[order.indexOf(original.id) + 1]).toBe(copy!.id);
+      expect(order[order.length - 1]).not.toBe(copy!.id);
+    });
+
+    it('resyncs the list from the server when the reorder write fails', async () => {
+      const seeded = seedRules(RULE_COUNT);
+      server.use(
+        http.post('/api/channel-pipeline/rules/reorder', () =>
+          HttpResponse.json({ detail: 'Service Unavailable' }, { status: 503 })
+        )
+      );
+
+      const { result } = renderHook(() => useChannelPipelineRules());
+      await act(async () => {
+        await result.current.fetchRules();
+      });
+
+      const serverOrder = seeded.map(r => r.id);
+      const attempted = [seeded[seeded.length - 1], ...seeded.slice(0, seeded.length - 1)]
+        .map(r => r.id);
+
+      await act(async () => {
+        await expect(result.current.reorderRules(attempted)).rejects.toThrow();
+      });
+
+      // The list must show what the server actually has, with no page reload.
+      expect(result.current.getRulesByPriority().map(r => r.id)).toEqual(serverOrder);
+    });
+
+    it('leaves rules outside the reordered set in the list', async () => {
+      const seeded = seedRules(10);
+
+      const { result } = renderHook(() => useChannelPipelineRules());
+      await act(async () => {
+        await result.current.fetchRules();
+      });
+
+      // Only a subset is reordered (the rules list can be filtered/searched).
+      const subset = [seeded[2].id, seeded[0].id, seeded[1].id];
+      await act(async () => {
+        await result.current.reorderRules(subset);
+      });
+
+      expect(result.current.rules).toHaveLength(10);
     });
   });
 

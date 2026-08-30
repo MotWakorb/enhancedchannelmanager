@@ -97,8 +97,35 @@ finally:
 
 ## Testing
 
-- Run: `cd backend && python -m pytest tests/ --tb=short --no-header -p no:warnings 2>&1 | tail -1`
-- This command suppresses warnings and headers so `tail -1` reliably returns the summary (e.g., `2147 passed in 50s`). Do NOT use `-q` — it suppresses the summary line when all tests pass.
+**The gate is `scripts/backend-gate.sh`. Run it from anywhere; it takes no arguments.**
+
+```bash
+scripts/backend-gate.sh          # THE backend gate
+echo $?                          # 0 = green. Read the code, not a piped tail.
+```
+
+Do not hand-type a pytest invocation and call it the gate. Two invocations used to circulate — one from this file's prose, one from CI — differing by 72 collected tests, so "backend gate green" could be reported by a run that never executed them (bead `enhancedchannelmanager-c9lb9`). The script is the single invocation, and `backend/tests/unit/test_backend_gate_contract.py` asserts it still matches `.github/workflows/test.yml` flag for flag.
+
+The script selects the interpreter itself (`$ECM_PYTHON`, else the repo `.venv`, else — in a worktree, which has none — the main checkout's, derived from `git-common-dir`) and refuses to run rather than fall back to ambient `python`. That fallback is a real trap: ambient `python` resolves an older `cryptography` and *silently self-skips 9 TLS tests* instead of failing, so the run still reports success. The gap is invisible unless you compare skip counts.
+
+**What the gate excludes, and why** — every exclusion is named, none is a bare number:
+
+| Excluded | Count | Why |
+| --- | --- | --- |
+| `tests/e2e/` | 10 files | Needs a live ECM container on `localhost:6100`; self-skips without one, and exercises whatever that container runs with one. Deferred to bead `enhancedchannelmanager-2lw25`. |
+| `tests/performance/` | 2 files | Seeds 250k rows; runs in the `perf-benchmarks` workflow (`bd-skqln.10`). |
+| `-m "not slow"` | 2 tests | A 5ms-per-call microbenchmark (host contention false-fails it) and a 5M-row migration volume gate. Named individually in `DOCUMENTED_SLOW_TESTS` in `test_backend_gate_contract.py`. |
+
+Expected shape on a green `dev`: **`3 skipped, 2 deselected`**. The full-tree run (`pytest tests/`, no ignores) instead reports **9 skipped** — the extra 6 live in the excluded trees. `18 skipped` from either means the wrong interpreter.
+
+**Subset runs: coverage will fail you, and it is not real.** `pytest.ini` sets `--cov=. --cov-fail-under=56`, and coverage is measured over the whole tree regardless of what you selected — so *any* subset run exits non-zero even when every test in it passes (a bare `--collect-only` reports `Total coverage: 18.39%`). Use the subset mode, which disables coverage and prints the warning:
+
+```bash
+scripts/backend-gate.sh --subset tests/unit/test_foo.py -k some_case   # adds --no-cov
+```
+
+A `--subset` run is **not** the gate and must never be reported as one.
+
 - In-memory SQLite with `StaticPool` for isolation
 - **Mock at router module level**: `patch("routers.channels.get_client", ...)` — NOT `patch("main.get_client", ...)`
 - Fixtures in `tests/conftest.py`: `test_engine`, `test_session`, `async_client`

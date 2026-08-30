@@ -482,8 +482,17 @@ class TaskExecution(Base):
     completed_at = Column(DateTime, nullable=True)
     duration_seconds = Column(Float, nullable=True)
     # Execution result
-    status = Column(String(20), nullable=False)  # "running", "completed", "failed", "cancelled"
-    success = Column(Boolean, nullable=True)  # True if completed successfully
+    # "running", "completed", "completed_with_warnings", "failed", "cancelled".
+    # Written from task_scheduler.execution_status (bead …-fexq1) — the ONE
+    # severity derivation, shared with the run's notification, so the row and
+    # the alert cannot describe the same run differently.
+    # Widened 20 -> 32 by migration 0042 to hold "completed_with_warnings"
+    # (23 chars), mirroring what 0039 did for the pipeline's status column.
+    status = Column(String(32), nullable=False)
+    # True when the run produced what it was asked for — including a
+    # warning-level run, whose applied state is real and kept. NOT the same
+    # question as TaskResult.success ("cleanly, with nothing to report").
+    success = Column(Boolean, nullable=True)
     message = Column(Text, nullable=True)  # Summary message
     error = Column(Text, nullable=True)  # Error message if failed
     # Counters
@@ -561,6 +570,10 @@ class Notification(Base):
 
     def to_dict(self) -> dict:
         """Convert to dictionary for API responses."""
+        try:
+            metadata = json.loads(self.extra_data) if self.extra_data else None
+        except (TypeError, ValueError):
+            metadata = None
         return {
             "id": self.id,
             "type": self.type,
@@ -571,7 +584,7 @@ class Notification(Base):
             "source_id": self.source_id,
             "action_label": self.action_label,
             "action_url": self.action_url,
-            "metadata": json.loads(self.extra_data) if self.extra_data else None,
+            "metadata": metadata,
             "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
             "read_at": self.read_at.isoformat() + "Z" if self.read_at else None,
             "expires_at": self.expires_at.isoformat() + "Z" if self.expires_at else None,
@@ -1761,6 +1774,9 @@ class User(Base):
     # Status
     is_active = Column(Boolean, default=True, nullable=False)
     is_admin = Column(Boolean, default=False, nullable=False)
+    # Incremented when credentials must be invalidated account-wide. Access
+    # JWTs carry the epoch they were issued under; older epochs are rejected.
+    auth_epoch = Column(Integer, default=0, server_default="0", nullable=False)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -1810,12 +1826,16 @@ class UserSession(Base):
     # Token tracking (store hash of refresh token, not the token itself)
     refresh_token_hash = Column(String(255), nullable=False, unique=True)
 
-    # Rotation grace window (bd-x67qe): hash of the immediately-prior refresh
-    # token and when it was rotated away. For a short window after rotation
-    # the predecessor is still accepted by /auth/refresh (idempotent-refresh
-    # semantics) so two tabs racing the same rotation don't hard-logout the
-    # loser. Only ONE generation is kept — a normal rotation overwrites both
-    # fields, so a graced token can never chain to an older one.
+    # Rotation confirmation (bd-x67qe, bead upkp1): hash of the
+    # immediately-prior refresh token and when it was rotated away. The
+    # predecessor is accepted by /auth/refresh with idempotent-refresh
+    # semantics until its successor is actually used, which is exactly when
+    # the next rotation overwrites ``prior_refresh_token_hash`` out of this
+    # row. Only ONE generation is kept, so a superseded token can never chain
+    # to an older one. ``rotated_at`` no longer gates acceptance (the
+    # 10-second wall-clock window it used to serve stranded any client whose
+    # rotated response never arrived); it is retained as forensic state for
+    # the refresh log lines.
     prior_refresh_token_hash = Column(String(255), nullable=True)
     rotated_at = Column(DateTime, nullable=True)
 
@@ -1871,11 +1891,18 @@ class PasswordResetToken(Base):
     token_hash = Column(String(255), nullable=False, unique=True)
     expires_at = Column(DateTime, nullable=False)
     used_at = Column(DateTime, nullable=True)
+    attempt_count = Column(Integer, default=0, server_default="0", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     __table_args__ = (
         Index("idx_reset_token_hash", token_hash),
         Index("idx_reset_token_user", user_id),
+        Index(
+            "uq_reset_token_unused_user",
+            user_id,
+            unique=True,
+            sqlite_where=used_at.is_(None),
+        ),
     )
 
     def __repr__(self):
@@ -2865,46 +2892,6 @@ class DummyEPGChannelAssignment(Base):
         return f"<DummyEPGChannelAssignment(id={self.id}, profile_id={self.profile_id}, channel_id={self.channel_id})>"
 
 
-class LookupTable(Base):
-    """
-    Named key→value lookup tables used by the dummy EPG template engine.
-
-    Referenced via the `|lookup:<name>` pipe transform. `entries` is a JSON
-    object (str → str); key miss falls back to the input value at render time.
-    """
-    __tablename__ = "lookup_tables"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String(100), nullable=False, unique=True)
-    description = Column(Text, nullable=True)
-    entries = Column(Text, nullable=False, default="{}")  # JSON-encoded dict[str, str]
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-
-    __table_args__ = (
-        Index("idx_lookup_table_name", name),
-    )
-
-    def to_dict(self) -> dict:
-        import json as _json
-        try:
-            entries_obj = _json.loads(self.entries) if self.entries else {}
-        except (ValueError, TypeError):
-            entries_obj = {}
-        return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "entries": entries_obj,
-            "entry_count": len(entries_obj),
-            "created_at": self.created_at.isoformat() + "Z" if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() + "Z" if self.updated_at else None,
-        }
-
-    def __repr__(self):
-        return f"<LookupTable(id={self.id}, name={self.name})>"
-
-
 class RuleLintFinding(Base):
     """
     Persistent lint finding for a stored rule pattern (bd-eio04.7).
@@ -3009,9 +2996,16 @@ class PendingMerge(Base):
     rationale.
 
     State machine (§D3): ``status`` transitions
-    ``pending → merged`` (operator/auto/MCP accepted the candidate) or
-    ``pending → dismissed`` (operator/auto/MCP rejected). Terminal states
-    are not garbage-collected in v0.17.1 (§D10 retention is deferred).
+    ``pending → merged`` (operator/auto/MCP accepted the candidate AND ECM
+    applied it upstream) or ``pending → dismissed`` (operator/auto/MCP
+    rejected). Terminal states are not garbage-collected in v0.17.1 (§D10
+    retention is deferred).
+
+    An accept ECM could NOT apply upstream does not transition at all: the row
+    stays ``pending`` and carries ``unapplied_reason``, so it remains in front
+    of the operator and remains retryable (bead
+    ``enhancedchannelmanager-i5ic0``, PO decision 2026-08-16 — ADR-008 §D1/§D6
+    amendment pending).
 
     Idempotency invariant (§D5): the partial unique index
     ``uq_pending_merges_active`` prevents duplicate ``pending`` rows for
@@ -3050,6 +3044,19 @@ class PendingMerge(Base):
     # 'operator' / 'auto' / 'bulk_m3u_hook' / 'mcp_tool'; NULL while
     # pending. App-validated enum (no DB CHECK).
     resolution_source = Column(Text, nullable=True)
+    # Why the LAST accept could not be applied to Dispatcharr, in
+    # operator-actionable prose; NULL when no accept has failed to apply
+    # (bead enhancedchannelmanager-i5ic0, PO decision 2026-08-16).
+    #
+    # Orthogonal to ``status``, deliberately (migration 0043 carries the
+    # rationale). ``status`` answers "has this left the queue"; this answers
+    # "did the last accept land upstream". A merge ECM could not apply STAYS
+    # ``pending`` with this set, so it stays in front of the operator, stays
+    # counted by the queue-depth gauge, keeps its ``uq_pending_merges_active``
+    # slot, and stays retryable — the accept path clears the column when a
+    # retry resolves. A fourth ``status`` value would have had to be taught to
+    # every ``status='pending'`` consumer purely to re-derive that.
+    unapplied_reason = Column(Text, nullable=True)
     # Surface that enqueued the row: 'drag_drop' / 'add_stream' /
     # 'm3u_refresh' / 'mcp_tool'. App-validated enum per the BD-C
     # implementation brief (migration 0014 docstring documents the
@@ -3175,6 +3182,46 @@ class PendingMergeJournal(Base):
             f"action={self.action_type}, "
             f"trigger={self.trigger_context})>"
         )
+
+
+class ProfileConflictReview(Base):
+    """Durable operator question for one effective-group profile conflict."""
+
+    __tablename__ = "profile_conflict_reviews"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    fingerprint = Column(Text, nullable=False)
+    fingerprint_version = Column(Integer, nullable=False, default=1, server_default="1")
+    effective_group_id = Column(Integer, nullable=False)
+    status = Column(Text, nullable=False, default="pending", server_default="pending")
+    accepted_choice_key = Column(Text, nullable=True)
+    accepted_profile_ids = Column(Text, nullable=True)
+    evidence = Column(Text, nullable=False)
+    created_at = Column(Integer, nullable=False)
+    last_seen_at = Column(Integer, nullable=False)
+    resolved_at = Column(Integer, nullable=True)
+    applied_at = Column(Integer, nullable=True)
+    actor_token_id = Column(Text, nullable=True)
+    retry_error = Column(Text, nullable=True)
+    notified_at = Column(Integer, nullable=True)
+    accept_journaled_at = Column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','accepted','superseded')",
+            name="ck_profile_conflict_reviews_status",
+        ),
+        Index(
+            "uq_profile_conflict_reviews_fingerprint", "fingerprint", unique=True
+        ),
+        Index(
+            "idx_profile_conflict_reviews_status_seen", "status", "last_seen_at"
+        ),
+        Index(
+            "idx_profile_conflict_reviews_effective_status",
+            "effective_group_id", "status",
+        ),
+    )
 
 
 class EventSyncReview(Base):

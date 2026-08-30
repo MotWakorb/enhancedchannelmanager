@@ -976,6 +976,18 @@ export const handlers = [
     return HttpResponse.json(newRule, { status: 201 })
   }),
 
+  // Bulk reorder (GH #755). Body is a bare JSON array of rule IDs in their new
+  // order; the server assigns each listed rule a priority equal to its index
+  // and leaves rules outside the list untouched.
+  http.post(`${API_BASE}/channel-pipeline/rules/reorder`, async ({ request }) => {
+    const ruleIds = await request.json() as number[]
+    ruleIds.forEach((id, index) => {
+      const rule = mockDataStore.channelPipelineRules.find(r => r.id === id)
+      if (rule) rule.priority = index
+    })
+    return HttpResponse.json({ status: 'reordered', rule_ids: ruleIds })
+  }),
+
   http.get(`${API_BASE}/channel-pipeline/rules/:id`, ({ params }) => {
     const id = parseInt(params.id as string)
     const rule = mockDataStore.channelPipelineRules.find(r => r.id === id)
@@ -1378,76 +1390,6 @@ export const handlers = [
       backup_date: '2026-01-01T00:00:00+00:00',
       restored_files: ['settings.json', 'journal.db'],
     })
-  }),
-
-  // ==========================================================================
-  // Lookup Tables — /api/lookup-tables
-  // ==========================================================================
-
-  http.get(`${API_BASE}/lookup-tables`, () => {
-    return HttpResponse.json([
-      {
-        id: 1,
-        name: 'callsigns',
-        description: 'Channel call signs',
-        entry_count: 2,
-        created_at: '2026-04-19T00:00:00Z',
-        updated_at: '2026-04-19T00:00:00Z',
-      },
-    ])
-  }),
-
-  http.post(`${API_BASE}/lookup-tables`, async ({ request }) => {
-    const body = (await request.json()) as {
-      name: string
-      description?: string | null
-      entries?: Record<string, string>
-    }
-    return HttpResponse.json(
-      {
-        id: nextId(),
-        name: body.name,
-        description: body.description ?? null,
-        entries: body.entries ?? {},
-        entry_count: Object.keys(body.entries ?? {}).length,
-        created_at: '2026-04-19T00:00:00Z',
-        updated_at: '2026-04-19T00:00:00Z',
-      },
-      { status: 201 },
-    )
-  }),
-
-  http.get(`${API_BASE}/lookup-tables/:id`, ({ params }) => {
-    return HttpResponse.json({
-      id: Number(params.id),
-      name: 'callsigns',
-      description: 'Channel call signs',
-      entries: { ESPN: 'espn.com', CNN: 'cnn.com' },
-      entry_count: 2,
-      created_at: '2026-04-19T00:00:00Z',
-      updated_at: '2026-04-19T00:00:00Z',
-    })
-  }),
-
-  http.patch(`${API_BASE}/lookup-tables/:id`, async ({ params, request }) => {
-    const body = (await request.json()) as {
-      name?: string
-      description?: string | null
-      entries?: Record<string, string>
-    }
-    return HttpResponse.json({
-      id: Number(params.id),
-      name: body.name ?? 'callsigns',
-      description: body.description ?? null,
-      entries: body.entries ?? { ESPN: 'espn.com' },
-      entry_count: Object.keys(body.entries ?? { ESPN: 'espn.com' }).length,
-      created_at: '2026-04-19T00:00:00Z',
-      updated_at: '2026-04-19T00:00:01Z',
-    })
-  }),
-
-  http.delete(`${API_BASE}/lookup-tables/:id`, () => {
-    return new HttpResponse(null, { status: 204 })
   }),
 
   // ==========================================================================

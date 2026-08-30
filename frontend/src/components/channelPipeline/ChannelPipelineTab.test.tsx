@@ -26,6 +26,16 @@ const renderWithProviders = (ui: React.JSX.Element) =>
     </AuthProvider>
   );
 
+function expectDialogLabelledByVisibleHeading(dialog: HTMLElement, expectedName: string) {
+  const titleId = dialog.getAttribute('aria-labelledby');
+  expect(titleId).toBeTruthy();
+
+  const title = document.getElementById(titleId!);
+  expect(title).toBeVisible();
+  expect(title).toHaveTextContent(expectedName);
+  expect(title).toHaveAttribute('id', titleId);
+}
+
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
@@ -42,10 +52,10 @@ describe('ChannelPipelineTab', () => {
       expect(screen.getByTestId('channel-pipeline-tab')).toBeInTheDocument();
     });
 
-    it('renders tab header with title', () => {
+    it('does not repeat the route title inside the tab body', () => {
       renderWithProviders(<ChannelPipelineTab />);
 
-      expect(screen.getByRole('heading', { name: 'Channel Pipeline' })).toBeInTheDocument();
+      expect(screen.queryByRole('heading', { name: 'Channel Pipeline' })).not.toBeInTheDocument();
     });
 
     it('renders rules section and execution section', () => {
@@ -246,12 +256,10 @@ describe('ChannelPipelineTab', () => {
 
       await user.click(screen.getByRole('button', { name: /delete/i }));
 
-      // Should show confirmation dialog
-      await waitFor(() => {
-        expect(screen.getByText(/confirm.*delete/i)).toBeInTheDocument();
-      });
+      const deleteDialog = await screen.findByRole('dialog', { name: 'Confirm Delete' });
+      expectDialogLabelledByVisibleHeading(deleteDialog, 'Confirm Delete');
 
-      await user.click(screen.getByRole('button', { name: /confirm/i }));
+      await user.click(within(deleteDialog).getByRole('button', { name: /confirm/i }));
 
       await waitFor(() => {
         expect(screen.queryByText('Deletable Rule')).not.toBeInTheDocument();
@@ -985,7 +993,7 @@ describe('ChannelPipelineTab', () => {
       });
       // Scope to the details dialog — the compact list chip also carries
       // event_sync words (e.g. "already attached").
-      const dialog = within(screen.getByRole('dialog'));
+      const dialog = within(screen.getByRole('dialog', { name: 'Execution Details' }));
       expect(dialog.getByText(/^attached:?$/i)).toBeInTheDocument();
       expect(dialog.getByText(/^already attached:?$/i)).toBeInTheDocument();
       expect(dialog.getByText(/ambiguous/i)).toBeInTheDocument();
@@ -1069,7 +1077,7 @@ describe('ChannelPipelineTab', () => {
       await waitFor(() => {
         expect(screen.getByText(/secondary streams evaluated/i)).toBeInTheDocument();
       });
-      const dialog = within(screen.getByRole('dialog'));
+      const dialog = within(screen.getByRole('dialog', { name: 'Execution Details' }));
       expect(dialog.getByText(/^would attach:?$/i)).toBeInTheDocument();
       expect(dialog.queryByText(/^attached:?$/i)).toBeNull();
     });
@@ -1257,7 +1265,7 @@ describe('ChannelPipelineTab', () => {
       expect(screen.getByText(/legacy per-run undo/i)).toBeInTheDocument();
       // Text spans a <strong> boundary ("no pre-run snapshot"), so match against
       // the dialog's full text content rather than a single node.
-      expect(screen.getByRole('dialog').textContent).toMatch(/no pre-run snapshot/i);
+      expect(screen.getByRole('dialog', { name: 'Confirm Rollback' }).textContent).toMatch(/no pre-run snapshot/i);
 
       await user.click(screen.getByRole('button', { name: /cancel/i }));
 
@@ -1270,6 +1278,27 @@ describe('ChannelPipelineTab', () => {
   });
 
   describe('snapshot revert affordance (ADR-010 uc51o.7)', () => {
+    it('offers snapshot recovery for a failed planned run that has recovery evidence', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'failed', mode: 'execute', has_snapshot: true })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const recovery = await screen.findByRole('button', { name: /recover from snapshot/i });
+      expect(recovery.title).toMatch(/failed run/i);
+      expect(screen.getByText(/failed after some changes may have been applied/i)).toBeInTheDocument();
+    });
+
+    it('does not offer snapshot recovery for a failed run without evidence', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({ status: 'failed', mode: 'execute', has_snapshot: false })
+      );
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByTestId('execution-item');
+      expect(screen.queryByRole('button', { name: /recover from snapshot/i })).toBeNull();
+    });
+
     it('shows the revert button when has_snapshot is true', async () => {
       mockDataStore.channelPipelineExecutions.push(
         createMockChannelPipelineExecution({ status: 'completed', mode: 'execute', has_snapshot: true })
@@ -1341,7 +1370,7 @@ describe('ChannelPipelineTab', () => {
       await user.click(screen.getByRole('button', { name: /undo this run/i }));
 
       await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: 'Undo This Run' })).toBeInTheDocument();
         // ADR-010 §D5 mandatory overwrite warning must be visible
         expect(screen.getByTestId('revert-warning')).toBeInTheDocument();
         expect(screen.getByText(/overwrite the current stream assignments/i)).toBeInTheDocument();
@@ -1480,10 +1509,9 @@ describe('ChannelPipelineTab', () => {
 
       await user.click(screen.getByRole('button', { name: /export/i }));
 
-      await waitFor(() => {
-        // Should show YAML in modal or download
-        expect(screen.getByText(/yaml/i)).toBeInTheDocument();
-      });
+      const exportDialog = await screen.findByRole('dialog', { name: 'Export Rules (YAML)' });
+      expectDialogLabelledByVisibleHeading(exportDialog, 'Export Rules (YAML)');
+      expect(within(exportDialog).getByLabelText(/exported yaml/i)).toBeInTheDocument();
     });
 
     it('opens import dialog', async () => {
@@ -1493,9 +1521,23 @@ describe('ChannelPipelineTab', () => {
       await user.click(screen.getByRole('button', { name: /import/i }));
 
       await waitFor(() => {
-        expect(screen.getByRole('dialog')).toBeInTheDocument();
+        expect(screen.getByRole('dialog', { name: 'Import Rules' })).toBeInTheDocument();
         expect(screen.getByLabelText(/yaml content/i)).toBeInTheDocument();
       });
+    });
+
+    it('keeps both import and export textareas beneath the Channel Pipeline root', async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await user.click(screen.getByRole('button', { name: /^import$/i }));
+      const importTextarea = await screen.findByLabelText(/yaml content/i);
+      expect(importTextarea.closest('.channel-pipeline-tab')).not.toBeNull();
+
+      await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: /close/i }));
+      await user.click(screen.getByRole('button', { name: /^export$/i }));
+      const exportTextarea = await screen.findByLabelText(/exported yaml/i);
+      expect(exportTextarea.closest('.channel-pipeline-tab')).not.toBeNull();
     });
 
     it('imports rules from YAML', async () => {
@@ -1514,7 +1556,7 @@ describe('ChannelPipelineTab', () => {
       await user.type(textarea, 'rules:');
 
       // Click the Import button inside the dialog
-      const dialog = screen.getByRole('dialog');
+      const dialog = screen.getByRole('dialog', { name: 'Import Rules' });
       const importButton = within(dialog).getByRole('button', { name: /^import$/i });
       await user.click(importButton);
 
@@ -1659,6 +1701,63 @@ describe('ChannelPipelineTab', () => {
       // Verify drag handles are present
       const dragHandles = screen.getAllByTestId('drag-handle');
       expect(dragHandles).toHaveLength(3);
+    });
+  });
+
+  /**
+   * GH #755 — on an instance with more rules than uvicorn's
+   * `--limit-concurrency` (`backend/entrypoint.sh`, default 100), copying a
+   * rule fired one `PUT /rules/{id}` per rule at once. Most came back 503, the
+   * operator got an error toast, and the copy stayed pinned to the bottom of
+   * the list until the page was reloaded.
+   *
+   * The 120-rule fixture is part of the guard: below the limit the burst never
+   * failed, so a small fixture cannot reproduce the reported failure.
+   */
+  describe('GH #755 rule copy at scale', () => {
+    const RULE_COUNT = 120;
+
+    const ruleNamesInOrder = () =>
+      screen.getAllByTestId('rule-row').map(row => row.querySelector('.rule-name')?.textContent);
+
+    it('shows the copy directly after the original without a page reload', async () => {
+      const user = userEvent.setup();
+      const perRuleWrites: string[] = [];
+      server.events.on('request:start', ({ request }) => {
+        const path = new URL(request.url).pathname;
+        if (request.method === 'PUT' && /\/channel-pipeline\/rules\/\d+$/.test(path)) {
+          perRuleWrites.push(path);
+        }
+      });
+
+      for (let i = 0; i < RULE_COUNT; i++) {
+        mockDataStore.channelPipelineRules.push(
+          createMockChannelPipelineRule({ name: `Bulk Rule ${String(i).padStart(3, '0')}`, priority: i })
+        );
+      }
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      await waitFor(() => {
+        expect(screen.getByText('Bulk Rule 000')).toBeInTheDocument();
+      });
+
+      const originalRow = screen.getAllByTestId('rule-row')[1];
+      await user.click(within(originalRow).getByRole('button', { name: /duplicate/i }));
+
+      await waitFor(() => {
+        expect(screen.getByText(/Bulk Rule 001 \(Copy\)/)).toBeInTheDocument();
+      });
+
+      // The list itself must be right — not just after a refresh.
+      const names = ruleNamesInOrder();
+      expect(names[names.indexOf('Bulk Rule 001') + 1]).toBe('Bulk Rule 001 (Copy)');
+      expect(names[names.length - 1]).not.toBe('Bulk Rule 001 (Copy)');
+
+      // ...and it must not have taken a write per rule to get there.
+      expect(perRuleWrites).toHaveLength(0);
+
+      server.events.removeAllListeners('request:start');
     });
   });
 

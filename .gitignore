@@ -15,6 +15,12 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.dist_root/
+# CSS chunk-leak audit build output (vite.audit.config.ts). Was untracked AND
+# unignored, so it polluted `git status` and broke `npm run lint`.
+frontend/.audit-dist/
+# Dev-only modal harness build output (bead enhancedchannelmanager-xhldy.1).
+# Never deployed; produced by `vite build --config vite.harness.config.ts`.
+frontend/.modal-harness-dist/
 
 # IDE
 .idea/
@@ -26,14 +32,20 @@ frontend/.dist_root/
 .DS_Store
 Thumbs.db
 
-# Claude Code temp files
+# Claude Code temp files and local-only settings
 tmpclaude-*-cwd
+.claude/settings.local.json
 
 # Build
 backend/static/
 *.egg-info/
 dist/
 build/
+# `mkdocs build` (a required gate, see docs/shipping.md) writes here by
+# default: mkdocs.yml sets no site_dir. Left untracked it trips the
+# binary-artifacts ratchet on site/sitemap.xml.gz, which reads as a real
+# finding rather than as build output nobody meant to keep.
+site/
 
 # Test coverage artifacts (enforced in CI, see docs/testing.md)
 frontend/coverage/
@@ -43,6 +55,11 @@ backend/htmlcov/
 mcp-server/.coverage
 mcp-server/coverage.xml
 mcp-server/htmlcov/
+
+# Root-level coverage db, same artifact as backend/.coverage above but left
+# by a pytest run invoked from the repo root instead of backend/; the
+# subdir-scoped entry does not match this path.
+/.coverage
 
 # JUnit XML reports — emitted in CI for the flake-pr-comment workflow
 # (bead xq19y) and locally when running pytest/vitest with --junitxml.
@@ -55,8 +72,22 @@ mcp-server/junit.xml
 backend/.benchmarks/
 backend/tests/performance/.benchmarks/
 
-# User guide screenshots (may contain PII)
-docs/images/
+# Screenshots of a live instance (may contain PII). The default is to ignore
+# everything under docs/images/ — captures taken against a real instance can
+# render Xtream stream URLs (provider password is in the path), provider
+# hostnames, private/public IPs, real email addresses, and account usernames.
+# This repository is public, so an accidental `git add` is unrecoverable.
+#
+# Exception (bd-2mluw): docs/images/user_guide/ is tracked. Those screenshots
+# are captured against the sanitized documentation environment — placeholder
+# hosts (dispatcharr.example.local), the `e2e_test` operator, pseudonymized
+# provider names, empty credential fields, and provider-identifying strings
+# blurred at capture time. Every file under it was individually PII-audited
+# before being committed. Anything added there later must clear the same bar.
+# `docs/images/*` (not `docs/images/`) is required: git will not descend into
+# an excluded directory, so a negation under it can never re-include anything.
+docs/images/*
+!docs/images/user_guide/
 
 # Playwright run-time artifacts (bd-lln2x). The visual-regression
 # baseline PNGs under e2e/visual/__screenshots__/ ARE checked in (they
@@ -65,3 +96,81 @@ test-results/
 test-results-visual/
 playwright-report/
 frontend/test-results/
+
+# Ad-hoc Playwright / UI snapshot dumps (bead enhancedchannelmanager-h9av3).
+#
+# These are agent scratch output, written to the repo root by hand during
+# debugging and never intended to be committed. They were NOT ignored, so
+# `git add -A` would have committed them. The h9av3 history sweep found one
+# such file in a stash that had captured a live `mcp_api_key` rendered in
+# the Settings > MCP Integration card, which is exactly the vector these
+# two lines close.
+#
+# Anchored to the `snap-` prefix and the `-snap` suffix rather than a bare
+# `*snap*.yml`. "snapshot" is an active, legitimate word in this repository
+# (e2e/snapshots/, ADR-010-auto-creation-snapshot-revert.md, the
+# auto_creation_snapshots migration), so a substring glob would eventually
+# swallow a real config such as `snapshot-policy.yml`. Verified against
+# `git ls-files`: no tracked file matches either pattern today.
+/snap-*.yml
+/snap-*.yaml
+/*-snap.yml
+/*-snap.yaml
+
+# Root-level agent scratch output (bead enhancedchannelmanager-6mqn5,
+# confirmed by the backlog validity audit enhancedchannelmanager-bewu9).
+#
+# `.playwright-mcp/` is the Playwright MCP server's working directory. It is
+# written to the repo root, it was not ignored, and it currently holds 2,321
+# files totalling 3.1 GB. One of them is `enc-artifact.zip`, a passphrase
+# encrypted ECM backup envelope (magic bytes `ECMBKENC`, chacha20poly1305).
+# A single `git add -A` would stage all of it, that envelope included, into a
+# public repository. The sibling `std-artifact.zip` was inspected read only
+# and is genuinely `redacted: true`, so credential exposure is confined to
+# the encrypted file, but neither one belongs in git history.
+#
+# The h9av3 block above anchors on the `snap-` prefix and the `-snap` suffix.
+# That was right for the files it had seen and too narrow for the class: the
+# audit found `uliyr-post-reload.yml` untracked in the root, an a11y snapshot
+# dump of exactly the kind h9av3 was written to catch, matching none of its
+# four patterns. Two more sat beside it, `dashboard-1920.png` and
+# `es-current.md`. Prefix and suffix matching cannot keep up with names an
+# agent invents at debug time, so the rule below inverts the default: ignore
+# the scratch-prone extensions at the repo root, then re-admit the files that
+# are genuinely tracked.
+#
+# h9av3's four patterns stay exactly as written. Do not widen them into a
+# substring glob such as `*snap*.yml`; "snapshot" is a live word in this
+# repository and that glob would eventually swallow a real config like
+# `snapshot-policy.yml`.
+#
+# Every pattern is anchored with a leading `/`, so only the repo root is
+# affected. Nothing under docs/, e2e/, backend/, frontend/, or .github/
+# changes behaviour.
+#
+# MAINTENANCE: a new root-level .yml, .yaml, .png, or .md file needs a
+# matching negation line here, or git will silently ignore it. Prefer putting
+# new documentation under docs/, where none of these patterns reach. The
+# negation list was derived from `git ls-files`. The docker-compose entry is
+# a glob on purpose: a bare `!/docker-compose.yml` would not have re-admitted
+# the tracked `docker-compose.mcp.yml`, and a future
+# `docker-compose.<variant>.yml` would have been lost the same way.
+.playwright-mcp/
+
+/*.yml
+/*.yaml
+/*.png
+/*.md
+!/.semgrep.yml
+!/docker-compose*.yml
+!/docker-compose*.yaml
+!/mkdocs.yml
+!/AGENTS.md
+!/CHANGELOG.md
+!/CLAUDE.md
+!/COMPONENTS.md
+!/CONTRIBUTING.md
+!/README.md
+!/SECURITY.md
+!/USER_GUIDE.md
+!/rebuild-instructions.md

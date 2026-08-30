@@ -7,6 +7,7 @@ import type { ChannelPipelineRule } from '../types/channelPipeline';
 import { logger } from '../utils/logger';
 import { ScheduleEditor } from './ScheduleEditor';
 import { ModalOverlay } from './ModalOverlay';
+import { useOwnedDialog } from '../hooks/useOwnedDialog';
 import { useNotifications } from '../contexts/NotificationContext';
 import { useBackupDestinationPrompt } from '../contexts/BackupDestinationPromptContext';
 import './ModalBase.css';
@@ -24,6 +25,7 @@ interface TaskEditorModalProps {
 }
 
 export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: TaskEditorModalProps) {
+  const { titleId: taskTitleId, containerRef: taskContainerRef } = useOwnedDialog();
   // Task state
   const [enabled, setEnabled] = useState(task.enabled);
   const [taskConfig, setTaskConfig] = useState<Record<string, unknown>>(task.config || {});
@@ -44,6 +46,8 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
   const [schedules, setSchedules] = useState<TaskSchedule[]>(task.schedules || []);
   const [editingSchedule, setEditingSchedule] = useState<TaskSchedule | null>(null);
   const [isAddingSchedule, setIsAddingSchedule] = useState(!!openAddSchedule);
+  const { titleId: addScheduleTitleId, containerRef: addScheduleContainerRef } = useOwnedDialog(isAddingSchedule);
+  const { titleId: editScheduleTitleId, containerRef: editScheduleContainerRef } = useOwnedDialog(Boolean(editingSchedule));
 
   // EPG/M3U/Channel Group data for task-specific config and schedule parameters
   const [epgSources, setEpgSources] = useState<EPGSource[]>([]);
@@ -61,6 +65,9 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
   // UI state
   const [saving, setSaving] = useState(false);
   const [savingSchedule, setSavingSchedule] = useState(false);
+  const closeTask = () => { if (!saving) onClose(); };
+  const closeAddSchedule = () => { if (!savingSchedule) setIsAddingSchedule(false); };
+  const closeEditSchedule = () => { if (!savingSchedule) setEditingSchedule(null); };
   const [runningSchedules, setRunningSchedules] = useState<Set<number>>(new Set());
   const notifications = useNotifications();
   const { promptBackupDestination } = useBackupDestinationPrompt();
@@ -419,15 +426,15 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
   };
 
   return (
-    <ModalOverlay onClose={onClose}>
-      <div className="modal-container modal-md task-editor-modal">
+    <ModalOverlay onClose={closeTask} role="dialog" aria-modal="true" aria-labelledby={taskTitleId}>
+      <div className="modal-container modal-md task-editor-modal" ref={taskContainerRef}>
         {/* Header */}
         <div className="modal-header">
           <div>
-            <h2>Configure Task</h2>
+            <h2 id={taskTitleId}>Configure Task</h2>
             <div className="modal-subtitle">{task.task_name}</div>
           </div>
-          <button className="modal-close-btn" onClick={onClose} aria-label="Close" title="Close">
+          <button className="modal-close-btn" onClick={closeTask} disabled={saving} aria-label="Close" title="Close">
             <span className="material-icons" aria-hidden="true">close</span>
           </button>
         </div>
@@ -495,29 +502,37 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     key={schedule.id}
                     className={`schedule-item ${!schedule.enabled ? 'disabled' : ''}`}
                   >
-                    {/* Enable toggle */}
-                    <input
-                      type="checkbox"
-                      checked={schedule.enabled}
-                      onChange={() => handleToggleSchedule(schedule)}
-                    />
+                    {/* Enable toggle. The toggle and the schedule's own text
+                        are one <label>: before, the checkbox had no
+                        accessible name at all and the 16px box was the entire
+                        pointer target (bead
+                        enhancedchannelmanager-m26f8). The actions and the
+                        stale-groups warning stay outside it — they carry
+                        buttons and an icon ligature. */}
+                    <label className="schedule-toggle">
+                      <input
+                        type="checkbox"
+                        checked={schedule.enabled}
+                        onChange={() => handleToggleSchedule(schedule)}
+                      />
 
-                    {/* Schedule info */}
-                    <div className="schedule-info">
-                      <div className="schedule-name">
-                        {schedule.name || schedule.description}
+                      {/* Schedule info */}
+                      <div className="schedule-info">
+                        <div className="schedule-name">
+                          {schedule.name || schedule.description}
+                        </div>
+                        {schedule.name && (
+                          <div className="schedule-description">
+                            {schedule.description}
+                          </div>
+                        )}
+                        {schedule.enabled && schedule.next_run_at && (
+                          <div className="schedule-next-run">
+                            Next: {formatNextRun(schedule.next_run_at)}
+                          </div>
+                        )}
                       </div>
-                      {schedule.name && (
-                        <div className="schedule-description">
-                          {schedule.description}
-                        </div>
-                      )}
-                      {schedule.enabled && schedule.next_run_at && (
-                        <div className="schedule-next-run">
-                          Next: {formatNextRun(schedule.next_run_at)}
-                        </div>
-                      )}
-                    </div>
+                    </label>
 
                     {/* Stale groups warning */}
                     {Array.isArray(schedule.parameters?._stale_groups) &&
@@ -873,17 +888,17 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
 
       {/* Schedule Editor Modal (Add) */}
       {isAddingSchedule && (
-        <ModalOverlay onClose={() => setIsAddingSchedule(false)} className="modal-overlay schedule-editor-modal" style={{ zIndex: 1001 }}>
-          <div className="modal-container modal-sm">
+        <ModalOverlay onClose={closeAddSchedule} className="modal-overlay schedule-editor-modal" style={{ zIndex: 1001 }} role="dialog" aria-modal="true" aria-labelledby={addScheduleTitleId}>
+          <div className="modal-container modal-sm" ref={addScheduleContainerRef}>
             <div className="modal-header">
-              <h2>Add Schedule</h2>
-              <button className="modal-close-btn" onClick={() => setIsAddingSchedule(false)} aria-label="Close" title="Close">
+              <h2 id={addScheduleTitleId}>Add Schedule</h2>
+              <button className="modal-close-btn" onClick={closeAddSchedule} disabled={savingSchedule} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <ScheduleEditor
               onSave={handleAddSchedule}
-              onCancel={() => setIsAddingSchedule(false)}
+              onCancel={closeAddSchedule}
               saving={savingSchedule}
               taskId={task.task_id}
               parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
@@ -896,18 +911,18 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
 
       {/* Schedule Editor Modal (Edit) */}
       {editingSchedule && (
-        <ModalOverlay onClose={() => setEditingSchedule(null)} className="modal-overlay schedule-editor-modal" style={{ zIndex: 1001 }}>
-          <div className="modal-container modal-sm">
+        <ModalOverlay onClose={closeEditSchedule} className="modal-overlay schedule-editor-modal" style={{ zIndex: 1001 }} role="dialog" aria-modal="true" aria-labelledby={editScheduleTitleId}>
+          <div className="modal-container modal-sm" ref={editScheduleContainerRef}>
             <div className="modal-header">
-              <h2>Edit Schedule</h2>
-              <button className="modal-close-btn" onClick={() => setEditingSchedule(null)} aria-label="Close" title="Close">
+              <h2 id={editScheduleTitleId}>Edit Schedule</h2>
+              <button className="modal-close-btn" onClick={closeEditSchedule} disabled={savingSchedule} aria-label="Close" title="Close">
                 <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <ScheduleEditor
               schedule={editingSchedule}
               onSave={handleUpdateSchedule}
-              onCancel={() => setEditingSchedule(null)}
+              onCancel={closeEditSchedule}
               saving={savingSchedule}
               taskId={task.task_id}
               parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}

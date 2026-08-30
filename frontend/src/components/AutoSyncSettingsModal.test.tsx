@@ -68,6 +68,32 @@ describe('AutoSyncSettingsModal — custom_properties merge (bead igqcy)', () =>
     vi.clearAllMocks();
   });
 
+  it('owns a named dialog, focuses inside it, and closes on Escape', async () => {
+    const onClose = vi.fn();
+    render(
+      <AutoSyncSettingsModal
+        isOpen={true}
+        onClose={onClose}
+        onSave={vi.fn()}
+        groupName="Sports HD"
+        customProperties={v0272CustomProperties}
+        epgSources={[]}
+        channelGroups={[]}
+        channelProfiles={[]}
+        streamProfiles={[]}
+      />
+    );
+
+    const dialog = screen.getByRole('dialog', { name: 'Auto-Sync Settings' });
+    const titleId = dialog.getAttribute('aria-labelledby');
+    expect(titleId).toBeTruthy();
+    expect(document.getElementById(titleId!)).toHaveTextContent('Auto-Sync Settings');
+    await vi.waitFor(() => expect(dialog).toContainElement(document.activeElement as HTMLElement));
+
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('preserves unknown custom_properties keys verbatim through a save', async () => {
     const onSave = vi.fn();
     renderModal(onSave);

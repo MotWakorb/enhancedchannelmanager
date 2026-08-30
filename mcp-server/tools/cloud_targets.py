@@ -13,6 +13,36 @@ every response masks them (last-4 chars only, see
 otherwise echo a full credential value — they only ever forward what the
 caller supplies (to the encrypted-write endpoints) and surface whatever the
 backend's already-masked response contains.
+
+enhancedchannelmanager-9kwzp.10 item 4 closed a real gap on this router:
+all four CRUD endpoints carried NO route dependency at all, so any
+authenticated non-admin could create, change or delete a cloud target.
+They are now admin-gated (``RequireAdminIfEnabled``). All four keep the
+PLAIN admin tier, which ADMITS the static MCP service principal, so
+``list_cloud_targets``, ``create_cloud_target``, ``update_cloud_target``
+and ``delete_cloud_target`` all continue to work over MCP.
+
+That was a deliberate PO decision against a human-admin gate for the three
+writes, which 9kwzp.10 initially shipped and which returned 403 to all
+three tools. The residual it accepts, so a caller knows what these tools
+can do: writing a cloud target names the host ``tasks/dbas_backup.py``
+PUTs the operator's archive to, supplies the credentials it authenticates
+with, and carries the ``insecure`` flag that turns off TLS verification
+for that upload — so an update can silently repoint a destination the
+operator already configured. The caller must still be an admin, and the
+outbound-policy write (``PATCH /api/settings/security``) is still refused
+to this principal.
+
+enhancedchannelmanager-9kwzp.6 had already moved BOTH connection-test endpoints
+(``POST /api/cloud-targets/{target_id}/test`` and
+``POST /api/cloud-targets/test``) behind ``RequireHumanAdminForOutboundTest``,
+which refuses the static MCP service principal. Bead
+enhancedchannelmanager-2u4e0 additionally makes that gate enforce while
+authentication is disabled, on any instance that holds an operator identity.
+``test_cloud_target`` therefore cannot succeed over MCP on any install that has
+ever created a user; its
+docstring records the refusal and the human path. The list/create/update/delete
+tools are unaffected.
 """
 import logging
 
@@ -59,8 +89,11 @@ def register(mcp: FastMCP):
 
         Credentials are encrypted at rest and NEVER echoed back in full —
         only a masked (last-4-chars) preview is shown, per the backend's
-        response shape. Use test_cloud_target with inline credentials to
-        validate them BEFORE creating the target.
+        response shape. Credentials CANNOT be pre-validated over MCP:
+        test_cloud_target is refused for the MCP service principal
+        (bead enhancedchannelmanager-9kwzp.6), so a wrong credential only
+        surfaces when an admin runs the test from the ECM UI, or when a
+        backup upload to this target fails.
 
         Args:
             name: Target name (must be unique).
@@ -181,13 +214,39 @@ def register(mcp: FastMCP):
         provider_type: str | None = None,
         credentials: dict | None = None,
     ) -> str:
-        """Test connectivity to a cloud storage target.
+        """Test connectivity to a cloud storage target. NOT USABLE OVER MCP.
 
-        Two modes:
+        REFUSED FOR THE MCP CREDENTIAL whenever ECM authentication is enabled
+        (bead enhancedchannelmanager-9kwzp.6), and since bead
+        enhancedchannelmanager-2u4e0 also whenever authentication is DISABLED on
+        an instance that already holds an operator identity. Both backing endpoints,
+        ``POST /api/cloud-targets/{target_id}/test`` and
+        ``POST /api/cloud-targets/test``, carry
+        ``RequireHumanAdminForOutboundTest``, which rejects the static MCP
+        service principal with HTTP 403 and the body "The MCP service
+        principal cannot run connection tests." Calling this tool returns that
+        403 as an error string. It is the designed outcome, not a
+        misconfiguration and not a permission an operator can grant to the MCP
+        key: a connection test sends credentials to a host the caller can name
+        and reports the upstream verdict back. In the saved-target mode those
+        credentials are the target's own stored ones, decrypted by the backend,
+        which the caller never had to know. That is an outbound probe reserved
+        for a human operator identity.
+
+        HUMAN PATH: an ECM admin runs it from the UI, Settings tab, Cloud
+        Storage Targets card, via the "Test Connection" button on the target
+        (or the test control inside the target editor for an unsaved
+        credential set). There is no MCP equivalent, and no argument to this
+        tool changes the outcome.
+
+        The one case where this tool still works is an install with
+        authentication turned off, because the gate no-ops when
+        ``require_auth`` is false or setup is incomplete. Do not rely on that.
+
+        Two modes, both refused as described above:
           - Saved target: pass target_id to test an already-configured
             target (the backend uses its stored, decrypted credentials).
-          - Inline: pass provider_type + credentials to test BEFORE saving
-            — pairs naturally with create_cloud_target.
+          - Inline: pass provider_type + credentials to test BEFORE saving.
 
         Args:
             target_id: ID of a saved cloud target to test.

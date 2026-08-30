@@ -110,6 +110,84 @@ describe('useDedupOnDrop', () => {
     });
   });
 
+  /**
+   * bead enhancedchannelmanager-ok8tj. The sibling of the defect commit
+   * `941d9087` fixed on the "Create in…" trigger path: "nothing in the group
+   * cleared the threshold" and "the lookup never ran / failed" both ended
+   * with the create path running and nothing on screen, so the operator could
+   * not tell a silent pass from a broken feature. The hook now names which
+   * happened; the caller turns that into an operator-visible message. Same
+   * three words as `AddStreamDedupOutcome`, deliberately.
+   */
+  describe('reported outcome', () => {
+    it('reports no_candidate when the lookup returns an empty list', async () => {
+      vi.mocked(api.getDedupCandidates).mockResolvedValue({
+        stream_name: 'CNN HD',
+        candidates: [],
+        total: 0,
+        page: 1,
+        page_size: 50,
+        total_pages: 0,
+      });
+      const { result } = renderHook(() =>
+        useDedupOnDrop({ reloadChannels: vi.fn() }),
+      );
+
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.handleSingleStreamDrop(
+          { streamId: 42, streamName: 'CNN HD', targetGroupId: 7 },
+          vi.fn(),
+        );
+      });
+
+      expect(outcome).toBe('no_candidate');
+    });
+
+    it('reports lookup_failed when the candidates endpoint errors', async () => {
+      vi.mocked(api.getDedupCandidates).mockRejectedValue(new Error('network'));
+      const { result } = renderHook(() =>
+        useDedupOnDrop({ reloadChannels: vi.fn() }),
+      );
+
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.handleSingleStreamDrop(
+          { streamId: 1, streamName: 'X', targetGroupId: null },
+          vi.fn(),
+        );
+      });
+
+      expect(outcome).toBe('lookup_failed');
+    });
+
+    it('reports candidate when the modal opens', async () => {
+      vi.mocked(api.getDedupCandidates).mockResolvedValue({
+        stream_name: 'CNN HD',
+        candidates: [
+          { channel_id: '101', channel_name: 'CNN', confidence: 1.0 },
+        ],
+        total: 1,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      });
+      const { result } = renderHook(() =>
+        useDedupOnDrop({ reloadChannels: vi.fn() }),
+      );
+
+      let outcome: unknown;
+      await act(async () => {
+        outcome = await result.current.handleSingleStreamDrop(
+          { streamId: 42, streamName: 'CNN HD', targetGroupId: 7 },
+          vi.fn(),
+        );
+      });
+
+      expect(outcome).toBe('candidate');
+    });
+  });
+
   describe('candidate-found branch', () => {
     const candidate = {
       channel_id: '101',

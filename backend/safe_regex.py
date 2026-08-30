@@ -45,6 +45,9 @@ a structured payload: ``{pattern_sha256, pattern_excerpt_50chars,
 text_len, timeout_ms, caller}``. The **full pattern is deliberately NOT
 logged** — patterns can contain attacker-controlled text, so we log a
 SHA-256 (for cross-referencing) plus a 50-character excerpt only.
+Sensitive ``sub`` callers can select ``diagnostic_mode="metadata_only"``;
+that mode retains categories, lengths, hashes, and caller location while
+omitting pattern/replacement excerpts and underlying exception text.
 
 See also
 --------
@@ -60,7 +63,7 @@ import hashlib
 import logging
 import sys
 from dataclasses import dataclass
-from typing import Callable, Optional, Union
+from typing import Callable, Literal, Optional, Union
 
 import regex as _regex
 
@@ -178,8 +181,26 @@ def _caller_name(skip_frames: int = 2) -> str:
     )
 
 
-def _log_oversize(pattern: str, text_len: int, max_pattern_len: int) -> None:
+def _log_oversize(
+    pattern: str,
+    text_len: int,
+    max_pattern_len: int,
+    *,
+    diagnostic_mode: Literal["excerpt", "metadata_only"] = "excerpt",
+) -> None:
     """Emit WARN log for oversize pattern; never logs the full pattern."""
+    if diagnostic_mode == "metadata_only":
+        logger.warning(
+            "[SAFE_REGEX] oversize pattern rejected "
+            "pattern_sha256=%s text_len=%d pattern_len=%d "
+            "max_pattern_len=%d caller=%s",
+            _pattern_sha256(pattern),
+            text_len,
+            len(pattern),
+            max_pattern_len,
+            _caller_name(skip_frames=3),
+        )
+        return
     logger.warning(
         "[SAFE_REGEX] oversize pattern rejected "
         "pattern_sha256=%s pattern_excerpt=%r text_len=%d pattern_len=%d "
@@ -193,8 +214,24 @@ def _log_oversize(pattern: str, text_len: int, max_pattern_len: int) -> None:
     )
 
 
-def _log_timeout(pattern: str, text_len: int, timeout_ms: int) -> None:
+def _log_timeout(
+    pattern: str,
+    text_len: int,
+    timeout_ms: int,
+    *,
+    diagnostic_mode: Literal["excerpt", "metadata_only"] = "excerpt",
+) -> None:
     """Emit WARN log for pattern timeout; never logs the full pattern."""
+    if diagnostic_mode == "metadata_only":
+        logger.warning(
+            "[SAFE_REGEX] pattern timed out "
+            "pattern_sha256=%s text_len=%d timeout_ms=%d caller=%s",
+            _pattern_sha256(pattern),
+            text_len,
+            timeout_ms,
+            _caller_name(skip_frames=3),
+        )
+        return
     logger.warning(
         "[SAFE_REGEX] pattern timed out "
         "pattern_sha256=%s pattern_excerpt=%r text_len=%d timeout_ms=%d caller=%s",
@@ -310,6 +347,7 @@ def sub(
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
     max_pattern_len: int = DEFAULT_MAX_PATTERN_LEN,
     on_error: Optional[Callable[[SubFailure], None]] = None,
+    diagnostic_mode: Literal["excerpt", "metadata_only"] = "excerpt",
 ) -> str:
     """Substitute *pattern* with *repl* across *text*; return the result.
 
@@ -321,9 +359,22 @@ def sub(
     surface WHY the substitution no-opped (e.g. in the channel-pipeline
     execution log). The callback must not raise. Omitting it preserves the
     exact pre-existing behavior for all other call sites.
+
+    ``diagnostic_mode="metadata_only"`` is for callers whose patterns or
+    replacement templates may contain credentials or other sensitive values.
+    It retains the failure category, lengths, hashes, and caller location but
+    omits pattern/replacement excerpts and exception text. The default
+    ``"excerpt"`` mode preserves the existing diagnostics for other callers.
     """
+    if diagnostic_mode not in ("excerpt", "metadata_only"):
+        raise ValueError("diagnostic_mode must be 'excerpt' or 'metadata_only'")
     if isinstance(pattern, str) and len(pattern) > max_pattern_len:
-        _log_oversize(pattern, len(text), max_pattern_len)
+        _log_oversize(
+            pattern,
+            len(text),
+            max_pattern_len,
+            diagnostic_mode=diagnostic_mode,
+        )
         if on_error is not None:
             on_error(SubFailure(
                 kind="oversize",
@@ -337,7 +388,12 @@ def sub(
         )
     except TimeoutError:
         pattern_str = pattern if isinstance(pattern, str) else pattern.pattern
-        _log_timeout(pattern_str, len(text), timeout_ms)
+        _log_timeout(
+            pattern_str,
+            len(text),
+            timeout_ms,
+            diagnostic_mode=diagnostic_mode,
+        )
         if on_error is not None:
             on_error(SubFailure(
                 kind="timeout",
@@ -362,25 +418,46 @@ def sub(
             template_error = True
         if template_error:
             repl_str = repl if isinstance(repl, str) else str(repl)
-            logger.warning(
-                "[SAFE_REGEX] replacement template error at sub "
-                "pattern_sha256=%s pattern_excerpt=%r repl_excerpt=%r "
-                "error=%s caller=%s",
-                _pattern_sha256(pattern_str),
-                _pattern_excerpt(pattern_str),
-                _pattern_excerpt(repl_str),
-                exc,
-                _caller_name(skip_frames=2),
-            )
+            if diagnostic_mode == "metadata_only":
+                logger.warning(
+                    "[SAFE_REGEX] replacement template error at sub "
+                    "pattern_sha256=%s pattern_len=%d repl_sha256=%s "
+                    "repl_len=%d caller=%s",
+                    _pattern_sha256(pattern_str),
+                    len(pattern_str),
+                    _pattern_sha256(repl_str),
+                    len(repl_str),
+                    _caller_name(skip_frames=2),
+                )
+            else:
+                logger.warning(
+                    "[SAFE_REGEX] replacement template error at sub "
+                    "pattern_sha256=%s pattern_excerpt=%r repl_excerpt=%r "
+                    "error=%s caller=%s",
+                    _pattern_sha256(pattern_str),
+                    _pattern_excerpt(pattern_str),
+                    _pattern_excerpt(repl_str),
+                    exc,
+                    _caller_name(skip_frames=2),
+                )
         else:
-            logger.warning(
-                "[SAFE_REGEX] compile error at sub "
-                "pattern_sha256=%s pattern_excerpt=%r error=%s caller=%s",
-                _pattern_sha256(pattern_str),
-                _pattern_excerpt(pattern_str),
-                exc,
-                _caller_name(skip_frames=2),
-            )
+            if diagnostic_mode == "metadata_only":
+                logger.warning(
+                    "[SAFE_REGEX] compile error at sub "
+                    "pattern_sha256=%s pattern_len=%d caller=%s",
+                    _pattern_sha256(pattern_str),
+                    len(pattern_str),
+                    _caller_name(skip_frames=2),
+                )
+            else:
+                logger.warning(
+                    "[SAFE_REGEX] compile error at sub "
+                    "pattern_sha256=%s pattern_excerpt=%r error=%s caller=%s",
+                    _pattern_sha256(pattern_str),
+                    _pattern_excerpt(pattern_str),
+                    exc,
+                    _caller_name(skip_frames=2),
+                )
         if on_error is not None:
             on_error(SubFailure(
                 kind="template" if template_error else "pattern",

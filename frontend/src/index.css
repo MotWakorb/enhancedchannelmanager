@@ -27,6 +27,10 @@
   --accent-secondary: #e0e0e8;
   --accent-hover: rgba(255, 255, 255, 0.2);
 
+  /* ECM brand mark */
+  --ecm-logo-ink: rgba(255, 255, 255, 0.95);
+  --ecm-logo-accent: #818cf8;
+
   /* Accent blue opacity scale (selection/highlight tints) */
   --accent-5: rgba(100, 108, 255, 0.05);
   --accent-8: rgba(100, 108, 255, 0.08);
@@ -41,14 +45,64 @@
   --accent-80: rgba(100, 108, 255, 0.8);
 
   --success: #10b981;
-  --success-bg: rgba(16, 185, 129, 0.2);
+  /* 0.2 -> 0.12. --success text on this tint measured 4.26:1 over
+     --bg-secondary and 4.01:1 over --bg-tertiary — the .badge-success
+     "Enabled" / "completed" chips on Channel Pipeline. Thinning the wash
+     rather than moving --success is what keeps the fix inside tinted
+     surfaces: --success is the app's green for text, icons, dots and fills,
+     and it already passes at 5.97:1 on the row itself. Now 4.94 / 4.65.
+     Bead enhancedchannelmanager-dlavh. */
+  --success-bg: rgba(16, 185, 129, 0.12);
   --success-text: #ffffff;
-  --error: #ef4444;
+  /* --error IS THE SOLID FILL. It is not a foreground token in any theme —
+     see the § "Semantic colours have two jobs" note in docs/css_guidelines.md.
+     Bead enhancedchannelmanager-4l51b split the two jobs this token used to do,
+     because in THIS theme they wanted opposite directions and no single value
+     could serve both:
+
+       as text : #ef4444 measured 4.03:1 on --bg-secondary — short of the 4.5
+                 AA floor, and it wanted to go LIGHTER.
+       as fill : white on #ef4444 measured 3.76:1 (.btn-danger,
+                 .notification-badge — the badge renders on all 11 routes), and
+                 it wanted to go DARKER.
+
+     All 94 `color: var(--error)` call sites moved to --danger-text, which was
+     already the red TEXT token here (5.48:1 on --bg-secondary, 6.00 on
+     --bg-primary, 5.13 on --bg-tertiary — all better than the #ef4444 they
+     replace). That freed --error to be toned for the fill alone:
+
+       #ef4444 -> #dc2626 (Tailwind red-600, one step down its own ray from
+       red-500; --danger-text is red-400, so the family is unchanged)
+         white on it        3.76 -> 4.83  (AA text floor 4.5, now clears)
+         non-text 1.4.11    vs --bg-primary 4.41 -> 3.44, vs --bg-secondary
+                            4.03 -> 3.14 — both still above the 3:1 floor for
+                            a UI shape, which is the real constraint on how far
+                            this can darken.
+
+     The window is genuinely narrow: white-on-fill and fill-on-page-background
+     are both monotonic in the fill's luminance and pull opposite ways, so
+     4.5:1 text and 3:1 non-text leave roughly 0.174-0.183 relative luminance
+     to work in. Do not nudge this value without re-checking BOTH numbers.
+
+     Unlike --success and --warning, --error therefore also does NOT colour
+     status glyphs any more — glyph rules take --danger-text too. Splitting a
+     token and then leaving some foregrounds on it is the partial-hoist failure
+     shape from css_guidelines § Load order. */
+  --error: #dc2626;
   --error-bg: rgba(239, 68, 68, 0.15);
   --warning: #f59e0b;
   --warning-bg: rgba(245, 158, 11, 0.15);
   --warning-text: #fbbf24;
   --danger-bg: rgba(239, 68, 68, 0.15);
+  /* --danger-text IS THE RED FOREGROUND — status text, error messages and
+     status glyphs. Value unchanged by bead enhancedchannelmanager-4l51b; it
+     already passed everywhere the 95 migrated call sites render (6.00 on
+     --bg-primary, 5.48 on --bg-secondary, 5.13 on --bg-tertiary, 5.12 on the
+     --error-bg tint over --bg-primary). Two known thin spots, neither of which
+     any current call site hits: 4.06 on --bg-hover and 4.41 on the --error-bg
+     tint over --bg-tertiary. Both are still well above the 2.98 / 3.24 that
+     --error gave there before, so nothing regressed — but if a red foreground
+     lands on a hovered row, measure it. */
   --danger-text: #f87171;
   --info-bg: rgba(59, 130, 246, 0.15);
   --info-text: #60a5fa;
@@ -76,6 +130,171 @@
   background-color: var(--bg-primary);
 }
 
+/* Browsers do not inherit `font-family` into form controls — they apply a
+   user-agent default instead. Without this reset every button, input, select
+   and textarea rendered in a different face from the text beside it, so the P1
+   type scale's "13px body" meant two typefaces depending on whether the element
+   was a control. Measured before the fix: 387 controls across the ten routes.
+
+   They do not inherit `font-size` either, and that half was missed the first
+   time. Measured on 2026-07-30, with the family reset already in place: 274 of
+   418 visible controls across the ten routes, and 516 elements across 77 of the
+   81 catalogued dialogs, still rendered at 13.3333px — Chromium's own control
+   size (`-webkit-small-control`), a value nobody in this repository chose. Bead
+   enhancedchannelmanager-ul2tp.
+
+   WHY THE BODY ROLE AND NOT `inherit`. `inherit` is the obvious symmetry with
+   the line above, and it is wrong here, measured: `body` computes to 16px — the
+   root default, which is no more chosen than 13.3333px is — so inheriting would
+   have taken 263 of those 274 controls UP to 16px, off the P1 text scale
+   entirely and 2.67px louder in every toolbar and dialog. The body role is what
+   the scale already assigns to controls: docs/css_guidelines.md § Typography
+   reads "Body ... running text, buttons, inputs, page descriptions". So the
+   move is 13.3333px -> 13px, which is on the scale and 0.33px of geometry.
+
+   This is an ELEMENT selector (0,0,1). Every class rule that gives a control its
+   own size still wins, which is why the 88 controls already sized by component
+   CSS do not move. A control that needs a different size takes a P1 role token
+   from the "Typography Roles" group below — never a literal px.
+
+   `line-height` IS an inherited property, but the user agent sets
+   `line-height: normal` on form controls, so controls do not take the root's
+   1.5 either. It is deliberately NOT reset here, and this is a decision rather
+   than an omission:
+
+     - Measured: at 13px, `normal` is a 15px line box and `1.5` is 19.5px. Every
+       control whose height is content-driven grows 4.5px — `input.priority-input`
+       measured 28.19px -> 32.69px — across every toolbar and 77 dialogs, and the
+       rail and header band geometry is pinned by e2e/frozen-chrome.spec.ts.
+     - Nothing is bought for it. A control's vertical rhythm is padding-driven
+       and its single line of text is centred in that padding; the 1.5 body
+       line-height exists for the vertical rhythm of MULTI-LINE running text,
+       which is not what a button or a single-line input is.
+     - `textarea` is the one genuinely multi-line control. If a dialog ever wants
+       looser text in one, that is a rule on that textarea, not an app-wide reset
+       that also inflates every button.
+
+   `.material-icons` below is deliberately unaffected by both declarations: it
+   sets its own family and its own 24px, and this rule does not reach it because
+   the icon class is applied to a span inside the control, not to the control
+   itself.
+
+   Guarded by e2e/control-typeface.spec.ts, which asserts the RENDERED face and
+   the RENDERED size rather than the declarations — the distinction matters,
+   because `getComputedStyle().fontFamily` returns the author's stack and would
+   report agreement that the font engine never delivered, and because the UA's
+   control size is a property of the client, so the guard measures it in a
+   CSS-free iframe each run instead of hardcoding 13.3333px. Bead
+   enhancedchannelmanager-6z299.9 owns the face arm, ul2tp the size arm. */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: var(--type-body-size);
+}
+
+/* The box of a checkbox or a radio, in one place.
+   Bead enhancedchannelmanager-7lwe0. The number and its justification live on
+   `--control-box-size` in the second :root block; this is the rule that
+   applies it.
+
+   WHAT IT REPLACES. 54 rule blocks across 26 component stylesheets each set
+   their own literal, and 16 more selected a checkbox without sizing it at all.
+   Rendered, that produced FIVE sizes — 13, 14, 15, 16 and 18px — for one
+   control; the 13px population is Chromium's own control size, inherited by
+   the blocks that declared nothing, and it appears in no stylesheet. Those
+   literals are deleted; every one of those blocks now falls through to here.
+
+   WHY IT SIZES BOTH AXES. `height` matters as much as `width`: the UA sizes a
+   control from its own metrics, and setting width alone leaves a rectangle.
+
+   `flex-shrink: 0` is part of the invariant, not a nicety. Most of these
+   controls sit in a flex row beside a label that can be long; without it the
+   box is the flex item that gives way and the token silently stops holding —
+   ten of the deleted blocks had already discovered this one at a time.
+
+   SPECIFICITY: (0,1,1), one step above the element reset above it, and low on
+   purpose. A component rule that genuinely needs a different box still wins —
+   but it should not want to. There is one token; a second size needs a second
+   TOKEN with its reason beside the first, not a literal here.
+
+   Guarded by e2e/control-box-size.spec.ts, which resolves the token through a
+   probe element and compares it against the RENDERED box on every route,
+   at both supported viewports and in all three themes. Deleting this rule
+   turns that guard red on the first route it walks. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: var(--control-box-size);
+  height: var(--control-box-size);
+  flex-shrink: 0;
+}
+
+/* The pointer TARGET of a checkbox or a radio, in one place.
+   Bead enhancedchannelmanager-3h2u1. The number and its justification live on
+   `--control-target-min` in the second :root block; this is the rule that
+   applies it.
+
+   WHAT IT REPLACES. Nothing — this is new, and it is the other half of the box
+   rule above. 4429a46f gave every control one box; m26f8 (24049628) gave every
+   control a label, so the row is the target everywhere. This gives the row a
+   floor. Measured before it landed: 91 of the 211 rows were under 24px tall,
+   at 18.19 / 19.5 / 21.19 / 21.5, and NOT ONE was under 24px wide — the defect
+   was only ever height, because a row is as wide as its form.
+
+   WHY `:has`, AND WHY THAT IS THE WHOLE POPULATION IT CAN OWN. A label extends
+   the target two ways: by WRAPPING the input, or by pointing at it with `for`.
+   Only the first is expressible in CSS — `label[for]` cannot ask what it
+   points AT, so a `for`-label on a text field would match too. 71 of the 91
+   short rows wrap their input and are fixed here; the remaining 20 are the
+   `for` shape in `.settings-section .checkbox-content`, fixed at that site
+   with the reason stated there. A new site that wraps its input inherits this
+   automatically; a new `for` site does not, and the guard is what catches it.
+
+   WHY `align-content` RIDES ALONG. A floor without alignment is half a fix: on
+   a row that gains height, the content has to go somewhere. Where the label
+   wraps the input, the box and its text are BOTH inside, so centring them
+   moves them together and their mutual alignment is preserved — which is why
+   this is safe here and deliberately NOT applied to the `for` shape, where the
+   box sits outside the label and would be left behind. It is inert on the
+   labels that are already `display: flex; align-items: center` (single-line
+   flex containers ignore `align-content`) and inert on any row taller than the
+   floor, which has no free space to distribute.
+
+   SPECIFICITY: (0,1,2) — `:has()` takes the specificity of its most specific
+   argument. That is above the component classes that style these labels, on
+   purpose and only for these two properties: the floor is not a suggestion. A
+   row that genuinely needs a different one needs a second TOKEN with its
+   reason beside the first.
+
+   Guarded by arm 4 of e2e/control-box-size.spec.ts, which measures the rendered
+   union of each control and its label and resolves this token through a probe
+   element rather than hardcoding 24. */
+label:has(input[type="checkbox"]),
+label:has(input[type="radio"]) {
+  min-height: var(--control-target-min);
+  align-content: center;
+}
+
+.material-icons {
+  display: inline-block;
+  width: 1em;
+  overflow: hidden;
+  font-family: "Material Icons";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: "liga";
+  -webkit-font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+}
+
 /* Light theme */
 [data-theme="light"] {
   --bg-primary: #ffffff;
@@ -85,16 +304,97 @@
   --bg-selected: rgba(100, 108, 255, 0.1);
 
   --text-primary: #1a1a1a;
-  --text-secondary: #666;
-  --text-muted: #999;
+
+  /* Contrast remediation, bead enhancedchannelmanager-dlavh. Both values are
+     darkened, hue untouched (they are neutral greys), because the light theme
+     has almost no room below the AA floor: on --bg-secondary (#f5f5f5) 4.5:1
+     forces a grey no lighter than #707070, and on the --border-primary chip
+     fill (#ddd) no lighter than #616161.
+
+     --text-secondary  #666 -> #616161: 5.27 -> 5.68 on --bg-secondary, and
+       4.23 -> 4.56 on the #ddd chip fill that .group-count / .category-count /
+       .source-type use, which was the actual failure. Two RGB units; the
+       reason it is worth doing is that it clears a whole family of 4.2-4.4
+       near-misses at once, including the one App.css already worked around by
+       hand (see .service-status-version).
+
+     --text-muted      #999 -> #686868: 2.61 -> 5.11 on --bg-secondary,
+       2.85 -> 5.57 on --bg-primary, 2.33 -> 4.55 on --bg-tertiary.
+
+     The honest consequence: in THIS theme --text-muted and --text-secondary
+     converge, because AA leaves no legal step between them on a light surface.
+     The token is not retired, because the step is real and passing in the
+     other two themes (dark 4.82 vs 6.46 on --bg-secondary; high contrast 8.52
+     vs 15.00). Muted-vs-secondary is a dark-theme distinction; do not reach
+     for --text-muted in the light theme expecting it to read as dimmer. */
+  --text-secondary: #616161;
+  --text-muted: #686868;
 
   --border-primary: #ddd;
   --border-secondary: #ccc;
   --border-accent: rgba(100, 108, 255, 0.5);
 
   --accent-primary: #4f46e5;
-  --accent-secondary: #6366f1;
+
+  /* Contrast remediation, bead enhancedchannelmanager-dlavh. #6366f1 ->
+     #3e41ee: the SAME hue (238.7deg) and the same saturation (83.5%), darkened
+     along its own HSL lightness ray from 66.7% to 58.7%. Nothing moved hue.
+
+     WHY IT HAD TO MOVE. #6366f1 does not clear 4.5:1 as text on ANY surface in
+     this palette — not even bare --bg-primary, where it measures 4.47. Every
+     one of the ten surfaces it paints on failed. The three sites the bead names
+     are the ones an operator meets in the default state; the rest are edit-mode
+     and dropdown states that no audit had ever rendered. Figures marked
+     [measured] come from the live compositor; the rest are computed from the
+     same surfaces because those states do not render on this instance:
+
+       sticky-section-nav pill (Stats + Settings), accent-10 over the nav's own
+         color-mix surface #e7e8f7   3.68 -> 5.41   [measured]
+       .settings-nav-item.active, accent-10 over --bg-tertiary #dadbea
+                                     3.25 -> 4.79   [measured]
+       .edit-mode-banner, accent-15 over --bg-primary     3.73 -> 5.48
+       .preview-new-number, accent-20 over --bg-primary   3.50 -> 5.15
+       .group-tag / .epg-dropdown-source, --bg-hover      3.38 -> 4.98
+       .edit-mode-label / -timer / .pane-header h2, --bg-secondary
+                                     4.10 -> 6.03
+       .edit-mode-dialog-toggle:hover, --bg-tertiary      3.65 -> 5.36
+       bare --bg-primary                                  4.47 -> 6.57
+
+     Non-text uses, 3:1 floor, all already passing and all improved: the
+     `inset 2px` rail bar in StickySectionNav.css, the `inset 3px` edit-mode bar
+     in TabNavigation.css, and the StatsTab.tsx chart `stroke`.
+
+     WHY RETONING THE TOKEN AND NOT SWAPPING THE CALL SITES. Audited before
+     touching it, because --error taught us a token can hold two incompatible
+     jobs (bead -4l51b): all seventeen occurrences of --accent-secondary, with
+     comments stripped, are three definitions, eleven `color`, two decorative
+     `box-shadow` bars and one chart `stroke`. There is NO background, border or
+     rgba()/color-mix() use anywhere — so unlike --error there is no fill under
+     white text that a darker value could regress. docs/css_guidelines.md:563
+     already states the rule this measurement confirms: never use
+     --accent-primary or --accent-secondary for backgrounds.
+
+     WHY NOT #4548ee, the lightest value that technically passes. It measures
+     4.51 on --bg-tertiary — 0.01 above the floor, which is inside the
+     measurement's own epsilon. #3e41ee keeps 0.32 of real headroom.
+
+     The honest consequence: in THIS theme --accent-secondary no longer reads as
+     lighter than --accent-primary (#4f46e5) — they converge, and the secondary
+     is marginally the deeper of the two. AA leaves no legal step above it on a
+     light surface, exactly as it leaves none between --text-muted and
+     --text-secondary above. Light/lighter is a dark-theme distinction; do not
+     reach for --accent-secondary here expecting a softer accent. The dark
+     (#e0e0e8) and high-contrast (#ffff88) values are untouched — both already
+     pass in their own themes.
+
+     Guarded by e2e/contrast-aa.spec.ts, which measures all three themes at
+     1280x720 and 1920x1080 and goes red on every ratio quoted above. */
+  --accent-secondary: #3e41ee;
   --accent-hover: rgba(100, 108, 255, 0.1);
+
+  /* ECM brand mark — deeper indigo against the lighter sidebar */
+  --ecm-logo-ink: #17171f;
+  --ecm-logo-accent: #4f46e5;
 
   /* Accent blue opacity scale (selection/highlight tints) */
   --accent-5: rgba(100, 108, 255, 0.05);
@@ -109,18 +409,82 @@
   --accent-60: rgba(100, 108, 255, 0.6);
   --accent-80: rgba(100, 108, 255, 0.8);
 
-  --success: #22c55e;
+  /* Semantic colours, contrast-remediated for this theme only — bead
+     enhancedchannelmanager-dlavh. Every value below is the SAME hue darkened
+     along its own HSL lightness ray until it clears 4.5:1 on --bg-primary,
+     --bg-secondary, --bg-tertiary and on its own *-bg tint. Green is still
+     green, red still red; nothing moved hue. The dark and high-contrast
+     values are untouched — they already pass in their own themes.
+
+     --success  #22c55e -> #137035
+       as text : 2.09 -> 5.67 on --bg-secondary (this is the .status-label /
+                 .badge-success / .good-count / .trend-up failure), and
+                 1.67 -> 4.55 on the --success-bg tint over --bg-tertiary.
+       as fill : --success-text (#fff) on it, 2.28 -> 6.18. Every white-on-
+                 green fill in this theme (.edit-mode-count, ScheduleEditor's
+                 active buttons, .ratio-segment.outbound) was failing too, so
+                 both of --success's jobs wanted the same darkening. That is
+                 why the token could be fixed rather than split.
+     --error    #ef4444 -> #c21111
+       as text : 3.45 -> 5.70 on --bg-secondary; 2.87 -> 4.52 on the
+                 --error-bg tint.
+       as fill : white on it, 3.76 -> 6.21 (.btn-danger, .notification-badge).
+                 Same story as --success: both jobs wanted darker HERE. In the
+                 dark theme they do not — see the note in the dark :root.
+     --warning-text #d97706 -> #975304: 2.92 -> 5.42 on --bg-secondary and
+                 2.73 -> 4.55 on the --warning-bg tint (.priority-tie-badge).
+     --danger-text  #dc2626 -> #cc2121: 4.43 -> 5.06 on --bg-secondary.
+                 Superseded — see the note on --danger-text below.
+     --info-text    #2563eb -> #1555e3: 4.74 -> 5.60 on --bg-secondary and
+                 4.25 -> 4.51 on the --info-bg tint (.action-update,
+                 .rule-kind-badge, .direction-icon.inbound).
+
+     --warning itself is deliberately NOT darkened. It is a fill that carries
+     #1a1a1a text (.task-status-pill-fix-btn, ChannelPipelineTab's running
+     pill; .header-update-available was a third until bd-nhkd4) at 8.10:1;
+     darkening it to pass as
+     text would break that. Warning-coloured TEXT takes --warning-text, which
+     is what that token is for — see .status-pending in shared/common.css. */
+  --success: #137035;
   --success-bg: rgba(34, 197, 94, 0.15);
   --success-text: #ffffff;
-  --error: #ef4444;
+  --error: #c21111;
   --error-bg: rgba(239, 68, 68, 0.1);
   --warning: #f59e0b;
   --warning-bg: rgba(245, 158, 11, 0.1);
-  --warning-text: #d97706;
+  --warning-text: #975304;
   --danger-bg: rgba(239, 68, 68, 0.1);
-  --danger-text: #dc2626;
+  /* #cc2121 -> #c21111, bead enhancedchannelmanager-4l51b. That bead moved all
+     94 `color: var(--error)` call sites to --danger-text app-wide. In dark and
+     high contrast that is a straight improvement, but HERE --error had already
+     been darkened to #c21111 by dlavh, so the migration would have made red
+     text LIGHTER in this theme: 5.70 -> 5.06 on --bg-secondary, 5.07 -> 4.50 on
+     --bg-tertiary, and 5.01 -> 4.45 on the --error-bg tint over --bg-secondary,
+     which drops below AA. Setting --danger-text to --error's value makes the
+     migration a no-op in this theme: every migrated site renders the exact
+     colour and ratio it rendered before, and the 11 sites already on
+     --danger-text improve (5.06 -> 5.70 on --bg-secondary).
+
+     The two tokens are therefore identical in the light theme. That is not a
+     redundancy to clean up — it is the same shape as --text-muted converging
+     on --text-secondary above. The split between fill and foreground is real
+     in dark and high contrast; in this theme both jobs want the same value,
+     exactly as dlavh found for --success. */
+  --danger-text: #c21111;
   --info-bg: rgba(59, 130, 246, 0.1);
-  --info-text: #2563eb;
+  --info-text: #1555e3;
+
+  /* These two existed ONLY in the dark :root, so the light theme inherited
+     #ffffff and every drag handle in the app rendered white-on-white — 1.09:1
+     against --bg-secondary, i.e. an invisible affordance, not merely a
+     low-contrast one (EPG source rows, Channel Pipeline rule rows, Channels
+     and Streams panes, SubstitutionPairsEditor, common.css § drag handle).
+     High contrast is fine on the inherited white (19.80:1) and is left alone.
+     Base 5.68:1 on --bg-secondary, hover 15.96:1 — the handle darkens on
+     hover, which is the same "handle gets more prominent" direction the dark
+     theme expresses by brightening. Bead enhancedchannelmanager-dlavh. */
+  --drag-handle-color: #616161;
+  --drag-handle-hover: #1a1a1a;
 
   --input-bg: #fff;
   --input-border: #ccc;
@@ -161,6 +525,10 @@
   --accent-secondary: #ffff88;
   --accent-hover: rgba(255, 255, 0, 0.2);
 
+  /* ECM brand mark — the accent must stay far from the ink here */
+  --ecm-logo-ink: #ffffff;
+  --ecm-logo-accent: #ffff00;
+
   /* Accent opacity scale (yellow-based for high contrast) */
   --accent-5: rgba(255, 255, 0, 0.05);
   --accent-8: rgba(255, 255, 0, 0.08);
@@ -177,7 +545,21 @@
   --success: #00ff00;
   --success-bg: rgba(0, 255, 0, 0.2);
   --success-text: #000000;
-  --error: #ff4444;
+  /* #ff4444 -> #d81b1b, bead enhancedchannelmanager-4l51b — the same fill/
+     foreground split as the dark :root, and for the same reason. On black,
+     #ff4444 is a fine foreground and a poor fill: white on it measured 3.41:1
+     (.btn-danger, .notification-badge), below the AA text floor. Now 5.13.
+
+     The cost is the badge's contrast as a SHAPE against the page: 6.16 -> 4.09
+     against --bg-primary (#000), 3.68 against --bg-tertiary (#111). Still
+     comfortably above the 3:1 non-text floor, and the text inside it is what
+     WCAG 1.4.3 actually mandates. This is the deliberate trade; do not "restore
+     the punchier red" without re-measuring white-on-fill.
+
+     --danger-text below is left at #ff4444 and is now the only red foreground
+     in this theme. Before the split the two tokens held the same value, which
+     is precisely why the conflict was invisible here. */
+  --error: #d81b1b;
   --error-bg: rgba(255, 68, 68, 0.2);
   --warning: #ffaa00;
   --warning-bg: rgba(255, 170, 0, 0.2);
@@ -243,6 +625,173 @@
   --text-2xl: 1.125rem;
   --text-3xl: 1.25rem;
   --text-4xl: 1.5rem;
+
+  /* Typography Roles — content pane
+     One role per kind of text a page body contains, so a rule picks a role
+     instead of a raw size. Values are preset "P1" (bead
+     enhancedchannelmanager-f4yc7). Each role points at the --text-* primitive
+     that already carries its number; 15px and 13px have no primitive, so they
+     are written literally. The rail and the top band are chrome, not content —
+     they are deliberately outside this scale.
+     See docs/css_guidelines.md § Typography. */
+
+  /* The route page title, e.g. "OPERATIONS / M3U MANAGER" — 20px.
+     Joined the scale in bead enhancedchannelmanager-tygwm. It had been frozen
+     outside it at 24px, written as a bare `1.5rem` in PageHeader.css, and read
+     oversized against a pane whose largest content type is the 20px metric.
+     Uppercase is not a token: the heading string arrives already uppercased
+     from routeHierarchy.ts, so no rule has to reassert it. */
+  --type-page-title-size: var(--text-3xl);
+  --type-page-title-weight: 700;
+  --type-page-title-line-height: 1.3;
+
+  /* Headline number on a stat/summary tile — 20px */
+  --type-metric-size: var(--text-3xl);
+  --type-metric-weight: 600;
+  --type-metric-line-height: 1.2;
+
+  /* The title of a dialog — 16px.
+     A DISTINCT role, not the 15px section role, by PO decision on bead
+     enhancedchannelmanager-xhldy: a dialog's title is the primary heading of
+     its own surface, so it sits closer to a route title than to a panel
+     heading inside a page. It reads against the modal's own body copy, not
+     against the route header behind the overlay, which is why 20px would be
+     too loud and 15px too quiet.
+     xhldy set it to 18px (`--text-2xl`), correcting a bespoke `1.1rem`
+     (17.6px) that was never a chosen number.
+
+     18px -> 16px (`--text-xl`) on bead enhancedchannelmanager-99o0x, PO
+     request: "the title text is oversized". The role SURVIVES at a distinct
+     step rather than collapsing into `--type-section-*`, and the reason is
+     hierarchy inside the dialog, not the number: a dialog's body carries
+     `.modal-section-title` at the 15px/600 section role, so a title set to
+     15px/600 would be typographically identical to the headings BELOW it and
+     the dialog would lose its own primary heading. That flattening is visible
+     in the dialogs that actually carry section titles — cp-rule-builder-modal,
+     settings-modal, norm-rule-editor, task-editor.
+     A 1px step reads thin, and that is a fair objection — but it is not
+     evidence of redundancy BY THIS SCALE'S OWN STANDARD. A role names the
+     KIND of text, not its size (docs/css_guidelines.md § Typography): body,
+     item title and label already share 13px exactly and separate on weight;
+     page title and metric already share 20px. Modal title at 16px against
+     section at 15px is more separated than either of those pairs, and it is
+     the only role that names "the primary heading of an overlay surface".
+     16px is `--text-xl`, a primitive the scale already carries.
+     Weight and line-height are unchanged: the PO asked for smaller, not
+     lighter, and dropping to 500 would put it below the section role's 600 —
+     inverting the hierarchy this step exists to protect. */
+  --type-modal-title-size: var(--text-xl);
+  --type-modal-title-weight: 600;
+  --type-modal-title-line-height: 1.3;
+
+  /* Section heading inside a page — 15px */
+  --type-section-size: 0.9375rem;
+  --type-section-weight: 600;
+  --type-section-line-height: 1.3;
+
+  /* Default running text in a pane — 13px */
+  --type-body-size: 0.8125rem;
+  --type-body-weight: 400;
+  --type-body-line-height: 1.5;
+
+  /* The name of a row in a list — 13px */
+  --type-item-title-size: 0.8125rem;
+  --type-item-title-weight: 600;
+  --type-item-title-line-height: 1.4;
+
+  /* Supporting detail under an item title — 11px */
+  --type-meta-size: var(--text-xs);
+  --type-meta-weight: 400;
+  --type-meta-line-height: 1.5;
+
+  /* Tracked uppercase label: column headers, status words — 10px.
+     P1 sets no line-height for this role; micro labels take the line box of
+     whatever they sit in. */
+  --type-micro-size: var(--text-2xs);
+  --type-micro-weight: 700;
+  --type-micro-tracking: 0.08em;
+
+  /* Text inside a chip/pill — 10px */
+  --type-badge-size: var(--text-2xs);
+  --type-badge-weight: 500;
+  --type-badge-line-height: 1.4;
+
+  /* The caption on a form control — 13px.
+     Distinct from item title, which is the same 13px at 600: a field label
+     sits above an input and reads as part of the control, so it takes the
+     button weight (500) rather than the heavier list-row weight. Added in
+     bead enhancedchannelmanager-6z299 because `.form-group label` was the
+     one shared treatment with no role that fit it. */
+  --type-label-size: 0.8125rem;
+  --type-label-weight: 500;
+  --type-label-line-height: 1.4;
+
+  /* Icon Size Scale
+     Content-pane icon sizes. Rail icons stay at their own 20px. */
+  --icon-status: 18px;
+  --icon-action: 16px;
+  /* Glyph inside a chip — sized to the chip, not to the pointer target. */
+  --icon-badge: 14px;
+  /* The illustration glyph in an empty/loading state. Decorative, so it is
+     the one place --text-muted is still allowed (see § Colour in
+     docs/css_guidelines.md). */
+  --icon-empty: 64px;
+
+  /* The box of a checkbox or a radio — 16px.
+     Bead enhancedchannelmanager-7lwe0. It lives in the ICON scale, not the
+     type scale, because that is what it is: a glyph-scale affordance sitting
+     inline in a row of body text, the same object as --icon-action, which is
+     also 16px and also a small inline mark next to 13px copy. It is a length,
+     not a font-size — nothing inherits it, and a control's TEXT is still the
+     body role set by the reset above.
+
+     THE RELATIONSHIP TO THE BODY ROLE, which is the number's actual
+     justification. Body is 13px. Measured on the rendered page, a label row
+     carrying that text has a line box of 18.2-18.5px, and the em box of the
+     text itself is 13px. 16px is 1.23em: above the em box, so the control
+     reads as a control and not as a letterform, and below the line box, so it
+     does not drive the height of the row it sits in.
+
+     WHY NOT THE TWO NUMBERS IT REPLACES. 18px was the loudest of the seven the
+     estate had declared, and it is almost exactly the row's line box — at that
+     size the control fills the row and the label starts to read as a caption
+     to the box rather than the box as a marker for the label. That is what the
+     PO saw on Settings once body text moved to 13px (bead ul2tp): the box did
+     not change, the text shrank underneath it. 13px is 1em, and it is also
+     Chromium's own control size — the 16 rule blocks that declared nothing
+     were rendering at it, and this project has just spent a bead establishing
+     that a UA default is a size nobody chose.
+
+     WHAT THIS IS NOT. It is NOT a pointer target. WCAG 2.5.8 asks for 24x24
+     CSS px and no plausible checkbox beside 13px text reaches it; what carries
+     the target is the <label>, which extends it to the whole row. All 211
+     controls measured for 7lwe0 now have that association — 44 of them gained
+     it in bead m26f8 — and the row's floor is --control-target-min below.
+
+     ONE token, no per-component literals: see the base rule below. */
+  --control-box-size: 16px;
+
+  /* The floor on a checkbox/radio ROW — 24px, the WCAG 2.5.8 (AA) minimum.
+     Bead enhancedchannelmanager-3h2u1.
+
+     THE PAIR. --control-box-size is what the control looks like;
+     --control-target-min is how big it is to hit. They are deliberately
+     different numbers and they must stay that way: the box is 16px because
+     18px filled the 18.2px line box and made the 13px label read as a caption
+     to it (the defect the PO reported in 7lwe0), and a 24px box beside 13px
+     text would be nearly twice the height of its own label. So the target
+     comes from the ROW, not from the box — see the base rule below.
+
+     A FLOOR, NOT AN INCREMENT. Measured on this tree, the failing rows sat at
+     18.19, 19.5, 21.19 and 21.5px, and 120 of the 211 rows already cleared 24
+     — several at 34-91px, where a card or a description line makes the row
+     tall on its own. A uniform padding bump would have to be sized for the
+     18px rows, would over-grow the 21px ones, and would grow all 120 that were
+     never in breach. min-height moves each failing row by exactly what it
+     lacks and is a no-op on every row already above it, which is also why the
+     rhythm gets MORE regular rather than less: every short checkbox row lands
+     on one number instead of a 18/19.5/21.19/21.5 spread. */
+  --control-target-min: 24px;
 
   /* Box Shadows */
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.15);

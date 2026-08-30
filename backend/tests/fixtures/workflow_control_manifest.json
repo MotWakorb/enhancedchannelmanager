@@ -1,0 +1,887 @@
+{
+  "if": [
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "security-scan-frontend",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "security-scan-backend",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false' && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true') || (github.event_name == 'pull_request' && github.base_ref == 'main') || (github.event_name == 'pull_request' && github.base_ref == 'dev' && needs.detect-dependency-change.outputs.dependency_files_changed == 'true'))"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "security-scan-mcp",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "if"
+      ],
+      "value": "!cancelled() && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')) || (github.event_name == 'pull_request' && (github.base_ref == 'main' || github.base_ref == 'dev')))"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        0,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed == 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        1,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false' && github.event_name == 'pull_request'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "build-amd64",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "build-arm64",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "build-mcp-amd64",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "build-mcp-arm64",
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "attest-image-candidates",
+        "if"
+      ],
+      "value": "always() && github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/main') && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && needs.build-mcp-amd64.result == 'success' && needs.build-mcp-arm64.result == 'success' && needs.trivy-scan.result == 'success' && needs.trivy-scan-arm64.result == 'success' && needs.trivy-scan-mcp-amd64.result == 'success' && needs.trivy-scan-mcp-arm64.result == 'success' && needs.security-scan-mcp.result == 'success'"
+    },
+    {
+      "file": "docs-pages.yml",
+      "path": [
+        "jobs",
+        "build",
+        "if"
+      ],
+      "value": "!cancelled() && needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "flake-pr-comment.yml",
+      "path": [
+        "jobs",
+        "comment",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "steps.gate.outputs.should_comment == 'true'"
+    },
+    {
+      "file": "flake-pr-comment.yml",
+      "path": [
+        "jobs",
+        "comment",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "flake-pr-comment.yml",
+      "path": [
+        "jobs",
+        "comment",
+        "steps",
+        7,
+        "if"
+      ],
+      "value": "steps.gate.outputs.should_comment == 'true'"
+    },
+    {
+      "file": "normalization-canary.yml",
+      "path": [
+        "jobs",
+        "canary",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "normalization-canary.yml",
+      "path": [
+        "jobs",
+        "canary",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "failure() && env.SLACK_WEBHOOK_URL != ''"
+    },
+    {
+      "file": "normalization-canary.yml",
+      "path": [
+        "jobs",
+        "canary",
+        "steps",
+        7,
+        "if"
+      ],
+      "value": "failure()"
+    },
+    {
+      "file": "perf-benchmarks.yml",
+      "path": [
+        "jobs",
+        "benchmark",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "github.event_name == 'pull_request'"
+    },
+    {
+      "file": "perf-benchmarks.yml",
+      "path": [
+        "jobs",
+        "benchmark",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "github.event_name == 'pull_request'"
+    },
+    {
+      "file": "perf-benchmarks.yml",
+      "path": [
+        "jobs",
+        "benchmark",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "github.event_name == 'pull_request'"
+    },
+    {
+      "file": "perf-benchmarks.yml",
+      "path": [
+        "jobs",
+        "benchmark",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "github.event_name == 'pull_request'"
+    },
+    {
+      "file": "perf-benchmarks.yml",
+      "path": [
+        "jobs",
+        "benchmark",
+        "steps",
+        8,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "publish-images.yml",
+      "path": [
+        "jobs",
+        "authorize",
+        "if"
+      ],
+      "value": "(inputs.tests_attested && inputs.candidate_branch == 'dev') || (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main')"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        7,
+        "if"
+      ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        8,
+        "if"
+      ],
+      "value": "steps.shape.outputs.kind == 'release'"
+    },
+    {
+      "file": "release-cut-gate.yml",
+      "path": [
+        "jobs",
+        "release-cut-gate",
+        "steps",
+        9,
+        "if"
+      ],
+      "value": "always()"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "if"
+      ],
+      "value": "${{ !cancelled() }}"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        0,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed == 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        1,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        7,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        8,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        9,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "if"
+      ],
+      "value": "${{ !cancelled() }}"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        0,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed == 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        1,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        7,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        8,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        9,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "if"
+      ],
+      "value": "${{ !cancelled() }}"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        0,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed == 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        1,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        6,
+        "if"
+      ],
+      "value": "needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        7,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        8,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        9,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.code_paths_changed != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "if"
+      ],
+      "value": "${{ !cancelled() }}"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        0,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected == 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        1,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        2,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        3,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        4,
+        "if"
+      ],
+      "value": "needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        5,
+        "if"
+      ],
+      "value": "always() && needs.detect.outputs.docs_site_affected != 'false'"
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "publish-verified-dev-images",
+        "if"
+      ],
+      "value": "always() && github.event_name == 'push' && github.ref == 'refs/heads/dev' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && !contains(needs.*.result, 'skipped')"
+    }
+  ],
+  "continue-on-error": [
+    {
+      "file": "build.yml",
+      "path": [
+        "jobs",
+        "codeql-analysis",
+        "steps",
+        6,
+        "continue-on-error"
+      ],
+      "value": true
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "backend",
+        "steps",
+        7,
+        "continue-on-error"
+      ],
+      "value": true
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "mcp-server",
+        "steps",
+        7,
+        "continue-on-error"
+      ],
+      "value": true
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "frontend",
+        "steps",
+        7,
+        "continue-on-error"
+      ],
+      "value": true
+    },
+    {
+      "file": "test.yml",
+      "path": [
+        "jobs",
+        "docs-link-check",
+        "steps",
+        5,
+        "continue-on-error"
+      ],
+      "value": true
+    }
+  ]
+}

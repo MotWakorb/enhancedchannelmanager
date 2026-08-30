@@ -58,6 +58,7 @@ _MUTATORS = (
     "patch_m3u_account",
     "refresh_m3u_account",
     "upload_logo_file",
+    "create_logo",
     "bulk_delete_logos",
     "delete_m3u_account",
     "delete_epg_source",
@@ -129,6 +130,11 @@ def _archive_plan():
                     },
                     # Already exists on the destination by name → would_skip/skipped.
                     {"id": 61, "name": "existing-logo", "filename": "existing.png"},
+                    # A remotely-hosted logo: no bytes, no filename, restored by
+                    # re-creating the row from its archived URL (bead …-dgnms).
+                    # The dry run must SIMULATE that branch, not fall through to
+                    # the byte validator and invent a failure.
+                    {"id": 62, "name": "cdn-logo", "url": "https://cdn.example/cdn.png"},
                 ],
             ),
         ],
@@ -189,6 +195,7 @@ def _client(*, created_ids=None):
     client.create_channel = AsyncMock(side_effect=_channel_creator())
     client.create_user = AsyncMock(return_value={"id": 940})
     client.upload_logo_file = AsyncMock(return_value={"id": 960})
+    client.create_logo = AsyncMock(return_value={"id": 965})
     client.update_channel = AsyncMock(return_value={"id": 0})
     client.update_profile_channel = AsyncMock(return_value=None)
     client.update_m3u_group_settings = AsyncMock(return_value=None)
@@ -286,9 +293,14 @@ async def test_parity_specific_counts(tmp_path):
     assert by[EntityType.EPG_SOURCE].would_create == 1
     assert by[EntityType.CHANNEL_GROUP].would_create == 1
     assert by[EntityType.CHANNEL].would_create == 2
-    assert by[EntityType.LOGO].would_create == 1   # the miss
+    # The byte-bearing miss + the remotely-hosted logo the URL path re-creates.
+    assert by[EntityType.LOGO].would_create == 2
     assert by[EntityType.LOGO].would_skip == 1     # the pre-existing logo
-    assert dry.logo_misses == 1
+    assert by[EntityType.LOGO].failed == 0         # dgnms: no invented failures
+    # NOTHING is reported lost: one logo restores from its bytes, one by URL,
+    # one is already on the destination. logo_misses is the operator-facing
+    # "you have lost these" count, not a would-create count.
+    assert dry.logo_misses == 0
 
 
 # ---------------------------------------------------------------------------
@@ -446,8 +458,8 @@ async def test_dry_run_aggregates_all_categories(tmp_path):
         assert entity_type in present, f"missing {entity_type} in aggregate"
     total_would_create = sum(c.would_create for c in dry.categories)
     # 2 m3u + 1 epg + 1 group + 1 profile + 1 stream-profile + 1 user + 2 channels
-    # + 1 logo miss = 10.
-    assert total_would_create == 10
+    # + 1 byte-bearing logo miss + 1 URL-restorable logo = 11.
+    assert total_would_create == 11
 
 
 @pytest.mark.asyncio
@@ -491,8 +503,12 @@ def test_dry_run_registry_wires_all_importers():
         EntityType.LOGO,
     ):
         assert entity_type in wired, f"{entity_type} not wired in dry-run registry"
-    # Order mirrors the hard Phase-2 sequence: M3U first, logos last.
+    # Order mirrors the hard Phase-2 sequence: M3U ahead of everything that
+    # remaps an ``m3u_account`` FK, logos last. USER_AGENT precedes M3U because
+    # an account's own ``user_agent`` FK remaps through that namespace
+    # (bead …-9h6cv), so the pin is the RELATION, not the index.
     order = [s.entity_type for s in steps]
-    assert order[0] == EntityType.M3U_ACCOUNT
+    assert order.index(EntityType.M3U_ACCOUNT) < order.index(EntityType.EPG_SOURCE)
+    assert order.index(EntityType.USER_AGENT) < order.index(EntityType.M3U_ACCOUNT)
     assert order[-1] == EntityType.LOGO
     assert order.index(EntityType.CHANNEL_GROUP) < order.index(EntityType.CHANNEL)
