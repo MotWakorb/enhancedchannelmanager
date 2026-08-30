@@ -10,7 +10,7 @@
 # but it is a code change, not a currency bump, and is tracked as its own bead
 # (enhancedchannelmanager-wiezs). Lift the cap there, not in a dependency
 # sweep -- an unpinned jump fails at import time.
-mcp[cli]>=1.27.2,<2
+mcp[cli]>=2.1.1,<3
 httpx>=0.28.0
 uvicorn[standard]>=0.32.0
 pydantic>=2.10.0

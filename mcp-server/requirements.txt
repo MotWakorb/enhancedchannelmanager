@@ -7,6 +7,7 @@ annotated-types==0.8.0
 anyio==4.14.2
     # via
     #   httpx
+    #   httpx2
     #   mcp
     #   sse-starlette
     #   starlette
@@ -28,52 +29,55 @@ cryptography==50.0.0
 h11==0.16.0
     # via
     #   httpcore
+    #   httpcore2
     #   uvicorn
 httpcore==1.0.9
     # via httpx
+httpcore2==2.12.0
+    # via httpx2
 httptools==0.8.0
     # via uvicorn
 httpx==0.28.1
-    # via
-    #   -r mcp-server/requirements.in
-    #   mcp
-httpx-sse==0.4.3
+    # via -r requirements.in
+httpx2==2.12.0
     # via mcp
 idna==3.19
     # via
     #   anyio
     #   httpx
+    #   httpx2
 jsonschema==4.26.0
     # via mcp
 jsonschema-specifications==2025.9.1
     # via jsonschema
 markdown-it-py==4.2.0
     # via rich
-mcp==1.29.0
-    # via -r mcp-server/requirements.in
+mcp[cli]==2.1.1
+    # via -r requirements.in
+mcp-types==2.1.1
+    # via mcp
 mdurl==0.1.2
     # via markdown-it-py
+opentelemetry-api==1.44.0
+    # via mcp
 pycparser==3.0
     # via cffi
 pydantic==2.13.4
     # via
-    #   -r mcp-server/requirements.in
+    #   -r requirements.in
     #   mcp
-    #   pydantic-settings
+    #   mcp-types
 pydantic-core==2.46.4
     # via pydantic
-pydantic-settings==2.15.0
-    # via mcp
 pygments==2.21.0
     # via rich
-pyjwt==2.13.0
+pyjwt[crypto]==2.13.0
     # via
-    #   -r mcp-server/requirements.in
+    #   -r requirements.in
     #   mcp
 python-dotenv==1.2.3
     # via
     #   mcp
-    #   pydantic-settings
     #   uvicorn
 python-multipart==0.0.32
     # via mcp
@@ -95,28 +99,30 @@ sse-starlette==3.4.8
     # via mcp
 starlette==1.6.0
     # via
-    #   -r mcp-server/requirements.in
+    #   -r requirements.in
     #   mcp
     #   sse-starlette
+truststore==0.10.4
+    # via
+    #   httpcore2
+    #   httpx2
 typer==0.27.1
     # via mcp
 typing-extensions==4.16.0
     # via
-    #   anyio
     #   mcp
+    #   mcp-types
+    #   opentelemetry-api
     #   pydantic
     #   pydantic-core
-    #   referencing
-    #   starlette
     #   typing-inspection
 typing-inspection==0.4.4
     # via
     #   mcp
     #   pydantic
-    #   pydantic-settings
-uvicorn==0.52.4
+uvicorn[standard]==0.52.4
     # via
-    #   -r mcp-server/requirements.in
+    #   -r requirements.in
     #   mcp
 uvloop==0.22.1
     # via uvicorn
