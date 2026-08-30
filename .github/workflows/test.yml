@@ -106,7 +106,7 @@ jobs:
 
       - name: Setup Python
         if: needs.detect.outputs.code_paths_changed != 'false'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -259,7 +259,7 @@ jobs:
 
       - name: Setup Python
         if: needs.detect.outputs.code_paths_changed != 'false'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -559,7 +559,7 @@ jobs:
 
       - name: Setup Python
         if: needs.detect.outputs.docs_site_affected != 'false'
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: 'pip'
