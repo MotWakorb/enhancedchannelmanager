@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "version": "0.18.1-0169",
-  "created": "2026-08-29T16:26:09Z",
+  "version": "0.18.1",
+  "created": "2026-08-29T17:24:08Z",
   "kind": "source-manifest",
-  "channel": "dev",
-  "permanent": false,
-  "channelNote": "Transient snapshot of the dev branch, NOT an artifact of record. There is at most one and it is superseded rather than accumulated. The version below names the build this snapshot was taken at, not what dev carries now; the binding that matters is the source-manifest hashes.",
+  "channel": "release",
+  "permanent": true,
+  "channelNote": "Release record. Kept forever alongside every other release, because answering 'which shipped versions contain this package' requires the history to be present.",
   "subject": {
     "type": "source-tree",
     "note": "These documents describe the dependency manifests of the release source tree. They do NOT describe a container image and assert no subject image digest. Digest-pinned base and build image references are recorded; see sbom/README.md."
@@ -34,13 +34,13 @@
       "path": "ecm.spdx.json",
       "subject": "ecm",
       "packages": 445,
-      "sha256": "05d8341797886904d4f8be33e264a9f9076d80861b008eab075b86cd064dd95d"
+      "sha256": "ffddf5b2bad769c83b786eee8d7ca3c7ed04606159d7025afbd294fe9d10d81e"
     },
     {
       "path": "mcp.spdx.json",
       "subject": "mcp",
       "packages": 43,
-      "sha256": "4d99176021ef65bc2439d1274d3bfd55a00f1e344e95226627328651c66d29ff"
+      "sha256": "7f0e05825eb19be2bf0ec2153e40af36823e118dae1481895be6ac4aa318830b"
     }
   ]
 }

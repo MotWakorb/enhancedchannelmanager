@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+from urllib.parse import parse_qsl
 
 import pytest
 
@@ -39,6 +40,14 @@ NODE_DIGEST = "a" * 64
 PYTHON_DIGEST = "b" * 64
 UV_DIGEST = "c" * 64
 ALPINE_DIGEST = "d" * 64
+BUILDKIT_INSTRUCTION_WHITESPACE = (" ", "\t", "\v", "\f", "\r")
+BUILDKIT_INSTRUCTION_WHITESPACE_IDS = (
+    "space",
+    "tab",
+    "vertical-tab",
+    "form-feed",
+    "carriage-return",
+)
 
 
 def _load():
@@ -65,6 +74,20 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _expected_namespace(sbom, document: dict, version: str, subject: str) -> str:
+    namespace_free = {
+        key: value for key, value in document.items() if key != "documentNamespace"
+    }
+    canonical = json.dumps(
+        namespace_free,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"{sbom.NAMESPACE_ROOT}/v{version}/{subject}-{fingerprint}"
+
+
 @pytest.fixture
 def tree(tmp_path: Path) -> Path:
     """A minimal repository with the exact manifest shapes the real one uses."""
@@ -76,7 +99,25 @@ def tree(tmp_path: Path) -> Path:
                 "lockfileVersion": 3,
                 "packages": {
                     "": {"name": "app", "version": "9.9.9"},
+                    "node_modules/@scope/widget": {
+                        "version": "1.2.3",
+                        "license": "Apache-2.0",
+                    },
+                    "node_modules/first/node_modules/semver": {
+                        "version": "7.8.5",
+                        "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+                        "integrity": "sha512-same-package-bytes",
+                        "dev": True,
+                        "license": "ISC",
+                    },
                     "node_modules/react": {"version": "19.0.0", "license": "MIT"},
+                    "node_modules/second/node_modules/semver": {
+                        "version": "7.8.5",
+                        "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+                        "integrity": "sha512-same-package-bytes",
+                        "dev": True,
+                        "license": "ISC",
+                    },
                     "node_modules/vite": {"version": "6.0.0", "dev": True},
                 },
             }
@@ -128,15 +169,51 @@ def test_the_coverage_limit_is_stated_inside_the_document(sbom, generated):
         document = json.loads((generated / name).read_text(encoding="utf-8"))
         comment = document["creationInfo"]["comment"]
         assert "NOT an image SBOM" in comment
-        assert "no image digest is asserted" in comment
+        assert "no subject image digest is asserted" in comment
+        assert "Digest-pinned base and build image references are recorded" in comment
+        assert "no image digest is asserted" not in comment
 
 
-def test_no_document_asserts_an_image_digest(sbom, generated):
-    """The whole failure mode this guards is a document naming a digest it cannot prove."""
+def test_the_index_distinguishes_subject_and_dependency_image_digests(sbom, generated):
     index = json.loads((generated / "index.json").read_text(encoding="utf-8"))
     assert index["kind"] == "source-manifest"
     assert index["subject"]["type"] == "source-tree"
-    assert "image_digest" not in json.dumps(index)
+    assert "no subject image digest" in index["subject"]["note"]
+    coverage = " ".join(index["coverage"]["includes"] + index["coverage"]["excludes"])
+    assert "Base and build images referenced by digest" in coverage
+    assert "Published subject image digest" in coverage
+    assert "Any image digest" not in coverage
+
+
+def test_base_and_build_image_digests_are_recorded_but_the_subject_has_none(
+    sbom, generated
+):
+    for name in ("ecm.spdx.json", "mcp.spdx.json"):
+        document = json.loads((generated / name).read_text(encoding="utf-8"))
+        root = next(
+            package
+            for package in document["packages"]
+            if package["SPDXID"] == document["documentDescribes"][0]
+        )
+        assert "checksums" not in root
+
+        images = [
+            package
+            for package in document["packages"]
+            if any(
+                ref["referenceLocator"].startswith("pkg:oci/")
+                for ref in package.get("externalRefs", [])
+            )
+        ]
+        assert images
+        for package in images:
+            assert package["versionInfo"].startswith("sha256:")
+            assert package["checksums"] == [
+                {
+                    "algorithm": "SHA256",
+                    "checksumValue": package["versionInfo"].removeprefix("sha256:"),
+                }
+            ]
 
 
 def test_a_base_image_used_twice_is_recorded_once_as_the_runtime_base(sbom, generated):
@@ -164,10 +241,159 @@ def test_a_copy_from_a_named_build_stage_is_not_an_image(sbom, generated):
     assert "ghcr.io/astral-sh/uv:latest" in names
 
 
+def test_exact_duplicate_npm_identity_is_deduplicated_and_ids_are_globally_unique(
+    sbom, generated
+):
+    ecm = json.loads((generated / "ecm.spdx.json").read_text(encoding="utf-8"))
+    semver = [package for package in ecm["packages"] if package["name"] == "semver"]
+    assert len(semver) == 1
+
+    for name in ("ecm.spdx.json", "mcp.spdx.json"):
+        document = json.loads((generated / name).read_text(encoding="utf-8"))
+        package_ids = [package["SPDXID"] for package in document["packages"]]
+        assert len(package_ids) == len(set(package_ids))
+
+
+def test_distinct_package_identities_that_normalize_to_one_spdx_id_are_rejected(sbom):
+    npm = [
+        {
+            "name": name,
+            "version": "1.0.0",
+            "dev": False,
+            "license": None,
+        }
+        for name in ("same.name", "same_name")
+    ]
+    duplicate_id = "SPDXRef-Package-npm-same.name-1.0.0"
+
+    with pytest.raises(sbom.SbomError, match=duplicate_id):
+        sbom.build_document(
+            subject="ecm",
+            subject_name="enhanced-channel-manager",
+            version="9.9.9",
+            created=CREATED,
+            pypi=[],
+            npm=npm,
+            images=[],
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "conflicting_value"),
+    [
+        ("dev", False),
+        ("license", "MIT"),
+        ("resolved", "https://registry.example/semver-7.8.5.tgz"),
+        ("integrity", "sha512-different-package-bytes"),
+    ],
+)
+def test_conflicting_duplicate_npm_identity_is_rejected(sbom, field, conflicting_value):
+    metadata = {
+        "version": "7.8.5",
+        "resolved": "https://registry.npmjs.org/semver/-/semver-7.8.5.tgz",
+        "integrity": "sha512-same-package-bytes",
+        "dev": True,
+        "license": "ISC",
+    }
+    conflicting = dict(metadata)
+    conflicting[field] = conflicting_value
+
+    with pytest.raises(sbom.SbomError, match="conflicting metadata"):
+        sbom.parse_lockfile_packages(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/first/node_modules/semver": metadata,
+                    "node_modules/second/node_modules/semver": conflicting,
+                },
+            },
+            "package-lock.json",
+        )
+
+
+def test_scoped_npm_purl_is_canonical(sbom, generated):
+    document = json.loads((generated / "ecm.spdx.json").read_text(encoding="utf-8"))
+    package = next(
+        package for package in document["packages"] if package["name"] == "@scope/widget"
+    )
+    assert package["externalRefs"] == [
+        {
+            "referenceCategory": "PACKAGE-MANAGER",
+            "referenceType": "purl",
+            "referenceLocator": "pkg:npm/%40scope/widget@1.2.3",
+        }
+    ]
+
+
+def test_oci_purls_are_canonical_and_use_only_supported_qualifiers(sbom, generated):
+    expected = {
+        f"pkg:oci/node@sha256:{NODE_DIGEST}"
+        "?repository_url=docker.io%2Flibrary%2Fnode&tag=20-alpine",
+        f"pkg:oci/python@sha256:{PYTHON_DIGEST}"
+        "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-slim",
+        f"pkg:oci/uv@sha256:{UV_DIGEST}"
+        "?repository_url=ghcr.io%2Fastral-sh%2Fuv&tag=latest",
+        f"pkg:oci/python@sha256:{ALPINE_DIGEST}"
+        "?repository_url=docker.io%2Flibrary%2Fpython&tag=3.12-alpine",
+    }
+    actual = set()
+    for name in ("ecm.spdx.json", "mcp.spdx.json"):
+        document = json.loads((generated / name).read_text(encoding="utf-8"))
+        actual.update(
+            ref["referenceLocator"]
+            for package in document["packages"]
+            for ref in package.get("externalRefs", [])
+            if ref["referenceLocator"].startswith("pkg:oci/")
+        )
+
+    assert actual == expected
+    for locator in actual:
+        qualifiers = dict(parse_qsl(locator.partition("?")[2]))
+        assert set(qualifiers) == {"repository_url", "tag"}
+
+
+def test_creator_identifies_the_generator_format_version(sbom, generated):
+    for name in ("ecm.spdx.json", "mcp.spdx.json"):
+        document = json.loads((generated / name).read_text(encoding="utf-8"))
+        assert document["creationInfo"]["creators"] == [
+            "Tool: scripts/generate_sbom.py-3"
+        ]
+
+
 def test_generation_is_deterministic_for_a_fixed_timestamp(sbom, tree):
     first = sbom.render(tree, "9.9.9", CREATED)
     second = sbom.render(tree, "9.9.9", CREATED)
     assert first == second
+
+
+def test_document_namespaces_are_content_derived_without_self_reference(sbom, tree):
+    rendered = sbom.render(tree, "9.9.9", CREATED)
+    namespaces = set()
+    for subject in ("ecm", "mcp"):
+        document = json.loads(rendered[f"{subject}.spdx.json"])
+        expected = _expected_namespace(sbom, document, "9.9.9", subject)
+        assert document["documentNamespace"] == expected
+        assert "#" not in document["documentNamespace"]
+        namespaces.add(document["documentNamespace"])
+    assert len(namespaces) == 2
+
+
+def test_document_namespace_changes_with_content_or_creation_time(sbom, tree):
+    original = json.loads(sbom.render(tree, "9.9.9", CREATED)["ecm.spdx.json"])
+
+    _write(
+        tree / "backend" / "requirements.txt",
+        "fastapi==0.136.2\ncryptography==50.0.0\n",
+    )
+    changed_content = json.loads(
+        sbom.render(tree, "9.9.9", CREATED)["ecm.spdx.json"]
+    )
+    changed_time = json.loads(
+        sbom.render(tree, "9.9.9", "2026-01-02T03:04:06Z")["ecm.spdx.json"]
+    )
+
+    assert changed_content["documentNamespace"] != original["documentNamespace"]
+    assert changed_time["documentNamespace"] != changed_content["documentNamespace"]
 
 
 # ─── verify: the mutants it must catch ─────────────────────────────────
@@ -251,17 +477,73 @@ def test_an_empty_requirements_file_is_rejected(sbom):
         sbom.parse_pinned_requirements("# only a comment\n", "requirements.txt")
 
 
-def test_a_floating_base_image_is_rejected(sbom):
-    with pytest.raises(sbom.SbomError):
-        sbom.parse_dockerfile_images("FROM python:3.12-slim\n", "Dockerfile")
-
-
-def test_a_floating_copy_from_image_is_rejected(sbom):
-    with pytest.raises(sbom.SbomError):
+@pytest.mark.parametrize(
+    "instruction_whitespace",
+    BUILDKIT_INSTRUCTION_WHITESPACE,
+    ids=BUILDKIT_INSTRUCTION_WHITESPACE_IDS,
+)
+def test_a_floating_base_image_is_rejected_for_every_buildkit_instruction_whitespace(
+    sbom, instruction_whitespace
+):
+    with pytest.raises(sbom.SbomError, match="python:3.12-slim.*floating image reference"):
         sbom.parse_dockerfile_images(
-            f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST}\nCOPY --from=busybox:latest /x /x\n",
+            f"FROM{instruction_whitespace}python:3.12-slim\n", "Dockerfile"
+        )
+
+
+@pytest.mark.parametrize(
+    "instruction_whitespace",
+    BUILDKIT_INSTRUCTION_WHITESPACE,
+    ids=BUILDKIT_INSTRUCTION_WHITESPACE_IDS,
+)
+def test_a_floating_copy_from_image_is_rejected_for_every_buildkit_instruction_whitespace(
+    sbom, instruction_whitespace
+):
+    with pytest.raises(sbom.SbomError, match="busybox:latest.*floating image reference"):
+        sbom.parse_dockerfile_images(
+            f"FROM python:3.12-slim@sha256:{PYTHON_DIGEST}\n"
+            f"COPY{instruction_whitespace}--from=busybox:latest /x /x\n",
             "Dockerfile",
         )
+
+
+@pytest.mark.parametrize("line_ending", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize(
+    "instruction_whitespace",
+    BUILDKIT_INSTRUCTION_WHITESPACE,
+    ids=BUILDKIT_INSTRUCTION_WHITESPACE_IDS,
+)
+def test_pinned_images_and_stage_aliases_work_for_every_buildkit_instruction_whitespace(
+    sbom, instruction_whitespace, line_ending
+):
+    images = sbom.parse_dockerfile_images(
+        line_ending.join(
+            [
+                f"FROM{instruction_whitespace}node:20-alpine@sha256:{NODE_DIGEST}"
+                f"{instruction_whitespace}AS{instruction_whitespace}build",
+                f"COPY{instruction_whitespace}--from=busybox:1.36@sha256:{UV_DIGEST}"
+                f"{instruction_whitespace}/bin/x{instruction_whitespace}/bin/x",
+                f"FROM{instruction_whitespace}build",
+                f"COPY{instruction_whitespace}--from=build"
+                f"{instruction_whitespace}/app{instruction_whitespace}/app",
+                "",
+            ]
+        ),
+        "Dockerfile",
+    )
+
+    assert images == [
+        {
+            "image": "busybox:1.36",
+            "digest": f"sha256:{UV_DIGEST}",
+            "role": "build",
+        },
+        {
+            "image": "node:20-alpine",
+            "digest": f"sha256:{NODE_DIGEST}",
+            "role": "runtime",
+        },
+    ]
 
 
 def test_a_dockerfile_without_a_from_is_rejected(sbom):
@@ -283,13 +565,103 @@ def test_a_lockfile_entry_without_a_version_is_rejected(sbom):
         )
 
 
+@pytest.mark.parametrize("location", ["", "node_modules/bad"])
+@pytest.mark.parametrize("entry", [None, True, 1, "bad", []])
+def test_every_lockfile_entry_must_be_an_object(sbom, location, entry):
+    with pytest.raises(sbom.SbomError, match=repr(location)):
+        sbom.parse_lockfile_packages(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    location: entry,
+                    "node_modules/real": {"version": "2.0.0"},
+                },
+            },
+            "package-lock.json",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("link", "true"),
+        ("dev", 0),
+        ("license", None),
+        ("resolved", 1),
+        ("integrity", []),
+        ("name", False),
+    ],
+)
+def test_present_lockfile_metadata_must_have_its_declared_type(sbom, field, invalid):
+    with pytest.raises(sbom.SbomError, match=rf"entry 'node_modules/bad'.*{field}"):
+        sbom.parse_lockfile_packages(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    "node_modules/bad": {"version": "1.0.0", field: invalid},
+                    "node_modules/real": {"version": "2.0.0"},
+                },
+            },
+            "package-lock.json",
+        )
+
+
+@pytest.mark.parametrize(
+    ("location", "entry", "field"),
+    [
+        ("", {"license": None}, "license"),
+        ("node_modules/workspace", {"link": True, "dev": "false"}, "dev"),
+    ],
+)
+def test_root_and_linked_entries_are_validated_before_they_are_skipped(
+    sbom, location, entry, field
+):
+    with pytest.raises(sbom.SbomError, match=rf"entry {location!r}.*{field}"):
+        sbom.parse_lockfile_packages(
+            {
+                "lockfileVersion": 3,
+                "packages": {
+                    location: entry,
+                    "node_modules/real": {"version": "2.0.0"},
+                },
+            },
+            "package-lock.json",
+        )
+
+
+def test_absent_optional_metadata_retains_defaults(sbom):
+    packages = sbom.parse_lockfile_packages(
+        {
+            "lockfileVersion": 3,
+            "packages": {
+                "": {"name": "app", "version": "1.0.0"},
+                "node_modules/real": {"version": "2.0.0"},
+            },
+        },
+        "package-lock.json",
+    )
+    assert packages == [
+        {
+            "name": "real",
+            "version": "2.0.0",
+            "dev": False,
+            "license": None,
+            "resolved": None,
+            "integrity": None,
+        }
+    ]
+
+
 def test_a_linked_workspace_entry_is_not_inventoried(sbom):
     packages = sbom.parse_lockfile_packages(
         {
             "lockfileVersion": 3,
             "packages": {
                 "": {"version": "1.0.0"},
-                "node_modules/left": {"version": "1.0.0", "link": True},
+                "node_modules/left": {
+                    "link": True,
+                    "resolved": "packages/left",
+                },
                 "node_modules/real": {"version": "2.0.0"},
             },
         },
@@ -455,6 +827,43 @@ def test_the_repository_carries_at_least_one_sbom(sbom):
 @pytest.mark.parametrize("directory", _committed_directories(), ids=lambda path: path.name)
 def test_every_committed_sbom_is_internally_consistent(sbom, directory):
     assert sbom.audit(directory) == []
+
+
+def test_every_committed_document_has_a_unique_content_derived_namespace(sbom):
+    namespaces = set()
+    for directory in _committed_directories():
+        index = json.loads((directory / "index.json").read_text(encoding="utf-8"))
+        for entry in index["documents"]:
+            document = json.loads(
+                (directory / entry["path"]).read_text(encoding="utf-8")
+            )
+            expected = _expected_namespace(
+                sbom,
+                document,
+                index["version"],
+                entry["subject"],
+            )
+            namespace = document["documentNamespace"]
+            assert namespace == expected
+            assert namespace not in namespaces
+            namespaces.add(namespace)
+
+
+@pytest.mark.parametrize("directory", _committed_directories(), ids=lambda path: path.name)
+def test_every_committed_document_has_unique_ids_and_resolved_relationships(
+    sbom, directory
+):
+    index = json.loads((directory / "index.json").read_text(encoding="utf-8"))
+    for entry in index["documents"]:
+        document = json.loads((directory / entry["path"]).read_text(encoding="utf-8"))
+        element_ids = ["SPDXRef-DOCUMENT"] + [
+            package["SPDXID"] for package in document["packages"]
+        ]
+        assert len(element_ids) == len(set(element_ids))
+        known = set(element_ids)
+        for relationship in document["relationships"]:
+            assert relationship["spdxElementId"] in known
+            assert relationship["relatedSpdxElement"] in known
 
 
 def test_the_sbom_for_the_current_version_matches_the_current_tree(sbom):
