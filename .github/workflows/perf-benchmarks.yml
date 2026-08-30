@@ -46,7 +46,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout repository (PR HEAD)
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Need both branches' history so we can check out the base
           # branch later for the baseline run.

@@ -49,7 +49,7 @@ jobs:
       mcp_arm64: ${{ steps.authorize.outputs.mcp_arm64 }}
     steps:
       - name: Checkout candidate policy from the immutable revision
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha }}
           fetch-depth: 1
@@ -136,7 +136,7 @@ jobs:
       ecm_digest: ${{ steps.promote.outputs.ecm_digest }}
       mcp_digest: ${{ steps.promote.outputs.mcp_digest }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.sha }}
       - name: Download exact verified OCI candidates
@@ -190,7 +190,7 @@ jobs:
       ecm_digest: ${{ steps.promote.outputs.ecm_digest }}
       mcp_digest: ${{ steps.promote.outputs.mcp_digest }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.sha }}
       - name: Download exact verified OCI candidates
@@ -240,7 +240,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.authorize.outputs.sha }}
       - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v4

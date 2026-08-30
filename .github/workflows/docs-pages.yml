@@ -37,7 +37,7 @@ jobs:
       docs_site_affected: ${{ steps.classify.outputs.docs_site_affected }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Only scripts/classify_changed_paths.py is needed; the changed-file
           # set comes from the compare API, not from git history.
@@ -67,7 +67,7 @@ jobs:
       && needs.detect.outputs.docs_site_affected != 'false'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

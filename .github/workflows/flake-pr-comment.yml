@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Sparse — we only need scripts/ and the workflow itself.
           # Default fetch-depth=1 is fine; we don't run git history ops.
