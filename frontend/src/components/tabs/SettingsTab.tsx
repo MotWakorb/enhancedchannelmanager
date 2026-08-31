@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import * as api from '../../services/api';
 import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { useNotifications } from '../../contexts/NotificationContext';
-import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode } from '../../services/api';
+import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode, StreamSortStrategy, StreamSortPointCriterion, StreamSortPointOperator, StreamSortPointRule } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { TagEngineSection } from '../settings/TagEngineSection';
 import { AuthSettingsSection } from '../settings/AuthSettingsSection';
@@ -94,6 +94,104 @@ const DEFAULT_SORT_ENABLED: SortEnabledMap = {
   custom_streams: false,
   catchup: false,
 };
+
+type PointCriterionConfig = {
+  label: string;
+  input: 'number' | 'codec' | 'boolean';
+  defaultValue: number | string | boolean;
+  defaultOperator: StreamSortPointOperator;
+  valueLabel: string;
+  step?: number;
+  valueScale?: number;
+};
+
+const ALL_POINT_CRITERIA: StreamSortPointCriterion[] = [
+  ...ALL_SORT_CRITERIA,
+  'failed',
+  'black_screen',
+  'low_fps',
+];
+
+const POINT_CRITERION_CONFIG: Record<StreamSortPointCriterion, PointCriterionConfig> = {
+  resolution: { label: 'Resolution', input: 'number', defaultValue: 1080, defaultOperator: 'gte', valueLabel: 'Value (vertical pixels)', step: 1 },
+  bitrate: { label: 'Bitrate', input: 'number', defaultValue: 6_000_000, defaultOperator: 'gte', valueLabel: 'Value (kbps)', step: 1, valueScale: 1000 },
+  framerate: { label: 'Framerate', input: 'number', defaultValue: 30, defaultOperator: 'gte', valueLabel: 'Value (FPS)', step: 0.01 },
+  video_codec: { label: 'Video Codec', input: 'codec', defaultValue: 'h264', defaultOperator: 'eq', valueLabel: 'Codec' },
+  m3u_priority: { label: 'M3U Priority', input: 'number', defaultValue: 0, defaultOperator: 'gte', valueLabel: 'Priority value', step: 1 },
+  audio_channels: { label: 'Audio Channels', input: 'number', defaultValue: 2, defaultOperator: 'gte', valueLabel: 'Value (channels)', step: 1 },
+  custom_streams: { label: 'Custom Streams', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
+  catchup: { label: 'Catch-up', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
+  failed: { label: 'Failed Streams', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
+  black_screen: { label: 'Black Screen', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
+  low_fps: { label: 'Low FPS', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
+};
+
+const POINT_CRITERION_OPTIONS = ALL_POINT_CRITERIA.map((criterion) => ({
+  value: criterion,
+  label: POINT_CRITERION_CONFIG[criterion].label,
+}));
+
+const ORDERED_POINT_OPERATOR_OPTIONS: { value: StreamSortPointOperator; label: string }[] = [
+  { value: 'eq', label: 'Equals (=)' },
+  { value: 'ne', label: 'Does not equal (!=)' },
+  { value: 'gt', label: 'Greater than (>)' },
+  { value: 'gte', label: 'At least (>=)' },
+  { value: 'lt', label: 'Less than (<)' },
+  { value: 'lte', label: 'At most (<=)' },
+];
+
+const BOOLEAN_POINT_OPERATOR_OPTIONS = [ORDERED_POINT_OPERATOR_OPTIONS[0]];
+const BOOLEAN_POINT_VALUE_OPTIONS = [
+  { value: 'true', label: 'True' },
+  { value: 'false', label: 'False' },
+];
+const VIDEO_CODEC_OPTIONS = [
+  { value: 'av1', label: 'AV1' },
+  { value: 'hevc', label: 'HEVC' },
+  { value: 'h265', label: 'H.265' },
+  { value: 'vp9', label: 'VP9' },
+  { value: 'h264', label: 'H.264' },
+  { value: 'avc', label: 'AVC' },
+  { value: 'vp8', label: 'VP8' },
+  { value: 'mpeg2video', label: 'MPEG-2 Video' },
+  { value: 'mpeg2', label: 'MPEG-2' },
+];
+
+type PointRuleValidation = {
+  value?: string;
+  points?: string;
+};
+
+function createPointRule(criterion: StreamSortPointCriterion = 'resolution'): StreamSortPointRule {
+  const config = POINT_CRITERION_CONFIG[criterion];
+  return {
+    criterion,
+    operator: config.defaultOperator,
+    value: config.defaultValue,
+    points: 10,
+  };
+}
+
+function validatePointRule(rule: StreamSortPointRule): PointRuleValidation {
+  const config = POINT_CRITERION_CONFIG[rule.criterion];
+  const errors: PointRuleValidation = {};
+
+  if (config.input === 'number' && (typeof rule.value !== 'number' || !Number.isFinite(rule.value))) {
+    errors.value = 'Value must be a finite number.';
+  } else if (config.input === 'codec' && (
+    typeof rule.value !== 'string' || !VIDEO_CODEC_OPTIONS.some((option) => option.value === rule.value)
+  )) {
+    errors.value = 'Choose a supported video codec.';
+  } else if (config.input === 'boolean' && typeof rule.value !== 'boolean') {
+    errors.value = 'Choose True or False.';
+  }
+
+  if (!Number.isSafeInteger(rule.points)) {
+    errors.points = 'Points must be a signed whole number.';
+  }
+
+  return errors;
+}
 
 // Merge saved sort criteria with any new criteria that may have been added
 // Preserves saved order and enabled state, appends new criteria at end (disabled)
@@ -556,6 +654,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const [streamSortPriority, setStreamSortPriority] = useState<SortCriterion[]>(['resolution', 'bitrate', 'framerate', 'video_codec', 'm3u_priority', 'audio_channels', 'custom_streams', 'catchup']);
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false });
+  const [streamSortStrategy, setStreamSortStrategy] = useState<StreamSortStrategy>('priority');
+  const [streamSortPointRules, setStreamSortPointRules] = useState<StreamSortPointRule[]>([]);
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
   const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
@@ -826,7 +926,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     refreshM3usBeforeProbe, autoReorderAfterProbe, pushStreamStatsToDispatcharr,
     probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
     blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
-    streamSortPriority, streamSortEnabled, m3uAccountPriorities,
+    streamSortPriority, streamSortEnabled, streamSortStrategy, streamSortPointRules,
+    m3uAccountPriorities,
     deprioritizeFailedStreams, deprioritizeBlackScreen, deprioritizeLowFps,
     failedStreamSortOrder, strikeThreshold, publicBaseUrl, smtpHost, smtpPort, smtpUser,
     smtpPassword, smtpFromEmail, smtpFromName, smtpUseTls, smtpUseSsl,
@@ -882,6 +983,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         return arrayMove(items, oldIndex, newIndex);
       });
     }
+  };
+
+  const updatePointRule = (index: number, changes: Partial<StreamSortPointRule>) => {
+    setStreamSortPointRules((rules) => rules.map((rule, ruleIndex) => (
+      ruleIndex === index ? { ...rule, ...changes } : rule
+    )));
+  };
+
+  const changePointRuleCriterion = (index: number, criterion: StreamSortPointCriterion) => {
+    setStreamSortPointRules((rules) => rules.map((rule, ruleIndex) => (
+      ruleIndex === index ? { ...createPointRule(criterion), points: rule.points } : rule
+    )));
+  };
+
+  const movePointRule = (index: number, direction: -1 | 1) => {
+    setStreamSortPointRules((rules) => arrayMove(rules, index, index + direction));
   };
 
   useEffect(() => {
@@ -1151,6 +1268,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
       setStreamSortPriority(merged.priority);
       setStreamSortEnabled(merged.enabled);
+      setStreamSortStrategy(settings.stream_sort_strategy ?? 'priority');
+      setStreamSortPointRules((settings.stream_sort_point_rules ?? []).map((rule) => ({ ...rule })));
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setDeprioritizeBlackScreen(settings.deprioritize_black_screen ?? true);
@@ -1525,6 +1644,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       }
     }
 
+    if (streamSortPointRules.some((rule) => Object.keys(validatePointRule(rule)).length > 0)) {
+      notifications.error('Fix the invalid Smart Sort point rules before saving.');
+      return;
+    }
+
     setLoading(true);
 
     try {
@@ -1607,6 +1731,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         low_fps_threshold: lowFpsThreshold,
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
+        stream_sort_strategy: streamSortStrategy,
+        stream_sort_point_rules: streamSortPointRules,
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
@@ -3044,33 +3170,87 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">sort</span>
-          <h3>Smart Sort Priority</h3>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={() => setIsSortPriorityReorderMode((v) => !v)}
-            title={isSortPriorityReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
-          >
-            <span className="material-icons">
-              {isSortPriorityReorderMode ? 'check' : 'reorder'}
-            </span>
-            {isSortPriorityReorderMode ? 'Done' : 'Reorder'}
-          </button>
+          <h3>Smart Sort</h3>
+          {streamSortStrategy === 'priority' && (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => setIsSortPriorityReorderMode((v) => !v)}
+              title={isSortPriorityReorderMode ? 'Exit reorder mode' : 'Reorder priority'}
+            >
+              <span className="material-icons">
+                {isSortPriorityReorderMode ? 'check' : 'reorder'}
+              </span>
+              {isSortPriorityReorderMode ? 'Done' : 'Reorder'}
+            </button>
+          )}
         </div>
 
-        <div className="form-group">
-          <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-            Configure which criteria are used for stream sorting. Check/uncheck to enable/disable.
-            Click Reorder to change priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
-          </p>
+        <div className="smart-sort-strategy" role="radiogroup" aria-label="Smart Sort strategy">
+          <label
+            className={`smart-sort-strategy-option ${streamSortStrategy === 'priority' ? 'is-active' : ''}`}
+          >
+            <input
+              type="radio"
+              className="sr-only"
+              name="stream-sort-strategy"
+              value="priority"
+              checked={streamSortStrategy === 'priority'}
+              onChange={() => setStreamSortStrategy('priority')}
+              aria-label="Priority"
+            />
+            <span className="smart-sort-strategy-title">Priority</span>
+            <span className="smart-sort-strategy-description">Rank enabled criteria from first to last.</span>
+          </label>
+          <label
+            className={`smart-sort-strategy-option ${streamSortStrategy === 'points' ? 'is-active' : ''}`}
+          >
+            <input
+              type="radio"
+              className="sr-only"
+              name="stream-sort-strategy"
+              value="points"
+              checked={streamSortStrategy === 'points'}
+              onChange={() => {
+                setStreamSortStrategy('points');
+                setIsSortPriorityReorderMode(false);
+              }}
+              aria-label="Points"
+            />
+            <span className="smart-sort-strategy-title">Points</span>
+            <span className="smart-sort-strategy-description">Add signed scores for every matching rule.</span>
+          </label>
+        </div>
 
-          {isSortPriorityReorderMode ? (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleSortPriorityDragEnd}
-            >
-              <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
+        {streamSortStrategy === 'priority' ? (
+          <>
+            <div className="form-group">
+              <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+                Configure which criteria are used for stream sorting. Check/uncheck to enable/disable.
+                Click Reorder to change priority. Enabled criteria appear in the sort dropdown and are used by Smart Sort.
+              </p>
+
+              {isSortPriorityReorderMode ? (
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleSortPriorityDragEnd}
+                >
+                  <SortableContext items={streamSortPriority} strategy={verticalListSortingStrategy}>
+                    <div className="sort-priority-list">
+                      {streamSortPriority.map((criterion, index) => (
+                        <SortablePriorityItem
+                          key={criterion}
+                          id={criterion}
+                          index={index}
+                          enabled={streamSortEnabled[criterion]}
+                          onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
+                        />
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+              ) : (
                 <div className="sort-priority-list">
                   {streamSortPriority.map((criterion, index) => (
                     <SortablePriorityItem
@@ -3082,81 +3262,79 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     />
                   ))}
                 </div>
-              </SortableContext>
-            </DndContext>
-          ) : (
-            <div className="sort-priority-list">
-              {streamSortPriority.map((criterion, index) => (
-                <SortablePriorityItem
-                  key={criterion}
-                  id={criterion}
-                  index={index}
-                  enabled={streamSortEnabled[criterion]}
-                  onToggleEnabled={(id) => setStreamSortEnabled(prev => ({ ...prev, [id]: !prev[id] }))}
-                />
-              ))}
+              )}
             </div>
-          )}
-        </div>
 
-        <div className="form-group">
-          <label className="checkbox-label">
-            <input
-              type="checkbox"
-              checked={deprioritizeFailedStreams}
-              onChange={(e) => setDeprioritizeFailedStreams(e.target.checked)}
-            />
-            <span>Deprioritize Failed Streams</span>
-          </label>
-          <p className="form-hint">
-            When enabled, streams that fail probe checks (dead/timeout) will automatically be sorted to the bottom when using stream sorting features.
-            This ensures working streams are prioritized for playback.
-          </p>
-        </div>
+            <div className="form-group">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={deprioritizeFailedStreams}
+                  onChange={(e) => setDeprioritizeFailedStreams(e.target.checked)}
+                />
+                <span>Deprioritize Failed Streams</span>
+              </label>
+              <p className="form-hint">
+                When enabled, streams that fail probe checks (dead/timeout) will automatically be sorted to the bottom when using stream sorting features.
+                This ensures working streams are prioritized for playback.
+              </p>
+            </div>
 
-        {deprioritizeFailedStreams && (
-          <>
-          <div className="form-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={deprioritizeBlackScreen}
-                onChange={(e) => setDeprioritizeBlackScreen(e.target.checked)}
-              />
-              <span>Deprioritize Black Screen Streams</span>
-            </label>
-            <p className="form-hint">
-              When disabled, streams detected as black screen will be sorted by their actual quality stats (resolution, bitrate, etc.) instead of being pushed to the bottom.
-            </p>
-          </div>
+            {deprioritizeFailedStreams && (
+              <>
+              <div className="form-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={deprioritizeBlackScreen}
+                    onChange={(e) => setDeprioritizeBlackScreen(e.target.checked)}
+                  />
+                  <span>Deprioritize Black Screen Streams</span>
+                </label>
+                <p className="form-hint">
+                  When disabled, streams detected as black screen will be sorted by their actual quality stats (resolution, bitrate, etc.) instead of being pushed to the bottom.
+                </p>
+              </div>
 
-          <div className="form-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={deprioritizeLowFps}
-                onChange={(e) => setDeprioritizeLowFps(e.target.checked)}
-              />
-              <span>Deprioritize Low FPS Streams</span>
-            </label>
-            <p className="form-hint">
-              When disabled, streams with low frame rates will be sorted by their actual quality stats instead of being pushed to the bottom.
-            </p>
-          </div>
+              <div className="form-group">
+                <label className="checkbox-label">
+                  <input
+                    type="checkbox"
+                    checked={deprioritizeLowFps}
+                    onChange={(e) => setDeprioritizeLowFps(e.target.checked)}
+                  />
+                  <span>Deprioritize Low FPS Streams</span>
+                </label>
+                <p className="form-hint">
+                  When disabled, streams with low frame rates will be sorted by their actual quality stats instead of being pushed to the bottom.
+                </p>
+              </div>
 
-          <div className="form-group">
-            <label className="form-label">Failed Stream Ordering</label>
-            <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
-              Click Reorder above to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
-            </p>
+              <div className="form-group">
+                <label className="form-label">Failed Stream Ordering</label>
+                <p className="form-hint" style={{ marginTop: 0, marginBottom: '0.75rem' }}>
+                  Click Reorder above to set the order of deprioritized streams. Streams in the first category sort higher (closer to working streams).
+                </p>
 
-            {isSortPriorityReorderMode ? (
-              <DndContext
-                sensors={sensors}
-                collisionDetection={closestCenter}
-                onDragEnd={handleFailedOrderDragEnd}
-              >
-                <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
+                {isSortPriorityReorderMode ? (
+                  <DndContext
+                    sensors={sensors}
+                    collisionDetection={closestCenter}
+                    onDragEnd={handleFailedOrderDragEnd}
+                  >
+                    <SortableContext items={failedStreamSortOrder} strategy={verticalListSortingStrategy}>
+                      <div className="sort-priority-list">
+                        {failedStreamSortOrder.map((category, index) => (
+                          <SortableFailedCategoryItem
+                            key={category}
+                            id={category}
+                            index={index}
+                          />
+                        ))}
+                      </div>
+                    </SortableContext>
+                  </DndContext>
+                ) : (
                   <div className="sort-priority-list">
                     {failedStreamSortOrder.map((category, index) => (
                       <SortableFailedCategoryItem
@@ -3166,21 +3344,160 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       />
                     ))}
                   </div>
-                </SortableContext>
-              </DndContext>
+                )}
+              </div>
+              </>
+            )}
+          </>
+        ) : (
+          <div className="smart-sort-points-editor">
+            <p className="form-hint smart-sort-points-copy">
+              All matching rules add together. Rule order is organizational only and does not create precedence.
+            </p>
+
+            {streamSortPointRules.length === 0 ? (
+              <p className="empty-inline">No point rules configured. Every stream will receive a score of 0.</p>
             ) : (
-              <div className="sort-priority-list">
-                {failedStreamSortOrder.map((category, index) => (
-                  <SortableFailedCategoryItem
-                    key={category}
-                    id={category}
-                    index={index}
-                  />
-                ))}
+              <div className="smart-sort-point-rules">
+                {streamSortPointRules.map((rule, index) => {
+                  const config = POINT_CRITERION_CONFIG[rule.criterion];
+                  const errors = validatePointRule(rule);
+                  const valueErrorId = `smart-sort-rule-${index}-value-error`;
+                  const pointsErrorId = `smart-sort-rule-${index}-points-error`;
+                  const operatorOptions = config.input === 'boolean'
+                    ? BOOLEAN_POINT_OPERATOR_OPTIONS
+                    : ORDERED_POINT_OPERATOR_OPTIONS;
+
+                  return (
+                    <div
+                      key={`${rule.criterion}-${index}`}
+                      className="smart-sort-point-rule"
+                      data-testid="smart-sort-point-rule"
+                    >
+                      <div className="smart-sort-point-rule-header">
+                        <span className="smart-sort-point-rule-title">Rule {index + 1}</span>
+                        <div className="smart-sort-point-rule-actions">
+                          <button
+                            type="button"
+                            className="btn-icon"
+                            aria-label={`Move rule ${index + 1} up`}
+                            title="Move rule up"
+                            disabled={index === 0}
+                            onClick={() => movePointRule(index, -1)}
+                          >
+                            <span className="material-icons" aria-hidden="true">arrow_upward</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-icon"
+                            aria-label={`Move rule ${index + 1} down`}
+                            title="Move rule down"
+                            disabled={index === streamSortPointRules.length - 1}
+                            onClick={() => movePointRule(index, 1)}
+                          >
+                            <span className="material-icons" aria-hidden="true">arrow_downward</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-icon"
+                            aria-label={`Delete rule ${index + 1}`}
+                            title="Delete rule"
+                            onClick={() => setStreamSortPointRules((rules) => rules.filter((_, ruleIndex) => ruleIndex !== index))}
+                          >
+                            <span className="material-icons" aria-hidden="true">delete</span>
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="smart-sort-point-rule-grid">
+                        <div className="smart-sort-point-field">
+                          <label>Condition</label>
+                          <CustomSelect
+                            ariaLabel={`Rule ${index + 1} condition`}
+                            value={rule.criterion}
+                            onChange={(value) => changePointRuleCriterion(index, value as StreamSortPointCriterion)}
+                            options={POINT_CRITERION_OPTIONS}
+                          />
+                        </div>
+
+                        <div className="smart-sort-point-field">
+                          <label>Operator</label>
+                          <CustomSelect
+                            ariaLabel={`Rule ${index + 1} operator`}
+                            value={rule.operator}
+                            onChange={(value) => updatePointRule(index, { operator: value as StreamSortPointOperator })}
+                            options={operatorOptions}
+                            disabled={config.input === 'boolean'}
+                          />
+                        </div>
+
+                        <div className="smart-sort-point-field">
+                          <label>{config.valueLabel}</label>
+                          {config.input === 'number' ? (
+                            <input
+                              type="number"
+                              step={config.step}
+                              value={typeof rule.value === 'number' && Number.isFinite(rule.value)
+                                ? rule.value / (config.valueScale ?? 1)
+                                : ''}
+                              aria-label={`Rule ${index + 1} value`}
+                              aria-invalid={Boolean(errors.value)}
+                              aria-describedby={errors.value ? valueErrorId : undefined}
+                              onChange={(event) => updatePointRule(index, {
+                                value: event.target.value === ''
+                                  ? Number.NaN
+                                  : Number(event.target.value) * (config.valueScale ?? 1),
+                              })}
+                            />
+                          ) : config.input === 'codec' ? (
+                            <CustomSelect
+                              ariaLabel={`Rule ${index + 1} value`}
+                              value={String(rule.value)}
+                              onChange={(value) => updatePointRule(index, { value })}
+                              options={VIDEO_CODEC_OPTIONS}
+                            />
+                          ) : (
+                            <CustomSelect
+                              ariaLabel={`Rule ${index + 1} value`}
+                              value={String(rule.value)}
+                              onChange={(value) => updatePointRule(index, { value: value === 'true' })}
+                              options={BOOLEAN_POINT_VALUE_OPTIONS}
+                            />
+                          )}
+                          {errors.value && <span id={valueErrorId} className="field-error">{errors.value}</span>}
+                        </div>
+
+                        <div className="smart-sort-point-field">
+                          <label>Points (signed integer)</label>
+                          <input
+                            type="number"
+                            step="1"
+                            value={Number.isFinite(rule.points) ? rule.points : ''}
+                            aria-label={`Rule ${index + 1} points`}
+                            aria-invalid={Boolean(errors.points)}
+                            aria-describedby={errors.points ? pointsErrorId : undefined}
+                            onChange={(event) => updatePointRule(index, {
+                              points: event.target.value === '' ? Number.NaN : Number(event.target.value),
+                            })}
+                          />
+                          {errors.points && <span id={pointsErrorId} className="field-error">{errors.points}</span>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
+
+            <button
+              type="button"
+              className="btn-secondary smart-sort-add-rule"
+              onClick={() => setStreamSortPointRules((rules) => [...rules, createPointRule()])}
+            >
+              <span className="material-icons" aria-hidden="true">add</span>
+              Add rule
+            </button>
           </div>
-          </>
         )}
       </div>
 

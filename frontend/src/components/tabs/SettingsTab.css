@@ -963,6 +963,124 @@
   width: 100%;
 }
 
+.smart-sort-strategy {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.smart-sort-strategy-option {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background-color: var(--input-bg);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.smart-sort-strategy-option:hover {
+  border-color: var(--text-muted);
+  background-color: var(--bg-tertiary);
+}
+
+.smart-sort-strategy-option:has(input:focus-visible) {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+}
+
+.smart-sort-strategy-option.is-active {
+  border-color: var(--accent-primary);
+  background-color: var(--accent-10);
+}
+
+.smart-sort-strategy-title,
+.smart-sort-point-rule-title {
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
+}
+
+.smart-sort-strategy-description {
+  color: var(--text-secondary);
+  font-size: var(--type-meta-size);
+  font-weight: var(--type-meta-weight);
+  line-height: var(--type-meta-line-height);
+}
+
+.smart-sort-points-copy {
+  margin-top: 0;
+  margin-bottom: 0.75rem;
+}
+
+.smart-sort-point-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.smart-sort-point-rule {
+  padding: 0.75rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  background-color: var(--input-bg);
+}
+
+.smart-sort-point-rule-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.smart-sort-point-rule-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.smart-sort-point-rule-actions .btn-icon:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.smart-sort-point-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.smart-sort-point-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.smart-sort-point-field label {
+  color: var(--text-secondary);
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
+}
+
+.smart-sort-point-field input,
+.smart-sort-point-field .custom-select {
+  width: 100%;
+  min-width: 0;
+}
+
+.smart-sort-add-rule {
+  margin-top: 0.75rem;
+}
+
 /* M3U Digest Settings */
 .email-recipients-list {
   display: flex;
