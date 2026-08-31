@@ -23,10 +23,11 @@ v0.18.2. It does not record or imply manual verification.
 
 ## Browser E2E evidence
 
-The exact-build Chromium run used isolated temporary settings and database
-state, non-production ports, and real `GET /api/settings`, `POST /api/settings`,
-and `POST /api/stream-stats/compute-sort` requests. Only the Dispatcharr
-inventory was fixture-backed.
+The exact-build Chromium run used temporary settings and database state on
+non-production ports. Its critical settings and compute-sort requests exercised
+the production routers and Smart Sort logic. Dispatcharr inventory,
+authentication/bootstrap, and supporting application-shell endpoints were
+fixture-backed.
 
 The test proves:
 
