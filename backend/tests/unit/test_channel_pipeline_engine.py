@@ -2170,6 +2170,8 @@ def _mk_smart_sort_settings(
     stream_sort_enabled=None,
     m3u_account_priorities=None,
     deprioritize_failed_streams=True,
+    deprioritize_black_screen=True,
+    deprioritize_low_fps=True,
     failed_stream_sort_order=None,
 ):
     """Build a MagicMock-backed settings object for _smart_sort_streams.
@@ -2187,6 +2189,8 @@ def _mk_smart_sort_settings(
     }
     settings.m3u_account_priorities = m3u_account_priorities or {}
     settings.deprioritize_failed_streams = deprioritize_failed_streams
+    settings.deprioritize_black_screen = deprioritize_black_screen
+    settings.deprioritize_low_fps = deprioritize_low_fps
     settings.failed_stream_sort_order = failed_stream_sort_order or [
         "black_screen", "low_fps", "failed",
     ]
@@ -2639,6 +2643,89 @@ class TestSmartSortCatchupCriterion:
         )
 
         assert result == [20, 10]
+
+
+class TestSmartSortEvaluatorDriftRepairs:
+    def test_pipeline_inactive_m3u_priority_accepts_arbitrary_size_integer(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True, "m3u_priority": False},
+            m3u_account_priorities={"1": 10**400},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1280x720"),
+            20: _success_stats_dict(20, resolution="1920x1080"),
+        }
+
+        assert _smart_sort_streams(
+            [10, 20], stats_cache, {10: 1}, "large-inactive-m3u", settings
+        ) == [20, 10]
+
+    def test_pipeline_honors_black_screen_category_toggle(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_black_screen=False,
+        )
+        stats_cache = {
+            10: {
+                **_success_stats_dict(10, resolution="1920x1080"),
+                "is_black_screen": True,
+            },
+            20: _success_stats_dict(20, resolution="1280x720"),
+        }
+
+        assert _smart_sort_streams(
+            [10, 20], stats_cache, {}, "black-toggle", settings
+        ) == [10, 20]
+
+    def test_pipeline_honors_low_fps_category_toggle(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_low_fps=False,
+        )
+        stats_cache = {
+            10: {
+                **_success_stats_dict(10, resolution="1920x1080"),
+                "is_low_fps": True,
+            },
+            20: _success_stats_dict(20, resolution="1280x720"),
+        }
+
+        assert _smart_sort_streams(
+            [10, 20], stats_cache, {}, "low-fps-toggle", settings
+        ) == [10, 20]
+
+    def test_pipeline_uses_m3u_priority_for_unprobed_streams(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 10, "2": 50, "custom": 100},
+            deprioritize_failed_streams=False,
+        )
+
+        assert _smart_sort_streams(
+            [10, 20, 30],
+            {},
+            {10: 1, 20: 2},
+            "unprobed-m3u",
+            settings,
+        ) == [30, 20, 10]
+
+    def test_pipeline_final_ties_use_ascending_stream_id(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+        )
+        stats_cache = {
+            20: _success_stats_dict(20),
+            10: _success_stats_dict(10),
+        }
+
+        assert _smart_sort_streams(
+            [20, 10], stats_cache, {}, "id-tie", settings
+        ) == [10, 20]
 
 
 class TestRunPipelineCreateChannelMergeChannelsTouched:

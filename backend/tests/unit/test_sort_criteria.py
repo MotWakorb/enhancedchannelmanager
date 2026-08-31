@@ -590,6 +590,23 @@ class TestBackwardsCompatibility:
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
+    def test_inactive_m3u_priority_accepts_arbitrary_size_integer(self):
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720"),
+            2: create_mock_stats(2, resolution="1920x1080"),
+        }
+
+        sorted_ids = smart_sort_streams(
+            [1, 2],
+            stats_map,
+            stream_m3u_map={1: 1},
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True, "m3u_priority": False},
+            m3u_account_priorities={"1": 10**400},
+        )
+
+        assert sorted_ids == [2, 1]
+
     def test_empty_stream_list(self):
         """Empty stream list returns empty list."""
         prober = create_prober()
@@ -661,6 +678,25 @@ class TestEdgeCases:
         # Successful stream sorted by stats, failed stream gets zeros (not pushed to bottom)
         # Both have (0,) prefix, but stream 1 has negative resolution, stream 2 has 0
         assert sorted_ids == [1, 2]
+
+    def test_failed_timeout_pending_and_missing_stats_share_failed_bucket(self):
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720", probe_status="success"),
+            2: create_mock_stats(2, resolution="3840x2160", probe_status="failed"),
+            3: create_mock_stats(3, resolution="3840x2160", probe_status="timeout"),
+            4: create_mock_stats(4, resolution="3840x2160", probe_status="pending"),
+        }
+
+        sorted_ids = smart_sort_streams(
+            [5, 4, 3, 2, 1],
+            stats_map,
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_failed_streams=True,
+            failed_stream_sort_order=["failed", "black_screen", "low_fps"],
+        )
+
+        assert sorted_ids == [1, 2, 3, 4, 5]
 
 
 class TestUpdateSortSettings:
