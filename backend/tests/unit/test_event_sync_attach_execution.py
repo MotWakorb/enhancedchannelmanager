@@ -40,6 +40,7 @@ from sqlalchemy.pool import StaticPool
 import database
 from channel_pipeline_engine import ChannelPipelineEngine
 from channel_pipeline_executor import ActionExecutor, ExecutionContext
+from config import DispatcharrSettings
 from models import (
     ChannelPipelineExecution,
     ChannelPipelineRule,
@@ -1272,6 +1273,89 @@ class TestEventSyncStreamSortBehavior:
         assert client.update_channel.await_args.args == (
             100, {"streams": [9001, 7001]},
         )
+
+    @pytest.mark.parametrize("strategy", ["priority", "points"])
+    def test_smart_sort_heals_already_attached_no_op_run(self, strategy):
+        engine, executor, client, _settings = self._two_provider_setup()
+        rule = self._event_rule_with_sort("smart_sort", "asc")
+        engine._existing_channels[0]["streams"] = [9001, 7001]
+        settings_kwargs = {
+            "stream_sort_strategy": strategy,
+            "m3u_account_priorities": {"1": 1, "2": 10},
+        }
+        if strategy == "priority":
+            settings_kwargs.update(
+                stream_sort_priority=["m3u_priority"],
+                stream_sort_enabled={"m3u_priority": True},
+            )
+        else:
+            settings_kwargs["stream_sort_point_rules"] = [{
+                "criterion": "m3u_priority",
+                "operator": "gte",
+                "value": 10,
+                "points": 20,
+            }]
+        settings = DispatcharrSettings(**settings_kwargs)
+        results = _results()
+        rule_channel_order_streams: dict = {}
+        stream_m3u_map: dict = {}
+        custom_stream_ids: set[int] = set()
+        catchup_stream_ids: set[int] = set()
+        stream_metadata_known_ids: set[int] = set()
+
+        _run(engine._run_event_sync_rules(
+            [rule], executor, results, dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+            rule_channel_order_streams=rule_channel_order_streams,
+            stream_m3u_map=stream_m3u_map,
+            custom_stream_ids=custom_stream_ids,
+            catchup_stream_ids=catchup_stream_ids,
+            stream_metadata_known_ids=stream_metadata_known_ids,
+            settings=settings,
+        ))
+
+        assert rule_channel_order_streams == {rule.id: [100]}
+        assert stream_m3u_map == {7001: 2, 9001: 1}
+        client.update_channel.reset_mock()
+
+        _run(engine._reorder_channel_streams(
+            [rule], rule_channel_order_streams,
+            {"execution_log": [], "dry_run_results": []},
+            dry_run=False,
+            settings=settings,
+            stream_m3u_map=stream_m3u_map,
+            custom_stream_ids=custom_stream_ids,
+            catchup_stream_ids=catchup_stream_ids,
+            stream_metadata_known_ids=stream_metadata_known_ids,
+        ))
+
+        client.update_channel.assert_awaited_once_with(
+            100, {"streams": [7001, 9001]}
+        )
+
+    def test_points_probe_only_rules_skip_master_metadata_fetch(self):
+        engine, executor, client, _settings = self._two_provider_setup()
+        rule = self._event_rule_with_sort("smart_sort", "asc")
+        engine._existing_channels[0]["streams"] = [9001, 7001]
+        settings = DispatcharrSettings(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=[{
+                "criterion": "resolution",
+                "operator": "gte",
+                "value": 1080,
+                "points": 20,
+            }],
+        )
+
+        _run(engine._run_event_sync_rules(
+            [rule], executor, _results(), dry_run=False,
+            triggered_by="manual", channels_touched_ids=set(),
+            rule_channel_order_streams={},
+            stream_m3u_map={},
+            settings=settings,
+        ))
+
+        client.get_streams_by_ids.assert_not_awaited()
 
 
 # =============================================================================

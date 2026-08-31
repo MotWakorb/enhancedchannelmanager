@@ -6,11 +6,13 @@ probe_all_streams, so a manual bulk run shows up in get_probe_progress /
 get_probe_results just like a scheduled probe-all run (the "manual probes don't
 feed the results envelope" half of the bug).
 """
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from stream_prober import StreamProber
+from smart_sort_evaluator import PointRule
 
 
 def _make_prober(client, **kwargs):
@@ -131,6 +133,114 @@ async def test_bulk_run_skips_reorder_when_setting_off():
         await prober.probe_streams_by_ids([10])
 
     reorder_mock.assert_not_called()
+
+
+@pytest.mark.parametrize("strategy", ["priority", "points"])
+@pytest.mark.asyncio
+async def test_probe_completion_reorder_uses_configured_smart_sort(strategy):
+    client = AsyncMock()
+    client.get_channels.return_value = {
+        "results": [{"id": 1, "name": "Channel", "streams": [20, 10]}],
+        "next": None,
+    }
+    point_rules = (
+        (PointRule("resolution", "gte", 1080, 10),)
+        if strategy == "points"
+        else ()
+    )
+    prober = _make_prober(
+        client,
+        stream_sort_strategy=strategy,
+        stream_sort_point_rules=point_rules,
+    )
+    stats = [
+        SimpleNamespace(
+            stream_id=20,
+            stream_name="720p",
+            probe_status="success",
+            resolution="1280x720",
+        ),
+        SimpleNamespace(
+            stream_id=10,
+            stream_name="1080p",
+            probe_status="success",
+            resolution="1920x1080",
+        ),
+    ]
+    session = MagicMock()
+    session.__enter__.return_value.query.return_value.filter.return_value.all.return_value = stats
+
+    with patch("stream_prober.get_session", return_value=session), patch(
+        "stream_prober.journal.log_entry"
+    ):
+        reordered = await prober._auto_reorder_channels_for_streams([20])
+
+    assert reordered == [{
+        "channel_id": 1,
+        "channel_name": "Channel",
+        "stream_count": 2,
+    }]
+    client.update_channel.assert_awaited_once_with(1, {"streams": [10, 20]})
+    client.get_streams_by_ids.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_probe_completion_reorder_uses_one_settings_snapshot():
+    client = AsyncMock()
+    client.get_channels.return_value = {
+        "results": [{"id": 1, "name": "Channel", "streams": [1, 2]}],
+        "next": None,
+    }
+    prober = _make_prober(
+        client,
+        stream_sort_strategy="points",
+        stream_sort_point_rules=(
+            PointRule("custom_streams", "eq", True, 10),
+        ),
+    )
+
+    async def fetch_metadata(_stream_ids):
+        prober.update_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            m3u_account_priorities={},
+            stream_sort_strategy="priority",
+            stream_sort_point_rules=(),
+        )
+        return [
+            {"id": 1, "is_custom": False},
+            {"id": 2, "is_custom": True},
+        ]
+
+    client.get_streams_by_ids.side_effect = fetch_metadata
+    stats = [
+        SimpleNamespace(
+            stream_id=1,
+            stream_name="1080p",
+            probe_status="success",
+            resolution="1920x1080",
+            is_black_screen=False,
+            is_low_fps=False,
+        ),
+        SimpleNamespace(
+            stream_id=2,
+            stream_name="720p custom",
+            probe_status="success",
+            resolution="1280x720",
+            is_black_screen=False,
+            is_low_fps=False,
+        ),
+    ]
+    session = MagicMock()
+    session.__enter__.return_value.query.return_value.filter.return_value.all.return_value = stats
+
+    with patch("stream_prober.get_session", return_value=session), patch(
+        "stream_prober.journal.log_entry"
+    ):
+        await prober._auto_reorder_channels_for_streams([1])
+
+    client.update_channel.assert_awaited_once_with(1, {"streams": [2, 1]})
+    assert prober.stream_sort_strategy == "priority"
 
 
 @pytest.mark.asyncio

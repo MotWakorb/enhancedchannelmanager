@@ -12,11 +12,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import or_
 
-from config import get_settings
+from config import get_settings, stream_sort_point_rules_for_evaluator
 from database import get_session
 from dispatcharr_client import get_client
 from services.notification_service import task_start_alerts_enabled
 from stream_prober import StreamProber, ensure_prober
+from smart_sort_evaluator import stream_metadata_criteria
 
 logger = logging.getLogger(__name__)
 
@@ -375,9 +376,13 @@ async def compute_sort(request: ComputeSortRequest):
     if request.mode == "smart":
         sort_priority = [c for c in settings.stream_sort_priority if settings.stream_sort_enabled.get(c, False)]
         sort_enabled = {c: True for c in sort_priority}
+        sort_strategy = settings.stream_sort_strategy
+        point_rules = stream_sort_point_rules_for_evaluator(settings)
     elif request.mode in valid_criteria:
         sort_priority = [request.mode]
         sort_enabled = {request.mode: True}
+        sort_strategy = "priority"
+        point_rules = ()
     else:
         raise HTTPException(status_code=400, detail=f"Invalid sort mode: {request.mode}")
 
@@ -410,9 +415,15 @@ async def compute_sort(request: ComputeSortRequest):
     stream_m3u_map = {}
     custom_stream_ids: set[int] = set()
     catchup_stream_ids: set[int] = set()
-    needs_m3u = "m3u_priority" in sort_priority
-    needs_custom = "custom_streams" in sort_priority
-    needs_catchup = "catchup" in sort_priority
+    stream_metadata_known_ids: set[int] = set()
+    metadata_criteria = stream_metadata_criteria(
+        sort_strategy,
+        priority_criteria=sort_priority,
+        point_rules=point_rules,
+    )
+    needs_m3u = "m3u_priority" in metadata_criteria
+    needs_custom = "custom_streams" in metadata_criteria
+    needs_catchup = "catchup" in metadata_criteria
     if needs_m3u or needs_custom or needs_catchup:
         try:
             client = get_client()
@@ -426,6 +437,7 @@ async def compute_sort(request: ComputeSortRequest):
                 stream_id = s.get("id", s.get("stream_id"))
                 if stream_id is None:
                     continue
+                stream_metadata_known_ids.add(int(stream_id))
                 if needs_m3u:
                     stream_m3u_map[int(stream_id)] = extract_m3u_account_id(s.get("m3u_account"))
                 if needs_custom and s.get("is_custom"):
@@ -458,6 +470,9 @@ async def compute_sort(request: ComputeSortRequest):
             channel_name=f"channel-{ch.channel_id}",
             custom_stream_ids=custom_stream_ids,
             catchup_stream_ids=catchup_stream_ids,
+            stream_sort_strategy=sort_strategy,
+            stream_sort_point_rules=point_rules,
+            stream_metadata_known_ids=stream_metadata_known_ids,
         )
         changed = sorted_ids != ch.stream_ids
         results.append(ChannelSortResult(

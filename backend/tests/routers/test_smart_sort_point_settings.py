@@ -65,9 +65,10 @@ async def test_valid_point_settings_persist_round_trip_and_update_live_config(
         )
     )
 
+    live_prober = MagicMock()
     try:
         with patch("routers.settings.reset_client"), patch(
-            "routers.settings.get_prober", return_value=None
+            "routers.settings.get_prober", return_value=live_prober
         ):
             response = await async_client.post(
                 "/api/settings",
@@ -101,6 +102,12 @@ async def test_valid_point_settings_persist_round_trip_and_update_live_config(
         assert resolved.status_code == 200
         assert resolved.json()["stream_sort_strategy"] == "points"
         assert resolved.json()["stream_sort_point_rules"] == VALID_RULES
+        live_prober.update_sort_settings.assert_called_once()
+        update_call = live_prober.update_sort_settings.call_args
+        assert update_call.kwargs["stream_sort_strategy"] == "points"
+        evaluator_rules = update_call.kwargs["stream_sort_point_rules"]
+        assert evaluator_rules[0].value == 1080
+        assert evaluator_rules[1].value == 6_000_000
     finally:
         config.clear_settings_cache()
 

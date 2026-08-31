@@ -30,6 +30,7 @@ from config import (
     get_log_level_from_env,
     set_log_level,
     sweep_orphaned_settings_temporaries,
+    stream_sort_point_rules_for_evaluator,
 )
 from database import init_db, get_session
 from bandwidth_tracker import BandwidthTracker, set_tracker, get_tracker
@@ -1570,11 +1571,14 @@ async def startup_event():
                 deprioritize_low_fps=settings.deprioritize_low_fps,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
+                low_fps_threshold=settings.low_fps_threshold,
                 stream_sort_priority=settings.stream_sort_priority,
                 stream_sort_enabled=settings.stream_sort_enabled,
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
                 failed_stream_sort_order=settings.failed_stream_sort_order,
+                stream_sort_strategy=settings.stream_sort_strategy,
+                stream_sort_point_rules=stream_sort_point_rules_for_evaluator(settings),
             )
             prober.set_notification_callbacks(
                 create_callback=create_notification_internal,

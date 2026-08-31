@@ -8,8 +8,10 @@ from smart_sort_evaluator import (
     PointRule,
     StreamFacts,
     evaluate_points,
+    sort_streams,
     sort_streams_by_points,
     sort_streams_by_priority,
+    stream_metadata_criteria,
 )
 
 
@@ -338,3 +340,50 @@ def test_points_mode_sorts_by_total_descending_then_stream_id_ascending():
 
     assert sort_streams_by_points(streams, rules) == [10, 30, 20]
     assert sort_streams_by_points(streams, []) == [10, 20, 30]
+
+
+def test_strategy_dispatcher_selects_points_without_priority_health_buckets():
+    healthy = _healthy(1, resolution_height=720)
+    failed = _healthy(
+        2,
+        probe_succeeded=False,
+        resolution_height=2160,
+        failed=True,
+        black_screen=True,
+        low_fps=True,
+    )
+
+    assert sort_streams(
+        [healthy, failed],
+        strategy="points",
+        point_rules=(
+            PointRule("resolution", "gte", 2160, 50),
+            PointRule("failed", "eq", True, -10),
+            PointRule("black_screen", "eq", True, -10),
+            PointRule("low_fps", "eq", True, -10),
+        ),
+        priority_criteria=("resolution",),
+    ) == [2, 1]
+
+
+def test_strategy_dispatcher_rejects_unknown_strategy():
+    with pytest.raises(ValueError, match="Unknown Smart Sort strategy"):
+        sort_streams([_healthy(1)], strategy="mystery")
+
+
+def test_stream_metadata_criteria_follow_only_the_active_strategy():
+    point_rules = (
+        PointRule("custom_streams", "eq", True, 5),
+        PointRule("resolution", "gte", 1080, 10),
+    )
+
+    assert stream_metadata_criteria(
+        "priority",
+        priority_criteria=("m3u_priority", "catchup", "resolution"),
+        point_rules=point_rules,
+    ) == frozenset({"m3u_priority", "catchup"})
+    assert stream_metadata_criteria(
+        "points",
+        priority_criteria=("m3u_priority", "catchup"),
+        point_rules=point_rules,
+    ) == frozenset({"custom_streams"})

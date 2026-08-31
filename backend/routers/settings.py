@@ -43,6 +43,7 @@ from config import (
     DispatcharrSettings,
     StreamSortPointRule,
     StreamSortStrategy,
+    stream_sort_point_rules_for_evaluator,
     MCP_SERVICE_FILE,
     MCP_SERVICE_FILENAME,
 )
@@ -1459,6 +1460,8 @@ async def update_settings(
     # Update prober's sort settings without requiring restart
     if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
             new_settings.stream_sort_enabled != current_settings.stream_sort_enabled or
+            new_settings.stream_sort_strategy != current_settings.stream_sort_strategy or
+            new_settings.stream_sort_point_rules != current_settings.stream_sort_point_rules or
             new_settings.m3u_account_priorities != current_settings.m3u_account_priorities or
             new_settings.failed_stream_sort_order != current_settings.failed_stream_sort_order or
             new_settings.deprioritize_black_screen != current_settings.deprioritize_black_screen or
@@ -1472,6 +1475,8 @@ async def update_settings(
                 failed_stream_sort_order=new_settings.failed_stream_sort_order,
                 deprioritize_black_screen=new_settings.deprioritize_black_screen,
                 deprioritize_low_fps=new_settings.deprioritize_low_fps,
+                stream_sort_strategy=new_settings.stream_sort_strategy,
+                stream_sort_point_rules=stream_sort_point_rules_for_evaluator(new_settings),
             )
             logger.info("[SETTINGS] Updated prober sort settings from settings")
 
@@ -2385,6 +2390,8 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
                 failed_stream_sort_order=settings.failed_stream_sort_order,
+                stream_sort_strategy=settings.stream_sort_strategy,
+                stream_sort_point_rules=stream_sort_point_rules_for_evaluator(settings),
             )
             new_prober.set_notification_callbacks(
                 create_callback=create_notification_internal,

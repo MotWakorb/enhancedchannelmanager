@@ -29,6 +29,9 @@ _BOOLEAN_CRITERIA = {
     "black_screen": "black_screen",
     "low_fps": "low_fps",
 }
+_STREAM_METADATA_CRITERIA = frozenset(
+    {"m3u_priority", "custom_streams", "catchup"}
+)
 _COMPARATORS: dict[str, Callable[[Real, Real], bool]] = {
     "==": operator.eq,
     "=": operator.eq,
@@ -52,6 +55,7 @@ class StreamFacts:
 
     stream_id: int
     probe_succeeded: bool = False
+    probe_stats_available: bool = True
     resolution_height: int | float | None = None
     video_bitrate: int | float | None = None
     bitrate: int | float | None = None
@@ -142,7 +146,7 @@ def _health_bucket(
 ) -> int | None:
     if not deprioritize_failed:
         return None
-    if facts.failed is True:
+    if facts.failed is True or not facts.probe_stats_available:
         return failed_rank.get("failed", 0)
     if deprioritize_black_screen and facts.black_screen is True:
         return failed_rank.get("black_screen", 1)
@@ -274,3 +278,45 @@ def sort_streams_by_points(
             key=lambda facts: (-evaluate_points(facts, rules), facts.stream_id),
         )
     ]
+
+
+def stream_metadata_criteria(
+    strategy: str,
+    *,
+    priority_criteria: Iterable[str] = (),
+    point_rules: Iterable[PointRule] = (),
+) -> frozenset[str]:
+    """Return Dispatcharr-backed facts required by the selected strategy."""
+    if strategy == "priority":
+        criteria = priority_criteria
+    elif strategy == "points":
+        criteria = (rule.criterion for rule in point_rules)
+    else:
+        raise ValueError(f"Unknown Smart Sort strategy: {strategy!r}")
+    return frozenset(criteria) & _STREAM_METADATA_CRITERIA
+
+
+def sort_streams(
+    streams: Iterable[StreamFacts],
+    *,
+    strategy: str,
+    priority_criteria: Iterable[str] = (),
+    point_rules: Iterable[PointRule] = (),
+    deprioritize_failed: bool = True,
+    deprioritize_black_screen: bool = True,
+    deprioritize_low_fps: bool = True,
+    failed_stream_sort_order: Iterable[str] | None = None,
+) -> list[int]:
+    """Dispatch normalized facts through the explicitly selected strategy."""
+    if strategy == "points":
+        return sort_streams_by_points(streams, point_rules)
+    if strategy == "priority":
+        return sort_streams_by_priority(
+            streams,
+            priority_criteria,
+            deprioritize_failed=deprioritize_failed,
+            deprioritize_black_screen=deprioritize_black_screen,
+            deprioritize_low_fps=deprioritize_low_fps,
+            failed_stream_sort_order=failed_stream_sort_order,
+        )
+    raise ValueError(f"Unknown Smart Sort strategy: {strategy!r}")
