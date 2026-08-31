@@ -13,6 +13,7 @@ a single-branch, depth-1 clone that carries no remote-tracking refs at
 all. A test for a git helper must supply its own git history: borrowing
 the ambient repository's shape tests the checkout, not the code.
 """
+
 from __future__ import annotations
 
 import importlib.util
@@ -129,16 +130,45 @@ def repo(tmp_path, script, monkeypatch) -> FakeRepo:
     return fake
 
 
-def _run(number, *, event="push", branch="dev", name=None, attempt=1, conclusion="success"):
+TEST_SHA = "a" * 40
+TEST_VERSION = "0.18.2-0001"
+
+
+def _run(
+    number,
+    *,
+    event="push",
+    branch="dev",
+    name=None,
+    attempt=1,
+    status="completed",
+    conclusion="success",
+):
     return {
-        "name": name or "Publish Verified Images",
+        "id": 33440983429,
+        "name": name or "Tests",
+        "head_sha": TEST_SHA,
         "head_branch": branch,
         "event": event,
         "run_number": number,
         "run_attempt": attempt,
-        "status": "completed",
+        "status": status,
         "conclusion": conclusion,
         "html_url": f"https://example.invalid/runs/{number}",
+    }
+
+
+def _job(
+    name="Publish Verified Dev Images / Publish Verified Multi-Arch Manifests",
+    *,
+    status="completed",
+    conclusion="success",
+):
+    return {
+        "name": name,
+        "status": status,
+        "conclusion": conclusion,
+        "html_url": "https://example.invalid/jobs/98294803170",
     }
 
 
@@ -148,7 +178,7 @@ def _run(number, *, event="push", branch="dev", name=None, attempt=1, conclusion
 class TestSelectBuildRun:
     def test_picks_the_matching_push_run(self, script):
         runs = [_run(10)]
-        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
+        chosen = script.select_build_run(runs, "Tests", "dev", TEST_SHA)
         assert chosen is not None and chosen["run_number"] == 10
 
     def test_ignores_pull_request_runs_for_the_same_sha(self, script):
@@ -159,18 +189,22 @@ class TestSelectBuildRun:
             _run(11, event="pull_request", branch="feature", conclusion="success"),
             _run(12, event="push", conclusion="failure"),
         ]
-        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
+        chosen = script.select_build_run(runs, "Tests", "dev", TEST_SHA)
         assert chosen is not None
         assert chosen["run_number"] == 12
         assert chosen["conclusion"] == "failure"
 
     def test_ignores_other_workflows(self, script):
-        runs = [_run(13, name="Tests")]
-        assert script.select_build_run(runs, "Publish Verified Images", "dev") is None
+        runs = [_run(13, name="Build and Push Docker Image")]
+        assert script.select_build_run(runs, "Tests", "dev", TEST_SHA) is None
 
     def test_ignores_runs_on_another_branch(self, script):
         runs = [_run(14, branch="main")]
-        assert script.select_build_run(runs, "Publish Verified Images", "dev") is None
+        assert script.select_build_run(runs, "Tests", "dev", TEST_SHA) is None
+
+    def test_ignores_api_result_for_a_different_sha(self, script):
+        runs = [_run(15) | {"head_sha": "b" * 40}]
+        assert script.select_build_run(runs, "Tests", "dev", TEST_SHA) is None
 
     def test_prefers_the_latest_attempt_of_a_rerun(self, script):
         """A re-run that fixes a flake is the state of record, not the
@@ -180,11 +214,87 @@ class TestSelectBuildRun:
             _run(20, attempt=1, conclusion="failure"),
             _run(20, attempt=2, conclusion="success"),
         ]
-        chosen = script.select_build_run(runs, "Publish Verified Images", "dev")
+        chosen = script.select_build_run(runs, "Tests", "dev", TEST_SHA)
         assert chosen is not None and chosen["run_attempt"] == 2
 
     def test_returns_none_for_an_empty_list(self, script):
-        assert script.select_build_run([], "Publish Verified Images", "dev") is None
+        assert script.select_build_run([], "Tests", "dev", TEST_SHA) is None
+
+
+class TestSelectPublishJob:
+    def test_selects_live_0001_nested_manifest_job(self, script):
+        jobs = [
+            _job(name="Publish Verified Dev Images / Authorize Exact-SHA Publication"),
+            _job(name="Publish Verified Dev Images / Publish Images (AMD64)"),
+            _job(name="Publish Verified Dev Images / Publish Images (ARM64)"),
+            _job(),
+        ]
+        assert script.select_publish_job(jobs) == jobs[-1]
+
+    def test_rejects_missing_or_similarly_named_job(self, script):
+        jobs = [_job(name="Publish Verified Dev Images / Publish Images (AMD64)")]
+        assert script.select_publish_job(jobs) is None
+
+    def test_rejects_duplicate_exact_jobs(self, script):
+        with pytest.raises(script.CheckError, match="2 jobs"):
+            script.select_publish_job([_job(), _job()])
+
+
+class TestPaginatedGitHubData:
+    @pytest.mark.parametrize(
+        ("fetch", "key", "endpoint"),
+        [
+            ("runs", "workflow_runs", "actions/runs?head_sha=" + TEST_SHA),
+            ("jobs", "jobs", "actions/runs/123/attempts/4/jobs"),
+        ],
+    )
+    def test_combines_every_page(self, script, monkeypatch, fetch, key, endpoint):
+        calls = []
+        first = _run(10, name="Other") if key == "workflow_runs" else _job(name="Other")
+        second = _run(11) if key == "workflow_runs" else _job()
+
+        def fake_run(cmd, *, timeout=300):
+            calls.append(cmd)
+            stdout = json.dumps({key: [first]}) + "\n" + json.dumps({key: [second]})
+            return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(script, "_run", fake_run)
+        if fetch == "runs":
+            result = script.fetch_workflow_runs("owner/repo", TEST_SHA)
+        else:
+            result = script.fetch_workflow_jobs("owner/repo", 123, 4)
+
+        assert result == [first, second]
+        assert "--paginate" in calls[0]
+        assert any(endpoint in part for part in calls[0])
+
+    @pytest.mark.parametrize(
+        "payload",
+        ["not-json", "[]", '{"workflow_runs": {}}', '{"workflow_runs": [null]}'],
+    )
+    def test_malformed_run_pagination_fails_closed(self, script, monkeypatch, payload):
+        monkeypatch.setattr(script.shutil, "which", lambda name: "/usr/bin/gh")
+        monkeypatch.setattr(
+            script,
+            "_run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(
+                cmd, 0, stdout=payload, stderr=""
+            ),
+        )
+        with pytest.raises(script.CheckError, match="gh api|paginated|workflow_runs"):
+            script.fetch_workflow_runs("owner/repo", TEST_SHA)
+
+    def test_malformed_attempt_job_pagination_fails_closed(self, script, monkeypatch):
+        monkeypatch.setattr(
+            script,
+            "_run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(
+                cmd, 0, stdout='{"jobs": [null]}', stderr=""
+            ),
+        )
+        with pytest.raises(script.CheckError, match="jobs item 1 is not an object"):
+            script.fetch_workflow_jobs("owner/repo", 123, 4)
 
 
 # --- Image config parsing ---------------------------------------------------
@@ -196,23 +306,42 @@ class TestParseImagetoolsConfig:
         {
           "linux/amd64": {
             "config": {"Env": ["PATH=/bin", "ECM_VERSION=0.18.1-0043",
-                               "GIT_COMMIT=abc1234"]}
+                               "GIT_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}
           },
           "linux/arm64": {
-            "config": {"Env": ["ECM_VERSION=0.18.1-0043"]}
+            "config": {"Env": ["ECM_VERSION=0.18.1-0043",
+                               "GIT_COMMIT=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}
           }
         }
         """
         env = script.parse_imagetools_config(payload)
         assert env["ECM_VERSION"] == "0.18.1-0043"
-        assert env["GIT_COMMIT"] == "abc1234"
+        assert env["GIT_COMMIT"] == TEST_SHA
+        assert env[script.PLATFORMS_KEY] == "linux/amd64, linux/arm64"
 
     def test_parses_a_single_platform_config(self, script):
-        payload = '{"created": "now", "config": {"Env": ["ECM_VERSION=0.18.1-0044"]}}'
+        payload = json.dumps(
+            {
+                "created": "now",
+                "config": {
+                    "Env": ["ECM_VERSION=0.18.1-0044", f"GIT_COMMIT={TEST_SHA}"]
+                },
+            }
+        )
         assert script.parse_imagetools_config(payload)["ECM_VERSION"] == "0.18.1-0044"
 
     def test_env_entries_with_equals_signs_in_the_value_survive(self, script):
-        payload = '{"config": {"Env": ["OPTS=a=b=c", "ECM_VERSION=0.1.0-0001"]}}'
+        payload = json.dumps(
+            {
+                "config": {
+                    "Env": [
+                        "OPTS=a=b=c",
+                        "ECM_VERSION=0.1.0-0001",
+                        f"GIT_COMMIT={TEST_SHA}",
+                    ]
+                }
+            }
+        )
         env = script.parse_imagetools_config(payload)
         assert env["OPTS"] == "a=b=c"
         assert env["ECM_VERSION"] == "0.1.0-0001"
@@ -224,6 +353,100 @@ class TestParseImagetoolsConfig:
     def test_raises_when_no_config_env_is_present(self, script):
         with pytest.raises(script.CheckError):
             script.parse_imagetools_config('{"linux/amd64": {"rootfs": {}}}')
+
+    @pytest.mark.parametrize("marker", ["ECM_VERSION", "GIT_COMMIT"])
+    def test_rejects_marker_missing_from_any_platform(self, script, marker):
+        complete = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        incomplete = {key: value for key, value in complete.items() if key != marker}
+        payload = {
+            "linux/amd64": {
+                "config": {"Env": [f"{k}={v}" for k, v in complete.items()]}
+            },
+            "linux/arm64": {
+                "config": {"Env": [f"{k}={v}" for k, v in incomplete.items()]}
+            },
+        }
+        with pytest.raises(script.CheckError, match=marker):
+            script.parse_imagetools_config(json.dumps(payload))
+
+    @pytest.mark.parametrize("marker", ["ECM_VERSION", "GIT_COMMIT"])
+    def test_rejects_platform_marker_disagreement(self, script, marker):
+        first = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        second = first | {marker: "different"}
+        payload = {
+            platform: {"config": {"Env": [f"{k}={v}" for k, v in markers.items()]}}
+            for platform, markers in (("linux/amd64", first), ("linux/arm64", second))
+        }
+        with pytest.raises(script.CheckError, match="disagree"):
+            script.parse_imagetools_config(json.dumps(payload))
+
+
+class TestProcessFailures:
+    def test_timeout_becomes_actionable_check_error(self, script, monkeypatch):
+        monkeypatch.setattr(
+            script.subprocess,
+            "run",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+            ),
+        )
+        with pytest.raises(script.CheckError, match="timed out.*17"):
+            script._run(["slow"], timeout=17)
+
+    def test_launch_failure_becomes_actionable_check_error(self, script, monkeypatch):
+        monkeypatch.setattr(
+            script.subprocess,
+            "run",
+            lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("missing")),
+        )
+        with pytest.raises(script.CheckError, match="could not launch"):
+            script._run(["missing"])
+
+
+class TestPublishedMarkerRead:
+    def test_pull_is_additive_after_mandatory_manifest_proof(self, script, monkeypatch):
+        events = []
+        marker = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            script,
+            "read_marker_via_imagetools",
+            lambda ref: events.append("manifest") or marker,
+        )
+        monkeypatch.setattr(
+            script,
+            "read_marker_via_pull",
+            lambda ref: events.append("pull") or marker.copy(),
+        )
+        assert (
+            script.read_published_marker("example/image:dev", use_pull=True) == marker
+        )
+        assert events == ["manifest", "pull"]
+
+    def test_pull_cannot_rescue_failed_manifest_proof(self, script, monkeypatch):
+        pulled = []
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(
+            script,
+            "read_marker_via_imagetools",
+            lambda ref: (_ for _ in ()).throw(script.CheckError("manifest failed")),
+        )
+        monkeypatch.setattr(
+            script, "read_marker_via_pull", lambda ref: pulled.append(ref)
+        )
+        with pytest.raises(script.CheckError, match="manifest failed"):
+            script.read_published_marker("example/image:dev", use_pull=True)
+        assert pulled == []
+
+    @pytest.mark.parametrize("marker", ["ECM_VERSION", "GIT_COMMIT"])
+    def test_pull_markers_must_match_manifest(self, script, monkeypatch, marker):
+        manifest = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        host = manifest | {marker: "different"}
+        monkeypatch.setattr(script.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(script, "read_marker_via_imagetools", lambda ref: manifest)
+        monkeypatch.setattr(script, "read_marker_via_pull", lambda ref: host)
+        with pytest.raises(script.CheckError, match=marker):
+            script.read_published_marker("example/image:dev", use_pull=True)
 
 
 # --- Repo-side facts --------------------------------------------------------
@@ -238,7 +461,9 @@ class TestExpectedVersion:
         The fixture's working tree says 0.0.0-dirty and each commit says
         something else, so a working-tree read cannot pass this.
         """
-        assert (repo.root / "frontend" / "package.json").read_text().count("0.0.0-dirty")
+        assert (
+            (repo.root / "frontend" / "package.json").read_text().count("0.0.0-dirty")
+        )
         assert script.expected_version_at(repo.tip) == "0.2.0-0002"
         assert script.expected_version_at(repo.first) == "0.1.0-0001"
         assert script.expected_version_at("dev") == "0.2.0-0002"
@@ -279,7 +504,9 @@ class TestExpectedVersion:
         assert "does not exist in this checkout" not in message
 
     def test_malformed_package_json_raises_check_error(self, script, repo):
-        (repo.root / "frontend" / "package.json").write_text("{not json", encoding="utf-8")
+        (repo.root / "frontend" / "package.json").write_text(
+            "{not json", encoding="utf-8"
+        )
         broken = repo.commit("break package.json")
         with pytest.raises(script.CheckError, match="not valid JSON"):
             script.expected_version_at(broken)
@@ -331,3 +558,161 @@ class TestCommitIsOnBranch:
 
     def test_unknown_branch_returns_none(self, script, repo):
         assert script.commit_is_on_branch(repo.tip, "no-such-branch-xyzzy") is None
+
+    def test_rev_parse_operational_error_is_not_a_missing_ref(
+        self, script, monkeypatch
+    ):
+        monkeypatch.setattr(
+            script,
+            "_run",
+            lambda cmd, **kwargs: subprocess.CompletedProcess(
+                cmd, 128, stdout="", stderr="fatal: corrupt ref database"
+            ),
+        )
+        with pytest.raises(script.CheckError, match="rev-parse.*corrupt ref database"):
+            script.commit_is_on_branch(TEST_SHA, "dev")
+
+    def test_merge_base_operational_error_is_reported(self, script, monkeypatch):
+        def fake_run(cmd, **kwargs):
+            if "rev-parse" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, stdout=TEST_SHA, stderr="")
+            return subprocess.CompletedProcess(
+                cmd, 2, stdout="", stderr="fatal: invalid commit graph"
+            )
+
+        monkeypatch.setattr(script, "_run", fake_run)
+        with pytest.raises(script.CheckError, match="merge-base.*invalid commit graph"):
+            script.commit_is_on_branch(TEST_SHA, "dev")
+
+
+@pytest.fixture
+def main_boundaries(script, monkeypatch):
+    runs = [_run(1921)]
+    jobs = [_job()]
+    marker = {
+        "ECM_VERSION": TEST_VERSION,
+        "GIT_COMMIT": TEST_SHA,
+        script.PLATFORMS_KEY: "linux/amd64, linux/arm64",
+    }
+    calls = []
+    monkeypatch.setattr(script, "resolve_commit", lambda ref: TEST_SHA)
+    monkeypatch.setattr(script, "commit_subject", lambda sha: "merge subject")
+    monkeypatch.setattr(script, "expected_version_at", lambda sha: TEST_VERSION)
+    monkeypatch.setattr(script, "commit_is_on_branch", lambda sha, branch: True)
+    monkeypatch.setattr(script, "repo_slug", lambda: "owner/repo")
+    monkeypatch.setattr(script, "fetch_workflow_runs", lambda slug, sha: runs)
+
+    def fetch_jobs(slug, run_id, run_attempt):
+        calls.append((slug, run_id, run_attempt))
+        return jobs
+
+    monkeypatch.setattr(script, "fetch_workflow_jobs", fetch_jobs)
+    monkeypatch.setattr(script, "read_published_marker", lambda ref, use_pull: marker)
+    return {"runs": runs, "jobs": jobs, "marker": marker, "calls": calls}
+
+
+class TestMainVerdict:
+    def test_live_0001_topology_passes_exact_attempt_and_markers(
+        self, script, main_boundaries, capsys
+    ):
+        assert script.main(["--commit", TEST_SHA, "--pull"]) == 0
+        output = capsys.readouterr().out
+        assert main_boundaries["calls"] == [("owner/repo", 33440983429, 1)]
+        assert "attempt 1" in output
+        assert "reusable publish job succeeded" in output
+        assert "linux/amd64, linux/arm64" in output
+        assert "GIT_COMMIT matches the exact resolved SHA" in output
+        assert "PASS:" in output
+
+    @pytest.mark.parametrize(
+        ("status", "conclusion"),
+        [("in_progress", None), ("completed", "failure")],
+    )
+    def test_tests_run_must_be_completed_successfully(
+        self, script, main_boundaries, capsys, status, conclusion
+    ):
+        main_boundaries["runs"][0].update(status=status, conclusion=conclusion)
+        assert script.main(["--commit", TEST_SHA]) == 1
+        assert "FAIL:" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        ("status", "conclusion"),
+        [("in_progress", None), ("completed", "failure"), ("completed", "skipped")],
+    )
+    def test_nested_manifest_job_must_be_completed_successfully(
+        self, script, main_boundaries, capsys, status, conclusion
+    ):
+        main_boundaries["jobs"][0].update(status=status, conclusion=conclusion)
+        assert script.main(["--commit", TEST_SHA]) == 1
+        assert "FAIL:" in capsys.readouterr().err
+
+    def test_missing_nested_manifest_job_fails(self, script, main_boundaries, capsys):
+        main_boundaries["jobs"].clear()
+        assert script.main(["--commit", TEST_SHA]) == 1
+        assert "no 'Publish Verified Dev Images" in capsys.readouterr().err
+
+    def test_duplicate_nested_manifest_job_is_incomplete(
+        self, script, main_boundaries, capsys
+    ):
+        main_boundaries["jobs"].append(_job())
+        assert script.main(["--commit", TEST_SHA]) == 1
+        output = capsys.readouterr()
+        assert "2 jobs" in output.err
+        assert "INCOMPLETE:" in output.err
+
+    @pytest.mark.parametrize(
+        "built_from",
+        [None, "unknown", TEST_SHA[:12], "A" * 40, "b" * 40],
+        ids=["missing", "malformed", "abbreviated", "uppercase", "stale"],
+    )
+    def test_git_commit_marker_must_be_exact_full_lowercase_sha(
+        self, script, main_boundaries, capsys, built_from
+    ):
+        if built_from is None:
+            main_boundaries["marker"].pop("GIT_COMMIT")
+        else:
+            main_boundaries["marker"]["GIT_COMMIT"] = built_from
+        assert script.main(["--commit", TEST_SHA]) == 1
+        output = capsys.readouterr()
+        assert "GIT_COMMIT" in output.err
+        assert "FAIL:" in output.err
+
+    def test_version_marker_must_match_target_commit(
+        self, script, main_boundaries, capsys
+    ):
+        main_boundaries["marker"]["ECM_VERSION"] = "0.18.2-0000"
+        assert script.main(["--commit", TEST_SHA]) == 1
+        assert "ECM_VERSION mismatch" in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "boundary",
+        ["fetch_workflow_runs", "fetch_workflow_jobs", "read_published_marker"],
+    )
+    def test_api_or_manifest_error_returns_incomplete(
+        self, script, main_boundaries, monkeypatch, capsys, boundary
+    ):
+        monkeypatch.setattr(
+            script,
+            boundary,
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                script.CheckError("actionable boundary failure")
+            ),
+        )
+        assert script.main(["--commit", TEST_SHA]) == 1
+        output = capsys.readouterr()
+        assert "INCOMPLETE:" in output.err
+        assert "actionable boundary failure" in output.err
+
+    def test_git_orientation_error_is_incomplete_but_other_proof_runs(
+        self, script, main_boundaries, monkeypatch, capsys
+    ):
+        monkeypatch.setattr(
+            script,
+            "commit_is_on_branch",
+            lambda *args: (_ for _ in ()).throw(script.CheckError("git timed out")),
+        )
+        assert script.main(["--commit", TEST_SHA]) == 1
+        output = capsys.readouterr()
+        assert "COULD NOT CHECK branch orientation" in output.out
+        assert "reusable publish job succeeded" in output.out
+        assert "INCOMPLETE:" in output.err

@@ -210,10 +210,12 @@ Read that summary before treating a green rollup as proof the suite passed. `gh 
 A merged PR is not a published image. Merging to `dev` triggers independent
 **Tests** and **Build and Push Docker Image** verification workflows. Image
 builds and scans no longer wait on a polling job: a wedged test runner cannot
-hide image-build evidence. Completion of either workflow triggers **Publish
-Verified Images**, which publishes only when both exact-SHA push workflows are
-successful and the SHA is still the current branch head. Until then, mutable
-tags retain their last known-good image.
+hide image-build evidence. After its required test jobs succeed, the **Tests**
+workflow calls `publish-images.yml` as the reusable **Publish Verified Dev
+Images** job. That called workflow publishes only when the exact-SHA build
+evidence is successful and the SHA is still the current `dev` head. There is
+no separate **Publish Verified Images** Actions run on the dev path. Until
+publication succeeds, mutable tags retain their last known-good image.
 
 The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
 
@@ -232,10 +234,10 @@ So after `git checkout dev && git pull`, run:
 
 The script checks two things for the merge commit at `HEAD`:
 
-1. The **Publish Verified Images** workflow run for that commit concluded `success`.
-2. The published tag's build marker (`ECM_VERSION`, baked into the image from the `ECM_VERSION` build-arg) equals the version in `frontend/package.json` **at that commit**.
+1. The exact SHA's **Tests** push run concluded `success`, and its final reusable **Publish Verified Dev Images / Publish Verified Multi-Arch Manifests** job concluded `success` on that exact run attempt. An overall green Tests run without exactly one such job is not publication proof.
+2. Every platform config represented by the published tag carries both build markers, all platforms agree, `ECM_VERSION` equals the version in `frontend/package.json` **at that commit**, and `GIT_COMMIT` equals the full 40-character resolved commit SHA exactly. Missing, abbreviated, malformed, conflicting, or stale markers fail the check.
 
-Both must hold. A green workflow with a stale marker means the push did not land on the tag. A correct marker with a failed workflow means the tag is still serving an older build.
+Both must hold. A green workflow with stale or cross-platform markers means the push did not land consistently on the tag. Correct markers with failed workflow evidence do not prove publication provenance.
 
 **It is a post-merge check, deliberately not a CI gate.** A check that runs after the merge cannot gate the merge it follows, and adding it to the PR flow would put a permanently-failing context on every open PR. Running it *before* the merge is the one way to misread it: on a feature branch the version bump has not reached `dev` yet, so the registry cannot possibly carry it. The script detects that case and prints a `PRE-MERGE RUN` banner saying the mismatch is expected.
 
@@ -250,10 +252,10 @@ Useful flags:
 | Flag | Effect |
 | --- | --- |
 | `--commit <sha>` | Verify a specific commit instead of `HEAD`. |
-| `--pull` | Read the marker by dropping and re-pulling the tag, the heavier check, instead of reading the registry config blob. |
+| `--pull` | After mandatory inspection of every represented manifest platform, drop and re-pull the tag and require the host image's `ECM_VERSION` and full `GIT_COMMIT` to match that manifest proof. A successful pull cannot rescue failed manifest inspection. |
 | `--skip-workflow` / `--skip-image` | Run only one of the two checks. |
 
-The same "prove the image before you trust it" discipline applies to any other manual image check you run: drop the local tag, pull it fresh, and read the version markers baked into the image before trusting it, the same way `--pull` above does.
+The default check always proves every platform represented by the manifest; it does not require a hardcoded architecture set, so a valid single-platform image remains supported. The additive `--pull` check then proves that a fresh host pull resolves to the same markers. The same "prove the image before you trust it" discipline applies to any other manual image check.
 
 ### 7. File Beads for Remaining Work
 

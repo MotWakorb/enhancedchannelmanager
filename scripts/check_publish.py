@@ -25,23 +25,22 @@ unrelated merge republished it by accident.
 
 ## What it checks
 
-  1. The "Publish Verified Images" workflow run for the commit under
-     test concluded `success`.
-  2. The published tag's build marker (`ECM_VERSION`, baked into the
-     image by the Dockerfile from the `ECM_VERSION` build-arg) equals the
-     version in `frontend/package.json` AT THAT COMMIT.
+  1. The "Tests" push run for the commit under test concluded `success`,
+     and its reusable publish workflow completed the final multi-arch
+     manifest job successfully on that exact run attempt.
+  2. Every represented platform carries matching `ECM_VERSION` and full
+     `GIT_COMMIT` markers. They must equal `frontend/package.json` AT THAT
+     COMMIT and the exact resolved commit SHA.
 
 Both must hold. A green workflow with a stale marker means the push
 silently did not land on the tag; a correct marker with a failed workflow
 means the tag is carrying an older successful build.
 
-The image is read through the registry's config blob
-(`docker buildx imagetools inspect`), which does not download layers.
-Pass `--pull` for the heavier form used by the restore drill's image
-gate: remove the local tag, pull it fresh, and read the marker out of the
-pulled image. See `docs/shipping.md` section 6, "Confirm the image
-published" ("prove the image before you trust it"), for that idiom and
-for where this script sits in the flow.
+The image is always read through every represented platform's registry
+config (`docker buildx imagetools inspect`), which does not download layers.
+Pass `--pull` to add host-level proof after that mandatory manifest proof.
+A pull cannot rescue failed manifest inspection. See `docs/shipping.md`
+section 6, "Confirm the image published".
 
 ## Refs it needs
 
@@ -68,6 +67,7 @@ of surfacing git's raw `ambiguous argument` error.
 Exits 0 when the registry matches `dev`, 1 when it does not or when a
 check could not be completed.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,9 +83,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "ghcr.io/motwakorb/enhancedchannelmanager"
 DEFAULT_TAG = "dev"
 DEFAULT_BRANCH = "dev"
-WORKFLOW_NAME = "Publish Verified Images"
+WORKFLOW_NAME = "Tests"
+PUBLISH_JOB_NAME = "Publish Verified Dev Images / Publish Verified Multi-Arch Manifests"
 MARKER_ENV = "ECM_VERSION"
 COMMIT_ENV = "GIT_COMMIT"
+PLATFORMS_KEY = "_ECM_MANIFEST_PLATFORMS"
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
@@ -98,9 +100,16 @@ class CheckError(RuntimeError):
 
 
 def _run(cmd: list[str], *, timeout: int = 300) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        cmd, capture_output=True, text=True, check=False, timeout=timeout
-    )
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout
+        )
+    except subprocess.TimeoutExpired as error:
+        raise CheckError(
+            f"command timed out after {timeout}s: {' '.join(cmd)}"
+        ) from error
+    except OSError as error:
+        raise CheckError(f"could not launch {cmd[0]!r}: {error}") from error
 
 
 def _git(*args: str) -> str:
@@ -226,20 +235,48 @@ def commit_is_on_branch(sha: str, branch: str) -> bool | None:
     as "the commit is not on the branch".
     """
     for ref in (f"origin/{branch}", branch):
-        probe = _run(["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", ref], timeout=60)
-        if probe.returncode != 0:
+        probe_cmd = [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            ref,
+        ]
+        probe = _run(probe_cmd, timeout=60)
+        if probe.returncode == 1:
             continue
-        result = _run(
-            ["git", "-C", str(REPO_ROOT), "merge-base", "--is-ancestor", sha, ref],
-            timeout=60,
+        if probe.returncode != 0:
+            raise CheckError(
+                f"{' '.join(probe_cmd)} failed ({probe.returncode}): "
+                f"{probe.stderr.strip() or 'no stderr'}"
+            )
+        ancestor_cmd = [
+            "git",
+            "-C",
+            str(REPO_ROOT),
+            "merge-base",
+            "--is-ancestor",
+            sha,
+            ref,
+        ]
+        result = _run(ancestor_cmd, timeout=60)
+        if result.returncode == 0:
+            return True
+        if result.returncode == 1:
+            return False
+        raise CheckError(
+            f"{' '.join(ancestor_cmd)} failed ({result.returncode}): "
+            f"{result.stderr.strip() or 'no stderr'}"
         )
-        if result.returncode in (0, 1):
-            return result.returncode == 0
     return None
 
 
 def repo_slug() -> str:
-    result = _run(["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"])
+    result = _run(
+        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]
+    )
     if result.returncode == 0 and result.stdout.strip():
         return result.stdout.strip()
     url = _git("remote", "get-url", "origin").strip()
@@ -263,6 +300,7 @@ def fetch_workflow_runs(slug: str, sha: str) -> list[dict]:
         [
             "gh",
             "api",
+            "--paginate",
             "-H",
             "Accept: application/vnd.github+json",
             f"repos/{slug}/actions/runs?head_sha={sha}&per_page=100",
@@ -273,14 +311,73 @@ def fetch_workflow_runs(slug: str, sha: str) -> list[dict]:
             f"gh api call for workflow runs failed: {result.stderr.strip()}"
         )
     try:
-        payload = json.loads(result.stdout)
+        pages = _decode_json_pages(result.stdout)
     except json.JSONDecodeError as error:
         raise CheckError(f"unparseable gh api response: {error}") from error
-    runs = payload.get("workflow_runs")
-    return runs if isinstance(runs, list) else []
+    return _combine_paginated_items(pages, "workflow_runs")
 
 
-def select_build_run(runs: list[dict], workflow_name: str, branch: str) -> dict | None:
+def fetch_workflow_jobs(slug: str, run_id: int, run_attempt: int) -> list[dict]:
+    result = _run(
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "-H",
+            "Accept: application/vnd.github+json",
+            f"repos/{slug}/actions/runs/{run_id}/attempts/{run_attempt}/jobs?per_page=100",
+        ]
+    )
+    if result.returncode != 0:
+        raise CheckError(
+            f"gh api call for workflow jobs failed: {result.stderr.strip()}"
+        )
+    try:
+        pages = _decode_json_pages(result.stdout)
+    except json.JSONDecodeError as error:
+        raise CheckError(
+            f"unparseable gh api response for workflow jobs: {error}"
+        ) from error
+    return _combine_paginated_items(pages, "jobs")
+
+
+def _decode_json_pages(payload: str) -> list[object]:
+    """Decode consecutive JSON documents emitted by ``gh api --paginate``."""
+    decoder = json.JSONDecoder()
+    pages: list[object] = []
+    offset = 0
+    while offset < len(payload):
+        while offset < len(payload) and payload[offset].isspace():
+            offset += 1
+        if offset == len(payload):
+            break
+        page, offset = decoder.raw_decode(payload, offset)
+        pages.append(page)
+    if not pages:
+        raise CheckError("paginated gh api response was empty")
+    return pages
+
+
+def _combine_paginated_items(pages: list[object], key: str) -> list[dict]:
+    combined: list[dict] = []
+    for page_number, page in enumerate(pages, start=1):
+        if not isinstance(page, dict) or not isinstance(page.get(key), list):
+            raise CheckError(
+                f"paginated gh api response page {page_number} carried invalid {key}"
+            )
+        for item_number, item in enumerate(page[key], start=1):
+            if not isinstance(item, dict):
+                raise CheckError(
+                    f"paginated gh api response page {page_number} {key} item "
+                    f"{item_number} is not an object"
+                )
+            combined.append(item)
+    return combined
+
+
+def select_build_run(
+    runs: list[dict], workflow_name: str, branch: str, sha: str
+) -> dict | None:
     """Pick the newest `workflow_name` run for `branch`, re-runs included.
 
     GitHub returns the same workflow once per attempt and once per event
@@ -292,11 +389,25 @@ def select_build_run(runs: list[dict], workflow_name: str, branch: str) -> dict 
         for run in runs
         if run.get("name") == workflow_name
         and run.get("head_branch") == branch
+        and run.get("head_sha") == sha
         and run.get("event") == "push"
     ]
     if not candidates:
         return None
-    return max(candidates, key=lambda run: (run.get("run_number") or 0, run.get("run_attempt") or 0))
+    return max(
+        candidates,
+        key=lambda run: (run.get("run_number") or 0, run.get("run_attempt") or 0),
+    )
+
+
+def select_publish_job(jobs: list[dict]) -> dict | None:
+    matches = [job for job in jobs if job.get("name") == PUBLISH_JOB_NAME]
+    if len(matches) > 1:
+        raise CheckError(
+            f"the Tests attempt carried {len(matches)} jobs named {PUBLISH_JOB_NAME!r}; "
+            "exactly one is required"
+        )
+    return matches[0] if matches else None
 
 
 # --- Check 2: the published build marker ------------------------------------
@@ -314,35 +425,61 @@ def _env_list_to_mapping(env: list[str]) -> dict[str, str]:
 def parse_imagetools_config(payload: str) -> dict[str, str]:
     """Pull the image's env mapping out of `imagetools inspect` JSON.
 
-    The payload is either a single image config or, for a multi-arch
-    manifest list, one config per platform. Every platform of a given tag
-    is built from the same source, so the first config with an env block
-    is representative; a disagreement between platforms is reported by
-    the caller as a mismatch, not silently averaged.
+    The payload is either a single image config or one config per platform.
+    Every represented platform must carry both provenance markers, and all
+    platforms must agree before one mapping can represent the tag.
     """
     try:
         data = json.loads(payload)
     except json.JSONDecodeError as error:
         raise CheckError(f"unparseable imagetools output: {error}") from error
 
-    configs: list[dict] = []
+    configs: list[tuple[str, dict]] = []
     if isinstance(data, dict) and "config" in data:
-        configs.append(data)
+        configs.append(("single image", data))
     elif isinstance(data, dict):
-        for value in data.values():
-            if isinstance(value, dict) and "config" in value:
-                configs.append(value)
+        for platform, value in data.items():
+            if not isinstance(value, dict) or "config" not in value:
+                raise CheckError(
+                    f"imagetools output carried no image config for {platform}"
+                )
+            configs.append((platform, value))
+    if not configs:
+        raise CheckError("imagetools output carried no image configs")
 
-    for entry in configs:
+    mappings: list[dict[str, str]] = []
+    for platform, entry in configs:
         env = entry.get("config", {}).get("Env")
-        if isinstance(env, list):
-            return _env_list_to_mapping(env)
-    raise CheckError("imagetools output carried no image config env block")
+        if not isinstance(env, list) or not all(isinstance(item, str) for item in env):
+            raise CheckError(
+                f"imagetools output carried no image config env block for {platform}"
+            )
+        mapping = _env_list_to_mapping(env)
+        for marker in (MARKER_ENV, COMMIT_ENV):
+            if marker not in mapping:
+                raise CheckError(f"image config for {platform} carries no {marker}")
+        mappings.append(mapping)
+
+    for marker in (MARKER_ENV, COMMIT_ENV):
+        values = {mapping[marker] for mapping in mappings}
+        if len(values) != 1:
+            raise CheckError(
+                f"image platforms disagree on {marker}: {sorted(values)!r}"
+            )
+    return mappings[0] | {PLATFORMS_KEY: ", ".join(platform for platform, _ in configs)}
 
 
 def read_marker_via_imagetools(ref: str) -> dict[str, str]:
     result = _run(
-        ["docker", "buildx", "imagetools", "inspect", ref, "--format", "{{json .Image}}"]
+        [
+            "docker",
+            "buildx",
+            "imagetools",
+            "inspect",
+            ref,
+            "--format",
+            "{{json .Image}}",
+        ]
     )
     if result.returncode != 0:
         raise CheckError(
@@ -375,17 +512,17 @@ def read_published_marker(ref: str, *, use_pull: bool) -> dict[str, str]:
             "docker is not installed, so the published image cannot be read. "
             "Pass --skip-image to check only the workflow run."
         )
+    manifest = read_marker_via_imagetools(ref)
     if use_pull:
-        return read_marker_via_pull(ref)
-    try:
-        return read_marker_via_imagetools(ref)
-    except CheckError as error:
-        print(
-            f"  note: registry config read unavailable ({error}); "
-            "falling back to a full pull.",
-            file=sys.stderr,
-        )
-        return read_marker_via_pull(ref)
+        host = read_marker_via_pull(ref)
+        for marker in (MARKER_ENV, COMMIT_ENV):
+            if host.get(marker) != manifest.get(marker):
+                raise CheckError(
+                    f"fresh-pull host {marker} mismatch: manifest carries "
+                    f"{manifest.get(marker)!r}, host image carries {host.get(marker)!r}"
+                )
+        print("  OK: fresh-pull host markers match the mandatory manifest proof.")
+    return manifest
 
 
 # --- Reporting --------------------------------------------------------------
@@ -417,8 +554,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--pull",
         action="store_true",
-        help="Read the marker by removing and re-pulling the tag (the restore "
-        "drill's image gate) instead of reading the registry config blob.",
+        help="After mandatory manifest inspection, remove and re-pull the tag "
+        "and require the host image markers to match.",
     )
     parser.add_argument(
         "--skip-workflow", action="store_true", help="Skip the workflow-run check."
@@ -437,14 +574,24 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     ref = f"{args.image}:{args.tag}"
-    on_branch = commit_is_on_branch(sha, args.branch)
+    failures: list[str] = []
+    errors: list[str] = []
+    orientation_error: str | None = None
+    try:
+        on_branch = commit_is_on_branch(sha, args.branch)
+    except CheckError as error:
+        on_branch = None
+        orientation_error = f"branch orientation could not be determined: {error}"
+        errors.append(orientation_error)
 
     print(_banner("Post-merge publish check"))
     print(f"  commit under test : {sha[:12]}  {subject}")
     print(f"  expected version  : {expected}   (frontend/package.json at that commit)")
     print(f"  published tag     : {ref}")
 
-    if on_branch is False:
+    if orientation_error is not None:
+        print(f"\n  COULD NOT CHECK branch orientation: {orientation_error}")
+    elif on_branch is False:
         print(
             f"\n  PRE-MERGE RUN. {sha[:12]} is not an ancestor of "
             f"'{args.branch}'. This check verifies what the registry carries "
@@ -463,18 +610,15 @@ def main(argv: list[str] | None = None) -> int:
             f"want that context in the verdict."
         )
 
-    failures: list[str] = []
-    errors: list[str] = []
-
     # --- Check 1 ---
-    print("\n[1/2] Publish Verified Images workflow run")
+    print("\n[1/2] Tests run and reusable publish job")
     if args.skip_workflow:
         print("  SKIPPED (--skip-workflow)")
     else:
         try:
             slug = repo_slug()
             runs = fetch_workflow_runs(slug, sha)
-            run = select_build_run(runs, WORKFLOW_NAME, args.branch)
+            run = select_build_run(runs, WORKFLOW_NAME, args.branch, sha)
             if run is None:
                 failures.append(
                     f"no {WORKFLOW_NAME!r} push run exists for {sha[:12]} on "
@@ -488,7 +632,9 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 status = run.get("status")
                 conclusion = run.get("conclusion")
-                print(f"  run       : #{run.get('run_number')} attempt {run.get('run_attempt')}")
+                print(
+                    f"  run       : #{run.get('run_number')} attempt {run.get('run_attempt')}"
+                )
                 print(f"  status    : {status}")
                 print(f"  conclusion: {conclusion}")
                 print(f"  url       : {run.get('html_url')}")
@@ -505,7 +651,44 @@ def main(argv: list[str] | None = None) -> int:
                         f"from the URL above once the cause is understood."
                     )
                 else:
-                    print("  OK: the merge commit's image build succeeded.")
+                    run_id = run.get("id")
+                    run_attempt = run.get("run_attempt")
+                    if not isinstance(run_id, int) or not isinstance(run_attempt, int):
+                        raise CheckError(
+                            "the selected Tests run has no integer id/run_attempt; "
+                            "attempt-specific job inspection is impossible"
+                        )
+                    jobs = fetch_workflow_jobs(slug, run_id, run_attempt)
+                    publish_job = select_publish_job(jobs)
+                    if publish_job is None:
+                        failures.append(
+                            f"the Tests attempt carried no {PUBLISH_JOB_NAME!r} job. "
+                            "A green test rollup alone does not prove publication."
+                        )
+                        print("  publish job: not found")
+                    else:
+                        publish_status = publish_job.get("status")
+                        publish_conclusion = publish_job.get("conclusion")
+                        print(f"  publish job status    : {publish_status}")
+                        print(f"  publish job conclusion: {publish_conclusion}")
+                        print(
+                            f"  publish job url       : {publish_job.get('html_url')}"
+                        )
+                        if publish_status != "completed":
+                            failures.append(
+                                f"the reusable publish job is still {publish_status!r}. "
+                                "Nothing has published yet; re-run this check when it finishes."
+                            )
+                        elif publish_conclusion != "success":
+                            failures.append(
+                                f"the reusable publish job concluded {publish_conclusion!r}, "
+                                "so publication was not proven. Re-run the failed Tests "
+                                "workflow from the URL above once the cause is understood."
+                            )
+                        else:
+                            print(
+                                "  OK: the exact attempt's reusable publish job succeeded."
+                            )
         except CheckError as error:
             errors.append(str(error))
             print(f"  COULD NOT CHECK: {error}")
@@ -518,9 +701,11 @@ def main(argv: list[str] | None = None) -> int:
         try:
             env = read_published_marker(ref, use_pull=args.pull)
             actual = env.get(MARKER_ENV)
-            built_from = env.get(COMMIT_ENV, "unknown")
+            built_from = env.get(COMMIT_ENV)
+            platforms = env.get(PLATFORMS_KEY, "unknown")
+            print(f"  manifest platforms: {platforms}")
             print(f"  {MARKER_ENV}   : {actual}")
-            print(f"  {COMMIT_ENV}    : {built_from[:12] if built_from else 'unknown'}")
+            print(f"  {COMMIT_ENV}    : {built_from[:12] if built_from else 'missing'}")
             if actual is None:
                 failures.append(
                     f"the published image carries no {MARKER_ENV}. The image "
@@ -529,13 +714,32 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif actual != expected:
                 failures.append(
-                    f"build marker mismatch: expected {expected!r}, published "
+                    f"{MARKER_ENV} mismatch: expected {expected!r}, published "
                     f"tag {ref} carries {actual!r} (built from "
-                    f"{built_from[:12]}). The registry is lagging the commit "
+                    f"{built_from[:12] if built_from else 'missing'}). "
+                    f"The registry is lagging the commit "
                     f"under test."
                 )
             else:
-                print(f"  OK: published marker matches {expected}.")
+                print(f"  OK: {MARKER_ENV} matches {expected}.")
+
+            if built_from is None:
+                failures.append(
+                    f"the published image carries no {COMMIT_ENV}. Exact-SHA "
+                    "publication cannot be proven from the registry tag."
+                )
+            elif not re.fullmatch(r"[0-9a-f]{40}", built_from):
+                failures.append(
+                    f"the published {COMMIT_ENV} marker {built_from!r} is not a "
+                    "full 40-character lowercase commit SHA."
+                )
+            elif built_from != sha:
+                failures.append(
+                    f"{COMMIT_ENV} mismatch: expected the exact SHA {sha}, but "
+                    f"published tag {ref} carries {built_from}."
+                )
+            else:
+                print(f"  OK: {COMMIT_ENV} matches the exact resolved SHA.")
         except CheckError as error:
             errors.append(str(error))
             print(f"  COULD NOT CHECK: {error}")
@@ -563,10 +767,16 @@ def main(argv: list[str] | None = None) -> int:
                 "merge to republish by accident.",
                 file=sys.stderr,
             )
+        if errors:
+            print("\nINCOMPLETE: one or more checks could not run.", file=sys.stderr)
+            for error in errors:
+                print(f"  - {error}", file=sys.stderr)
         return 1
 
     if errors:
-        print("INCOMPLETE: no mismatch found, but a check could not run.", file=sys.stderr)
+        print(
+            "INCOMPLETE: no mismatch found, but a check could not run.", file=sys.stderr
+        )
         for error in errors:
             print(f"  - {error}", file=sys.stderr)
         return 1
@@ -579,11 +789,14 @@ def main(argv: list[str] | None = None) -> int:
     elif args.skip_image:
         print(f"PASS: {sha[:12]} has a successful build run (image check skipped).")
     elif args.skip_workflow:
-        print(f"PASS: {ref} carries {expected} (workflow-run check skipped).")
+        print(
+            f"PASS: {ref} carries {expected} from exact commit {sha} "
+            "(workflow-run check skipped)."
+        )
     else:
         print(
-            f"PASS: {ref} carries {expected}, built from a successful run "
-            f"of {sha[:12]}."
+            f"PASS: {ref} carries {expected} from exact commit {sha}, built "
+            "from a successful Tests run and reusable publish job."
         )
     return 0
 
