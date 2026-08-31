@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -106,6 +108,77 @@ def test_latest_rerun_controls_outcome(policy):
         policy.validate_publish_candidate(**values)
     values["runs"][-1]["conclusion"] = "success"
     assert policy.validate_publish_candidate(**values) == ("dev", "abc123")
+
+
+@pytest.mark.parametrize(
+    ("branch", "tests_attested"), [("main", False), ("dev", True)]
+)
+def test_authorization_filters_large_irrelevant_run_sets_before_cli_serialization(
+    policy, branch, tests_attested
+):
+    publish = PUBLISH.read_text(encoding="utf-8")
+    match = re.search(
+        r"runs=\$\(gh api --paginate .*?\| jq -sc '([^']+)'\)",
+        publish,
+        re.DOTALL,
+    )
+    assert match, "authorize must filter paginated runs before assigning $runs"
+
+    required_runs = [
+        _run("Tests", run_number=6, head_branch=branch),
+        _run("Tests", run_number=7, head_branch=branch),
+        _run("Build and Push Docker Image", run_number=6, head_branch=branch),
+        _run("Build and Push Docker Image", run_number=7, head_branch=branch),
+    ]
+    irrelevant_runs = [
+        _run(
+            "Dependency Graph" if index % 2 else "Publish Verified Images",
+            run_number=10_000 + index,
+            head_branch=branch,
+            conclusion="skipped",
+            irrelevant_payload="x" * 256,
+        )
+        for index in range(1_000)
+    ]
+    pages = [irrelevant_runs[:500], required_runs, irrelevant_runs[500:]]
+    api_output = "\n".join(json.dumps(page) for page in pages)
+    assert len(api_output) > 131_072
+    result = subprocess.run(
+        ["jq", "-sc", match.group(1)],
+        input=api_output,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    runs = json.loads(result.stdout)
+
+    assert runs == required_runs
+    assert len(result.stdout) < 5_000
+
+    if tests_attested:
+        trigger = _run(
+            "Tests", run_number=2_147_483_647, head_branch=branch, id=0
+        )
+        runs.append(trigger)
+    else:
+        trigger = required_runs[1]
+
+    assert policy.validate_publish_candidate(
+        trigger=trigger, branch_sha="abc123", runs=runs
+    ) == (branch, "abc123")
+    with pytest.raises(policy.PolicyError, match="stale trigger SHA"):
+        policy.validate_publish_candidate(
+            trigger=trigger, branch_sha="newer", runs=runs
+        )
+    latest_build = max(
+        (run for run in runs if run["name"] == "Build and Push Docker Image"),
+        key=lambda run: run["run_number"],
+    )
+    latest_build["head_sha"] = "wrong"
+    with pytest.raises(policy.PolicyError, match="wrong revision"):
+        policy.validate_publish_candidate(
+            trigger=trigger, branch_sha="abc123", runs=runs
+        )
 
 
 def _attestation(**overrides):
