@@ -9,7 +9,7 @@ import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.orm import Session
 from urllib.parse import urlparse, urlunparse
 
@@ -41,6 +41,9 @@ from config import (
     clear_settings_cache,
     set_log_level,
     DispatcharrSettings,
+    StreamSortPointRule,
+    StreamSortStrategy,
+    stream_sort_point_rules_for_evaluator,
     MCP_SERVICE_FILE,
     MCP_SERVICE_FILENAME,
 )
@@ -464,6 +467,8 @@ class SettingsRequest(BaseModel):
     probe_retry_delay: int = 2  # Seconds between retries (1-30)
     stream_fetch_page_limit: int = 200  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"]  # Priority order for Smart Sort
+    stream_sort_strategy: Optional[StreamSortStrategy] = None
+    stream_sort_point_rules: Optional[list[StreamSortPointRule]] = None
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False, "catchup": False}  # Which criteria are enabled
     m3u_account_priorities: dict[str, int] = {}  # M3U account priorities (account_id -> priority value)
     black_screen_detection_enabled: bool = False  # Run ffmpeg blackdetect after successful probe
@@ -545,6 +550,15 @@ class SettingsRequest(BaseModel):
     # so an older frontend bundle that omits it preserves the stored value.
     trusted_media_networks: Optional[list[str]] = None
 
+    @field_validator("stream_sort_strategy", "stream_sort_point_rules", mode="before")
+    @classmethod
+    def reject_null_smart_sort_settings(cls, value, info):
+        if value is None:
+            raise ValueError(
+                f"{info.field_name} cannot be null; omit it to preserve the stored value"
+            )
+        return value
+
 
 class SettingsResponse(BaseModel):
     url: str
@@ -604,6 +618,8 @@ class SettingsResponse(BaseModel):
     probe_retry_delay: int  # Seconds between retries (1-30)
     stream_fetch_page_limit: int  # Max pages when fetching streams (200 pages * 500 = 100K streams)
     stream_sort_priority: list[str]  # Priority order for Smart Sort
+    stream_sort_strategy: StreamSortStrategy
+    stream_sort_point_rules: list[StreamSortPointRule]
     stream_sort_enabled: dict[str, bool]  # Which criteria are enabled
     m3u_account_priorities: dict[str, int]  # M3U account priorities (account_id -> priority value)
     black_screen_detection_enabled: bool  # Run ffmpeg blackdetect after successful probe
@@ -868,6 +884,8 @@ async def get_current_settings(
         probe_retry_delay=settings.probe_retry_delay,
         stream_fetch_page_limit=settings.stream_fetch_page_limit,
         stream_sort_priority=settings.stream_sort_priority,
+        stream_sort_strategy=settings.stream_sort_strategy,
+        stream_sort_point_rules=settings.stream_sort_point_rules,
         stream_sort_enabled=settings.stream_sort_enabled,
         m3u_account_priorities=settings.m3u_account_priorities,
         black_screen_detection_enabled=settings.black_screen_detection_enabled,
@@ -1080,6 +1098,16 @@ async def update_settings(
         if request.backend_log_file_backup_count is not None
         else current_settings.backend_log_file_backup_count
     )
+    stream_sort_strategy = (
+        request.stream_sort_strategy
+        if request.stream_sort_strategy is not None
+        else current_settings.stream_sort_strategy
+    )
+    stream_sort_point_rules = (
+        request.stream_sort_point_rules
+        if request.stream_sort_point_rules is not None
+        else current_settings.stream_sort_point_rules
+    )
 
     # MCP API key is never accepted on this endpoint (it has dedicated
     # generate/revoke endpoints) — always preserve the stored value so a
@@ -1178,6 +1206,8 @@ async def update_settings(
         probe_retry_delay=request.probe_retry_delay,
         stream_fetch_page_limit=request.stream_fetch_page_limit,
         stream_sort_priority=request.stream_sort_priority,
+        stream_sort_strategy=stream_sort_strategy,
+        stream_sort_point_rules=stream_sort_point_rules,
         stream_sort_enabled=request.stream_sort_enabled,
         m3u_account_priorities=request.m3u_account_priorities,
         black_screen_detection_enabled=request.black_screen_detection_enabled,
@@ -1430,6 +1460,8 @@ async def update_settings(
     # Update prober's sort settings without requiring restart
     if (new_settings.stream_sort_priority != current_settings.stream_sort_priority or
             new_settings.stream_sort_enabled != current_settings.stream_sort_enabled or
+            new_settings.stream_sort_strategy != current_settings.stream_sort_strategy or
+            new_settings.stream_sort_point_rules != current_settings.stream_sort_point_rules or
             new_settings.m3u_account_priorities != current_settings.m3u_account_priorities or
             new_settings.failed_stream_sort_order != current_settings.failed_stream_sort_order or
             new_settings.deprioritize_black_screen != current_settings.deprioritize_black_screen or
@@ -1443,6 +1475,8 @@ async def update_settings(
                 failed_stream_sort_order=new_settings.failed_stream_sort_order,
                 deprioritize_black_screen=new_settings.deprioritize_black_screen,
                 deprioritize_low_fps=new_settings.deprioritize_low_fps,
+                stream_sort_strategy=new_settings.stream_sort_strategy,
+                stream_sort_point_rules=stream_sort_point_rules_for_evaluator(new_settings),
             )
             logger.info("[SETTINGS] Updated prober sort settings from settings")
 
@@ -2356,6 +2390,8 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
                 stream_fetch_page_limit=settings.stream_fetch_page_limit,
                 m3u_account_priorities=settings.m3u_account_priorities,
                 failed_stream_sort_order=settings.failed_stream_sort_order,
+                stream_sort_strategy=settings.stream_sort_strategy,
+                stream_sort_point_rules=stream_sort_point_rules_for_evaluator(settings),
             )
             new_prober.set_notification_callbacks(
                 create_callback=create_notification_internal,

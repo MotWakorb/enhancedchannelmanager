@@ -57,6 +57,28 @@
 
 ## Pending release notes (copy-paste to Discord when cutting the release)
 
+### v0.18.2
+
+```
+@here
+
+## 🚀 ECM v0.18.2
+
+**🆕 Smart Sort Points**
+• Choose Priority when the first criterion must win, or Points when several stream qualities should trade off
+• Add signed rules for resolution, bitrate, framerate, codec, M3U priority, audio channels, custom/catch-up streams, failures, black screens, and low FPS
+• Every matching rule adds to the score; higher scores sort first, and ties finish by stream ID
+• Manual sorting, probe-completion and scheduled-probe reordering, Channel Pipeline, and Event Sync use the same saved Smart Sort strategy
+
+**⚙️ Compatibility**
+• Priority remains the default for existing installs
+• Priority and Points configurations are both retained when switching modes
+• Cached clients that do not know the new fields preserve the stored strategy and rules
+
+**📋 Scope**
+• Not included: score preview/explanation UI, profiles, compound rule groups, per-channel profiles, SQL migrations, or new dependencies
+```
+
 ### v0.17.2
 
 ```

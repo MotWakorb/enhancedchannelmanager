@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Smart Sort can now use signed additive Points rules as an alternative to the existing ordered Priority strategy (bead `enhancedchannelmanager-npueh.5`).** Rules can reward or penalize resolution, bitrate, framerate, video codec, M3U priority, audio channels, custom streams, catch-up, failed streams, black screens, and low FPS. Every matching rule contributes to the total, higher totals sort first, and final ties use ascending stream ID. Priority remains the default for existing settings. Both configurations survive mode changes, and cached clients that omit the new settings preserve the stored strategy and rules.
+
+  The same selected Smart Sort strategy is used by manual stream ordering, probe-completion and scheduled-probe reordering, Channel Pipeline, and Event Sync. Direct one-field sorts remain legacy Priority sorts. See the [Channel Defaults guide](docs/user_guide/settings/channel-defaults.md#choose-how-smart-sort-ranks-streams) for rule units, operators, missing-value behavior, and worked examples.
+
+  **Not included:** no score preview or explanation UI, no profiles, no compound rule groups, no per-channel profiles, no SQL migrations, and no new dependencies.
+
 ## [0.18.1] — 2026-08-30
 
 ### Security

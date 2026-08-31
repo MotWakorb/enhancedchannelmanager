@@ -6,6 +6,7 @@ settings loading, and sort computation.
 """
 import pytest
 from unittest.mock import patch, AsyncMock
+from config import StreamSortPointRule
 from models import StreamStats
 
 
@@ -36,6 +37,8 @@ def mock_settings():
     mock = MagicMock()
     mock.stream_sort_priority = ["resolution", "bitrate", "framerate"]
     mock.stream_sort_enabled = {"resolution": True, "bitrate": True, "framerate": True}
+    mock.stream_sort_strategy = "priority"
+    mock.stream_sort_point_rules = []
     mock.m3u_account_priorities = {}
     mock.deprioritize_failed_streams = True
     return mock
@@ -276,3 +279,111 @@ async def test_compute_sort_invalid_mode(async_client, mock_settings):
         })
 
     assert response.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_compute_sort_smart_points_can_override_health_buckets(
+    async_client, test_session, seed_stream_stats, mock_settings
+):
+    seed_stream_stats(
+        {"stream_id": 1, "resolution": "1280x720", "probe_status": "success"},
+        {"stream_id": 2, "resolution": "3840x2160", "probe_status": "failed"},
+    )
+    mock_settings.stream_sort_strategy = "points"
+    mock_settings.stream_sort_point_rules = [
+        StreamSortPointRule(
+            criterion="resolution", operator="gte", value=2160, points=50
+        ),
+        StreamSortPointRule(
+            criterion="failed", operator="eq", value=True, points=-10
+        ),
+    ]
+    mock_client = AsyncMock()
+
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings), patch(
+        "routers.stream_stats.get_client", return_value=mock_client
+    ):
+        smart = await async_client.post(
+            "/api/stream-stats/compute-sort",
+            json={
+                "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
+                "mode": "smart",
+            },
+        )
+        direct = await async_client.post(
+            "/api/stream-stats/compute-sort",
+            json={
+                "channels": [{"channel_id": 10, "stream_ids": [2, 1]}],
+                "mode": "resolution",
+            },
+        )
+
+    assert smart.status_code == 200
+    assert smart.json()["results"][0]["sorted_stream_ids"] == [2, 1]
+    assert direct.status_code == 200
+    assert direct.json()["results"][0]["sorted_stream_ids"] == [1, 2]
+    mock_client.get_streams_by_ids.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_compute_sort_points_fetches_dispatcharr_metadata_only_for_active_rule(
+    async_client, test_session, seed_stream_stats, mock_settings
+):
+    seed_stream_stats({"stream_id": 1}, {"stream_id": 2})
+    mock_settings.stream_sort_strategy = "points"
+    mock_settings.stream_sort_point_rules = [
+        StreamSortPointRule(
+            criterion="custom_streams", operator="eq", value=True, points=10
+        )
+    ]
+    mock_client = AsyncMock()
+    mock_client.get_streams_by_ids.return_value = [
+        {"id": 1, "is_custom": False},
+        {"id": 2, "is_custom": True},
+    ]
+
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings), patch(
+        "routers.stream_stats.get_client", return_value=mock_client
+    ):
+        response = await async_client.post(
+            "/api/stream-stats/compute-sort",
+            json={
+                "channels": [{"channel_id": 10, "stream_ids": [1, 2]}],
+                "mode": "smart",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["sorted_stream_ids"] == [2, 1]
+    mock_client.get_streams_by_ids.assert_awaited_once_with([1, 2])
+
+
+@pytest.mark.asyncio
+async def test_compute_sort_points_does_not_treat_missing_metadata_as_false(
+    async_client, test_session, seed_stream_stats, mock_settings
+):
+    seed_stream_stats({"stream_id": 1}, {"stream_id": 2})
+    mock_settings.stream_sort_strategy = "points"
+    mock_settings.stream_sort_point_rules = [
+        StreamSortPointRule(
+            criterion="custom_streams", operator="eq", value=False, points=10
+        )
+    ]
+    mock_client = AsyncMock()
+    mock_client.get_streams_by_ids.return_value = [
+        {"id": 2, "is_custom": False},
+    ]
+
+    with patch("routers.stream_stats.get_settings", return_value=mock_settings), patch(
+        "routers.stream_stats.get_client", return_value=mock_client
+    ):
+        response = await async_client.post(
+            "/api/stream-stats/compute-sort",
+            json={
+                "channels": [{"channel_id": 10, "stream_ids": [2, 1]}],
+                "mode": "smart",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["results"][0]["sorted_stream_ids"] == [2, 1]

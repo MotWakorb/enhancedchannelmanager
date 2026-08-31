@@ -1,16 +1,18 @@
 from contextlib import contextmanager
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 import errno
 import fcntl
 import json
+import math
 import os
 import logging
 import secrets
 import stat
 import threading
 import time
+from typing import Literal
 
 # Single source of truth for the dedup confidence floor per ADR-008 §D2.
 # Imported from the ``confidence_constants`` leaf module (NOT from
@@ -27,6 +29,7 @@ from credential_sentinel import (
     credential_is_present,
 )
 from pathlib import Path
+from smart_sort_evaluator import CODEC_RANK, PointRule
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -458,6 +461,77 @@ def validate_url_scheme(url: str, field_name: str = "URL") -> None:
         )
 
 
+_STREAM_SORT_NUMERIC_CRITERIA = frozenset(
+    {"resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"}
+)
+_STREAM_SORT_BOOLEAN_CRITERIA = frozenset(
+    {"custom_streams", "catchup", "failed", "black_screen", "low_fps"}
+)
+_STREAM_SORT_ORDERED_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
+StreamSortStrategy = Literal["priority", "points"]
+
+
+class StreamSortPointRule(BaseModel):
+    """One persisted points-mode rule at the strict settings boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    criterion: str
+    operator: str
+    value: object
+    points: int
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_public_contract(cls, data):
+        if not isinstance(data, dict):
+            return data
+
+        criterion = data.get("criterion")
+        operator = data.get("operator")
+        value = data.get("value")
+        points = data.get("points")
+
+        valid_criteria = (
+            _STREAM_SORT_NUMERIC_CRITERIA
+            | _STREAM_SORT_BOOLEAN_CRITERIA
+            | {"video_codec"}
+        )
+        if criterion not in valid_criteria:
+            raise ValueError(
+                "criterion must be one of: " + ", ".join(sorted(valid_criteria))
+            )
+
+        allowed_operators = (
+            {"eq"}
+            if criterion in _STREAM_SORT_BOOLEAN_CRITERIA
+            else _STREAM_SORT_ORDERED_OPERATORS
+        )
+        if operator not in allowed_operators:
+            raise ValueError(
+                f"operator for {criterion!r} must be one of: "
+                + ", ".join(sorted(allowed_operators))
+            )
+
+        if criterion in _STREAM_SORT_NUMERIC_CRITERIA:
+            if type(value) not in {int, float} or (
+                isinstance(value, float) and not math.isfinite(value)
+            ):
+                raise ValueError(f"value for {criterion!r} must be a finite JSON number")
+        elif criterion == "video_codec":
+            if type(value) is not str or value.lower() not in CODEC_RANK:
+                raise ValueError(
+                    "value for 'video_codec' must be a recognized codec name or alias"
+                )
+        elif type(value) is not bool:
+            raise ValueError(f"value for {criterion!r} must be a JSON boolean")
+
+        if type(points) is not int:
+            raise ValueError("points must be a signed JSON integer")
+
+        return data
+
+
 class DispatcharrSettings(BaseModel):
     """User-configurable Dispatcharr connection settings."""
     url: str = ""
@@ -624,6 +698,8 @@ class DispatcharrSettings(BaseModel):
     # Order determines priority: first element is primary sort key, subsequent elements are tie-breakers
     # Valid values: "resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"
     stream_sort_priority: list[str] = ["resolution", "bitrate", "framerate", "video_codec", "m3u_priority", "audio_channels", "custom_streams", "catchup"]
+    stream_sort_strategy: StreamSortStrategy = "priority"
+    stream_sort_point_rules: list[StreamSortPointRule] = []
     # Which sort criteria are enabled (users can disable criteria they don't want to use)
     # Only enabled criteria appear in sort dropdown and are used by Smart Sort
     stream_sort_enabled: dict[str, bool] = {"resolution": True, "bitrate": True, "framerate": True, "video_codec": False, "m3u_priority": False, "audio_channels": False, "custom_streams": False, "catchup": False}
@@ -992,6 +1068,33 @@ class DispatcharrSettings(BaseModel):
     def is_telegram_configured(self) -> bool:
         """Check if shared Telegram bot is configured."""
         return bool(self.telegram_bot_token and self.telegram_chat_id)
+
+
+def stream_sort_point_rules_for_evaluator(
+    settings: DispatcharrSettings,
+) -> tuple[PointRule, ...]:
+    """Convert validated settings rules to evaluator units."""
+    converted_rules = []
+    for rule in settings.stream_sort_point_rules:
+        value = rule.value
+        if rule.criterion == "bitrate":
+            if type(value) is int:
+                value *= 1000
+            else:
+                numerator, denominator = value.as_integer_ratio()
+                scaled_numerator = numerator * 1000
+                quotient, remainder = divmod(scaled_numerator, denominator)
+                value = quotient if remainder == 0 else value * 1000
+
+        converted_rules.append(
+            PointRule(
+                criterion=rule.criterion,
+                operator=rule.operator,
+                value=value,
+                points=rule.points,
+            )
+        )
+    return tuple(converted_rules)
 
 
 # In-memory cache of settings

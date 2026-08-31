@@ -1138,6 +1138,16 @@ export type SortEnabledMap = Record<SortCriterion, boolean>;
 // Deprioritized stream categories for ordering within the "failed" group
 export type FailedStreamCategory = 'failed' | 'black_screen' | 'low_fps';
 
+export type StreamSortStrategy = 'priority' | 'points';
+export type StreamSortPointCriterion = SortCriterion | FailedStreamCategory;
+export type StreamSortPointOperator = 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte';
+export interface StreamSortPointRule {
+  criterion: StreamSortPointCriterion;
+  operator: StreamSortPointOperator;
+  value: number | string | boolean;
+  points: number;
+}
+
 // M3U account priorities for sorting - maps account ID (as string) to priority value
 export type M3UAccountPriorities = Record<string, number>;
 
@@ -1209,6 +1219,8 @@ export interface SettingsResponse {
   probe_retry_delay: number;   // Seconds between retries (1-30)
   stream_fetch_page_limit: number;  // Max pages when fetching streams (pages * 500 = max streams)
   stream_sort_priority: SortCriterion[];  // Priority order for Smart Sort (e.g., ['resolution', 'bitrate', 'framerate'])
+  stream_sort_strategy?: StreamSortStrategy;  // Omitted by older backends; resolves to Priority
+  stream_sort_point_rules?: StreamSortPointRule[];  // Omitted by older backends; resolves to no Points rules
   stream_sort_enabled: SortEnabledMap;  // Which sort criteria are enabled (e.g., { resolution: true, bitrate: true, framerate: false })
   m3u_account_priorities: M3UAccountPriorities;  // M3U account priorities for sorting (account_id -> priority)
   black_screen_detection_enabled: boolean;  // Run ffmpeg blackdetect after successful probe
@@ -1381,6 +1393,8 @@ export async function saveSettings(settings: {
   probe_retry_delay?: number;   // Optional - seconds between retries (1-30), defaults to 2
   stream_fetch_page_limit?: number;  // Optional - max pages when fetching streams, defaults to 200 (100K streams)
   stream_sort_priority?: SortCriterion[];  // Optional - priority order for Smart Sort, defaults to ['resolution', 'bitrate', 'framerate']
+  stream_sort_strategy?: StreamSortStrategy;  // Optional - defaults to 'priority'
+  stream_sort_point_rules?: StreamSortPointRule[];  // Optional - defaults to []
   stream_sort_enabled?: SortEnabledMap;  // Optional - which sort criteria are enabled, defaults to all true
   m3u_account_priorities?: M3UAccountPriorities;  // Optional - M3U account priorities for sorting
   black_screen_detection_enabled?: boolean;  // Optional - run ffmpeg blackdetect after successful probe, defaults to false

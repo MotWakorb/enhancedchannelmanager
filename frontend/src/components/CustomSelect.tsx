@@ -10,6 +10,7 @@ export interface SelectOption {
 }
 
 interface CustomSelectProps {
+  id?: string;
   options: SelectOption[];
   value: string;
   onChange: (value: string) => void;
@@ -24,6 +25,7 @@ interface CustomSelectProps {
 }
 
 export function CustomSelect({
+  id,
   options,
   value,
   onChange,
@@ -215,6 +217,7 @@ export function CustomSelect({
       onKeyDown={handleKeyDown}
     >
       <button
+        id={id}
         ref={triggerRef}
         type="button"
         className="custom-select-trigger"
