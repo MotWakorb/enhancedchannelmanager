@@ -2975,6 +2975,90 @@ class TestPointsSmartSortPipeline:
             [1, 2], stats_cache, {}, "points-health", settings
         ) == [2, 1]
 
+    def test_points_execution_log_does_not_claim_unhealthy_winner_was_deprioritized(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            {"id": 100, "name": "points-health", "streams": [1, 2]}
+        ]
+        engine._smart_sort_stats_cache = {
+            1: _success_stats_dict(1, resolution="1920x1080", stream_name="Healthy"),
+            2: {
+                **_failed_stats_dict(
+                    2, resolution="1280x720", fps="25", stream_name="Unhealthy winner"
+                ),
+                "is_black_screen": True,
+                "is_low_fps": True,
+            },
+        }
+        engine._stream_stats_cache = engine._smart_sort_stats_cache
+        rule = MagicMock()
+        rule.id = 9
+        rule.stream_sort_field = "smart_sort"
+        settings = _mk_smart_sort_settings(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=(PointRule("failed", "eq", True, 100),),
+        )
+        results = {"execution_log": [], "dry_run_results": []}
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._reorder_channel_streams(
+                [rule],
+                {rule.id: [100]},
+                results,
+                dry_run=False,
+                settings=settings,
+                stream_m3u_map={},
+            )
+        )
+
+        client.update_channel.assert_awaited_once_with(100, {"streams": [2, 1]})
+        description = results["execution_log"][0]["actions_executed"][0]["description"]
+        assert "deprioritized" not in description
+
+    def test_priority_execution_log_omits_disabled_black_screen_bucket(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            {"id": 100, "name": "priority-toggle", "streams": [1, 2]}
+        ]
+        engine._smart_sort_stats_cache = {
+            1: _success_stats_dict(1, resolution="1280x720", stream_name="Healthy 720p"),
+            2: {
+                **_success_stats_dict(
+                    2, resolution="1920x1080", stream_name="Black screen 1080p"
+                ),
+                "is_black_screen": True,
+            },
+        }
+        engine._stream_stats_cache = engine._smart_sort_stats_cache
+        rule = MagicMock()
+        rule.id = 9
+        rule.stream_sort_field = "smart_sort"
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_black_screen=False,
+        )
+        results = {"execution_log": [], "dry_run_results": []}
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._reorder_channel_streams(
+                [rule],
+                {rule.id: [100]},
+                results,
+                dry_run=False,
+                settings=settings,
+                stream_m3u_map={},
+            )
+        )
+
+        client.update_channel.assert_awaited_once_with(100, {"streams": [2, 1]})
+        description = results["execution_log"][0]["actions_executed"][0]["description"]
+        assert "deprioritized" not in description
+
     def test_direct_quality_sort_ignores_global_points_strategy(self):
         settings = _mk_smart_sort_settings(
             stream_sort_strategy="points",

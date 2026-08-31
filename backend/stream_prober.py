@@ -363,6 +363,42 @@ def smart_sort_streams(
     return sorted_ids
 
 
+def _priority_deprioritized_streams(
+    sorted_stream_ids: list[int], stats_map: dict, sort_settings: dict
+) -> list[dict]:
+    if (
+        sort_settings["stream_sort_strategy"] != "priority"
+        or not sort_settings["deprioritize_failed_streams"]
+    ):
+        return []
+
+    deprioritized = []
+    for stream_id in sorted_stream_ids:
+        stat = stats_map.get(stream_id)
+        if not stat:
+            continue
+        if stat.probe_status in ("failed", "timeout"):
+            reason = stat.probe_status
+        elif (
+            sort_settings["deprioritize_black_screen"]
+            and getattr(stat, "is_black_screen", False)
+        ):
+            reason = "black_screen"
+        elif (
+            sort_settings["deprioritize_low_fps"]
+            and getattr(stat, "is_low_fps", False)
+        ):
+            reason = "low_fps"
+        else:
+            continue
+        deprioritized.append({
+            "id": stream_id,
+            "name": stat.stream_name,
+            "reason": reason,
+        })
+    return deprioritized
+
+
 class StreamProber:
     """
     Background service that probes streams using ffprobe.
@@ -2139,17 +2175,9 @@ class StreamProber:
                                 logger.error("[STREAM-PROBE-SORT] Failed to update channel %s (%s): %s", channel_id, channel_name, update_err)
                                 raise  # Re-raise to be caught by outer exception handler
 
-                            # Collect deprioritization reasons for journal
-                            deprioritized = []
-                            for sid in sorted_stream_ids:
-                                stat = stats_map.get(sid)
-                                if stat:
-                                    if getattr(stat, 'is_black_screen', False):
-                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "black_screen"})
-                                    elif getattr(stat, 'is_low_fps', False):
-                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "low_fps"})
-                                    elif stat.probe_status in ('failed', 'timeout'):
-                                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": stat.probe_status})
+                            deprioritized = _priority_deprioritized_streams(
+                                sorted_stream_ids, stats_map, sort_settings
+                            )
 
                             # Build journal description
                             desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{channel_name}'"]
@@ -2296,16 +2324,9 @@ class StreamProber:
                 logger.error("[STREAM-PROBE-SORT] Failed to update channel %s during bulk reorder: %s", channel_id, e)
                 continue
 
-            deprioritized = []
-            for sid in sorted_ids:
-                stat = stats_map.get(sid)
-                if stat:
-                    if getattr(stat, 'is_black_screen', False):
-                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "black_screen"})
-                    elif getattr(stat, 'is_low_fps', False):
-                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": "low_fps"})
-                    elif stat.probe_status in ('failed', 'timeout'):
-                        deprioritized.append({"id": sid, "name": stat.stream_name, "reason": stat.probe_status})
+            deprioritized = _priority_deprioritized_streams(
+                sorted_ids, stats_map, sort_settings
+            )
 
             desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{channel_name}'"]
             if deprioritized:

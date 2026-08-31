@@ -1,6 +1,8 @@
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { once } from 'node:events'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { createServer as createHTTPServer } from 'node:http'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -49,14 +51,20 @@ async function waitForURL(
   url: string,
   child: ChildProcessWithoutNullStreams,
   output: () => string,
+  expectedNonce: string,
+  timeoutMs = 60_000,
 ): Promise<void> {
-  const deadline = Date.now() + 60_000
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (child.exitCode !== null) {
       throw new Error(`Harness process exited with ${child.exitCode}\n${output()}`)
     }
     try {
-      if ((await fetch(url)).ok) return
+      const response = await fetch(url)
+      if (response.ok) {
+        const readiness = await response.json()
+        if (readiness?.nonce === expectedNonce) return
+      }
     } catch {
       // The isolated server is still starting.
     }
@@ -108,6 +116,7 @@ test.beforeAll(async () => {
   test.setTimeout(120_000)
   temporaryDirectory = await mkdtemp(path.join(tmpdir(), 'ecm-smart-sort-points-e2e-'))
   const [frontendPort, backendPort] = await Promise.all([reservePort(), reservePort()])
+  const harnessNonce = randomUUID()
   appURL = `http://127.0.0.1:${frontendPort}`
   const apiURL = `http://127.0.0.1:${backendPort}`
   const environment = {
@@ -118,6 +127,7 @@ test.beforeAll(async () => {
     SMART_SORT_POINTS_E2E_API: apiURL,
     SMART_SORT_POINTS_E2E_BACKEND_PORT: String(backendPort),
     SMART_SORT_POINTS_E2E_DIST: path.join(temporaryDirectory, 'frontend-dist'),
+    SMART_SORT_POINTS_E2E_NONCE: harnessNonce,
     SMART_SORT_POINTS_E2E_PORT: String(frontendPort),
   }
 
@@ -130,7 +140,9 @@ test.beforeAll(async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   })
-  await waitForURL(`${apiURL}/api/health`, backend, captureOutput(backend))
+  await waitForURL(
+    `${apiURL}/api/health`, backend, captureOutput(backend), harnessNonce,
+  )
 
   execFileSync('npx', ['vite', 'build', '--config', VITE_CONFIG], {
     cwd: FRONTEND,
@@ -143,13 +155,40 @@ test.beforeAll(async () => {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   })
-  await waitForURL(appURL, preview, captureOutput(preview))
+  await waitForURL(
+    `${appURL}/api/health`, preview, captureOutput(preview), harnessNonce,
+  )
 })
 
 test.afterAll(async () => {
   await stopProcess(preview)
   await stopProcess(backend)
   if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true })
+})
+
+test('readiness rejects an unrelated successful server with the wrong nonce', async () => {
+  const unrelatedServer = createHTTPServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ status: 'healthy', nonce: 'wrong-harness' }))
+  })
+  unrelatedServer.listen(0, '127.0.0.1')
+  await once(unrelatedServer, 'listening')
+
+  try {
+    const address = unrelatedServer.address()
+    if (!address || typeof address === 'string') throw new Error('Test server did not bind')
+    await expect(waitForURL(
+      `http://127.0.0.1:${address.port}`,
+      backend,
+      () => '',
+      'expected-harness',
+      300,
+    )).rejects.toThrow('Timed out waiting for')
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      unrelatedServer.close((error) => error ? reject(error) : resolve())
+    })
+  }
 })
 
 test('persisted Points rules drive manual Smart Sort ordering', async ({ page }) => {

@@ -1837,17 +1837,36 @@ class ChannelPipelineEngine:
                         # Update cache
                         channel["streams"] = sorted_streams
 
-                        # Collect deprioritization reasons
                         deprioritized = []
-                        for sid in sorted_streams:
-                            stats = self._stream_stats_cache.get(sid)
-                            if stats:
-                                if stats.get("is_black_screen"):
-                                    deprioritized.append({"id": sid, "name": stats.get("stream_name", f"Stream {sid}"), "reason": "black_screen"})
-                                elif stats.get("is_low_fps"):
-                                    deprioritized.append({"id": sid, "name": stats.get("stream_name", f"Stream {sid}"), "reason": "low_fps"})
-                                elif stats.get("probe_status") in ("failed", "timeout"):
-                                    deprioritized.append({"id": sid, "name": stats.get("stream_name", f"Stream {sid}"), "reason": stats.get("probe_status")})
+                        if (
+                            field == "smart_sort"
+                            and settings is not None
+                            and settings.stream_sort_strategy == "priority"
+                            and settings.deprioritize_failed_streams
+                        ):
+                            for sid in sorted_streams:
+                                stats = self._stream_stats_cache.get(sid)
+                                if not stats:
+                                    continue
+                                if stats.get("probe_status") in ("failed", "timeout"):
+                                    reason = stats["probe_status"]
+                                elif (
+                                    settings.deprioritize_black_screen
+                                    and stats.get("is_black_screen")
+                                ):
+                                    reason = "black_screen"
+                                elif (
+                                    settings.deprioritize_low_fps
+                                    and stats.get("is_low_fps")
+                                ):
+                                    reason = "low_fps"
+                                else:
+                                    continue
+                                deprioritized.append({
+                                    "id": sid,
+                                    "name": stats.get("stream_name", f"Stream {sid}"),
+                                    "reason": reason,
+                                })
 
                         mode_label = _stream_sort_rule_label(rule.stream_sort_field)
                         desc_parts = [f"Reordered {len(sorted_streams)} streams in '{channel_name}' by {mode_label}"]

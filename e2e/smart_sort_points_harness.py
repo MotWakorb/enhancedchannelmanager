@@ -48,6 +48,7 @@ STREAMS = [
         "logo_url": None,
     },
 ]
+HARNESS_NONCE = os.environ["SMART_SORT_POINTS_E2E_NONCE"]
 
 
 app = FastAPI()
@@ -91,7 +92,11 @@ async def initialize_harness() -> None:
 
 @app.get("/api/health")
 async def health() -> dict[str, str]:
-    return {"status": "healthy", "service": "smart-sort-points-e2e"}
+    return {
+        "status": "healthy",
+        "service": "smart-sort-points-e2e",
+        "nonce": HARNESS_NONCE,
+    }
 
 
 @app.get("/api/auth/status")
