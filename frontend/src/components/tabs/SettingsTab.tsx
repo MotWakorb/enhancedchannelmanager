@@ -656,6 +656,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamSortStrategy, setStreamSortStrategy] = useState<StreamSortStrategy>('priority');
   const [streamSortPointRules, setStreamSortPointRules] = useState<StreamSortPointRule[]>([]);
   const [streamSortPointRulesDirty, setStreamSortPointRulesDirty] = useState(false);
+  const streamSortPointRulesRevisionRef = useRef(0);
   const [pointRuleFocusRequest, setPointRuleFocusRequest] = useState(0);
   const pointRulesEditorRef = useRef<HTMLDivElement>(null);
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
@@ -988,6 +989,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   const editPointRules = (update: (rules: StreamSortPointRule[]) => StreamSortPointRule[]) => {
+    streamSortPointRulesRevisionRef.current += 1;
     setStreamSortPointRules(update);
     setStreamSortPointRulesDirty(true);
   };
@@ -1667,6 +1669,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
 
     setLoading(true);
+    const streamSortPointRulesRevision = streamSortPointRulesRevisionRef.current;
 
     try {
       const result = await api.saveSettings({
@@ -1809,7 +1812,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
-      setStreamSortPointRulesDirty(false);
+      if (streamSortPointRulesRevisionRef.current === streamSortPointRulesRevision) {
+        setStreamSortPointRulesDirty(false);
+      }
       logger.info('Settings saved successfully');
       // Check if any settings that require a restart have changed
       // Only poll interval and timezone changes require a full service restart.

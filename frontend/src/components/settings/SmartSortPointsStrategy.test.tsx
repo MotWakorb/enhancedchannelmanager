@@ -378,6 +378,68 @@ describe('Smart Sort Priority and Points strategies', () => {
     ]);
   });
 
+  it('resends rules edited while an earlier save is pending', async () => {
+    const loadedRule: api.StreamSortPointRule = {
+      criterion: 'resolution', operator: 'gte', value: 1080, points: 20,
+    };
+    let persistedRules = [loadedRule];
+    let releaseFirstSave!: () => void;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const saveResponse = {
+      status: 'ok', configured: true, server_changed: false,
+    };
+    let saveCount = 0;
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      stream_sort_strategy: 'points',
+      stream_sort_point_rules: persistedRules,
+    }));
+    vi.mocked(api.saveSettings).mockImplementation(async (payload) => {
+      const requestNumber = saveCount;
+      saveCount += 1;
+      if (requestNumber === 0) await firstSaveGate;
+      if (payload.stream_sort_point_rules !== undefined) {
+        persistedRules = payload.stream_sort_point_rules.map((rule) => ({ ...rule }));
+      }
+      return saveResponse;
+    });
+
+    const firstRender = renderOnChannelDefaults();
+    await screen.findByRole('button', { name: 'Add rule' });
+    fireEvent.change(ruleControl(1, 'Points (signed integer)'), { target: { value: '21' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.saveSettings).mock.calls[0][0].stream_sort_point_rules).toEqual([
+      { ...loadedRule, points: 21 },
+    ]);
+
+    const pointsInput = ruleControl(1, 'Points (signed integer)');
+    expect(pointsInput).not.toBeDisabled();
+    fireEvent.change(pointsInput, { target: { value: '22' } });
+    expect(pointsInput).toHaveValue(22);
+
+    releaseFirstSave();
+    const saveButton = await screen.findByRole('button', { name: /Save Settings$/ });
+    await waitFor(() => expect(saveButton).toBeEnabled());
+    fireEvent.click(saveButton);
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.saveSettings).mock.calls[1][0].stream_sort_point_rules).toEqual([
+      { ...loadedRule, points: 22 },
+    ]);
+    await waitFor(() => expect(saveButton).toBeEnabled());
+
+    firstRender.unmount();
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      stream_sort_strategy: 'points',
+      stream_sort_point_rules: persistedRules,
+    }));
+    renderOnChannelDefaults();
+
+    await screen.findByRole('button', { name: 'Add rule' });
+    expect(ruleControl(1, 'Points (signed integer)')).toHaveValue(22);
+  });
+
   it('renders codec aliases case-insensitively and preserves them across unrelated and intentional saves', async () => {
     const codecRule: api.StreamSortPointRule = {
       criterion: 'video_codec', operator: 'eq', value: 'H264', points: 10,
