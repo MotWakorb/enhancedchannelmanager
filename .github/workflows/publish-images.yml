@@ -82,7 +82,9 @@ jobs:
               exit 1
             fi
             runs=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-              --jq '.workflow_runs' | jq -sc 'add // []')
+              --jq '.workflow_runs' | jq -sc 'add // []
+                | map(select(.name == "Tests"
+                  or .name == "Build and Push Docker Image"))')
             if test "$TESTS_ATTESTED" = true; then
               test_run=$(jq -nc --arg sha "$SHA" --arg branch "$BRANCH" \
                 '{id: 0, name: "Tests", head_sha: $sha, head_branch: $branch,

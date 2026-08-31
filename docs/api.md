@@ -1095,6 +1095,58 @@ result.
 | `POST /api/settings/restart-services` | Restart background services. Admin-only when auth is enabled; the MCP service key is still admitted, because this rebuilds the tracker/prober from already-saved settings and reaches no caller-named host (bead 9kwzp.6). |
 | `POST /api/settings/reset-stats` | Reset all statistics. Admin-only when auth is enabled; the MCP service key is refused, because the wipe is irreversible and has no rollback (bead 9kwzp.12). |
 
+### Smart Sort settings
+
+`GET /api/settings` and `POST /api/settings` use these fields for Smart Sort:
+
+| Field | Type | Contract |
+| --- | --- | --- |
+| `stream_sort_strategy` | `"priority" \| "points"` | Selects the evaluator used by `mode: "smart"`. The default for settings files that predate this field is `"priority"`. |
+| `stream_sort_priority` | `string[]` | Priority-mode criterion order. The implemented criterion names are `resolution`, `bitrate`, `framerate`, `video_codec`, `m3u_priority`, `audio_channels`, `custom_streams`, and `catchup`; `stream_sort_enabled` decides which entries participate. |
+| `stream_sort_point_rules` | object[] | Ordered storage for Points rules. Storage order is returned unchanged for editing, but evaluation adds every matching rule, so order does not create precedence. The default is `[]`. |
+
+Each `stream_sort_point_rules` entry has exactly four fields:
+
+```json
+{
+  "criterion": "bitrate",
+  "operator": "gte",
+  "value": 6000,
+  "points": 25
+}
+```
+
+| Field | Validation and normalization |
+| --- | --- |
+| `criterion` | One of the eight Priority criteria above, or the Points-only health criteria `failed`, `black_screen`, and `low_fps`. |
+| `operator` | `eq`, `ne`, `gt`, `gte`, `lt`, or `lte` for numeric and `video_codec` rules. Boolean criteria (`custom_streams`, `catchup`, and the three health criteria) accept only `eq`. Symbol aliases such as `>=` are evaluator internals and are rejected by the settings API. |
+| `value` | A finite JSON number for `resolution` (vertical pixels), `bitrate` (kbps), `framerate` (FPS), `m3u_priority` (unitless), and `audio_channels` (channel count); a case-insensitive supported codec name or alias for `video_codec`; or a JSON boolean for boolean criteria. Bitrate thresholds are converted from kbps to bps only when handed to the evaluator; persisted and returned values stay in kbps. Codec comparisons use the implemented rank `av1 > hevc/h265 > vp9 > h264/avc > vp8 > mpeg2video/mpeg2`, so aliases at one rank compare as equal. |
+| `points` | Signed JSON integer. All matching values are summed; the highest total sorts first. |
+
+Unknown or missing facts do not match a Points rule. For example, unknown
+boolean metadata does not match even when the rule value is `false`. Equal
+totals are resolved by ascending numeric stream ID. Points evaluation does not
+apply Priority mode's failed/black-screen/low-FPS health buckets; model those
+effects with explicit signed rules.
+
+The API rejects an unknown strategy, criterion, operator, value type, codec,
+non-finite number, non-integer `points`, or extra rule field with `422
+Unprocessable Entity`. Explicit `null` for `stream_sort_strategy` or
+`stream_sort_point_rules` also returns `422` with an instruction to omit the
+field instead.
+
+Omission is compatibility behavior, not a reset: if a cached or older client
+omits `stream_sort_strategy`, the stored strategy is preserved; if it omits
+`stream_sort_point_rules`, the stored rules are preserved. An explicit empty
+rule list clears the rules. Priority configuration and Points rules are stored
+at the same time, so changing `stream_sort_strategy` does not erase the inactive
+configuration.
+
+See the [Channel Defaults guide](user_guide/settings/channel-defaults.md#choose-how-smart-sort-ranks-streams)
+for operator-facing semantics and worked examples, and the [v0.18.2 release
+evidence](validation/smart-sort-v0.18.2-readiness.md) for the automated consumer
+matrix.
+
 **Auth-disabled instances (bead `enhancedchannelmanager-2u4e0`):** the seven test routes above (`/test`, `/test-smtp`, `/test-discord`, `/test-telegram`, and the three `*/test-connection` routes) also require an authenticated human admin while `require_auth` is false, on any instance that already holds an operator identity. They reach the network with credentials the instance already stores and report the upstream verdict back. Only an instance that never created a user reaches them anonymously; `/restart-services` and `/reset-stats` are not affected. See `docs/auth_middleware.md` → "What `require_auth: false` permits".
 
 ## Event Sync Team Aliases
@@ -1129,7 +1181,59 @@ Operator team-alias dictionary for the Event Sync matcher's team-token layer (be
 | `GET /api/stream-stats/struck-out` | List struck-out streams (exceeding failure threshold) |
 | `POST /api/stream-stats/struck-out/remove` | Bulk remove struck-out streams from all channels |
 | `GET /api/stream-stats/stale?days=7` | List stale streams: not probed by ECM in `days` days (or never), OR flagged `is_stale` by Dispatcharr's own M3U refresh, each tagged with which `reasons` fired |
-| `POST /api/stream-stats/compute-sort` | Compute sort scores for streams (resolution, bitrate, framerate, video codec, M3U priority, audio channels) |
+| `POST /api/stream-stats/compute-sort` | Compute stream order without applying it. `mode: "smart"` uses the saved Smart Sort strategy; a criterion name requests a direct legacy one-field sort. |
+
+### `POST /api/stream-stats/compute-sort`
+
+Computes orders for one or more channels without writing to Dispatcharr. This
+is the endpoint manual sorting uses with the browser's current, possibly staged,
+stream lists.
+
+**Request:**
+
+```json
+{
+  "channels": [
+    {"channel_id": 41, "stream_ids": [101, 202]}
+  ],
+  "mode": "smart"
+}
+```
+
+`mode` defaults to `smart`. `smart` resolves the current
+`stream_sort_strategy` and its saved Priority or Points configuration. Direct
+modes are `resolution`, `bitrate`, `framerate`, `video_codec`, `m3u_priority`,
+`audio_channels`, `custom_streams`, and `catchup`. A direct mode always uses the
+legacy Priority evaluator for that one field and does not inherit a global
+Points strategy. An unsupported mode returns `400 Bad Request`.
+
+**Response: `200 OK`**
+
+```json
+{
+  "results": [
+    {
+      "channel_id": 41,
+      "sorted_stream_ids": [202, 101],
+      "changed": true
+    }
+  ]
+}
+```
+
+Results follow request channel order. `sorted_stream_ids` is the complete
+computed order for that channel; `changed` compares it with the submitted
+`stream_ids` sequence. Equal Priority values or Points totals use ascending
+numeric stream ID as the final tie-break. Streams without a `StreamStats` row
+are supported and therefore still produce deterministic output. If the request
+contains no stream IDs, the response is `{ "results": [] }`.
+
+The endpoint reads probe facts from ECM and fetches Dispatcharr metadata only
+when the active criterion or Points rules require M3U Priority, Custom Streams,
+or Catch-up. Missing metadata remains unknown and does not become `false` for a
+Points rule. The response does not expose per-rule scores or explanations and
+does not apply the returned order; consumers decide whether and how to stage or
+write it.
 
 ## Enhanced Stats
 

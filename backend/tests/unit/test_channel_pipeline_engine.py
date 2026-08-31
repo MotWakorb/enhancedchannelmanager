@@ -6,6 +6,7 @@ pipeline, coordinating rules, streams, and executions.
 """
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 import asyncio
 import json
 import pytest
@@ -20,10 +21,14 @@ from channel_pipeline_engine import (
     _sort_streams_by_m3u_account_priority,
     _sort_streams_by_resolution_height,
     _reorder_streams_for_rule,
+    _pipeline_stream_facts,
 )
 from channel_pipeline_evaluator import StreamContext
 from channel_pipeline_evaluator import StreamContext
 from channel_pipeline_executor import ActionExecutor, ExecutionContext
+from config import DispatcharrSettings
+from smart_sort_evaluator import PointRule
+from stream_prober import _prober_stream_facts, smart_sort_streams
 
 
 class TestChannelPipelineEngineInit:
@@ -38,6 +43,37 @@ class TestChannelPipelineEngineInit:
         assert engine._existing_channels is None
         assert engine._existing_groups is None
         assert engine._stream_stats_cache == {}
+        assert engine._smart_sort_stats_cache == {}
+
+    def test_load_stream_stats_keeps_failed_rows_only_for_smart_sort(self):
+        client = MagicMock()
+        engine = ChannelPipelineEngine(client)
+        success = MagicMock()
+        success.stream_id = 1
+        success.probe_status = "success"
+        success.to_dict.return_value = {"stream_id": 1, "probe_status": "success"}
+        failed = MagicMock()
+        failed.stream_id = 2
+        failed.probe_status = "failed"
+        failed.to_dict.return_value = {"stream_id": 2, "probe_status": "failed"}
+        session = MagicMock()
+        session.query.return_value.all.return_value = [success, failed]
+        settings = MagicMock()
+        settings.strike_threshold = 0
+
+        with patch("channel_pipeline_engine.get_session", return_value=session), patch(
+            "channel_pipeline_engine.get_settings", return_value=settings
+        ):
+            asyncio.get_event_loop().run_until_complete(engine._load_stream_stats())
+
+        assert engine._stream_stats_cache == {
+            1: {"stream_id": 1, "probe_status": "success"}
+        }
+        assert engine._smart_sort_stats_cache == {
+            1: {"stream_id": 1, "probe_status": "success"},
+            2: {"stream_id": 2, "probe_status": "failed"},
+        }
+        session.close.assert_called_once()
 
 
 class TestChannelPipelineEngineSingleton:
@@ -1434,6 +1470,58 @@ class TestEventSyncStreamReorderWiring:
             "Pass 3.5 — ordering would stop healing on steady-state runs"
         )
 
+    @pytest.mark.parametrize("strategy", ["priority", "points"])
+    def test_smart_sort_no_op_runs_through_process_streams(self, strategy):
+        event_rule = self._make_event_rule(stream_sort_field="smart_sort")
+        self.engine._existing_channels = [
+            {"id": 501, "name": "master", "streams": [9001, 7001]},
+        ]
+        self.client.get_streams_by_ids.return_value = [
+            {"id": 9001, "m3u_account": 1},
+            {"id": 7001, "m3u_account": 2},
+        ]
+        settings_kwargs = {
+            "stream_sort_strategy": strategy,
+            "m3u_account_priorities": {"1": 1, "2": 10},
+        }
+        if strategy == "priority":
+            settings_kwargs.update(
+                stream_sort_priority=["m3u_priority"],
+                stream_sort_enabled={"m3u_priority": True},
+            )
+        else:
+            settings_kwargs["stream_sort_point_rules"] = [{
+                "criterion": "m3u_priority",
+                "operator": "gte",
+                "value": 10,
+                "points": 20,
+            }]
+        settings = DispatcharrSettings(**settings_kwargs)
+        skip_entry = {
+            "type": "event_sync_attach",
+            "description": "Stream already in channel 'master' (2 streams)",
+            "success": True,
+            "skipped": True,
+            "entity_id": 501,
+            "entity_name": "master",
+            "error": None,
+            "match": {},
+        }
+
+        with patch(
+            "channel_pipeline_engine.get_settings", return_value=settings
+        ):
+            self._run_process_streams(
+                event_rule,
+                mock_reorder_patch=False,
+                merged_ids=(),
+                attach_entries=[skip_entry],
+            )
+
+        self.client.update_channel.assert_awaited_once_with(
+            501, {"streams": [7001, 9001]}
+        )
+
     def test_event_sync_rule_without_sort_field_never_reorders(self):
         """No stream_sort_field -> Pass 3.5 no-ops the rule: no update_channel
         call for the master even though it was registered (no behavior change
@@ -1482,7 +1570,7 @@ class TestChannelPipelineEngineStreamReorderLogging:
                 rule_channel_order={1: [channel_id]},
                 results=results,
                 dry_run=False,
-                settings=MagicMock(),
+                settings=_mk_smart_sort_settings(),
                 stream_m3u_map={},
             )
         )
@@ -2170,7 +2258,11 @@ def _mk_smart_sort_settings(
     stream_sort_enabled=None,
     m3u_account_priorities=None,
     deprioritize_failed_streams=True,
+    deprioritize_black_screen=True,
+    deprioritize_low_fps=True,
     failed_stream_sort_order=None,
+    stream_sort_strategy="priority",
+    stream_sort_point_rules=(),
 ):
     """Build a MagicMock-backed settings object for _smart_sort_streams.
 
@@ -2187,9 +2279,13 @@ def _mk_smart_sort_settings(
     }
     settings.m3u_account_priorities = m3u_account_priorities or {}
     settings.deprioritize_failed_streams = deprioritize_failed_streams
+    settings.deprioritize_black_screen = deprioritize_black_screen
+    settings.deprioritize_low_fps = deprioritize_low_fps
     settings.failed_stream_sort_order = failed_stream_sort_order or [
         "black_screen", "low_fps", "failed",
     ]
+    settings.stream_sort_strategy = stream_sort_strategy
+    settings.stream_sort_point_rules = stream_sort_point_rules
     return settings
 
 
@@ -2639,6 +2735,434 @@ class TestSmartSortCatchupCriterion:
         )
 
         assert result == [20, 10]
+
+
+class TestSmartSortEvaluatorDriftRepairs:
+    def test_pipeline_inactive_m3u_priority_accepts_arbitrary_size_integer(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True, "m3u_priority": False},
+            m3u_account_priorities={"1": 10**400},
+        )
+        stats_cache = {
+            10: _success_stats_dict(10, resolution="1280x720"),
+            20: _success_stats_dict(20, resolution="1920x1080"),
+        }
+
+        assert _smart_sort_streams(
+            [10, 20], stats_cache, {10: 1}, "large-inactive-m3u", settings
+        ) == [20, 10]
+
+    def test_pipeline_honors_black_screen_category_toggle(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_black_screen=False,
+        )
+        stats_cache = {
+            10: {
+                **_success_stats_dict(10, resolution="1920x1080"),
+                "is_black_screen": True,
+            },
+            20: _success_stats_dict(20, resolution="1280x720"),
+        }
+
+        assert _smart_sort_streams(
+            [10, 20], stats_cache, {}, "black-toggle", settings
+        ) == [10, 20]
+
+    def test_pipeline_honors_low_fps_category_toggle(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_low_fps=False,
+        )
+        stats_cache = {
+            10: {
+                **_success_stats_dict(10, resolution="1920x1080"),
+                "is_low_fps": True,
+            },
+            20: _success_stats_dict(20, resolution="1280x720"),
+        }
+
+        assert _smart_sort_streams(
+            [10, 20], stats_cache, {}, "low-fps-toggle", settings
+        ) == [10, 20]
+
+    def test_pipeline_uses_m3u_priority_for_unprobed_streams(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"1": 10, "2": 50, "custom": 100},
+            deprioritize_failed_streams=False,
+        )
+
+        assert _smart_sort_streams(
+            [10, 20, 30],
+            {},
+            {10: 1, 20: 2},
+            "unprobed-m3u",
+            settings,
+        ) == [30, 20, 10]
+
+    def test_pipeline_final_ties_use_ascending_stream_id(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+        )
+        stats_cache = {
+            20: _success_stats_dict(20),
+            10: _success_stats_dict(10),
+        }
+
+        assert _smart_sort_streams(
+            [20, 10], stats_cache, {}, "id-tie", settings
+        ) == [10, 20]
+
+
+class TestPointsSmartSortPipeline:
+    def test_consumer_families_normalize_every_sort_and_health_fact_identically(self):
+        stat = SimpleNamespace(
+            probe_status="failed",
+            resolution="3840x2160",
+            video_bitrate=8_000_000,
+            bitrate=9_000_000,
+            fps="59.94",
+            video_codec="hevc",
+            audio_channels=6,
+            is_black_screen=True,
+            is_low_fps=True,
+        )
+        stats_dict = {
+            "probe_status": "failed",
+            "resolution": "3840x2160",
+            "video_bitrate": 8_000_000,
+            "bitrate": 9_000_000,
+            "fps": "59.94",
+            "video_codec": "hevc",
+            "audio_channels": 6,
+            "is_black_screen": True,
+            "is_low_fps": True,
+        }
+        metadata = {7: 3}
+        priorities = {"3": 20}
+        custom_ids = {7}
+        catchup_ids = {7}
+        known_ids = {7}
+
+        prober_facts = _prober_stream_facts(
+            7, stat, metadata, priorities, custom_ids, catchup_ids, known_ids
+        )
+        pipeline_facts = _pipeline_stream_facts(
+            7,
+            stats_dict,
+            metadata,
+            priorities,
+            custom_ids,
+            catchup_ids,
+            known_ids,
+        )
+
+        assert prober_facts == pipeline_facts
+        assert prober_facts.stream_id == 7
+        assert prober_facts.resolution_height == 2160
+        assert prober_facts.video_bitrate == 8_000_000
+        assert prober_facts.bitrate == 9_000_000
+        assert prober_facts.framerate == 59.94
+        assert prober_facts.video_codec == "hevc"
+        assert prober_facts.m3u_priority == 20
+        assert prober_facts.audio_channels == 6
+        assert prober_facts.is_custom is True
+        assert prober_facts.is_catchup is True
+        assert prober_facts.failed is True
+        assert prober_facts.black_screen is True
+        assert prober_facts.low_fps is True
+
+    def test_points_unknown_health_does_not_match_false_or_failed_rules(self):
+        point_rules = (
+            PointRule("failed", "eq", True, 30),
+            PointRule("black_screen", "eq", False, 10),
+            PointRule("low_fps", "eq", False, 10),
+        )
+        settings = _mk_smart_sort_settings(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=point_rules,
+        )
+        pipeline_stats = {2: _success_stats_dict(2)}
+        prober_stats = {
+            2: SimpleNamespace(
+                stream_name="known",
+                probe_status="success",
+                resolution="1920x1080",
+                is_black_screen=False,
+                is_low_fps=False,
+            )
+        }
+
+        pipeline_order = _smart_sort_streams(
+            [1, 2], pipeline_stats, {}, "unknown-health", settings
+        )
+        prober_order = smart_sort_streams(
+            [1, 2],
+            prober_stats,
+            stream_sort_strategy="points",
+            stream_sort_point_rules=point_rules,
+        )
+
+        assert pipeline_order == prober_order == [2, 1]
+
+    def test_priority_partial_metadata_keeps_legacy_custom_fallback(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"custom": 100, "5": 50},
+        )
+        pipeline_stats = {
+            1: _success_stats_dict(1),
+            2: _success_stats_dict(2),
+        }
+        prober_stats = {
+            stream_id: SimpleNamespace(
+                stream_name=f"Stream {stream_id}",
+                probe_status="success",
+                resolution="1920x1080",
+                is_black_screen=False,
+                is_low_fps=False,
+            )
+            for stream_id in (1, 2)
+        }
+
+        pipeline_order = _smart_sort_streams(
+            [2, 1],
+            pipeline_stats,
+            {2: 5},
+            "partial-metadata",
+            settings,
+            stream_metadata_known_ids={2},
+        )
+        prober_order = smart_sort_streams(
+            [2, 1],
+            prober_stats,
+            stream_m3u_map={2: 5},
+            stream_sort_priority=["m3u_priority"],
+            stream_sort_enabled={"m3u_priority": True},
+            m3u_account_priorities={"custom": 100, "5": 50},
+            stream_metadata_known_ids={2},
+        )
+
+        assert pipeline_order == prober_order == [1, 2]
+
+    def test_points_can_rank_failed_black_screen_low_fps_stream_first(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=(
+                PointRule("resolution", "gte", 2160, 50),
+                PointRule("failed", "eq", True, -10),
+                PointRule("black_screen", "eq", True, -10),
+                PointRule("low_fps", "eq", True, -10),
+            ),
+        )
+        stats_cache = {
+            1: _success_stats_dict(1, resolution="1280x720"),
+            2: {
+                **_failed_stats_dict(2, resolution="3840x2160", fps="60"),
+                "is_black_screen": True,
+                "is_low_fps": True,
+            },
+        }
+
+        assert _smart_sort_streams(
+            [1, 2], stats_cache, {}, "points-health", settings
+        ) == [2, 1]
+
+    def test_points_execution_log_does_not_claim_unhealthy_winner_was_deprioritized(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            {"id": 100, "name": "points-health", "streams": [1, 2]}
+        ]
+        healthy = _success_stats_dict(
+            1, resolution="1920x1080", stream_name="Healthy"
+        )
+        unhealthy = {
+            **_failed_stats_dict(
+                2, resolution="1280x720", fps="25", stream_name="Unhealthy winner"
+            ),
+            "is_black_screen": True,
+            "is_low_fps": True,
+        }
+        engine._smart_sort_stats_cache = {1: healthy, 2: unhealthy}
+        engine._stream_stats_cache = {1: healthy}
+        rule = MagicMock()
+        rule.id = 9
+        rule.stream_sort_field = "smart_sort"
+        settings = _mk_smart_sort_settings(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=(PointRule("failed", "eq", True, 100),),
+        )
+        results = {"execution_log": [], "dry_run_results": []}
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._reorder_channel_streams(
+                [rule],
+                {rule.id: [100]},
+                results,
+                dry_run=False,
+                settings=settings,
+                stream_m3u_map={},
+            )
+        )
+
+        client.update_channel.assert_awaited_once_with(100, {"streams": [2, 1]})
+        description = results["execution_log"][0]["actions_executed"][0]["description"]
+        assert "deprioritized" not in description
+
+    def test_priority_execution_log_omits_disabled_black_screen_bucket(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            {"id": 100, "name": "priority-toggle", "streams": [1, 2]}
+        ]
+        healthy = _success_stats_dict(
+            1, resolution="1280x720", stream_name="Healthy 720p"
+        )
+        black_screen = {
+            **_success_stats_dict(
+                2, resolution="1920x1080", stream_name="Black screen 1080p"
+            ),
+            "is_black_screen": True,
+        }
+        engine._smart_sort_stats_cache = {1: healthy, 2: black_screen}
+        engine._stream_stats_cache = {1: healthy, 2: black_screen}
+        rule = MagicMock()
+        rule.id = 9
+        rule.stream_sort_field = "smart_sort"
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_black_screen=False,
+        )
+        results = {"execution_log": [], "dry_run_results": []}
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._reorder_channel_streams(
+                [rule],
+                {rule.id: [100]},
+                results,
+                dry_run=False,
+                settings=settings,
+                stream_m3u_map={},
+            )
+        )
+
+        client.update_channel.assert_awaited_once_with(100, {"streams": [2, 1]})
+        description = results["execution_log"][0]["actions_executed"][0]["description"]
+        assert "deprioritized" not in description
+
+    def test_priority_execution_log_uses_full_sort_cache_and_failed_precedence(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            {"id": 100, "name": "priority-health", "streams": [2, 1]}
+        ]
+        healthy = _success_stats_dict(
+            1, resolution="1280x720", stream_name="Healthy"
+        )
+        pending = {
+            **_failed_stats_dict(
+                2, resolution="1920x1080", fps="25", stream_name="Pending unhealthy"
+            ),
+            "probe_status": "pending",
+            "is_black_screen": True,
+            "is_low_fps": True,
+        }
+        engine._smart_sort_stats_cache = {1: healthy, 2: pending}
+        engine._stream_stats_cache = {1: healthy}
+        rule = MagicMock()
+        rule.id = 9
+        rule.stream_sort_field = "smart_sort"
+        settings = _mk_smart_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+        )
+        results = {"execution_log": [], "dry_run_results": []}
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._reorder_channel_streams(
+                [rule],
+                {rule.id: [100]},
+                results,
+                dry_run=False,
+                settings=settings,
+                stream_m3u_map={},
+            )
+        )
+
+        client.update_channel.assert_awaited_once_with(100, {"streams": [1, 2]})
+        description = results["execution_log"][0]["actions_executed"][0]["description"]
+        assert "1 pending deprioritized" in description
+        assert "black screen" not in description
+        assert "low FPS" not in description
+
+    def test_direct_quality_sort_ignores_global_points_strategy(self):
+        settings = _mk_smart_sort_settings(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=(PointRule("resolution", "lte", 720, 100),),
+        )
+        rule = MagicMock()
+        rule.stream_sort_field = "quality"
+        rule.stream_sort_order = "desc"
+        rule.quality_tie_break_order = "desc"
+        rule.quality_m3u_tie_break_enabled = False
+        stats_cache = {
+            1: _success_stats_dict(1, resolution="1280x720"),
+            2: _success_stats_dict(2, resolution="1920x1080"),
+        }
+
+        assert _reorder_streams_for_rule(
+            [1, 2], rule, stats_cache, {}, "direct-quality", settings
+        ) == [2, 1]
+
+    def test_reorder_hydrates_metadata_for_streams_outside_pipeline_fetch(self):
+        client = MagicMock()
+        client.get_streams_by_ids = AsyncMock(return_value=[
+            {"id": 1, "m3u_account": 1, "is_custom": False, "is_catchup": False},
+            {"id": 2, "m3u_account": None, "is_custom": True, "is_catchup": False},
+        ])
+        client.update_channel = AsyncMock(return_value={})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = [
+            {"id": 100, "name": "metadata", "streams": [1, 2]}
+        ]
+        rule = MagicMock()
+        rule.id = 9
+        rule.stream_sort_field = "smart_sort"
+        settings = _mk_smart_sort_settings(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=(
+                PointRule("custom_streams", "eq", True, 10),
+            ),
+        )
+
+        asyncio.get_event_loop().run_until_complete(
+            engine._reorder_channel_streams(
+                [rule],
+                {rule.id: [100]},
+                {"execution_log": [], "dry_run_results": []},
+                dry_run=False,
+                settings=settings,
+                stream_m3u_map={},
+                custom_stream_ids=set(),
+                catchup_stream_ids=set(),
+                stream_metadata_known_ids=set(),
+            )
+        )
+
+        client.get_streams_by_ids.assert_awaited_once_with([1, 2])
+        client.update_channel.assert_awaited_once_with(100, {"streams": [2, 1]})
 
 
 class TestRunPipelineCreateChannelMergeChannelsTouched:

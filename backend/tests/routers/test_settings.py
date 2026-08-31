@@ -79,6 +79,8 @@ def _mock_settings(**overrides):
         "probe_retry_delay": 5,
         "stream_fetch_page_limit": 100,
         "stream_sort_priority": ["resolution"],
+        "stream_sort_strategy": "priority",
+        "stream_sort_point_rules": [],
         "stream_sort_enabled": {"resolution": True},
         "m3u_account_priorities": {},
         "deprioritize_failed_streams": False,

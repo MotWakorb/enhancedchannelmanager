@@ -210,6 +210,8 @@ class SecondaryStream:
     provider: str | None = None
     provider_id: int | None = None
     name_seen_before_today: bool | None = None
+    is_custom: bool = False
+    is_catchup: bool = False
 
 
 @dataclass(frozen=True)

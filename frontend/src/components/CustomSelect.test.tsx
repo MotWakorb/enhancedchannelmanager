@@ -97,6 +97,25 @@ describe('CustomSelect — searchable space handling (GH #489)', () => {
 });
 
 describe('CustomSelect — viewport placement', () => {
+  it('uses its trigger id for a visible label relationship', () => {
+    render(
+      <>
+        <label htmlFor="smart-sort-condition">Condition</label>
+        <CustomSelect
+          id="smart-sort-condition"
+          options={OPTIONS}
+          value="us-news"
+          onChange={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(screen.getByRole('button', { name: 'Condition' })).toHaveAttribute(
+      'id',
+      'smart-sort-condition',
+    );
+  });
+
   it('opens upward near the bottom of the viewport and clamps to its 250px cap', async () => {
     const user = userEvent.setup();
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 600 });

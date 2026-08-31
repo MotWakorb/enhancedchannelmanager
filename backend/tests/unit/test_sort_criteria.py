@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from stream_prober import StreamProber, smart_sort_streams, extract_m3u_account_id
 from models import StreamStats
+from smart_sort_evaluator import PointRule
 
 
 def create_mock_stats(
@@ -46,7 +47,9 @@ def create_prober(
     stream_sort_priority: list = None,
     stream_sort_enabled: dict = None,
     m3u_account_priorities: dict = None,
-    deprioritize_failed_streams: bool = True
+    deprioritize_failed_streams: bool = True,
+    stream_sort_strategy: str = "priority",
+    stream_sort_point_rules: tuple[PointRule, ...] = (),
 ) -> StreamProber:
     """Create a StreamProber with specified sort settings."""
     mock_client = MagicMock()
@@ -55,7 +58,9 @@ def create_prober(
         stream_sort_priority=stream_sort_priority or ["resolution", "bitrate", "framerate"],
         stream_sort_enabled=stream_sort_enabled or {"resolution": True, "bitrate": True, "framerate": True},
         m3u_account_priorities=m3u_account_priorities or {},
-        deprioritize_failed_streams=deprioritize_failed_streams
+        deprioritize_failed_streams=deprioritize_failed_streams,
+        stream_sort_strategy=stream_sort_strategy,
+        stream_sort_point_rules=stream_sort_point_rules,
     )
     return prober
 
@@ -590,6 +595,23 @@ class TestBackwardsCompatibility:
 class TestEdgeCases:
     """Tests for edge cases and error handling."""
 
+    def test_inactive_m3u_priority_accepts_arbitrary_size_integer(self):
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720"),
+            2: create_mock_stats(2, resolution="1920x1080"),
+        }
+
+        sorted_ids = smart_sort_streams(
+            [1, 2],
+            stats_map,
+            stream_m3u_map={1: 1},
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True, "m3u_priority": False},
+            m3u_account_priorities={"1": 10**400},
+        )
+
+        assert sorted_ids == [2, 1]
+
     def test_empty_stream_list(self):
         """Empty stream list returns empty list."""
         prober = create_prober()
@@ -662,6 +684,25 @@ class TestEdgeCases:
         # Both have (0,) prefix, but stream 1 has negative resolution, stream 2 has 0
         assert sorted_ids == [1, 2]
 
+    def test_failed_timeout_pending_and_missing_stats_share_failed_bucket(self):
+        stats_map = {
+            1: create_mock_stats(1, resolution="1280x720", probe_status="success"),
+            2: create_mock_stats(2, resolution="3840x2160", probe_status="failed"),
+            3: create_mock_stats(3, resolution="3840x2160", probe_status="timeout"),
+            4: create_mock_stats(4, resolution="3840x2160", probe_status="pending"),
+        }
+
+        sorted_ids = smart_sort_streams(
+            [5, 4, 3, 2, 1],
+            stats_map,
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            deprioritize_failed_streams=True,
+            failed_stream_sort_order=["failed", "black_screen", "low_fps"],
+        )
+
+        assert sorted_ids == [1, 2, 3, 4, 5]
+
 
 class TestUpdateSortSettings:
     """Tests for the update_sort_settings method."""
@@ -709,6 +750,66 @@ class TestUpdateSortSettings:
 
         # Higher M3U priority wins
         assert sorted_ids == [2, 1]
+
+    def test_update_sort_settings_switches_live_prober_to_points(self):
+        prober = create_prober()
+        rules = (PointRule("resolution", "gte", 1080, 20),)
+
+        prober.update_sort_settings(
+            stream_sort_priority=["resolution"],
+            stream_sort_enabled={"resolution": True},
+            m3u_account_priorities={},
+            stream_sort_strategy="points",
+            stream_sort_point_rules=rules,
+        )
+
+        assert prober.stream_sort_strategy == "points"
+        assert prober.stream_sort_point_rules == rules
+
+
+class TestPointsStrategy:
+    def test_points_can_rank_failed_black_screen_low_fps_stream_first(self):
+        prober = create_prober(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=(
+                PointRule("resolution", "gte", 2160, 50),
+                PointRule("failed", "eq", True, -10),
+                PointRule("black_screen", "eq", True, -10),
+                PointRule("low_fps", "eq", True, -10),
+            ),
+        )
+        healthy = create_mock_stats(1, resolution="1280x720")
+        unhealthy = create_mock_stats(
+            2,
+            resolution="3840x2160",
+            probe_status="failed",
+        )
+        unhealthy.is_black_screen = True
+        unhealthy.is_low_fps = True
+
+        assert prober._smart_sort_streams(
+            [1, 2], {1: healthy, 2: unhealthy}, {}, "points-health"
+        ) == [2, 1]
+
+    def test_points_final_ties_use_ascending_stream_id(self):
+        prober = create_prober(
+            stream_sort_strategy="points",
+            stream_sort_point_rules=(),
+        )
+
+        assert prober._smart_sort_streams([30, 10, 20], {}, {}, "points-tie") == [10, 20, 30]
+
+    def test_missing_dispatcharr_boolean_fact_does_not_match_false_rule(self):
+        rules = (PointRule("custom_streams", "eq", False, 10),)
+
+        assert smart_sort_streams(
+            [2, 1],
+            {},
+            stream_sort_strategy="points",
+            stream_sort_point_rules=rules,
+            custom_stream_ids=set(),
+            stream_metadata_known_ids={2},
+        ) == [2, 1]
 
 
 def run_standalone_sort(stream_ids, stats_map, stream_m3u_map=None, **kwargs):

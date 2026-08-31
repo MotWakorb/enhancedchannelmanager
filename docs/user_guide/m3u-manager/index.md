@@ -81,11 +81,10 @@ refreshes independently of each account's own **Refresh (hours)** setting.
 
 **Result:** ECM stores the priority, but it has **no effect on stream
 ordering by itself**. It only feeds the **M3U Priority** criterion in
-Smart Sort, which is off by default. Enable it under [Settings → Channel
-Defaults → Set which criteria Smart Sort uses, and in what
-order](../settings/channel-defaults.md#set-which-criteria-smart-sort-uses-and-in-what-order)
-for this priority to actually change how ECM orders streams within a
-channel.
+Smart Sort, which is off by default. Under [Settings → Channel Defaults →
+Choose how Smart Sort ranks streams](../settings/channel-defaults.md#choose-how-smart-sort-ranks-streams),
+either enable **M3U Priority** in Priority mode or add an M3U Priority rule in
+Points mode for this value to change how ECM orders streams within a channel.
 
 ### Filter out streams before they're imported
 

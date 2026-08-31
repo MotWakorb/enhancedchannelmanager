@@ -422,6 +422,8 @@ class TestComputeSort:
         mock_settings = MagicMock()
         mock_settings.stream_sort_priority = ["resolution"]
         mock_settings.stream_sort_enabled = {"resolution": True}
+        mock_settings.stream_sort_strategy = "priority"
+        mock_settings.stream_sort_point_rules = []
         mock_settings.m3u_account_priorities = {}
         mock_settings.deprioritize_failed_streams = False
 
