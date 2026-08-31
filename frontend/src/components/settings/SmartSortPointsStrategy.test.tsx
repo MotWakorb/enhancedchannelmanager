@@ -35,15 +35,15 @@ vi.mock('../../hooks/useAuth', () => ({
 }));
 
 vi.mock('../CustomSelect', () => ({
-  CustomSelect: ({ value, onChange, options, disabled, ariaLabel }: {
+  CustomSelect: ({ id, value, onChange, options, disabled }: {
+    id?: string;
     value: string;
     onChange: (value: string) => void;
     options: { value: string; label: string }[];
     disabled?: boolean;
-    ariaLabel?: string;
   }) => (
     <select
-      aria-label={ariaLabel}
+      id={id}
       disabled={disabled}
       value={value}
       onChange={(event) => onChange(event.target.value)}
@@ -74,7 +74,7 @@ const PRIORITY_CRITERIA = [
 
 const ALL_POINT_RULES: api.StreamSortPointRule[] = [
   { criterion: 'resolution', operator: 'gte', value: 1080, points: 20 },
-  { criterion: 'bitrate', operator: 'gte', value: 6_000_000, points: 25 },
+  { criterion: 'bitrate', operator: 'gte', value: 6000, points: 25 },
   { criterion: 'framerate', operator: 'lt', value: 59.94, points: 2 },
   { criterion: 'video_codec', operator: 'gte', value: 'h265', points: 10 },
   { criterion: 'm3u_priority', operator: 'ne', value: -1, points: 3 },
@@ -195,6 +195,14 @@ function optionValues(select: HTMLElement): string[] {
   ));
 }
 
+function ruleEditor(ruleNumber: number): HTMLElement {
+  return screen.getAllByTestId('smart-sort-point-rule')[ruleNumber - 1];
+}
+
+function ruleControl(ruleNumber: number, label: string): HTMLElement {
+  return within(ruleEditor(ruleNumber)).getByLabelText(label);
+}
+
 describe('Smart Sort Priority and Points strategies', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -251,7 +259,7 @@ describe('Smart Sort Priority and Points strategies', () => {
     expect(screen.getByText(/all matching rules add together/i)).toBeInTheDocument();
     expect(screen.getByText(/order is organizational only/i)).toBeInTheDocument();
 
-    expect(optionValues(screen.getByLabelText('Rule 1 condition'))).toEqual([
+    expect(optionValues(ruleControl(1, 'Condition'))).toEqual([
       'resolution',
       'bitrate',
       'framerate',
@@ -267,23 +275,23 @@ describe('Smart Sort Priority and Points strategies', () => {
 
     const orderedOperators = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte'];
     for (let ruleNumber = 1; ruleNumber <= 6; ruleNumber += 1) {
-      expect(optionValues(screen.getByLabelText(`Rule ${ruleNumber} operator`))).toEqual(orderedOperators);
+      expect(optionValues(ruleControl(ruleNumber, 'Operator'))).toEqual(orderedOperators);
     }
     for (let ruleNumber = 7; ruleNumber <= 11; ruleNumber += 1) {
-      expect(optionValues(screen.getByLabelText(`Rule ${ruleNumber} operator`))).toEqual(['eq']);
+      expect(optionValues(ruleControl(ruleNumber, 'Operator'))).toEqual(['eq']);
     }
 
-    expect(screen.getByLabelText('Rule 1 value')).toHaveAttribute('type', 'number');
-    expect(screen.getByText('Value (vertical pixels)')).toBeInTheDocument();
-    expect(screen.getByText('Value (kbps)')).toBeInTheDocument();
-    expect(screen.getByLabelText('Rule 2 value')).toHaveValue(6000);
-    expect(screen.getByText('Value (FPS)')).toBeInTheDocument();
-    expect(optionValues(screen.getByLabelText('Rule 4 value'))).toEqual([
+    expect(ruleControl(1, 'Value (vertical pixels)')).toHaveAttribute('type', 'number');
+    expect(ruleControl(2, 'Value (kbps)')).toHaveValue(6000);
+    expect(ruleControl(3, 'Value (FPS)')).toHaveValue(59.94);
+    expect(optionValues(ruleControl(4, 'Codec'))).toEqual([
       'av1', 'hevc', 'h265', 'vp9', 'h264', 'avc', 'vp8', 'mpeg2video', 'mpeg2',
     ]);
-    expect(optionValues(screen.getByLabelText('Rule 9 value'))).toEqual(['true', 'false']);
-    expect(screen.getByLabelText('Rule 9 points')).toHaveValue(40);
-    expect(screen.getByLabelText('Rule 10 points')).toHaveValue(-30);
+    expect(optionValues(ruleControl(9, 'Matches when'))).toEqual(['true', 'false']);
+    expect(ruleControl(9, 'Points (signed integer)')).toHaveValue(40);
+    expect(ruleControl(10, 'Points (signed integer)')).toHaveValue(-30);
+    expect(ruleControl(1, 'Condition')).toHaveAccessibleName('Condition');
+    expect(ruleControl(1, 'Operator')).toHaveAccessibleName('Operator');
     expect(screen.queryByText('Deprioritize Failed Streams')).not.toBeInTheDocument();
   });
 
@@ -291,7 +299,7 @@ describe('Smart Sort Priority and Points strategies', () => {
     const loadedRules: api.StreamSortPointRule[] = [
       { criterion: 'resolution', operator: 'gte', value: 1080, points: 20 },
       { criterion: 'failed', operator: 'eq', value: true, points: 30 },
-      { criterion: 'bitrate', operator: 'lt', value: 2_000_000, points: -5 },
+      { criterion: 'bitrate', operator: 'lt', value: 2000, points: -5 },
     ];
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
       stream_sort_strategy: 'points',
@@ -303,8 +311,8 @@ describe('Smart Sort Priority and Points strategies', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
     expect(screen.getAllByTestId('smart-sort-point-rule')).toHaveLength(4);
     fireEvent.click(screen.getByRole('button', { name: 'Delete rule 4' }));
-    fireEvent.change(screen.getByLabelText('Rule 2 points'), { target: { value: '35' } });
-    fireEvent.change(screen.getByLabelText('Rule 3 value'), { target: { value: '2500' } });
+    fireEvent.change(ruleControl(2, 'Points (signed integer)'), { target: { value: '35' } });
+    fireEvent.change(ruleControl(3, 'Value (kbps)'), { target: { value: '2500' } });
     fireEvent.click(screen.getByRole('button', { name: 'Move rule 1 down' }));
     fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
 
@@ -314,7 +322,7 @@ describe('Smart Sort Priority and Points strategies', () => {
     expect(payload.stream_sort_point_rules).toEqual([
       { criterion: 'failed', operator: 'eq', value: true, points: 35 },
       { criterion: 'resolution', operator: 'gte', value: 1080, points: 20 },
-      { criterion: 'bitrate', operator: 'lt', value: 2_500_000, points: -5 },
+      { criterion: 'bitrate', operator: 'lt', value: 2500, points: -5 },
     ]);
     expect(payload.linked_m3u_accounts).toEqual([[7, 11]]);
 
@@ -326,10 +334,115 @@ describe('Smart Sort Priority and Points strategies', () => {
     renderOnChannelDefaults();
 
     await screen.findByRole('button', { name: 'Add rule' });
-    expect(screen.getByLabelText('Rule 1 condition')).toHaveValue('failed');
-    expect(screen.getByLabelText('Rule 1 points')).toHaveValue(35);
-    expect(screen.getByLabelText('Rule 3 value')).toHaveValue(2500);
-    expect(screen.getByLabelText('Rule 3 points')).toHaveValue(-5);
+    expect(ruleControl(1, 'Condition')).toHaveValue('failed');
+    expect(ruleControl(1, 'Points (signed integer)')).toHaveValue(35);
+    expect(ruleControl(3, 'Value (kbps)')).toHaveValue(2500);
+    expect(ruleControl(3, 'Points (signed integer)')).toHaveValue(-5);
+  });
+
+  it('keeps persisted bitrate rules in kbps through repeated save and reload', async () => {
+    const bitrateRule: api.StreamSortPointRule = {
+      criterion: 'bitrate', operator: 'gte', value: 6000, points: 25,
+    };
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      stream_sort_strategy: 'points',
+      stream_sort_point_rules: [bitrateRule],
+    }));
+
+    const firstRender = renderOnChannelDefaults();
+    await screen.findByRole('button', { name: 'Add rule' });
+    expect(ruleControl(1, 'Value (kbps)')).toHaveValue(6000);
+
+    fireEvent.change(ruleControl(1, 'Points (signed integer)'), { target: { value: '26' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    const firstPayload = vi.mocked(api.saveSettings).mock.calls[0][0];
+    expect(firstPayload.stream_sort_point_rules).toEqual([
+      { ...bitrateRule, points: 26 },
+    ]);
+
+    firstRender.unmount();
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      stream_sort_strategy: 'points',
+      stream_sort_point_rules: firstPayload.stream_sort_point_rules,
+    }));
+    renderOnChannelDefaults();
+    await screen.findByRole('button', { name: 'Add rule' });
+    expect(ruleControl(1, 'Value (kbps)')).toHaveValue(6000);
+
+    fireEvent.change(ruleControl(1, 'Points (signed integer)'), { target: { value: '27' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.saveSettings).mock.calls[1][0].stream_sort_point_rules).toEqual([
+      { ...bitrateRule, points: 27 },
+    ]);
+  });
+
+  it('renders codec aliases case-insensitively and preserves them across unrelated and intentional saves', async () => {
+    const codecRule: api.StreamSortPointRule = {
+      criterion: 'video_codec', operator: 'eq', value: 'H264', points: 10,
+    };
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      stream_sort_strategy: 'points',
+      stream_sort_point_rules: [codecRule],
+    }));
+    renderOnChannelDefaults();
+    await screen.findByRole('button', { name: 'Add rule' });
+
+    expect(ruleControl(1, 'Codec')).toHaveValue('h264');
+    fireEvent.click(screen.getByRole('radio', { name: 'Priority' }));
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.saveSettings).mock.calls[0][0]).not.toHaveProperty('stream_sort_point_rules');
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Points' }));
+    fireEvent.change(ruleControl(1, 'Points (signed integer)'), { target: { value: '11' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.saveSettings).mock.calls[1][0].stream_sort_point_rules).toEqual([
+      { ...codecRule, points: 11 },
+    ]);
+  });
+
+  it('omits untouched server rules so unsafe integers do not block unrelated Priority saves', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      stream_sort_strategy: 'priority',
+      stream_sort_point_rules: [{
+        criterion: 'resolution',
+        operator: 'gte',
+        value: 1080,
+        points: Number.MAX_SAFE_INTEGER + 1,
+      }],
+    }));
+    renderOnChannelDefaults();
+    await waitFor(() => expect(api.getSettings).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Deprioritize Low FPS Streams' }));
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
+
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.saveSettings).mock.calls[0][0]).not.toHaveProperty('stream_sort_point_rules');
+  });
+
+  it('reveals and focuses an invalid Points draft before blocking a Priority save', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      stream_sort_strategy: 'points',
+      stream_sort_point_rules: [ALL_POINT_RULES[0]],
+    }));
+    renderOnChannelDefaults();
+    await screen.findByRole('button', { name: 'Add rule' });
+
+    fireEvent.change(ruleControl(1, 'Points (signed integer)'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('radio', { name: 'Priority' }));
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
+
+    expect(screen.getByRole('radio', { name: 'Points' })).toBeChecked();
+    const invalidPoints = await screen.findByLabelText('Points (signed integer)');
+    expect(invalidPoints).toHaveValue(null);
+    expect(screen.getByText('Points must be a signed whole number.')).toBeInTheDocument();
+    await waitFor(() => expect(invalidPoints).toHaveFocus());
+    expect(api.saveSettings).not.toHaveBeenCalled();
   });
 
   it('shows inline validation and refuses to serialize invalid numeric values or points', async () => {
@@ -340,8 +453,8 @@ describe('Smart Sort Priority and Points strategies', () => {
     renderOnChannelDefaults();
     await screen.findByRole('button', { name: 'Add rule' });
 
-    fireEvent.change(screen.getByLabelText('Rule 1 value'), { target: { value: '' } });
-    fireEvent.change(screen.getByLabelText('Rule 1 points'), { target: { value: '1.5' } });
+    fireEvent.change(ruleControl(1, 'Value (vertical pixels)'), { target: { value: '' } });
+    fireEvent.change(ruleControl(1, 'Points (signed integer)'), { target: { value: '1.5' } });
     fireEvent.click(screen.getByRole('button', { name: /Save Settings$/ }));
 
     expect(await screen.findByText('Value must be a finite number.')).toBeInTheDocument();

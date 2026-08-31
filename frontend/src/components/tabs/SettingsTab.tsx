@@ -102,7 +102,6 @@ type PointCriterionConfig = {
   defaultOperator: StreamSortPointOperator;
   valueLabel: string;
   step?: number;
-  valueScale?: number;
 };
 
 const ALL_POINT_CRITERIA: StreamSortPointCriterion[] = [
@@ -114,7 +113,7 @@ const ALL_POINT_CRITERIA: StreamSortPointCriterion[] = [
 
 const POINT_CRITERION_CONFIG: Record<StreamSortPointCriterion, PointCriterionConfig> = {
   resolution: { label: 'Resolution', input: 'number', defaultValue: 1080, defaultOperator: 'gte', valueLabel: 'Value (vertical pixels)', step: 1 },
-  bitrate: { label: 'Bitrate', input: 'number', defaultValue: 6_000_000, defaultOperator: 'gte', valueLabel: 'Value (kbps)', step: 1, valueScale: 1000 },
+  bitrate: { label: 'Bitrate', input: 'number', defaultValue: 6000, defaultOperator: 'gte', valueLabel: 'Value (kbps)', step: 1 },
   framerate: { label: 'Framerate', input: 'number', defaultValue: 30, defaultOperator: 'gte', valueLabel: 'Value (FPS)', step: 0.01 },
   video_codec: { label: 'Video Codec', input: 'codec', defaultValue: 'h264', defaultOperator: 'eq', valueLabel: 'Codec' },
   m3u_priority: { label: 'M3U Priority', input: 'number', defaultValue: 0, defaultOperator: 'gte', valueLabel: 'Priority value', step: 1 },
@@ -179,7 +178,7 @@ function validatePointRule(rule: StreamSortPointRule): PointRuleValidation {
   if (config.input === 'number' && (typeof rule.value !== 'number' || !Number.isFinite(rule.value))) {
     errors.value = 'Value must be a finite number.';
   } else if (config.input === 'codec' && (
-    typeof rule.value !== 'string' || !VIDEO_CODEC_OPTIONS.some((option) => option.value === rule.value)
+    typeof rule.value !== 'string' || !VIDEO_CODEC_OPTIONS.some((option) => option.value === String(rule.value).toLowerCase())
   )) {
     errors.value = 'Choose a supported video codec.';
   } else if (config.input === 'boolean' && typeof rule.value !== 'boolean') {
@@ -656,6 +655,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [streamSortEnabled, setStreamSortEnabled] = useState<SortEnabledMap>({ resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false, catchup: false });
   const [streamSortStrategy, setStreamSortStrategy] = useState<StreamSortStrategy>('priority');
   const [streamSortPointRules, setStreamSortPointRules] = useState<StreamSortPointRule[]>([]);
+  const [streamSortPointRulesDirty, setStreamSortPointRulesDirty] = useState(false);
+  const [pointRuleFocusRequest, setPointRuleFocusRequest] = useState(0);
+  const pointRulesEditorRef = useRef<HTMLDivElement>(null);
   const [m3uAccountPriorities, setM3uAccountPriorities] = useState<Record<string, number>>({});
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
   const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
@@ -985,21 +987,32 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
+  const editPointRules = (update: (rules: StreamSortPointRule[]) => StreamSortPointRule[]) => {
+    setStreamSortPointRules(update);
+    setStreamSortPointRulesDirty(true);
+  };
+
   const updatePointRule = (index: number, changes: Partial<StreamSortPointRule>) => {
-    setStreamSortPointRules((rules) => rules.map((rule, ruleIndex) => (
+    editPointRules((rules) => rules.map((rule, ruleIndex) => (
       ruleIndex === index ? { ...rule, ...changes } : rule
     )));
   };
 
   const changePointRuleCriterion = (index: number, criterion: StreamSortPointCriterion) => {
-    setStreamSortPointRules((rules) => rules.map((rule, ruleIndex) => (
+    editPointRules((rules) => rules.map((rule, ruleIndex) => (
       ruleIndex === index ? { ...createPointRule(criterion), points: rule.points } : rule
     )));
   };
 
   const movePointRule = (index: number, direction: -1 | 1) => {
-    setStreamSortPointRules((rules) => arrayMove(rules, index, index + direction));
+    editPointRules((rules) => arrayMove(rules, index, index + direction));
   };
+
+  useEffect(() => {
+    if (pointRuleFocusRequest > 0 && streamSortStrategy === 'points') {
+      pointRulesEditorRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
+    }
+  }, [pointRuleFocusRequest, streamSortStrategy]);
 
   useEffect(() => {
     void loadSettings().catch(() => {
@@ -1270,6 +1283,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setStreamSortEnabled(merged.enabled);
       setStreamSortStrategy(settings.stream_sort_strategy ?? 'priority');
       setStreamSortPointRules((settings.stream_sort_point_rules ?? []).map((rule) => ({ ...rule })));
+      setStreamSortPointRulesDirty(false);
       setM3uAccountPriorities(settings.m3u_account_priorities ?? {});
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setDeprioritizeBlackScreen(settings.deprioritize_black_screen ?? true);
@@ -1644,7 +1658,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       }
     }
 
-    if (streamSortPointRules.some((rule) => Object.keys(validatePointRule(rule)).length > 0)) {
+    if (streamSortPointRulesDirty && streamSortPointRules.some((rule) => Object.keys(validatePointRule(rule)).length > 0)) {
+      setStreamSortStrategy('points');
+      setIsSortPriorityReorderMode(false);
+      setPointRuleFocusRequest((request) => request + 1);
       notifications.error('Fix the invalid Smart Sort point rules before saving.');
       return;
     }
@@ -1732,7 +1749,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_strategy: streamSortStrategy,
-        stream_sort_point_rules: streamSortPointRules,
+        ...(streamSortPointRulesDirty ? { stream_sort_point_rules: streamSortPointRules } : {}),
         stream_sort_enabled: streamSortEnabled,
         m3u_account_priorities: m3uAccountPriorities,
         deprioritize_failed_streams: deprioritizeFailedStreams,
@@ -1792,6 +1809,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setOriginalUrl(url);
       setOriginalUsername(username);
       setPassword('');
+      setStreamSortPointRulesDirty(false);
       logger.info('Settings saved successfully');
       // Check if any settings that require a restart have changed
       // Only poll interval and timezone changes require a full service restart.
@@ -3350,7 +3368,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             )}
           </>
         ) : (
-          <div className="smart-sort-points-editor">
+          <div ref={pointRulesEditorRef} className="smart-sort-points-editor">
             <p className="form-hint smart-sort-points-copy">
               All matching rules add together. Rule order is organizational only and does not create precedence.
             </p>
@@ -3364,6 +3382,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   const errors = validatePointRule(rule);
                   const valueErrorId = `smart-sort-rule-${index}-value-error`;
                   const pointsErrorId = `smart-sort-rule-${index}-points-error`;
+                  const conditionId = `smart-sort-rule-${index}-condition`;
+                  const operatorId = `smart-sort-rule-${index}-operator`;
+                  const valueId = `smart-sort-rule-${index}-value`;
+                  const pointsId = `smart-sort-rule-${index}-points`;
                   const operatorOptions = config.input === 'boolean'
                     ? BOOLEAN_POINT_OPERATOR_OPTIONS
                     : ORDERED_POINT_OPERATOR_OPTIONS;
@@ -3402,7 +3424,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                             className="btn-icon"
                             aria-label={`Delete rule ${index + 1}`}
                             title="Delete rule"
-                            onClick={() => setStreamSortPointRules((rules) => rules.filter((_, ruleIndex) => ruleIndex !== index))}
+                            onClick={() => editPointRules((rules) => rules.filter((_, ruleIndex) => ruleIndex !== index))}
                           >
                             <span className="material-icons" aria-hidden="true">delete</span>
                           </button>
@@ -3411,9 +3433,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
                       <div className="smart-sort-point-rule-grid">
                         <div className="smart-sort-point-field">
-                          <label>Condition</label>
+                          <label htmlFor={conditionId}>Condition</label>
                           <CustomSelect
-                            ariaLabel={`Rule ${index + 1} condition`}
+                            id={conditionId}
                             value={rule.criterion}
                             onChange={(value) => changePointRuleCriterion(index, value as StreamSortPointCriterion)}
                             options={POINT_CRITERION_OPTIONS}
@@ -3421,9 +3443,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                         </div>
 
                         <div className="smart-sort-point-field">
-                          <label>Operator</label>
+                          <label htmlFor={operatorId}>Operator</label>
                           <CustomSelect
-                            ariaLabel={`Rule ${index + 1} operator`}
+                            id={operatorId}
                             value={rule.operator}
                             onChange={(value) => updatePointRule(index, { operator: value as StreamSortPointOperator })}
                             options={operatorOptions}
@@ -3432,33 +3454,33 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                         </div>
 
                         <div className="smart-sort-point-field">
-                          <label>{config.valueLabel}</label>
+                          <label htmlFor={valueId}>{config.valueLabel}</label>
                           {config.input === 'number' ? (
                             <input
+                              id={valueId}
                               type="number"
                               step={config.step}
                               value={typeof rule.value === 'number' && Number.isFinite(rule.value)
-                                ? rule.value / (config.valueScale ?? 1)
+                                ? rule.value
                                 : ''}
-                              aria-label={`Rule ${index + 1} value`}
                               aria-invalid={Boolean(errors.value)}
                               aria-describedby={errors.value ? valueErrorId : undefined}
                               onChange={(event) => updatePointRule(index, {
                                 value: event.target.value === ''
                                   ? Number.NaN
-                                  : Number(event.target.value) * (config.valueScale ?? 1),
+                                  : Number(event.target.value),
                               })}
                             />
                           ) : config.input === 'codec' ? (
                             <CustomSelect
-                              ariaLabel={`Rule ${index + 1} value`}
-                              value={String(rule.value)}
+                              id={valueId}
+                              value={String(rule.value).toLowerCase()}
                               onChange={(value) => updatePointRule(index, { value })}
                               options={VIDEO_CODEC_OPTIONS}
                             />
                           ) : (
                             <CustomSelect
-                              ariaLabel={`Rule ${index + 1} value`}
+                              id={valueId}
                               value={String(rule.value)}
                               onChange={(value) => updatePointRule(index, { value: value === 'true' })}
                               options={BOOLEAN_POINT_VALUE_OPTIONS}
@@ -3468,12 +3490,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                         </div>
 
                         <div className="smart-sort-point-field">
-                          <label>Points (signed integer)</label>
+                          <label htmlFor={pointsId}>Points (signed integer)</label>
                           <input
+                            id={pointsId}
                             type="number"
                             step="1"
                             value={Number.isFinite(rule.points) ? rule.points : ''}
-                            aria-label={`Rule ${index + 1} points`}
                             aria-invalid={Boolean(errors.points)}
                             aria-describedby={errors.points ? pointsErrorId : undefined}
                             onChange={(event) => updatePointRule(index, {
@@ -3492,7 +3514,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <button
               type="button"
               className="btn-secondary smart-sort-add-rule"
-              onClick={() => setStreamSortPointRules((rules) => [...rules, createPointRule()])}
+              onClick={() => editPointRules((rules) => [...rules, createPointRule()])}
             >
               <span className="material-icons" aria-hidden="true">add</span>
               Add rule
