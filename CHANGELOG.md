@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.18.2] — 2026-08-31
+
+### Added
+
+- **Smart Sort can now use signed additive Points rules as an alternative to the existing ordered Priority strategy (bead `enhancedchannelmanager-npueh.5`).** Rules can reward or penalize resolution, bitrate, framerate, video codec, M3U priority, audio channels, custom streams, catch-up, failed streams, black screens, and low FPS. Every matching rule contributes to the total, higher totals sort first, and final ties use ascending stream ID. Priority remains the default for existing settings. Both configurations survive mode changes, and cached clients that omit the new settings preserve the stored strategy and rules.
+
+  The same selected Smart Sort strategy is used by manual stream ordering, probe-completion and scheduled-probe reordering, Channel Pipeline, and Event Sync. Direct one-field sorts remain legacy Priority sorts. See the [Channel Defaults guide](docs/user_guide/settings/channel-defaults.md#choose-how-smart-sort-ranks-streams) for rule units, operators, missing-value behavior, and worked examples.
+
+  **Excluded from v0.18.2:** no score preview or explanation UI, no profiles, no compound rule groups, no per-channel profiles, no SQL migrations, and no new dependencies.
+
 ## [0.18.1] — 2026-08-30
 
 ### Security
@@ -1281,7 +1291,8 @@ Full notes: [GitHub Release v0.13.0](https://github.com/MotWakorb/enhancedchanne
 
 Entries for `0.12.x` and earlier have not been backfilled into this file. See the [GitHub Releases page](https://github.com/MotWakorb/enhancedchannelmanager/releases) for the original release notes. Future releases will be recorded here under the appropriate Keep-a-Changelog sections.
 
-[Unreleased]: https://github.com/MotWakorb/enhancedchannelmanager/compare/v0.18.1...HEAD
+[Unreleased]: https://github.com/MotWakorb/enhancedchannelmanager/compare/v0.18.2...HEAD
+[0.18.2]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.18.2
 [0.18.1]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.18.1
 [0.15.2]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.2
 [0.15.1]: https://github.com/MotWakorb/enhancedchannelmanager/releases/tag/v0.15.1
