@@ -8,6 +8,8 @@ from smart_sort_evaluator import (
     PointRule,
     StreamFacts,
     evaluate_points,
+    health_deprioritization_category,
+    health_deprioritization_reason,
     sort_streams,
     sort_streams_by_points,
     sort_streams_by_priority,
@@ -33,6 +35,67 @@ def _healthy(stream_id: int, **overrides) -> StreamFacts:
     }
     values.update(overrides)
     return StreamFacts(stream_id=stream_id, **values)
+
+
+def _health_category(facts, *, strategy="priority", master=True, black=True, low=True):
+    return health_deprioritization_category(
+        facts,
+        strategy=strategy,
+        deprioritize_failed=master,
+        deprioritize_black_screen=black,
+        deprioritize_low_fps=low,
+    )
+
+
+def test_health_category_points_never_claims_deprioritization():
+    facts = _healthy(1, failed=True, black_screen=True, low_fps=True)
+
+    assert _health_category(facts, strategy="points") is None
+
+
+def test_health_category_master_off_makes_category_toggles_inert():
+    facts = StreamFacts(
+        stream_id=1,
+        probe_stats_available=False,
+        failed=True,
+        black_screen=True,
+        low_fps=True,
+    )
+
+    assert _health_category(facts, master=False, black=True, low=True) is None
+
+
+def test_health_category_missing_stats_uses_failed_bucket_and_not_probed_reason():
+    facts = StreamFacts(stream_id=1, probe_stats_available=False)
+    category = _health_category(facts)
+
+    assert category == "failed"
+    assert health_deprioritization_reason(facts, category, None) == "not_probed"
+
+
+def test_health_category_pending_precedes_enabled_black_and_low_fps():
+    facts = _healthy(
+        1,
+        probe_succeeded=False,
+        failed=True,
+        black_screen=True,
+        low_fps=True,
+    )
+    category = _health_category(facts)
+
+    assert category == "failed"
+    assert health_deprioritization_reason(facts, category, "pending") == "pending"
+
+
+@pytest.mark.parametrize(
+    ("facts", "black", "low", "expected"),
+    [
+        (_healthy(1, black_screen=True), True, False, "black_screen"),
+        (_healthy(2, low_fps=True), False, True, "low_fps"),
+    ],
+)
+def test_health_category_uses_each_enabled_category(facts, black, low, expected):
+    assert _health_category(facts, black=black, low=low) == expected
 
 
 @pytest.mark.parametrize(

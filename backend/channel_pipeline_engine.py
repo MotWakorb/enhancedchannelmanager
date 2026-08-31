@@ -52,6 +52,9 @@ from channel_pipeline_executor import (
 from channel_pipeline_sort import sort_channels_by_name
 from smart_sort_evaluator import (
     StreamFacts,
+    health_deprioritization_category,
+    health_deprioritization_label,
+    health_deprioritization_reason,
     sort_streams,
     sort_streams_by_priority,
     stream_metadata_criteria,
@@ -1838,33 +1841,45 @@ class ChannelPipelineEngine:
                         channel["streams"] = sorted_streams
 
                         deprioritized = []
-                        if (
-                            field == "smart_sort"
-                            and settings is not None
-                            and settings.stream_sort_strategy == "priority"
-                            and settings.deprioritize_failed_streams
-                        ):
+                        if field == "smart_sort" and settings is not None:
+                            strategy = settings.stream_sort_strategy
+                            evaluator_metadata_known_ids = (
+                                stream_metadata_known_ids
+                                if strategy == "points"
+                                else None
+                            )
                             for sid in sorted_streams:
-                                stats = self._stream_stats_cache.get(sid)
-                                if not stats:
-                                    continue
-                                if stats.get("probe_status") in ("failed", "timeout"):
-                                    reason = stats["probe_status"]
-                                elif (
-                                    settings.deprioritize_black_screen
-                                    and stats.get("is_black_screen")
-                                ):
-                                    reason = "black_screen"
-                                elif (
-                                    settings.deprioritize_low_fps
-                                    and stats.get("is_low_fps")
-                                ):
-                                    reason = "low_fps"
-                                else:
+                                stats = stats_cache.get(sid)
+                                facts = _pipeline_stream_facts(
+                                    sid,
+                                    stats,
+                                    stream_m3u_map,
+                                    settings.m3u_account_priorities,
+                                    custom_stream_ids,
+                                    catchup_stream_ids,
+                                    evaluator_metadata_known_ids,
+                                )
+                                category = health_deprioritization_category(
+                                    facts,
+                                    strategy=strategy,
+                                    deprioritize_failed=settings.deprioritize_failed_streams,
+                                    deprioritize_black_screen=settings.deprioritize_black_screen,
+                                    deprioritize_low_fps=settings.deprioritize_low_fps,
+                                )
+                                reason = health_deprioritization_reason(
+                                    facts,
+                                    category,
+                                    stats.get("probe_status") if stats else None,
+                                )
+                                if reason is None:
                                     continue
                                 deprioritized.append({
                                     "id": sid,
-                                    "name": stats.get("stream_name", f"Stream {sid}"),
+                                    "name": (
+                                        stats.get("stream_name", f"Stream {sid}")
+                                        if stats
+                                        else f"Stream {sid}"
+                                    ),
                                     "reason": reason,
                                 })
 
@@ -1876,7 +1891,7 @@ class ChannelPipelineEngine:
                                 reasons.setdefault(d["reason"], []).append(d["name"])
                             reason_strs = []
                             for reason, names in reasons.items():
-                                label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                                label = health_deprioritization_label(reason)
                                 reason_strs.append(f"{len(names)} {label}")
                             desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
 

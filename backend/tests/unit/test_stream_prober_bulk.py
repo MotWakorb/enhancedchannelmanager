@@ -233,6 +233,44 @@ async def test_bulk_priority_reorder_does_not_report_disabled_black_screen_bucke
 
 
 @pytest.mark.asyncio
+async def test_bulk_priority_journal_reports_missing_stats_as_not_probed():
+    client = AsyncMock()
+    client.get_channels.return_value = {
+        "results": [{"id": 1, "name": "Channel", "streams": [1, 2]}],
+        "next": None,
+    }
+    prober = _make_prober(client)
+    stats = [
+        SimpleNamespace(
+            stream_id=2,
+            stream_name="Healthy",
+            probe_status="success",
+            resolution="1920x1080",
+            bitrate=5_000_000,
+            is_black_screen=False,
+            is_low_fps=False,
+        ),
+    ]
+    session = MagicMock()
+    session.__enter__.return_value.query.return_value.filter.return_value.all.return_value = stats
+
+    with patch("stream_prober.get_session", return_value=session), patch(
+        "stream_prober.journal.log_entry"
+    ) as journal_log:
+        reordered = await prober._auto_reorder_channels_for_streams([1])
+
+    assert reordered[0]["channel_id"] == 1
+    client.update_channel.assert_awaited_once_with(1, {"streams": [2, 1]})
+    journal_entry = journal_log.call_args.kwargs
+    assert journal_entry["after_value"] == {
+        "deprioritized": [
+            {"id": 1, "name": "Stream 1", "reason": "not_probed"},
+        ]
+    }
+    assert "1 not probed deprioritized" in journal_entry["description"]
+
+
+@pytest.mark.asyncio
 async def test_probe_completion_reorder_uses_one_settings_snapshot():
     client = AsyncMock()
     client.get_channels.return_value = {

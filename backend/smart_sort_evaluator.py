@@ -32,6 +32,15 @@ _BOOLEAN_CRITERIA = {
 _STREAM_METADATA_CRITERIA = frozenset(
     {"m3u_priority", "custom_streams", "catchup"}
 )
+_DEFAULT_HEALTH_RANK = {"failed": 0, "black_screen": 1, "low_fps": 2}
+_HEALTH_REASON_LABELS = {
+    "black_screen": "black screen",
+    "low_fps": "low FPS",
+    "failed": "failed",
+    "timeout": "timed out",
+    "pending": "pending",
+    "not_probed": "not probed",
+}
 _COMPARATORS: dict[str, Callable[[Real, Real], bool]] = {
     "==": operator.eq,
     "=": operator.eq,
@@ -136,6 +145,48 @@ def _priority_value(
     return 0
 
 
+def health_deprioritization_category(
+    facts: StreamFacts,
+    *,
+    strategy: str,
+    deprioritize_failed: bool,
+    deprioritize_black_screen: bool,
+    deprioritize_low_fps: bool,
+) -> str | None:
+    """Return the canonical Priority health category used before criteria."""
+    if strategy != "priority" or not deprioritize_failed:
+        return None
+    if facts.failed is True or not facts.probe_stats_available:
+        return "failed"
+    if deprioritize_black_screen and facts.black_screen is True:
+        return "black_screen"
+    if deprioritize_low_fps and facts.low_fps is True:
+        return "low_fps"
+    return None
+
+
+def health_deprioritization_reason(
+    facts: StreamFacts,
+    category: str | None,
+    probe_status: object,
+) -> str | None:
+    """Preserve a truthful operator reason within the canonical category."""
+    if category is None:
+        return None
+    if category != "failed":
+        return category
+    if not facts.probe_stats_available:
+        return "not_probed"
+    if probe_status in ("failed", "timeout", "pending"):
+        return probe_status
+    return "failed"
+
+
+def health_deprioritization_label(reason: str) -> str:
+    """Return a human-readable audit label for a health reason."""
+    return _HEALTH_REASON_LABELS.get(reason, reason)
+
+
 def _health_bucket(
     facts: StreamFacts,
     failed_rank: dict[str, int],
@@ -144,15 +195,16 @@ def _health_bucket(
     deprioritize_black_screen: bool,
     deprioritize_low_fps: bool,
 ) -> int | None:
-    if not deprioritize_failed:
+    category = health_deprioritization_category(
+        facts,
+        strategy="priority",
+        deprioritize_failed=deprioritize_failed,
+        deprioritize_black_screen=deprioritize_black_screen,
+        deprioritize_low_fps=deprioritize_low_fps,
+    )
+    if category is None:
         return None
-    if facts.failed is True or not facts.probe_stats_available:
-        return failed_rank.get("failed", 0)
-    if deprioritize_black_screen and facts.black_screen is True:
-        return failed_rank.get("black_screen", 1)
-    if deprioritize_low_fps and facts.low_fps is True:
-        return failed_rank.get("low_fps", 2)
-    return None
+    return failed_rank.get(category, _DEFAULT_HEALTH_RANK[category])
 
 
 def _priority_sort_key(

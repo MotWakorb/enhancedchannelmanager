@@ -31,6 +31,9 @@ from models import StreamStats
 from smart_sort_evaluator import (
     PointRule,
     StreamFacts,
+    health_deprioritization_category,
+    health_deprioritization_label,
+    health_deprioritization_reason,
     sort_streams,
     stream_metadata_criteria,
 )
@@ -364,36 +367,45 @@ def smart_sort_streams(
 
 
 def _priority_deprioritized_streams(
-    sorted_stream_ids: list[int], stats_map: dict, sort_settings: dict
+    sorted_stream_ids: list[int],
+    stats_map: dict,
+    sort_settings: dict,
+    stream_m3u_map: dict[int, int],
+    custom_stream_ids: set[int],
+    catchup_stream_ids: set[int],
+    stream_metadata_known_ids: set[int],
 ) -> list[dict]:
-    if (
-        sort_settings["stream_sort_strategy"] != "priority"
-        or not sort_settings["deprioritize_failed_streams"]
-    ):
-        return []
-
     deprioritized = []
     for stream_id in sorted_stream_ids:
         stat = stats_map.get(stream_id)
-        if not stat:
-            continue
-        if stat.probe_status in ("failed", "timeout"):
-            reason = stat.probe_status
-        elif (
-            sort_settings["deprioritize_black_screen"]
-            and getattr(stat, "is_black_screen", False)
-        ):
-            reason = "black_screen"
-        elif (
-            sort_settings["deprioritize_low_fps"]
-            and getattr(stat, "is_low_fps", False)
-        ):
-            reason = "low_fps"
-        else:
+        facts = _prober_stream_facts(
+            stream_id,
+            stat,
+            stream_m3u_map,
+            sort_settings["m3u_account_priorities"],
+            custom_stream_ids,
+            catchup_stream_ids,
+            (
+                stream_metadata_known_ids
+                if sort_settings["stream_sort_strategy"] == "points"
+                else None
+            ),
+        )
+        category = health_deprioritization_category(
+            facts,
+            strategy=sort_settings["stream_sort_strategy"],
+            deprioritize_failed=sort_settings["deprioritize_failed_streams"],
+            deprioritize_black_screen=sort_settings["deprioritize_black_screen"],
+            deprioritize_low_fps=sort_settings["deprioritize_low_fps"],
+        )
+        reason = health_deprioritization_reason(
+            facts, category, getattr(stat, "probe_status", None)
+        )
+        if reason is None:
             continue
         deprioritized.append({
             "id": stream_id,
-            "name": stat.stream_name,
+            "name": stat.stream_name if stat else f"Stream {stream_id}",
             "reason": reason,
         })
     return deprioritized
@@ -2176,7 +2188,13 @@ class StreamProber:
                                 raise  # Re-raise to be caught by outer exception handler
 
                             deprioritized = _priority_deprioritized_streams(
-                                sorted_stream_ids, stats_map, sort_settings
+                                sorted_stream_ids,
+                                stats_map,
+                                sort_settings,
+                                stream_m3u_map,
+                                custom_stream_ids,
+                                catchup_stream_ids,
+                                stream_metadata_known_ids,
                             )
 
                             # Build journal description
@@ -2187,7 +2205,7 @@ class StreamProber:
                                     reasons.setdefault(d["reason"], []).append(d["name"])
                                 reason_strs = []
                                 for reason, names in reasons.items():
-                                    label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                                    label = health_deprioritization_label(reason)
                                     reason_strs.append(f"{len(names)} {label}")
                                 desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
 
@@ -2325,7 +2343,13 @@ class StreamProber:
                 continue
 
             deprioritized = _priority_deprioritized_streams(
-                sorted_ids, stats_map, sort_settings
+                sorted_ids,
+                stats_map,
+                sort_settings,
+                stream_m3u_map,
+                custom_stream_ids,
+                catchup_stream_ids,
+                stream_metadata_known_ids,
             )
 
             desc_parts = [f"Smart sort reordered {len(stream_ids)} streams in '{channel_name}'"]
@@ -2335,7 +2359,7 @@ class StreamProber:
                     reasons.setdefault(d["reason"], []).append(d["name"])
                 reason_strs = []
                 for reason, names in reasons.items():
-                    label = {"black_screen": "black screen", "low_fps": "low FPS", "failed": "failed", "timeout": "timed out"}.get(reason, reason)
+                    label = health_deprioritization_label(reason)
                     reason_strs.append(f"{len(names)} {label}")
                 desc_parts.append(f"({', '.join(reason_strs)} deprioritized)")
 
