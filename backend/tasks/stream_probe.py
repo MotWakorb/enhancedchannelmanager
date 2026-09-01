@@ -90,6 +90,9 @@ class StreamProbeTask(TaskScheduler):
         if "auto_sync_groups" in config:
             self._auto_sync_groups = bool(config["auto_sync_groups"])
         if "allow_reorder_after_probe" in config:
+            # A present malformed value must remain fail-closed if a hydration
+            # caller catches validation errors and keeps this instance alive.
+            self._allow_reorder_after_probe = False
             self.validate_run_parameters(config)
             self._allow_reorder_after_probe = config["allow_reorder_after_probe"]
         if "timeout" in config:

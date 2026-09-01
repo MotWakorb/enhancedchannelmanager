@@ -773,6 +773,17 @@ def _schedule_parameter_schema(task_id: str) -> Optional[dict]:
 
 def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> None:
     """Apply task-specific invariants before a schedule can be persisted."""
+    if (
+        task_id == "stream_probe"
+        and parameters is not None
+        and "allow_reorder_after_probe" in parameters
+        and type(parameters["allow_reorder_after_probe"]) is not bool
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="allow_reorder_after_probe must be a boolean",
+        )
+
     try:
         from task_registry import get_registry
         task_class = get_registry().get_task_class(task_id)

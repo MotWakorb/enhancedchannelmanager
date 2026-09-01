@@ -927,6 +927,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
               taskId={task.task_id}
               parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
               parameterOptions={parameterOptions}
+              defaultParameters={defaultParameters}
             />
           </div>
         </ModalOverlay>

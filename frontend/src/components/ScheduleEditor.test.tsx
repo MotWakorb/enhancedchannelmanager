@@ -311,6 +311,83 @@ describe('ScheduleEditor', () => {
       ));
     });
 
+    it('keeps a user-disabled boolean when async defaults arrive later', async () => {
+      const user = userEvent.setup();
+      const streamProbeSchema: TaskParameterSchema[] = [{
+        name: 'allow_reorder_after_probe',
+        type: 'boolean',
+        label: 'Allow stream reordering',
+        description: 'Allow this schedule to apply the global setting',
+        default: true,
+      }];
+      const { rerender } = render(
+        <ScheduleEditor
+          {...defaultProps}
+          taskId="stream_probe"
+          parameterSchema={streamProbeSchema}
+        />
+      );
+
+      await user.click(screen.getByRole('checkbox', { name: /allow stream reordering/i }));
+      rerender(
+        <ScheduleEditor
+          {...defaultProps}
+          taskId="stream_probe"
+          parameterSchema={streamProbeSchema}
+          defaultParameters={{ allow_reorder_after_probe: true }}
+        />
+      );
+
+      expect(screen.getByRole('checkbox', { name: /allow stream reordering/i })).not.toBeChecked();
+      await user.click(screen.getByRole('button', { name: /add schedule/i }));
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalledWith(
+        expect.objectContaining({ parameters: { allow_reorder_after_probe: false } }),
+      ));
+    });
+
+    it('keeps a user-cleared array when async defaults and options arrive later', async () => {
+      const user = userEvent.setup();
+      const groupSchema: TaskParameterSchema[] = [{
+        name: 'channel_groups',
+        type: 'number_array',
+        label: 'Channel Groups',
+        description: 'Which channel groups to probe',
+        default: [],
+        source: 'channel_groups',
+      }];
+      const { rerender } = render(
+        <ScheduleEditor
+          {...defaultProps}
+          taskId="stream_probe"
+          parameterSchema={groupSchema}
+          parameterOptions={{ channel_groups: [{ value: 7, label: 'Sports' }] }}
+          defaultParameters={{ channel_groups: [7] }}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /select none/i }));
+      rerender(
+        <ScheduleEditor
+          {...defaultProps}
+          taskId="stream_probe"
+          parameterSchema={groupSchema}
+          parameterOptions={{
+            channel_groups: [
+              { value: 7, label: 'Sports' },
+              { value: 8, label: 'News' },
+            ],
+          }}
+          defaultParameters={{ channel_groups: [7, 8] }}
+        />
+      );
+
+      expect(screen.getByText('0 of 2 selected')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /add schedule/i }));
+      await waitFor(() => expect(mockOnSave).toHaveBeenCalledWith(
+        expect.objectContaining({ parameters: { channel_groups: [] } }),
+      ));
+    });
+
     it('requires explicit apply confirmation for a recurring sync schedule', async () => {
       const user = userEvent.setup();
       const syncSchema: TaskParameterSchema[] = [{

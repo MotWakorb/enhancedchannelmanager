@@ -38,7 +38,7 @@ def _task_prober() -> SimpleNamespace:
     )
 
 
-def test_stream_probe_config_rejects_non_boolean_reorder_option():
+def test_stream_probe_config_rejects_non_boolean_reorder_option_fail_closed():
     task = StreamProbeTask()
 
     with pytest.raises(
@@ -46,7 +46,7 @@ def test_stream_probe_config_rejects_non_boolean_reorder_option():
     ):
         task.update_config({"allow_reorder_after_probe": "false"})
 
-    assert task.get_config()["allow_reorder_after_probe"] is True
+    assert task.get_config()["allow_reorder_after_probe"] is False
 
 
 def test_stream_probe_config_missing_reorder_option_keeps_legacy_default():
