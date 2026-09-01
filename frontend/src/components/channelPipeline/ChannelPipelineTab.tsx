@@ -12,6 +12,7 @@ import type {
   RestoreSnapshotResponse,
   FailedChannel,
   EventSyncExecutionSummary,
+  SelectedRuleOutcome,
 } from '../../types/channelPipeline';
 import {
   isNormalizationWarning,
@@ -60,6 +61,15 @@ const EXECUTION_STATUS_LABEL: Partial<Record<string, string>> = {
   capped: 'Capped',
   abandoned: 'Abandoned',
   completed_with_errors: 'Completed with Errors',
+};
+
+const selectedOutcomeSummary = (outcome: SelectedRuleOutcome) => {
+  const status = EXECUTION_STATUS_LABEL[outcome.status] ?? outcome.status.replace(/_/g, ' ');
+  const count = outcome.rule_kind === 'event_sync'
+    ? `${outcome.attach_count ?? 0} attached`
+    : `${outcome.match_count ?? 0} matched`;
+  const errors = `${outcome.error_count ?? 0} error${outcome.error_count === 1 ? '' : 's'}`;
+  return `${outcome.rule_name}: ${status}, ${count}, ${errors}`;
 };
 
 /**
@@ -1413,7 +1423,9 @@ export function ChannelPipelineTab() {
                     </span>
                     <span className="execution-mode">
                       {execution.run_scope === 'selected'
-                        ? `Selected Rules (${execution.selected_rule_ids?.length ?? 0})`
+                        ? execution.selected_rule_integrity === 'corrupt'
+                          ? 'Selected Rules (data corrupt)'
+                          : `Selected Rules (${execution.selected_rule_ids?.length ?? 0})`
                         : execution.mode === 'dry_run' ? 'Dry Run' : 'Execute'}
                     </span>
                     <span className="execution-date">
@@ -1426,9 +1438,12 @@ export function ChannelPipelineTab() {
                         // the bug); show event_sync counts instead.
                         const esTotals = aggregateEventSyncSummary(execution.event_sync_summary);
                         if (execution.run_scope === 'selected') {
+                          if (execution.selected_rule_integrity === 'corrupt') {
+                            return 'Selected rule outcome data is unavailable or corrupt';
+                          }
                           return (execution.selected_rule_outcomes ?? [])
-                            .map(outcome => outcome.rule_name)
-                            .join(', ');
+                            .map(selectedOutcomeSummary)
+                            .join(' | ');
                         }
                         if (execution.is_event_sync && esTotals) {
                           const attachWord = execution.mode === 'dry_run' ? 'would attach' : 'attached';
@@ -2144,6 +2159,26 @@ export function ChannelPipelineTab() {
                   totals={eventSyncTotals}
                   isDryRun={details.mode === 'dry_run'}
                 />
+              )}
+              {details.run_scope === 'selected' && (
+                <section className="selected-outcomes" aria-label="Selected rule outcomes">
+                  <h3>Selected Rule Outcomes</h3>
+                  {details.selected_rule_integrity === 'corrupt' ? (
+                    <p className="selected-outcomes-corrupt" role="alert">
+                      Selected rule outcome data is unavailable or corrupt.
+                    </p>
+                  ) : (
+                    <ul>
+                      {(details.selected_rule_outcomes ?? []).map(outcome => (
+                        <li key={outcome.rule_id}>
+                          <span>{selectedOutcomeSummary(outcome)}</span>
+                          {outcome.skip_reason && <small>{outcome.skip_reason}</small>}
+                          {outcome.cap_reason && <small>{outcome.cap_reason}</small>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
               )}
               {details.error_message && (
                 <div className="detail-row error">

@@ -792,16 +792,67 @@ describe('ChannelPipelineTab', () => {
           run_scope: 'selected',
           selected_rule_ids: [4, 9],
           selected_rule_outcomes: [
-            { rule_id: 4, rule_name: 'First', status: 'completed', match_count: 3, error_count: 0 },
-            { rule_id: 9, rule_name: 'Second', status: 'completed_with_errors', match_count: 1, error_count: 2 },
+            { rule_id: 4, rule_name: 'First', rule_kind: 'standard', status: 'completed', match_count: 3, error_count: 0 },
+            { rule_id: 9, rule_name: 'Second', rule_kind: 'event_sync', status: 'completed_with_errors', attach_count: 1, error_count: 2 },
           ],
+          selected_rule_integrity: 'valid',
         }),
       );
 
       renderWithProviders(<ChannelPipelineTab />);
 
       expect(await screen.findByText('Selected Rules (2)')).toBeInTheDocument();
-      expect(screen.getByText(/first, second/i)).toBeInTheDocument();
+      expect(screen.getByText(/first.*completed.*3 matched.*0 errors/i)).toBeInTheDocument();
+      expect(screen.getByText(/second.*completed with errors.*1 attached.*2 errors/i)).toBeInTheDocument();
+    });
+
+    it('renders corrupt selected audit data as unavailable, never zero rules', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          run_scope: 'selected',
+          selected_rule_integrity: 'corrupt',
+          selected_rule_ids: [],
+          selected_rule_outcomes: [],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      expect(await screen.findByText('Selected Rules (data corrupt)')).toBeInTheDocument();
+      expect(screen.getByText(/selected rule outcome data is unavailable or corrupt/i)).toBeInTheDocument();
+      expect(screen.queryByText('Selected Rules (0)')).not.toBeInTheDocument();
+    });
+
+    it('shows selected rule skip and cap facts in execution details', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          run_scope: 'selected',
+          selected_rule_integrity: 'valid',
+          selected_rule_ids: [4, 9],
+          selected_rule_outcomes: [
+            {
+              rule_id: 4, rule_name: 'Fetch skipped', rule_kind: 'event_sync',
+              status: 'skipped', attach_count: 0, error_count: 1,
+              skip_reason: 'secondary stream fetch failed',
+            },
+            {
+              rule_id: 9, rule_name: 'Promotion capped', rule_kind: 'event_sync',
+              status: 'capped', attach_count: 2, error_count: 0,
+              cap_reason: 'promotion cap reached',
+            },
+          ],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await user.click(await screen.findByRole('button', { name: /view details/i }));
+
+      const dialog = within(screen.getByRole('dialog', { name: 'Execution Details' }));
+      expect(dialog.getByText(/fetch skipped.*skipped.*0 attached.*1 error/i)).toBeInTheDocument();
+      expect(dialog.getByText(/secondary stream fetch failed/i)).toBeInTheDocument();
+      expect(dialog.getByText(/promotion capped.*capped.*2 attached.*0 errors/i)).toBeInTheDocument();
+      expect(dialog.getByText(/promotion cap reached/i)).toBeInTheDocument();
     });
 
     it('displays execution history', async () => {

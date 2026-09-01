@@ -495,6 +495,8 @@ export interface ChannelPipelineExecution {
   run_scope?: 'all' | 'single' | 'selected';
   /** Canonical priority/id order used for a selected-rule run. */
   selected_rule_ids?: number[];
+  /** Parser result for the durable selected-rule audit payload. */
+  selected_rule_integrity?: 'not_selected' | 'valid' | 'corrupt';
   /** One persisted result per selected rule, in execution order. */
   selected_rule_outcomes?: SelectedRuleOutcome[];
 }
@@ -502,9 +504,23 @@ export interface ChannelPipelineExecution {
 export interface SelectedRuleOutcome {
   rule_id: number;
   rule_name: string;
-  status: 'pending' | 'completed' | 'completed_with_errors' | 'failed';
+  rule_kind: 'standard' | 'event_sync';
+  status:
+    | 'pending'
+    | 'running'
+    | 'completed'
+    | 'completed_with_errors'
+    | 'skipped'
+    | 'capped'
+    | 'failed'
+    | 'interrupted'
+    | 'not_run'
+    | 'abandoned';
   match_count?: number;
+  attach_count?: number;
   error_count?: number;
+  skip_reason?: string;
+  cap_reason?: string;
 }
 
 /**

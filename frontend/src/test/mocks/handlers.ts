@@ -194,6 +194,7 @@ export function createMockChannelPipelineExecution(overrides: Partial<MockChanne
     is_event_sync: overrides.is_event_sync ?? false,
     event_sync_summary: overrides.event_sync_summary ?? undefined,
     run_scope: overrides.run_scope ?? 'all',
+    selected_rule_integrity: overrides.selected_rule_integrity ?? 'not_selected',
     selected_rule_ids: overrides.selected_rule_ids ?? [],
     selected_rule_outcomes: overrides.selected_rule_outcomes ?? [],
   }
@@ -404,13 +405,28 @@ interface MockChannelPipelineExecution {
     cap_overage?: number
   }[]
   run_scope?: 'all' | 'single' | 'selected'
+  selected_rule_integrity?: 'not_selected' | 'valid' | 'corrupt'
   selected_rule_ids?: number[]
   selected_rule_outcomes?: {
     rule_id: number
     rule_name: string
-    status: 'pending' | 'completed' | 'completed_with_errors' | 'failed'
+    rule_kind: 'standard' | 'event_sync'
+    status:
+      | 'pending'
+      | 'running'
+      | 'completed'
+      | 'completed_with_errors'
+      | 'skipped'
+      | 'capped'
+      | 'failed'
+      | 'interrupted'
+      | 'not_run'
+      | 'abandoned'
     match_count?: number
+    attach_count?: number
     error_count?: number
+    skip_reason?: string
+    cap_reason?: string
   }[]
 }
 
@@ -1205,6 +1221,7 @@ export const handlers = [
       return {
         rule_id: ruleId,
         rule_name: rule?.name ?? `Rule ${ruleId}`,
+        rule_kind: rule?.event_sync_config ? 'event_sync' as const : 'standard' as const,
         status: 'completed' as const,
         match_count: 0,
         error_count: 0,
@@ -1214,6 +1231,7 @@ export const handlers = [
       mode: body.dry_run ? 'dry_run' : 'execute',
       status: 'completed',
       run_scope: 'selected',
+      selected_rule_integrity: 'valid',
       selected_rule_ids: body.rule_ids ?? [],
       selected_rule_outcomes: outcomes,
     })
