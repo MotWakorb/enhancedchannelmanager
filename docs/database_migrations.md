@@ -98,6 +98,23 @@ destructive = False  # opt OUT of a scanner false positive. Justify it in the
 Bias toward over-detection: a false positive costs one extra (idempotent)
 migration actually running; a false negative is silent data loss.
 
+### Selected-rule audit data (revision 0051)
+
+Revision `0051` adds nullable `TEXT` column
+`auto_creation_executions.selected_rule_outcomes`. Upgrade is idempotent only
+when an existing column has that exact compatible shape; startup and migration
+both fail closed if the column is non-text or non-nullable. Deploy the backend
+revision before a frontend that expects selected-rule integrity and per-rule
+outcomes.
+
+Downgrade to `0050` is safe only while every row has
+`selected_rule_outcomes IS NULL`. Once any selected-rule run has persisted audit
+data, `alembic downgrade 0050` intentionally refuses rather than silently erase
+execution history. Roll back application code without downgrading the database,
+or explicitly archive and remove that audit data before an intentional destructive
+schema downgrade. The downgrade guard is a data-safety boundary, not a migration
+failure to bypass during routine deployment rollback.
+
 Two consequences for authoring:
 
 - **Keep destructive migrations idempotent** (`inspect`-guarded), like every

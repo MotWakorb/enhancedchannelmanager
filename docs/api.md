@@ -1529,12 +1529,22 @@ Selected-rule runs use the same asynchronous `202 Accepted` and execution pollin
 contract as run-all and single-rule runs. The server ignores client submission
 order and executes the selected scope in canonical rule order: ascending
 `priority`, then ascending rule `id` as the stable tie-break. Standard rules run
-through the existing standard pipeline passes; Event Sync rules run through the
-existing dedicated Event Sync phase. Execution responses identify these rows with
-`run_scope: "selected"` and include `selected_rule_ids` plus one
-`selected_rule_outcomes` entry per rule. Validation is fail-closed and atomic: an
-ineligible member is never silently dropped, and an empty or stale selection is
-never widened into run-all.
+through the existing standard pipeline passes first; Event Sync rules then run
+through the existing dedicated Event Sync phase. Execution responses identify
+these rows with `run_scope: "selected"` and include `selected_rule_integrity`,
+`selected_rule_ids`, and one `selected_rule_outcomes` entry per rule. Each outcome
+retains the worker-start rule name and kind, terminal status, kind-appropriate
+matched/attached count, error count, and any skip or cap reason. A malformed
+non-null audit payload remains selected scope with
+`selected_rule_integrity: "corrupt"`; it is never presented as a zero-rule run.
+
+Validation is fail-closed and atomic at both request acceptance and worker start:
+an empty, duplicate, unknown, disabled, inactive, or invalid member is never
+silently dropped, and a stale selection is never widened into run-all. The
+worker-start validation is the execution snapshot boundary. Rule edits committed
+before that fresh load apply to the run; edits committed after it do not alter or
+cancel the detached definitions already being executed. The worker takes this
+snapshot before any Dispatcharr reads.
 
 ---
 
