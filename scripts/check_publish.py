@@ -482,18 +482,25 @@ def parse_imagetools_config(payload: str) -> dict[str, str]:
     configs: list[tuple[str, dict]] = []
     for platform in EXPECTED_PLATFORMS:
         value = data[platform]
-        if not isinstance(value, dict) or "config" not in value:
+        if not isinstance(value, dict):
+            raise CheckError(f"imagetools platform {platform} value must be an object")
+        if "config" not in value:
+            raise CheckError(f"imagetools platform {platform} carries no config field")
+        config = value["config"]
+        if not isinstance(config, dict):
             raise CheckError(
-                f"imagetools output carried no image config for {platform}"
+                f"imagetools platform {platform} config must be an object, "
+                f"got {type(config).__name__}"
             )
-        configs.append((platform, value))
+        configs.append((platform, config))
 
     mappings: list[dict[str, str]] = []
-    for platform, entry in configs:
-        env = entry.get("config", {}).get("Env")
+    for platform, config in configs:
+        env = config.get("Env")
         if not isinstance(env, list) or not all(isinstance(item, str) for item in env):
             raise CheckError(
-                f"imagetools output carried no image config env block for {platform}"
+                f"imagetools output carried no image config env block for {platform}; "
+                "expected a list of strings"
             )
         mapping = _env_list_to_mapping(env, context=f"image config for {platform}")
         for marker in (MARKER_ENV, COMMIT_ENV):

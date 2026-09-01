@@ -324,6 +324,13 @@ class TestPaginatedGitHubData:
 
 
 class TestParseImagetoolsConfig:
+    """Manifest invariant: unique object keys; exact platforms; object platform
+    and config values; string-list Env; one of each marker; platform agreement.
+
+    Version and full lowercase SHA equality are enforced by the verdict layer.
+    Every malformed external shape must become an actionable CheckError.
+    """
+
     def test_parses_a_multi_platform_manifest(self, script):
         payload = """
         {
@@ -373,8 +380,89 @@ class TestParseImagetoolsConfig:
             script.parse_imagetools_config("not json")
 
     def test_raises_when_no_config_env_is_present(self, script):
-        with pytest.raises(script.CheckError):
-            script.parse_imagetools_config('{"linux/amd64": {"rootfs": {}}}')
+        payload = {
+            platform: {
+                "config": (
+                    {}
+                    if platform == "linux/amd64"
+                    else {
+                        "Env": [
+                            f"ECM_VERSION={TEST_VERSION}",
+                            f"GIT_COMMIT={TEST_SHA}",
+                        ]
+                    }
+                )
+            }
+            for platform in ("linux/amd64", "linux/arm64")
+        }
+        with pytest.raises(script.CheckError, match="env block for linux/amd64"):
+            script.parse_imagetools_config(json.dumps(payload))
+
+    @pytest.mark.parametrize(
+        ("platform_value", "message"),
+        [
+            ({}, "linux/amd64.*config field"),
+            ({"config": None}, "linux/amd64.*config.*object"),
+            ({"config": []}, "linux/amd64.*config.*object"),
+            ({"config": "invalid"}, "linux/amd64.*config.*object"),
+            ({"config": 17}, "linux/amd64.*config.*object"),
+        ],
+        ids=["absent", "null", "list", "string", "scalar"],
+    )
+    def test_rejects_malformed_config_with_exact_platform_set(
+        self, script, platform_value, message
+    ):
+        valid = {
+            "config": {
+                "Env": [
+                    f"ECM_VERSION={TEST_VERSION}",
+                    f"GIT_COMMIT={TEST_SHA}",
+                ]
+            }
+        }
+        payload = {"linux/amd64": platform_value, "linux/arm64": valid}
+        with pytest.raises(script.CheckError, match=message):
+            script.parse_imagetools_config(json.dumps(payload))
+
+    @pytest.mark.parametrize("platform_value", [None, [], "invalid", 17])
+    def test_rejects_non_object_platform_value(self, script, platform_value):
+        payload = {
+            "linux/amd64": platform_value,
+            "linux/arm64": {
+                "config": {
+                    "Env": [
+                        f"ECM_VERSION={TEST_VERSION}",
+                        f"GIT_COMMIT={TEST_SHA}",
+                    ]
+                }
+            },
+        }
+        with pytest.raises(
+            script.CheckError, match="platform linux/amd64 value.*object"
+        ):
+            script.parse_imagetools_config(json.dumps(payload))
+
+    @pytest.mark.parametrize("env", [None, "invalid", ["ECM_VERSION=valid", 17]])
+    def test_rejects_env_that_is_not_a_list_of_strings(self, script, env):
+        payload = {
+            platform: {
+                "config": {
+                    "Env": (
+                        env
+                        if platform == "linux/amd64"
+                        else [
+                            f"ECM_VERSION={TEST_VERSION}",
+                            f"GIT_COMMIT={TEST_SHA}",
+                        ]
+                    )
+                }
+            }
+            for platform in ("linux/amd64", "linux/arm64")
+        }
+        with pytest.raises(
+            script.CheckError, match="env block for linux/amd64.*list of strings"
+        ):
+            script.parse_imagetools_config(json.dumps(payload))
 
     @pytest.mark.parametrize("marker", ["ECM_VERSION", "GIT_COMMIT"])
     def test_rejects_marker_missing_from_any_platform(self, script, marker):
