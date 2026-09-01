@@ -874,6 +874,13 @@ class ActionExecutor:
                 error=f"Unknown action type: {action.type}"
             )
 
+        if action_type == ActionType.CREATE_CHANNEL:
+            _, provider_number_result = self._resolve_provider_channel_number(
+                action.params.get("channel_number", "auto"), stream_ctx, action.type
+            )
+            if provider_number_result is not None:
+                return provider_number_result
+
         # Build template context for variable expansion. Pass the rule's
         # normalization groups so {normalized_name} is consistent across every
         # action, not just create_channel (GH #466 / bd-6gvt8).
@@ -1186,6 +1193,12 @@ class ActionExecutor:
                                        fold_match_key: bool = False) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
+        raw_number_spec = params.get("channel_number", "auto")
+        number_spec, provider_number_result = self._resolve_provider_channel_number(
+            raw_number_spec, stream_ctx, action.type
+        )
+        if provider_number_result is not None:
+            return provider_number_result
         name_template = params.get("name_template", "{stream_name}")
         channel_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
         logger.debug("[AUTO-CREATE-EXEC] Template '%s' expanded to '%s'", name_template, channel_name)
@@ -1382,12 +1395,11 @@ class ActionExecutor:
             )
 
         # Determine channel number first (needed for name prefix).
-        number_spec, provider_number_result = self._resolve_provider_channel_number(
-            params.get("channel_number", "auto"), stream_ctx, action.type
+        channel_number = (
+            number_spec
+            if raw_number_spec == "{provider_channel_number}"
+            else self._get_next_channel_number(number_spec)
         )
-        if provider_number_result is not None:
-            return provider_number_result
-        channel_number = self._get_next_channel_number(number_spec)
         logger.debug("[AUTO-CREATE-EXEC] Channel number: spec=%s -> %s", params.get('channel_number', 'auto'), channel_number)
 
         # Apply channel number in name if setting is enabled
@@ -3411,8 +3423,9 @@ class ActionExecutor:
                 error="No channel to update"
             )
 
+        raw_value = action.params.get("value", "auto")
         value, provider_number_result = self._resolve_provider_channel_number(
-            action.params.get("value", "auto"), stream_ctx, action.type
+            raw_value, stream_ctx, action.type
         )
         if provider_number_result is not None:
             return provider_number_result
@@ -3430,7 +3443,11 @@ class ActionExecutor:
                 skipped=True
             )
 
-        channel_number = self._get_next_channel_number(value)
+        channel_number = (
+            value
+            if raw_value == "{provider_channel_number}"
+            else self._get_next_channel_number(value)
+        )
 
         if exec_ctx.dry_run:
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
@@ -3490,7 +3507,7 @@ class ActionExecutor:
                 description="Provider channel number is missing; action skipped",
                 skipped=True,
             )
-        if not is_valid_channel_number(provider_number):
+        if not is_valid_channel_number(provider_number) or provider_number <= 0:
             error = "Provider channel number is invalid"
             return spec, ActionResult(
                 success=False,
@@ -3499,6 +3516,8 @@ class ActionExecutor:
                 skipped=True,
                 error=error,
             )
+        if isinstance(provider_number, float) and provider_number.is_integer():
+            provider_number = int(provider_number)
         return provider_number, None
 
     # =========================================================================
