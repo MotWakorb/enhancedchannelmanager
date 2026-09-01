@@ -874,18 +874,18 @@ class ActionExecutor:
                 error=f"Unknown action type: {action.type}"
             )
 
-        if action_type == ActionType.CREATE_CHANNEL:
-            _, provider_number_result = self._resolve_provider_channel_number(
-                action.params.get("channel_number", "auto"), stream_ctx, action.type
-            )
-            if provider_number_result is not None:
-                return provider_number_result
-
         # Build template context for variable expansion. Pass the rule's
         # normalization groups so {normalized_name} is consistent across every
         # action, not just create_channel (GH #466 / bd-6gvt8).
-        template_ctx = self._build_template_context(
-            stream_ctx, exec_ctx, normalization_group_ids=normalization_group_ids)
+        template_ctx = (
+            None
+            if action_type == ActionType.CREATE_CHANNEL
+            else self._build_template_context(
+                stream_ctx,
+                exec_ctx,
+                normalization_group_ids=normalization_group_ids,
+            )
+        )
 
         # Execute based on action type
         if action_type == ActionType.CREATE_CHANNEL:
@@ -1199,6 +1199,12 @@ class ActionExecutor:
         )
         if provider_number_result is not None:
             return provider_number_result
+        if template_ctx is None:
+            template_ctx = self._build_template_context(
+                stream_ctx,
+                exec_ctx,
+                normalization_group_ids=normalization_group_ids,
+            )
         name_template = params.get("name_template", "{stream_name}")
         channel_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
         logger.debug("[AUTO-CREATE-EXEC] Template '%s' expanded to '%s'", name_template, channel_name)
@@ -3430,10 +3436,31 @@ class ActionExecutor:
         if provider_number_result is not None:
             return provider_number_result
 
+        is_provider_number = raw_value == "{provider_channel_number}"
+        if is_provider_number:
+            channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
+            current_number = channel.get("channel_number")
+            try:
+                provider_number_is_current = (
+                    current_number is not None
+                    and channel_number_ticks(current_number) == channel_number_ticks(value)
+                )
+            except InvalidChannelNumberError:
+                provider_number_is_current = False
+            if provider_number_is_current:
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"Channel number is already {value}; action skipped",
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                    skipped=True,
+                )
+
         # Reuse the number if this channel was already assigned one this run
         # (avoids consuming extra numbers when multiple streams merge into same channel)
         existing_number = self._channel_assigned_numbers.get(exec_ctx.current_channel_id)
-        if existing_number is not None:
+        if existing_number is not None and not is_provider_number:
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -3451,6 +3478,7 @@ class ActionExecutor:
 
         if exec_ctx.dry_run:
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
+            self._mark_channel_number_used(channel_number)
             # Update simulated state so subsequent actions in this dry run
             # preview against the new number (mirrors the real-run path).
             simulated = self._channel_by_id.get(exec_ctx.current_channel_id)
