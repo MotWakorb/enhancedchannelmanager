@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Confirm that a merge to `dev` actually reached the container registry.
+"""Check workflow evidence and current registry-tag markers after a dev merge.
 
 This is a POST-MERGE check (bead enhancedchannelmanager-t8fqg). It is not
 a CI gate and must never become one: a check that runs after the merge
@@ -28,19 +28,20 @@ unrelated merge republished it by accident.
   1. The "Tests" push run for the commit under test concluded `success`,
      and its reusable publish workflow completed the final multi-arch
      manifest job successfully on that exact run attempt.
-  2. Every represented platform carries matching `ECM_VERSION` and full
+  2. The expected linux/amd64 and linux/arm64 configs carry matching
+     `ECM_VERSION` and full
      `GIT_COMMIT` markers. They must equal `frontend/package.json` AT THAT
      COMMIT and the exact resolved commit SHA.
 
-Both must hold. A green workflow with a stale marker means the push
-silently did not land on the tag; a correct marker with a failed workflow
-means the tag is carrying an older successful build.
+Both must hold. The checks intentionally report workflow evidence and current
+tag-marker evidence separately; neither cryptographically binds image bytes to
+the workflow job. The mutable tag check also trusts actors allowed to write it.
 
-The image is always read through every represented platform's registry
-config (`docker buildx imagetools inspect`), which does not download layers.
-Pass `--pull` to add host-level proof after that mandatory manifest proof.
+The image is always read through both expected platforms' registry configs
+(`docker buildx imagetools inspect`), which does not download layers.
+Pass `--pull` to add a host-level marker cross-check after that inspection.
 A pull cannot rescue failed manifest inspection. See `docs/shipping.md`
-section 6, "Confirm the image published".
+section 6, "Check publish evidence and current tag markers".
 
 ## Refs it needs
 
@@ -88,6 +89,7 @@ PUBLISH_JOB_NAME = "Publish Verified Dev Images / Publish Verified Multi-Arch Ma
 MARKER_ENV = "ECM_VERSION"
 COMMIT_ENV = "GIT_COMMIT"
 PLATFORMS_KEY = "_ECM_MANIFEST_PLATFORMS"
+EXPECTED_PLATFORMS = ("linux/amd64", "linux/arm64")
 
 _SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
@@ -274,16 +276,27 @@ def commit_is_on_branch(sha: str, branch: str) -> bool | None:
 
 
 def repo_slug() -> str:
-    result = _run(
-        ["gh", "repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]
-    )
-    if result.returncode == 0 and result.stdout.strip():
-        return result.stdout.strip()
     url = _git("remote", "get-url", "origin").strip()
-    match = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?$", url)
-    if not match:
-        raise CheckError(f"cannot derive owner/repo from origin remote {url!r}")
-    return match.group(1)
+    scp_match = re.fullmatch(r"git@github\.com:([^/]+)/([^/]+)", url)
+    if scp_match:
+        owner, repo = scp_match.groups()
+    else:
+        url_match = re.fullmatch(
+            r"(?:https://github\.com/|ssh://git@github\.com/)([^/]+)/([^/?#]+)",
+            url,
+        )
+        if not url_match:
+            raise CheckError(
+                f"cannot derive owner/repo from GitHub origin remote {url!r}"
+            )
+        owner, repo = url_match.groups()
+
+    repo = repo.removesuffix(".git")
+    if not re.fullmatch(
+        r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", owner
+    ) or not re.fullmatch(r"[A-Za-z0-9_.-]+", repo):
+        raise CheckError(f"GitHub origin does not carry a valid owner/repo: {url!r}")
+    return f"{owner}/{repo}"
 
 
 # --- Check 1: the workflow run ----------------------------------------------
@@ -394,9 +407,17 @@ def select_build_run(
     ]
     if not candidates:
         return None
+    for run in candidates:
+        for field in ("id", "run_number", "run_attempt"):
+            value = run.get(field)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise CheckError(
+                    f"candidate {workflow_name!r} run field {field!r} must be a "
+                    f"positive integer, got {value!r}"
+                )
     return max(
         candidates,
-        key=lambda run: (run.get("run_number") or 0, run.get("run_attempt") or 0),
+        key=lambda run: (run["run_number"], run["run_attempt"]),
     )
 
 
@@ -413,39 +434,59 @@ def select_publish_job(jobs: list[dict]) -> dict | None:
 # --- Check 2: the published build marker ------------------------------------
 
 
-def _env_list_to_mapping(env: list[str]) -> dict[str, str]:
+def _env_list_to_mapping(
+    env: list[str], *, context: str = "image config"
+) -> dict[str, str]:
     mapping: dict[str, str] = {}
     for entry in env:
         name, separator, value = entry.partition("=")
         if separator:
+            if name in (MARKER_ENV, COMMIT_ENV) and name in mapping:
+                raise CheckError(f"{context} carries duplicate {name} entries")
             mapping[name] = value
     return mapping
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise CheckError(
+                f"imagetools output carries duplicate JSON object key {key!r}"
+            )
+        value[key] = item
+    return value
 
 
 def parse_imagetools_config(payload: str) -> dict[str, str]:
     """Pull the image's env mapping out of `imagetools inspect` JSON.
 
-    The payload is either a single image config or one config per platform.
-    Every represented platform must carry both provenance markers, and all
-    platforms must agree before one mapping can represent the tag.
+    The payload must contain exactly the supported ECM platform configs. Both
+    must carry one copy of each marker and agree before one mapping can
+    represent the current tag.
     """
     try:
-        data = json.loads(payload)
+        data = json.loads(payload, object_pairs_hook=_unique_json_object)
     except json.JSONDecodeError as error:
         raise CheckError(f"unparseable imagetools output: {error}") from error
 
-    configs: list[tuple[str, dict]] = []
-    if isinstance(data, dict) and "config" in data:
-        configs.append(("single image", data))
-    elif isinstance(data, dict):
-        for platform, value in data.items():
-            if not isinstance(value, dict) or "config" not in value:
-                raise CheckError(
-                    f"imagetools output carried no image config for {platform}"
-                )
-            configs.append((platform, value))
-    if not configs:
+    if not isinstance(data, dict):
         raise CheckError("imagetools output carried no image configs")
+    actual_platforms = set(data)
+    if actual_platforms != set(EXPECTED_PLATFORMS):
+        raise CheckError(
+            f"imagetools platform set mismatch: expected {', '.join(EXPECTED_PLATFORMS)}; "
+            f"found {', '.join(sorted(actual_platforms)) or 'none'}"
+        )
+
+    configs: list[tuple[str, dict]] = []
+    for platform in EXPECTED_PLATFORMS:
+        value = data[platform]
+        if not isinstance(value, dict) or "config" not in value:
+            raise CheckError(
+                f"imagetools output carried no image config for {platform}"
+            )
+        configs.append((platform, value))
 
     mappings: list[dict[str, str]] = []
     for platform, entry in configs:
@@ -454,7 +495,7 @@ def parse_imagetools_config(payload: str) -> dict[str, str]:
             raise CheckError(
                 f"imagetools output carried no image config env block for {platform}"
             )
-        mapping = _env_list_to_mapping(env)
+        mapping = _env_list_to_mapping(env, context=f"image config for {platform}")
         for marker in (MARKER_ENV, COMMIT_ENV):
             if marker not in mapping:
                 raise CheckError(f"image config for {platform} carries no {marker}")
@@ -521,7 +562,7 @@ def read_published_marker(ref: str, *, use_pull: bool) -> dict[str, str]:
                     f"fresh-pull host {marker} mismatch: manifest carries "
                     f"{manifest.get(marker)!r}, host image carries {host.get(marker)!r}"
                 )
-        print("  OK: fresh-pull host markers match the mandatory manifest proof.")
+        print("  OK: fresh-pull host markers match the registry manifest markers.")
     return manifest
 
 
@@ -535,8 +576,8 @@ def _banner(text: str) -> str:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "POST-MERGE check: confirm the merge commit's image actually "
-            "published. Run this AFTER `gh pr merge`, not before."
+            "POST-MERGE check: inspect the exact workflow attempt and current "
+            "mutable-tag markers. Run this AFTER `gh pr merge`, not before."
         )
     )
     parser.add_argument(
@@ -564,6 +605,14 @@ def main(argv: list[str] | None = None) -> int:
         "--skip-image", action="store_true", help="Skip the published-image check."
     )
     args = parser.parse_args(argv)
+
+    if args.skip_workflow and args.skip_image:
+        print(
+            "FATAL: --skip-workflow and --skip-image cannot be used together; "
+            "at least one check is required.",
+            file=sys.stderr,
+        )
+        return 2
 
     try:
         sha = resolve_commit(args.commit)
@@ -663,7 +712,7 @@ def main(argv: list[str] | None = None) -> int:
                     if publish_job is None:
                         failures.append(
                             f"the Tests attempt carried no {PUBLISH_JOB_NAME!r} job. "
-                            "A green test rollup alone does not prove publication."
+                            "A green test rollup alone is not publish-job evidence."
                         )
                         print("  publish job: not found")
                     else:
@@ -682,7 +731,7 @@ def main(argv: list[str] | None = None) -> int:
                         elif publish_conclusion != "success":
                             failures.append(
                                 f"the reusable publish job concluded {publish_conclusion!r}, "
-                                "so publication was not proven. Re-run the failed Tests "
+                                "so publish-job evidence is not successful. Re-run the failed Tests "
                                 "workflow from the URL above once the cause is understood."
                             )
                         else:
@@ -715,7 +764,7 @@ def main(argv: list[str] | None = None) -> int:
             elif actual != expected:
                 failures.append(
                     f"{MARKER_ENV} mismatch: expected {expected!r}, published "
-                    f"tag {ref} carries {actual!r} (built from "
+                    f"tag {ref} carries {actual!r} ({COMMIT_ENV} marker: "
                     f"{built_from[:12] if built_from else 'missing'}). "
                     f"The registry is lagging the commit "
                     f"under test."
@@ -725,8 +774,8 @@ def main(argv: list[str] | None = None) -> int:
 
             if built_from is None:
                 failures.append(
-                    f"the published image carries no {COMMIT_ENV}. Exact-SHA "
-                    "publication cannot be proven from the registry tag."
+                    f"the published image carries no {COMMIT_ENV}. The current "
+                    "registry tag cannot be matched to the target SHA."
                 )
             elif not re.fullmatch(r"[0-9a-f]{40}", built_from):
                 failures.append(
@@ -750,7 +799,10 @@ def main(argv: list[str] | None = None) -> int:
     # ahead of the evidence it refers to.
     sys.stdout.flush()
     if failures:
-        print("FAIL: the published image does not match this commit.", file=sys.stderr)
+        print(
+            "FAIL: required workflow and current-tag evidence did not all pass.",
+            file=sys.stderr,
+        )
         for failure in failures:
             print(f"  - {failure}", file=sys.stderr)
         if on_branch is False:
@@ -761,8 +813,8 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             print(
-                "\nSee docs/shipping.md section 6, step 'Confirm the image "
-                "published'. Do not leave dev and the registry diverged: "
+                "\nSee docs/shipping.md section 6, step 'Check publish evidence "
+                "and current tag markers'. Do not leave dev and the registry diverged: "
                 "re-run the failed workflow rather than waiting for the next "
                 "merge to republish by accident.",
                 file=sys.stderr,
@@ -784,19 +836,23 @@ def main(argv: list[str] | None = None) -> int:
     # Claim only what actually ran. A PASS line that asserts the registry
     # carries the right marker after `--skip-image` is a lie the operator
     # has no way to see through.
-    if args.skip_workflow and args.skip_image:
-        print(f"PASS: nothing was checked (both checks skipped) for {sha[:12]}.")
-    elif args.skip_image:
-        print(f"PASS: {sha[:12]} has a successful build run (image check skipped).")
+    if args.skip_image:
+        print(
+            f"PASS: exact Tests attempt and reusable publish job succeeded for "
+            f"{sha} (mutable-tag marker check skipped)."
+        )
     elif args.skip_workflow:
         print(
-            f"PASS: {ref} carries {expected} from exact commit {sha} "
-            "(workflow-run check skipped)."
+            f"PASS: current mutable tag {ref} exposes {MARKER_ENV}={expected} and "
+            f"{COMMIT_ENV}={sha} (workflow evidence skipped; point-in-time marker "
+            "check only)."
         )
     else:
         print(
-            f"PASS: {ref} carries {expected} from exact commit {sha}, built "
-            "from a successful Tests run and reusable publish job."
+            f"PASS: exact Tests attempt and reusable publish job succeeded, and "
+            f"current mutable tag {ref} exposes {MARKER_ENV}={expected} and "
+            f"{COMMIT_ENV}={sha}. This point-in-time check trusts registry writers; "
+            "it does not bind image bytes to the workflow job."
         )
     return 0
 

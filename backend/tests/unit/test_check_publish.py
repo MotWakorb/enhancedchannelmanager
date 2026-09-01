@@ -220,6 +220,29 @@ class TestSelectBuildRun:
     def test_returns_none_for_an_empty_list(self, script):
         assert script.select_build_run([], "Tests", "dev", TEST_SHA) is None
 
+    @pytest.mark.parametrize("field", ["id", "run_number", "run_attempt"])
+    @pytest.mark.parametrize(
+        "value",
+        [None, 0, -1, True, "1", 1.5],
+        ids=["missing", "zero", "negative", "bool", "string", "float"],
+    )
+    def test_rejects_non_positive_integer_candidate_metadata(
+        self, script, field, value
+    ):
+        run = _run(21)
+        run[field] = value
+        with pytest.raises(script.CheckError, match=rf"{field}.*positive integer"):
+            script.select_build_run([run], "Tests", "dev", TEST_SHA)
+
+    def test_mixed_candidate_metadata_never_raises_raw_type_error(self, script):
+        runs = [_run(22), _run(23) | {"run_number": "23"}]
+        with pytest.raises(script.CheckError, match="run_number.*positive integer"):
+            script.select_build_run(runs, "Tests", "dev", TEST_SHA)
+
+    def test_malformed_unrelated_run_is_ignored(self, script):
+        runs = [_run(24), _run(25, name="Other") | {"run_number": "bad"}]
+        assert script.select_build_run(runs, "Tests", "dev", TEST_SHA) == runs[0]
+
 
 class TestSelectPublishJob:
     def test_selects_live_0001_nested_manifest_job(self, script):
@@ -319,27 +342,26 @@ class TestParseImagetoolsConfig:
         assert env["GIT_COMMIT"] == TEST_SHA
         assert env[script.PLATFORMS_KEY] == "linux/amd64, linux/arm64"
 
-    def test_parses_a_single_platform_config(self, script):
+    def test_rejects_a_single_platform_config(self, script):
         payload = json.dumps(
-            {
-                "created": "now",
-                "config": {
-                    "Env": ["ECM_VERSION=0.18.1-0044", f"GIT_COMMIT={TEST_SHA}"]
-                },
-            }
+            {"config": {"Env": ["ECM_VERSION=0.18.1-0044", f"GIT_COMMIT={TEST_SHA}"]}}
         )
-        assert script.parse_imagetools_config(payload)["ECM_VERSION"] == "0.18.1-0044"
+        with pytest.raises(script.CheckError, match="linux/amd64.*linux/arm64"):
+            script.parse_imagetools_config(payload)
 
     def test_env_entries_with_equals_signs_in_the_value_survive(self, script):
         payload = json.dumps(
             {
-                "config": {
-                    "Env": [
-                        "OPTS=a=b=c",
-                        "ECM_VERSION=0.1.0-0001",
-                        f"GIT_COMMIT={TEST_SHA}",
-                    ]
+                platform: {
+                    "config": {
+                        "Env": [
+                            "OPTS=a=b=c",
+                            "ECM_VERSION=0.1.0-0001",
+                            f"GIT_COMMIT={TEST_SHA}",
+                        ]
+                    }
                 }
+                for platform in ("linux/amd64", "linux/arm64")
             }
         )
         env = script.parse_imagetools_config(payload)
@@ -379,6 +401,75 @@ class TestParseImagetoolsConfig:
         }
         with pytest.raises(script.CheckError, match="disagree"):
             script.parse_imagetools_config(json.dumps(payload))
+
+    @pytest.mark.parametrize("marker", ["ECM_VERSION", "GIT_COMMIT"])
+    @pytest.mark.parametrize("duplicate_value", ["same", "different"])
+    def test_rejects_duplicate_provenance_marker_per_platform(
+        self, script, marker, duplicate_value
+    ):
+        values = {"ECM_VERSION": TEST_VERSION, "GIT_COMMIT": TEST_SHA}
+        duplicate = values[marker] if duplicate_value == "same" else "conflict"
+        payload = {
+            platform: {
+                "config": {
+                    "Env": [
+                        f"ECM_VERSION={TEST_VERSION}",
+                        f"GIT_COMMIT={TEST_SHA}",
+                        f"{marker}={duplicate}",
+                    ]
+                }
+            }
+            for platform in ("linux/amd64", "linux/arm64")
+        }
+        with pytest.raises(
+            script.CheckError, match=rf"linux/amd64.*duplicate {marker}"
+        ):
+            script.parse_imagetools_config(json.dumps(payload))
+
+    @pytest.mark.parametrize(
+        "platforms",
+        [
+            ["linux/amd64"],
+            ["linux/amd64", "linux/s390x"],
+            ["linux/amd64", "linux/arm64", "linux/s390x"],
+            ["linux/amd64/v8", "linux/arm64"],
+        ],
+        ids=[
+            "missing-arm64",
+            "wrong-platform",
+            "unexpected-platform",
+            "malformed-platform",
+        ],
+    )
+    def test_requires_exact_ecm_platform_set(self, script, platforms):
+        payload = {
+            platform: {
+                "config": {
+                    "Env": [f"ECM_VERSION={TEST_VERSION}", f"GIT_COMMIT={TEST_SHA}"]
+                }
+            }
+            for platform in platforms
+        }
+        with pytest.raises(
+            script.CheckError, match="expected.*linux/amd64.*linux/arm64"
+        ):
+            script.parse_imagetools_config(json.dumps(payload))
+
+    def test_rejects_duplicate_platform_key_before_json_collapse(self, script):
+        config = json.dumps(
+            {
+                "config": {
+                    "Env": [f"ECM_VERSION={TEST_VERSION}", f"GIT_COMMIT={TEST_SHA}"]
+                }
+            }
+        )
+        payload = (
+            f'{{"linux/amd64":{config},"linux/amd64":{config},"linux/arm64":{config}}}'
+        )
+        with pytest.raises(
+            script.CheckError, match="duplicate JSON object key.*linux/amd64"
+        ):
+            script.parse_imagetools_config(payload)
 
 
 class TestProcessFailures:
@@ -585,6 +676,43 @@ class TestCommitIsOnBranch:
             script.commit_is_on_branch(TEST_SHA, "dev")
 
 
+class TestRepoSlug:
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://github.com/MotWakorb/enhancedchannelmanager.git",
+            "ssh://git@github.com/MotWakorb/enhancedchannelmanager.git",
+            "git@github.com:MotWakorb/enhancedchannelmanager.git",
+        ],
+    )
+    def test_derives_slug_from_supported_github_origin(self, script, monkeypatch, url):
+        monkeypatch.setattr(script, "_git", lambda *args: url + "\n")
+        monkeypatch.setattr(
+            script,
+            "_run",
+            lambda *args, **kwargs: pytest.fail(
+                "repo_slug must not call gh or cwd-sensitive commands"
+            ),
+        )
+        assert script.repo_slug() == "MotWakorb/enhancedchannelmanager"
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://gitlab.com/MotWakorb/enhancedchannelmanager.git",
+            "git@github.com:owner.git",
+            "https://github.com/owner/repo/extra",
+            "https://github.com/owner/repo.git?ref=main",
+            "/local/repository",
+            "https://github.com/bad owner/repo.git",
+        ],
+    )
+    def test_rejects_non_github_or_malformed_origin(self, script, monkeypatch, url):
+        monkeypatch.setattr(script, "_git", lambda *args: url + "\n")
+        with pytest.raises(script.CheckError, match="GitHub origin|owner/repo"):
+            script.repo_slug()
+
+
 @pytest.fixture
 def main_boundaries(script, monkeypatch):
     runs = [_run(1921)]
@@ -595,19 +723,41 @@ def main_boundaries(script, monkeypatch):
         script.PLATFORMS_KEY: "linux/amd64, linux/arm64",
     }
     calls = []
-    monkeypatch.setattr(script, "resolve_commit", lambda ref: TEST_SHA)
-    monkeypatch.setattr(script, "commit_subject", lambda sha: "merge subject")
-    monkeypatch.setattr(script, "expected_version_at", lambda sha: TEST_VERSION)
-    monkeypatch.setattr(script, "commit_is_on_branch", lambda sha, branch: True)
-    monkeypatch.setattr(script, "repo_slug", lambda: "owner/repo")
-    monkeypatch.setattr(script, "fetch_workflow_runs", lambda slug, sha: runs)
+    monkeypatch.setattr(
+        script, "resolve_commit", lambda ref: calls.append("resolve") or TEST_SHA
+    )
+    monkeypatch.setattr(
+        script, "commit_subject", lambda sha: calls.append("subject") or "merge subject"
+    )
+    monkeypatch.setattr(
+        script,
+        "expected_version_at",
+        lambda sha: calls.append("version") or TEST_VERSION,
+    )
+    monkeypatch.setattr(
+        script,
+        "commit_is_on_branch",
+        lambda sha, branch: calls.append("orientation") or True,
+    )
+    monkeypatch.setattr(
+        script, "repo_slug", lambda: calls.append("slug") or "owner/repo"
+    )
+    monkeypatch.setattr(
+        script,
+        "fetch_workflow_runs",
+        lambda slug, sha: calls.append("runs") or runs,
+    )
 
     def fetch_jobs(slug, run_id, run_attempt):
-        calls.append((slug, run_id, run_attempt))
+        calls.append(("jobs", slug, run_id, run_attempt))
         return jobs
 
     monkeypatch.setattr(script, "fetch_workflow_jobs", fetch_jobs)
-    monkeypatch.setattr(script, "read_published_marker", lambda ref, use_pull: marker)
+    monkeypatch.setattr(
+        script,
+        "read_published_marker",
+        lambda ref, use_pull: calls.append(("image", use_pull)) or marker,
+    )
     return {"runs": runs, "jobs": jobs, "marker": marker, "calls": calls}
 
 
@@ -617,12 +767,68 @@ class TestMainVerdict:
     ):
         assert script.main(["--commit", TEST_SHA, "--pull"]) == 0
         output = capsys.readouterr().out
-        assert main_boundaries["calls"] == [("owner/repo", 33440983429, 1)]
+        assert ("jobs", "owner/repo", 33440983429, 1) in main_boundaries["calls"]
+        assert ("image", True) in main_boundaries["calls"]
         assert "attempt 1" in output
         assert "reusable publish job succeeded" in output
         assert "linux/amd64, linux/arm64" in output
         assert "GIT_COMMIT matches the exact resolved SHA" in output
         assert "PASS:" in output
+        assert "current mutable tag" in output
+        assert "does not bind image bytes" in output
+        assert "built from a successful" not in output
+
+    @pytest.mark.parametrize(
+        ("args", "result", "workflow_runs", "image_runs", "verdict"),
+        [
+            ([], 0, True, True, "current mutable tag"),
+            (["--skip-workflow"], 0, False, True, "workflow evidence skipped"),
+            (["--skip-image"], 0, True, False, "mutable-tag marker check skipped"),
+            (
+                ["--pull", "--skip-image"],
+                0,
+                True,
+                False,
+                "mutable-tag marker check skipped",
+            ),
+            (
+                ["--skip-workflow", "--skip-image"],
+                2,
+                False,
+                False,
+                "cannot be used together",
+            ),
+        ],
+        ids=[
+            "default",
+            "workflow-only-skip",
+            "image-only-skip",
+            "pull-with-image-skip",
+            "both-skipped",
+        ],
+    )
+    def test_skip_modes_run_only_truthfully_claimed_boundaries(
+        self,
+        script,
+        main_boundaries,
+        capsys,
+        args,
+        result,
+        workflow_runs,
+        image_runs,
+        verdict,
+    ):
+        assert script.main(["--commit", TEST_SHA, *args]) == result
+        calls = main_boundaries["calls"]
+        output = capsys.readouterr()
+        assert ("runs" in calls) is workflow_runs
+        assert (
+            any(isinstance(call, tuple) and call[0] == "image" for call in calls)
+            is image_runs
+        )
+        assert verdict in output.out + output.err
+        if result == 2:
+            assert calls == []
 
     @pytest.mark.parametrize(
         ("status", "conclusion"),

@@ -70,7 +70,7 @@ Three further releases have since been promoted: **0.17.0** (2026-05-16), **0.17
 
 ## Where to read the version
 
-Four places all show the same string:
+Four places all show the same version string:
 
 - **UI**: the header status pill (and About dialog) render `frontend/package.json` at build time.
 - **Docker image label**: `docker inspect ecm-ecm-1 --format '{{ index .Config.Labels "org.opencontainers.image.version" }}'`, or the GHCR tag itself.
@@ -78,6 +78,11 @@ Four places all show the same string:
 - **`package.json`** in the repo at the SHA the build was cut from.
 
 All four are populated from the same source; if they disagree, something has been hand-edited post-build and the image should be treated as suspect.
+
+Current images also expose the full 40-character source marker as `GIT_COMMIT`.
+`scripts/check_publish.py` requires exactly one `ECM_VERSION` and one
+`GIT_COMMIT` on each of the `linux/amd64` and `linux/arm64` configs, requires
+the platforms to agree, and compares both markers with the target commit.
 
 ## Checking whether a fix is in your build
 
@@ -88,13 +93,33 @@ You have a bead ID or PR number, you have a running ECM container, and you want 
 ```bash
 docker exec ecm-ecm-1 sh -c 'echo $ECM_VERSION'
 # Example output: 0.16.0-0051
+
+docker exec ecm-ecm-1 sh -c 'echo $GIT_COMMIT'
+# Example output: the full 40-character source commit marker
 ```
 
-### 2. Map the build number to a commit
+### 2. Read the source commit marker
 
-Every dev build comes from exactly one commit on `dev`. The CI build workflow stamps the version onto the image, so the mapping is one-to-one, but it is not currently encoded in the image itself. You recover it from git by matching the build number against the version bump commit.
+For a current image, `GIT_COMMIT` directly supplies the commit marker to check.
+Cross-check the registry manifest rather than relying only on a running host's
+selected platform:
 
-The version bump lands in `frontend/package.json` at the time of the build, so:
+```bash
+docker buildx imagetools inspect \
+  ghcr.io/motwakorb/enhancedchannelmanager:dev \
+  --format '{{json .Image}}'
+```
+
+Both `linux/amd64` and `linux/arm64` must expose the same full SHA and version.
+The supported automated check is:
+
+```bash
+python scripts/check_publish.py --commit <target-sha>
+```
+
+For a historical image that predates `GIT_COMMIT`, recover the likely source
+commit from image history/digests and the version bump history. The version bump
+lands in `frontend/package.json`, so this remains a useful fallback:
 
 ```bash
 # Clone or update a local copy of the repo, then:
@@ -103,9 +128,12 @@ git log --all --oneline --follow -S '"version": "0.16.0-0051"' -- frontend/packa
 # Expected: one commit, the one that set this version.
 ```
 
-Alternative: if you know roughly when the build was cut, jump to the GitHub Actions run log. Each `build-amd64` run prints the resolved version in step "Extract version and set release channel". The workflow run URL is the canonical audit trail.
+Alternative historical fallback: if you know roughly when the build was cut,
+use the image digest and GitHub Actions run logs. Each `build-amd64` run prints
+the resolved version in step "Extract version and set release channel".
 
-The commit SHA that sets `frontend/package.json` to your `BUILD` number is the tip of the tree your image was built from.
+For historical unmarked images, corroborate the candidate SHA with the image
+digest and run records before using it as the tip SHA below.
 
 ### 3. Confirm the fix SHA is an ancestor
 
@@ -133,7 +161,8 @@ If the bead ID or PR number appears in the `[Unreleased]` section of [`CHANGELOG
 ## What this scheme does not guarantee
 
 - **Monotone feature presence across releases.** A feature visible in `0.16.0-0051` can be absent from a later promoted release if the PO explicitly decides to revert or defer. Always check against the target release's CHANGELOG, not the build stream.
-- **Reproducible binaries.** The `BUILD` number and commit SHA map is one-to-one, but the image bytes also depend on base-image digests and dependency resolver state at build time. For byte-identical reproducibility use the image digest (`docker inspect ... --format '{{ .Id }}'`), not the version string.
+- **Artifact-to-workflow attestation.** `GIT_COMMIT` and `ECM_VERSION` are image config markers, and registry tags are mutable. Their agreement with a target plus a successful workflow attempt is a point-in-time consistency check that trusts registry writers; it does not cryptographically bind image bytes to that workflow job.
+- **Reproducible binaries.** The image bytes also depend on base-image digests and dependency resolver state at build time. For byte-identical reproducibility use the image digest (`docker inspect ... --format '{{ .Id }}'`), not the version string.
 - **External identification of a release.** `0.16.0-0051` is an internal dev-build identifier; only a tagged release like `0.17.0` is a stable external reference. Do not cite dev builds in external bug reports without also providing the commit SHA.
 
 ## Related
