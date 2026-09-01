@@ -534,6 +534,29 @@ describe('ChannelPipelineTab', () => {
       expect(within(dialog).getByText(/outside its active date window/i)).toBeInTheDocument();
       expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
     });
+
+    it('blocks a selected rule that disappears during a rules refresh', async () => {
+      const user = userEvent.setup();
+      const vanishing = createMockChannelPipelineRule({
+        name: 'Vanishing Rule', enabled: true,
+      });
+      mockDataStore.channelPipelineRules.push(vanishing);
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('Vanishing Rule');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Vanishing Rule' }));
+
+      mockDataStore.channelPipelineRules.length = 0;
+      await user.click(screen.getByRole('button', { name: /^run$/i }));
+      await waitFor(() => {
+        expect(screen.queryByText('Vanishing Rule')).not.toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+      const dialog = await screen.findByRole('dialog', { name: /run 1 selected rule/i });
+      expect(within(dialog).getByText(/rule no longer exists/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
+    });
   });
 
   describe('event_sync per-rule run (utswf)', () => {

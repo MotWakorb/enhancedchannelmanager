@@ -402,6 +402,13 @@ export function ChannelPipelineTab() {
     [rules, selectedRuleIds],
   );
 
+  const missingSelectedRuleIds = useMemo(
+    () => Array.from(selectedRuleIds)
+      .filter(id => !rules.some(rule => rule.id === id))
+      .sort((a, b) => a - b),
+    [rules, selectedRuleIds],
+  );
+
   const selectedRuleEligibility = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
     return selectedRules.map(rule => ({
@@ -733,7 +740,11 @@ export function ChannelPipelineTab() {
   }, [handleRun]);
 
   const handleConfirmSelectedRun = useCallback(async () => {
-    if (selectedRuleEligibility.some(item => item.reason) || selectedRules.length === 0) {
+    if (
+      selectedRuleEligibility.some(item => item.reason) ||
+      missingSelectedRuleIds.length > 0 ||
+      selectedRules.length === 0
+    ) {
       return;
     }
     const ids = selectedRules.map(rule => rule.id);
@@ -746,7 +757,7 @@ export function ChannelPipelineTab() {
     } finally {
       setRunningSelectedCount(0);
     }
-  }, [handleRun, selectedRuleEligibility, selectedRules]);
+  }, [handleRun, missingSelectedRuleIds, selectedRuleEligibility, selectedRules]);
 
   // Live-run confirm (utswf): an event_sync live run attaches streams, so the
   // row Run icon routes through a confirm. Reuses handleRunSingleRule — the
@@ -1539,7 +1550,7 @@ export function ChannelPipelineTab() {
           <div className="modal-container modal-sm selected-run-confirm">
             <div className="modal-header">
               <h2 id={`${dialogId}-selected-run-title`}>
-                Run {selectedRules.length} selected rule{selectedRules.length === 1 ? '' : 's'}
+                Run {selectedRuleIds.size} selected rule{selectedRuleIds.size === 1 ? '' : 's'}
               </h2>
             </div>
             <div className="modal-body">
@@ -1554,8 +1565,16 @@ export function ChannelPipelineTab() {
                     {reason && <span className="selected-run-ineligible" role="alert">{reason}</span>}
                   </li>
                 ))}
+                {missingSelectedRuleIds.map(ruleId => (
+                  <li key={ruleId}>
+                    <span>Rule {ruleId}</span>
+                    <span className="selected-run-ineligible" role="alert">
+                      This rule no longer exists.
+                    </span>
+                  </li>
+                ))}
               </ol>
-              {selectedRuleEligibility.some(item => item.reason) && (
+              {(selectedRuleEligibility.some(item => item.reason) || missingSelectedRuleIds.length > 0) && (
                 <p className="selected-run-blocked" role="alert">
                   Nothing will run until every selected rule is eligible. Adjust
                   the selection or rule settings and try again.
@@ -1574,7 +1593,10 @@ export function ChannelPipelineTab() {
                 type="button"
                 className="btn-primary"
                 onClick={handleConfirmSelectedRun}
-                disabled={selectedRuleEligibility.some(item => item.reason)}
+                disabled={
+                  selectedRuleEligibility.some(item => item.reason) ||
+                  missingSelectedRuleIds.length > 0
+                }
               >
                 Run selected
               </button>

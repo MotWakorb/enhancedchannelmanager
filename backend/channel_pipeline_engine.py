@@ -325,6 +325,32 @@ class ChannelPipelineEngine:
             raise RuntimeError(
                 "Selected rule scope changed before execution; no rules were run"
             )
+        if require_all_rule_ids:
+            from channel_pipeline_schema import (
+                validate_event_sync_config,
+                validate_rule,
+            )
+
+            invalid_rule_ids = []
+            for rule in rules:
+                errors = validate_rule(
+                    rule.get_conditions(), rule.get_actions()
+                ).get("errors", [])
+                if rule.is_event_sync():
+                    config = rule.get_event_sync_config()
+                    errors = list(errors)
+                    errors.extend(
+                        ["event_sync_config is invalid"]
+                        if config is None
+                        else validate_event_sync_config(config)
+                    )
+                if errors:
+                    invalid_rule_ids.append(rule.id)
+            if invalid_rule_ids:
+                raise RuntimeError(
+                    "Selected rule configuration changed before execution; "
+                    f"no rules were run (invalid rule IDs: {invalid_rule_ids})"
+                )
 
         # ---------------------------------------------------------------------
         # event_sync routing (bead ti939.1.3 exclusion + ti939.2.1 attach path).

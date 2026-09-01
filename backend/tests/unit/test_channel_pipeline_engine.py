@@ -508,6 +508,39 @@ class TestChannelPipelineEngineRunPipeline:
             if method is not None:
                 method.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_selected_run_revalidates_rule_configuration_before_processing(self):
+        from channel_pipeline_schema import validate_rule
+
+        invalid_rule = MagicMock()
+        invalid_rule.id = 7
+        invalid_rule.name = "Became invalid after enqueue"
+        invalid_rule.get_conditions.return_value = [{"type": "always"}]
+        invalid_rule.get_actions.return_value = [{"type": "skip"}]
+        invalid_rule.is_event_sync.return_value = False
+
+        assert validate_rule(
+            invalid_rule.get_conditions(), invalid_rule.get_actions()
+        )["valid"]
+        invalid_rule.get_conditions.return_value = [{"type": "not_a_condition"}]
+
+        self.engine._load_existing_data = AsyncMock()
+        self.engine._load_rules = AsyncMock(return_value=[invalid_rule])
+        self.engine._fetch_streams = AsyncMock()
+        self.engine._process_streams = AsyncMock()
+
+        with pytest.raises(
+            RuntimeError,
+            match="Selected rule configuration changed before execution",
+        ):
+            await self.engine.run_pipeline(
+                rule_ids=[invalid_rule.id],
+                require_all_rule_ids=True,
+            )
+
+        self.engine._fetch_streams.assert_not_awaited()
+        self.engine._process_streams.assert_not_awaited()
+
     @patch("channel_pipeline_engine.get_session")
     def test_run_pipeline_dry_run(self, mock_get_session):
         """Run pipeline in dry run mode."""
