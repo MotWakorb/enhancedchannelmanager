@@ -2083,11 +2083,13 @@ class StreamProber:
                     if not result.get("next"):
                         break
                     page += 1
-                    if page > 50:  # Safety limit
-                        break
+                    if page > 50:
+                        raise RuntimeError(
+                            "Channel pagination exceeded the 50-page safety limit"
+                        )
                 except Exception as e:
                     logger.error("[STREAM-PROBE] Failed to fetch channels page %s for auto-reorder: %s", page, e)
-                    break
+                    raise
 
             logger.info("[STREAM-PROBE-SORT] Found %s channels to potentially reorder", len(channels_to_reorder))
 
@@ -2273,6 +2275,7 @@ class StreamProber:
 
         except Exception as e:
             logger.error("[STREAM-PROBE] Auto-reorder channels failed: %s", e)
+            raise
 
         return reordered
 
@@ -2543,14 +2546,10 @@ class StreamProber:
             )
             logger.info("[STREAM-PROBE] Found %s unique streams across all channels", len(channel_stream_ids))
 
-            # Store channel stream IDs for scheduled probes (not reprobes)
-            # so the reprobe task can scope to only these streams
-            if stream_ids_filter is None:
-                self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
-                self._last_probe_channel_stream_ids = set(channel_stream_ids)
-                logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
-
             if not channel_stream_ids:
+                if stream_ids_filter is None:
+                    self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
+                    self._last_probe_channel_stream_ids = set()
                 self._probe_progress_status = "completed"
                 self._probe_progress_current_stream = ""
                 self._save_probe_history(start_time, 0, reordered_channels=[])
@@ -3159,6 +3158,13 @@ class StreamProber:
                     logger.info("[STREAM-PROBE-SORT] Auto-reordered %s channels", len(reordered_channels))
                 except Exception as e:
                     logger.error("[STREAM-PROBE] Auto-reorder failed: %s", e)
+                    raise
+
+            # Publish reprobe scope only after the complete scheduled run succeeds.
+            if stream_ids_filter is None:
+                self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
+                self._last_probe_channel_stream_ids = set(channel_stream_ids)
+                logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
 
             # Save to probe history
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)

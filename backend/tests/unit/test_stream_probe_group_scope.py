@@ -273,6 +273,71 @@ async def test_channel_pagination_failure_fails_without_writes_and_preserves_sco
     client.update_channel.assert_not_awaited()
 
 
+@pytest.mark.parametrize("failure_page", [1, 2])
+@pytest.mark.asyncio
+async def test_reorder_pagination_failure_fails_without_writes_and_preserves_scope(
+    failure_page,
+):
+    client = AsyncMock()
+    client.get_channel_groups.return_value = [{"id": 7, "name": "Sports"}]
+    probe_page = {
+        "results": [
+            {
+                "id": 1,
+                "name": "Sports One",
+                "channel_group_id": 7,
+                "streams": [10],
+            }
+        ],
+        "next": None,
+    }
+    reorder_page = {
+        "results": [
+            {"id": 1, "name": "Sports One", "channel_group_id": 7}
+        ],
+        "next": "page-2",
+    }
+    client.get_channels.side_effect = (
+        [probe_page, RuntimeError("reorder channels unavailable")]
+        if failure_page == 1
+        else [
+            probe_page,
+            reorder_page,
+            RuntimeError("reorder channels unavailable"),
+        ]
+    )
+    client.get_m3u_accounts.return_value = []
+    prober = StreamProber(
+        client=client,
+        auto_reorder_after_probe=True,
+        refresh_m3us_before_probe=False,
+    )
+    prober._persist_probe_history = lambda: None
+    prober._last_probe_scope_kind = "scoped"
+    prober._last_probe_channel_stream_ids = {88}
+    task = StreamProbeTask()
+    task.set_prober(prober)
+    task.update_config({"channel_groups": [7]})
+
+    with patch.object(
+        prober, "_fetch_all_streams", AsyncMock(return_value=[])
+    ), patch.object(
+        prober, "_create_probe_notification", AsyncMock()
+    ), patch.object(
+        prober, "_finalize_probe_notification", AsyncMock()
+    ):
+        result = await task.execute()
+
+    assert result.success is False
+    assert "reorder channels unavailable" in result.error
+    assert prober._probe_progress_status == "failed"
+    assert prober.get_probe_history()[0]["status"] == "failed"
+    assert prober._last_probe_scope_kind == "scoped"
+    assert prober._last_probe_channel_stream_ids == {88}
+    client.get_channel.assert_not_awaited()
+    client.update_channel.assert_not_awaited()
+
+
 @pytest.mark.parametrize("configured_ids", [[], [999]])
 @pytest.mark.asyncio
 async def test_full_scheduled_zero_scope_completes_before_refresh_or_metadata(
