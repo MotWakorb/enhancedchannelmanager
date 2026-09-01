@@ -223,6 +223,13 @@ TASK_PARAMETER_SCHEMAS = {
                 "source": "channel_groups",  # Tells UI to fetch from channel groups API
             },
             {
+                "name": "allow_reorder_after_probe",
+                "type": "boolean",
+                "label": "Allow stream reordering",
+                "description": "Allow this schedule to apply the global auto-reorder setting after probing",
+                "default": True,
+            },
+            {
                 "name": "timeout",
                 "type": "number",
                 "label": "Timeout (seconds)",
@@ -622,6 +629,23 @@ async def update_task(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _validate_run_parameters(task_id: str, parameters: Optional[dict]) -> None:
+    """Apply task-specific invariants before ad-hoc parameters reach the engine."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:
+        logger.debug("[TASKS] Could not validate run parameters for %s: %s", task_id, e)
+        return
+
+    validator = getattr(task_class, "validate_run_parameters", None) if task_class else None
+    if validator:
+        try:
+            validator(parameters)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 @router.post("/api/tasks/{task_id}/run", tags=["Tasks"])
 async def run_task(
     task_id: str,
@@ -646,6 +670,7 @@ async def run_task(
     # few truthy spellings would leave coercion and future-parameter bypasses.
     _reject_mcp_privileged_task(task_id, caller_is_mcp)
     try:
+        _validate_run_parameters(task_id, request.parameters if request else None)
         from task_engine import get_engine
         engine = get_engine()
         schedule_id = request.schedule_id if request else None
@@ -748,6 +773,17 @@ def _schedule_parameter_schema(task_id: str) -> Optional[dict]:
 
 def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> None:
     """Apply task-specific invariants before a schedule can be persisted."""
+    if (
+        task_id == "stream_probe"
+        and parameters is not None
+        and "allow_reorder_after_probe" in parameters
+        and type(parameters["allow_reorder_after_probe"]) is not bool
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="allow_reorder_after_probe must be a boolean",
+        )
+
     try:
         from task_registry import get_registry
         task_class = get_registry().get_task_class(task_id)

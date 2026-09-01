@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { TaskSchedule, TaskScheduleType, TaskScheduleCreate, TaskScheduleUpdate, TaskParameterSchema } from '../services/api';
 import { CustomSelect } from './CustomSelect';
 import './ModalBase.css';
@@ -58,6 +58,23 @@ const TIMEZONE_OPTIONS = [
   { value: 'Australia/Sydney', label: 'Sydney' },
 ];
 
+function resolveParameters(
+  parameterSchema?: TaskParameterSchema[],
+  defaultParameters?: Record<string, unknown>,
+  scheduleParameters?: Record<string, unknown> | null,
+): Record<string, unknown> {
+  const schemaDefaults = (parameterSchema || []).reduce((defaults, parameter) => {
+    if (parameter.default !== undefined) defaults[parameter.name] = parameter.default;
+    return defaults;
+  }, {} as Record<string, unknown>);
+
+  return {
+    ...schemaDefaults,
+    ...defaultParameters,
+    ...scheduleParameters,
+  };
+}
+
 export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, parameterSchema, parameterOptions, defaultParameters }: ScheduleEditorProps) {
   // Form state
   const [name, setName] = useState(schedule?.name || '');
@@ -71,18 +88,22 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
   const [useCustomInterval, setUseCustomInterval] = useState(false);
 
   // Task-specific parameters state
-  const [parameters, setParameters] = useState<Record<string, unknown>>(() => {
-    // Initialize from schedule parameters (editing)
-    if (schedule?.parameters) return schedule.parameters;
-    // Use provided defaults for new schedules
-    if (defaultParameters && Object.keys(defaultParameters).length > 0) return defaultParameters;
-    // Fall back to schema defaults
-    if (!parameterSchema) return {};
-    return parameterSchema.reduce((acc, param) => {
-      if (param.default !== undefined) acc[param.name] = param.default;
-      return acc;
-    }, {} as Record<string, unknown>);
-  });
+  const touchedParameters = useRef(new Set<string>());
+  const [parameters, setParameters] = useState<Record<string, unknown>>(() =>
+    resolveParameters(parameterSchema, defaultParameters, schedule?.parameters)
+  );
+
+  // The modal loads schema, task defaults, and options asynchronously. Rebuild
+  // untouched values as those inputs arrive without overwriting user edits.
+  useEffect(() => {
+    setParameters((current) => {
+      const resolved = resolveParameters(parameterSchema, defaultParameters, schedule?.parameters);
+      touchedParameters.current.forEach((name) => {
+        resolved[name] = current[name];
+      });
+      return resolved;
+    });
+  }, [parameterSchema, defaultParameters, schedule?.parameters]);
 
   // Check if browser timezone is in our list
   const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -98,11 +119,13 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
 
   // Helper to update a single parameter
   const updateParameter = (name: string, value: unknown) => {
+    touchedParameters.current.add(name);
     setParameters(prev => ({ ...prev, [name]: value }));
   };
 
   // Helper to toggle a value in an array parameter
   const toggleArrayParameter = (name: string, value: string | number) => {
+    touchedParameters.current.add(name);
     setParameters(prev => {
       const arr = (prev[name] as (string | number)[]) || [];
       const newArr = arr.includes(value)

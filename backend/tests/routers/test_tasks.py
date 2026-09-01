@@ -246,6 +246,58 @@ class TestRunTask:
         assert response.status_code == 200
         mock_engine.run_task.assert_called_once_with("stream_probe", schedule_id=None, parameters=None)
 
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("false", id="string"),
+            pytest.param(1, id="number"),
+            pytest.param(None, id="null"),
+            pytest.param([], id="array"),
+            pytest.param({}, id="object"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_stream_probe_run_rejects_non_boolean_reorder_option(
+        self, async_client, value
+    ):
+        mock_engine = MagicMock()
+        mock_engine.run_task = AsyncMock()
+
+        with patch("task_engine.get_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/tasks/stream_probe/run",
+                json={"parameters": {"allow_reorder_after_probe": value}},
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "allow_reorder_after_probe must be a boolean"
+        )
+        mock_engine.run_task.assert_not_awaited()
+
+    @pytest.mark.parametrize("value", [True, False])
+    @pytest.mark.asyncio
+    async def test_stream_probe_run_accepts_boolean_reorder_option(
+        self, async_client, value
+    ):
+        mock_result = MagicMock()
+        mock_result.to_dict.return_value = {"success": True}
+        mock_engine = MagicMock()
+        mock_engine.run_task = AsyncMock(return_value=mock_result)
+
+        with patch("task_engine.get_engine", return_value=mock_engine):
+            response = await async_client.post(
+                "/api/tasks/stream_probe/run",
+                json={"parameters": {"allow_reorder_after_probe": value}},
+            )
+
+        assert response.status_code == 200
+        mock_engine.run_task.assert_awaited_once_with(
+            "stream_probe",
+            schedule_id=None,
+            parameters={"allow_reorder_after_probe": value},
+        )
+
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown(self, async_client):
         """Returns 404 when task not found."""
@@ -355,6 +407,25 @@ class TestGetParameterSchema:
         data = response.json()
         assert data["task_id"] == "stream_probe"
         assert len(data["parameters"]) > 0
+
+    @pytest.mark.asyncio
+    async def test_stream_probe_schema_allows_reorder_by_default(self, async_client):
+        response = await async_client.get("/api/tasks/stream_probe/parameter-schema")
+
+        assert response.status_code == 200
+        parameters = {
+            parameter["name"]: parameter for parameter in response.json()["parameters"]
+        }
+        assert parameters["allow_reorder_after_probe"] == {
+            "name": "allow_reorder_after_probe",
+            "type": "boolean",
+            "label": "Allow stream reordering",
+            "description": (
+                "Allow this schedule to apply the global auto-reorder setting "
+                "after probing"
+            ),
+            "default": True,
+        }
 
     @pytest.mark.asyncio
     async def test_returns_empty_for_unknown(self, async_client):
@@ -601,6 +672,95 @@ class TestCreateTaskSchedule:
         assert data["schedule_time"] == "06:00"
 
     @pytest.mark.asyncio
+    async def test_persists_stream_probe_reorder_choice_as_json(
+        self, async_client, test_session
+    ):
+        _create_scheduled_task(test_session, task_id="stream_probe")
+
+        response = await async_client.post(
+            "/api/tasks/stream_probe/schedules",
+            json={
+                "schedule_type": "daily",
+                "schedule_time": "06:00",
+                "parameters": {
+                    "channel_groups": [7],
+                    "allow_reorder_after_probe": False,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"] == {
+            "channel_groups": [7],
+            "allow_reorder_after_probe": False,
+        }
+        persisted = test_session.query(TaskSchedule).filter_by(
+            id=response.json()["id"]
+        ).one()
+        assert persisted.get_parameters() == {
+            "channel_groups": [7],
+            "allow_reorder_after_probe": False,
+        }
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("false", id="string"),
+            pytest.param(1, id="number"),
+            pytest.param(None, id="null"),
+            pytest.param([], id="array"),
+            pytest.param({}, id="object"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_non_boolean_stream_probe_reorder_option(
+        self, async_client, test_session, value
+    ):
+        _create_scheduled_task(test_session, task_id="stream_probe")
+
+        response = await async_client.post(
+            "/api/tasks/stream_probe/schedules",
+            json={
+                "schedule_type": "daily",
+                "schedule_time": "06:00",
+                "parameters": {"allow_reorder_after_probe": value},
+            },
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "allow_reorder_after_probe must be a boolean"
+        )
+
+    @pytest.mark.parametrize("lookup_result", [None, RuntimeError("registry unavailable")])
+    @pytest.mark.asyncio
+    async def test_rejects_malformed_reorder_when_registry_class_is_unavailable(
+        self, async_client, test_session, lookup_result
+    ):
+        _create_scheduled_task(test_session, task_id="stream_probe")
+        registry = MagicMock()
+        if isinstance(lookup_result, Exception):
+            registry.get_task_class.side_effect = lookup_result
+        else:
+            registry.get_task_class.return_value = lookup_result
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.post(
+                "/api/tasks/stream_probe/schedules",
+                json={
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {"allow_reorder_after_probe": "false"},
+                },
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "allow_reorder_after_probe must be a boolean"
+        )
+        assert test_session.query(TaskSchedule).filter_by(task_id="stream_probe").count() == 0
+
+    @pytest.mark.asyncio
     async def test_returns_404_for_unknown_task(self, async_client):
         """Returns 404 when task not found."""
         response = await async_client.post("/api/tasks/nonexistent/schedules", json={
@@ -737,6 +897,77 @@ class TestUpdateTaskSchedule:
         assert response.status_code == 200
         data = response.json()
         assert data["schedule_time"] == "09:00"
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param("false", id="string"),
+            pytest.param(1, id="number"),
+            pytest.param(None, id="null"),
+            pytest.param([], id="array"),
+            pytest.param({}, id="object"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_rejects_non_boolean_stream_probe_reorder_option(
+        self, async_client, test_session, value
+    ):
+        _create_scheduled_task(test_session, task_id="stream_probe")
+        schedule = _create_task_schedule(test_session, task_id="stream_probe")
+
+        response = await async_client.patch(
+            f"/api/tasks/stream_probe/schedules/{schedule.id}",
+            json={"parameters": {"allow_reorder_after_probe": value}},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "allow_reorder_after_probe must be a boolean"
+        )
+
+    @pytest.mark.parametrize("lookup_result", [None, RuntimeError("registry unavailable")])
+    @pytest.mark.asyncio
+    async def test_rejects_malformed_reorder_update_when_registry_class_is_unavailable(
+        self, async_client, test_session, lookup_result
+    ):
+        _create_scheduled_task(test_session, task_id="stream_probe")
+        schedule = _create_task_schedule(test_session, task_id="stream_probe")
+        schedule.set_parameters({"allow_reorder_after_probe": False})
+        test_session.commit()
+        registry = MagicMock()
+        if isinstance(lookup_result, Exception):
+            registry.get_task_class.side_effect = lookup_result
+        else:
+            registry.get_task_class.return_value = lookup_result
+
+        with patch("task_registry.get_registry", return_value=registry):
+            response = await async_client.patch(
+                f"/api/tasks/stream_probe/schedules/{schedule.id}",
+                json={"parameters": {"allow_reorder_after_probe": "false"}},
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == (
+            "allow_reorder_after_probe must be a boolean"
+        )
+        test_session.refresh(schedule)
+        assert schedule.get_parameters()["allow_reorder_after_probe"] is False
+
+    @pytest.mark.parametrize("value", [True, False])
+    @pytest.mark.asyncio
+    async def test_accepts_boolean_stream_probe_reorder_option(
+        self, async_client, test_session, value
+    ):
+        _create_scheduled_task(test_session, task_id="stream_probe")
+        schedule = _create_task_schedule(test_session, task_id="stream_probe")
+
+        response = await async_client.patch(
+            f"/api/tasks/stream_probe/schedules/{schedule.id}",
+            json={"parameters": {"allow_reorder_after_probe": value}},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"]["allow_reorder_after_probe"] is value
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown(self, async_client, test_session):

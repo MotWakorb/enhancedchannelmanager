@@ -99,6 +99,16 @@ function makeCleanupTask(configOverrides: Record<string, unknown> = {}): TaskSta
   };
 }
 
+function makeStreamProbeTask(): TaskStatus {
+  return {
+    ...makeCleanupTask(),
+    task_id: 'stream_probe',
+    task_name: 'Stream Probe',
+    task_description: 'Probe streams',
+    config: {},
+  };
+}
+
 describe('TaskEditorModal — bd-ia28g retention fields', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -160,6 +170,53 @@ describe('TaskEditorModal — bd-ia28g retention fields', () => {
     await user.click(cancel);
     await user.keyboard('{Escape}');
     expect(screen.getByRole('dialog', { name: 'Edit Schedule' })).toBe(dialog);
+  });
+
+  it('merges task defaults into a partial Stream Probe schedule while stored values win', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getTaskParameterSchema).mockResolvedValue({
+      task_id: 'stream_probe',
+      description: 'Stream Probe parameters',
+      parameters: [
+        { name: 'channel_groups', type: 'number_array', label: 'Channel Groups', description: 'Groups', default: [], source: 'channel_groups' },
+        { name: 'allow_reorder_after_probe', type: 'boolean', label: 'Allow stream reordering', description: 'Reorder', default: true },
+        { name: 'timeout', type: 'number', label: 'Timeout', description: 'Timeout', default: 30 },
+        { name: 'max_concurrent', type: 'number', label: 'Max Concurrent', description: 'Concurrency', default: 3 },
+      ],
+    });
+    vi.mocked(api.getChannelGroups).mockResolvedValue([
+      { id: 7, name: 'Sports', channel_count: 4, is_auto_sync: false },
+    ] as Awaited<ReturnType<typeof api.getChannelGroups>>);
+    vi.mocked(api.getSettings).mockResolvedValue({
+      stream_probe_timeout: 45,
+      max_concurrent_probes: 9,
+    } as Awaited<ReturnType<typeof api.getSettings>>);
+    vi.mocked(api.getTaskSchedules).mockResolvedValue({ schedules: [{
+      id: 8, task_id: 'stream_probe', name: 'Partial', enabled: true, schedule_type: 'daily',
+      schedule_time: '03:00', timezone: 'UTC', interval_seconds: null, days_of_week: null,
+      day_of_month: null, week_parity: null, parameters: { timeout: 77 }, next_run_at: null,
+      last_run_at: null, description: '', created_at: '', updated_at: null,
+    }] });
+    const updateSchedule = vi.spyOn(api, 'updateTaskSchedule').mockResolvedValue(undefined as never);
+
+    render(<TaskEditorModal task={makeStreamProbeTask()} onClose={vi.fn()} onSaved={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: 'Edit schedule' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Edit Schedule' })).getByRole(
+      'button', { name: /update schedule/i },
+    ));
+
+    await waitFor(() => expect(updateSchedule).toHaveBeenCalledWith(
+      'stream_probe',
+      8,
+      expect.objectContaining({
+        parameters: {
+          channel_groups: [7],
+          allow_reorder_after_probe: true,
+          timeout: 77,
+          max_concurrent: 9,
+        },
+      }),
+    ));
   });
 
   it('renders the channel pipeline BLOB retention input with the config value', async () => {

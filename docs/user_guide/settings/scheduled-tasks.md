@@ -35,6 +35,17 @@ Now here. Trigger those from their own page instead.
 update to reflect the change. A disabled task shows a paused-circle badge
 and **Next Run: Disabled**.
 
+### Probe selected groups without changing stream order
+
+When adding or editing a **Stream Probe** schedule, select the channel groups
+to probe and turn off **Allow stream reordering**. The probe still saves fresh
+resolution, bitrate, codec, and health metadata, but that run leaves each
+channel's stream order unchanged. Other schedules keep their own setting.
+
+Leaving the option on preserves the existing behavior: the schedule follows
+the global auto-reorder setting under **Settings → Maintenance**. It does not
+turn reordering on when that global setting is off.
+
 ### Check whether a task's last few runs succeeded
 
 1. Go to **Settings → Scheduled Tasks**.

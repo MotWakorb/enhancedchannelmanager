@@ -275,6 +275,31 @@ class TestRestartRoundtrip:
         assert inst is not None
         assert inst.get_config() == JournalNoisePurgeTask().get_config()
 
+    def test_malformed_present_stream_probe_reorder_hydrates_fail_closed(
+        self, test_session, monkeypatch
+    ):
+        from tasks.stream_probe import StreamProbeTask
+        from tests.fixtures.factories import create_scheduled_task
+
+        create_scheduled_task(
+            test_session,
+            task_id="stream_probe",
+            task_name="Stream Probe",
+            description="x",
+            enabled=True,
+            schedule_type="manual",
+            config={"allow_reorder_after_probe": "false"},
+        )
+        monkeypatch.setattr("task_registry.get_session", lambda: test_session)
+        reg = TaskRegistry()
+        reg.register(StreamProbeTask)
+
+        reg.sync_from_database()
+
+        inst = reg.get_task_instance("stream_probe")
+        assert inst is not None
+        assert inst.get_config()["allow_reorder_after_probe"] is False
+
 
 class TestScheduleOverlayNotPersisted:
     """Delta re-review BLOCK (gjb01): per-schedule TaskSchedule.parameters are
