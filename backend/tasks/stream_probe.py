@@ -175,48 +175,27 @@ class StreamProbeTask(TaskScheduler):
                 self._prober.max_concurrent_probes = max(1, min(16, self._max_concurrent_override))
                 logger.info("[%s] Using schedule max_concurrent: %s", self.task_id, self._prober.max_concurrent_probes)
 
-            # Determine channel groups to use
-            # None = not configured (probe everything), [] = explicitly empty (probe nothing)
-            channel_groups = self._channel_groups if self._channel_groups is not None else None
+            channel_groups = None
+            channel_group_ids = None
 
             if self._auto_sync_groups:
                 # Auto-sync mode: always probe ALL current groups, ignore stored list
                 logger.info("[%s] Auto-sync enabled, probing all current groups", self.task_id)
-                channel_groups = None  # None = probe everything
-            elif channel_groups:
-                # Fixed-list mode: validate stored IDs/names against current groups
-                # Note: stale groups are auto-removed on schedule load, but validate
-                # here too in case groups were deleted between loads
-                try:
-                    current_groups = await self._prober.client.get_channel_groups()
-                    current_by_id = {g["id"]: g.get("name") for g in current_groups}
-                    current_by_name = {g.get("name"): g for g in current_groups}
-
-                    if channel_groups and isinstance(channel_groups[0], int):
-                        valid_ids = [gid for gid in channel_groups if gid in current_by_id]
-                        stale_count = len(channel_groups) - len(valid_ids)
-                        valid_groups = [current_by_id[gid] for gid in valid_ids]
-                    else:
-                        valid_groups = [g for g in channel_groups if g in current_by_name]
-                        stale_count = len(channel_groups) - len(valid_groups)
-
-                    if stale_count:
-                        logger.warning("[%s] Skipping %s stale group(s) (will be auto-removed on next schedule load)", self.task_id, stale_count)
-
-                    # Use validated group names; if all were stale, keep empty list
-                    # (empty = probe nothing, not probe everything)
-                    channel_groups = valid_groups
-                except Exception as e:
-                    logger.warning("[%s] Failed to validate channel groups: %s", self.task_id, e)
+            elif self._channel_groups is not None:
+                if all(isinstance(group, int) for group in self._channel_groups):
+                    channel_group_ids = frozenset(self._channel_groups)
+                else:
+                    channel_groups = list(self._channel_groups)
 
             # Start the probe in background so we can poll for progress
-            logger.info("[%s] Starting stream probe (groups: %s)", self.task_id, channel_groups)
+            logger.info("[%s] Starting stream probe (group names: %s, group IDs: %s)", self.task_id, channel_groups, channel_group_ids)
 
             import asyncio
             # Run probe_all_streams as a background task
             probe_task = asyncio.create_task(
                 self._prober.probe_all_streams(
                     channel_groups_override=channel_groups,
+                    channel_group_ids_override=channel_group_ids,
                     skip_m3u_refresh=False,  # Scheduled probes should refresh
                     # The "probe started" alert is info-level; only dispatch it
                     # externally when this task opted into info alerts. self._send_alerts
@@ -247,10 +226,18 @@ class StreamProbeTask(TaskScheduler):
                 await asyncio.sleep(1)  # Poll every second
 
             # Wait for the task to complete (in case of cancellation, this ensures cleanup)
-            try:
-                await probe_task
-            except Exception:
-                pass  # Any exception is handled below via prober state
+            probe_result = await probe_task
+
+            if probe_result and probe_result.get("status") == "failed":
+                error = probe_result.get("error", "Unknown probe failure")
+                self._set_progress(status="failed", current_item="")
+                return TaskResult(
+                    success=False,
+                    message=f"Stream probe failed: {error}",
+                    error=error,
+                    started_at=started_at,
+                    completed_at=datetime.utcnow(),
+                )
 
             # Get final results from prober
             success_count = self._prober._probe_progress_success_count
@@ -263,6 +250,7 @@ class StreamProbeTask(TaskScheduler):
                 failed_count=failed_count,
                 skipped_count=skipped_count,
                 status="completed" if not self._cancel_requested else "cancelled",
+                current_item="",
             )
 
             black_screen = self._prober._probe_progress_black_screen_count

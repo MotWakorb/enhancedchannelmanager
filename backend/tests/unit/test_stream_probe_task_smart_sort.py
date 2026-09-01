@@ -72,6 +72,7 @@ async def test_scheduled_probe_uses_resolved_smart_sort_configuration(strategy):
     assert prober.stream_sort_point_rules == point_rules
     prober.probe_all_streams.assert_awaited_once_with(
         channel_groups_override=None,
+        channel_group_ids_override=None,
         skip_m3u_refresh=False,
         start_send_alerts=True,
         allow_reorder_after_probe=True,

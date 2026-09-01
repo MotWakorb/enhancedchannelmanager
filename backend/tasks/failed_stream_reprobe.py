@@ -107,19 +107,29 @@ class FailedStreamReprobeTask(TaskScheduler):
 
         # Scope to only streams from the last scheduled probe's channel groups
         # This prevents reprobing event streams or streams from unselected groups
+        scope_kind = getattr(self._prober, "_last_probe_scope_kind", None)
         scoped_stream_ids = getattr(self._prober, '_last_probe_channel_stream_ids', set())
-        if scoped_stream_ids:
+        if scope_kind == "scoped":
             before_count = len(failed_ids)
             failed_ids = [sid for sid in failed_ids if sid in scoped_stream_ids]
             excluded = before_count - len(failed_ids)
             if excluded:
                 logger.info("[%s] Scoped from %d to %d failed streams (%d excluded — not in last probe's groups)",
                            self.task_id, before_count, len(failed_ids), excluded)
-        else:
+        elif scope_kind is None:
             logger.warning("[%s] No scoped channel stream IDs from last probe — reprobing all %d failed streams",
                           self.task_id, len(failed_ids))
 
         if not failed_ids:
+            self._set_progress(
+                total=0,
+                current=0,
+                status="completed",
+                current_item="",
+                success_count=0,
+                failed_count=0,
+                skipped_count=0,
+            )
             return TaskResult(
                 success=True,
                 message="No failed streams to re-probe",

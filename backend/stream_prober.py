@@ -511,7 +511,9 @@ class StreamProber:
         self._probe_progress_low_fps_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
-        # Channel stream IDs from the last scheduled probe (used to scope reprobes)
+        # Scope from the last successful scheduled probe (used to scope reprobes).
+        # None = no prior probe, "all" = all groups, "scoped" = selected groups.
+        self._last_probe_scope_kind: str | None = None
         self._last_probe_channel_stream_ids: set = set()
 
         # Profile-to-account mapping for connection tracking
@@ -1671,60 +1673,95 @@ class StreamProber:
                 break
         return all_streams
 
-    async def _fetch_channel_stream_ids(self, channel_groups_override: list[str] | None = None) -> tuple[set, dict, dict]:
+    async def _resolve_channel_group_ids(
+        self,
+        channel_groups_override: list[str] | None = None,
+        channel_group_ids_override: frozenset[int] | None = None,
+    ) -> frozenset[int] | None:
+        """Resolve one invocation's group scope to stable numeric IDs."""
+        if channel_groups_override is not None and channel_group_ids_override is not None:
+            raise ValueError("channel group names and IDs cannot both be provided")
+        if channel_groups_override is None and channel_group_ids_override is None:
+            return None
+
+        requested_ids = (
+            frozenset(channel_group_ids_override)
+            if channel_group_ids_override is not None
+            else None
+        )
+        requested_names = (
+            list(dict.fromkeys(channel_groups_override))
+            if channel_groups_override is not None
+            else None
+        )
+        if requested_ids == frozenset() or requested_names == []:
+            return frozenset()
+
+        all_groups = await self.client.get_channel_groups()
+        if requested_ids is not None:
+            available_ids = {group["id"] for group in all_groups}
+            resolved_ids = requested_ids & available_ids
+            stale_ids = requested_ids - resolved_ids
+            if stale_ids:
+                logger.warning(
+                    "[STREAM-PROBE] Requested channel group IDs not found: %s",
+                    sorted(stale_ids),
+                )
+            return frozenset(resolved_ids)
+
+        ids_by_name: dict[str, list[int]] = {}
+        for group in all_groups:
+            ids_by_name.setdefault(group.get("name"), []).append(group["id"])
+
+        resolved_ids: set[int] = set()
+        for requested_name in requested_names or []:
+            matching_ids = ids_by_name.get(requested_name, [])
+            if len(matching_ids) > 1:
+                raise ValueError(
+                    f"Ambiguous channel group name {requested_name!r}; use a numeric group ID"
+                )
+            if matching_ids:
+                resolved_ids.add(matching_ids[0])
+            else:
+                logger.warning(
+                    "[STREAM-PROBE] Requested channel group not found: %s",
+                    requested_name,
+                )
+        return frozenset(resolved_ids)
+
+    async def _fetch_channel_stream_ids(
+        self,
+        channel_groups_override: list[str] | None = None,
+        channel_group_ids_override: frozenset[int] | None = None,
+    ) -> tuple[set, dict, dict]:
         """
         Fetch all unique stream IDs from channels (paginated).
         Only fetches from selected groups if channel_groups_override is set.
         Returns: (set of stream IDs, dict mapping stream_id -> list of channel names, dict mapping stream_id -> lowest channel number)
 
         Args:
-            channel_groups_override: Optional list of channel group names to filter by.
-                                    None probes all groups; an empty list probes none.
+            channel_groups_override: Optional list of channel group names to resolve.
+            channel_group_ids_override: Invocation-local resolved numeric group IDs.
         """
-        logger.debug("[STREAM-PROBE] _fetch_channel_stream_ids called with override=%s", channel_groups_override)
+        logger.debug(
+            "[STREAM-PROBE] _fetch_channel_stream_ids called with names=%s, ids=%s",
+            channel_groups_override,
+            channel_group_ids_override,
+        )
 
         channel_stream_ids = set()
         stream_to_channels = {}  # stream_id -> list of channel names
         stream_to_channel_number = {}  # stream_id -> lowest channel number (for sorting)
 
-        if channel_groups_override == []:
+        selected_group_ids = (
+            await self._resolve_channel_group_ids(channel_groups_override)
+            if channel_groups_override is not None
+            else channel_group_ids_override
+        )
+        if selected_group_ids == frozenset():
             return channel_stream_ids, stream_to_channels, stream_to_channel_number
 
-        # Presence, not truthiness, controls filtering: [] is an explicit no-op.
-        groups_to_filter = channel_groups_override or []
-        filter_by_group = channel_groups_override is not None
-        logger.debug("[STREAM-PROBE] groups_to_filter=%s", groups_to_filter)
-
-        # If specific groups are selected, fetch all groups first to filter
-        selected_group_ids = set()
-        if groups_to_filter:
-            try:
-                all_groups = await self.client.get_channel_groups()
-                available_group_names = [g.get("name") for g in all_groups]
-                logger.debug("[STREAM-PROBE] Requested groups: %s", groups_to_filter)
-                logger.debug("[STREAM-PROBE] Available groups: %s", available_group_names)
-
-                matched_groups = []
-                unmatched_groups = []
-                for group in all_groups:
-                    group_name = group.get("name")
-                    if group_name in groups_to_filter:
-                        selected_group_ids.add(group["id"])
-                        matched_groups.append(f"{group_name} (id={group['id']})")
-
-                for requested in groups_to_filter:
-                    if requested not in [g.get("name") for g in all_groups]:
-                        unmatched_groups.append(requested)
-
-                logger.debug("[STREAM-PROBE] Matched groups: %s", matched_groups)
-                if unmatched_groups:
-                    logger.warning("[STREAM-PROBE] Requested groups NOT FOUND: %s", unmatched_groups)
-                logger.debug("[STREAM-PROBE] Filtering to %s groups", len(selected_group_ids))
-            except Exception as e:
-                logger.error("[STREAM-PROBE] Failed to fetch channel groups for filtering: %s", e)
-
-            if not selected_group_ids:
-                return channel_stream_ids, stream_to_channels, stream_to_channel_number
+        filter_by_group = selected_group_ids is not None
 
         page = 1
         total_channels_seen = 0
@@ -1736,47 +1773,43 @@ class StreamProber:
         while True:
             try:
                 result = await self.client.get_channels(page=page, page_size=500)
-                channels = result.get("results", [])
-                for channel in channels:
-                    total_channels_seen += 1
-                    channel_name = channel.get("name", f"Channel {channel.get('id', 'Unknown')}")
-                    channel_group_id = channel.get("channel_group_id")
+            except Exception:
+                logger.exception("[STREAM-PROBE] Failed to fetch channels page %s", page)
+                raise
+            channels = result.get("results", [])
+            for channel in channels:
+                total_channels_seen += 1
+                channel_name = channel.get("name", f"Channel {channel.get('id', 'Unknown')}")
+                channel_group_id = channel.get("channel_group_id")
 
-                    # An explicitly configured selection must never widen to all groups.
-                    if filter_by_group and channel_group_id not in selected_group_ids:
-                        channels_excluded_wrong_group += 1
-                        excluded_channel_names.append(channel_name)
-                        continue  # Skip channels not in selected groups
+                if filter_by_group and channel_group_id not in selected_group_ids:
+                    channels_excluded_wrong_group += 1
+                    excluded_channel_names.append(channel_name)
+                    continue
 
-                    channel_number = channel.get("channel_number", 999999)  # Default high number for sorting
-                    # Each channel has a "streams" field which is a list of stream IDs
-                    stream_ids = channel.get("streams", [])
+                channel_number = channel.get("channel_number", 999999)
+                stream_ids = channel.get("streams", [])
 
-                    if not stream_ids:
-                        channels_with_no_streams += 1
-                        logger.debug("[STREAM-PROBE] Channel '%s' has no streams, skipping", channel_name)
-                        continue
+                if not stream_ids:
+                    channels_with_no_streams += 1
+                    logger.debug("[STREAM-PROBE] Channel '%s' has no streams, skipping", channel_name)
+                    continue
 
-                    channels_included += 1
-                    channel_stream_ids.update(stream_ids)
-                    logger.debug("[STREAM-PROBE] Including channel '%s' with %s stream(s)", channel_name, len(stream_ids))
+                channels_included += 1
+                channel_stream_ids.update(stream_ids)
+                logger.debug("[STREAM-PROBE] Including channel '%s' with %s stream(s)", channel_name, len(stream_ids))
 
-                    # Map each stream to its channel names and track lowest channel number
-                    for stream_id in stream_ids:
-                        if stream_id not in stream_to_channels:
-                            stream_to_channels[stream_id] = []
-                        stream_to_channels[stream_id].append(channel_name)
-                        # Track the lowest channel number for this stream (for sorting)
-                        if stream_id not in stream_to_channel_number or channel_number < stream_to_channel_number[stream_id]:
-                            stream_to_channel_number[stream_id] = channel_number
-                if not result.get("next"):
-                    break
-                page += 1
-                if page > 50:  # Safety limit
-                    break
-            except Exception as e:
-                logger.error("[STREAM-PROBE] Failed to fetch channels page %s: %s", page, e)
+                for stream_id in stream_ids:
+                    if stream_id not in stream_to_channels:
+                        stream_to_channels[stream_id] = []
+                    stream_to_channels[stream_id].append(channel_name)
+                    if stream_id not in stream_to_channel_number or channel_number < stream_to_channel_number[stream_id]:
+                        stream_to_channel_number[stream_id] = channel_number
+            if not result.get("next"):
                 break
+            page += 1
+            if page > 50:
+                raise RuntimeError("Channel pagination exceeded the 50-page safety limit")
 
         # Log summary of channel filtering
         logger.debug("[STREAM-PROBE] Channel filtering summary:")
@@ -2004,41 +2037,31 @@ class StreamProber:
             logger.debug("[STREAM-PROBE] Profile %s: rewrote URL", profile['id'])
         return rewritten
 
-    async def _auto_reorder_channels(self, channel_groups_override: list[str] | None = None, stream_to_channels: dict = None) -> list[dict]:
+    async def _auto_reorder_channels(
+        self,
+        channel_groups_override: list[str] | None = None,
+        stream_to_channels: dict = None,
+        channel_group_ids_override: frozenset[int] | None = None,
+    ) -> list[dict]:
         """
         Auto-reorder streams in all channels from the selected groups using smart sort.
         Returns a list of dicts with {channel_id, channel_name, stream_count} for channels that were reordered.
         """
         reordered = []
 
-        if channel_groups_override == []:
+        selected_group_ids = (
+            await self._resolve_channel_group_ids(channel_groups_override)
+            if channel_groups_override is not None
+            else channel_group_ids_override
+        )
+        if selected_group_ids == frozenset():
             return reordered
 
         sort_settings = self._sort_settings_snapshot()
 
         try:
-            # Presence, not truthiness, controls filtering: [] reorders nothing.
-            groups_to_filter = channel_groups_override or []
-            filter_by_group = channel_groups_override is not None
-            logger.info("[STREAM-PROBE-SORT] groups_to_filter=%s", groups_to_filter)
-
-            # Get selected group IDs
-            selected_group_ids = set()
-            if groups_to_filter:
-                try:
-                    all_groups = await self.client.get_channel_groups()
-                    available_group_names = [g.get("name") for g in all_groups]
-                    logger.info("[STREAM-PROBE-SORT] Available groups: %s... (total: %s)", available_group_names[:10], len(all_groups))
-                    for group in all_groups:
-                        if group.get("name") in groups_to_filter:
-                            selected_group_ids.add(group["id"])
-                    logger.info("[STREAM-PROBE-SORT] Filtering to %s selected groups (matched: %s)", len(selected_group_ids), selected_group_ids)
-                except Exception as e:
-                    logger.error("[STREAM-PROBE] Failed to fetch channel groups for auto-reorder: %s", e)
-                    return []
-
-                if not selected_group_ids:
-                    return reordered
+            filter_by_group = selected_group_ids is not None
+            logger.info("[STREAM-PROBE-SORT] selected_group_ids=%s", selected_group_ids)
 
             # Fetch all channels and filter by selected groups
             page = 1
@@ -2416,6 +2439,7 @@ class StreamProber:
     async def probe_all_streams(
         self,
         channel_groups_override: list[str] | None = None,
+        channel_group_ids_override: frozenset[int] | None = None,
         skip_m3u_refresh: bool = False,
         stream_ids_filter: list[int] = None,
         start_send_alerts: bool = True,
@@ -2429,6 +2453,8 @@ class StreamProber:
         Args:
             channel_groups_override: Optional list of channel group names to filter by.
                                     None probes all groups; an empty list probes none.
+            channel_group_ids_override: Invocation-local scheduled group IDs. These
+                                        are validated once and never converted to names.
             skip_m3u_refresh: If True, skip M3U refresh even if configured.
                              Use this for on-demand probes from the UI.
             stream_ids_filter: Optional list of specific stream IDs to probe.
@@ -2441,7 +2467,7 @@ class StreamProber:
                                        auto-reorder setting. False suppresses reorder
                                        without changing the shared setting.
         """
-        logger.info("[STREAM-PROBE] probe_all_streams called with channel_groups_override=%s, skip_m3u_refresh=%s, stream_ids_filter=%s", channel_groups_override, skip_m3u_refresh, len(stream_ids_filter) if stream_ids_filter else 0)
+        logger.info("[STREAM-PROBE] probe_all_streams called with channel_groups_override=%s, channel_group_ids_override=%s, skip_m3u_refresh=%s, stream_ids_filter=%s", channel_groups_override, channel_group_ids_override, skip_m3u_refresh, len(stream_ids_filter) if stream_ids_filter else 0)
         logger.info("[STREAM-PROBE] Settings: parallel_probing_enabled=%s, max_concurrent_probes=%s, "
                      "profile_distribution_strategy=%s",
                      self.parallel_probing_enabled, self.max_concurrent_probes,
@@ -2473,9 +2499,16 @@ class StreamProber:
         probed_count = 0
         start_time = datetime.utcnow()
         try:
-            if channel_groups_override == []:
-                self._last_probe_channel_stream_ids = set()
+            resolved_group_ids = await self._resolve_channel_group_ids(
+                channel_groups_override,
+                channel_group_ids_override,
+            )
+            if resolved_group_ids == frozenset():
+                if stream_ids_filter is None:
+                    self._last_probe_scope_kind = "scoped"
+                    self._last_probe_channel_stream_ids = set()
                 self._probe_progress_status = "completed"
+                self._probe_progress_current_stream = ""
                 self._save_probe_history(start_time, 0, reordered_channels=[])
                 return {
                     "status": "completed",
@@ -2504,18 +2537,22 @@ class StreamProber:
 
             # Fetch all channel stream IDs and channel mappings
             self._probe_progress_status = "fetching"
-            logger.info("[STREAM-PROBE] Fetching channel stream IDs (override groups: %s)...", channel_groups_override)
-            channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(channel_groups_override)
+            logger.info("[STREAM-PROBE] Fetching channel stream IDs (resolved group IDs: %s)...", resolved_group_ids)
+            channel_stream_ids, stream_to_channels, stream_to_channel_number = await self._fetch_channel_stream_ids(
+                channel_group_ids_override=resolved_group_ids
+            )
             logger.info("[STREAM-PROBE] Found %s unique streams across all channels", len(channel_stream_ids))
 
             # Store channel stream IDs for scheduled probes (not reprobes)
             # so the reprobe task can scope to only these streams
-            if not stream_ids_filter:
+            if stream_ids_filter is None:
+                self._last_probe_scope_kind = "all" if resolved_group_ids is None else "scoped"
                 self._last_probe_channel_stream_ids = set(channel_stream_ids)
                 logger.info("[STREAM-PROBE] Saved %s channel stream IDs for reprobe scoping", len(self._last_probe_channel_stream_ids))
 
-            if channel_groups_override is not None and not channel_stream_ids:
+            if not channel_stream_ids:
                 self._probe_progress_status = "completed"
+                self._probe_progress_current_stream = ""
                 self._save_probe_history(start_time, 0, reordered_channels=[])
                 return {
                     "status": "completed",
@@ -3115,7 +3152,10 @@ class StreamProber:
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
                 try:
-                    reordered_channels = await self._auto_reorder_channels(channel_groups_override, stream_to_channels)
+                    reordered_channels = await self._auto_reorder_channels(
+                        stream_to_channels=stream_to_channels,
+                        channel_group_ids_override=resolved_group_ids,
+                    )
                     logger.info("[STREAM-PROBE-SORT] Auto-reordered %s channels", len(reordered_channels))
                 except Exception as e:
                     logger.error("[STREAM-PROBE] Auto-reorder failed: %s", e)

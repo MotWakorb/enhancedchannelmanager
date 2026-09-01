@@ -74,13 +74,15 @@ async def test_scheduled_probe_reorder_choice_is_invocation_local_and_group_scop
     assert second.success is True
     assert prober.probe_all_streams.await_args_list == [
         call(
-            channel_groups_override=["Sports"],
+            channel_groups_override=None,
+            channel_group_ids_override=frozenset({7}),
             skip_m3u_refresh=False,
             start_send_alerts=True,
             allow_reorder_after_probe=False,
         ),
         call(
             channel_groups_override=None,
+            channel_group_ids_override=None,
             skip_m3u_refresh=False,
             start_send_alerts=True,
             allow_reorder_after_probe=True,
@@ -111,6 +113,7 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
     monkeypatch.setattr(stream_prober, "get_session", session_factory)
 
     client = AsyncMock()
+    client.get_channel_groups.return_value = [{"id": 7, "name": "Sports"}]
     client.get_m3u_accounts.return_value = []
     channel_order = [10, 20]
     prober = StreamProber(
@@ -120,8 +123,11 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
     )
     prober._persist_probe_history = lambda: None
 
-    async def reorder(group_names, _stream_to_channels):
-        assert group_names == groups
+    async def reorder(*, stream_to_channels, channel_group_ids_override):
+        assert stream_to_channels == {20: ["Channel"]}
+        assert channel_group_ids_override == (
+            frozenset({7}) if groups is not None else None
+        )
         channel_order[:] = [20, 10]
         return [{"channel_id": 1}]
 
@@ -175,7 +181,11 @@ async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
         result = await prober.probe_all_streams(**kwargs)
 
     assert result["status"] == "completed"
-    fetch_channel_stream_ids.assert_awaited_once_with(groups)
+    fetch_channel_stream_ids.assert_awaited_once_with(
+        channel_group_ids_override=(
+            frozenset({7}) if groups is not None else None
+        )
+    )
     assert channel_order == expected_order
     if expected_order == [20, 10]:
         reorder_mock.assert_awaited_once()
