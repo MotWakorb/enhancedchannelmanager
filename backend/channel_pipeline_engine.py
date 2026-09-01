@@ -284,6 +284,7 @@ class ChannelPipelineEngine:
         record_execution: bool = True,
         plan_only: bool = False,
         skip_prerefresh: bool = False,
+        require_all_rule_ids: bool = False,
     ) -> dict:
         """
         Run the full auto-creation pipeline.
@@ -298,6 +299,9 @@ class ChannelPipelineEngine:
                 themselves to reach the manual-run-only attach phase.
             m3u_account_ids: Optional list of M3U account IDs to process (None = all)
             rule_ids: Optional list of rule IDs to run (None = all enabled)
+            require_all_rule_ids: Fail before processing when any requested ID
+                is no longer enabled or active. Used by atomically validated
+                selected runs to close the validation-to-worker race.
             execution_id: Optional pre-created execution record id. When the
                 router enqueues a background task (bd-enfsy 202+poll pattern)
                 it creates an ChannelPipelineExecution(status="running") up front
@@ -317,6 +321,10 @@ class ChannelPipelineEngine:
 
         # Load enabled rules
         rules = await self._load_rules(rule_ids)
+        if require_all_rule_ids and set(rule_ids or []) != {rule.id for rule in rules}:
+            raise RuntimeError(
+                "Selected rule scope changed before execution; no rules were run"
+            )
 
         # ---------------------------------------------------------------------
         # event_sync routing (bead ti939.1.3 exclusion + ti939.2.1 attach path).
@@ -658,6 +666,18 @@ class ChannelPipelineEngine:
         ]
         execution.set_event_sync_summary(event_sync_summaries)
         execution.is_event_sync = bool(event_sync_to_run) and not bool(rules)
+        selected_scope = execution.get_selected_rule_outcomes()
+        if selected_scope:
+            rules_by_id = {
+                rule.id: rule for rule in rules + event_sync_to_run
+            }
+            selected_rules = [
+                rules_by_id[item["rule_id"]] for item in selected_scope
+                if item.get("rule_id") in rules_by_id
+            ]
+            execution.set_selected_rule_outcomes(
+                self._selected_rule_outcomes(selected_rules, results)
+            )
 
         if dry_run:
             execution.set_dry_run_results(results["dry_run_results"])
@@ -1233,7 +1253,9 @@ class ChannelPipelineEngine:
             if rule_ids:
                 query = query.filter(ChannelPipelineRule.id.in_(rule_ids))
 
-            rules = query.order_by(ChannelPipelineRule.priority).all()
+            rules = query.order_by(
+                ChannelPipelineRule.priority, ChannelPipelineRule.id
+            ).all()
             for r in rules:
                 logger.debug(
                     "[AUTO-CREATE-ENGINE] Rule id=%s name=%r priority=%s "
@@ -1247,6 +1269,28 @@ class ChannelPipelineEngine:
 
         finally:
             session.close()
+
+    @staticmethod
+    def _selected_rule_outcomes(rules: list, results: dict) -> list[dict]:
+        """Build one terminal outcome per selected rule in execution order."""
+        match_counts = results.get("rule_match_counts", {})
+        failed_actions = results.get("failed_actions", [])
+        outcomes = []
+        for rule in rules:
+            error_count = sum(
+                1 for failure in failed_actions
+                if failure.get("rule_id") == rule.id
+            )
+            outcomes.append({
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "status": (
+                    "completed_with_errors" if error_count else "completed"
+                ),
+                "match_count": match_counts.get(rule.id, 0),
+                "error_count": error_count,
+            })
+        return outcomes
 
     async def _detect_disabled_normalization_group_warnings(
         self, rules: list[ChannelPipelineRule]

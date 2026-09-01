@@ -491,6 +491,20 @@ export interface ChannelPipelineExecution {
    * Absent/false for runs that changed no profile membership.
    */
   has_non_reversible_profile_changes?: boolean;
+  /** Distinguishes run-all, single-rule, and selected-rule history rows. */
+  run_scope?: 'all' | 'single' | 'selected';
+  /** Canonical priority/id order used for a selected-rule run. */
+  selected_rule_ids?: number[];
+  /** One persisted result per selected rule, in execution order. */
+  selected_rule_outcomes?: SelectedRuleOutcome[];
+}
+
+export interface SelectedRuleOutcome {
+  rule_id: number;
+  rule_name: string;
+  status: 'pending' | 'completed' | 'completed_with_errors' | 'failed';
+  match_count?: number;
+  error_count?: number;
 }
 
 /**
@@ -717,6 +731,7 @@ export interface RunPipelineEnqueuedResponse {
   execution_id: number;
   status: 'running';
   rule_id?: number;
+  rule_ids?: number[];
   message: string;
 }
 

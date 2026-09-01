@@ -1498,6 +1498,134 @@ class TestRunAutoCreationPipeline:
             await _asyncio.sleep(0)
 
 
+class TestRunSelectedChannelPipelineRules:
+    """Tests for the strict, atomic selected-rule run endpoint."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_empty_and_duplicate_rule_ids(self, async_client):
+        empty = await async_client.post(
+            "/api/channel-pipeline/run-selected", json={"rule_ids": []}
+        )
+        duplicate = await async_client.post(
+            "/api/channel-pipeline/run-selected", json={"rule_ids": [7, 7]}
+        )
+
+        assert empty.status_code == 400
+        assert empty.json()["detail"]["code"] == "empty_rule_selection"
+        assert duplicate.status_code == 400
+        assert duplicate.json()["detail"]["code"] == "duplicate_rule_ids"
+
+    @pytest.mark.asyncio
+    async def test_rejects_unknown_rule_without_enqueuing(self, async_client):
+        response = await async_client.post(
+            "/api/channel-pipeline/run-selected", json={"rule_ids": [99999]}
+        )
+
+        assert response.status_code == 404
+        assert response.json()["detail"] == {
+            "code": "unknown_rule_ids",
+            "message": "Selected rules were not found",
+            "rule_ids": [99999],
+        }
+
+    @pytest.mark.asyncio
+    async def test_rejects_entire_partially_eligible_selection(
+        self, async_client, test_session
+    ):
+        enabled = _create_rule(test_session, name="Runnable", priority=2)
+        disabled = _create_rule(
+            test_session, name="Disabled", priority=1, enabled=False
+        )
+        inactive = _create_rule(
+            test_session,
+            name="Not started",
+            priority=3,
+            active_from=date(2099, 1, 1),
+        )
+
+        response = await async_client.post(
+            "/api/channel-pipeline/run-selected",
+            json={"rule_ids": [enabled.id, disabled.id, inactive.id]},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {
+            "code": "selected_rules_not_runnable",
+            "message": "Every selected rule must be runnable",
+            "issues": [
+                {"rule_id": disabled.id, "rule_name": "Disabled", "reason": "disabled"},
+                {"rule_id": inactive.id, "rule_name": "Not started", "reason": "inactive"},
+            ],
+        }
+        assert test_session.query(ChannelPipelineExecution).count() == 0
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_stored_rule(self, async_client, test_session):
+        invalid = _create_rule(
+            test_session,
+            name="Invalid stored rule",
+            conditions=json.dumps([{"type": "not_a_condition"}]),
+            actions=json.dumps([]),
+        )
+
+        response = await async_client.post(
+            "/api/channel-pipeline/run-selected", json={"rule_ids": [invalid.id]}
+        )
+
+        assert response.status_code == 409
+        detail = response.json()["detail"]
+        assert detail["code"] == "selected_rules_not_runnable"
+        assert detail["issues"][0]["rule_id"] == invalid.id
+        assert detail["issues"][0]["reason"] == "invalid"
+        assert detail["issues"][0]["errors"]
+
+    @pytest.mark.asyncio
+    async def test_enqueues_exact_selection_in_canonical_order_and_records_scope(
+        self, async_client, test_session
+    ):
+        import asyncio as _asyncio
+
+        later = _create_rule(test_session, name="Later", priority=20)
+        first = _create_rule(test_session, name="First", priority=10)
+        unselected = _create_rule(test_session, name="Unselected", priority=0)
+        gate = _asyncio.Event()
+
+        async def slow_run_pipeline(*args, **kwargs):
+            await gate.wait()
+            return {"success": True}
+
+        mock_engine = AsyncMock()
+        mock_engine.run_pipeline = AsyncMock(side_effect=slow_run_pipeline)
+        with patch(
+            "channel_pipeline_engine.get_channel_pipeline_engine",
+            return_value=mock_engine,
+        ):
+            response = await async_client.post(
+                "/api/channel-pipeline/run-selected",
+                json={"rule_ids": [later.id, first.id], "dry_run": False},
+            )
+
+        assert response.status_code == 202, response.text
+        execution_id = response.json()["execution_id"]
+        call = mock_engine.run_pipeline.call_args.kwargs
+        assert call["rule_ids"] == [first.id, later.id]
+        assert call["require_all_rule_ids"] is True
+        assert unselected.id not in call["rule_ids"]
+
+        test_session.expire_all()
+        execution = test_session.get(ChannelPipelineExecution, execution_id)
+        assert execution.to_dict()["run_scope"] == "selected"
+        assert execution.to_dict()["selected_rule_ids"] == [first.id, later.id]
+        assert execution.to_dict()["selected_rule_outcomes"] == [
+            {"rule_id": first.id, "rule_name": "First", "status": "pending"},
+            {"rule_id": later.id, "rule_name": "Later", "status": "pending"},
+        ]
+
+        gate.set()
+        for _ in range(20):
+            await _asyncio.sleep(0)
+
+
 class TestRunChannelPipelineRule:
     """Tests for POST /api/auto-creation/rules/{rule_id}/run (background-task pattern)."""
 

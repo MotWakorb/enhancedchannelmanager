@@ -45,6 +45,57 @@ class TestChannelPipelineEngineInit:
         assert engine._stream_stats_cache == {}
         assert engine._smart_sort_stats_cache == {}
 
+    def test_selected_rule_outcomes_preserve_order_and_attribute_failures(self):
+        rules = [
+            SimpleNamespace(id=4, name="First"),
+            SimpleNamespace(id=9, name="Second"),
+        ]
+        results = {
+            "rule_match_counts": {4: 3, 9: 1},
+            "failed_actions": [
+                {"rule_id": 9, "error": "assignment failed"},
+                {"rule_id": 9, "error": "profile failed"},
+            ],
+        }
+
+        outcomes = ChannelPipelineEngine._selected_rule_outcomes(rules, results)
+
+        assert outcomes == [
+            {
+                "rule_id": 4,
+                "rule_name": "First",
+                "status": "completed",
+                "match_count": 3,
+                "error_count": 0,
+            },
+            {
+                "rule_id": 9,
+                "rule_name": "Second",
+                "status": "completed_with_errors",
+                "match_count": 1,
+                "error_count": 2,
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_load_rules_uses_priority_then_id_not_submission_order(self):
+        engine = ChannelPipelineEngine(MagicMock())
+        query = MagicMock()
+        session = MagicMock()
+        session.query.return_value = query
+        query.filter.return_value = query
+        query.order_by.return_value = query
+        query.all.return_value = []
+
+        with patch("channel_pipeline_engine.get_session", return_value=session):
+            await engine._load_rules([9, 4])
+
+        order_args = query.order_by.call_args.args
+        assert order_args == (
+            __import__("models").ChannelPipelineRule.priority,
+            __import__("models").ChannelPipelineRule.id,
+        )
+
     def test_load_stream_stats_keeps_failed_rows_only_for_smart_sort(self):
         client = MagicMock()
         engine = ChannelPipelineEngine(client)

@@ -2318,6 +2318,10 @@ class ChannelPipelineExecution(Base):
     # returns [] for NULL.
     event_sync_summary = Column(Text, nullable=True)
 
+    # Canonical scope and per-rule results for selected-rule runs. NULL keeps
+    # legacy, run-all, and single-rule execution records unchanged.
+    selected_rule_outcomes = Column(Text, nullable=True)
+
     # True only for a PURE event_sync run — event_sync rule(s) ran and NO
     # standard rules were in scope. Lets the executions UI swap the standard
     # counter block for the event_sync block reliably even after the source
@@ -2446,9 +2450,24 @@ class ChannelPipelineExecution(Base):
         """Set event_sync_summary from list (JSON), NULL when empty."""
         self.event_sync_summary = json.dumps(summaries) if summaries else None
 
+    def get_selected_rule_outcomes(self) -> list:
+        """Parse selected-rule scope/outcomes (empty for other run types)."""
+        if not self.selected_rule_outcomes:
+            return []
+        try:
+            value = json.loads(self.selected_rule_outcomes)
+        except (ValueError, TypeError):
+            return []
+        return value if isinstance(value, list) else []
+
+    def set_selected_rule_outcomes(self, outcomes: list) -> None:
+        """Persist selected-rule outcomes in canonical execution order."""
+        self.selected_rule_outcomes = json.dumps(outcomes) if outcomes else None
+
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
         """Convert to dictionary for API responses."""
         _warnings = self.get_warnings()
+        _selected_rule_outcomes = self.get_selected_rule_outcomes()
         result = {
             "id": self.id,
             "rule_id": self.rule_id,
@@ -2484,6 +2503,15 @@ class ChannelPipelineExecution(Base):
             # and any legacy NULL row to a real boolean.
             "is_event_sync": bool(self.is_event_sync),
             "event_sync_summary": self.get_event_sync_summary(),
+            "run_scope": (
+                "selected" if _selected_rule_outcomes else
+                "single" if self.rule_id is not None else "all"
+            ),
+            "selected_rule_ids": [
+                item["rule_id"] for item in _selected_rule_outcomes
+                if isinstance(item, dict) and isinstance(item.get("rule_id"), int)
+            ],
+            "selected_rule_outcomes": _selected_rule_outcomes,
             # y3m6o.1 review (Finding 3): True when this run mutated
             # channel-profile membership non-reversibly. Derived from the
             # persisted ``non_reversible_profile_changes`` warning (no schema

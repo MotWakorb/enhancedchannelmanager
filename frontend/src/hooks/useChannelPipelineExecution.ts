@@ -39,7 +39,7 @@ export interface UseChannelPipelineExecutionResult {
   /** Get a single execution by ID */
   getExecution: (id: number) => Promise<ChannelPipelineExecution | undefined>;
   /** Run the pipeline */
-  runPipeline: (options?: { dryRun?: boolean; ruleIds?: number[] }) => Promise<RunPipelineResponse | undefined>;
+  runPipeline: (options?: { dryRun?: boolean; ruleIds?: number[]; selected?: boolean }) => Promise<RunPipelineResponse | undefined>;
   /** Rollback an execution */
   rollback: (id: number) => Promise<RollbackResponse | undefined>;
   /** Get the most recent execution */
@@ -178,6 +178,7 @@ export function useChannelPipelineExecution(
   const runPipeline = useCallback(async (options?: {
     dryRun?: boolean;
     ruleIds?: number[];
+    selected?: boolean;
   }): Promise<RunPipelineResponse | undefined> => {
     setIsRunning(true);
     setError(null);
@@ -186,10 +187,15 @@ export function useChannelPipelineExecution(
       // bd-enfsy: backend returns 202 with execution_id and runs the pipeline
       // in a supervised background task. Poll until terminal so the caller
       // (and the existing isRunning UI flag) still sees a "done" signal.
-      const enqueued = await api.runChannelPipeline({
-        dryRun: options?.dryRun,
-        ruleIds: options?.ruleIds,
-      });
+      const enqueued = options?.selected
+        ? await api.runSelectedChannelPipelineRules({
+            dryRun: options.dryRun,
+            ruleIds: options.ruleIds ?? [],
+          })
+        : await api.runChannelPipeline({
+            dryRun: options?.dryRun,
+            ruleIds: options?.ruleIds,
+          });
       const terminal = await pollExecutionUntilTerminal(enqueued.execution_id);
       return terminal;
     } catch (err) {

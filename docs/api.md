@@ -1507,6 +1507,7 @@ produced.
 | `POST /api/channel-pipeline/rules/{id}/duplicate` | Duplicate a rule |
 | `POST /api/channel-pipeline/rules/{id}/run` | Run a single rule (supports dry_run) |
 | `POST /api/channel-pipeline/run` | Run the full pipeline (execute or dry_run) |
+| `POST /api/channel-pipeline/run-selected` | Run exactly the submitted `rule_ids` as one execution. The selection is validated atomically; empty, duplicate, unknown, disabled, inactive, or invalid rules reject the whole request. |
 | `GET /api/channel-pipeline/executions` | Get execution history (paginated) |
 | `GET /api/channel-pipeline/executions/{id}` | Get execution details (optional log/entities) |
 | `POST /api/channel-pipeline/executions/{id}/rollback` | Rollback an execution. With a pre-run snapshot it requires `confirm=true` (409 otherwise); once confirmed, an event_sync attach run whose journal fully covers its attaches is reverted SURGICALLY (only the run-added stream ids removed, post-run Dispatcharr churn preserved; response carries `surgical_unmerge: true`), otherwise it delegates to the full snapshot restore |
@@ -1523,6 +1524,17 @@ produced.
 | `GET /api/channel-pipeline/debug-bundle/{job_id}` | Poll or download a bundle owned by the authenticated human admin who started it. Other principals receive `404`. Returns JSON status while running, JSON `{status: "failed", error}` on failure, or the `tar.gz` (`application/gzip`) attachment when ready (obfuscated channels, rules, normalization rules, streams, probe stats, settings, task schedules, logs). `logs.txt` contains the oldest-to-newest persistent window, bounded to the newest 50 MiB; it falls back to the ring when no persistent data is available. A degraded persistent snapshot also adds `logs-ring-fallback.txt`. `manifest.json.log_members` records sources, timestamps, counts, applied rotation settings, saturation and truncation. Completed artifacts use private temporary files rather than retained in-memory byte strings. A job is evicted after a successful read or by its independent 30-minute expiry timer. |
 | `GET /api/channel-pipeline/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
 | `POST /api/channel-pipeline/event-sync-preview` | Event Sync dry-run: match secondary-group streams against live master channels with ZERO writes (bead ti939.1.4). Admin-gated. See notes below and `docs/event_sync.md`. |
+
+Selected-rule runs use the same asynchronous `202 Accepted` and execution polling
+contract as run-all and single-rule runs. The server ignores client submission
+order and executes the selected scope in canonical rule order: ascending
+`priority`, then ascending rule `id` as the stable tie-break. Standard rules run
+through the existing standard pipeline passes; Event Sync rules run through the
+existing dedicated Event Sync phase. Execution responses identify these rows with
+`run_scope: "selected"` and include `selected_rule_ids` plus one
+`selected_rule_outcomes` entry per rule. Validation is fail-closed and atomic: an
+ineligible member is never silently dropped, and an empty or stale selection is
+never widened into run-all.
 
 ---
 

@@ -445,8 +445,95 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
-    // Note: Per-rule selection with checkboxes is not implemented.
-    // The run pipeline executes all enabled rules.
+    it('confirms and runs exactly the selected rules in displayed order, then clears selection', async () => {
+      const user = userEvent.setup();
+      const bodies: Array<{ dry_run?: boolean; rule_ids?: number[] }> = [];
+      const later = createMockChannelPipelineRule({ name: 'Later', priority: 20, enabled: true });
+      const first = createMockChannelPipelineRule({ name: 'First', priority: 10, enabled: true });
+      const unselected = createMockChannelPipelineRule({ name: 'Unselected', priority: 30, enabled: true });
+      mockDataStore.channelPipelineRules.push(later, first, unselected);
+      server.use(
+        http.post('/api/channel-pipeline/run-selected', async ({ request }) => {
+          const body = await request.json() as { dry_run?: boolean; rule_ids?: number[] };
+          bodies.push(body);
+          const execution = createMockChannelPipelineExecution({
+            status: 'completed',
+            selected_rule_ids: body.rule_ids,
+            run_scope: 'selected',
+          });
+          mockDataStore.channelPipelineExecutions.unshift(execution);
+          return HttpResponse.json(
+            { execution_id: execution.id, status: 'running', message: 'started' },
+            { status: 202 },
+          );
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('First');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Later' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select First' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /run 2 selected rules/i });
+      expect(within(dialog).getByText('First')).toBeInTheDocument();
+      expect(within(dialog).getByText('Later')).toBeInTheDocument();
+      expect(within(dialog).queryByText('Unselected')).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: /^run selected$/i }));
+
+      await waitFor(() => expect(bodies).toEqual([
+        { dry_run: false, rule_ids: [first.id, later.id] },
+      ]));
+      await waitFor(() => {
+        expect(screen.getByRole('checkbox', { name: 'Select First' })).not.toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'Select Later' })).not.toBeChecked();
+      });
+    });
+
+    it('rejects partial eligibility in confirmation without sending a request', async () => {
+      const user = userEvent.setup();
+      let requestCount = 0;
+      const runnable = createMockChannelPipelineRule({ name: 'Runnable', priority: 1, enabled: true });
+      const disabled = createMockChannelPipelineRule({ name: 'Disabled', priority: 2, enabled: false });
+      mockDataStore.channelPipelineRules.push(runnable, disabled);
+      server.use(
+        http.post('/api/channel-pipeline/run-selected', () => {
+          requestCount += 1;
+          return HttpResponse.json({}, { status: 500 });
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('Runnable');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Runnable' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select Disabled' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /run 2 selected rules/i });
+      expect(within(dialog).getByText(/disabled rules cannot run/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
+      await user.click(within(dialog).getByRole('button', { name: /cancel/i }));
+      expect(requestCount).toBe(0);
+      expect(screen.getByRole('checkbox', { name: 'Select Runnable' })).toBeChecked();
+      expect(screen.getByRole('checkbox', { name: 'Select Disabled' })).toBeChecked();
+    });
+
+    it('identifies an out-of-window selection as ineligible', async () => {
+      const user = userEvent.setup();
+      const inactive = createMockChannelPipelineRule({
+        name: 'Future Rule', enabled: true, active_from: '2099-01-01',
+      });
+      mockDataStore.channelPipelineRules.push(inactive);
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('Future Rule');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Future Rule' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /run 1 selected rule/i });
+      expect(within(dialog).getByText(/outside its active date window/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
+    });
   });
 
   describe('event_sync per-rule run (utswf)', () => {
@@ -676,6 +763,24 @@ describe('ChannelPipelineTab', () => {
   });
 
   describe('execution history', () => {
+    it('labels selected-rule history and names its scope', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          run_scope: 'selected',
+          selected_rule_ids: [4, 9],
+          selected_rule_outcomes: [
+            { rule_id: 4, rule_name: 'First', status: 'completed', match_count: 3, error_count: 0 },
+            { rule_id: 9, rule_name: 'Second', status: 'completed_with_errors', match_count: 1, error_count: 2 },
+          ],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      expect(await screen.findByText('Selected Rules (2)')).toBeInTheDocument();
+      expect(screen.getByText(/first, second/i)).toBeInTheDocument();
+    });
+
     it('displays execution history', async () => {
       mockDataStore.channelPipelineExecutions.push(
         createMockChannelPipelineExecution({ status: 'completed', channels_created: 5 }),

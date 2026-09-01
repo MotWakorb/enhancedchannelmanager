@@ -232,6 +232,12 @@ class RunPipelineRequest(BaseModel):
     rule_ids: Optional[List[int]] = None
 
 
+class RunSelectedRulesRequest(BaseModel):
+    """Strict scope for an atomic selected-rule run."""
+    dry_run: bool = False
+    rule_ids: List[int] = Field(default_factory=list, max_length=500)
+
+
 class CommitPipelinePlanRequest(BaseModel):
     plan_id: str
     plan_hash: str
@@ -1377,6 +1383,7 @@ def _create_pending_execution(
     triggered_by: str,
     rule_id: int | None = None,
     rule_name: str | None = None,
+    selected_rules: list | None = None,
 ) -> int:
     """Create a status='running' execution row up front (bd-enfsy 202+poll).
 
@@ -1396,6 +1403,11 @@ def _create_pending_execution(
             rule_id=rule_id,
             rule_name=rule_name,
         )
+        if selected_rules:
+            execution.set_selected_rule_outcomes([
+                {"rule_id": rule.id, "rule_name": rule.name, "status": "pending"}
+                for rule in selected_rules
+            ])
         session.add(execution)
         session.commit()
         session.refresh(execution)
@@ -1431,6 +1443,12 @@ def _mark_execution_failed(
             )
             execution.status = "failed"
             execution.error_message = f"{type(error).__name__}: {error}"
+            selected_outcomes = execution.get_selected_rule_outcomes()
+            if selected_outcomes:
+                execution.set_selected_rule_outcomes([
+                    {**outcome, "status": "failed"}
+                    for outcome in selected_outcomes
+                ])
             if partial_replay is not None:
                 execution.set_execution_log([{
                     "type": "partial_replay_failure",
@@ -1526,6 +1544,127 @@ async def run_auto_creation_pipeline(
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation pipeline: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/run-selected", status_code=202)
+async def run_selected_auto_creation_rules(
+    request: RunSelectedRulesRequest,
+    _admin=RequireAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
+    """Run exactly the selected runnable rules after atomic validation."""
+    from channel_pipeline_schema import validate_event_sync_config, validate_rule
+    from models import ChannelPipelineRule
+
+    if caller_is_mcp and not request.dry_run:
+        raise HTTPException(
+            status_code=409,
+            detail="MCP execution requires prepare and commit",
+        )
+
+    if not request.rule_ids:
+        raise HTTPException(status_code=400, detail={
+            "code": "empty_rule_selection",
+            "message": "Select at least one rule",
+        })
+    if len(request.rule_ids) != len(set(request.rule_ids)):
+        raise HTTPException(status_code=400, detail={
+            "code": "duplicate_rule_ids",
+            "message": "rule_ids must be unique",
+        })
+
+    session = get_session()
+    try:
+        rules = session.query(ChannelPipelineRule).filter(
+            ChannelPipelineRule.id.in_(request.rule_ids)
+        ).order_by(ChannelPipelineRule.priority, ChannelPipelineRule.id).all()
+        found_ids = {rule.id for rule in rules}
+        missing = sorted(set(request.rule_ids) - found_ids)
+        if missing:
+            raise HTTPException(status_code=404, detail={
+                "code": "unknown_rule_ids",
+                "message": "Selected rules were not found",
+                "rule_ids": missing,
+            })
+
+        today = datetime.utcnow().date()
+        issues = []
+        for rule in rules:
+            if not rule.enabled:
+                issues.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "reason": "disabled",
+                })
+                continue
+            if (
+                (rule.active_from is not None and rule.active_from > today)
+                or (rule.active_until is not None and rule.active_until < today)
+            ):
+                issues.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "reason": "inactive",
+                })
+                continue
+
+            validation = validate_rule(rule.get_conditions(), rule.get_actions())
+            errors = list(validation.get("errors", []))
+            if rule.is_event_sync():
+                config = rule.get_event_sync_config()
+                if config is None:
+                    errors.append("event_sync_config is invalid")
+                else:
+                    errors.extend(validate_event_sync_config(config))
+            if errors:
+                issues.append({
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "reason": "invalid",
+                    "errors": errors,
+                })
+
+        if issues:
+            raise HTTPException(status_code=409, detail={
+                "code": "selected_rules_not_runnable",
+                "message": "Every selected rule must be runnable",
+                "issues": issues,
+            })
+    finally:
+        session.close()
+
+    try:
+        engine = await _ensure_engine()
+        execution_id = _create_pending_execution(
+            mode="dry_run" if request.dry_run else "execute",
+            triggered_by="api",
+            selected_rules=rules,
+        )
+        canonical_rule_ids = [rule.id for rule in rules]
+        _supervise_background_pipeline(
+            engine.run_pipeline(
+                dry_run=request.dry_run,
+                triggered_by="api",
+                rule_ids=canonical_rule_ids,
+                execution_id=execution_id,
+                require_all_rule_ids=True,
+            ),
+            execution_id=execution_id,
+            label="run_selected_rules",
+        )
+        return JSONResponse(status_code=202, content={
+            "execution_id": execution_id,
+            "status": "running",
+            "rule_ids": canonical_rule_ids,
+            "message": "Selected rules started; poll execution status",
+        })
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception(
+            "[AUTO-CREATE] Failed to enqueue selected rules: %s", error
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

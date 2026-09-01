@@ -12,7 +12,7 @@ import * as ts from 'typescript';
 import { MODAL_OVERLAY_MANIFEST, type ModalOverlayManifestEntry } from './modalOverlayManifest';
 
 const SRC = path.resolve(process.cwd(), 'src');
-const EXPECTED_CALL_SITES = 75;
+const EXPECTED_CALL_SITES = 76;
 
 function attributeValue(
   opening: ts.JsxOpeningLikeElement,
