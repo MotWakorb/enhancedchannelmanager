@@ -629,6 +629,23 @@ async def update_task(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+def _validate_run_parameters(task_id: str, parameters: Optional[dict]) -> None:
+    """Apply task-specific invariants before ad-hoc parameters reach the engine."""
+    try:
+        from task_registry import get_registry
+        task_class = get_registry().get_task_class(task_id)
+    except Exception as e:
+        logger.debug("[TASKS] Could not validate run parameters for %s: %s", task_id, e)
+        return
+
+    validator = getattr(task_class, "validate_run_parameters", None) if task_class else None
+    if validator:
+        try:
+            validator(parameters)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail=str(e)) from e
+
+
 @router.post("/api/tasks/{task_id}/run", tags=["Tasks"])
 async def run_task(
     task_id: str,
@@ -653,6 +670,7 @@ async def run_task(
     # few truthy spellings would leave coercion and future-parameter bypasses.
     _reject_mcp_privileged_task(task_id, caller_is_mcp)
     try:
+        _validate_run_parameters(task_id, request.parameters if request else None)
         from task_engine import get_engine
         engine = get_engine()
         schedule_id = request.schedule_id if request else None

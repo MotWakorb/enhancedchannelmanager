@@ -61,6 +61,19 @@ class StreamProbeTask(TaskScheduler):
             "max_concurrent": self._max_concurrent_override,
         }
 
+    @classmethod
+    def validate_schedule_parameters(cls, parameters: Optional[dict]) -> None:
+        cls.validate_run_parameters(parameters)
+
+    @classmethod
+    def validate_run_parameters(cls, parameters: Optional[dict]) -> None:
+        if (
+            parameters is not None
+            and "allow_reorder_after_probe" in parameters
+            and type(parameters["allow_reorder_after_probe"]) is not bool
+        ):
+            raise ValueError("allow_reorder_after_probe must be a boolean")
+
     def update_config(self, config: dict) -> None:
         """Update stream probe configuration from schedule parameters.
 
@@ -77,7 +90,8 @@ class StreamProbeTask(TaskScheduler):
         if "auto_sync_groups" in config:
             self._auto_sync_groups = bool(config["auto_sync_groups"])
         if "allow_reorder_after_probe" in config:
-            self._allow_reorder_after_probe = bool(config["allow_reorder_after_probe"])
+            self.validate_run_parameters(config)
+            self._allow_reorder_after_probe = config["allow_reorder_after_probe"]
         if "timeout" in config:
             self._timeout_override = config["timeout"]
         if "max_concurrent" in config:

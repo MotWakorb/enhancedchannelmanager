@@ -38,6 +38,25 @@ def _task_prober() -> SimpleNamespace:
     )
 
 
+def test_stream_probe_config_rejects_non_boolean_reorder_option():
+    task = StreamProbeTask()
+
+    with pytest.raises(
+        ValueError, match="allow_reorder_after_probe must be a boolean"
+    ):
+        task.update_config({"allow_reorder_after_probe": "false"})
+
+    assert task.get_config()["allow_reorder_after_probe"] is True
+
+
+def test_stream_probe_config_missing_reorder_option_keeps_legacy_default():
+    task = StreamProbeTask()
+
+    task.update_config({"channel_groups": [7]})
+
+    assert task.get_config()["allow_reorder_after_probe"] is True
+
+
 @pytest.mark.asyncio
 async def test_scheduled_probe_reorder_choice_is_invocation_local_and_group_scoped():
     prober = _task_prober()
