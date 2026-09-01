@@ -161,7 +161,7 @@ gh pr merge <#> --merge --delete-branch
 git checkout dev && git pull
 git status  # MUST show "up to date with origin"
 
-# Confirm the image actually published (see below - this step is NOT optional)
+# Check publish evidence and current tag markers (see below; this is NOT optional)
 .venv/bin/python scripts/check_publish.py
 ```
 
@@ -205,15 +205,17 @@ All four required checks gate their real work on `scripts/classify_changed_paths
 
 Read that summary before treating a green rollup as proof the suite passed. `gh run view <run-id>` links it, or open the run in the browser.
 
-#### Confirm the image published
+#### Check publish evidence and current tag markers
 
 A merged PR is not a published image. Merging to `dev` triggers independent
 **Tests** and **Build and Push Docker Image** verification workflows. Image
 builds and scans no longer wait on a polling job: a wedged test runner cannot
-hide image-build evidence. Completion of either workflow triggers **Publish
-Verified Images**, which publishes only when both exact-SHA push workflows are
-successful and the SHA is still the current branch head. Until then, mutable
-tags retain their last known-good image.
+hide image-build evidence. After its required test jobs succeed, the **Tests**
+workflow calls `publish-images.yml` as the reusable **Publish Verified Dev
+Images** job. That called workflow publishes only when the exact-SHA build
+evidence is successful and the SHA is still the current `dev` head. There is
+no separate **Publish Verified Images** Actions run on the dev path. Until
+publication succeeds, mutable tags retain their last known-good image.
 
 The published `:dev` tag has silently lagged `dev` four times, from four unrelated causes:
 
@@ -232,10 +234,10 @@ So after `git checkout dev && git pull`, run:
 
 The script checks two things for the merge commit at `HEAD`:
 
-1. The **Publish Verified Images** workflow run for that commit concluded `success`.
-2. The published tag's build marker (`ECM_VERSION`, baked into the image from the `ECM_VERSION` build-arg) equals the version in `frontend/package.json` **at that commit**.
+1. The exact SHA's **Tests** push run concluded `success`, and its final reusable **Publish Verified Dev Images / Publish Verified Multi-Arch Manifests** job concluded `success` on that exact run attempt. An overall green Tests run without exactly one such job is not publish-job evidence.
+2. The manifest contains exactly `linux/amd64` and `linux/arm64`, with neither a missing, duplicate, malformed, nor unexpected platform. Each config carries exactly one `ECM_VERSION` and one full 40-character `GIT_COMMIT`; both platforms agree, the version equals `frontend/package.json` **at that commit**, and the commit marker equals the resolved SHA. Missing, duplicate, malformed, conflicting, or stale markers fail the check.
 
-Both must hold. A green workflow with a stale marker means the push did not land on the tag. A correct marker with a failed workflow means the tag is still serving an older build.
+Both must hold. The script reports the exact workflow attempt/job outcome and current mutable-tag marker values as separate evidence. This point-in-time check trusts actors allowed to write the tag; it does not cryptographically bind image bytes to that workflow job.
 
 **It is a post-merge check, deliberately not a CI gate.** A check that runs after the merge cannot gate the merge it follows, and adding it to the PR flow would put a permanently-failing context on every open PR. Running it *before* the merge is the one way to misread it: on a feature branch the version bump has not reached `dev` yet, so the registry cannot possibly carry it. The script detects that case and prints a `PRE-MERGE RUN` banner saying the mismatch is expected.
 
@@ -250,10 +252,10 @@ Useful flags:
 | Flag | Effect |
 | --- | --- |
 | `--commit <sha>` | Verify a specific commit instead of `HEAD`. |
-| `--pull` | Read the marker by dropping and re-pulling the tag, the heavier check, instead of reading the registry config blob. |
-| `--skip-workflow` / `--skip-image` | Run only one of the two checks. |
+| `--pull` | After mandatory inspection of exactly `linux/amd64` and `linux/arm64`, drop and re-pull the tag and require the host image's `ECM_VERSION` and full `GIT_COMMIT` to match those manifest markers. A successful pull cannot rescue failed manifest inspection. |
+| `--skip-workflow` / `--skip-image` | Run only one of the two checks. The flags cannot be combined because that would check nothing. With `--skip-image`, `--pull` has no image operation to perform. |
 
-The same "prove the image before you trust it" discipline applies to any other manual image check you run: drop the local tag, pull it fresh, and read the version markers baked into the image before trusting it, the same way `--pull` above does.
+The default check requires the ECM platform contract: exactly `linux/amd64` and `linux/arm64`, each carrying one copy of both markers. The additive `--pull` check confirms that a fresh host pull resolves to the same marker values. Image history/digest lookup remains a fallback for historical images that predate these markers.
 
 ### 7. File Beads for Remaining Work
 

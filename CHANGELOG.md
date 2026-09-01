@@ -14,6 +14,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
   **Not included:** no score preview or explanation UI, no profiles, no compound rule groups, no per-channel profiles, no SQL migrations, and no new dependencies.
 
+### Fixed
+
+- **Post-merge dev publication checks now follow the actual reusable workflow and fail closed on incomplete evidence (bead `enhancedchannelmanager-69dxb`, build 0002).** The checker selects the exact successful `Tests` push attempt and its final reusable manifest job, requires the current mutable tag to contain exactly matching AMD64 and ARM64 version/full-commit markers, and treats a fresh pull as an additional marker cross-check rather than a fallback. Malformed API or manifest data, duplicate markers, missing platforms, command failures, and a request to skip both checks now return actionable failures. The result is explicitly a point-in-time consistency check that trusts registry writers, not cryptographic workflow-to-image attestation.
+
 ## [0.18.1] — 2026-08-30
 
 ### Security
