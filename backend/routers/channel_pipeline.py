@@ -1405,7 +1405,14 @@ def _create_pending_execution(
         )
         if selected_rules:
             execution.set_selected_rule_outcomes([
-                {"rule_id": rule.id, "rule_name": rule.name, "status": "pending"}
+                {
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "rule_kind": (
+                        "event_sync" if rule.is_event_sync() else "standard"
+                    ),
+                    "status": "pending",
+                }
                 for rule in selected_rules
             ])
         session.add(execution)
@@ -1443,11 +1450,22 @@ def _mark_execution_failed(
             )
             execution.status = "failed"
             execution.error_message = f"{type(error).__name__}: {error}"
-            selected_outcomes = execution.get_selected_rule_outcomes()
-            if selected_outcomes:
+            selected_state = execution.get_selected_rule_outcome_state()
+            if selected_state["integrity"] == "valid":
+                terminal = {
+                    "completed", "completed_with_errors", "skipped", "capped",
+                    "failed", "interrupted", "not_run", "abandoned",
+                }
                 execution.set_selected_rule_outcomes([
-                    {**outcome, "status": "failed"}
-                    for outcome in selected_outcomes
+                    outcome if outcome["status"] in terminal else {
+                        **outcome,
+                        "status": (
+                            "interrupted"
+                            if outcome["status"] == "running"
+                            else "not_run"
+                        ),
+                    }
+                    for outcome in selected_state["outcomes"]
                 ])
             if partial_replay is not None:
                 execution.set_execution_log([{
@@ -1554,8 +1572,10 @@ async def run_selected_auto_creation_rules(
     caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
 ):
     """Run exactly the selected runnable rules after atomic validation."""
-    from channel_pipeline_schema import validate_event_sync_config, validate_rule
-    from models import ChannelPipelineRule
+    from selected_pipeline_rules import (
+        SelectedRuleValidationError,
+        load_selected_rule_snapshots,
+    )
 
     if caller_is_mcp and not request.dry_run:
         raise HTTPException(
@@ -1574,65 +1594,18 @@ async def run_selected_auto_creation_rules(
             "message": "rule_ids must be unique",
         })
 
-    session = get_session()
     try:
-        rules = session.query(ChannelPipelineRule).filter(
-            ChannelPipelineRule.id.in_(request.rule_ids)
-        ).order_by(ChannelPipelineRule.priority, ChannelPipelineRule.id).all()
-        found_ids = {rule.id for rule in rules}
-        missing = sorted(set(request.rule_ids) - found_ids)
-        if missing:
-            raise HTTPException(status_code=404, detail={
-                "code": "unknown_rule_ids",
-                "message": "Selected rules were not found",
-                "rule_ids": missing,
-            })
-
-        today = datetime.utcnow().date()
-        issues = []
-        for rule in rules:
-            if not rule.enabled:
-                issues.append({
-                    "rule_id": rule.id,
-                    "rule_name": rule.name,
-                    "reason": "disabled",
-                })
-                continue
-            if (
-                (rule.active_from is not None and rule.active_from > today)
-                or (rule.active_until is not None and rule.active_until < today)
-            ):
-                issues.append({
-                    "rule_id": rule.id,
-                    "rule_name": rule.name,
-                    "reason": "inactive",
-                })
-                continue
-
-            validation = validate_rule(rule.get_conditions(), rule.get_actions())
-            errors = list(validation.get("errors", []))
-            if rule.is_event_sync():
-                config = rule.get_event_sync_config()
-                if config is None:
-                    errors.append("event_sync_config is invalid")
-                else:
-                    errors.extend(validate_event_sync_config(config))
-            if errors:
-                issues.append({
-                    "rule_id": rule.id,
-                    "rule_name": rule.name,
-                    "reason": "invalid",
-                    "errors": errors,
-                })
-
-        if issues:
-            raise HTTPException(status_code=409, detail={
-                "code": "selected_rules_not_runnable",
-                "message": "Every selected rule must be runnable",
-                "issues": issues,
-            })
-    finally:
-        session.close()
+        rules = load_selected_rule_snapshots(request.rule_ids)
+    except SelectedRuleValidationError as error:
+        detail = {"code": error.code, "message": error.message}
+        if error.rule_ids:
+            detail["rule_ids"] = error.rule_ids
+        if error.issues:
+            detail["issues"] = error.issues
+        raise HTTPException(
+            status_code=404 if error.code == "unknown_rule_ids" else 409,
+            detail=detail,
+        )
 
     try:
         engine = await _ensure_engine()

@@ -1580,6 +1580,33 @@ class TestRunSelectedChannelPipelineRules:
         assert detail["issues"][0]["errors"]
 
     @pytest.mark.asyncio
+    async def test_rejects_event_sync_rule_disabled_in_nested_config(
+        self, async_client, test_session
+    ):
+        from tests.event_sync_fixtures import event_sync_config
+
+        config = event_sync_config()
+        config["enabled"] = False
+        nested_disabled = _create_rule(
+            test_session,
+            name="Nested disabled",
+            event_sync_config=json.dumps(config),
+        )
+
+        response = await async_client.post(
+            "/api/channel-pipeline/run-selected",
+            json={"rule_ids": [nested_disabled.id]},
+        )
+
+        assert response.status_code == 409
+        assert response.json()["detail"]["issues"] == [{
+            "rule_id": nested_disabled.id,
+            "rule_name": "Nested disabled",
+            "reason": "disabled",
+        }]
+        assert test_session.query(ChannelPipelineExecution).count() == 0
+
+    @pytest.mark.asyncio
     async def test_enqueues_exact_selection_in_canonical_order_and_records_scope(
         self, async_client, test_session
     ):
@@ -1617,8 +1644,18 @@ class TestRunSelectedChannelPipelineRules:
         assert execution.to_dict()["run_scope"] == "selected"
         assert execution.to_dict()["selected_rule_ids"] == [first.id, later.id]
         assert execution.to_dict()["selected_rule_outcomes"] == [
-            {"rule_id": first.id, "rule_name": "First", "status": "pending"},
-            {"rule_id": later.id, "rule_name": "Later", "status": "pending"},
+            {
+                "rule_id": first.id,
+                "rule_name": "First",
+                "rule_kind": "standard",
+                "status": "pending",
+            },
+            {
+                "rule_id": later.id,
+                "rule_name": "Later",
+                "rule_kind": "standard",
+                "status": "pending",
+            },
         ]
 
         gate.set()

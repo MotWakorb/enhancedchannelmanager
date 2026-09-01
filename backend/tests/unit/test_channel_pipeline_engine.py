@@ -47,8 +47,8 @@ class TestChannelPipelineEngineInit:
 
     def test_selected_rule_outcomes_preserve_order_and_attribute_failures(self):
         rules = [
-            SimpleNamespace(id=4, name="First"),
-            SimpleNamespace(id=9, name="Second"),
+            SimpleNamespace(id=4, name="First", is_event_sync=lambda: False),
+            SimpleNamespace(id=9, name="Second", is_event_sync=lambda: False),
         ]
         results = {
             "rule_match_counts": {4: 3, 9: 1},
@@ -64,6 +64,7 @@ class TestChannelPipelineEngineInit:
             {
                 "rule_id": 4,
                 "rule_name": "First",
+                "rule_kind": "standard",
                 "status": "completed",
                 "match_count": 3,
                 "error_count": 0,
@@ -71,6 +72,7 @@ class TestChannelPipelineEngineInit:
             {
                 "rule_id": 9,
                 "rule_name": "Second",
+                "rule_kind": "standard",
                 "status": "completed_with_errors",
                 "match_count": 1,
                 "error_count": 2,
@@ -525,7 +527,11 @@ class TestChannelPipelineEngineRunPipeline:
         invalid_rule.get_conditions.return_value = [{"type": "not_a_condition"}]
 
         self.engine._load_existing_data = AsyncMock()
-        self.engine._load_rules = AsyncMock(return_value=[invalid_rule])
+        self.engine._load_selected_rule_snapshots = AsyncMock(
+            side_effect=RuntimeError(
+                "Selected rule configuration changed before execution"
+            )
+        )
         self.engine._fetch_streams = AsyncMock()
         self.engine._process_streams = AsyncMock()
 

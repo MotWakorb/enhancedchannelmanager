@@ -2450,15 +2450,65 @@ class ChannelPipelineExecution(Base):
         """Set event_sync_summary from list (JSON), NULL when empty."""
         self.event_sync_summary = json.dumps(summaries) if summaries else None
 
-    def get_selected_rule_outcomes(self) -> list:
-        """Parse selected-rule scope/outcomes (empty for other run types)."""
-        if not self.selected_rule_outcomes:
-            return []
+    _SELECTED_RULE_STATUSES = frozenset({
+        "pending", "running", "completed", "completed_with_errors",
+        "skipped", "capped", "failed", "interrupted", "not_run",
+        "abandoned",
+    })
+    _SELECTED_RULE_KINDS = frozenset({"standard", "event_sync"})
+    _SELECTED_RULE_COUNT_FIELDS = frozenset({
+        "match_count", "attach_count", "error_count",
+    })
+
+    def get_selected_rule_outcome_state(self) -> dict:
+        """Strictly parse selected-run audit data without losing its scope."""
+        if self.selected_rule_outcomes is None:
+            return {"integrity": "not_selected", "outcomes": []}
         try:
             value = json.loads(self.selected_rule_outcomes)
         except (ValueError, TypeError):
-            return []
-        return value if isinstance(value, list) else []
+            return {"integrity": "corrupt", "outcomes": []}
+        if not isinstance(value, list) or not value:
+            return {"integrity": "corrupt", "outcomes": []}
+
+        ids = set()
+        for item in value:
+            if not isinstance(item, dict):
+                return {"integrity": "corrupt", "outcomes": []}
+            rule_id = item.get("rule_id")
+            if (
+                not isinstance(rule_id, int)
+                or isinstance(rule_id, bool)
+                or rule_id in ids
+            ):
+                return {"integrity": "corrupt", "outcomes": []}
+            ids.add(rule_id)
+            if not isinstance(item.get("rule_name"), str) or not item["rule_name"].strip():
+                return {"integrity": "corrupt", "outcomes": []}
+            if item.get("rule_kind") not in self._SELECTED_RULE_KINDS:
+                return {"integrity": "corrupt", "outcomes": []}
+            if item.get("status") not in self._SELECTED_RULE_STATUSES:
+                return {"integrity": "corrupt", "outcomes": []}
+            for field in self._SELECTED_RULE_COUNT_FIELDS:
+                if field not in item:
+                    continue
+                count = item[field]
+                if (
+                    not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or count < 0
+                ):
+                    return {"integrity": "corrupt", "outcomes": []}
+            for field in ("skip_reason", "cap_reason"):
+                if field in item and (
+                    not isinstance(item[field], str) or not item[field].strip()
+                ):
+                    return {"integrity": "corrupt", "outcomes": []}
+        return {"integrity": "valid", "outcomes": value}
+
+    def get_selected_rule_outcomes(self) -> list:
+        """Return validated selected outcomes, or an empty list when unavailable."""
+        return self.get_selected_rule_outcome_state()["outcomes"]
 
     def set_selected_rule_outcomes(self, outcomes: list) -> None:
         """Persist selected-rule outcomes in canonical execution order."""
@@ -2467,7 +2517,8 @@ class ChannelPipelineExecution(Base):
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
         """Convert to dictionary for API responses."""
         _warnings = self.get_warnings()
-        _selected_rule_outcomes = self.get_selected_rule_outcomes()
+        _selected_rule_state = self.get_selected_rule_outcome_state()
+        _selected_rule_outcomes = _selected_rule_state["outcomes"]
         result = {
             "id": self.id,
             "rule_id": self.rule_id,
@@ -2504,9 +2555,10 @@ class ChannelPipelineExecution(Base):
             "is_event_sync": bool(self.is_event_sync),
             "event_sync_summary": self.get_event_sync_summary(),
             "run_scope": (
-                "selected" if _selected_rule_outcomes else
-                "single" if self.rule_id is not None else "all"
+                "selected" if self.selected_rule_outcomes is not None else
+                "single" if self.rule_id is not None or self.rule_name else "all"
             ),
+            "selected_rule_integrity": _selected_rule_state["integrity"],
             "selected_rule_ids": [
                 item["rule_id"] for item in _selected_rule_outcomes
                 if isinstance(item, dict) and isinstance(item.get("rule_id"), int)
