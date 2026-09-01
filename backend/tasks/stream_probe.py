@@ -47,6 +47,7 @@ class StreamProbeTask(TaskScheduler):
         # Schedule parameter overrides
         self._channel_groups: Optional[list] = None  # None = not configured (probe all), [] = explicitly empty (probe nothing)
         self._auto_sync_groups: bool = False  # Probe all current groups at runtime
+        self._allow_reorder_after_probe: bool = True
         self._timeout_override: Optional[int] = None
         self._max_concurrent_override: Optional[int] = None
 
@@ -55,6 +56,7 @@ class StreamProbeTask(TaskScheduler):
         return {
             "channel_groups": self._channel_groups,
             "auto_sync_groups": self._auto_sync_groups,
+            "allow_reorder_after_probe": self._allow_reorder_after_probe,
             "timeout": self._timeout_override,
             "max_concurrent": self._max_concurrent_override,
         }
@@ -64,6 +66,7 @@ class StreamProbeTask(TaskScheduler):
 
         Supported parameters:
         - channel_groups: list[str] - which channel groups to probe
+        - allow_reorder_after_probe: bool - allow the global reorder setting for this run
         - timeout: int - probe timeout in seconds
         - max_concurrent: int - max concurrent probe operations
         """
@@ -73,6 +76,8 @@ class StreamProbeTask(TaskScheduler):
             self._channel_groups = val if val is not None else []
         if "auto_sync_groups" in config:
             self._auto_sync_groups = bool(config["auto_sync_groups"])
+        if "allow_reorder_after_probe" in config:
+            self._allow_reorder_after_probe = bool(config["allow_reorder_after_probe"])
         if "timeout" in config:
             self._timeout_override = config["timeout"]
         if "max_concurrent" in config:
@@ -86,6 +91,7 @@ class StreamProbeTask(TaskScheduler):
         """Restore the exact baseline, preserving ``None`` as probe-all."""
         self._channel_groups = config["channel_groups"]
         self._auto_sync_groups = config["auto_sync_groups"]
+        self._allow_reorder_after_probe = config["allow_reorder_after_probe"]
         self._timeout_override = config["timeout"]
         self._max_concurrent_override = config["max_concurrent"]
 
@@ -199,6 +205,7 @@ class StreamProbeTask(TaskScheduler):
                     # externally when this task opted into info alerts. self._send_alerts
                     # is the engine-gated (send_alerts AND alert_on_info) value (GH #462).
                     start_send_alerts=self._send_alerts,
+                    allow_reorder_after_probe=self._allow_reorder_after_probe,
                 )
             )
 
@@ -340,5 +347,6 @@ class StreamProbeTask(TaskScheduler):
             # Clear all schedule parameter overrides
             self._channel_groups = None
             self._auto_sync_groups = False
+            self._allow_reorder_after_probe = True
             self._timeout_override = None
             self._max_concurrent_override = None

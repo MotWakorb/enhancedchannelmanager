@@ -2401,7 +2401,14 @@ class StreamProber:
             **self._sort_settings_snapshot(),
         )
 
-    async def probe_all_streams(self, channel_groups_override: list[str] = None, skip_m3u_refresh: bool = False, stream_ids_filter: list[int] = None, start_send_alerts: bool = True):
+    async def probe_all_streams(
+        self,
+        channel_groups_override: list[str] = None,
+        skip_m3u_refresh: bool = False,
+        stream_ids_filter: list[int] = None,
+        start_send_alerts: bool = True,
+        allow_reorder_after_probe: bool = True,
+    ):
         """Probe all streams that are in channels (runs in background).
 
         Uses parallel probing - streams from different M3U accounts (or same M3U with
@@ -2415,9 +2422,12 @@ class StreamProber:
             stream_ids_filter: Optional list of specific stream IDs to probe.
                               If provided, only these streams will be probed (useful for re-probing failed streams).
             start_send_alerts: Whether the info-level "probe started" notification
-                              should dispatch an external alert. Callers pass the
-                              gated ``send_alerts AND alert_on_info`` value so the
-                              start alert respects the per-task config (GH #462).
+                               should dispatch an external alert. Callers pass the
+                               gated ``send_alerts AND alert_on_info`` value so the
+                               start alert respects the per-task config (GH #462).
+            allow_reorder_after_probe: Whether this invocation may apply the global
+                                       auto-reorder setting. False suppresses reorder
+                                       without changing the shared setting.
         """
         logger.info("[STREAM-PROBE] probe_all_streams called with channel_groups_override=%s, skip_m3u_refresh=%s, stream_ids_filter=%s", channel_groups_override, skip_m3u_refresh, len(stream_ids_filter) if stream_ids_filter else 0)
         logger.info("[STREAM-PROBE] Settings: parallel_probing_enabled=%s, max_concurrent_probes=%s, "
@@ -3064,8 +3074,12 @@ class StreamProber:
 
             # Auto-reorder streams if configured
             reordered_channels = []
-            logger.info("[STREAM-PROBE-SORT] Checking auto_reorder_after_probe setting: %s", self.auto_reorder_after_probe)
-            if self.auto_reorder_after_probe:
+            logger.info(
+                "[STREAM-PROBE-SORT] Checking auto_reorder_after_probe=%s, allow_reorder_after_probe=%s",
+                self.auto_reorder_after_probe,
+                allow_reorder_after_probe,
+            )
+            if self.auto_reorder_after_probe and allow_reorder_after_probe:
                 logger.info("[STREAM-PROBE] Auto-reorder is enabled, reordering streams in probed channels...")
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."

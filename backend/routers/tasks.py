@@ -223,6 +223,13 @@ TASK_PARAMETER_SCHEMAS = {
                 "source": "channel_groups",  # Tells UI to fetch from channel groups API
             },
             {
+                "name": "allow_reorder_after_probe",
+                "type": "boolean",
+                "label": "Allow stream reordering",
+                "description": "Allow this schedule to apply the global auto-reorder setting after probing",
+                "default": True,
+            },
+            {
                 "name": "timeout",
                 "type": "number",
                 "label": "Timeout (seconds)",

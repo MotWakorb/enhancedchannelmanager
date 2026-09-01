@@ -357,6 +357,25 @@ class TestGetParameterSchema:
         assert len(data["parameters"]) > 0
 
     @pytest.mark.asyncio
+    async def test_stream_probe_schema_allows_reorder_by_default(self, async_client):
+        response = await async_client.get("/api/tasks/stream_probe/parameter-schema")
+
+        assert response.status_code == 200
+        parameters = {
+            parameter["name"]: parameter for parameter in response.json()["parameters"]
+        }
+        assert parameters["allow_reorder_after_probe"] == {
+            "name": "allow_reorder_after_probe",
+            "type": "boolean",
+            "label": "Allow stream reordering",
+            "description": (
+                "Allow this schedule to apply the global auto-reorder setting "
+                "after probing"
+            ),
+            "default": True,
+        }
+
+    @pytest.mark.asyncio
     async def test_returns_empty_for_unknown(self, async_client):
         """Returns empty schema for unknown task type."""
         response = await async_client.get("/api/tasks/unknown_task/parameter-schema")
@@ -599,6 +618,37 @@ class TestCreateTaskSchedule:
         data = response.json()
         assert data["schedule_type"] == "daily"
         assert data["schedule_time"] == "06:00"
+
+    @pytest.mark.asyncio
+    async def test_persists_stream_probe_reorder_choice_as_json(
+        self, async_client, test_session
+    ):
+        _create_scheduled_task(test_session, task_id="stream_probe")
+
+        response = await async_client.post(
+            "/api/tasks/stream_probe/schedules",
+            json={
+                "schedule_type": "daily",
+                "schedule_time": "06:00",
+                "parameters": {
+                    "channel_groups": [7],
+                    "allow_reorder_after_probe": False,
+                },
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["parameters"] == {
+            "channel_groups": [7],
+            "allow_reorder_after_probe": False,
+        }
+        persisted = test_session.query(TaskSchedule).filter_by(
+            id=response.json()["id"]
+        ).one()
+        assert persisted.get_parameters() == {
+            "channel_groups": [7],
+            "allow_reorder_after_probe": False,
+        }
 
     @pytest.mark.asyncio
     async def test_returns_404_for_unknown_task(self, async_client):
