@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Scheduled Stream Probe group filters now fail closed when no configured groups resolve (bead `enhancedchannelmanager-8gmk8.3`, build 0004).** An omitted group selection still probes all groups, while an explicit empty selection or an all-stale selection completes without probing metadata or reordering channels. Mixed selections probe and reorder only currently valid groups.
+
 - **Post-merge dev publication checks now follow the actual reusable workflow and fail closed on incomplete evidence (bead `enhancedchannelmanager-69dxb`, build 0002).** The checker selects the exact successful `Tests` push attempt and its final reusable manifest job, requires the current mutable tag to contain exactly matching AMD64 and ARM64 version/full-commit markers, and treats a fresh pull as an additional marker cross-check rather than a fallback. Malformed API or manifest data, duplicate markers, missing platforms, command failures, and a request to skip both checks now return actionable failures. The result is explicitly a point-in-time consistency check that trusts registry writers, not cryptographic workflow-to-image attestation.
 
 ## [0.18.1] — 2026-08-30

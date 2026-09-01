@@ -150,6 +150,7 @@ class TestFailedStreamReprobeTask:
         mock_prober._probe_success_streams = [{"id": 10, "name": "s10"}]
         mock_prober._probe_failed_streams = []
         # Only stream 10 is in scope — stream 40 is from a different group
+        mock_prober._last_probe_scope_kind = "scoped"
         mock_prober._last_probe_channel_stream_ids = {10, 20, 30}
 
         async def mock_probe(**kwargs):
