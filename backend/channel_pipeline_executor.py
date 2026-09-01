@@ -1024,6 +1024,9 @@ class ActionExecutor:
             TemplateVariables.QUALITY_RAW: stream_ctx.resolution_height or "",
             TemplateVariables.PROVIDER: stream_ctx.m3u_account_name or "",
             TemplateVariables.PROVIDER_ID: stream_ctx.m3u_account_id or "",
+            TemplateVariables.PROVIDER_CHANNEL_NUMBER: (
+                stream_ctx.stream_chno if stream_ctx.stream_chno is not None else ""
+            ),
             TemplateVariables.NORMALIZED_NAME: normalized_name,
         }
 
@@ -1378,8 +1381,13 @@ class ActionExecutor:
                 details=action_details
             )
 
-        # Determine channel number first (needed for name prefix)
-        channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
+        # Determine channel number first (needed for name prefix).
+        number_spec, provider_number_result = self._resolve_provider_channel_number(
+            params.get("channel_number", "auto"), stream_ctx, action.type
+        )
+        if provider_number_result is not None:
+            return provider_number_result
+        channel_number = self._get_next_channel_number(number_spec)
         logger.debug("[AUTO-CREATE-EXEC] Channel number: spec=%s -> %s", params.get('channel_number', 'auto'), channel_number)
 
         # Apply channel number in name if setting is enabled
@@ -3403,7 +3411,11 @@ class ActionExecutor:
                 error="No channel to update"
             )
 
-        value = action.params.get("value", "auto")
+        value, provider_number_result = self._resolve_provider_channel_number(
+            action.params.get("value", "auto"), stream_ctx, action.type
+        )
+        if provider_number_result is not None:
+            return provider_number_result
 
         # Reuse the number if this channel was already assigned one this run
         # (avoids consuming extra numbers when multiple streams merge into same channel)
@@ -3461,6 +3473,33 @@ class ActionExecutor:
                 description="Failed to set channel number",
                 error=str(e)
             )
+
+    @staticmethod
+    def _resolve_provider_channel_number(
+        spec: Any, stream_ctx: StreamContext, action_type: str
+    ) -> tuple[Any, Optional[ActionResult]]:
+        """Resolve the provider-number token without falling back to auto numbering."""
+        if spec != "{provider_channel_number}":
+            return spec, None
+
+        provider_number = stream_ctx.stream_chno
+        if provider_number is None:
+            return spec, ActionResult(
+                success=True,
+                action_type=action_type,
+                description="Provider channel number is missing; action skipped",
+                skipped=True,
+            )
+        if not is_valid_channel_number(provider_number):
+            error = "Provider channel number is invalid"
+            return spec, ActionResult(
+                success=False,
+                action_type=action_type,
+                description=f"{error}; action skipped",
+                skipped=True,
+                error=error,
+            )
+        return provider_number, None
 
     # =========================================================================
     # Sort Group (enhancedchannelmanager-vy4fl)

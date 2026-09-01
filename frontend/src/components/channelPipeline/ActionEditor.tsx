@@ -29,6 +29,7 @@ const TEMPLATE_VARIABLES = [
   { name: '{quality_raw}', description: 'Raw quality number', example: '1080' },
   { name: '{provider}', description: 'M3U provider name', example: 'Provider A' },
   { name: '{provider_id}', description: 'M3U provider ID', example: '1' },
+  { name: '{provider_channel_number}', description: 'Channel number supplied by the M3U provider', example: '101' },
   { name: '{normalized_name}', description: 'Normalized name', example: 'ESPN' },
 ];
 
@@ -299,8 +300,10 @@ export function ActionEditor({
   const [streamProfiles, setStreamProfiles] = useState<StreamProfile[]>([]);
   const [channelProfiles, setChannelProfiles] = useState<ChannelProfile[]>([]);
   const [channelProfileDropdownOpen, setChannelProfileDropdownOpen] = useState(false);
-  const [channelNumberMode, setChannelNumberMode] = useState<'auto' | 'starting'>(
-    parseStartingNumber(action.channel_number) !== null ? 'starting' : 'auto'
+  const [channelNumberMode, setChannelNumberMode] = useState<'auto' | 'starting' | 'provider'>(
+    action.channel_number === '{provider_channel_number}'
+      ? 'provider'
+      : parseStartingNumber(action.channel_number) !== null ? 'starting' : 'auto'
   );
   const [nameTransformEnabled, setNameTransformEnabled] = useState(
     !!action.name_transform_pattern
@@ -741,19 +744,22 @@ export function ActionEditor({
             <CustomSelect
               value={channelNumberMode}
               onChange={val => {
-                const mode = val as 'auto' | 'starting';
+                const mode = val as 'auto' | 'starting' | 'provider';
                 setChannelNumberMode(mode);
                 if (mode === 'auto') {
                   const { channel_number: _, ...rest } = action;
                   onChange(rest);
-                } else {
+                } else if (mode === 'starting') {
                   setChannelNumberStartText('100');
                   onChange({ ...action, channel_number: '100-99999' });
+                } else {
+                  onChange({ ...action, channel_number: '{provider_channel_number}' });
                 }
               }}
               options={[
                 { value: 'auto', label: 'Auto (sequential from 1)' },
                 { value: 'starting', label: 'Starting from...' },
+                { value: 'provider', label: 'Provider Channel Number' },
               ]}
               disabled={readonly}
             />

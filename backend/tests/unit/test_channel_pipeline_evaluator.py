@@ -74,10 +74,15 @@ class TestStreamContext:
 
     def test_from_dispatcharr_stream_populates_stream_chno(self):
         """Populates stream_chno from stream data."""
-        stream = {"id": 1, "name": "CNN", "stream_chno": 21262.0}
+        fixture_path = (
+            Path(__file__).parents[1]
+            / "fixtures"
+            / "dispatcharr_stream_provider_channel_number.json"
+        )
+        stream = json.loads(fixture_path.read_text())
         ctx = StreamContext.from_dispatcharr_stream(stream)
 
-        assert ctx.stream_chno == 21262.0
+        assert ctx.stream_chno == 20174.0
 
     def test_from_dispatcharr_stream_stream_chno_none(self):
         """stream_chno is None when not in stream data."""

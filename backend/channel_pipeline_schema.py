@@ -826,6 +826,7 @@ class TemplateVariables:
     QUALITY_RAW = "quality_raw"          # Resolution as number (e.g., 1080, 720)
     PROVIDER = "provider"                # M3U account name
     PROVIDER_ID = "provider_id"          # M3U account ID
+    PROVIDER_CHANNEL_NUMBER = "provider_channel_number"  # tvg-chno from M3U source
     NORMALIZED_NAME = "normalized_name"  # Name after normalization rules
 
     @classmethod
@@ -840,6 +841,7 @@ class TemplateVariables:
             cls.QUALITY_RAW,
             cls.PROVIDER,
             cls.PROVIDER_ID,
+            cls.PROVIDER_CHANNEL_NUMBER,
             cls.NORMALIZED_NAME,
         ]
 

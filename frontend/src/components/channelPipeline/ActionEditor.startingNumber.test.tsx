@@ -86,6 +86,24 @@ describe('Create Channel "Starting from..." channel number', () => {
     channel_number: '100-99999',
   };
 
+  it('offers provider channel numbering and stores the provider template', async () => {
+    const user = userEvent.setup();
+    const calls = renderActionEditor({
+      type: 'create_channel',
+      name_template: '{stream_name}',
+      group_id: 1,
+    });
+
+    const numberingTrigger = screen
+      .getByText('Channel Numbering')
+      .closest('.action-field')
+      ?.querySelector('.custom-select-trigger') as HTMLButtonElement;
+    await user.click(numberingTrigger);
+    await user.click(screen.getByRole('option', { name: 'Provider Channel Number' }));
+
+    expect(lastAction(calls).channel_number).toBe('{provider_channel_number}');
+  });
+
   it('refuses a fractional start instead of numbering from its integer part', async () => {
     const user = userEvent.setup();
     const calls = renderActionEditor(CREATE_CHANNEL);
