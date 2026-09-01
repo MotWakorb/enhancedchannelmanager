@@ -241,7 +241,10 @@ class TestPipelineRuleSpec:
         errors = action.validate()
         assert any(CHANNEL_NUMBER_RULE_MESSAGE in e for e in errors), errors
 
-    @pytest.mark.parametrize("value", ["auto", "100-99999", "{auto}", 101, "101"])
+    @pytest.mark.parametrize(
+        "value",
+        ["auto", "100-99999", "{auto}", "{provider_channel_number}", 101, "101"],
+    )
     def test_set_channel_number_accepts_the_existing_spec_vocabulary(self, value):
         """Narrowing the spec vocabulary is a different question, so it is not narrowed."""
         from channel_pipeline_schema import Action, ActionType
@@ -362,4 +365,17 @@ class TestPipelineRuleSpec:
             type=ActionType.CREATE_CHANNEL,
             params={"name_template": "{stream_name}", "channel_number": value},
         )
+        assert action.validate() == []
+
+    def test_create_channel_accepts_provider_channel_number(self):
+        from channel_pipeline_schema import Action, ActionType
+
+        action = Action(
+            type=ActionType.CREATE_CHANNEL,
+            params={
+                "name_template": "{stream_name}",
+                "channel_number": "{provider_channel_number}",
+            },
+        )
+
         assert action.validate() == []

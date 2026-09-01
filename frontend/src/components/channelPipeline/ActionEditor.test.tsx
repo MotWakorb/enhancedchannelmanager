@@ -492,6 +492,27 @@ describe('ActionEditor', () => {
         expect(onChange).toHaveBeenCalled();
       });
     });
+
+    it('offers the provider channel number template variable', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+
+      render(
+        <ActionEditor
+          action={{ type: 'set_channel_number' }}
+          onChange={onChange}
+          onRemove={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: 'Show variables' }));
+      await user.click(screen.getByRole('button', { name: /provider_channel_number/i }));
+
+      expect(onChange).toHaveBeenCalledWith({
+        type: 'set_channel_number',
+        value: '{provider_channel_number}',
+      });
+    });
   });
 
   describe('sort_group action', () => {

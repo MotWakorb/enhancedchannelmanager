@@ -76,6 +76,65 @@ class TestChannelPipelineEngineInit:
         session.close.assert_called_once()
 
 
+class TestProviderCreateResultAggregation:
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "live"])
+    @pytest.mark.parametrize(
+        ("provider_number", "expected_failed_actions"),
+        [(None, 0), ("20174", 1)],
+        ids=["missing", "malformed"],
+    )
+    def test_skipped_provider_create_reaches_engine_aggregation(
+        self, provider_number, expected_failed_actions, dry_run
+    ):
+        from models import ChannelPipelineRule
+
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        client.get_channel_groups = AsyncMock(return_value=[])
+        client.create_channel = AsyncMock()
+        engine = ChannelPipelineEngine(client)
+        rule = ChannelPipelineRule()
+        rule.id = 1
+        rule.name = "Provider Number"
+        rule.priority = 0
+        rule.enabled = True
+        rule.m3u_account_id = None
+        rule.target_group_id = None
+        rule.stop_on_first_match = True
+        rule.match_scope_target_group = False
+        rule.match_scope_group_id = None
+        rule.skip_struck_streams = False
+        rule.set_conditions([{"type": "always"}])
+        rule.set_actions([{
+            "type": "create_channel",
+            "channel_number": "{provider_channel_number}",
+        }])
+        stream = StreamContext(
+            stream_id=1,
+            stream_name="Provider Stream",
+            m3u_account_id=1,
+            stream_chno=provider_number,
+        )
+        engine._load_rules = AsyncMock(return_value=[rule])
+        engine._fetch_streams = AsyncMock(return_value=[stream])
+        engine._create_execution = AsyncMock(
+            return_value=MagicMock(id=1, mode=None)
+        )
+        engine._save_execution = AsyncMock()
+        engine._update_rule_stats = AsyncMock()
+
+        with patch("channel_pipeline_engine.get_session", return_value=MagicMock()):
+            results = asyncio.get_event_loop().run_until_complete(
+                engine.run_pipeline(dry_run=dry_run)
+            )
+
+        assert results["streams_skipped"] == 1
+        assert len(results["failed_actions"]) == expected_failed_actions
+        action = results["execution_log"][0]["actions_executed"][0]
+        assert action["success"] is (provider_number is None)
+        client.create_channel.assert_not_awaited()
+
+
 class TestChannelPipelineEngineSingleton:
     """Tests for singleton pattern helpers."""
 

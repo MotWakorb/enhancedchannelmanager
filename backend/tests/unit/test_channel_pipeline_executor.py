@@ -7,6 +7,9 @@ and streams with proper rollback tracking.
 from types import SimpleNamespace
 from unittest.mock import MagicMock, AsyncMock, patch
 import asyncio
+from copy import deepcopy
+import json
+from pathlib import Path
 import pytest
 
 from channel_number import is_valid_channel_number
@@ -67,6 +70,449 @@ class TestActionResult:
         assert result.success is False
         assert result.error == "API connection failed"
 
+
+class TestProviderChannelNumber:
+    @staticmethod
+    def _provider_fixture_stream() -> StreamContext:
+        """Load the sanitized provider-number response fixture.
+
+        Repository history does not establish how the response was captured.
+        """
+        fixture_path = (
+            Path(__file__).parents[1]
+            / "fixtures"
+            / "dispatcharr_stream_provider_channel_number.json"
+        )
+        return StreamContext.from_dispatcharr_stream(json.loads(fixture_path.read_text()))
+
+    @staticmethod
+    def _executor() -> tuple[ActionExecutor, AsyncMock]:
+        client = MagicMock()
+        client.update_channel = AsyncMock()
+        client.create_channel = AsyncMock(
+            return_value={"id": 9, "name": "FloRacing", "channel_number": 20174}
+        )
+        executor = ActionExecutor(
+            client,
+            existing_channels=[
+                {"id": 1, "name": "FloRacing", "channel_number": 7, "streams": [39491]}
+            ],
+        )
+        return executor, client
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_set_channel_number_resolves_provider_fixture_number(self, dry_run):
+        executor, client = self._executor()
+        exec_ctx = ExecutionContext(dry_run=dry_run)
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {"type": "set_channel_number", "value": "{provider_channel_number}"},
+            self._provider_fixture_stream(),
+            exec_ctx,
+        ))
+
+        assert result.success is True
+        assert result.modified is True
+        assert executor._channel_by_id[1]["channel_number"] == 20174
+        if dry_run:
+            client.update_channel.assert_not_awaited()
+            assert result.description == "Would set channel number to 20174"
+        else:
+            client.update_channel.assert_awaited_once_with(1, {"channel_number": 20174})
+            assert result.description == "Set channel number to 20174"
+
+    @pytest.mark.parametrize(
+        ("provider_number", "expected_success", "expected_error"),
+        [
+            (None, True, None),
+            (0, False, "Provider channel number is invalid"),
+            (0.0, False, "Provider channel number is invalid"),
+            (-1, False, "Provider channel number is invalid"),
+            ("20174", False, "Provider channel number is invalid"),
+        ],
+    )
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_set_channel_number_does_not_fallback_for_missing_or_invalid_provider_number(
+        self, provider_number, expected_success, expected_error, dry_run
+    ):
+        executor, client = self._executor()
+        stream = self._provider_fixture_stream()
+        stream.stream_chno = provider_number
+        exec_ctx = ExecutionContext(dry_run=dry_run)
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {"type": "set_channel_number", "value": "{provider_channel_number}"},
+            stream,
+            exec_ctx,
+        ))
+
+        assert result.success is expected_success
+        assert result.skipped is True
+        assert result.error == expected_error
+        assert executor._channel_by_id[1]["channel_number"] == 7
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_create_channel_uses_provider_channel_number(self, dry_run):
+        executor, client = self._executor()
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {
+                "type": "create_channel",
+                "name_template": "{stream_name}",
+                "channel_number": "{provider_channel_number}",
+            },
+            self._provider_fixture_stream(),
+            ExecutionContext(dry_run=dry_run),
+        ))
+
+        assert result.success is True
+        if dry_run:
+            client.create_channel.assert_not_awaited()
+            assert "(#20174)" in result.description
+        else:
+            assert client.create_channel.await_args.args[0]["channel_number"] == 20174
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_create_channel_skips_when_provider_channel_number_is_missing(self, dry_run):
+        executor, client = self._executor()
+        stream = self._provider_fixture_stream()
+        stream.stream_chno = None
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {
+                "type": "create_channel",
+                "name_template": "{stream_name} New",
+                "channel_number": "{provider_channel_number}",
+            },
+            stream,
+            ExecutionContext(dry_run=dry_run),
+        ))
+
+        assert result.success is True
+        assert result.skipped is True
+        assert "provider channel number is missing" in result.description.lower()
+        client.create_channel.assert_not_awaited()
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    @pytest.mark.parametrize("occupied_by_current_channel", [True, False])
+    def test_set_channel_number_preserves_provider_number_on_collision(
+        self, dry_run, occupied_by_current_channel
+    ):
+        executor, client = self._executor()
+        if occupied_by_current_channel:
+            executor._channel_by_id[1]["channel_number"] = 20174
+        else:
+            occupied = {
+                "id": 2,
+                "name": "Other",
+                "channel_number": 20174,
+                "streams": [],
+                "auto_created": True,
+            }
+            executor.existing_channels.append(occupied)
+            executor._channel_by_id[2] = occupied
+        executor._mark_channel_number_used(20174)
+        exec_ctx = ExecutionContext(dry_run=dry_run)
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {"type": "set_channel_number", "value": "{provider_channel_number}"},
+            self._provider_fixture_stream(),
+            exec_ctx,
+        ))
+
+        assert result.success is True
+        assert executor._channel_by_id[1]["channel_number"] == 20174
+        if occupied_by_current_channel:
+            assert result.skipped is True
+            client.update_channel.assert_not_awaited()
+            assert result.description == "Channel number is already 20174; action skipped"
+        elif dry_run:
+            client.update_channel.assert_not_awaited()
+            assert result.description == "Would set channel number to 20174"
+        else:
+            client.update_channel.assert_awaited_once_with(1, {"channel_number": 20174})
+
+    @pytest.mark.parametrize("dry_run", [True, False])
+    def test_create_channel_preserves_provider_number_on_collision(self, dry_run):
+        executor, client = self._executor()
+        executor._mark_channel_number_used(20174)
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {
+                "type": "create_channel",
+                "name_template": "{stream_name} New",
+                "channel_number": "{provider_channel_number}",
+            },
+            self._provider_fixture_stream(),
+            ExecutionContext(dry_run=dry_run),
+        ))
+
+        assert result.success is True
+        if dry_run:
+            client.create_channel.assert_not_awaited()
+            assert "(#20174)" in result.description
+        else:
+            assert client.create_channel.await_args.args[0]["channel_number"] == 20174
+
+    @pytest.mark.parametrize("provider_number", [None, 0, 0.0])
+    @pytest.mark.parametrize("dry_run", [True, False])
+    @pytest.mark.parametrize(
+        ("if_exists", "normalization_enabled"),
+        [
+            ("merge", False),
+            ("merge_only", False),
+            ("update", False),
+            ("skip", True),
+        ],
+        ids=["merge", "merge-only", "update", "normalization"],
+    )
+    def test_create_channel_rejects_provider_number_before_existing_channel_mutation(
+        self, if_exists, normalization_enabled, dry_run, provider_number
+    ):
+        client = MagicMock()
+        client.update_channel = AsyncMock()
+        client.create_channel = AsyncMock()
+        normalizer = MagicMock() if normalization_enabled else None
+        if normalizer is not None:
+            normalized = MagicMock(normalized="FloRacing", transformations=[])
+            normalizer.normalize.return_value = normalized
+            normalizer.extract_core_name.side_effect = lambda value: value
+            normalizer.extract_call_sign.return_value = None
+        existing = {
+            "id": 1,
+            "name": "FloRacing",
+            "channel_number": 7,
+            "streams": [100],
+            "auto_created": True,
+        }
+        executor = ActionExecutor(
+            client,
+            existing_channels=[existing],
+            normalization_engine=normalizer,
+        )
+        if normalizer is not None:
+            normalizer.reset_mock()
+        before_channel = deepcopy(executor._channel_by_id[1])
+        stream = self._provider_fixture_stream()
+        stream.stream_chno = provider_number
+        stream.logo_url = "https://example.test/logo.png"
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {
+                "type": "create_channel",
+                "name_template": "FloRacing",
+                "channel_number": "{provider_channel_number}",
+                "if_exists": if_exists,
+            },
+            stream,
+            ExecutionContext(dry_run=dry_run),
+            normalization_group_ids=[1] if normalization_enabled else None,
+        ))
+
+        assert result.skipped is True
+        assert result.success is (provider_number is None)
+        assert executor._channel_by_id[1] == before_channel
+        client.update_channel.assert_not_awaited()
+        client.create_channel.assert_not_awaited()
+        if normalizer is not None:
+            normalizer.normalize.assert_not_called()
+
+    @pytest.mark.parametrize("action_type", ["set_channel_number", "create_channel"])
+    @pytest.mark.parametrize(
+        ("provider_number", "expected_success"),
+        [(20174.1, True), (20174.12, False)],
+    )
+    def test_provider_actions_enforce_canonical_tenths_precision(
+        self, action_type, provider_number, expected_success
+    ):
+        executor, client = self._executor()
+        stream = self._provider_fixture_stream()
+        stream.stream_chno = provider_number
+        exec_ctx = ExecutionContext()
+        action = {"type": action_type}
+        if action_type == "set_channel_number":
+            action["value"] = "{provider_channel_number}"
+            exec_ctx.current_channel_id = 1
+        else:
+            action.update({
+                "name_template": "{stream_name} New",
+                "channel_number": "{provider_channel_number}",
+            })
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream, exec_ctx)
+        )
+
+        assert result.success is expected_success
+        if expected_success and action_type == "set_channel_number":
+            client.update_channel.assert_awaited_once_with(
+                1, {"channel_number": provider_number}
+            )
+        elif expected_success:
+            assert client.create_channel.await_args.args[0]["channel_number"] == provider_number
+        else:
+            assert result.skipped is True
+            client.update_channel.assert_not_awaited()
+            client.create_channel.assert_not_awaited()
+
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "live"])
+    def test_create_auto_then_provider_set_then_create_auto_has_mode_parity(self, dry_run):
+        client = MagicMock()
+        client.update_channel = AsyncMock()
+        next_id = iter([101, 102])
+        client.create_channel = AsyncMock(side_effect=lambda data: {
+            **data,
+            "id": next(next_id),
+        })
+        executor = ActionExecutor(client, existing_channels=[])
+        exec_ctx = ExecutionContext(dry_run=dry_run)
+        first = StreamContext(
+            stream_id=1, stream_name="First", m3u_account_id=1, stream_chno=2,
+        )
+        second = StreamContext(
+            stream_id=2, stream_name="Second", m3u_account_id=1,
+        )
+
+        results = [
+            asyncio.get_event_loop().run_until_complete(executor.execute(
+                {"type": "create_channel", "channel_number": "auto"},
+                first,
+                exec_ctx,
+            )),
+            asyncio.get_event_loop().run_until_complete(executor.execute(
+                {"type": "set_channel_number", "value": "{provider_channel_number}"},
+                first,
+                exec_ctx,
+            )),
+            asyncio.get_event_loop().run_until_complete(executor.execute(
+                {"type": "create_channel", "channel_number": "auto"},
+                second,
+                exec_ctx,
+            )),
+        ]
+
+        first_id, second_id = (-1, -2) if dry_run else (101, 102)
+        assert [result.success for result in results] == [True, True, True]
+        assert [result.skipped for result in results] == [False, False, False]
+        assert executor._channel_by_id[first_id]["channel_number"] == 2
+        assert executor._channel_by_id[second_id]["channel_number"] == 3
+        assert len(exec_ctx.results) == 3
+        assert exec_ctx.channels_created == 2
+        assert exec_ctx.channels_updated == 1
+        assert exec_ctx.streams_skipped == 0
+        if dry_run:
+            client.create_channel.assert_not_awaited()
+            client.update_channel.assert_not_awaited()
+        else:
+            assert [
+                call.args[0]["channel_number"]
+                for call in client.create_channel.await_args_list
+            ] == [1, 3]
+            client.update_channel.assert_awaited_once_with(101, {"channel_number": 2})
+
+    def test_live_create_then_provider_set_is_not_suppressed_by_assignment_tracking(self):
+        client = MagicMock()
+        client.update_channel = AsyncMock()
+        client.create_channel = AsyncMock(return_value={
+            "id": 101,
+            "name": "First",
+            "channel_number": 1,
+            "streams": [1],
+        })
+        executor = ActionExecutor(client, existing_channels=[])
+        exec_ctx = ExecutionContext()
+        stream = StreamContext(
+            stream_id=1, stream_name="First", m3u_account_id=1, stream_chno=20174,
+        )
+
+        asyncio.get_event_loop().run_until_complete(executor.execute(
+            {"type": "create_channel", "channel_number": "auto"}, stream, exec_ctx,
+        ))
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {"type": "set_channel_number", "value": "{provider_channel_number}"},
+            stream,
+            exec_ctx,
+        ))
+
+        assert result.modified is True
+        assert result.skipped is False
+        assert executor._channel_by_id[101]["channel_number"] == 20174
+        client.update_channel.assert_awaited_once_with(101, {"channel_number": 20174})
+
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "live"])
+    def test_canonically_equal_provider_set_is_an_accounted_noop(self, dry_run):
+        executor, client = self._executor()
+        executor._channel_by_id[1]["channel_number"] = 1.2
+        exec_ctx = ExecutionContext(dry_run=dry_run)
+        exec_ctx.current_channel_id = 1
+        stream = self._provider_fixture_stream()
+        stream.stream_chno = 1.1 + 0.1
+
+        result = asyncio.get_event_loop().run_until_complete(executor.execute(
+            {"type": "set_channel_number", "value": "{provider_channel_number}"},
+            stream,
+            exec_ctx,
+        ))
+
+        assert result.success is True
+        assert result.skipped is True
+        assert result.modified is False
+        assert len(exec_ctx.results) == 1
+        assert exec_ctx.streams_skipped == 1
+        assert exec_ctx.channels_updated == 0
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.parametrize("action_type", ["set_channel_number", "create_channel"])
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "live"])
+    @pytest.mark.parametrize(
+        ("provider_number", "expected_success"),
+        [
+            (None, True),
+            (0, False),
+            (-1, False),
+            ("2", False),
+            (2.12, False),
+        ],
+        ids=["missing", "zero", "negative", "numeric-string", "unsupported-precision"],
+    )
+    def test_invalid_provider_action_has_one_accounted_result_and_no_state_mutation(
+        self, provider_number, expected_success, dry_run, action_type
+    ):
+        executor, client = self._executor()
+        executor._channel_assigned_numbers[1] = 7
+        stream = self._provider_fixture_stream()
+        stream.stream_chno = provider_number
+        exec_ctx = ExecutionContext(dry_run=dry_run)
+        exec_ctx.current_channel_id = 1
+        action = {
+            "type": action_type,
+            "value": "{provider_channel_number}",
+            "name_template": "Never Created",
+            "channel_number": "{provider_channel_number}",
+        }
+        before_channels = deepcopy(executor._channel_by_id)
+        before_created = deepcopy(executor._created_channels)
+        before_assignments = dict(executor._channel_assigned_numbers)
+        before_occupancy = set(executor._used_channel_number_ticks)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, stream, exec_ctx)
+        )
+
+        assert result.success is expected_success
+        assert result.skipped is True
+        assert exec_ctx.results == [result]
+        assert exec_ctx.streams_skipped == 1
+        assert executor._channel_by_id == before_channels
+        assert executor._created_channels == before_created
+        assert executor._channel_assigned_numbers == before_assignments
+        assert executor._used_channel_number_ticks == before_occupancy
+        client.update_channel.assert_not_awaited()
+        client.create_channel.assert_not_awaited()
 
 class TestExecutionContext:
     """Tests for ExecutionContext dataclass."""

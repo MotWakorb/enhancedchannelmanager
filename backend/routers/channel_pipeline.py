@@ -3974,7 +3974,7 @@ async def get_auto_creation_action_schema():
             "description": "Create a new channel",
             "params": {
                 "name_template": {"type": "string", "default": "{stream_name}", "description": "Template for channel name"},
-                "channel_number": {"type": "string|integer", "default": "auto", "description": "'auto', specific number, or 'min-max' range"},
+                "channel_number": {"type": "string|integer", "default": "auto", "description": "'auto', '{provider_channel_number}', specific number, or 'min-max' range"},
                 "group_id": {"type": "integer", "optional": True, "description": "Target channel group ID"},
                 "if_exists": {"type": "string", "enum": ["skip", "merge", "update"], "default": "skip", "description": "Behavior if channel exists"}
             }
@@ -4032,7 +4032,7 @@ async def get_auto_creation_action_schema():
             "type": ActionType.SET_CHANNEL_NUMBER.value,
             "description": "Set the channel number",
             "params": {
-                "value": {"type": "string|integer", "description": "'auto', specific number, or 'min-max' range"}
+                "value": {"type": "string|integer", "description": "'auto', '{provider_channel_number}', specific number, or 'min-max' range"}
             }
         },
         {
@@ -4070,6 +4070,7 @@ async def get_auto_creation_template_variables():
             {"name": "{quality_raw}", "description": "Resolution as number (e.g., 1080)"},
             {"name": "{provider}", "description": "M3U account name"},
             {"name": "{provider_id}", "description": "M3U account ID"},
+            {"name": "{provider_channel_number}", "description": "Channel number supplied by the M3U provider"},
             {"name": "{normalized_name}", "description": "Name after normalization rules"}
         ]
     }

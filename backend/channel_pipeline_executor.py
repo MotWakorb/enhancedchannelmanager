@@ -877,8 +877,15 @@ class ActionExecutor:
         # Build template context for variable expansion. Pass the rule's
         # normalization groups so {normalized_name} is consistent across every
         # action, not just create_channel (GH #466 / bd-6gvt8).
-        template_ctx = self._build_template_context(
-            stream_ctx, exec_ctx, normalization_group_ids=normalization_group_ids)
+        template_ctx = (
+            None
+            if action_type == ActionType.CREATE_CHANNEL
+            else self._build_template_context(
+                stream_ctx,
+                exec_ctx,
+                normalization_group_ids=normalization_group_ids,
+            )
+        )
 
         # Execute based on action type
         if action_type == ActionType.CREATE_CHANNEL:
@@ -1024,6 +1031,9 @@ class ActionExecutor:
             TemplateVariables.QUALITY_RAW: stream_ctx.resolution_height or "",
             TemplateVariables.PROVIDER: stream_ctx.m3u_account_name or "",
             TemplateVariables.PROVIDER_ID: stream_ctx.m3u_account_id or "",
+            TemplateVariables.PROVIDER_CHANNEL_NUMBER: (
+                stream_ctx.stream_chno if stream_ctx.stream_chno is not None else ""
+            ),
             TemplateVariables.NORMALIZED_NAME: normalized_name,
         }
 
@@ -1183,6 +1193,18 @@ class ActionExecutor:
                                        fold_match_key: bool = False) -> ActionResult:
         """Execute create_channel action."""
         params = action.params
+        raw_number_spec = params.get("channel_number", "auto")
+        number_spec, provider_number_result = self._resolve_provider_channel_number(
+            raw_number_spec, stream_ctx, action.type
+        )
+        if provider_number_result is not None:
+            return provider_number_result
+        if template_ctx is None:
+            template_ctx = self._build_template_context(
+                stream_ctx,
+                exec_ctx,
+                normalization_group_ids=normalization_group_ids,
+            )
         name_template = params.get("name_template", "{stream_name}")
         channel_name = TemplateVariables.expand_template(name_template, template_ctx, exec_ctx.custom_variables)
         logger.debug("[AUTO-CREATE-EXEC] Template '%s' expanded to '%s'", name_template, channel_name)
@@ -1378,8 +1400,12 @@ class ActionExecutor:
                 details=action_details
             )
 
-        # Determine channel number first (needed for name prefix)
-        channel_number = self._get_next_channel_number(params.get("channel_number", "auto"))
+        # Determine channel number first (needed for name prefix).
+        channel_number = (
+            number_spec
+            if raw_number_spec == "{provider_channel_number}"
+            else self._get_next_channel_number(number_spec)
+        )
         logger.debug("[AUTO-CREATE-EXEC] Channel number: spec=%s -> %s", params.get('channel_number', 'auto'), channel_number)
 
         # Apply channel number in name if setting is enabled
@@ -3403,12 +3429,38 @@ class ActionExecutor:
                 error="No channel to update"
             )
 
-        value = action.params.get("value", "auto")
+        raw_value = action.params.get("value", "auto")
+        value, provider_number_result = self._resolve_provider_channel_number(
+            raw_value, stream_ctx, action.type
+        )
+        if provider_number_result is not None:
+            return provider_number_result
+
+        is_provider_number = raw_value == "{provider_channel_number}"
+        if is_provider_number:
+            channel = self._channel_by_id.get(exec_ctx.current_channel_id, {})
+            current_number = channel.get("channel_number")
+            try:
+                provider_number_is_current = (
+                    current_number is not None
+                    and channel_number_ticks(current_number) == channel_number_ticks(value)
+                )
+            except InvalidChannelNumberError:
+                provider_number_is_current = False
+            if provider_number_is_current:
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"Channel number is already {value}; action skipped",
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                    skipped=True,
+                )
 
         # Reuse the number if this channel was already assigned one this run
         # (avoids consuming extra numbers when multiple streams merge into same channel)
         existing_number = self._channel_assigned_numbers.get(exec_ctx.current_channel_id)
-        if existing_number is not None:
+        if existing_number is not None and not is_provider_number:
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -3418,10 +3470,15 @@ class ActionExecutor:
                 skipped=True
             )
 
-        channel_number = self._get_next_channel_number(value)
+        channel_number = (
+            value
+            if raw_value == "{provider_channel_number}"
+            else self._get_next_channel_number(value)
+        )
 
         if exec_ctx.dry_run:
             self._channel_assigned_numbers[exec_ctx.current_channel_id] = channel_number
+            self._mark_channel_number_used(channel_number)
             # Update simulated state so subsequent actions in this dry run
             # preview against the new number (mirrors the real-run path).
             simulated = self._channel_by_id.get(exec_ctx.current_channel_id)
@@ -3461,6 +3518,35 @@ class ActionExecutor:
                 description="Failed to set channel number",
                 error=str(e)
             )
+
+    @staticmethod
+    def _resolve_provider_channel_number(
+        spec: Any, stream_ctx: StreamContext, action_type: str
+    ) -> tuple[Any, Optional[ActionResult]]:
+        """Resolve the provider-number token without falling back to auto numbering."""
+        if spec != "{provider_channel_number}":
+            return spec, None
+
+        provider_number = stream_ctx.stream_chno
+        if provider_number is None:
+            return spec, ActionResult(
+                success=True,
+                action_type=action_type,
+                description="Provider channel number is missing; action skipped",
+                skipped=True,
+            )
+        if not is_valid_channel_number(provider_number) or provider_number <= 0:
+            error = "Provider channel number is invalid"
+            return spec, ActionResult(
+                success=False,
+                action_type=action_type,
+                description=f"{error}; action skipped",
+                skipped=True,
+                error=error,
+            )
+        if isinstance(provider_number, float) and provider_number.is_integer():
+            provider_number = int(provider_number)
+        return provider_number, None
 
     # =========================================================================
     # Sort Group (enhancedchannelmanager-vy4fl)

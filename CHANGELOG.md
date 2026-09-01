@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Channel Pipeline rules can preserve provider-supplied channel numbers (bead `enhancedchannelmanager-rtst2.8`, GitHub #920, build 0005).** Set Channel Number now exposes `{provider_channel_number}`, and Create Channel offers a matching **Provider Channel Number** numbering option. Both preview and execution read Dispatcharr's existing `stream_chno` value; a missing value skips without assigning a fallback, while malformed provider data fails visibly without changing or creating a channel.
+
 - **Scheduled stream probes can refresh health metadata without changing curated stream order (bead `enhancedchannelmanager-8gmk8.2`, build 0003).** Each Stream Probe schedule now has an **Allow stream reordering** option. It remains enabled by default and still follows the global auto-reorder setting; disabling it suppresses reordering for only that schedule invocation, including group-scoped probes, without affecting other probe runs.
 
 - **Smart Sort can now use signed additive Points rules as an alternative to the existing ordered Priority strategy (bead `enhancedchannelmanager-npueh.5`).** Rules can reward or penalize resolution, bitrate, framerate, video codec, M3U priority, audio channels, custom streams, catch-up, failed streams, black screens, and low FPS. Every matching rule contributes to the total, higher totals sort first, and final ties use ascending stream ID. Priority remains the default for existing settings. Both configurations survive mode changes, and cached clients that omit the new settings preserve the stored strategy and rules.
