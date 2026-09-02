@@ -7,7 +7,7 @@ import type {
   ChannelPipelineExecution,
   CreateRuleData,
   ExecutionLogEntry,
-  ActionLogEntry,
+  ExecutionLogFilterCategory,
   BulkUpdateRulesPatch,
   RestoreSnapshotResponse,
   FailedChannel,
@@ -219,30 +219,6 @@ function EventSyncSummaryDetails(
   );
 }
 
-/** Categorize a log action into a filter bucket. */
-function getActionCategory(action: ActionLogEntry): string | null {
-  const desc = action.description?.toLowerCase() || '';
-  if (action.type === 'create_channel' || action.type === 'create_group') {
-    return 'created';
-  } else if (action.type === 'merge_streams' || action.type === 'merge_stream') {
-    return desc.includes('no existing channel found') || desc.includes('stream skipped')
-      ? 'skipped' : 'merged';
-  } else if (action.type === 'skip' || desc.includes('skipped')) {
-    return 'skipped';
-  } else if (action.type === 'update_channel') {
-    return 'updated';
-  } else if (action.type === 'remove_from_channel') {
-    return 'removed';
-  } else if (action.type === 'set_stream_priority') {
-    return 'updated';
-  } else if ((action as ActionLogEntry & { action?: string }).action === 'excluded' || desc.includes('excluded:')) {
-    return 'excluded';
-  } else if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'set_channel_number'].includes(action.type)) {
-    return 'assigned';
-  }
-  return null;
-}
-
 export function ChannelPipelineTab() {
   const dialogId = useId();
   const { user } = useAuth();
@@ -309,9 +285,11 @@ export function ChannelPipelineTab() {
   const [showExecutionDetails, setShowExecutionDetails] = useState<ChannelPipelineExecution | null>(null);
   const [executionDetails, setExecutionDetails] = useState<ChannelPipelineExecution | null>(null);
   const [executionDetailsLoading, setExecutionDetailsLoading] = useState(false);
+  const [executionDetailsError, setExecutionDetailsError] = useState<string | null>(null);
   const [logSearch, setLogSearch] = useState('');
-  const [logFilters, setLogFilters] = useState<Set<string>>(new Set());
+  const [logFilters, setLogFilters] = useState<Set<ExecutionLogFilterCategory>>(new Set());
   const [expandedLogEntries, setExpandedLogEntries] = useState<Set<number>>(new Set());
+  const initializeLogFiltersRef = useRef(false);
 
   // Import/Export state
   const [importYaml, setImportYaml] = useState('');
@@ -819,33 +797,58 @@ export function ChannelPipelineTab() {
     }
   }, [showRevertConfirm, fetchExecutions, notifications]);
 
-  const handleViewDetails = useCallback(async (execution: ChannelPipelineExecution) => {
+  const handleViewDetails = useCallback((execution: ChannelPipelineExecution) => {
     setShowExecutionDetails(execution);
     setExecutionDetails(null);
+    setExecutionDetailsError(null);
     setLogSearch('');
     setLogFilters(new Set());
     setExpandedLogEntries(new Set());
-    setExecutionDetailsLoading(true);
-    try {
-      const details = await channelPipelineApi.getExecutionDetails(execution.id);
-      setExecutionDetails(details);
-      // Pre-select all filter categories so user clicks to *remove*
-      const allCats = new Set<string>();
-      for (const entry of (details.execution_log || [])) {
-        for (const action of entry.actions_executed) {
-          if (!action.success) allCats.add('errors');
-          const cat = getActionCategory(action);
-          if (cat) allCats.add(cat);
-        }
-      }
-      if (allCats.size > 1) setLogFilters(allCats);
-    } catch {
-      // Fall back to the basic execution data we already have
-      setExecutionDetails(null);
-    } finally {
-      setExecutionDetailsLoading(false);
-    }
+    initializeLogFiltersRef.current = true;
   }, []);
+
+  useEffect(() => {
+    if (!showExecutionDetails) return;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setExecutionDetailsLoading(true);
+      setExecutionDetailsError(null);
+      try {
+        const details = await channelPipelineApi.getExecutionDetails(
+          showExecutionDetails.id,
+          {
+            search: logSearch,
+            categories: [...logFilters],
+            limit: 500,
+            offset: 0,
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        setExecutionDetails(details);
+        if (initializeLogFiltersRef.current) {
+          initializeLogFiltersRef.current = false;
+          const categories = Object.entries(details.execution_log_filter_counts ?? {})
+            .filter(([, count]) => (count ?? 0) > 0)
+            .map(([category]) => category as ExecutionLogFilterCategory);
+          if (categories.length > 1) setLogFilters(new Set(categories));
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setExecutionDetails(null);
+        setExecutionDetailsError(
+          error instanceof Error ? error.message : 'Failed to load execution log',
+        );
+      } finally {
+        if (!controller.signal.aborted) setExecutionDetailsLoading(false);
+      }
+    }, logSearch || logFilters.size > 0 ? 200 : 0);
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [showExecutionDetails, logSearch, logFilters]);
 
   const handleExport = useCallback(async () => {
     try {
@@ -2010,25 +2013,11 @@ export function ChannelPipelineTab() {
         // event_sync-aware summary block (null for a standard-only run).
         const eventSyncTotals = aggregateEventSyncSummary(details.event_sync_summary);
 
-        // Categorize each entry by its action types for filtering
-        const getEntryCategories = (entry: ExecutionLogEntry): Set<string> => {
-          const cats = new Set<string>();
-          for (const action of entry.actions_executed) {
-            if (!action.success) cats.add('errors');
-            const cat = getActionCategory(action);
-            if (cat) cats.add(cat);
-          }
-          return cats;
-        };
+        const logTotal = details.execution_log_total ?? log.length;
+        const filteredLogTotal = details.execution_log_filtered_total ?? log.length;
+        const filterCounts = details.execution_log_filter_counts ?? {};
 
-        // Count entries per filter category
-        const filterCounts: Record<string, number> = {};
-        for (const entry of log) {
-          const cats = getEntryCategories(entry);
-          cats.forEach(c => { filterCounts[c] = (filterCounts[c] || 0) + 1; });
-        }
-
-        const filterDefs: { key: string; label: string; icon: string }[] = [
+        const filterDefs: { key: ExecutionLogFilterCategory; label: string; icon: string }[] = [
           { key: 'created', label: 'Created', icon: 'add_circle' },
           { key: 'merged', label: 'Merged', icon: 'merge' },
           { key: 'updated', label: 'Updated', icon: 'edit' },
@@ -2039,9 +2028,9 @@ export function ChannelPipelineTab() {
           { key: 'errors', label: 'Errors', icon: 'error' },
         ];
 
-        const activeFilters = filterDefs.filter(f => filterCounts[f.key] > 0);
+        const activeFilters = filterDefs.filter(f => (filterCounts[f.key] ?? 0) > 0);
 
-        const toggleFilter = (key: string) => {
+        const toggleFilter = (key: ExecutionLogFilterCategory) => {
           setLogFilters(prev => {
             const next = new Set(prev);
             if (next.has(key)) next.delete(key);
@@ -2049,21 +2038,6 @@ export function ChannelPipelineTab() {
             return next;
           });
         };
-
-        const filteredLog = log.filter((entry: ExecutionLogEntry) => {
-          // Text search filter
-          if (logSearch && !entry.stream_name.toLowerCase().includes(logSearch.toLowerCase())) {
-            return false;
-          }
-          // Action type filters (OR logic: show if entry matches any active filter)
-          if (logFilters.size > 0) {
-            const cats = getEntryCategories(entry);
-            let matchesFilter = false;
-            logFilters.forEach(f => { if (cats.has(f)) matchesFilter = true; });
-            if (!matchesFilter) return false;
-          }
-          return true;
-        });
 
         const toggleLogEntry = (streamId: number) => {
           setExpandedLogEntries(prev => {
@@ -2264,70 +2238,80 @@ export function ChannelPipelineTab() {
               <div className="execution-log-section">
                 <div className="execution-log-header">
                   <h3>Execution Log</h3>
-                  {log.length > 0 && (
+                  {logTotal > 0 && (
                     <span className="log-count">
-                      {filteredLog.length === log.length
-                        ? `${log.length} matched streams`
-                        : `${filteredLog.length} of ${log.length} matched streams`}
+                      {filteredLogTotal === logTotal
+                        ? `${logTotal} matched streams`
+                        : `${filteredLogTotal} of ${logTotal} matched streams`}
                     </span>
                   )}
                 </div>
 
+                {logTotal > 3 && (
+                  <div className="log-search-bar">
+                    <span className="material-icons">search</span>
+                    <input
+                      type="text"
+                      placeholder="Search streams..."
+                      value={logSearch}
+                      onChange={e => setLogSearch(e.target.value)}
+                      className="log-search-input"
+                      maxLength={200}
+                    />
+                    {logSearch && (
+                      <button className="log-search-clear" onClick={() => setLogSearch('')} aria-label="Clear search" title="Clear search">
+                        <span className="material-icons" aria-hidden="true">close</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {activeFilters.length > 1 && (
+                  <div className="log-filter-chips">
+                    {activeFilters.map(f => (
+                      <button
+                        key={f.key}
+                        className={`log-filter-chip ${logFilters.has(f.key) ? 'active' : ''} ${f.key === 'errors' ? 'chip-errors' : ''}`}
+                        onClick={() => toggleFilter(f.key)}
+                      >
+                        <span className="material-icons">{f.icon}</span>
+                        {f.label}
+                        <span className="log-filter-count">{filterCounts[f.key]}</span>
+                      </button>
+                    ))}
+                    {logFilters.size > 0 && (
+                      <button
+                        className="log-filter-clear"
+                        onClick={() => setLogFilters(new Set())}
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                )}
+
                 {executionDetailsLoading ? (
                   <div className="log-loading">
                     <span className="material-icons spinning">sync</span>
-                    Loading execution log...
+                    {logSearch || logFilters.size > 0
+                      ? 'Filtering execution log...'
+                      : 'Loading execution log...'}
                   </div>
-                ) : log.length === 0 ? (
+                ) : executionDetailsError ? (
+                  <div className="log-empty" role="alert">
+                    {executionDetailsError}
+                  </div>
+                ) : logTotal === 0 ? (
                   <div className="log-empty">
                     No execution log available for this run.
                   </div>
+                ) : filteredLogTotal === 0 ? (
+                  <div className="log-empty">
+                    No execution log entries match these filters.
+                  </div>
                 ) : (
-                  <>
-                    {log.length > 3 && (
-                      <div className="log-search-bar">
-                        <span className="material-icons">search</span>
-                        <input
-                          type="text"
-                          placeholder="Search streams..."
-                          value={logSearch}
-                          onChange={e => setLogSearch(e.target.value)}
-                          className="log-search-input"
-                        />
-                        {logSearch && (
-                          <button className="log-search-clear" onClick={() => setLogSearch('')} aria-label="Clear search" title="Clear search">
-                            <span className="material-icons" aria-hidden="true">close</span>
-                          </button>
-                        )}
-                      </div>
-                    )}
-
-                    {activeFilters.length > 1 && (
-                      <div className="log-filter-chips">
-                        {activeFilters.map(f => (
-                          <button
-                            key={f.key}
-                            className={`log-filter-chip ${logFilters.has(f.key) ? 'active' : ''} ${f.key === 'errors' ? 'chip-errors' : ''}`}
-                            onClick={() => toggleFilter(f.key)}
-                          >
-                            <span className="material-icons">{f.icon}</span>
-                            {f.label}
-                            <span className="log-filter-count">{filterCounts[f.key]}</span>
-                          </button>
-                        ))}
-                        {logFilters.size > 0 && (
-                          <button
-                            className="log-filter-clear"
-                            onClick={() => setLogFilters(new Set())}
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </div>
-                    )}
-
-                    <div className="log-entries">
-                      {filteredLog.map((entry: ExecutionLogEntry) => {
+                  <div className="log-entries">
+                      {log.map((entry: ExecutionLogEntry) => {
                         const isExpanded = expandedLogEntries.has(entry.stream_id);
                         const rulesEvaluated = entry.rules_evaluated ?? [];
                         const actionsExecuted = entry.actions_executed ?? [];
@@ -2447,8 +2431,7 @@ export function ChannelPipelineTab() {
                           </div>
                         );
                       })}
-                    </div>
-                  </>
+                  </div>
                 )}
               </div>
             </div>

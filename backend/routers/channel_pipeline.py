@@ -2157,8 +2157,8 @@ async def reset_run_on_refresh_circuit_breaker(_admin=RequireAdminIfEnabled):
 
 @router.get("/executions")
 async def get_auto_creation_executions(
-    limit: int = 50,
-    offset: int = 0,
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     rule_id: Optional[int] = None,
     status: Optional[str] = None
 ):
@@ -2177,7 +2177,8 @@ async def get_auto_creation_executions(
 
             total = query.count()
             executions = query.order_by(
-                ChannelPipelineExecution.started_at.desc()
+                ChannelPipelineExecution.started_at.desc(),
+                ChannelPipelineExecution.id.desc(),
             ).offset(offset).limit(limit).all()
 
             # Derive has_snapshot (ADR-010 §D6) — a boolean from the existence
@@ -2217,8 +2218,88 @@ async def get_auto_creation_executions(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+_EXECUTION_LOG_CATEGORIES = frozenset({
+    "assigned",
+    "created",
+    "errors",
+    "excluded",
+    "merged",
+    "removed",
+    "skipped",
+    "updated",
+})
+
+
+def _execution_log_action_category(action: dict) -> Optional[str]:
+    """Return the UI filter category for one persisted execution-log action."""
+    action_type = action.get("type")
+    description = str(action.get("description") or "").casefold()
+    if action_type in {"create_channel", "create_group"}:
+        return "created"
+    if action_type in {"merge_streams", "merge_stream"}:
+        if "no existing channel found" in description or "stream skipped" in description:
+            return "skipped"
+        return "merged"
+    if action_type == "skip" or "skipped" in description:
+        return "skipped"
+    if action_type in {"update_channel", "set_stream_priority"}:
+        return "updated"
+    if action_type == "remove_from_channel":
+        return "removed"
+    if action.get("action") == "excluded" or "excluded:" in description:
+        return "excluded"
+    if action_type in {
+        "assign_logo",
+        "assign_tvg_id",
+        "assign_epg",
+        "assign_profile",
+        "set_channel_number",
+    }:
+        return "assigned"
+    return None
+
+
+def _execution_log_entry_categories(entry: object) -> set[str]:
+    """Return every exposed filter category matched by a stored log entry."""
+    if not isinstance(entry, dict):
+        return set()
+    categories = set()
+    actions = entry.get("actions_executed")
+    if not isinstance(actions, list):
+        return categories
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if not action.get("success"):
+            categories.add("errors")
+        category = _execution_log_action_category(action)
+        if category:
+            categories.add(category)
+    return categories
+
+
+def _parse_execution_log_categories(value: Optional[str]) -> set[str]:
+    """Validate the comma-separated execution-log categories accepted by the UI."""
+    if not value:
+        return set()
+    categories = value.split(",")
+    if any(not category or category not in _EXECUTION_LOG_CATEGORIES for category in categories):
+        raise HTTPException(status_code=422, detail="Invalid execution-log category")
+    if len(categories) != len(set(categories)):
+        raise HTTPException(status_code=422, detail="Duplicate execution-log category")
+    return set(categories)
+
+
 @router.get("/executions/{execution_id}")
-async def get_auto_creation_execution(execution_id: int, include_entities: bool = False, include_log: bool = False):
+async def get_auto_creation_execution(
+    execution_id: int,
+    include_entities: bool = False,
+    include_log: bool = False,
+    log_search: Optional[str] = Query(None, max_length=200),
+    log_categories: Optional[str] = Query(None, max_length=200),
+    log_limit: int = Query(500, ge=1, le=500),
+    log_offset: int = Query(0, ge=0),
+):
     """Get details of a specific execution."""
     logger.debug("[AUTO-CREATE] GET /executions/%s", execution_id)
     try:
@@ -2231,7 +2312,40 @@ async def get_auto_creation_execution(execution_id: int, include_entities: bool 
             if not execution:
                 raise HTTPException(status_code=404, detail="Execution not found")
 
-            result = execution.to_dict(include_entities=include_entities, include_log=include_log)
+            result = execution.to_dict(include_entities=include_entities)
+            if include_log:
+                execution_log = execution.get_execution_log()
+                categories = _parse_execution_log_categories(log_categories)
+                filter_counts = {category: 0 for category in _EXECUTION_LOG_CATEGORIES}
+                categorized_entries = []
+                for entry in execution_log:
+                    entry_categories = _execution_log_entry_categories(entry)
+                    categorized_entries.append((entry, entry_categories))
+                    for category in entry_categories:
+                        filter_counts[category] += 1
+
+                search_term = log_search.casefold() if log_search else None
+                filtered_log = [
+                    entry
+                    for entry, entry_categories in categorized_entries
+                    if (
+                        search_term is None
+                        or search_term in str(
+                            entry.get("stream_name", "")
+                            if isinstance(entry, dict)
+                            else ""
+                        ).casefold()
+                    )
+                    and (not categories or bool(entry_categories & categories))
+                ]
+                result["execution_log"] = filtered_log[
+                    log_offset:log_offset + log_limit
+                ]
+                result["execution_log_total"] = len(execution_log)
+                result["execution_log_filtered_total"] = len(filtered_log)
+                result["execution_log_filter_counts"] = filter_counts
+                result["execution_log_limit"] = log_limit
+                result["execution_log_offset"] = log_offset
 
             # Include conflicts
             conflicts = session.query(ChannelPipelineConflict).filter(

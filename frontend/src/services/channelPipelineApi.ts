@@ -15,6 +15,7 @@ import type {
   RulesListResponse,
   ExecutionsListResponse,
   ChannelPipelineExecution,
+  ExecutionLogFilterCategory,
   ValidationResult,
   RunPipelineEnqueuedResponse,
   RollbackResponse,
@@ -294,9 +295,27 @@ export async function getChannelPipelineExecution(id: number): Promise<ChannelPi
 /**
  * Get full execution details including entities and execution log.
  */
-export async function getExecutionDetails(id: number): Promise<ChannelPipelineExecution> {
+export async function getExecutionDetails(
+  id: number,
+  params?: {
+    search?: string;
+    categories?: ExecutionLogFilterCategory[];
+    limit?: number;
+    offset?: number;
+  },
+  signal?: AbortSignal,
+): Promise<ChannelPipelineExecution> {
+  const query = buildQuery({
+    include_entities: true,
+    include_log: true,
+    log_search: params?.search,
+    log_categories: params?.categories?.slice().sort().join(','),
+    log_limit: params?.limit,
+    log_offset: params?.offset,
+  });
   return fetchJson<ChannelPipelineExecution>(
-    `${API_BASE}/channel-pipeline/executions/${id}?include_entities=true&include_log=true`
+    `${API_BASE}/channel-pipeline/executions/${id}${query}`,
+    { signal },
   );
 }
 

@@ -1535,6 +1535,31 @@ disabled, matching the existing run-now convention.
 | `GET /api/channel-pipeline/fuzzy-preview` | Paginated, write-free scored fuzzy match preview across given channel groups (bead jnzst, v0.17.3-0006). Admin-gated. See notes below. |
 | `POST /api/channel-pipeline/event-sync-preview` | Event Sync dry-run: match secondary-group streams against live master channels with ZERO writes (bead ti939.1.4). Admin-gated. See notes below and `docs/event_sync.md`. |
 
+Execution history is ordered by newest `started_at`, then newest execution `id`
+when timestamps tie. `limit` defaults to 50 and accepts 1 through 500; `offset`
+defaults to 0. The same filters and ordering are applied before pagination, and
+`total` reports the number of matching executions before the page is sliced.
+
+To read a run's per-stream log, request
+`GET /api/channel-pipeline/executions/{id}?include_log=true`. Log responses are
+bounded to 500 entries by default and at most. The following optional parameters
+are applied to the stored log before `log_offset` and `log_limit`:
+
+| Parameter | Contract |
+|-|-|
+| `log_search` | Case-insensitive literal substring of `stream_name`, maximum 200 characters. `%`, `_`, and other punctuation have no wildcard meaning. |
+| `log_categories` | Comma-separated unique values from `created`, `merged`, `updated`, `removed`, `excluded`, `skipped`, `assigned`, and `errors`. Multiple values use OR semantics. Unknown, empty, or duplicate values return 422. |
+| `log_limit` | Page size from 1 through 500; default 500. |
+| `log_offset` | Zero-based offset in the persisted log order; default 0. |
+
+With `include_log=true`, the response adds `execution_log_total`,
+`execution_log_filtered_total`, `execution_log_filter_counts`,
+`execution_log_limit`, and `execution_log_offset`. Category counts describe the
+complete stored log, not only the returned page, so clients can keep filter
+controls stable while paging or searching. The existing per-run retention
+setting still determines what was stored: server filtering cannot recover live
+run entries omitted by the execution-log memory safety cap.
+
 Selected-rule runs use the same asynchronous `202 Accepted` and execution polling
 contract as run-all and single-rule runs. The server ignores client submission
 order. The accepted selection, audit outcomes, and display order are canonical:

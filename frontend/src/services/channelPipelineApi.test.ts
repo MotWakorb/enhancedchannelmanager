@@ -28,6 +28,7 @@ import {
   runChannelPipeline,
   getChannelPipelineExecutions,
   getChannelPipelineExecution,
+  getExecutionDetails,
   rollbackChannelPipelineExecution,
   // YAML Import/Export
   exportChannelPipelineRulesYAML,
@@ -497,6 +498,33 @@ describe('Channel Pipeline API Service', () => {
 
     it('throws 404 when execution not found', async () => {
       await expect(getChannelPipelineExecution(999)).rejects.toThrow('Execution not found');
+    });
+
+    it('sends execution-log filters and pagination to the server', async () => {
+      const execution = createMockChannelPipelineExecution({ id: 42 });
+      mockDataStore.channelPipelineExecutions.push(execution);
+      let capturedUrl = '';
+      server.use(
+        http.get('/api/channel-pipeline/executions/:id', ({ request }) => {
+          capturedUrl = request.url;
+          return HttpResponse.json(execution);
+        })
+      );
+
+      await getExecutionDetails(42, {
+        search: 'older %_ stream',
+        categories: ['merged', 'errors'],
+        limit: 100,
+        offset: 200,
+      });
+
+      const query = new URL(capturedUrl).searchParams;
+      expect(query.get('include_entities')).toBe('true');
+      expect(query.get('include_log')).toBe('true');
+      expect(query.get('log_search')).toBe('older %_ stream');
+      expect(query.get('log_categories')).toBe('errors,merged');
+      expect(query.get('log_limit')).toBe('100');
+      expect(query.get('log_offset')).toBe('200');
     });
   });
 

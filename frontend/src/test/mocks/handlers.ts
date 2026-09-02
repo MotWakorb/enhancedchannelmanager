@@ -5,6 +5,7 @@
  * enabling realistic API testing without a backend.
  */
 import { http, HttpResponse } from 'msw'
+import type { ExecutionLogEntry, ExecutionLogFilterCategory } from '../../types/channelPipeline'
 
 // API base URL
 const API_BASE = '/api'
@@ -197,6 +198,12 @@ export function createMockChannelPipelineExecution(overrides: Partial<MockChanne
     selected_rule_integrity: overrides.selected_rule_integrity ?? 'not_selected',
     selected_rule_ids: overrides.selected_rule_ids ?? [],
     selected_rule_outcomes: overrides.selected_rule_outcomes ?? [],
+    execution_log: overrides.execution_log ?? undefined,
+    execution_log_total: overrides.execution_log_total ?? undefined,
+    execution_log_filtered_total: overrides.execution_log_filtered_total ?? undefined,
+    execution_log_filter_counts: overrides.execution_log_filter_counts ?? undefined,
+    execution_log_limit: overrides.execution_log_limit ?? undefined,
+    execution_log_offset: overrides.execution_log_offset ?? undefined,
   }
 }
 
@@ -360,6 +367,12 @@ interface MockChannelPipelineExecution {
   streams_excluded: number
   created_entities: object[]
   modified_entities: object[]
+  execution_log?: ExecutionLogEntry[]
+  execution_log_total?: number
+  execution_log_filtered_total?: number
+  execution_log_filter_counts?: Partial<Record<ExecutionLogFilterCategory, number>>
+  execution_log_limit?: number
+  execution_log_offset?: number
   dry_run_results?: object[]
   rolled_back_at?: string
   rolled_back_by?: string
