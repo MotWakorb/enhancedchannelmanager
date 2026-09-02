@@ -842,13 +842,12 @@ class ActionExecutor:
                 journaled). Threaded into the resolution chokepoint as
                 ``block_manual = not allow_manual_channel_merge``.
             fold_match_key: When True (GH #645 / bead 0vao3 — opt-in per
-                rule, default False), the create_channel ``if_exists`` merge
-                lookup additionally compares names by the shared canonical
-                fold key (casefold + strip ALL whitespace) so whitespace/case
-                spelling variants merge into one channel instead of creating
-                duplicates. Comparison key only — stored channel names are
-                never altered. Threaded into ``_find_channel_by_name`` as
-                ``fold_key``.
+                rule, default False), create_channel ``if_exists`` merge and
+                merge_streams ``target:auto`` can compare names by the shared
+                canonical fold key (casefold + strip ALL whitespace). Exact
+                identity remains first, and merge_streams accepts a folded
+                match only when exactly one eligible channel remains.
+                Comparison key only: stored channel names are never altered.
 
         Returns:
             ActionResult with execution details
@@ -905,6 +904,7 @@ class ActionExecutor:
                                                          match_scope_target_group=match_scope_target_group,
                                                          rule_scope_group_id=rule_scope_group_id,
                                                          allow_manual_channel_merge=allow_manual_channel_merge,
+                                                         fold_match_key=fold_match_key,
                                                          rule_id=rule_id)
         elif action_type == ActionType.ASSIGN_LOGO:
             result = await self._execute_assign_logo(action, stream_ctx, exec_ctx, template_ctx)
@@ -1352,13 +1352,32 @@ class ActionExecutor:
                             self._channel_by_name[new_name.lower()] = existing
                             self._add_candidate(
                                 self._by_name_candidates, new_name.lower(), existing)
-                            # GH #645 / bead 0vao3: the renamed spelling must
-                            # also be fold-findable (old fold keys still point
-                            # at the same mutated dict, so they stay correct).
-                            self._fold_key_to_channel.setdefault(
-                                _fold_key(new_name), existing)
-                            self._add_candidate(
-                                self._fold_key_candidates, _fold_key(new_name), existing)
+                            # A renamed channel must stop matching its former
+                            # folded identities. Re-index both the stored name
+                            # and the number-prefix-stripped base name.
+                            old_fold_keys = {
+                                _fold_key(existing_name), _fold_key(existing_core)}
+                            new_core = new_name[len(existing_base):]
+                            new_fold_keys = {
+                                _fold_key(new_name), _fold_key(new_core)}
+                            for old_fold_key in old_fold_keys - new_fold_keys:
+                                remaining = [
+                                    c for c in self._fold_key_candidates.get(
+                                        old_fold_key, []) if c is not existing]
+                                if remaining:
+                                    self._fold_key_candidates[old_fold_key] = remaining
+                                else:
+                                    self._fold_key_candidates.pop(old_fold_key, None)
+                                if self._fold_key_to_channel.get(old_fold_key) is existing:
+                                    if remaining:
+                                        self._fold_key_to_channel[old_fold_key] = remaining[0]
+                                    else:
+                                        self._fold_key_to_channel.pop(old_fold_key, None)
+                            for new_fold_key in new_fold_keys:
+                                self._fold_key_to_channel.setdefault(
+                                    new_fold_key, existing)
+                                self._add_candidate(
+                                    self._fold_key_candidates, new_fold_key, existing)
                         except Exception as e:
                             logger.warning("[AUTO-CREATE-EXEC] Failed to rename channel '%s' to '%s': %s", existing_name, new_name, e)
                             action_details.append(f"Failed to rename channel: {e}")
@@ -1996,6 +2015,7 @@ class ActionExecutor:
                                       match_scope_target_group: bool = True,
                                       rule_scope_group_id: int = None,
                                       allow_manual_channel_merge: bool = False,
+                                      fold_match_key: bool = False,
                                       rule_id: int = None) -> ActionResult:
         """Execute merge_streams action.
 
@@ -2118,6 +2138,7 @@ class ActionExecutor:
                 channel = self._find_unique_channel_by_exact_identity(
                     lookup_name, scope_group_id=effective_scope_group_id,
                     block_manual=not allow_manual_channel_merge,
+                    fold_key=fold_match_key,
                 )
                 if channel is None:
                     blocked_manual = blocked_manual or self._last_manual_block
@@ -5415,8 +5436,29 @@ class ActionExecutor:
         *,
         scope_group_id: Optional[int] = None,
         block_manual: bool = True,
+        fold_key: bool = False,
     ) -> Optional[dict]:
-        """Resolve one exact post-normalization identity, never a collision."""
+        """Resolve one exact identity, then one eligible folded fallback."""
+        self._last_manual_block = None
+
+        def _eligible_unique(candidates: list[dict]) -> list[dict]:
+            unique: list[dict] = []
+            seen: set[int] = set()
+            for candidate in candidates:
+                identity = candidate.get("id")
+                marker = id(candidate) if identity is None else int(identity)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                if scope_group_id is not None \
+                        and candidate.get("channel_group_id") != scope_group_id:
+                    continue
+                if block_manual and self._is_manual_channel(candidate):
+                    self._last_manual_block = candidate
+                    continue
+                unique.append(candidate)
+            return unique
+
         key = name.lower()
         candidates: list[dict] = []
         created = self._created_channels.get(key)
@@ -5429,26 +5471,30 @@ class ActionExecutor:
         ):
             candidates.extend(mapping.get(key, ()))
 
-        unique: list[dict] = []
-        seen: set[int] = set()
-        for candidate in candidates:
-            identity = candidate.get("id")
-            marker = id(candidate) if identity is None else int(identity)
-            if marker in seen:
-                continue
-            seen.add(marker)
-            if scope_group_id is not None and candidate.get("channel_group_id") != scope_group_id:
-                continue
-            if block_manual and self._is_manual_channel(candidate):
-                self._last_manual_block = candidate
-                continue
-            unique.append(candidate)
+        unique = _eligible_unique(candidates)
 
         if len(unique) == 1:
             return unique[0]
         if len(unique) > 1:
+            self._last_manual_block = None
             logger.warning(
                 "[AUTO-CREATE-EXEC] Exact normalized channel identity is "
+                "ambiguous across %d eligible channels; stream skipped.",
+                len(unique),
+            )
+            return None
+
+        if not fold_key:
+            return None
+
+        folded = fold_match_key(name)
+        unique = _eligible_unique(self._fold_key_candidates.get(folded, []))
+        if len(unique) == 1:
+            return unique[0]
+        if len(unique) > 1:
+            self._last_manual_block = None
+            logger.warning(
+                "[AUTO-CREATE-EXEC] Folded normalized channel identity is "
                 "ambiguous across %d eligible channels; stream skipped.",
                 len(unique),
             )

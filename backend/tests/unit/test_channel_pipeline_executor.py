@@ -4768,6 +4768,205 @@ class TestNameTransformFailureVisibility:
         assert executor._journal_buffer == []
 
 
+class TestMergeStreamsFoldMatchKey:
+    """Rule-level folding extends exact ``merge_streams target:auto`` lookup."""
+
+    @staticmethod
+    def _normalizer():
+        engine = MagicMock()
+
+        def normalize(value, group_ids=None):
+            return SimpleNamespace(normalized=value)
+
+        engine.normalize.side_effect = normalize
+        engine.extract_core_name.side_effect = lambda value: value
+        engine.extract_call_sign.return_value = None
+        return engine
+
+    @staticmethod
+    def _channel(channel_id, name, *, group_id=7, auto_created=True):
+        return {
+            "id": channel_id,
+            "name": name,
+            "streams": [],
+            "auto_created": auto_created,
+            "channel_group_id": group_id,
+        }
+
+    @staticmethod
+    def _stream(name):
+        return StreamContext(
+            stream_id=901,
+            stream_name=name,
+            m3u_account_id=1,
+            m3u_account_name="Synthetic provider",
+            group_name="Sports",
+        )
+
+    async def _merge(self, channels, stream_name, **execute_kwargs):
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        executor = ActionExecutor(
+            client,
+            existing_channels=channels,
+            normalization_engine=self._normalizer(),
+        )
+        result = await executor.execute(
+            {"type": "merge_streams", "target": "auto"},
+            self._stream(stream_name),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+            **execute_kwargs,
+        )
+        return client, result
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("stream_name", "channel_name"),
+        [("Motor Trend", "Motortrend"), ("Moto GP", "MotoGP")],
+    )
+    async def test_folded_spacing_variants_merge_when_enabled(
+        self, stream_name, channel_name
+    ):
+        client, result = await self._merge(
+            [self._channel(51, channel_name)],
+            stream_name,
+            fold_match_key=True,
+        )
+
+        assert result.success is True
+        assert result.skipped is False
+        client.update_channel.assert_awaited_once_with(51, {"streams": [901]})
+
+    @pytest.mark.asyncio
+    async def test_folded_spacing_variants_stay_unmatched_by_default(self):
+        client, result = await self._merge(
+            [self._channel(51, "Motortrend")],
+            "Motor Trend",
+        )
+
+        assert result.skipped is True
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_exact_identity_wins_before_folded_candidates(self):
+        client, result = await self._merge(
+            [
+                self._channel(51, "Moto GP"),
+                self._channel(52, "MotoGP"),
+            ],
+            "Moto GP",
+            fold_match_key=True,
+        )
+
+        assert result.success is True
+        client.update_channel.assert_awaited_once_with(51, {"streams": [901]})
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_folded_identity_skips(self):
+        client, result = await self._merge(
+            [
+                self._channel(51, "Motortrend"),
+                self._channel(52, "Motor  trend"),
+            ],
+            "Motor Trend",
+            fold_match_key=True,
+        )
+
+        assert result.skipped is True
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_folded_candidates_are_filtered_by_rule_group_scope(self):
+        client, result = await self._merge(
+            [
+                self._channel(51, "MotoGP", group_id=7),
+                self._channel(52, "Moto  GP", group_id=8),
+            ],
+            "Moto GP",
+            fold_match_key=True,
+            rule_scope_group_id=8,
+        )
+
+        assert result.success is True
+        client.update_channel.assert_awaited_once_with(52, {"streams": [901]})
+
+    @pytest.mark.asyncio
+    async def test_manual_folded_candidate_remains_protected(self):
+        client, result = await self._merge(
+            [self._channel(51, "Motortrend", auto_created=False)],
+            "Motor Trend",
+            fold_match_key=True,
+        )
+
+        assert result.skipped is True
+        assert "allow_manual_channel_merge" in result.description
+        client.update_channel.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_manual_folded_candidate_requires_explicit_opt_in(self):
+        client, result = await self._merge(
+            [self._channel(51, "Motortrend", auto_created=False)],
+            "Motor Trend",
+            fold_match_key=True,
+            allow_manual_channel_merge=True,
+        )
+
+        assert result.success is True
+        assert result.skipped is False
+        client.update_channel.assert_awaited_once_with(51, {"streams": [901]})
+
+    @pytest.mark.asyncio
+    async def test_rename_evicts_old_folded_identity_and_keeps_numbered_base(self):
+        engine = MagicMock()
+
+        def normalize(value, group_ids=None):
+            normalized = "Discovery" if value == "Motortrend" else value
+            return SimpleNamespace(normalized=normalized, transformations=[])
+
+        engine.normalize.side_effect = normalize
+        engine.extract_core_name.side_effect = lambda value: value
+        engine.extract_call_sign.return_value = None
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        executor = ActionExecutor(
+            client,
+            existing_channels=[self._channel(51, "4000 | Motortrend")],
+            normalization_engine=engine,
+        )
+
+        rename_result = await executor.execute(
+            {"type": "create_channel", "if_exists": "merge"},
+            StreamContext(stream_id=902, stream_name="Discovery", m3u_account_id=1),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+        )
+        assert rename_result.success is True
+        assert executor._channel_by_id[51]["name"] == "4000 | Discovery"
+
+        client.update_channel.reset_mock()
+        old_name_result = await executor.execute(
+            {"type": "merge_streams", "target": "auto"},
+            self._stream("Motor Trend"),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+            fold_match_key=True,
+        )
+        assert old_name_result.skipped is True
+        client.update_channel.assert_not_awaited()
+
+        new_name_result = await executor.execute(
+            {"type": "merge_streams", "target": "auto"},
+            self._stream("Dis cov ery"),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+            fold_match_key=True,
+        )
+        assert new_name_result.success is True
+        assert new_name_result.skipped is False
+        client.update_channel.assert_awaited_once_with(51, {"streams": [902, 901]})
+
+
 class TestCreateChannelFoldMatchKey:
     """GH #645 / bead enhancedchannelmanager-0vao3: opt-in ``fold_match_key``.
 
