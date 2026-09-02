@@ -1,4 +1,6 @@
+import gc
 import json
+import warnings
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -7,8 +9,16 @@ from sqlalchemy.orm import sessionmaker
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from channel_pipeline_engine import ChannelPipelineEngine
-from models import ChannelPipelineExecution
-from routers.channel_pipeline import _create_pending_execution, _mark_execution_failed
+from models import ChannelPipelineExecution, ChannelPipelineRule
+from routers.channel_pipeline import (
+    RunPipelineRequest,
+    RunSelectedRulesRequest,
+    _create_pending_execution,
+    _mark_execution_failed,
+    run_auto_creation_pipeline,
+    run_auto_creation_rule,
+    run_selected_auto_creation_rules,
+)
 from task_engine import _abandon_orphaned_auto_creation_executions
 
 
@@ -134,9 +144,16 @@ def _completed_results(*, event_warnings=None):
         json.dumps([_outcome(1, "One"), _outcome(1, "Duplicate")]),
         json.dumps([_outcome(True, "Boolean id")]),
         json.dumps([_outcome(1, "Negative", match_count=-1)]),
+        json.dumps([_outcome(0, "Zero id")]),
+        json.dumps([_outcome(-1, "Negative id")]),
         json.dumps([_outcome(1, "Boolean count", error_count=True)]),
+        json.dumps([_outcome(1, "Huge count", error_count=2_147_483_648)]),
+        json.dumps([_outcome(1, "N" * 101)]),
+        json.dumps([_outcome(1, "One", skip_reason="R" * 1025)]),
+        json.dumps([_outcome(1, "One", unexpected="field")]),
         json.dumps([_outcome(1, "Bad status", status="mystery")]),
         json.dumps([_outcome(1, "Bad kind", kind="other")]),
+        json.dumps([_outcome(i + 1, f"Rule {i}") for i in range(501)]),
     ],
 )
 def test_non_null_malformed_selected_storage_stays_selected_and_corrupt(stored):
@@ -163,6 +180,43 @@ def test_null_selected_storage_uses_legacy_scope_precedence():
     assert deleted_single.to_dict()["run_scope"] == "single"
     assert run_all.to_dict()["run_scope"] == "all"
     assert deleted_single.to_dict()["selected_rule_integrity"] == "not_selected"
+
+
+def test_oversized_selected_storage_is_rejected_before_json_decode():
+    oversized = "[" + (
+        "x" * ChannelPipelineExecution._SELECTED_RULE_MAX_SERIALIZED_BYTES
+    )
+    execution = ChannelPipelineExecution(
+        started_at=datetime.utcnow(),
+        selected_rule_outcomes=oversized,
+    )
+
+    with patch("models.json.loads") as loads:
+        assert execution.get_selected_rule_outcome_state() == {
+            "integrity": "corrupt", "outcomes": [],
+        }
+
+    loads.assert_not_called()
+
+
+def test_failure_terminalization_survives_oversized_selected_storage(test_session):
+    execution = ChannelPipelineExecution(
+        mode="execute", triggered_by="api", started_at=datetime.utcnow(),
+        status="running",
+        selected_rule_outcomes="[" + (
+            "x" * ChannelPipelineExecution._SELECTED_RULE_MAX_SERIALIZED_BYTES
+        ),
+    )
+    test_session.add(execution)
+    test_session.commit()
+
+    with patch("routers.channel_pipeline.get_session", return_value=test_session):
+        _mark_execution_failed(execution.id, RuntimeError("worker failed"))
+
+    test_session.expire_all()
+    stored = test_session.get(ChannelPipelineExecution, execution.id)
+    assert stored.status == "failed"
+    assert stored.to_dict()["selected_rule_integrity"] == "corrupt"
 
 
 def test_valid_selected_storage_preserves_identity_order_and_counts():
@@ -480,6 +534,69 @@ def test_supervisor_failure_terminalizes_parent_even_when_selected_storage_is_co
     assert stored.status == "failed"
     assert stored.selected_rule_outcomes == "{broken"
     assert stored.to_dict()["selected_rule_integrity"] == "corrupt"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["selected", "all", "single"])
+async def test_synchronous_task_creation_failure_terminalizes_accepted_execution(
+    test_session, endpoint,
+):
+    rule = _rule(7, "Queued", event_sync=endpoint == "selected")
+    factory = _session_factory(test_session)
+    engine = MagicMock()
+    engine.run_pipeline = MagicMock(side_effect=lambda **_kwargs: _never_started())
+    engine.run_rule = MagicMock(side_effect=lambda **_kwargs: _never_started())
+
+    async def invoke():
+        if endpoint == "selected":
+            with patch(
+                "selected_pipeline_rules.load_selected_rule_snapshots",
+                return_value=[rule],
+            ):
+                return await run_selected_auto_creation_rules(
+                    RunSelectedRulesRequest(rule_ids=[rule.id]),
+                    _admin=None, caller_is_mcp=False,
+                )
+        if endpoint == "single":
+            test_session.add(ChannelPipelineRule(
+                id=rule.id, name=rule.name, enabled=True, priority=0,
+                conditions="[]", actions="[]",
+            ))
+            test_session.commit()
+            return await run_auto_creation_rule(rule.id, _admin=None)
+        return await run_auto_creation_pipeline(
+            RunPipelineRequest(), _admin=None, caller_is_mcp=False,
+        )
+
+    async def _never_started():
+        return None
+
+    with patch("routers.channel_pipeline.get_session", side_effect=factory), patch(
+        "routers.channel_pipeline._ensure_engine", AsyncMock(return_value=engine),
+    ), patch(
+        "routers.channel_pipeline.asyncio.create_task",
+        side_effect=RuntimeError("scheduler secret detail"),
+    ):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            with pytest.raises(Exception) as raised:
+                await invoke()
+            gc.collect()
+
+    assert getattr(raised.value, "status_code", None) == 500
+    assert getattr(raised.value, "detail", None) == "Internal server error"
+    assert not [item for item in caught if "was never awaited" in str(item.message)]
+    stored = factory().query(ChannelPipelineExecution).order_by(
+        ChannelPipelineExecution.id.desc()
+    ).first()
+    assert stored.status == "failed"
+    assert "scheduler secret detail" not in (stored.error_message or "")
+    if endpoint == "selected":
+        assert [item["status"] for item in stored.get_selected_rule_outcomes()] == [
+            "not_run"
+        ]
+    else:
+        assert stored.selected_rule_outcomes is None
 
 
 def test_hard_crash_abandons_only_nonterminal_selected_children(test_session):

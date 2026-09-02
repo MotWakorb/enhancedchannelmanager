@@ -1347,13 +1347,15 @@ class ChannelPipelineEngine:
                         "event_sync_invalid_config", "event_sync_fetch_failed",
                         "event_sync_preflight_failed",
                         "event_sync_auto_run_suppressed",
+                        "event_sync_review_enqueue_failed",
                     }
                 ]
                 attach_count = summary.get("attached", 0) if summary else 0
-                error_count = (
-                    (summary.get("attach_errors", 0) if summary else 0)
-                    + action_errors + len(warnings)
-                )
+                # Attach failures are already expanded one-for-one into
+                # failed_actions by _record_failed_phase. That list is the
+                # authoritative source; adding summary.attach_errors again
+                # double-counts the same failed writes.
+                error_count = action_errors + len(warnings)
                 capped = bool(summary) and (
                     summary.get("capped", False)
                     or (summary.get("promotion") or {}).get("capped", False)
@@ -1377,7 +1379,7 @@ class ChannelPipelineEngine:
                 if status == "skipped":
                     outcome["skip_reason"] = warnings[0].get(
                         "message", "Event Sync rule was skipped"
-                    )
+                    )[:ChannelPipelineExecution._SELECTED_RULE_REASON_MAX_CHARS]
                 if status == "capped":
                     outcome["cap_reason"] = "Event Sync per-run cap reached"
                 outcomes.append(outcome)

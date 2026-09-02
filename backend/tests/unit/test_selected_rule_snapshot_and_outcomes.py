@@ -182,6 +182,13 @@ def test_event_sync_outcomes_are_derived_from_attach_skip_and_cap_facts(
     results = {
         "event_sync": [] if summary is None else [summary],
         "event_sync_warnings": warnings,
+        # _run_event_sync_rules expands each attach error into one authoritative
+        # failed_actions row; summary.attach_errors is display data, not a
+        # second error source.
+        "failed_actions": [
+            {"rule_id": 2, "action_type": "event_sync_attach"}
+            for _ in range(summary.get("attach_errors", 0) if summary else 0)
+        ],
     }
 
     outcome = ChannelPipelineEngine._selected_rule_outcomes([rule], results)[0]

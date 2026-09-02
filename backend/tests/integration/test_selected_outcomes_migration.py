@@ -109,7 +109,32 @@ def test_downgrade_refuses_selected_audit_data(tmp_path):
     finally:
         engine.dispose()
 
-    with pytest.raises(RuntimeError, match="refusing.*selected.*audit data"):
+    with pytest.raises(
+        RuntimeError,
+        match="all ECM instances.*stopped.*backup.*selected.*audit data",
+    ):
+        command.downgrade(cfg, "0050")
+
+
+def test_downgrade_refuses_active_execution_even_without_selected_audit(tmp_path):
+    url, cfg = _database(tmp_path, "active.db")
+    command.upgrade(cfg, "head")
+    engine = create_engine(url, future=True)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text(
+                "INSERT INTO auto_creation_executions "
+                "(mode, triggered_by, started_at, status, streams_evaluated, "
+                "streams_matched, channels_created, channels_updated, "
+                "groups_created, streams_merged, channels_touched, streams_skipped, "
+                "streams_excluded, is_event_sync, created_at) "
+                "VALUES ('execute', 'api', CURRENT_TIMESTAMP, 'running', 0, 0, "
+                "0, 0, 0, 0, 0, 0, 0, 0, CURRENT_TIMESTAMP)"
+            ))
+    finally:
+        engine.dispose()
+
+    with pytest.raises(RuntimeError, match="active/running execution"):
         command.downgrade(cfg, "0050")
 
 

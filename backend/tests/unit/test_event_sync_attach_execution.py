@@ -500,6 +500,11 @@ class TestEnginePhase:
         assert any(fa["action_type"] == "event_sync_attach" for fa in failed)
         # One aggregated failure entry per attach error (honest count).
         assert len(failed) == s["attach_errors"]
+        outcome = ChannelPipelineEngine._selected_rule_outcomes(
+            [_event_rule()], results,
+        )[0]
+        assert outcome["status"] == "completed_with_errors"
+        assert outcome["error_count"] == s["attach_errors"] == len(failed)
 
     def test_clean_attach_records_no_failed_actions(self):
         """Control: a successful attach records nothing in failed_actions."""

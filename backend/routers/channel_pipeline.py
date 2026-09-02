@@ -1508,7 +1508,27 @@ def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> as
             )
             _mark_execution_failed(execution_id, e)
 
-    task = asyncio.create_task(_runner(), name=f"auto-creation-{label}-exec-{execution_id}")
+    runner = _runner()
+    try:
+        task = asyncio.create_task(
+            runner, name=f"auto-creation-{label}-exec-{execution_id}"
+        )
+    except Exception as error:
+        # create_task failed synchronously: neither coroutine can ever be
+        # awaited. Close both before durable finalization so GC cannot emit a
+        # delayed "was never awaited" warning in an unrelated request/test.
+        runner.close()
+        if asyncio.iscoroutine(coro):
+            coro.close()
+        from cloud_storage.upload_security import redact_secrets
+        logger.error(
+            "[AUTO-CREATE] Background %s execution=%s scheduling failed "
+            "(%s: %s)",
+            label, execution_id, type(error).__name__, redact_secrets(str(error)),
+        )
+        safe_error = RuntimeError("Background task scheduling failed")
+        _mark_execution_failed(execution_id, safe_error)
+        raise safe_error from None
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return task

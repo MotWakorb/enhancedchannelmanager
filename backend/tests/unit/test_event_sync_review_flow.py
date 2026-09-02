@@ -21,7 +21,7 @@ engine attach phase + the store, against a real (in-memory) DB:
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy.orm import sessionmaker
@@ -530,6 +530,33 @@ class TestStaleDatelessDemoteFlow:
                 == "stale_dateless_stream_name"
         finally:
             db.close()
+
+    def test_live_engine_enqueue_failure_is_an_error_bearing_selected_outcome(
+        self, db_session_local
+    ):
+        channels = [_master_channel(101, MASTER_IMSA)]
+        batch = [{"id": 7002, "name": STREAM_IMSA_AMBIG, "m3u_account": 1}]
+        engine, executor, _client = _engine_with_client(channels, batch)
+        rule = _event_rule()
+        results = _results()
+
+        with patch(
+            "services.event_sync_review_store.enqueue_review_candidates",
+            side_effect=RuntimeError("database unavailable"),
+        ):
+            _run(engine._run_event_sync_rules(
+                [rule], executor, results, dry_run=False, triggered_by="manual",
+                channels_touched_ids=set(),
+            ))
+
+        assert results["event_sync"][0]["ambiguous_skipped"] == 1
+        assert results["event_sync"][0]["review_enqueued"] == 0
+        assert [warning["type"] for warning in results["event_sync_warnings"]] == [
+            "event_sync_review_enqueue_failed"
+        ]
+        outcome = ChannelPipelineEngine._selected_rule_outcomes([rule], results)[0]
+        assert outcome["status"] == "completed_with_errors"
+        assert outcome["error_count"] == 1
 
     def test_live_engine_run_attaches_when_name_is_fresh(
         self, db_session_local

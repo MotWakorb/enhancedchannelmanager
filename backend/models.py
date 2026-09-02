@@ -2459,31 +2459,77 @@ class ChannelPipelineExecution(Base):
     _SELECTED_RULE_COUNT_FIELDS = frozenset({
         "match_count", "attach_count", "error_count",
     })
+    _SELECTED_RULE_REQUIRED_FIELDS = frozenset({
+        "rule_id", "rule_name", "rule_kind", "status",
+    })
+    _SELECTED_RULE_OPTIONAL_FIELDS = _SELECTED_RULE_COUNT_FIELDS | frozenset({
+        "skip_reason", "cap_reason",
+    })
+    _SELECTED_RULE_MAX_ENTRIES = 500
+    _SELECTED_RULE_NAME_MAX_CHARS = 100
+    _SELECTED_RULE_REASON_MAX_CHARS = 1024
+    _SELECTED_RULE_MAX_COUNT = 2_147_483_647
+    # Derived from the 500-entry request cap and bounded fields, not an
+    # independent operator policy. json.dumps may use two six-byte surrogate
+    # escapes per Unicode character; 512 bytes per item covers keys, punctuation,
+    # integer text, status, and kind around the bounded name and two reasons.
+    _SELECTED_RULE_MAX_SERIALIZED_BYTES = _SELECTED_RULE_MAX_ENTRIES * (
+        12 * (
+            _SELECTED_RULE_NAME_MAX_CHARS
+            + 2 * _SELECTED_RULE_REASON_MAX_CHARS
+        ) + 512
+    )
 
     def get_selected_rule_outcome_state(self) -> dict:
         """Strictly parse selected-run audit data without losing its scope."""
         if self.selected_rule_outcomes is None:
             return {"integrity": "not_selected", "outcomes": []}
+        if (
+            not isinstance(self.selected_rule_outcomes, str)
+            or len(self.selected_rule_outcomes)
+            > self._SELECTED_RULE_MAX_SERIALIZED_BYTES
+            or len(self.selected_rule_outcomes.encode("utf-8"))
+            > self._SELECTED_RULE_MAX_SERIALIZED_BYTES
+        ):
+            return {"integrity": "corrupt", "outcomes": []}
         try:
             value = json.loads(self.selected_rule_outcomes)
         except (ValueError, TypeError):
             return {"integrity": "corrupt", "outcomes": []}
-        if not isinstance(value, list) or not value:
+        if (
+            not isinstance(value, list)
+            or not value
+            or len(value) > self._SELECTED_RULE_MAX_ENTRIES
+        ):
             return {"integrity": "corrupt", "outcomes": []}
 
         ids = set()
         for item in value:
             if not isinstance(item, dict):
                 return {"integrity": "corrupt", "outcomes": []}
+            keys = frozenset(item)
+            if (
+                not self._SELECTED_RULE_REQUIRED_FIELDS.issubset(keys)
+                or not keys.issubset(
+                    self._SELECTED_RULE_REQUIRED_FIELDS
+                    | self._SELECTED_RULE_OPTIONAL_FIELDS
+                )
+            ):
+                return {"integrity": "corrupt", "outcomes": []}
             rule_id = item.get("rule_id")
             if (
                 not isinstance(rule_id, int)
                 or isinstance(rule_id, bool)
+                or rule_id <= 0
                 or rule_id in ids
             ):
                 return {"integrity": "corrupt", "outcomes": []}
             ids.add(rule_id)
-            if not isinstance(item.get("rule_name"), str) or not item["rule_name"].strip():
+            if (
+                not isinstance(item.get("rule_name"), str)
+                or not item["rule_name"].strip()
+                or len(item["rule_name"]) > self._SELECTED_RULE_NAME_MAX_CHARS
+            ):
                 return {"integrity": "corrupt", "outcomes": []}
             if item.get("rule_kind") not in self._SELECTED_RULE_KINDS:
                 return {"integrity": "corrupt", "outcomes": []}
@@ -2497,11 +2543,14 @@ class ChannelPipelineExecution(Base):
                     not isinstance(count, int)
                     or isinstance(count, bool)
                     or count < 0
+                    or count > self._SELECTED_RULE_MAX_COUNT
                 ):
                     return {"integrity": "corrupt", "outcomes": []}
             for field in ("skip_reason", "cap_reason"):
                 if field in item and (
-                    not isinstance(item[field], str) or not item[field].strip()
+                    not isinstance(item[field], str)
+                    or not item[field].strip()
+                    or len(item[field]) > self._SELECTED_RULE_REASON_MAX_CHARS
                 ):
                     return {"integrity": "corrupt", "outcomes": []}
         return {"integrity": "valid", "outcomes": value}
