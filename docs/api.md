@@ -1490,6 +1490,15 @@ keep it at rest for an unattended one. Sent at the top level of the run request
 instead of inside `parameters`, they are ignored and a plain artifact is
 produced.
 
+For `auto_creation`, schedule `parameters` must contain a non-empty, unique
+`rule_ids` array. Every rule must be enabled, active for its UTC date window,
+and valid when the schedule is created or enabled and again when it runs. A
+stale scope fails without falling back to all rules. Schedule-list responses add
+`selection_error` when a stored scope can no longer run; such a schedule may be
+disabled or repaired but cannot be enabled unchanged. `POST /api/tasks/auto_creation/run`
+with `schedule_id` uses the same exact scope even when that child schedule is
+disabled, matching the existing run-now convention.
+
 ## Channel Pipeline
 
 > **Deprecated alias:** every endpoint below is also reachable at the old `/api/auto-creation/...` prefix. The alias forwards to the same handler and continues to work, but is hidden from the OpenAPI schema and should not be used in new integrations. Use the canonical `/api/channel-pipeline/...` paths shown here.
@@ -1540,6 +1549,9 @@ rule name and kind, terminal status, kind-appropriate matched/attached count,
 error count, and any skip or cap reason. A malformed non-null audit payload
 remains selected scope with
 `selected_rule_integrity: "corrupt"`; it is never presented as a zero-rule run.
+Executions started by an exact schedule use `triggered_by: "scheduled_selected"`
+and also expose `scheduled_task_id` and `schedule_id`; these origin fields are
+`null` for other execution sources.
 
 Selected executions checkpoint only phase-sized lifecycle transitions. All
 selected Standard children become `running` together when Standard processing

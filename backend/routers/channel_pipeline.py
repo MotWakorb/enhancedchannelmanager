@@ -491,7 +491,15 @@ async def get_auto_creation_rules():
                 actions = r.get_actions()
                 action_summary = ", ".join(f"{a.get('type', '?')}" for a in actions)
                 logger.debug("[AUTO-CREATE]   Rule id=%s '%s': actions=[%s], raw_actions=%s", r.id, r.name, action_summary, r.actions)
-            return {"rules": [r.to_dict() for r in rules]}
+            from selected_pipeline_rules import selected_rule_issues
+            payload = []
+            for rule in rules:
+                item = rule.to_dict()
+                issues = selected_rule_issues(rule)
+                item["runnable"] = not issues
+                item["selection_issues"] = issues
+                payload.append(item)
+            return {"rules": payload}
         finally:
             session.close()
     except Exception as e:

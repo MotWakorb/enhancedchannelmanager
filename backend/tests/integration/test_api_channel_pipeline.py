@@ -60,6 +60,12 @@ class TestChannelPipelineRulesAPI:
     def test_get_rules_with_data(self, test_client, mock_db_session):
         """Get rules returns list of rules."""
         mock_rule = MagicMock()
+        mock_rule.enabled = True
+        mock_rule.active_from = None
+        mock_rule.active_until = None
+        mock_rule.get_conditions.return_value = [{"type": "always"}]
+        mock_rule.get_actions.return_value = [{"type": "skip"}]
+        mock_rule.is_event_sync.return_value = False
         mock_rule.to_dict.return_value = {
             "id": 1,
             "name": "Test Rule",
@@ -76,6 +82,7 @@ class TestChannelPipelineRulesAPI:
         data = response.json()
         assert len(data["rules"]) == 1
         assert data["rules"][0]["name"] == "Test Rule"
+        assert data["rules"][0]["runnable"] is True
 
     def test_get_rule_by_id_found(self, test_client, mock_db_session):
         """Get single rule by ID when it exists."""

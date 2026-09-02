@@ -2568,12 +2568,30 @@ class ChannelPipelineExecution(Base):
         _warnings = self.get_warnings()
         _selected_rule_state = self.get_selected_rule_outcome_state()
         _selected_rule_outcomes = _selected_rule_state["outcomes"]
+        _origin = next(
+            (
+                entry for entry in self.get_execution_log()
+                if isinstance(entry, dict)
+                and entry.get("type") == "scheduled_task_origin"
+            ),
+            {},
+        )
+        _selected_scope = next(
+            (
+                entry for entry in self.get_execution_log()
+                if isinstance(entry, dict)
+                and entry.get("type") == "selected_rule_scope"
+            ),
+            {},
+        )
         result = {
             "id": self.id,
             "rule_id": self.rule_id,
             "rule_name": self.rule_name or (self.rule.name if self.rule else None),
             "mode": self.mode,
             "triggered_by": self.triggered_by,
+            "scheduled_task_id": _origin.get("scheduled_task_id"),
+            "schedule_id": _origin.get("schedule_id"),
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
             "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
             "duration_seconds": self.duration_seconds,
@@ -2604,15 +2622,17 @@ class ChannelPipelineExecution(Base):
             "is_event_sync": bool(self.is_event_sync),
             "event_sync_summary": self.get_event_sync_summary(),
             "run_scope": (
-                "selected" if self.selected_rule_outcomes is not None else
+                "selected" if self.selected_rule_outcomes is not None or _selected_scope else
                 "single" if self.rule_id is not None or self.rule_name else "all"
             ),
             "selected_rule_integrity": _selected_rule_state["integrity"],
             "selected_rule_ids": [
                 item["rule_id"] for item in _selected_rule_outcomes
                 if isinstance(item, dict) and isinstance(item.get("rule_id"), int)
-            ],
+            ] or _selected_scope.get("selected_rule_ids", []),
             "selected_rule_outcomes": _selected_rule_outcomes,
+            "selection_issues": _selected_scope.get("selection_issues", []),
+            "missing_rule_ids": _selected_scope.get("missing_rule_ids", []),
             # y3m6o.1 review (Finding 3): True when this run mutated
             # channel-profile membership non-reversibly. Derived from the
             # persisted ``non_reversible_profile_changes`` warning (no schema

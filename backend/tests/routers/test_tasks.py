@@ -15,7 +15,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from models import ScheduledTask, TaskSchedule
+from models import ChannelPipelineRule, ScheduledTask, TaskSchedule
 from export_models import SyncTarget
 
 
@@ -51,6 +51,20 @@ def _create_task_schedule(session, task_id="stream_probe", **overrides):
     session.commit()
     session.refresh(record)
     return record
+
+
+def _create_pipeline_rule(session, name: str, priority: int = 0):
+    rule = ChannelPipelineRule(
+        name=name,
+        enabled=True,
+        priority=priority,
+        conditions='[{"type": "always"}]',
+        actions='[{"type": "skip"}]',
+    )
+    session.add(rule)
+    session.commit()
+    session.refresh(rule)
+    return rule
 
 
 def _create_sync_target(session, target_id=7, credential_version=1):
@@ -133,6 +147,33 @@ class TestListTasks:
 
         assert response.status_code == 200
         assert response.json()["tasks"][0]["next_run"] is None
+
+    @pytest.mark.asyncio
+    async def test_channel_pipeline_schedule_reports_stale_exact_selection(
+        self, async_client, test_session
+    ):
+        _create_scheduled_task(test_session, task_id="auto_creation")
+        _create_task_schedule(
+            test_session,
+            task_id="auto_creation",
+            parameters='{"rule_ids": [7]}',
+        )
+        registry = MagicMock()
+        registry.get_all_task_statuses.return_value = [{
+            "task_id": "auto_creation", "status": "idle", "task_name": "Channel Pipeline",
+        }]
+        error = ValueError("Selected rule 7 is disabled")
+
+        with patch("task_registry.get_registry", return_value=registry), patch(
+            "schedule_calculator.describe_schedule", return_value="Daily"
+        ), patch(
+            "routers.tasks._schedule_parameter_error", return_value=str(error)
+        ):
+            response = await async_client.get("/api/tasks")
+
+        assert response.status_code == 200
+        schedule = response.json()["tasks"][0]["schedules"][0]
+        assert schedule["selection_error"] == "Selected rule 7 is disabled"
 
 
 class TestGetTask:
@@ -672,6 +713,45 @@ class TestCreateTaskSchedule:
         assert data["schedule_time"] == "06:00"
 
     @pytest.mark.asyncio
+    async def test_channel_pipeline_persists_exact_selected_rule_ids(
+        self, async_client, test_session
+    ):
+        _create_scheduled_task(test_session, task_id="auto_creation")
+        later = _create_pipeline_rule(test_session, "Later", priority=20)
+        first = _create_pipeline_rule(test_session, "First", priority=10)
+
+        response = await async_client.post(
+            "/api/tasks/auto_creation/schedules",
+            json={
+                "name": "Chosen rules",
+                "schedule_type": "daily",
+                "schedule_time": "06:00",
+                "parameters": {"rule_ids": [later.id, first.id]},
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["parameters"] == {"rule_ids": [later.id, first.id]}
+        persisted = test_session.get(TaskSchedule, response.json()["id"])
+        assert persisted.get_parameters() == {"rule_ids": [later.id, first.id]}
+
+    @pytest.mark.asyncio
+    async def test_channel_pipeline_rejects_empty_selection(self, async_client, test_session):
+        _create_scheduled_task(test_session, task_id="auto_creation")
+
+        response = await async_client.post(
+            "/api/tasks/auto_creation/schedules",
+            json={
+                "schedule_type": "daily",
+                "schedule_time": "06:00",
+                "parameters": {"rule_ids": []},
+            },
+        )
+
+        assert response.status_code == 422
+        assert test_session.query(TaskSchedule).filter_by(task_id="auto_creation").count() == 0
+
+    @pytest.mark.asyncio
     async def test_persists_stream_probe_reorder_choice_as_json(
         self, async_client, test_session
     ):
@@ -897,6 +977,52 @@ class TestUpdateTaskSchedule:
         assert response.status_code == 200
         data = response.json()
         assert data["schedule_time"] == "09:00"
+
+    @pytest.mark.asyncio
+    async def test_channel_pipeline_edit_revalidates_and_preserves_previous_scope_on_failure(
+        self, async_client, test_session
+    ):
+        _create_scheduled_task(test_session, task_id="auto_creation")
+        rule = _create_pipeline_rule(test_session, "Current")
+        schedule = _create_task_schedule(test_session, task_id="auto_creation")
+        schedule.set_parameters({"rule_ids": [rule.id]})
+        test_session.commit()
+
+        response = await async_client.patch(
+            f"/api/tasks/auto_creation/schedules/{schedule.id}",
+            json={"parameters": {"rule_ids": [rule.id, rule.id]}},
+        )
+
+        assert response.status_code == 422
+        test_session.refresh(schedule)
+        assert schedule.get_parameters() == {"rule_ids": [rule.id]}
+
+    @pytest.mark.asyncio
+    async def test_channel_pipeline_stale_schedule_can_disable_but_not_reenable(
+        self, async_client, test_session
+    ):
+        _create_scheduled_task(test_session, task_id="auto_creation")
+        rule = _create_pipeline_rule(test_session, "Removed")
+        schedule = _create_task_schedule(test_session, task_id="auto_creation")
+        schedule.set_parameters({"rule_ids": [rule.id]})
+        test_session.delete(rule)
+        test_session.commit()
+
+        disabled = await async_client.patch(
+            f"/api/tasks/auto_creation/schedules/{schedule.id}",
+            json={"enabled": False, "parameters": {"rule_ids": [rule.id]}},
+        )
+        blocked_enable = await async_client.patch(
+            f"/api/tasks/auto_creation/schedules/{schedule.id}",
+            json={"enabled": True},
+        )
+
+        assert disabled.status_code == 200
+        assert disabled.json()["enabled"] is False
+        assert disabled.json()["parameters"] == {"rule_ids": [rule.id]}
+        assert blocked_enable.status_code == 422
+        test_session.refresh(schedule)
+        assert schedule.enabled is False
 
     @pytest.mark.parametrize(
         "value",

@@ -31,35 +31,9 @@ def load_selected_rule_snapshots(rule_ids: list[int]) -> list[ChannelPipelineRul
                 rule_ids=missing,
             )
 
-        today = datetime.utcnow().date()
         issues = []
         for rule in rules:
-            if not rule.enabled:
-                issues.append({"rule_id": rule.id, "rule_name": rule.name,
-                               "reason": "disabled"})
-                continue
-            if ((rule.active_from is not None and rule.active_from > today)
-                    or (rule.active_until is not None and rule.active_until < today)):
-                issues.append({"rule_id": rule.id, "rule_name": rule.name,
-                               "reason": "inactive"})
-                continue
-
-            errors = list(validate_rule(
-                rule.get_conditions(), rule.get_actions()
-            ).get("errors", []))
-            if rule.is_event_sync():
-                config = rule.get_event_sync_config()
-                if config is None:
-                    errors.append("event_sync_config is invalid")
-                elif not config.get("enabled", True):
-                    issues.append({"rule_id": rule.id, "rule_name": rule.name,
-                                   "reason": "disabled"})
-                    continue
-                else:
-                    errors.extend(validate_event_sync_config(config))
-            if errors:
-                issues.append({"rule_id": rule.id, "rule_name": rule.name,
-                               "reason": "invalid", "errors": errors})
+            issues.extend(selected_rule_issues(rule))
 
         if issues:
             raise SelectedRuleValidationError(
@@ -72,3 +46,32 @@ def load_selected_rule_snapshots(rule_ids: list[int]) -> list[ChannelPipelineRul
         return rules
     finally:
         session.close()
+
+
+def selected_rule_issues(
+    rule: ChannelPipelineRule, *, today=None
+) -> list[dict]:
+    """Return the shared selected-run eligibility issues for one rule."""
+    today = today or datetime.utcnow().date()
+    if not rule.enabled:
+        return [{"rule_id": rule.id, "rule_name": rule.name,
+                 "reason": "disabled"}]
+    if ((rule.active_from is not None and rule.active_from > today)
+            or (rule.active_until is not None and rule.active_until < today)):
+        return [{"rule_id": rule.id, "rule_name": rule.name,
+                 "reason": "inactive"}]
+
+    errors = list(validate_rule(
+        rule.get_conditions(), rule.get_actions()
+    ).get("errors", []))
+    if rule.is_event_sync():
+        config = rule.get_event_sync_config()
+        if config is None:
+            errors.append("event_sync_config is invalid")
+        elif not config.get("enabled", True):
+            return [{"rule_id": rule.id, "rule_name": rule.name,
+                     "reason": "disabled"}]
+        else:
+            errors.extend(validate_event_sync_config(config))
+    return ([{"rule_id": rule.id, "rule_name": rule.name,
+              "reason": "invalid", "errors": errors}] if errors else [])
