@@ -1024,7 +1024,7 @@ export function RuleBuilder({
                   <summary>Why / when to use</summary>
                   <p className="rule-why-body">
                     On: when this rule merges into existing channels (Create Channel with
-                    &quot;If exists: merge&quot;), names are compared ignoring case and ALL spacing —
+                    &quot;If exists: merge&quot; or Merge Streams with Auto-detect), names are compared ignoring case and ALL spacing —
                     &quot;eurosport 2&quot;, &quot;Eurosport 2&quot; and &quot;Eurosport2&quot; become one channel
                     instead of several. This only changes how names are COMPARED; the visible channel
                     name keeps its original spelling and is never rewritten. Caveat: genuinely distinct

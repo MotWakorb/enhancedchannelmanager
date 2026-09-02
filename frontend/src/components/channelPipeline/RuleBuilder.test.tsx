@@ -792,6 +792,7 @@ describe('RuleBuilder', () => {
       expect(
         screen.getByRole('checkbox', { name: /ignore spacing and case differences/i }),
       ).not.toBeChecked();
+      expect(screen.getByText(/Merge Streams with Auto-detect/i)).toBeInTheDocument();
     });
 
     it('round-trips a rule with the flag enabled', async () => {
