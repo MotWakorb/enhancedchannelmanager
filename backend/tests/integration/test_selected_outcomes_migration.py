@@ -180,6 +180,20 @@ def test_downgrade_preserves_existing_history_with_null_outcomes(tmp_path):
                 "CURRENT_TIMESTAMP, 'completed', 7, 3, 1, 2, 0, 0, 3, 4, 0, 0, "
                 "CURRENT_TIMESTAMP, NULL) RETURNING id"
             )).scalar_one()
+            connection.execute(text(
+                "INSERT INTO auto_creation_snapshots "
+                "(execution_id, snapshot_time, channel_count, channels_data, "
+                "created_at) VALUES "
+                "(:execution_id, CURRENT_TIMESTAMP, 1, "
+                "'{\"channels\": [{\"id\": 42}]}', CURRENT_TIMESTAMP)"
+            ), {"execution_id": execution_id})
+            connection.execute(text(
+                "INSERT INTO auto_creation_conflicts "
+                "(execution_id, stream_id, stream_name, conflict_type, resolution, "
+                "description, created_at) VALUES "
+                "(:execution_id, 17, 'Preserved stream', 'duplicate_match', "
+                "'skipped', 'Preserved conflict', CURRENT_TIMESTAMP)"
+            ), {"execution_id": execution_id})
     finally:
         engine.dispose()
 
@@ -227,6 +241,29 @@ def test_downgrade_preserves_existing_history_with_null_outcomes(tmp_path):
             "channels_updated": 2,
             "channels_touched": 3,
             "streams_skipped": 4,
+        }
+        with engine.connect() as connection:
+            snapshot = connection.execute(text(
+                "SELECT execution_id, channel_count, channels_data "
+                "FROM auto_creation_snapshots WHERE execution_id = :execution_id"
+            ), {"execution_id": execution_id}).mappings().one()
+            conflict = connection.execute(text(
+                "SELECT execution_id, stream_id, stream_name, conflict_type, "
+                "resolution, description FROM auto_creation_conflicts "
+                "WHERE execution_id = :execution_id"
+            ), {"execution_id": execution_id}).mappings().one()
+        assert dict(snapshot) == {
+            "execution_id": execution_id,
+            "channel_count": 1,
+            "channels_data": '{"channels": [{"id": 42}]}',
+        }
+        assert dict(conflict) == {
+            "execution_id": execution_id,
+            "stream_id": 17,
+            "stream_name": "Preserved stream",
+            "conflict_type": "duplicate_match",
+            "resolution": "skipped",
+            "description": "Preserved conflict",
         }
     finally:
         engine.dispose()

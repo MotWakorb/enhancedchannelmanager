@@ -140,7 +140,7 @@ before startup if the restore operation copied or transformed it.
 Downgrade is safe only under operator-provided quiescence and while every row has
 `selected_rule_outcomes IS NULL`. Revision `0051` refuses when it observes an
 active/running execution or selected-rule audit data, but SQLite's
-nontransactional DDL leaves a race between those checks and the batch column
+nontransactional DDL leaves a race between those checks and the native column
 drop: the migration cannot prove that an external ECM process stayed stopped.
 Once any selected-rule run has persisted audit data, `alembic downgrade 0050`
 intentionally refuses rather than silently erase execution history. Roll back

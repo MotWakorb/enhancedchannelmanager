@@ -2,7 +2,7 @@
 
 Downgrade requires every ECM instance to be stopped and a full-fidelity
 ``journal.db`` backup to exist before Alembic starts. SQLite DDL is not
-transactionally lockable across this guard and the subsequent batch column
+transactionally lockable across this guard and the subsequent native column
 drop, so the checks below are safe only under operator-provided quiescence.
 They refuse known active executions or selected-rule audit data; they cannot
 prove an external process will not write after the checks.
@@ -77,5 +77,7 @@ def downgrade() -> None:
                 f"{selected_count} row(s) contain selected rule audit data, so "
                 "this downgrade would erase history even under quiescence"
             )
-        with op.batch_alter_table(TABLE) as batch_op:
-            batch_op.drop_column(COLUMN)
+        # SQLite 3.35+ supports native DROP COLUMN. Do not use batch mode here:
+        # rebuilding the parent table under foreign_keys=ON fires inbound
+        # ON DELETE CASCADE constraints and erases snapshots/conflicts.
+        op.drop_column(TABLE, COLUMN)
