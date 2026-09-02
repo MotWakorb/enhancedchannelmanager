@@ -268,10 +268,16 @@ export function EventSyncReviewQueue() {
         `Discarded ${outcome.discarded_ids.length} of ${requested} selected review items` +
           (details.length ? `; ${details.join('; ')}.` : '.'),
       );
-      const discarded = new Set(outcome.discarded_ids);
-      setRows(previous => previous.filter(row => !discarded.has(row.id)));
+      const terminalIds = new Set([
+        ...outcome.discarded_ids,
+        ...outcome.missing_ids,
+        ...outcome.not_pending_ids,
+      ]);
+      setRows(previous => previous.filter(row => !terminalIds.has(row.id)));
       setTotal(previous => Math.max(0, previous - outcome.discarded_ids.length));
-      setSelectedIds(new Set());
+      setSelectedIds(previous =>
+        new Set([...previous].filter(id => !terminalIds.has(id))),
+      );
       setDiscardIds(null);
       await loadRows();
     } catch (err) {

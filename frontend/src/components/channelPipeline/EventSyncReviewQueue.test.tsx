@@ -466,6 +466,47 @@ describe('EventSyncReviewQueue — bulk discard', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('refresh failed');
   });
 
+  it('removes every terminal outcome from the queue when the refresh fails', async () => {
+    const discarded = makeRecord({ id: 1 });
+    const missing = makeRecord({
+      id: 2,
+      evidence: { ...makeRecord().evidence, stream_name: 'Missing stream' },
+    });
+    const notPending = makeRecord({
+      id: 3,
+      evidence: { ...makeRecord().evidence, stream_name: 'Terminal stream' },
+    });
+    vi.mocked(api.getEventSyncReviews)
+      .mockResolvedValueOnce({
+        reviews: [discarded, missing, notPending],
+        total: 3,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      })
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockResolvedValue({
+      requested_ids: [1, 2, 3],
+      discarded_ids: [1],
+      missing_ids: [2],
+      not_pending_ids: [3],
+    });
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select all rendered reviews/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^discard 3 items$/i }));
+
+    await waitFor(() => expect(api.getEventSyncReviews).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('checkbox', { name: /select review 1/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /select review 2/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /select review 3/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/selected$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/discarded 1 of 3/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/1 was already removed/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/1 was no longer pending/i);
+    expect(screen.getByRole('alert')).toHaveTextContent('refresh failed');
+  });
+
   it('keeps selection and shows API errors in the confirmation dialog', async () => {
     mockList([makeRecord()]);
     vi.mocked(api.bulkDiscardEventSyncReviews).mockRejectedValue(new Error('discard failed'));
