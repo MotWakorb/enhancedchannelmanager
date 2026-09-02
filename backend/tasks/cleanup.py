@@ -187,6 +187,16 @@ class CleanupTask(TaskScheduler):
         if "vacuum_db" in config:
             self.vacuum_db = config["vacuum_db"]
 
+    @classmethod
+    def validate_run_parameters(cls, parameters: dict | None) -> None:
+        """Validate destructive retention overrides before task activation."""
+        if parameters and "event_sync_review_retention_days" in parameters:
+            validate_review_retention_days(
+                parameters["event_sync_review_retention_days"]
+            )
+
+    validate_schedule_parameters = validate_run_parameters
+
     async def execute(self) -> TaskResult:
         """Execute the cleanup task."""
         started_at = datetime.utcnow()

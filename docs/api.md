@@ -819,7 +819,7 @@ The `/api/event-sync-reviews/*` family (bead ti939.3.2) is the review queue for 
 | Endpoint | Description |
 |-|-|
 | `GET /api/event-sync-reviews` | Paginated list. Query: `status` (`pending` default \| `accepted` \| `rejected` \| `superseded`), `rule_id`, `page`, `page_size` (≤200). Rows carry the fingerprint columns, state-machine fields, and a parsed display-only `evidence` snapshot (both raw names, parsed titles/starts, score/band/team-verdict/time-delta, snapshot ids). `RequireAuthIfEnabled`. |
-| `POST /api/event-sync-reviews/bulk-discard` | Delete only the selected pending review rows. Body: `{ "review_ids": [12, 19] }`, with 1-200 unique strict positive integer IDs. The operation is transactional and never widens its scope. Response: `{requested_ids, discarded_ids, missing_ids, not_pending_ids}`; IDs concurrently removed are reported as missing, while IDs accepted/rejected/superseded before the request are reported as not pending and retained. No Dispatcharr stream is detached and no terminal decision is removed. `RequireAdminIfEnabled`. |
+| `POST /api/event-sync-reviews/bulk-discard` | Delete only the selected pending review rows. Body: `{ "review_ids": [12, 19] }`, with 1-200 unique strict positive signed 64-bit integer IDs. The deletion and its `review_bulk_discard` audit row commit together or both roll back. Response: `{requested_ids, discarded_ids, missing_ids, not_pending_ids}`; IDs concurrently removed are reported as missing, while IDs accepted/rejected/superseded before deletion are reported as not pending and retained. No Dispatcharr stream is detached and no terminal decision is removed. `RequireAdminIfEnabled`. |
 | `POST /api/event-sync-reviews/{id}/accept` | Accept a pairing: records the durable fingerprint decision (future runs auto-attach it), supersedes sibling pending pairings for the same stream fingerprint, then best-effort attaches immediately. Snapshot channel/stream ids are re-verified against live Dispatcharr (channel name must still parse to the row's `event_key`; stream name must still hash to `stream_name_hash`), and a failed verification defers the attach to the next run (`attach_deferred_reason`). Response: `{status: "accepted", attached, already_attached, attach_deferred_reason, superseded_siblings}`. Idempotent on `accepted`; `409` on `rejected`/`superseded`; `404` if missing. `RequireAdminIfEnabled`. |
 | `POST /api/event-sync-reviews/{id}/reject` | Reject a pairing: durable fingerprint suppression. Future runs neither attach nor re-ask. No Dispatcharr call. Response: `{status: "rejected"}`. Idempotent on `rejected`; `409` on `accepted`/`superseded`. `RequireAdminIfEnabled`. |
 
@@ -1458,7 +1458,7 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `GET /api/tasks` | List all tasks with status |
 | `GET /api/tasks/{id}` | Get task details with schedules |
 | `PATCH /api/tasks/{id}` | Update task configuration |
-| `POST /api/tasks/{id}/run` | Run task immediately |
+| `POST /api/tasks/{id}/run` | Run task immediately. Database Cleanup and DBAS backup/restore/sync tasks require a human admin; the MCP service principal cannot activate them. |
 | `POST /api/tasks/{id}/cancel` | Cancel running task |
 | `GET /api/tasks/{id}/history` | Get task execution history |
 | `GET /api/tasks/engine/status` | Get task engine status |
@@ -1466,7 +1466,7 @@ The frontend uses this to drive the "add alert method" form so new method types 
 | `GET /api/tasks/{id}/parameter-schema` | Get parameter schema for a task type |
 | `GET /api/tasks/parameter-schemas` | Get all task parameter schemas |
 | `GET /api/tasks/{id}/schedules` | Get task schedules |
-| `POST /api/tasks/{id}/schedules` | Add schedule to task |
+| `POST /api/tasks/{id}/schedules` | Add schedule to task. Database Cleanup and DBAS backup/restore/sync schedule writes require a human admin. |
 | `PATCH /api/tasks/{id}/schedules/{sid}` | Update schedule |
 | `DELETE /api/tasks/{id}/schedules/{sid}` | Delete schedule |
 

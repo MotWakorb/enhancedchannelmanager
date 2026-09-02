@@ -62,6 +62,16 @@ def test_retention_rejects_values_outside_strict_integer_contract(value):
         task.update_config({"event_sync_review_retention_days": value})
 
 
+@pytest.mark.parametrize("value", [-1, 3651, 1.5, True, "30"])
+def test_run_and_schedule_retention_validation_rejects_invalid_values(value):
+    parameters = {"event_sync_review_retention_days": value}
+
+    with pytest.raises(ValueError, match="event_sync_review_retention_days"):
+        CleanupTask.validate_run_parameters(parameters)
+    with pytest.raises(ValueError, match="event_sync_review_retention_days"):
+        CleanupTask.validate_schedule_parameters(parameters)
+
+
 def test_disabled_retention_does_not_query_or_delete(test_session):
     _rule(test_session)
     _review(test_session, 1, NOW_MS - 100 * DAY_MS)
@@ -159,3 +169,34 @@ async def test_cleanup_task_surfaces_purge_failure_in_result(test_session):
     assert result.details["errors"] == [
         "Event Sync review cleanup: forced retention failure"
     ]
+
+
+@pytest.mark.asyncio
+async def test_system_cleanup_uses_enabled_retention_and_reports_deleted_count(
+    test_session,
+):
+    _rule(test_session)
+    _review(test_session, 1, NOW_MS - 40 * DAY_MS)
+    _review(test_session, 2, NOW_MS - 20 * DAY_MS)
+    settings = SimpleNamespace(
+        auto_creation_snapshot_days=30,
+        auto_creation_snapshot_max=50,
+        m3u_snapshot_days=90,
+        m3u_change_log_days=90,
+        unique_client_connection_days=90,
+    )
+    task = CleanupTask()
+    task.update_config({"event_sync_review_retention_days": 30})
+    task.vacuum_db = False
+
+    with (
+        patch("tasks.cleanup.get_session", return_value=test_session),
+        patch("config.get_settings", return_value=settings),
+        patch("services.event_sync_review_store.now_epoch_ms", return_value=NOW_MS),
+    ):
+        result = await task.execute()
+
+    assert result.success is True
+    assert result.failed_count == 0
+    assert result.details["deleted"]["event_sync_reviews"] == 1
+    assert {row.id for row in test_session.query(EventSyncReview).all()} == {2}

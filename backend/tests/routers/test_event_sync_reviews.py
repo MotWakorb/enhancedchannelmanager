@@ -30,6 +30,7 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import event
 
 from models import ChannelPipelineRule, EventSyncReview, JournalEntry
 from services.event_sync_matcher import parse_event_name
@@ -226,6 +227,86 @@ class TestBulkDiscardEventSyncReviews:
         assert after["not_pending_ids"] == [accepted_id]
 
     @pytest.mark.asyncio
+    async def test_reports_rows_that_change_immediately_before_delete(
+        self, async_client, test_session, test_engine
+    ):
+        _make_rule(test_session)
+        stable = _make_review(test_session, provider_id=7)
+        disappears = _make_review(test_session, provider_id=8)
+        resolves = _make_review(test_session, provider_id=9)
+        untouched = _make_review(test_session, provider_id=10)
+        fired = False
+
+        def mutate_at_delete(_conn, _cursor, statement, parameters, context, executemany):
+            nonlocal fired
+            del parameters, context, executemany
+            if fired or not statement.lstrip().upper().startswith("DELETE FROM EVENT_SYNC_REVIEWS"):
+                return
+            fired = True
+            _cursor.execute(
+                "DELETE FROM event_sync_reviews WHERE id = ?", (disappears.id,)
+            )
+            _cursor.execute(
+                "UPDATE event_sync_reviews SET status = 'accepted' WHERE id = ?",
+                (resolves.id,),
+            )
+
+        event.listen(test_engine, "before_cursor_execute", mutate_at_delete)
+        try:
+            response = await async_client.post(
+                "/api/event-sync-reviews/bulk-discard",
+                json={"review_ids": [stable.id, disappears.id, resolves.id]},
+            )
+        finally:
+            event.remove(test_engine, "before_cursor_execute", mutate_at_delete)
+
+        assert fired is True
+        assert response.status_code == 200
+        assert response.json() == {
+            "requested_ids": [stable.id, disappears.id, resolves.id],
+            "discarded_ids": [stable.id],
+            "missing_ids": [disappears.id],
+            "not_pending_ids": [resolves.id],
+        }
+        test_session.expire_all()
+        remaining = {
+            row.id: row.status for row in test_session.query(EventSyncReview).all()
+        }
+        assert remaining == {resolves.id: "accepted", untouched.id: "pending"}
+
+    @pytest.mark.asyncio
+    async def test_journal_persistence_failure_rolls_back_deletion(
+        self, async_client, test_session
+    ):
+        _make_rule(test_session)
+        first = _make_review(test_session, provider_id=7)
+        second = _make_review(test_session, provider_id=8)
+
+        def fail_journal_insert(*_args):
+            raise RuntimeError("forced journal persistence failure")
+
+        event.listen(JournalEntry, "before_insert", fail_journal_insert)
+        try:
+            response = await async_client.post(
+                "/api/event-sync-reviews/bulk-discard",
+                json={"review_ids": [first.id, second.id]},
+            )
+        finally:
+            event.remove(JournalEntry, "before_insert", fail_journal_insert)
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == (
+            "Event Sync review discard failed; no selected rows were discarded"
+        )
+        test_session.expire_all()
+        assert {
+            row.id for row in test_session.query(EventSyncReview).all()
+        } == {first.id, second.id}
+        assert test_session.query(JournalEntry).filter(
+            JournalEntry.action_type == "review_bulk_discard"
+        ).count() == 0
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "payload",
         [
@@ -243,6 +324,58 @@ class TestBulkDiscardEventSyncReviews:
         response = await async_client.post(
             "/api/event-sync-reviews/bulk-discard", json=payload
         )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_accepts_200_ids_and_rejects_201(self, async_client):
+        accepted = await async_client.post(
+            "/api/event-sync-reviews/bulk-discard",
+            json={"review_ids": list(range(1, 201))},
+        )
+        rejected = await async_client.post(
+            "/api/event-sync-reviews/bulk-discard",
+            json={"review_ids": list(range(1, 202))},
+        )
+
+        assert accepted.status_code == 200
+        assert accepted.json()["missing_ids"] == list(range(1, 201))
+        assert rejected.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_repeated_discard_reports_previously_deleted_ids_as_missing(
+        self, async_client, test_session
+    ):
+        _make_rule(test_session)
+        row = _make_review(test_session)
+
+        first = await async_client.post(
+            "/api/event-sync-reviews/bulk-discard",
+            json={"review_ids": [row.id]},
+        )
+        second = await async_client.post(
+            "/api/event-sync-reviews/bulk-discard",
+            json={"review_ids": [row.id]},
+        )
+
+        assert first.json()["discarded_ids"] == [row.id]
+        assert second.status_code == 200
+        assert second.json() == {
+            "requested_ids": [row.id],
+            "discarded_ids": [],
+            "missing_ids": [row.id],
+            "not_pending_ids": [],
+        }
+        assert test_session.query(JournalEntry).filter(
+            JournalEntry.action_type == "review_bulk_discard"
+        ).count() == 1
+
+    @pytest.mark.asyncio
+    async def test_rejects_ids_above_sqlite_integer_range(self, async_client):
+        response = await async_client.post(
+            "/api/event-sync-reviews/bulk-discard",
+            json={"review_ids": [9_223_372_036_854_775_808]},
+        )
+
         assert response.status_code == 422
 
     @pytest.mark.asyncio
@@ -271,7 +404,7 @@ class TestBulkDiscardEventSyncReviews:
                 json={"review_ids": [first.id, second.id]},
             )
 
-        assert response.status_code == 500
+        assert response.status_code == 503
         test_session.expire_all()
         remaining_ids = {
             row.id for row in test_session.query(EventSyncReview).all()

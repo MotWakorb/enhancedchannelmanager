@@ -60,6 +60,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
 from pydantic import BaseModel, StrictInt, field_validator
+from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 import journal
@@ -84,6 +85,7 @@ router = APIRouter(prefix="/api/event-sync-reviews", tags=["Event Sync Reviews"]
 DEFAULT_PAGE = 1
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
+MAX_SQLITE_INTEGER = 9_223_372_036_854_775_807
 
 _VALID_STATUSES = (
     REVIEW_STATUS_PENDING,
@@ -158,6 +160,10 @@ class BulkDiscardReviewsRequest(BaseModel):
             raise ValueError(f"review_ids may contain at most {MAX_PAGE_SIZE} ids")
         if any(review_id <= 0 for review_id in value):
             raise ValueError("review_ids must contain only positive integers")
+        if any(review_id > MAX_SQLITE_INTEGER for review_id in value):
+            raise ValueError(
+                f"review_ids must not exceed {MAX_SQLITE_INTEGER}"
+            )
         if len(set(value)) != len(value):
             raise ValueError("review_ids must not contain duplicates")
         return value
@@ -485,34 +491,58 @@ async def bulk_discard_event_sync_reviews(
     user=RequireAdminIfEnabled,
 ) -> BulkDiscardReviewsOutcome:
     """Discard exactly the selected pending review rows in one transaction."""
-    rows = db.query(EventSyncReview.id, EventSyncReview.status).filter(
-        EventSyncReview.id.in_(request.review_ids)
-    ).all()
-    status_by_id = {row.id: row.status for row in rows}
-    discarded_ids = [
-        review_id for review_id in request.review_ids
-        if status_by_id.get(review_id) == REVIEW_STATUS_PENDING
-    ]
-    missing_ids = [
-        review_id for review_id in request.review_ids
-        if review_id not in status_by_id
-    ]
-    not_pending_ids = [
-        review_id for review_id in request.review_ids
-        if review_id in status_by_id
-        and status_by_id[review_id] != REVIEW_STATUS_PENDING
-    ]
-
     try:
-        if discarded_ids:
-            deleted = db.query(EventSyncReview).filter(
-                EventSyncReview.id.in_(discarded_ids),
-                EventSyncReview.status == REVIEW_STATUS_PENDING,
-            ).delete(synchronize_session=False)
-            if deleted != len(discarded_ids):
-                raise RuntimeError(
-                    "selected review rows changed during discard; no rows committed"
+        deleted_id_set = set(
+            db.execute(
+                delete(EventSyncReview)
+                .where(
+                    EventSyncReview.id.in_(request.review_ids),
+                    EventSyncReview.status == REVIEW_STATUS_PENDING,
                 )
+                .returning(EventSyncReview.id)
+            ).scalars()
+        )
+        discarded_ids = [
+            review_id for review_id in request.review_ids
+            if review_id in deleted_id_set
+        ]
+        remaining_rows = db.query(
+            EventSyncReview.id, EventSyncReview.status
+        ).filter(EventSyncReview.id.in_(request.review_ids)).all()
+        status_by_id = {row.id: row.status for row in remaining_rows}
+        missing_ids = [
+            review_id for review_id in request.review_ids
+            if review_id not in deleted_id_set and review_id not in status_by_id
+        ]
+        not_pending_ids = [
+            review_id for review_id in request.review_ids
+            if review_id in status_by_id
+        ]
+        outcome = BulkDiscardReviewsOutcome(
+            requested_ids=request.review_ids,
+            discarded_ids=discarded_ids,
+            missing_ids=missing_ids,
+            not_pending_ids=not_pending_ids,
+        )
+        actor = _actor_token_id(user)
+        if discarded_ids:
+            db.add(journal._build_journal_entry(
+                category="event_sync",
+                action_type="review_bulk_discard",
+                entity_id=discarded_ids[0],
+                entity_name=f"{len(discarded_ids)} Event Sync review items",
+                description=(
+                    f"Discarded {len(discarded_ids)} selected pending Event Sync "
+                    f"review item(s); {len(missing_ids)} missing and "
+                    f"{len(not_pending_ids)} no longer pending"
+                ),
+                before_value={"status": REVIEW_STATUS_PENDING},
+                after_value={
+                    **outcome.model_dump(),
+                    "actor_token_id": actor,
+                },
+                user_initiated=True,
+            ))
         db.commit()
     except Exception as e:  # noqa: BLE001
         db.rollback()
@@ -522,35 +552,10 @@ async def bulk_discard_event_sync_reviews(
             e,
         )
         raise HTTPException(
-            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Event Sync review discard failed; no selected rows were discarded",
         )
 
-    outcome = BulkDiscardReviewsOutcome(
-        requested_ids=request.review_ids,
-        discarded_ids=discarded_ids,
-        missing_ids=missing_ids,
-        not_pending_ids=not_pending_ids,
-    )
-    actor = _actor_token_id(user)
-    if discarded_ids:
-        journal.log_entry(
-            category="event_sync",
-            action_type="review_bulk_discard",
-            entity_id=discarded_ids[0],
-            entity_name=f"{len(discarded_ids)} Event Sync review items",
-            description=(
-                f"Discarded {len(discarded_ids)} selected pending Event Sync "
-                f"review item(s); {len(missing_ids)} missing and "
-                f"{len(not_pending_ids)} no longer pending"
-            ),
-            before_value={"status": REVIEW_STATUS_PENDING},
-            after_value={
-                **outcome.model_dump(),
-                "actor_token_id": actor,
-            },
-            user_initiated=True,
-        )
     logger.info(
         "[EVENT-SYNC] bulk review discard requested=%s discarded=%s missing=%s "
         "not_pending=%s actor=%s",

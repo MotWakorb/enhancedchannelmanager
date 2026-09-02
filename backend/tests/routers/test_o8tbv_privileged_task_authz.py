@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from auth import resolve_is_admin_if_enabled
+from auth import ResolveIsMcpServicePrincipalIfEnabled, resolve_is_admin_if_enabled
 from routers.tasks import PRIVILEGED_TASK_IDS
 
 
@@ -41,11 +41,20 @@ def _override_admin(app, is_admin: bool):
     return lambda: app.dependency_overrides.pop(_prebuilt.dependency, None)
 
 
+def _override_mcp(app, is_mcp: bool):
+    async def _resolved() -> bool:
+        return is_mcp
+
+    dependency = ResolveIsMcpServicePrincipalIfEnabled.dependency
+    app.dependency_overrides[dependency] = _resolved
+    return lambda: app.dependency_overrides.pop(dependency, None)
+
+
 @pytest.mark.asyncio
 class TestPrivilegedTaskRunGate:
-    async def test_privileged_run_ids_are_dbas(self):
+    async def test_privileged_run_ids_include_cleanup_and_dbas(self):
         assert PRIVILEGED_TASK_IDS == frozenset(
-            {"dbas_restore", "dbas_backup", "dbas_sync"}
+            {"cleanup", "dbas_restore", "dbas_backup", "dbas_sync"}
         )
 
     async def test_per_target_sync_prefix_is_privileged(self):
@@ -56,7 +65,70 @@ class TestPrivilegedTaskRunGate:
 
         assert is_privileged_task_id("dbas_sync_1")
         assert is_privileged_task_id("dbas_sync_12345")
-        assert not is_privileged_task_id("cleanup")
+        assert is_privileged_task_id("cleanup")
+
+    async def test_non_admin_cannot_run_cleanup_with_retention(self, async_client):
+        from main import app
+
+        cleanup = _override_admin(app, is_admin=False)
+        engine = MagicMock()
+        engine.run_task = AsyncMock()
+        try:
+            with patch("task_engine.get_engine", return_value=engine):
+                response = await async_client.post(
+                    "/api/tasks/cleanup/run",
+                    json={"parameters": {"event_sync_review_retention_days": 30}},
+                )
+        finally:
+            cleanup()
+
+        assert response.status_code == 403
+        engine.run_task.assert_not_awaited()
+
+    async def test_mcp_cannot_run_cleanup_with_retention(self, async_client):
+        from main import app
+
+        cleanup_admin = _override_admin(app, is_admin=True)
+        cleanup_mcp = _override_mcp(app, is_mcp=True)
+        engine = MagicMock()
+        engine.run_task = AsyncMock()
+        try:
+            with patch("task_engine.get_engine", return_value=engine):
+                response = await async_client.post(
+                    "/api/tasks/cleanup/run",
+                    json={"parameters": {"event_sync_review_retention_days": 30}},
+                )
+        finally:
+            cleanup_mcp()
+            cleanup_admin()
+
+        assert response.status_code == 403
+        assert "MCP service principal" in response.json()["detail"]
+        engine.run_task.assert_not_awaited()
+
+    async def test_admin_can_run_cleanup_with_retention(self, async_client):
+        from main import app
+
+        cleanup = _override_admin(app, is_admin=True)
+        result = MagicMock()
+        result.to_dict.return_value = {"success": True}
+        engine = MagicMock()
+        engine.run_task = AsyncMock(return_value=result)
+        try:
+            with patch("task_engine.get_engine", return_value=engine):
+                response = await async_client.post(
+                    "/api/tasks/cleanup/run",
+                    json={"parameters": {"event_sync_review_retention_days": 30}},
+                )
+        finally:
+            cleanup()
+
+        assert response.status_code == 200
+        engine.run_task.assert_awaited_once_with(
+            "cleanup",
+            schedule_id=None,
+            parameters={"event_sync_review_retention_days": 30},
+        )
 
     @pytest.mark.parametrize("task_id", ["dbas_restore", "dbas_backup", "dbas_sync", "dbas_sync_7"])
     async def test_non_admin_run_privileged_task_forbidden(self, async_client, task_id):
@@ -177,6 +249,107 @@ class TestPrivilegedTaskCancelGate:
 
 @pytest.mark.asyncio
 class TestPrivilegedTaskScheduleGate:
+    @pytest.mark.parametrize(
+        ("method", "path", "body"),
+        [
+            (
+                "patch",
+                "/api/tasks/cleanup",
+                {"config": {"event_sync_review_retention_days": 30}},
+            ),
+            (
+                "post",
+                "/api/tasks/cleanup/schedules",
+                {
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {"event_sync_review_retention_days": 30},
+                },
+            ),
+            (
+                "patch",
+                "/api/tasks/cleanup/schedules/1",
+                {
+                    "enabled": True,
+                    "parameters": {"event_sync_review_retention_days": 30},
+                },
+            ),
+        ],
+    )
+    async def test_non_admin_cannot_configure_cleanup_retention(
+        self, async_client, method, path, body
+    ):
+        from main import app
+
+        cleanup = _override_admin(app, is_admin=False)
+        try:
+            response = await getattr(async_client, method)(path, json=body)
+        finally:
+            cleanup()
+
+        assert response.status_code == 403
+
+    async def test_mcp_cannot_create_cleanup_retention_schedule(self, async_client):
+        from main import app
+
+        cleanup_admin = _override_admin(app, is_admin=True)
+        cleanup_mcp = _override_mcp(app, is_mcp=True)
+        try:
+            response = await async_client.post(
+                "/api/tasks/cleanup/schedules",
+                json={
+                    "schedule_type": "daily",
+                    "schedule_time": "06:00",
+                    "parameters": {"event_sync_review_retention_days": 30},
+                },
+            )
+        finally:
+            cleanup_mcp()
+            cleanup_admin()
+
+        assert response.status_code == 403
+        assert "MCP service principal" in response.json()["detail"]
+
+    async def test_admin_can_persist_cleanup_retention_schedule(
+        self, async_client, test_session
+    ):
+        from main import app
+        from models import ScheduledTask, TaskSchedule
+        from tasks.cleanup import CleanupTask
+
+        test_session.add(ScheduledTask(
+            task_id="cleanup",
+            task_name="Database Cleanup",
+            description="Clean persisted application data",
+            enabled=True,
+            schedule_type="manual",
+        ))
+        test_session.commit()
+        cleanup = _override_admin(app, is_admin=True)
+        registry = MagicMock()
+        registry.get_task_class.return_value = CleanupTask
+        try:
+            with patch("task_registry.get_registry", return_value=registry):
+                response = await async_client.post(
+                    "/api/tasks/cleanup/schedules",
+                    json={
+                        "schedule_type": "daily",
+                        "schedule_time": "06:00",
+                        "parameters": {"event_sync_review_retention_days": 30},
+                    },
+                )
+        finally:
+            cleanup()
+
+        assert response.status_code == 200
+        test_session.expire_all()
+        schedule = test_session.query(TaskSchedule).filter(
+            TaskSchedule.task_id == "cleanup"
+        ).one()
+        assert schedule.get_parameters() == {
+            "event_sync_review_retention_days": 30
+        }
+
     async def test_non_admin_cannot_enable_privileged_parent(self, async_client):
         from main import app
 

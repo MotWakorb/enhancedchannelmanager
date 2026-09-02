@@ -30,7 +30,7 @@
  * first-class row the operator can list and undo — and it outranks any
  * later accept for the same fingerprint.
  */
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import * as api from '../../services/api';
 import type { EventSyncReviewRecord } from '../../types/eventSync';
 import { logger } from '../../utils/logger';
@@ -38,6 +38,7 @@ import { getDateLocale } from '../../utils/formatting';
 import { BAND_META, TEAM_VERDICT_META } from './eventSyncDefaults';
 import { EXCLUSIONS_CHANGED_EVENT } from './EventSyncExclusionsPanel';
 import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
 import '../ModalBase.css';
 import './EventSyncReviewQueue.css';
 
@@ -63,7 +64,8 @@ export function EventSyncReviewQueue() {
   const [discardIds, setDiscardIds] = useState<number[] | null>(null);
   const [discardBusy, setDiscardBusy] = useState(false);
   const [discardError, setDiscardError] = useState<string | null>(null);
-  const discardTitleId = `${useId()}-bulk-discard-title`;
+  const { titleId: discardTitleId, containerRef: discardContainerRef } =
+    useOwnedDialog(discardIds !== null);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -266,6 +268,9 @@ export function EventSyncReviewQueue() {
         `Discarded ${outcome.discarded_ids.length} of ${requested} selected review items` +
           (details.length ? `; ${details.join('; ')}.` : '.'),
       );
+      const discarded = new Set(outcome.discarded_ids);
+      setRows(previous => previous.filter(row => !discarded.has(row.id)));
+      setTotal(previous => Math.max(0, previous - outcome.discarded_ids.length));
       setSelectedIds(new Set());
       setDiscardIds(null);
       await loadRows();
@@ -325,6 +330,12 @@ export function EventSyncReviewQueue() {
         </div>
       )}
 
+      {loading && rows.length === 0 && (
+        <div className="loading-state" role="status">
+          Loading Event Sync reviews...
+        </div>
+      )}
+
       {!loading && rows.length === 0 && !loadError && (
         <div className="empty-state">
           <span className="material-icons">inbox</span>
@@ -337,7 +348,7 @@ export function EventSyncReviewQueue() {
       )}
 
       {rows.length > 0 && (
-        <>
+        <div inert={discardIds !== null ? true : undefined}>
           <div className="event-sync-review-bulk-toolbar" aria-label="Event Sync review bulk actions">
             <label className="event-sync-review-select-all">
               <input
@@ -373,7 +384,7 @@ export function EventSyncReviewQueue() {
                     className="event-sync-review-selector"
                     checked={selectedIds.has(row.id)}
                     onChange={() => toggleSelected(row.id)}
-                    disabled={busy || discardBusy}
+                    disabled={busy || discardIds !== null || discardBusy}
                     aria-label={`Select review ${row.id}`}
                   />
                   {ev.rule_name && (
@@ -461,7 +472,7 @@ export function EventSyncReviewQueue() {
                     type="button"
                     className="btn-secondary"
                     onClick={() => handleNeverAttach(row)}
-                    disabled={busy}
+                    disabled={busy || discardIds !== null || discardBusy}
                     title="Record a standing exclusion: this pairing never attaches, on any future run, until you remove it from the exclusions list"
                   >
                     <span className="material-icons" aria-hidden="true">block</span>
@@ -471,7 +482,7 @@ export function EventSyncReviewQueue() {
                     type="button"
                     className="btn-secondary"
                     onClick={() => handleReject(row)}
-                    disabled={busy}
+                    disabled={busy || discardIds !== null || discardBusy}
                   >
                     <span className="material-icons" aria-hidden="true">do_not_disturb_on</span>
                     Reject pairing
@@ -480,7 +491,7 @@ export function EventSyncReviewQueue() {
                     type="button"
                     className="btn-primary"
                     onClick={() => handleAccept(row)}
-                    disabled={busy}
+                    disabled={busy || discardIds !== null || discardBusy}
                   >
                     <span className="material-icons" aria-hidden="true">task_alt</span>
                     {busy ? 'Working...' : 'Accept & attach'}
@@ -497,16 +508,19 @@ export function EventSyncReviewQueue() {
             );
           })}
           </ul>
-        </>
+        </div>
       )}
 
       {discardIds && (
-        <ModalOverlay onClose={closeBulkDiscard}>
+        <ModalOverlay
+          onClose={closeBulkDiscard}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={discardTitleId}
+        >
           <div
+            ref={discardContainerRef}
             className="modal-container modal-sm"
-            role="alertdialog"
-            aria-modal="true"
-            aria-labelledby={discardTitleId}
           >
             <div className="modal-header">
               <h3 id={discardTitleId} className="modal-title">

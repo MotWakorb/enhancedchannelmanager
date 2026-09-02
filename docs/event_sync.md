@@ -1320,7 +1320,8 @@ Unattended runs (auto-run rules) include the queued count in their
 completion notification ("N event matches queued for review"), so
 borderline events are one click away instead of silently skipped at 3 AM.
 
-**Audit**: every accept/reject and successful bulk discard writes a journal entry
+**Audit**: every accept/reject and successful bulk discard writes a journal entry;
+the direct bulk-discard deletion and audit entry are one database transaction
 (category `event_sync`, action `review_accept` / `review_reject` /
 `review_bulk_discard`), and every
 queue-driven attach is journaled with `attach_source: "review_queue"`:

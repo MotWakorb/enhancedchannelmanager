@@ -81,7 +81,7 @@ export const MODAL_OVERLAY_MANIFEST: readonly ModalOverlayManifestEntry[] = [
   { identity: 'components/channelPipeline/ChannelPipelineTab.tsx#9', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline', focus: 'debt' },
   { identity: 'components/channelPipeline/ChannelPipelineTab.tsx#10', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline', focus: 'debt' },
   { identity: 'components/channelPipeline/EventSyncAutoSyncFixDialog.tsx#1', owner: 'descendant', role: 'alertdialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'debt' },
-  { identity: 'components/channelPipeline/EventSyncReviewQueue.tsx#1', owner: 'descendant', role: 'alertdialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'debt' },
+  { identity: 'components/channelPipeline/EventSyncReviewQueue.tsx#1', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'managed-helper' },
   { identity: 'components/channelPipeline/EventSyncRuleEditor.tsx#1', owner: 'descendant', role: 'alertdialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'debt' },
   { identity: 'components/channelPipeline/RuleBuilder.tsx#1', owner: 'descendant', role: 'alertdialog', modal: 'true', name: 'named', relation: 'root', family: 'channel-pipeline-confirm', focus: 'debt' },
   { identity: 'components/settings/CloudTargetEditor.tsx#1', owner: 'overlay', role: 'dialog', modal: 'true', name: 'named', relation: 'root', family: 'settings-cloud', focus: 'managed-helper' },
