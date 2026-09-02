@@ -107,6 +107,14 @@ both fail closed if the column is non-text or non-nullable. Deploy the backend
 revision before a frontend that expects selected-rule integrity and per-rule
 outcomes.
 
+The JSON array remains in canonical audit/display order (ascending rule priority,
+then rule ID), even though temporal processing is phase-ordered: all selected
+Standard rules run before selected Event Sync rules. During a selected run the
+same column receives bounded phase checkpoints: one Standard start write, one
+Standard boundary write, and start/terminal writes around each Event Sync rule.
+Run-all and single-rule executions keep the column `NULL` and do not use these
+checkpoints.
+
 Downgrade to `0050` is safe only while every row has
 `selected_rule_outcomes IS NULL`. Once any selected-rule run has persisted audit
 data, `alembic downgrade 0050` intentionally refuses rather than silently erase

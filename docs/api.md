@@ -1527,16 +1527,28 @@ produced.
 
 Selected-rule runs use the same asynchronous `202 Accepted` and execution polling
 contract as run-all and single-rule runs. The server ignores client submission
-order and executes the selected scope in canonical rule order: ascending
-`priority`, then ascending rule `id` as the stable tie-break. Standard rules run
-through the existing standard pipeline passes first; Event Sync rules then run
-through the existing dedicated Event Sync phase. Execution responses identify
-these rows with `run_scope: "selected"` and include `selected_rule_integrity`,
-`selected_rule_ids`, and one `selected_rule_outcomes` entry per rule. Each outcome
-retains the worker-start rule name and kind, terminal status, kind-appropriate
-matched/attached count, error count, and any skip or cap reason. A malformed
-non-null audit payload remains selected scope with
+order. The accepted selection, audit outcomes, and display order are canonical:
+ascending `priority`, then ascending rule `id` as the stable tie-break. That
+canonical order is not the temporal phase order when kinds interleave by
+priority. Processing always runs the selected Standard phase first, followed by
+the selected Event Sync phase; Event Sync rules retain their canonical positions
+in the outcome list rather than being regrouped for display. Execution responses
+identify these rows with `run_scope: "selected"` and include
+`selected_rule_integrity`, `selected_rule_ids`, and one
+`selected_rule_outcomes` entry per rule. Each outcome retains the worker-start
+rule name and kind, terminal status, kind-appropriate matched/attached count,
+error count, and any skip or cap reason. A malformed non-null audit payload
+remains selected scope with
 `selected_rule_integrity: "corrupt"`; it is never presented as a zero-rule run.
+
+Selected executions checkpoint only phase-sized lifecycle transitions. All
+selected Standard children become `running` together when Standard processing
+starts and receive their derived terminal outcomes together before Event Sync
+starts. Event Sync children transition to `running` immediately before their own
+attempt and to a derived terminal outcome before the next Event Sync rule. This
+avoids per-action database writes while preserving completed work across a later
+fatal error. On fatal finalization, the active child becomes `interrupted`, future
+children become `not_run`, and already-terminal children remain unchanged.
 
 Validation is fail-closed and atomic at both request acceptance and worker start:
 an empty, duplicate, unknown, disabled, inactive, or invalid member is never
