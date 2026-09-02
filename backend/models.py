@@ -3474,6 +3474,13 @@ class EventSyncReview(Base):
         ),
         # Queue list + badge count read path.
         Index("idx_event_sync_reviews_status_created", "status", "created_at"),
+        # Bounded retention purge ordered by oldest observation, then row id.
+        Index(
+            "idx_event_sync_reviews_status_seen_id",
+            "status",
+            "last_seen_at",
+            "id",
+        ),
         # Per-rule decision load (every run) + per-rule queue filters.
         Index("idx_event_sync_reviews_rule_status", "rule_id", "status"),
     )
