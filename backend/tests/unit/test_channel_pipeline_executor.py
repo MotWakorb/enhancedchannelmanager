@@ -4916,6 +4916,56 @@ class TestMergeStreamsFoldMatchKey:
         assert result.skipped is False
         client.update_channel.assert_awaited_once_with(51, {"streams": [901]})
 
+    @pytest.mark.asyncio
+    async def test_rename_evicts_old_folded_identity_and_keeps_numbered_base(self):
+        engine = MagicMock()
+
+        def normalize(value, group_ids=None):
+            normalized = "Discovery" if value == "Motortrend" else value
+            return SimpleNamespace(normalized=normalized, transformations=[])
+
+        engine.normalize.side_effect = normalize
+        engine.extract_core_name.side_effect = lambda value: value
+        engine.extract_call_sign.return_value = None
+        client = MagicMock()
+        client.update_channel = AsyncMock(return_value={})
+        executor = ActionExecutor(
+            client,
+            existing_channels=[self._channel(51, "4000 | Motortrend")],
+            normalization_engine=engine,
+        )
+
+        rename_result = await executor.execute(
+            {"type": "create_channel", "if_exists": "merge"},
+            StreamContext(stream_id=902, stream_name="Discovery", m3u_account_id=1),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+        )
+        assert rename_result.success is True
+        assert executor._channel_by_id[51]["name"] == "4000 | Discovery"
+
+        client.update_channel.reset_mock()
+        old_name_result = await executor.execute(
+            {"type": "merge_streams", "target": "auto"},
+            self._stream("Motor Trend"),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+            fold_match_key=True,
+        )
+        assert old_name_result.skipped is True
+        client.update_channel.assert_not_awaited()
+
+        new_name_result = await executor.execute(
+            {"type": "merge_streams", "target": "auto"},
+            self._stream("Dis cov ery"),
+            ExecutionContext(),
+            normalization_group_ids=[41],
+            fold_match_key=True,
+        )
+        assert new_name_result.success is True
+        assert new_name_result.skipped is False
+        client.update_channel.assert_awaited_once_with(51, {"streams": [902, 901]})
+
 
 class TestCreateChannelFoldMatchKey:
     """GH #645 / bead enhancedchannelmanager-0vao3: opt-in ``fold_match_key``.

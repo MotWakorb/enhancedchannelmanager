@@ -1352,13 +1352,32 @@ class ActionExecutor:
                             self._channel_by_name[new_name.lower()] = existing
                             self._add_candidate(
                                 self._by_name_candidates, new_name.lower(), existing)
-                            # GH #645 / bead 0vao3: the renamed spelling must
-                            # also be fold-findable (old fold keys still point
-                            # at the same mutated dict, so they stay correct).
-                            self._fold_key_to_channel.setdefault(
-                                _fold_key(new_name), existing)
-                            self._add_candidate(
-                                self._fold_key_candidates, _fold_key(new_name), existing)
+                            # A renamed channel must stop matching its former
+                            # folded identities. Re-index both the stored name
+                            # and the number-prefix-stripped base name.
+                            old_fold_keys = {
+                                _fold_key(existing_name), _fold_key(existing_core)}
+                            new_core = new_name[len(existing_base):]
+                            new_fold_keys = {
+                                _fold_key(new_name), _fold_key(new_core)}
+                            for old_fold_key in old_fold_keys - new_fold_keys:
+                                remaining = [
+                                    c for c in self._fold_key_candidates.get(
+                                        old_fold_key, []) if c is not existing]
+                                if remaining:
+                                    self._fold_key_candidates[old_fold_key] = remaining
+                                else:
+                                    self._fold_key_candidates.pop(old_fold_key, None)
+                                if self._fold_key_to_channel.get(old_fold_key) is existing:
+                                    if remaining:
+                                        self._fold_key_to_channel[old_fold_key] = remaining[0]
+                                    else:
+                                        self._fold_key_to_channel.pop(old_fold_key, None)
+                            for new_fold_key in new_fold_keys:
+                                self._fold_key_to_channel.setdefault(
+                                    new_fold_key, existing)
+                                self._add_candidate(
+                                    self._fold_key_candidates, new_fold_key, existing)
                         except Exception as e:
                             logger.warning("[AUTO-CREATE-EXEC] Failed to rename channel '%s' to '%s': %s", existing_name, new_name, e)
                             action_details.append(f"Failed to rename channel: {e}")
