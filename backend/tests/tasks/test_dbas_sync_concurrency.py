@@ -608,17 +608,15 @@ async def test_concurrent_runs_attribute_metrics_per_result(
 # ---------------------------------------------------------------------------
 
 
-def test_per_target_sync_ids_are_privileged():
-    """Every per-target sync id must stay admin-gated exactly like the ids in
-    PRIVILEGED_TASK_IDS — the outbound-write surface did not stop being
-    privileged because the id grew a suffix."""
+def test_per_target_sync_ids_and_destructive_cleanup_are_privileged():
+    """Per-target sync ids and destructive cleanup must stay admin-gated."""
     from routers.tasks import PRIVILEGED_TASK_IDS, is_privileged_task_id
 
     for legacy_id in PRIVILEGED_TASK_IDS:
         assert is_privileged_task_id(legacy_id)
     assert is_privileged_task_id("dbas_sync_1")
     assert is_privileged_task_id("dbas_sync_12345")
-    assert not is_privileged_task_id("cleanup")
+    assert is_privileged_task_id("cleanup")
     assert not is_privileged_task_id("stream_probe")
 
 
