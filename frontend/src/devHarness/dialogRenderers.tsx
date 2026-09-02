@@ -71,6 +71,7 @@ import { ChannelsPane } from '../components/ChannelsPane'
 import { SettingsTab } from '../components/tabs/SettingsTab'
 import { CircuitBreakerBanner } from '../components/channelPipeline/CircuitBreakerBanner'
 import { EventSyncAutoSyncFixDialog } from '../components/channelPipeline/EventSyncAutoSyncFixDialog'
+import { EventSyncReviewQueue } from '../components/channelPipeline/EventSyncReviewQueue'
 import { EventSyncRuleEditor } from '../components/channelPipeline/EventSyncRuleEditor'
 import { RuleBuilder } from '../components/channelPipeline/RuleBuilder'
 import { CloudTargetEditor } from '../components/settings/CloudTargetEditor'
@@ -863,6 +864,15 @@ const RENDERERS = {
     render: () => <ChannelPipelineTab />,
     open: [click('Run Event sync')],
     expect: '[data-testid="event-sync-run-confirm"]',
+  },
+
+  'cp-event-sync-review-discard': {
+    render: () => <EventSyncReviewQueue />,
+    open: [
+      click('', { selector: '.event-sync-review-selector' }),
+      click('Discard selected'),
+    ],
+    expect: '[role="alertdialog"]',
   },
 
   'cp-rollback-confirm': {

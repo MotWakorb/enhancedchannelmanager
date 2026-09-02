@@ -37,7 +37,11 @@ __all__ = [
     "load_pending_fingerprints",
     "load_review_decisions",
     "now_epoch_ms",
+    "purge_stale_pending_reviews",
 ]
+
+EVENT_SYNC_REVIEW_RETENTION_MAX_DAYS = 3650
+EVENT_SYNC_REVIEW_PURGE_BATCH_SIZE = 200
 
 
 def now_epoch_ms() -> int:
@@ -47,6 +51,99 @@ def now_epoch_ms() -> int:
     timestamps (mirrors ``routers/channel_merges._now_epoch_ms``).
     """
     return int(time.time() * 1000)
+
+
+def validate_review_retention_days(value: object) -> int:
+    """Validate the persisted integer-days contract; zero disables purge."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            "event_sync_review_retention_days must be an integer from 0 to "
+            f"{EVENT_SYNC_REVIEW_RETENTION_MAX_DAYS} (0 disables retention)"
+        )
+    if value < 0 or value > EVENT_SYNC_REVIEW_RETENTION_MAX_DAYS:
+        raise ValueError(
+            "event_sync_review_retention_days must be between 0 and "
+            f"{EVENT_SYNC_REVIEW_RETENTION_MAX_DAYS} (0 disables retention)"
+        )
+    return value
+
+
+def purge_stale_pending_reviews(
+    db: Session,
+    *,
+    retention_days: int,
+    batch_limit: int = EVENT_SYNC_REVIEW_PURGE_BATCH_SIZE,
+    now_ms: int | None = None,
+) -> dict:
+    """Delete one deterministic batch of pending reviews older than cutoff.
+
+    Terminal decisions are deliberately retained because deleting an accepted
+    or rejected fingerprint would change future matching behavior. The
+    ``last_seen_at`` clock keeps questions that active runs still encounter.
+    """
+    days = validate_review_retention_days(retention_days)
+    if batch_limit < 1 or batch_limit > EVENT_SYNC_REVIEW_PURGE_BATCH_SIZE:
+        raise ValueError(
+            f"batch_limit must be between 1 and {EVENT_SYNC_REVIEW_PURGE_BATCH_SIZE}"
+        )
+    if days == 0:
+        return {
+            "enabled": False,
+            "cutoff_ms": None,
+            "deleted": 0,
+            "batch_limit": batch_limit,
+        }
+
+    cutoff_ms = (now_epoch_ms() if now_ms is None else now_ms) - days * 86_400_000
+    candidate_ids = [
+        row.id
+        for row in (
+            db.query(EventSyncReview.id)
+            .filter(
+                EventSyncReview.status == REVIEW_STATUS_PENDING,
+                EventSyncReview.last_seen_at < cutoff_ms,
+            )
+            .order_by(EventSyncReview.last_seen_at.asc(), EventSyncReview.id.asc())
+            .limit(batch_limit)
+            .all()
+        )
+    ]
+    if not candidate_ids:
+        return {
+            "enabled": True,
+            "cutoff_ms": cutoff_ms,
+            "deleted": 0,
+            "deleted_ids": [],
+            "batch_limit": batch_limit,
+        }
+
+    try:
+        deleted = (
+            db.query(EventSyncReview)
+            .filter(
+                EventSyncReview.id.in_(candidate_ids),
+                EventSyncReview.status == REVIEW_STATUS_PENDING,
+                EventSyncReview.last_seen_at < cutoff_ms,
+            )
+            .delete(synchronize_session=False)
+        )
+        if deleted != len(candidate_ids):
+            raise RuntimeError(
+                "Event Sync review purge target changed during the transaction; "
+                "no selected rows were committed"
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return {
+        "enabled": True,
+        "cutoff_ms": cutoff_ms,
+        "deleted": deleted,
+        "deleted_ids": candidate_ids,
+        "batch_limit": batch_limit,
+    }
 
 
 def load_review_decisions(db: Session, rule_id: int) -> ReviewDecisions:

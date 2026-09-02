@@ -605,6 +605,18 @@ async def update_task(
     _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s", task_id)
     try:
+        if (
+            task_id == "cleanup"
+            and config.config is not None
+            and "event_sync_review_retention_days" in config.config
+        ):
+            from services.event_sync_review_store import validate_review_retention_days
+            try:
+                validate_review_retention_days(
+                    config.config["event_sync_review_retention_days"]
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
         from task_registry import get_registry
         registry = get_registry()
 

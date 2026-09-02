@@ -29,6 +29,7 @@ vi.mock('../../services/api', async () => {
     getEventSyncReviews: vi.fn(),
     acceptEventSyncReview: vi.fn(),
     rejectEventSyncReview: vi.fn(),
+    bulkDiscardEventSyncReviews: vi.fn(),
     createEventSyncExclusion: vi.fn(),
   };
 });
@@ -337,5 +338,91 @@ describe('EventSyncReviewQueue — never attach (bead ti939.3.5)', () => {
       screen.getByText('BOX HD: Fury vs. Usyk @ 11 Jul 08:00 PM ET'),
     ).toBeInTheDocument();
     expect(api.rejectEventSyncReview).not.toHaveBeenCalled();
+  });
+});
+
+describe('EventSyncReviewQueue — bulk discard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('selects the current rendered scope and confirms the exact count', async () => {
+    mockList([makeRecord({ id: 1 }), makeRecord({ id: 2 })]);
+    render(<EventSyncReviewQueue />);
+
+    await screen.findByText('2', { selector: '[data-testid="event-sync-review-count"]' });
+    fireEvent.click(screen.getByRole('checkbox', { name: /select all rendered reviews/i }));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+
+    expect(screen.getByRole('alertdialog')).toHaveAccessibleName(
+      'Discard 2 selected review items?',
+    );
+    expect(api.bulkDiscardEventSyncReviews).not.toHaveBeenCalled();
+  });
+
+  it('cancel closes confirmation without discarding and preserves selection', async () => {
+    mockList([makeRecord()]);
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /select review 1/i })).toBeChecked();
+    expect(api.bulkDiscardEventSyncReviews).not.toHaveBeenCalled();
+  });
+
+  it('discards exact selected ids, refreshes, resets selection, and reports partial outcome', async () => {
+    const first = makeRecord({ id: 1 });
+    const second = makeRecord({ id: 2 });
+    mockList([first, second]);
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockResolvedValue({
+      requested_ids: [1, 2],
+      discarded_ids: [1],
+      missing_ids: [2],
+      not_pending_ids: [],
+    });
+
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select all rendered reviews/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^discard 2 items$/i }));
+
+    await waitFor(() => {
+      expect(api.bulkDiscardEventSyncReviews).toHaveBeenCalledWith([1, 2]);
+    });
+    await waitFor(() => expect(api.getEventSyncReviews).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('status')).toHaveTextContent(/discarded 1 of 2/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/1 was already removed/i);
+    expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
+  });
+
+  it('keeps selection and shows API errors in the confirmation dialog', async () => {
+    mockList([makeRecord()]);
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockRejectedValue(new Error('discard failed'));
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^discard 1 item$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('discard failed');
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /select review 1/i })).toBeChecked();
+  });
+
+  it('does not count a selected row after an individual action removes it', async () => {
+    mockList([makeRecord()]);
+    vi.mocked(api.rejectEventSyncReview).mockResolvedValue({ status: 'rejected' });
+    render(<EventSyncReviewQueue />);
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /reject pairing/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /discard selected/i })).not.toBeInTheDocument();
   });
 });

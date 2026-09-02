@@ -136,6 +136,7 @@ export const DIALOG_CATALOG = [
   { id: 'cp-export-dialog', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → export rules', status: 'stubbed', via: 'host' },
   { id: 'cp-execution-details', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → execution details', status: 'stubbed', via: 'host' },
   { id: 'cp-event-sync-run-confirm', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → event-sync run confirm', status: 'stubbed', via: 'host' },
+  { id: 'cp-event-sync-review-discard', file: 'src/components/channelPipeline/EventSyncReviewQueue.tsx', label: 'Event sync review → discard selected', status: 'stubbed', via: 'host' },
   { id: 'cp-rollback-confirm', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → rollback confirm', status: 'stubbed', via: 'host' },
   { id: 'cp-revert-confirm', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → undo this run confirm', status: 'stubbed', via: 'host' },
   { id: 'cp-revert-result', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → revert complete summary', status: 'stubbed', via: 'host' },

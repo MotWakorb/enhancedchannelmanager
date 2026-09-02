@@ -1271,6 +1271,27 @@ channel, with the full evidence the matcher saw, never just a score:
   never attach (not even if a later run's score drifts into the attach
   band) and never re-enters the queue. Nothing is written to Dispatcharr.
 
+### Discarding stale questions and optional retention
+
+Select individual cards, or use **Select rendered reviews** to select the
+current rendered queue page, then choose **Discard selected**. The confirmation
+names the exact count. The request contains only those row IDs; it does not
+recompute a filter or expand to newer arrivals. The result reports IDs that were
+already removed or no longer pending, and refreshes the queue after success.
+Discard removes a question only: it does not detach a stream and cannot delete
+an accepted, rejected, or superseded decision.
+
+Automatic retention is configured under **Settings → Scheduled Tasks → Database
+Cleanup** as **Event Sync pending review retention (days)**. It defaults to `0`
+(disabled), so upgrades delete nothing until an operator opts in. Valid values
+are integer days from `0` through `3650`; `0` disables retention and `1..3650`
+enables it. Each Database Cleanup pass deterministically deletes at most 200
+pending rows whose `last_seen_at` is **strictly less than** the UTC epoch-millisecond
+cutoff. A row exactly on the cutoff, a newer row, and every terminal decision
+are preserved. Failed deletion or commit rolls back that whole Event Sync batch;
+the task log and task-history result report its count or failure. Re-running the
+task is safe and drains another oldest-first batch.
+
 ### Decisions survive refreshes: by design
 
 Decisions are keyed on **content identity**: the provider account, the
@@ -1299,8 +1320,9 @@ Unattended runs (auto-run rules) include the queued count in their
 completion notification ("N event matches queued for review"), so
 borderline events are one click away instead of silently skipped at 3 AM.
 
-**Audit**: every accept/reject writes a journal entry (category
-`event_sync`, action `review_accept` / `review_reject`), and every
+**Audit**: every accept/reject and successful bulk discard writes a journal entry
+(category `event_sync`, action `review_accept` / `review_reject` /
+`review_bulk_discard`), and every
 queue-driven attach is journaled with `attach_source: "review_queue"`:
 distinguishable from threshold attaches (`attach_source: "threshold"`) in
 the journal's match provenance.

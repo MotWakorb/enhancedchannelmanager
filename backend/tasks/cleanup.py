@@ -33,6 +33,11 @@ from models import (
 )
 from task_scheduler import TaskScheduler, TaskResult, ScheduleConfig, ScheduleType
 from task_registry import register_task
+from services.event_sync_review_store import (
+    EVENT_SYNC_REVIEW_PURGE_BATCH_SIZE,
+    purge_stale_pending_reviews,
+    validate_review_retention_days,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +57,8 @@ class CleanupTask(TaskScheduler):
       (default: 7) — see bd-ia28g
     - notifications_days: Delete notifications older than this many days
       (default: 30) — see bd-ia28g; uses ``expires_at`` if set, else ``created_at``
+    - event_sync_review_retention_days: Delete stale pending Event Sync review
+      rows after this many days (default: 0, disabled; valid: 0 or 1-3650)
     - vacuum_db: Run VACUUM after cleanup (default: True)
 
     ChannelPipelineSnapshot retention (ADR-010 §D7, uc51o.3) is bounded by TWO
@@ -106,7 +113,10 @@ class CleanupTask(TaskScheduler):
 
     task_id = "cleanup"
     task_name = "Database Cleanup"
-    task_description = "Clean up old probe history, task execution history, and journal entries"
+    task_description = (
+        "Clean up old probe history, task execution history, journal entries, "
+        "and configured retained data"
+    )
 
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         # bd-ygoqr (follow-up to bd-f9gd8 DBA spike): fresh installs now default
@@ -140,6 +150,7 @@ class CleanupTask(TaskScheduler):
         self.auto_creation_blob_days: int = 30
         self.health_checks_days: int = 7
         self.notifications_days: int = 30
+        self.event_sync_review_retention_days: int = 0
         self.vacuum_db: bool = True
 
     def get_config(self) -> dict:
@@ -151,6 +162,7 @@ class CleanupTask(TaskScheduler):
             "auto_creation_blob_days": self.auto_creation_blob_days,
             "health_checks_days": self.health_checks_days,
             "notifications_days": self.notifications_days,
+            "event_sync_review_retention_days": self.event_sync_review_retention_days,
             "vacuum_db": self.vacuum_db,
         }
 
@@ -168,6 +180,10 @@ class CleanupTask(TaskScheduler):
             self.health_checks_days = config["health_checks_days"]
         if "notifications_days" in config:
             self.notifications_days = config["notifications_days"]
+        if "event_sync_review_retention_days" in config:
+            self.event_sync_review_retention_days = validate_review_retention_days(
+                config["event_sync_review_retention_days"]
+            )
         if "vacuum_db" in config:
             self.vacuum_db = config["vacuum_db"]
 
@@ -177,7 +193,7 @@ class CleanupTask(TaskScheduler):
         deleted_counts = {}
         errors = []
 
-        # 10 prune operations total:
+        # 11 prune operations total:
         # 1. stream_stats failed/pending probes
         # 2. task_executions
         # 3. journal_entries
@@ -187,9 +203,10 @@ class CleanupTask(TaskScheduler):
         # 7. auto_creation_snapshots age + count prune (ADR-010 §D7, uc51o.3)
         # 8. m3u_snapshots + m3u_change_logs age prune (bd-wehek)
         # 9. unique_client_connections age prune (bd-1wi3y)
-        # 10. VACUUM (must remain LAST — runs after all prune steps so freed
+        # 10. stale pending Event Sync reviews (opt-in)
+        # 11. VACUUM (must remain LAST — runs after all prune steps so freed
         #     pages are reclaimed in the same maintenance pass)
-        total_steps = 10
+        total_steps = 11
 
         self._set_progress(
             total=total_steps,
@@ -624,8 +641,48 @@ class CleanupTask(TaskScheduler):
                     session.close()
                     return self._cancelled_result(started_at, deleted_counts)
 
-                # 10. VACUUM the database
-                self._set_progress(current=10, current_item="Vacuuming database")
+                # 10. Prune stale pending Event Sync review questions. Terminal
+                # decisions stay load-bearing; last_seen_at protects questions
+                # still encountered by active runs. Zero is the explicit
+                # disabled default, and each pass is capped to bound write-lock
+                # duration.
+                self._set_progress(
+                    current=10,
+                    current_item="Pruning stale pending Event Sync reviews",
+                )
+                try:
+                    review_outcome = purge_stale_pending_reviews(
+                        session,
+                        retention_days=self.event_sync_review_retention_days,
+                    )
+                    deleted_counts["event_sync_reviews"] = review_outcome["deleted"]
+                    if review_outcome["enabled"]:
+                        logger.info(
+                            "[%s] Deleted %s stale pending Event Sync reviews "
+                            "older than %s days (batch limit %s)",
+                            self.task_id,
+                            review_outcome["deleted"],
+                            self.event_sync_review_retention_days,
+                            EVENT_SYNC_REVIEW_PURGE_BATCH_SIZE,
+                        )
+                    else:
+                        logger.info(
+                            "[%s] Event Sync review retention disabled; no rows deleted",
+                            self.task_id,
+                        )
+                except Exception as e:
+                    logger.error(
+                        "[%s] Failed to prune Event Sync reviews: %s", self.task_id, e
+                    )
+                    errors.append(f"Event Sync review cleanup: {str(e)}")
+                    session.rollback()
+
+                if self._cancel_requested:
+                    session.close()
+                    return self._cancelled_result(started_at, deleted_counts)
+
+                # 11. VACUUM the database
+                self._set_progress(current=11, current_item="Vacuuming database")
 
                 if self.vacuum_db:
                     try:

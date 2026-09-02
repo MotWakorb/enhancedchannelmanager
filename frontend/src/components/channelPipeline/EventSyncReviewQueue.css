@@ -111,6 +111,36 @@
   gap: 10px;
 }
 
+.event-sync-review-bulk-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-primary);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+}
+
+.event-sync-review-select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: var(--type-body-size);
+}
+
+.event-sync-review-selector {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 600px) {
+  .event-sync-review-bulk-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+
 .event-sync-review-card {
   border: 1px solid var(--border-primary);
   border-radius: 6px;

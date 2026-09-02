@@ -184,6 +184,101 @@ class TestListEventSyncReviews:
         ).status_code == 400
 
 
+class TestBulkDiscardEventSyncReviews:
+    @pytest.mark.asyncio
+    async def test_discards_only_exact_pending_ids_and_reports_missing_and_resolved(
+        self, async_client, test_session
+    ):
+        _make_rule(test_session)
+        first = _make_review(test_session, provider_id=7)
+        second = _make_review(test_session, provider_id=8)
+        untouched = _make_review(test_session, provider_id=9)
+        accepted = _make_review(test_session, provider_id=10, status="accepted")
+        first_id, second_id = first.id, second.id
+        untouched_id, accepted_id = untouched.id, accepted.id
+
+        response = await async_client.post(
+            "/api/event-sync-reviews/bulk-discard",
+            json={"review_ids": [second_id, first_id, accepted_id, 9999]},
+        )
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "requested_ids": [second_id, first_id, accepted_id, 9999],
+            "discarded_ids": [second_id, first_id],
+            "missing_ids": [9999],
+            "not_pending_ids": [accepted_id],
+        }
+        test_session.expire_all()
+        remaining = {
+            row.id: row.status for row in test_session.query(EventSyncReview).all()
+        }
+        assert remaining == {untouched_id: "pending", accepted_id: "accepted"}
+
+        entries = test_session.query(JournalEntry).filter(
+            JournalEntry.category == "event_sync",
+            JournalEntry.action_type == "review_bulk_discard",
+        ).all()
+        assert len(entries) == 1
+        after = json.loads(entries[0].after_value)
+        assert after["discarded_ids"] == [second_id, first_id]
+        assert after["missing_ids"] == [9999]
+        assert after["not_pending_ids"] == [accepted_id]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"review_ids": []},
+            {"review_ids": [1, 1]},
+            {"review_ids": [0]},
+            {"review_ids": [-1]},
+            {"review_ids": [True]},
+            {"review_ids": ["1"]},
+        ],
+    )
+    async def test_rejects_empty_duplicate_and_invalid_ids(
+        self, async_client, payload
+    ):
+        response = await async_client.post(
+            "/api/event-sync-reviews/bulk-discard", json=payload
+        )
+        assert response.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_rolls_back_the_whole_discard_when_commit_fails(
+        self, async_client, test_session
+    ):
+        _make_rule(test_session)
+        first = _make_review(test_session, provider_id=7)
+        second = _make_review(test_session, provider_id=8)
+
+        from sqlalchemy.orm import Session
+
+        original_commit = Session.commit
+        calls = 0
+
+        def fail_endpoint_commit(session):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("forced commit failure")
+            return original_commit(session)
+
+        with patch.object(Session, "commit", fail_endpoint_commit):
+            response = await async_client.post(
+                "/api/event-sync-reviews/bulk-discard",
+                json={"review_ids": [first.id, second.id]},
+            )
+
+        assert response.status_code == 500
+        test_session.expire_all()
+        remaining_ids = {
+            row.id for row in test_session.query(EventSyncReview).all()
+        }
+        assert remaining_ids == {first.id, second.id}
+
+
 class TestAcceptEventSyncReview:
     @pytest.mark.asyncio
     async def test_happy_path_attaches_and_journals_distinctly(

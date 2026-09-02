@@ -623,10 +623,9 @@ class TestCleanupTaskFullExecuteWithAllBlocks:
             result = await task.execute()
 
         assert result.success is True
-        assert result.total_items == 10, (
-            "execute() must report 10 cleanup steps now that bd-wehek and "
-            "bd-1wi3y added two more prune blocks (m3u_snapshots/change_logs "
-            "and unique_client_connections) before VACUUM (was 8 after uc51o.3)"
+        assert result.total_items == 11, (
+            "execute() must report 11 cleanup steps now that Event Sync "
+            "pending-review retention runs before VACUUM"
         )
         deleted = result.details["deleted"]
         assert deleted["auto_creation_blobs_pruned"] == 1
@@ -635,3 +634,4 @@ class TestCleanupTaskFullExecuteWithAllBlocks:
         # The snapshot prune block ran (zero eligible rows here, but the key
         # is present, proving step 7 executed against the session).
         assert "auto_creation_snapshots" in deleted
+        assert deleted["event_sync_reviews"] == 0

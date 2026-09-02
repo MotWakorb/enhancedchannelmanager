@@ -59,7 +59,7 @@ from typing import List, Literal, Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi import status as http_status
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictInt, field_validator
 from sqlalchemy.orm import Session
 
 import journal
@@ -144,6 +144,30 @@ class RejectReviewOutcome(BaseModel):
     """Flat outcome for POST /{id}/reject."""
 
     status: Literal["rejected"] = "rejected"
+
+
+class BulkDiscardReviewsRequest(BaseModel):
+    review_ids: List[StrictInt]
+
+    @field_validator("review_ids")
+    @classmethod
+    def validate_review_ids(cls, value: List[int]) -> List[int]:
+        if not value:
+            raise ValueError("review_ids must contain at least one id")
+        if len(value) > MAX_PAGE_SIZE:
+            raise ValueError(f"review_ids may contain at most {MAX_PAGE_SIZE} ids")
+        if any(review_id <= 0 for review_id in value):
+            raise ValueError("review_ids must contain only positive integers")
+        if len(set(value)) != len(value):
+            raise ValueError("review_ids must not contain duplicates")
+        return value
+
+
+class BulkDiscardReviewsOutcome(BaseModel):
+    requested_ids: List[int]
+    discarded_ids: List[int]
+    missing_ids: List[int]
+    not_pending_ids: List[int]
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +471,96 @@ async def list_event_sync_reviews(
         page_size=page_size,
         total_pages=total_pages,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /api/event-sync-reviews/bulk-discard
+# ---------------------------------------------------------------------------
+
+
+@router.post("/bulk-discard", response_model=BulkDiscardReviewsOutcome)
+async def bulk_discard_event_sync_reviews(
+    request: BulkDiscardReviewsRequest,
+    db: Session = Depends(get_session),
+    user=RequireAdminIfEnabled,
+) -> BulkDiscardReviewsOutcome:
+    """Discard exactly the selected pending review rows in one transaction."""
+    rows = db.query(EventSyncReview.id, EventSyncReview.status).filter(
+        EventSyncReview.id.in_(request.review_ids)
+    ).all()
+    status_by_id = {row.id: row.status for row in rows}
+    discarded_ids = [
+        review_id for review_id in request.review_ids
+        if status_by_id.get(review_id) == REVIEW_STATUS_PENDING
+    ]
+    missing_ids = [
+        review_id for review_id in request.review_ids
+        if review_id not in status_by_id
+    ]
+    not_pending_ids = [
+        review_id for review_id in request.review_ids
+        if review_id in status_by_id
+        and status_by_id[review_id] != REVIEW_STATUS_PENDING
+    ]
+
+    try:
+        if discarded_ids:
+            deleted = db.query(EventSyncReview).filter(
+                EventSyncReview.id.in_(discarded_ids),
+                EventSyncReview.status == REVIEW_STATUS_PENDING,
+            ).delete(synchronize_session=False)
+            if deleted != len(discarded_ids):
+                raise RuntimeError(
+                    "selected review rows changed during discard; no rows committed"
+                )
+        db.commit()
+    except Exception as e:  # noqa: BLE001
+        db.rollback()
+        logger.exception(
+            "[EVENT-SYNC] bulk review discard failed requested=%s: %s",
+            request.review_ids,
+            e,
+        )
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Event Sync review discard failed; no selected rows were discarded",
+        )
+
+    outcome = BulkDiscardReviewsOutcome(
+        requested_ids=request.review_ids,
+        discarded_ids=discarded_ids,
+        missing_ids=missing_ids,
+        not_pending_ids=not_pending_ids,
+    )
+    actor = _actor_token_id(user)
+    if discarded_ids:
+        journal.log_entry(
+            category="event_sync",
+            action_type="review_bulk_discard",
+            entity_id=discarded_ids[0],
+            entity_name=f"{len(discarded_ids)} Event Sync review items",
+            description=(
+                f"Discarded {len(discarded_ids)} selected pending Event Sync "
+                f"review item(s); {len(missing_ids)} missing and "
+                f"{len(not_pending_ids)} no longer pending"
+            ),
+            before_value={"status": REVIEW_STATUS_PENDING},
+            after_value={
+                **outcome.model_dump(),
+                "actor_token_id": actor,
+            },
+            user_initiated=True,
+        )
+    logger.info(
+        "[EVENT-SYNC] bulk review discard requested=%s discarded=%s missing=%s "
+        "not_pending=%s actor=%s",
+        request.review_ids,
+        discarded_ids,
+        missing_ids,
+        not_pending_ids,
+        actor,
+    )
+    return outcome
 
 
 # ---------------------------------------------------------------------------

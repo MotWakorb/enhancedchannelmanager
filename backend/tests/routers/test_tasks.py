@@ -229,6 +229,21 @@ class TestGetTask:
 
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", [-1, 3651, 1.5, True, "30"])
+    async def test_rejects_invalid_event_sync_review_retention(
+        self, async_client, value
+    ):
+        mock_registry = MagicMock()
+        with patch("task_registry.get_registry", return_value=mock_registry):
+            response = await async_client.patch("/api/tasks/cleanup", json={
+                "config": {"event_sync_review_retention_days": value},
+            })
+
+        assert response.status_code == 422
+        assert "event_sync_review_retention_days" in response.json()["detail"]
+        mock_registry.update_task_config.assert_not_called()
+
 
 class TestUpdateTask:
     """Tests for PATCH /api/tasks/{task_id}."""

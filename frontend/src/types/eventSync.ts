@@ -484,6 +484,14 @@ export interface RejectEventSyncReviewOutcome {
   status: 'rejected';
 }
 
+/** Exact-ID outcome for `POST /api/event-sync-reviews/bulk-discard`. */
+export interface BulkDiscardEventSyncReviewsOutcome {
+  requested_ids: number[];
+  discarded_ids: number[];
+  missing_ids: number[];
+  not_pending_ids: number[];
+}
+
 // =============================================================================
 // Operator exclusions (bead ti939.3.5) — /api/event-sync-exclusions
 // =============================================================================
