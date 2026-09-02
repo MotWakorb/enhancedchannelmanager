@@ -162,6 +162,32 @@ async def test_run_now_missing_schedule_fails_closed_without_executing(monkeypat
     task_engine._execute_task.assert_not_awaited()
 
 
+@pytest.mark.parametrize("failure_at", ["get_session", "query", "first"])
+@pytest.mark.asyncio
+async def test_run_now_schedule_lookup_error_fails_closed_without_executing(
+    monkeypatch, failure_at
+):
+    session = MagicMock()
+    query = MagicMock()
+    session.query.return_value = query
+    if failure_at == "get_session":
+        get_session = MagicMock(side_effect=RuntimeError("database unavailable"))
+    else:
+        get_session = MagicMock(return_value=session)
+        if failure_at == "query":
+            session.query.side_effect = RuntimeError("query failed")
+        else:
+            query.filter.return_value.first.side_effect = RuntimeError("read failed")
+    monkeypatch.setattr("database.get_session", get_session)
+    task_engine = TaskEngine()
+    task_engine._execute_task = AsyncMock()
+
+    result = await task_engine.run_task("auto_creation", schedule_id=405)
+
+    assert result is None
+    task_engine._execute_task.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_selected_pipeline_external_failure_terminalizes_exact_scope():
     first = _rule(3, "First", 5)

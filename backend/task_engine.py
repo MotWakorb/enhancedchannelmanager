@@ -1505,6 +1505,7 @@ class TaskEngine:
                     session.close()
             except Exception as e:
                 logger.exception("[%s] Failed to load schedule parameters: %s", task_id, e)
+                return None
 
         return await self._execute_task(task_id, triggered_by="manual", parameters=parameters, schedule_id=schedule_id)
 
