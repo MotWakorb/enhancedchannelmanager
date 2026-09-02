@@ -37,6 +37,9 @@ import { logger } from '../../utils/logger';
 import { getDateLocale } from '../../utils/formatting';
 import { BAND_META, TEAM_VERDICT_META } from './eventSyncDefaults';
 import { EXCLUSIONS_CHANGED_EVENT } from './EventSyncExclusionsPanel';
+import { ModalOverlay } from '../ModalOverlay';
+import { useOwnedDialog } from '../../hooks/useOwnedDialog';
+import '../ModalBase.css';
 import './EventSyncReviewQueue.css';
 
 const PAGE_SIZE = 50;
@@ -57,6 +60,12 @@ export function EventSyncReviewQueue() {
   const [rowErrors, setRowErrors] = useState<Record<number, string>>({});
   // Outcome of the last accept (attach-deferred explanations live here).
   const [notice, setNotice] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [discardIds, setDiscardIds] = useState<number[] | null>(null);
+  const [discardBusy, setDiscardBusy] = useState(false);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+  const { titleId: discardTitleId, containerRef: discardContainerRef } =
+    useOwnedDialog(discardIds !== null);
 
   const loadRows = useCallback(async () => {
     setLoading(true);
@@ -69,6 +78,7 @@ export function EventSyncReviewQueue() {
       });
       setRows(response.reviews);
       setTotal(response.total);
+      setSelectedIds(new Set());
     } catch (err) {
       const detail =
         err instanceof Error ? err.message : 'Failed to load event sync reviews';
@@ -203,6 +213,82 @@ export function EventSyncReviewQueue() {
     [clearRowError],
   );
 
+  const toggleSelected = useCallback((rowId: number) => {
+    setSelectedIds(previous => {
+      const next = new Set(previous);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }, []);
+
+  const renderedSelectedCount = rows.filter(row => selectedIds.has(row.id)).length;
+  const allRenderedSelected = rows.length > 0 && renderedSelectedCount === rows.length;
+
+  const toggleAllRendered = useCallback(() => {
+    setSelectedIds(previous => {
+      const next = new Set(previous);
+      if (rows.every(row => next.has(row.id))) {
+        rows.forEach(row => next.delete(row.id));
+      } else {
+        rows.forEach(row => next.add(row.id));
+      }
+      return next;
+    });
+  }, [rows]);
+
+  const openBulkDiscard = useCallback(() => {
+    const exactIds = rows.filter(row => selectedIds.has(row.id)).map(row => row.id);
+    if (exactIds.length === 0) return;
+    setDiscardError(null);
+    setDiscardIds(exactIds);
+  }, [rows, selectedIds]);
+
+  const closeBulkDiscard = useCallback(() => {
+    if (discardBusy) return;
+    setDiscardError(null);
+    setDiscardIds(null);
+  }, [discardBusy]);
+
+  const confirmBulkDiscard = useCallback(async () => {
+    if (!discardIds || discardIds.length === 0) return;
+    setDiscardBusy(true);
+    setDiscardError(null);
+    try {
+      const outcome = await api.bulkDiscardEventSyncReviews(discardIds);
+      const requested = outcome.requested_ids.length;
+      const details: string[] = [];
+      if (outcome.missing_ids.length > 0) {
+        details.push(`${outcome.missing_ids.length} was already removed`);
+      }
+      if (outcome.not_pending_ids.length > 0) {
+        details.push(`${outcome.not_pending_ids.length} was no longer pending`);
+      }
+      setNotice(
+        `Discarded ${outcome.discarded_ids.length} of ${requested} selected review items` +
+          (details.length ? `; ${details.join('; ')}.` : '.'),
+      );
+      const terminalIds = new Set([
+        ...outcome.discarded_ids,
+        ...outcome.missing_ids,
+        ...outcome.not_pending_ids,
+      ]);
+      setRows(previous => previous.filter(row => !terminalIds.has(row.id)));
+      setTotal(previous => Math.max(0, previous - outcome.discarded_ids.length));
+      setSelectedIds(previous =>
+        new Set([...previous].filter(id => !terminalIds.has(id))),
+      );
+      setDiscardIds(null);
+      await loadRows();
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : 'Discard failed';
+      logger.error('EventSyncReviewQueue: bulk discard failed', err);
+      setDiscardError(detail);
+    } finally {
+      setDiscardBusy(false);
+    }
+  }, [discardIds, loadRows]);
+
   return (
     <div className="event-sync-review-queue" data-testid="event-sync-review-queue">
       <div className="event-sync-review-header">
@@ -250,6 +336,12 @@ export function EventSyncReviewQueue() {
         </div>
       )}
 
+      {loading && rows.length === 0 && (
+        <div className="loading-state" role="status">
+          Loading Event Sync reviews...
+        </div>
+      )}
+
       {!loading && rows.length === 0 && !loadError && (
         <div className="empty-state">
           <span className="material-icons">inbox</span>
@@ -262,7 +354,28 @@ export function EventSyncReviewQueue() {
       )}
 
       {rows.length > 0 && (
-        <ul className="event-sync-review-list" aria-label="Event sync review queue">
+        <div inert={discardIds !== null ? true : undefined}>
+          <div className="event-sync-review-bulk-toolbar" aria-label="Event Sync review bulk actions">
+            <label className="event-sync-review-select-all">
+              <input
+                type="checkbox"
+                checked={allRenderedSelected}
+                onChange={toggleAllRendered}
+                aria-label="Select all rendered reviews"
+              />
+              <span>{renderedSelectedCount > 0 ? `${renderedSelectedCount} selected` : 'Select rendered reviews'}</span>
+            </label>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={openBulkDiscard}
+              disabled={renderedSelectedCount === 0 || discardBusy}
+            >
+              <span className="material-icons" aria-hidden="true">delete_sweep</span>
+              Discard selected
+            </button>
+          </div>
+          <ul className="event-sync-review-list" aria-label="Event sync review queue">
           {rows.map(row => {
             const ev = row.evidence;
             const busy = !!rowBusy[row.id];
@@ -272,6 +385,14 @@ export function EventSyncReviewQueue() {
             return (
               <li key={row.id} className="event-sync-review-card">
                 <div className="event-sync-review-card-header">
+                  <input
+                    type="checkbox"
+                    className="event-sync-review-selector"
+                    checked={selectedIds.has(row.id)}
+                    onChange={() => toggleSelected(row.id)}
+                    disabled={busy || discardIds !== null || discardBusy}
+                    aria-label={`Select review ${row.id}`}
+                  />
                   {ev.rule_name && (
                     <span className="event-sync-review-rule">{ev.rule_name}</span>
                   )}
@@ -357,7 +478,7 @@ export function EventSyncReviewQueue() {
                     type="button"
                     className="btn-secondary"
                     onClick={() => handleNeverAttach(row)}
-                    disabled={busy}
+                    disabled={busy || discardIds !== null || discardBusy}
                     title="Record a standing exclusion: this pairing never attaches, on any future run, until you remove it from the exclusions list"
                   >
                     <span className="material-icons" aria-hidden="true">block</span>
@@ -367,7 +488,7 @@ export function EventSyncReviewQueue() {
                     type="button"
                     className="btn-secondary"
                     onClick={() => handleReject(row)}
-                    disabled={busy}
+                    disabled={busy || discardIds !== null || discardBusy}
                   >
                     <span className="material-icons" aria-hidden="true">do_not_disturb_on</span>
                     Reject pairing
@@ -376,7 +497,7 @@ export function EventSyncReviewQueue() {
                     type="button"
                     className="btn-primary"
                     onClick={() => handleAccept(row)}
-                    disabled={busy}
+                    disabled={busy || discardIds !== null || discardBusy}
                   >
                     <span className="material-icons" aria-hidden="true">task_alt</span>
                     {busy ? 'Working...' : 'Accept & attach'}
@@ -392,7 +513,55 @@ export function EventSyncReviewQueue() {
               </li>
             );
           })}
-        </ul>
+          </ul>
+        </div>
+      )}
+
+      {discardIds && (
+        <ModalOverlay
+          onClose={closeBulkDiscard}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={discardTitleId}
+        >
+          <div
+            ref={discardContainerRef}
+            className="modal-container modal-sm"
+          >
+            <div className="modal-header">
+              <h3 id={discardTitleId} className="modal-title">
+                Discard {discardIds.length} selected review {discardIds.length === 1 ? 'item' : 'items'}?
+              </h3>
+            </div>
+            <div className="modal-body">
+              <p>
+                This removes only the selected pending review items. It does not
+                detach streams or change accepted and rejected decisions.
+              </p>
+              {discardError && <div className="error-banner" role="alert">{discardError}</div>}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="modal-btn modal-btn-secondary"
+                onClick={closeBulkDiscard}
+                disabled={discardBusy}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="modal-btn modal-btn-danger"
+                onClick={confirmBulkDiscard}
+                disabled={discardBusy}
+              >
+                {discardBusy
+                  ? 'Discarding...'
+                  : `Discard ${discardIds.length} ${discardIds.length === 1 ? 'item' : 'items'}`}
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
       )}
     </div>
   );

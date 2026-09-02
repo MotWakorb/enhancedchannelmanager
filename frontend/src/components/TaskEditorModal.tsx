@@ -794,6 +794,28 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     older than this many days by created_at.
                   </small>
                 </div>
+                <div className="retention-item">
+                  <label htmlFor="event-sync-review-retention-days">
+                    Event Sync pending review retention (days)
+                  </label>
+                  <input
+                    id="event-sync-review-retention-days"
+                    type="number"
+                    min={0}
+                    max={3650}
+                    step={1}
+                    value={(taskConfig.event_sync_review_retention_days as number) ?? 0}
+                    onChange={(e) => setTaskConfig({
+                      ...taskConfig,
+                      event_sync_review_retention_days: Number.parseInt(e.target.value, 10),
+                    })}
+                  />
+                  <small className="form-hint">
+                    0 disables automatic deletion. Otherwise, each cleanup pass
+                    deletes at most 200 pending items last seen strictly before
+                    the 1-3650 day cutoff. Accepted and rejected decisions stay.
+                  </small>
+                </div>
                 <label className="config-checkbox">
                   <input
                     type="checkbox"

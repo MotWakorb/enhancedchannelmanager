@@ -315,6 +315,7 @@ _REVIEW_QUEUES = {
     ("POST", "/api/channel-merges/{merge_id}/dismiss"),
     ("POST", "/api/event-sync-exclusions"),
     ("DELETE", "/api/event-sync-exclusions/{exclusion_id}"),
+    ("POST", "/api/event-sync-reviews/bulk-discard"),
     ("POST", "/api/event-sync-reviews/{review_id}/accept"),
     ("POST", "/api/event-sync-reviews/{review_id}/reject"),
     ("POST", "/api/epg/migration/apply"),

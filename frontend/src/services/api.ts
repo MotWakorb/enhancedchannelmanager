@@ -101,6 +101,7 @@ import type {
   EventSyncExclusionsListResponse,
   EventSyncReviewsListResponse,
   RejectEventSyncReviewOutcome,
+  BulkDiscardEventSyncReviewsOutcome,
 } from '../types/eventSync';
 import type {
   AcceptProfileConflictOutcome,
@@ -5342,6 +5343,17 @@ export async function rejectEventSyncReview(
 ): Promise<RejectEventSyncReviewOutcome> {
   return fetchJson(`${API_BASE}/event-sync-reviews/${reviewId}/reject`, {
     method: 'POST',
+  });
+}
+
+/** Discard exactly the selected pending review row IDs in one transaction. */
+export async function bulkDiscardEventSyncReviews(
+  reviewIds: number[],
+): Promise<BulkDiscardEventSyncReviewsOutcome> {
+  return fetchJson(`${API_BASE}/event-sync-reviews/bulk-discard`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ review_ids: reviewIds }),
   });
 }
 

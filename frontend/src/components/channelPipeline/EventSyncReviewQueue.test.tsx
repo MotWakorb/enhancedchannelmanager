@@ -29,6 +29,7 @@ vi.mock('../../services/api', async () => {
     getEventSyncReviews: vi.fn(),
     acceptEventSyncReview: vi.fn(),
     rejectEventSyncReview: vi.fn(),
+    bulkDiscardEventSyncReviews: vi.fn(),
     createEventSyncExclusion: vi.fn(),
   };
 });
@@ -337,5 +338,200 @@ describe('EventSyncReviewQueue — never attach (bead ti939.3.5)', () => {
       screen.getByText('BOX HD: Fury vs. Usyk @ 11 Jul 08:00 PM ET'),
     ).toBeInTheDocument();
     expect(api.rejectEventSyncReview).not.toHaveBeenCalled();
+  });
+});
+
+describe('EventSyncReviewQueue — bulk discard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('selects the current rendered scope and confirms the exact count', async () => {
+    mockList([makeRecord({ id: 1 }), makeRecord({ id: 2 })]);
+    render(<EventSyncReviewQueue />);
+
+    await screen.findByText('2', { selector: '[data-testid="event-sync-review-count"]' });
+    fireEvent.click(screen.getByRole('checkbox', { name: /select all rendered reviews/i }));
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+
+    expect(screen.getByRole('dialog')).toHaveAccessibleName(
+      'Discard 2 selected review items?',
+    );
+    expect(api.bulkDiscardEventSyncReviews).not.toHaveBeenCalled();
+  });
+
+  it('announces the initial loading state', () => {
+    vi.mocked(api.getEventSyncReviews).mockReturnValue(new Promise(() => {}));
+
+    render(<EventSyncReviewQueue />);
+
+    expect(screen.getByRole('status')).toHaveTextContent(/loading event sync reviews/i);
+  });
+
+  it('owns focus, contains Tab, closes on Escape, and restores the opener', async () => {
+    mockList([makeRecord()]);
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    const opener = screen.getByRole('button', { name: /discard selected/i });
+    opener.focus();
+    fireEvent.click(opener);
+
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    const discard = screen.getByRole('button', { name: /^discard 1 item$/i });
+    await waitFor(() => expect(cancel).toHaveFocus());
+    discard.focus();
+    fireEvent.keyDown(document, { key: 'Tab' });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(opener).toHaveFocus();
+  });
+
+  it('keeps the background inert and ignores Escape while discard is active', async () => {
+    mockList([makeRecord()]);
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockReturnValue(new Promise(() => {}));
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+
+    expect(screen.getByRole('button', { name: /never attach/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /reject pairing/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /accept & attach/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^discard 1 item$/i }));
+    expect(await screen.findByRole('button', { name: /discarding/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('cancel closes confirmation without discarding and preserves selection', async () => {
+    mockList([makeRecord()]);
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /select review 1/i })).toBeChecked();
+    expect(api.bulkDiscardEventSyncReviews).not.toHaveBeenCalled();
+  });
+
+  it('discards exact selected ids, refreshes, resets selection, and reports partial outcome', async () => {
+    const first = makeRecord({ id: 1 });
+    const second = makeRecord({ id: 2 });
+    mockList([first, second]);
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockResolvedValue({
+      requested_ids: [1, 2],
+      discarded_ids: [1],
+      missing_ids: [2],
+      not_pending_ids: [],
+    });
+
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select all rendered reviews/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^discard 2 items$/i }));
+
+    await waitFor(() => {
+      expect(api.bulkDiscardEventSyncReviews).toHaveBeenCalledWith([1, 2]);
+    });
+    await waitFor(() => expect(api.getEventSyncReviews).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole('status')).toHaveTextContent(/discarded 1 of 2/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/1 was already removed/i);
+    expect(screen.queryByText('2 selected')).not.toBeInTheDocument();
+  });
+
+  it('removes committed discards even when the refresh fails', async () => {
+    const first = makeRecord({ id: 1 });
+    const second = makeRecord({ id: 2, evidence: { ...makeRecord().evidence, stream_name: 'Second stream' } });
+    vi.mocked(api.getEventSyncReviews)
+      .mockResolvedValueOnce({
+        reviews: [first, second], total: 2, page: 1, page_size: 50, total_pages: 1,
+      })
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockResolvedValue({
+      requested_ids: [1], discarded_ids: [1], missing_ids: [], not_pending_ids: [],
+    });
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^discard 1 item$/i }));
+
+    await waitFor(() => expect(api.getEventSyncReviews).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('checkbox', { name: /select review 1/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /select review 2/i })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/discarded 1 of 1/i);
+    expect(screen.getByRole('alert')).toHaveTextContent('refresh failed');
+  });
+
+  it('removes every terminal outcome from the queue when the refresh fails', async () => {
+    const discarded = makeRecord({ id: 1 });
+    const missing = makeRecord({
+      id: 2,
+      evidence: { ...makeRecord().evidence, stream_name: 'Missing stream' },
+    });
+    const notPending = makeRecord({
+      id: 3,
+      evidence: { ...makeRecord().evidence, stream_name: 'Terminal stream' },
+    });
+    vi.mocked(api.getEventSyncReviews)
+      .mockResolvedValueOnce({
+        reviews: [discarded, missing, notPending],
+        total: 3,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      })
+      .mockRejectedValueOnce(new Error('refresh failed'));
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockResolvedValue({
+      requested_ids: [1, 2, 3],
+      discarded_ids: [1],
+      missing_ids: [2],
+      not_pending_ids: [3],
+    });
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select all rendered reviews/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^discard 3 items$/i }));
+
+    await waitFor(() => expect(api.getEventSyncReviews).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('checkbox', { name: /select review 1/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /select review 2/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: /select review 3/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/selected$/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(/discarded 1 of 3/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/1 was already removed/i);
+    expect(screen.getByRole('status')).toHaveTextContent(/1 was no longer pending/i);
+    expect(screen.getByRole('alert')).toHaveTextContent('refresh failed');
+  });
+
+  it('keeps selection and shows API errors in the confirmation dialog', async () => {
+    mockList([makeRecord()]);
+    vi.mocked(api.bulkDiscardEventSyncReviews).mockRejectedValue(new Error('discard failed'));
+    render(<EventSyncReviewQueue />);
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /discard selected/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^discard 1 item$/i }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('discard failed');
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /select review 1/i })).toBeChecked();
+  });
+
+  it('does not count a selected row after an individual action removes it', async () => {
+    mockList([makeRecord()]);
+    vi.mocked(api.rejectEventSyncReview).mockResolvedValue({ status: 'rejected' });
+    render(<EventSyncReviewQueue />);
+
+    fireEvent.click(await screen.findByRole('checkbox', { name: /select review 1/i }));
+    expect(screen.getByText('1 selected')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /reject pairing/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('1 selected')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /discard selected/i })).not.toBeInTheDocument();
   });
 });

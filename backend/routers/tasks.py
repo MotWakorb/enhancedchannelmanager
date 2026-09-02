@@ -19,15 +19,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Tasks"])
 
 # Task ids that may ONLY be driven by an admin (or in auth-disabled setup mode).
-# These tasks restore/produce credential-bearing backup artifacts or push config
-# OUTBOUND to a remote instance, and reach the same destructive restore path as
-# the admin-gated /restore-dbas endpoint. The generic POST /api/tasks/{task_id}/run
-# endpoint is reachable by ordinary users for ordinary tasks, so it must NOT carry
-# a blanket admin dependency — instead it admin-gates exactly these privileged ids
-# (O8TBV-1). ``dbas_sync`` is here because it is an outbound-write op (it mutates a
-# remote Dispatcharr-B on apply) — equally privileged to backup/restore (bead
-# 5gzg5). Keep this set in sync with any new privileged task registered in
-# backend/tasks/.
+# These tasks delete application data, restore/produce credential-bearing backup
+# artifacts, or push config OUTBOUND to another instance. The generic run endpoint
+# remains reachable by ordinary users for ordinary tasks, so it admin-gates only
+# this explicit set and the dynamic privileged prefixes below.
 #
 # 7ipq2.3: cross-instance sync tasks are registered PER TARGET as
 # ``dbas_sync_<sync_target_id>`` (ADR-013 S6 — dynamic ids, one per SyncTarget
@@ -35,7 +30,9 @@ router = APIRouter(tags=["Tasks"])
 # :func:`is_privileged_task_id`, which also matches the per-target prefix.
 # The legacy ``dbas_sync`` id stays in the set as defence in depth (it is no
 # longer registered, so a run attempt 404s — but it must never be less gated).
-PRIVILEGED_TASK_IDS = frozenset({"dbas_restore", "dbas_backup", "dbas_sync"})
+PRIVILEGED_TASK_IDS = frozenset({
+    "cleanup", "dbas_restore", "dbas_backup", "dbas_sync",
+})
 
 # Prefixes of dynamically registered privileged task-id families (currently
 # only per-target cross-instance sync). Dynamic ids come from code-controlled
@@ -52,7 +49,7 @@ def is_privileged_task_id(task_id: str) -> bool:
 
 
 def _reject_mcp_privileged_task(task_id: str, caller_is_mcp: bool) -> None:
-    """Keep outbound/restore task activation under human authority."""
+    """Keep destructive and credential-bearing tasks under human authority."""
     if caller_is_mcp and is_privileged_task_id(task_id):
         raise HTTPException(
             status_code=403,
@@ -605,6 +602,18 @@ async def update_task(
     _authorize_privileged_task_write(task_id, is_admin, caller_is_mcp)
     logger.debug("[TASKS] PATCH /api/tasks/%s", task_id)
     try:
+        if (
+            task_id == "cleanup"
+            and config.config is not None
+            and "event_sync_review_retention_days" in config.config
+        ):
+            from services.event_sync_review_store import validate_review_retention_days
+            try:
+                validate_review_retention_days(
+                    config.config["event_sync_review_retention_days"]
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=422, detail=str(e))
         from task_registry import get_registry
         registry = get_registry()
 
@@ -665,9 +674,9 @@ async def run_task(
 ):
     """Manually trigger a task execution.
 
-    Ordinary, user-triggerable tasks are unchanged. Privileged tasks
-    (:data:`PRIVILEGED_TASK_IDS` — the DBAS backup/restore tasks that reach the
-    admin-gated restore path) are refused for authenticated non-admins (O8TBV-1).
+    Ordinary, user-triggerable tasks are unchanged. Privileged tasks are refused
+    for authenticated non-admins; this includes Database Cleanup because its
+    retention parameters directly delete persisted application data.
     """
     logger.debug("[TASKS] POST /api/tasks/%s/run", task_id)
     if is_privileged_task_id(task_id) and not is_admin:

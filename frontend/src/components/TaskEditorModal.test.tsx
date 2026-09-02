@@ -93,6 +93,7 @@ function makeCleanupTask(configOverrides: Record<string, unknown> = {}): TaskSta
       auto_creation_blob_days: 30,
       health_checks_days: 7,
       notifications_days: 30,
+      event_sync_review_retention_days: 0,
       vacuum_db: true,
       ...configOverrides,
     },
@@ -296,6 +297,33 @@ describe('TaskEditorModal — bd-ia28g retention fields', () => {
           auto_creation_blob_days: 90,
         }),
       })
+    );
+  });
+
+  it('renders Event Sync review retention disabled by default and saves days', async () => {
+    const user = userEvent.setup();
+    render(
+      <TaskEditorModal
+        task={makeCleanupTask()}
+        onClose={() => {}}
+        onSaved={() => {}}
+      />
+    );
+
+    const input = await screen.findByRole('spinbutton', {
+      name: /event sync pending review retention/i,
+    });
+    expect(input).toHaveValue(0);
+    expect(input).toHaveAttribute('min', '0');
+    expect(input).toHaveAttribute('max', '3650');
+    fireEvent.change(input, { target: { value: '45' } });
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    expect(api.updateTask).toHaveBeenCalledWith(
+      'cleanup',
+      expect.objectContaining({
+        config: expect.objectContaining({ event_sync_review_retention_days: 45 }),
+      }),
     );
   });
 });
