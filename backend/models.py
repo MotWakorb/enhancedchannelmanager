@@ -2011,6 +2011,10 @@ class ChannelPipelineRule(Base):
     # Normalization - JSON array of NormalizationRuleGroup IDs to apply, null/empty = disabled
     normalization_group_ids = Column(Text, nullable=True)
 
+    # Optional provider-coverage gate. JSON array of at least two distinct M3U
+    # account IDs; null/empty preserves the historical per-stream behavior.
+    required_provider_ids = Column(Text, nullable=True)
+
     # Strike filtering - skip streams that have been struck out (consecutive_failures >= strike_threshold)
     skip_struck_streams = Column(Boolean, default=False, nullable=False)
 
@@ -2160,6 +2164,39 @@ class ChannelPipelineRule(Base):
         """Set normalization_group_ids from list of ints."""
         self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
 
+    def get_required_provider_ids(self) -> list[int]:
+        """Parse the required M3U account IDs, returning no gate when unset."""
+        if not self.required_provider_ids:
+            return []
+        try:
+            parsed = json.loads(self.required_provider_ids)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("required_provider_ids is malformed") from exc
+        if not isinstance(parsed, list) or any(
+            not isinstance(item, int) or isinstance(item, bool) or item <= 0
+            for item in parsed
+        ):
+            raise ValueError("required_provider_ids must contain at least two provider IDs")
+        provider_ids = sorted(set(parsed))
+        if len(provider_ids) < 2:
+            raise ValueError("required_provider_ids must contain at least two distinct provider IDs")
+        return provider_ids
+
+    def set_required_provider_ids(self, ids: list[int]) -> None:
+        """Store stable, distinct M3U account IDs in deterministic order."""
+        if not ids:
+            self.required_provider_ids = None
+            return
+        if any(
+            not isinstance(item, int) or isinstance(item, bool) or item <= 0
+            for item in ids
+        ):
+            raise ValueError("required_provider_ids must contain positive provider IDs")
+        provider_ids = sorted(set(ids))
+        if len(provider_ids) < 2:
+            raise ValueError("required_provider_ids must contain at least two distinct provider IDs")
+        self.required_provider_ids = json.dumps(provider_ids)
+
     def get_event_sync_config(self) -> dict | None:
         """Parse event_sync_config JSON into a dict (None when unset/corrupt)."""
         if not self.event_sync_config:
@@ -2210,6 +2247,7 @@ class ChannelPipelineRule(Base):
             "quality_tie_break_order": self.quality_tie_break_order or "desc",
             "quality_m3u_tie_break_enabled": bool(self.quality_m3u_tie_break_enabled),
             "normalization_group_ids": self.get_normalization_group_ids(),
+            "required_provider_ids": self.get_required_provider_ids(),
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "match_scope_target_group": self.match_scope_target_group or False,

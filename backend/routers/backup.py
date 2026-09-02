@@ -6452,6 +6452,10 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 quality_tie_break_order=item.get("quality_tie_break_order", "desc"),
                 quality_m3u_tie_break_enabled=item.get("quality_m3u_tie_break_enabled", True),
                 normalization_group_ids=_resolve_backup_normalization_group_ids(item, session),
+                required_provider_ids=(
+                    json.dumps(sorted(set(item.get("required_provider_ids", []))))
+                    if item.get("required_provider_ids") else None
+                ),
                 skip_struck_streams=item.get("skip_struck_streams", False),
                 orphan_action=item.get("orphan_action", "delete"),
                 # bd-p6ko9: restore the stored per-rule value; ECM-generated

@@ -1844,6 +1844,12 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_executions "
                     "ADD COLUMN selected_rule_outcomes TEXT"
                 ))
+                # 0053 (enhancedchannelmanager-rtst2.3): optional provider
+                # coverage gate on Channel Pipeline rules.
+                conn.execute(text(
+                    "ALTER TABLE auto_creation_rules "
+                    "ADD COLUMN required_provider_ids TEXT"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.

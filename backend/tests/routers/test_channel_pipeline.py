@@ -141,6 +141,52 @@ class TestCreateChannelPipelineRule:
         assert data["enabled"] is True
 
     @pytest.mark.asyncio
+    async def test_round_trips_required_provider_ids(self, async_client):
+        provider_client = MagicMock()
+        provider_client.get_m3u_accounts = AsyncMock(return_value=[
+            {"id": 11, "name": "Primary"},
+            {"id": 22, "name": "Backup"},
+        ])
+        with patch("routers.channel_pipeline.get_client", return_value=provider_client), \
+             patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            response = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Redundant sports",
+                "conditions": [{"type": "always"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+                "required_provider_ids": [22, 11, 22],
+            })
+
+        assert response.status_code == 200, response.text
+        assert response.json()["required_provider_ids"] == [11, 22]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("value", "expected_status"),
+        [([11], 422), ([11, "bad"], 422), ([11, 999], 422)],
+        ids=["fewer-than-two", "malformed", "missing-reference"],
+    )
+    async def test_rejects_invalid_required_provider_ids(
+        self, async_client, value, expected_status
+    ):
+        provider_client = MagicMock()
+        provider_client.get_m3u_accounts = AsyncMock(return_value=[
+            {"id": 11, "name": "Primary"},
+            {"id": 22, "name": "Backup"},
+        ])
+        with patch("routers.channel_pipeline.get_client", return_value=provider_client):
+            response = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Invalid coverage",
+                "conditions": [{"type": "always"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+                "required_provider_ids": value,
+            })
+
+        assert response.status_code == expected_status
+        if value == [11, 999]:
+            assert response.json()["detail"]["invalid_required_provider_ids"] == [999]
+
+    @pytest.mark.asyncio
     async def test_round_trips_active_date_window(self, async_client):
         with patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
              patch("routers.channel_pipeline.journal"):
@@ -291,6 +337,32 @@ class TestUpdateChannelPipelineRule:
 
         assert response.status_code == 200
         assert response.json()["name"] == "New Name"
+
+    @pytest.mark.asyncio
+    async def test_updates_and_clears_required_provider_ids(
+        self, async_client, test_session
+    ):
+        rule = _create_rule(test_session, name="Coverage update")
+        provider_client = MagicMock()
+        provider_client.get_m3u_accounts = AsyncMock(return_value=[
+            {"id": 11, "name": "Primary"},
+            {"id": 22, "name": "Backup"},
+        ])
+        with patch("routers.channel_pipeline.get_client", return_value=provider_client), \
+             patch("routers.channel_pipeline.journal"):
+            updated = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"required_provider_ids": [22, 11]},
+            )
+            cleared = await async_client.put(
+                f"/api/auto-creation/rules/{rule.id}",
+                json={"required_provider_ids": []},
+            )
+
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["required_provider_ids"] == [11, 22]
+        assert cleared.status_code == 200, cleared.text
+        assert cleared.json()["required_provider_ids"] == []
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -2459,6 +2531,47 @@ class TestImportYAML:
         ).one()
         assert target.active_from == date(2026, 9, 1)
         assert target.active_until == date(2027, 2, 15)
+
+    @pytest.mark.asyncio
+    async def test_export_import_round_trip_preserves_required_provider_ids_and_names(
+        self, async_client, test_session
+    ):
+        import yaml
+
+        source = _create_rule(
+            test_session,
+            name="Coverage source",
+            required_provider_ids=json.dumps([11, 22]),
+        )
+        mock_client = AsyncMock()
+        mock_client.get_channel_groups.return_value = []
+        mock_client.get_m3u_accounts.return_value = [
+            {"id": 11, "name": "Primary"},
+            {"id": 22, "name": "Backup"},
+        ]
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client):
+            exported = await async_client.get("/api/auto-creation/export/yaml")
+
+        document = yaml.safe_load(exported.text)
+        exported_rule = document["rules"][0]
+        assert exported_rule["required_provider_ids"] == [11, 22]
+        assert exported_rule["required_provider_names"] == ["Primary", "Backup"]
+        exported_rule["name"] = "Coverage target"
+        test_session.delete(source)
+        test_session.commit()
+
+        with patch("routers.channel_pipeline.get_client", return_value=mock_client), \
+             patch("channel_pipeline_schema.validate_rule", return_value={"valid": True, "errors": []}), \
+             patch("routers.channel_pipeline.journal"):
+            imported = await async_client.post("/api/auto-creation/import/yaml", json={
+                "yaml_content": yaml.safe_dump(document, sort_keys=False),
+            })
+
+        assert imported.status_code == 200, imported.text
+        assert imported.json()["errors"] == []
+        test_session.expire_all()
+        target = test_session.query(ChannelPipelineRule).filter_by(name="Coverage target").one()
+        assert target.get_required_provider_ids() == [11, 22]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

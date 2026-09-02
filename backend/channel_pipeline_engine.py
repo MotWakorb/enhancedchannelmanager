@@ -271,6 +271,8 @@ class ChannelPipelineEngine:
         self._stream_stats_cache = {}
         self._smart_sort_stats_cache = {}
         self._struck_stream_ids = set()
+        self._required_provider_names: dict[int, str] = {}
+        self._required_provider_unavailable_ids: set[int] = set()
         self._stream_fetch_facts = {
             "rule_fetch_successes": {}, "rule_fetch_failures": {},
         }
@@ -1525,11 +1527,13 @@ class ChannelPipelineEngine:
             for rule in rules:
                 if rule.m3u_account_id:
                     accounts_to_fetch.add(rule.m3u_account_id)
+                accounts_to_fetch.update(rule.get_required_provider_ids())
 
-            # If no specific accounts, fetch all
-            if not accounts_to_fetch:
+            # Required-provider coverage is additive; it must not turn an
+            # otherwise unscoped ruleset into a provider-scoped run.
+            if not any(rule.m3u_account_id for rule in rules):
                 m3u_accounts = await self.client.get_m3u_accounts() or []
-                accounts_to_fetch = {a["id"] for a in m3u_accounts}
+                accounts_to_fetch.update(a["id"] for a in m3u_accounts)
         else:
             m3u_accounts = await self.client.get_m3u_accounts() or []
             accounts_to_fetch = {a["id"] for a in m3u_accounts}
@@ -1538,10 +1542,15 @@ class ChannelPipelineEngine:
         all_streams = []
         m3u_accounts = await self.client.get_m3u_accounts() or []
         account_map = {a["id"]: a for a in m3u_accounts}
+        self._required_provider_names = {
+            account_id: account.get("name") or f"Provider #{account_id}"
+            for account_id, account in account_map.items()
+        }
+        self._required_provider_unavailable_ids = set()
         scoped_accounts = {
             rule.id: (
-                {rule.m3u_account_id}
-                if rule.m3u_account_id else set(accounts_to_fetch)
+                set(rule.get_required_provider_ids())
+                or ({rule.m3u_account_id} if rule.m3u_account_id else set(accounts_to_fetch))
             )
             for rule in (rules or [])
         }
@@ -1563,6 +1572,7 @@ class ChannelPipelineEngine:
         for account_id in sorted(accounts_to_fetch):
             account = account_map.get(account_id)
             if not account:
+                self._required_provider_unavailable_ids.add(account_id)
                 for rule_id, account_ids in scoped_accounts.items():
                     if account_id in account_ids:
                         self._stream_fetch_facts["rule_fetch_failures"][rule_id].append(
@@ -1606,6 +1616,7 @@ class ChannelPipelineEngine:
                     if account_id in account_ids:
                         self._stream_fetch_facts["rule_fetch_successes"][rule_id] += 1
             except Exception as e:
+                self._required_provider_unavailable_ids.add(account_id)
                 logger.error("[AUTO-CREATE-ENGINE] Failed to fetch streams from M3U account %s: %s", str(account_id).replace('\n', ''), str(e).replace('\n', ''))
                 for rule_id, account_ids in scoped_accounts.items():
                     if account_id in account_ids:
@@ -1614,6 +1625,116 @@ class ChannelPipelineEngine:
                         )
 
         return all_streams
+
+    def _apply_required_provider_coverage(
+        self, matched_entries: list, normalization_engine, results: dict, dry_run: bool
+    ) -> list:
+        """Remove incomplete normalized-name cohorts before any action executes.
+
+        A stream is available for this gate when it matched the rule and survives
+        the rule's existing struck-stream policy. No probe is introduced here.
+        """
+        passthrough = []
+        cohorts = defaultdict(list)
+        for entry in matched_entries:
+            stream, rule = entry[0], entry[1]
+            required = rule.get_required_provider_ids()
+            has_create = any(
+                (action.get("type") if isinstance(action, dict) else getattr(action, "type", None))
+                == "create_channel"
+                for action in rule.get_actions()
+            )
+            if not required or not has_create:
+                passthrough.append(entry)
+                continue
+
+            cohort_name = stream.stream_name
+            group_ids = rule.get_normalization_group_ids()
+            if group_ids and normalization_engine:
+                try:
+                    cohort_name = normalization_engine.normalize(
+                        stream.stream_name, group_ids=group_ids
+                    ).normalized
+                except Exception as exc:
+                    logger.warning(
+                        "[AUTO-CREATE-ENGINE] Required-provider cohort normalization "
+                        "failed for rule %s stream %s: %s",
+                        rule.id, stream.stream_id, exc,
+                    )
+                    cohort_name = None
+            cohorts[(rule.id, cohort_name)].append(entry)
+
+        accepted = list(passthrough)
+        for (_rule_id, cohort_name), entries in cohorts.items():
+            rule = entries[0][1]
+            required = set(rule.get_required_provider_ids())
+            present = {entry[0].m3u_account_id for entry in entries}
+            available = {
+                entry[0].m3u_account_id
+                for entry in entries
+                if not rule.skip_struck_streams
+                or entry[0].stream_id not in self._struck_stream_ids
+            }
+            unavailable = sorted(
+                (required & self._required_provider_unavailable_ids)
+                | ((required & present) - available)
+            )
+            missing = sorted(required - present - set(unavailable))
+            if cohort_name is not None and not missing and not unavailable:
+                accepted.extend(entries)
+                continue
+
+            if cohort_name is None:
+                missing = sorted(required - set(unavailable))
+            provider_name = lambda provider_id: self._required_provider_names.get(
+                provider_id, f"Provider #{provider_id}"
+            )
+            block = {
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "cohort": cohort_name or "[normalization unavailable]",
+                "missing_provider_ids": missing,
+                "missing_providers": [provider_name(item) for item in missing],
+                "unavailable_provider_ids": unavailable,
+                "unavailable_providers": [provider_name(item) for item in unavailable],
+            }
+            results["required_provider_blocks"].append(block)
+            reasons = []
+            if block["missing_providers"]:
+                reasons.append("missing " + ", ".join(block["missing_providers"]))
+            if block["unavailable_providers"]:
+                reasons.append("unavailable " + ", ".join(block["unavailable_providers"]))
+            description = (
+                f"Skipped channel cohort '{block['cohort']}' because required "
+                f"provider coverage was incomplete: {'; '.join(reasons)}"
+            )
+            results["execution_log"].append({
+                "stream_id": None,
+                "stream_name": block["cohort"],
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "required_provider_coverage",
+                    "description": description,
+                    "success": True,
+                    "entity_id": None,
+                    "error": None,
+                    "details": block,
+                }],
+            })
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": None,
+                    "stream_name": block["cohort"],
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "action": description,
+                    "would_create": False,
+                    "would_modify": False,
+                })
+            results["streams_skipped"] += len(entries)
+
+        return accepted
 
     async def _apply_global_filters(self, streams: list) -> tuple:
         """
@@ -2654,6 +2775,7 @@ class ChannelPipelineEngine:
                 verbose=dry_run,
             ),
             "rule_match_counts": {},
+            "required_provider_blocks": [],
             "probe_stream_ids": set(),
             "streams_probed": 0,
             # enhancedchannelmanager-vy4fl: group_id -> sort_group params,
@@ -2829,6 +2951,10 @@ class ChannelPipelineEngine:
         await self._probe_unprobed_streams(
             matched_entries, rules, results,
             dry_run or not planning.allow_internal_side_effects,
+        )
+
+        matched_entries = self._apply_required_provider_coverage(
+            matched_entries, norm_engine, results, dry_run
         )
 
         # =====================================================================

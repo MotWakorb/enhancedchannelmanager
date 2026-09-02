@@ -1102,6 +1102,7 @@ describe('RuleBuilder', () => {
           quality_tie_break_order: 'desc',
           quality_m3u_tie_break_enabled: true,
           normalization_group_ids: [],
+          required_provider_ids: [],
           skip_struck_streams: true,
           orphan_action: 'move_uncategorized',
           match_scope_target_group: true,
@@ -1516,6 +1517,49 @@ describe('RuleBuilder', () => {
           active_until: '2027-02-15',
         }),
       ));
+    });
+  });
+
+  describe('required provider coverage', () => {
+    it('requires two providers and includes their stable ids in the save payload', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule = {
+        name: 'Redundant sports',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'skip' }],
+      } as ChannelPipelineRule;
+      render(<RuleBuilder rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await gotoStep(user, 2);
+      await user.click(await screen.findByRole('button', { name: 'Required Providers' }));
+      const providers = await screen.findByRole('group', { name: 'Required Providers' });
+      await user.click(within(providers).getByText('Test Provider 1'));
+      expect(screen.getByText(/select at least two distinct providers/i)).toBeInTheDocument();
+      await user.click(within(providers).getByText('Test Provider 2'));
+      expect(screen.queryByText(/select at least two distinct providers/i)).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole('button', { name: /save/i }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith(
+        expect.objectContaining({ required_provider_ids: [1, 2] }),
+      ));
+    });
+
+    it('round-trips configured provider ids when editing', async () => {
+      const user = userEvent.setup();
+      const rule = {
+        name: 'Redundant sports',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'skip' }],
+        required_provider_ids: [1, 2],
+      } as ChannelPipelineRule;
+      render(<RuleBuilder rule={rule} onSave={vi.fn()} onCancel={vi.fn()} />);
+
+      await gotoStep(user, 2);
+
+      expect(await screen.findByRole('button', { name: 'Required Providers' }))
+        .toHaveTextContent('2 providers selected');
     });
   });
 });

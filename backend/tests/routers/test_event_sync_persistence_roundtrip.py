@@ -165,6 +165,27 @@ class TestDbasRestoreRoundTrip:
         assert restored.active_from == date(2026, 9, 1)
         assert restored.active_until == date(2027, 2, 15)
 
+    def test_backup_restore_round_trip_preserves_required_provider_ids(self, test_session):
+        from routers.backup import _restore_auto_creation_rules
+
+        rule = _create_rule(
+            test_session,
+            name="Provider coverage DBAS",
+            event_sync_config=None,
+            required_provider_ids=json.dumps([11, 22]),
+        )
+        exported = rule.to_dict()
+        assert exported["required_provider_ids"] == [11, 22]
+
+        with patch("routers.backup.get_session", return_value=test_session):
+            result = _restore_auto_creation_rules([exported])
+
+        assert result["warnings"] == []
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Provider coverage DBAS"
+        ).one()
+        assert restored.get_required_provider_ids() == [11, 22]
+
     def test_provider_scoped_config_round_trips(self, test_session):
         """bead 1bftz: a PROVIDER-SCOPED config survives DBAS restore with the
         nested {group_id, m3u_account_id} scopes preserved."""

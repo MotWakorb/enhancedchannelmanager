@@ -257,6 +257,8 @@ export interface ChannelPipelineRule {
   /** When false, equal-resolution streams keep probe/m3u-independent order (stream id tie-break only). */
   quality_m3u_tie_break_enabled?: boolean;
   normalization_group_ids?: number[];
+  /** M3U account IDs that must all match within one normalized-name cohort. */
+  required_provider_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: 'delete' | 'move_uncategorized' | 'delete_and_cleanup_groups' | 'none';
   // When true, the executor's existing-channel name lookup during
@@ -319,6 +321,7 @@ export interface CreateRuleData {
   quality_tie_break_order?: string;
   quality_m3u_tie_break_enabled?: boolean;
   normalization_group_ids?: number[];
+  required_provider_ids?: number[];
   skip_struck_streams?: boolean;
   orphan_action?: string;
   match_scope_target_group?: boolean;

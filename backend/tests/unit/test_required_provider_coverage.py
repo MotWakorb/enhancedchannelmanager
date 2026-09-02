@@ -1,0 +1,185 @@
+import asyncio
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
+from channel_pipeline_engine import ChannelPipelineEngine
+from channel_pipeline_evaluator import StreamContext
+from channel_pipeline_executor import ActionResult
+from models import ChannelPipelineRule
+
+
+def _rule(*, required=(1, 2), skip_struck=False):
+    rule = ChannelPipelineRule(
+        name="Provider coverage",
+        enabled=True,
+        priority=0,
+        conditions=json.dumps([{"type": "always"}]),
+        actions=json.dumps([{
+            "type": "create_channel",
+            "name_template": "{stream_name}",
+            "if_exists": "merge",
+        }]),
+        skip_struck_streams=skip_struck,
+    )
+    rule.id = 7
+    rule.set_required_provider_ids(list(required))
+    return rule
+
+
+def _stream(stream_id, name, provider_id, provider_name):
+    return StreamContext(
+        stream_id=stream_id,
+        stream_name=name,
+        m3u_account_id=provider_id,
+        m3u_account_name=provider_name,
+    )
+
+
+def _run(streams, *, required=(1, 2), struck=(), dry_run=True, normalization=None):
+    client = MagicMock()
+    engine = ChannelPipelineEngine(client)
+    engine._existing_channels = []
+    engine._existing_groups = []
+    engine._struck_stream_ids = set(struck)
+    engine._required_provider_names = {1: "Primary", 2: "Backup", 3: "Extra"}
+    engine._reconcile_orphans = AsyncMock()
+    engine._update_rule_stats = AsyncMock()
+    engine._refresh_dummy_epg_and_retry = AsyncMock()
+    execution = MagicMock(id=99)
+    rule = _rule(required=required, skip_struck=bool(struck))
+    if normalization:
+        rule.set_normalization_group_ids([5])
+
+    executed = []
+
+    async def execute(_self, _action, stream, _ctx, *args, **kwargs):
+        executed.append(stream.stream_id)
+        return ActionResult(
+            success=True,
+            action_type="create_channel",
+            description=f"create {stream.stream_name}",
+            created=True,
+        )
+
+    with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
+         patch("normalization_engine.get_normalization_engine", return_value=normalization), \
+         patch("channel_pipeline_engine.ActionExecutor.execute", new=execute):
+        result = asyncio.get_event_loop().run_until_complete(
+            engine._process_streams(
+                streams,
+                [rule],
+                execution,
+                dry_run=dry_run,
+            )
+        )
+    return result, executed
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "live"])
+def test_complete_cohort_executes_every_required_provider_once(dry_run):
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+    ], dry_run=dry_run)
+
+    assert executed == [10, 20]
+    assert result["required_provider_blocks"] == []
+
+
+def test_missing_provider_blocks_entire_cohort_and_names_requirement():
+    result, executed = _run([_stream(10, "ESPN", 1, "Primary")])
+
+    assert executed == []
+    assert result["required_provider_blocks"] == [{
+        "rule_id": 7,
+        "rule_name": "Provider coverage",
+        "cohort": "ESPN",
+        "missing_provider_ids": [2],
+        "missing_providers": ["Backup"],
+        "unavailable_provider_ids": [],
+        "unavailable_providers": [],
+    }]
+    assert "Backup" in result["execution_log"][0]["actions_executed"][0]["description"]
+
+
+def test_missing_provider_blocks_live_run_without_emitting_dry_run_rows():
+    result, executed = _run(
+        [_stream(10, "ESPN", 1, "Primary")],
+        dry_run=False,
+    )
+
+    assert executed == []
+    assert result["required_provider_blocks"][0]["missing_provider_ids"] == [2]
+    assert result["dry_run_results"] == []
+
+
+def test_struck_required_provider_blocks_cohort_as_unavailable():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+    ], struck=(20,))
+
+    assert executed == []
+    block = result["required_provider_blocks"][0]
+    assert block["missing_provider_ids"] == []
+    assert block["unavailable_provider_ids"] == [2]
+    assert block["unavailable_providers"] == ["Backup"]
+
+
+def test_healthy_alternative_from_same_provider_satisfies_coverage():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+        _stream(21, "ESPN", 2, "Backup"),
+    ], struck=(20,))
+
+    assert executed == [10, 21]
+    assert result["required_provider_blocks"] == []
+
+
+def test_extra_provider_stream_executes_with_complete_cohort():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+        _stream(30, "ESPN", 3, "Extra"),
+    ])
+
+    assert executed == [10, 20, 30]
+    assert result["required_provider_blocks"] == []
+
+
+def test_same_provider_names_in_unrelated_cohort_do_not_satisfy_requirement():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "CNN", 2, "Backup"),
+    ])
+
+    assert executed == []
+    assert {block["cohort"] for block in result["required_provider_blocks"]} == {"ESPN", "CNN"}
+
+
+def test_rule_normalization_combines_provider_variants_into_one_cohort():
+    normalization = MagicMock()
+    normalization.normalize.side_effect = lambda _name, group_ids: SimpleNamespace(
+        normalized="ESPN"
+    )
+    result, executed = _run([
+        _stream(10, "ESPN US", 1, "Primary"),
+        _stream(20, "ESPN UK", 2, "Backup"),
+    ], normalization=normalization)
+
+    assert executed == [10, 20]
+    assert result["required_provider_blocks"] == []
+    assert normalization.normalize.call_count >= 2
+
+
+def test_rule_without_required_providers_keeps_per_stream_behavior():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+    ], required=())
+
+    assert executed == [10]
+    assert result["required_provider_blocks"] == []
