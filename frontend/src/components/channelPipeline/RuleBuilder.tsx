@@ -517,7 +517,13 @@ export function RuleBuilder({
       // the conditions and actions in the Logic step — so route there so the
       // error is visible from whichever step Save was pressed, then focus the
       // first offending field.
-      setCurrentStep(1);
+      const hasLogicError = Boolean(
+        validationErrors.name
+        || validationErrors.conditions
+        || validationErrors.actions
+        || validationErrors.invalidActionFieldId
+      );
+      setCurrentStep(validationErrors.requiredProviders && !hasLogicError ? 2 : 1);
       // Both routes queue the focus rather than taking it here, because the
       // step this render reveals has not been committed yet; see the effect on
       // `pendingFocusFieldId`.
@@ -529,6 +535,8 @@ export function RuleBuilder({
         // operator lands on the entry they have to fix, scrolled into view,
         // rather than on a Save button that appeared to do nothing.
         setPendingFocusFieldId(validationErrors.invalidActionFieldId);
+      } else if (validationErrors.requiredProviders) {
+        setPendingFocusFieldId(`${id}-required-providers`);
       }
       return;
     }
@@ -1069,6 +1077,7 @@ export function RuleBuilder({
                   Optional. Create channels only when every selected provider has a matching stream in the same normalized-name cohort.
                 </span>
                 <GroupMultiSelectDropdown
+                  id={`${id}-required-providers`}
                   options={availableProviders}
                   selectedIds={requiredProviderIds}
                   onChange={setRequiredProviderIds}

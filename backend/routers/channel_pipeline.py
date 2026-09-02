@@ -1145,6 +1145,10 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateChannelPipelineRule
         _validate_normalization_group_ids(
             scalar_update.normalization_group_ids, session
         )
+        if "required_provider_ids" in scalar_update.model_fields_set:
+            await _validate_required_provider_ids(
+                scalar_update.required_provider_ids
+            )
 
         # Track per-rule diffs so we can emit per-entity journal entries with a
         # shared batch_id after a successful commit (bd-91mcq). Matches the
@@ -2816,9 +2820,9 @@ async def export_auto_creation_rules_yaml():
 async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=RequireAdminIfEnabled):
     """Import auto-creation rules from YAML.
 
-    Supports portable name fields: if group_name/target_group_name/m3u_account_name
-    are present and corresponding IDs are missing, names are resolved to local IDs.
-    Explicit IDs always take priority over names.
+    Supports portable name fields. Group and single-provider names resolve when
+    corresponding IDs are missing; exported required-provider names always
+    resolve to local IDs so cross-installation imports ignore stale source IDs.
     """
     logger.debug("[AUTO-CREATE-YAML] POST /import/yaml - overwrite=%s", request.overwrite)
     try:
@@ -2909,9 +2913,18 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                     # Strip transient name fields from stored data
                     action.pop("group_name", None)
 
+                required_ids_present = "required_provider_ids" in rule_data
+                required_names_present = "required_provider_names" in rule_data
                 required_ids = rule_data.get("required_provider_ids")
                 required_names = rule_data.get("required_provider_names")
-                if required_ids is None and required_names:
+                if required_names_present and required_names not in (None, []):
+                    if not isinstance(required_names, list):
+                        errors.append({
+                            "rule_index": i,
+                            "rule_name": rule_name,
+                            "errors": ["required_provider_names must be a list"],
+                        })
+                        continue
                     required_ids = []
                     unresolved_names = []
                     for name in required_names:
@@ -2931,7 +2944,10 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         })
                         continue
                     rule_data["required_provider_ids"] = required_ids
-                if required_ids:
+                elif not required_ids_present:
+                    required_ids = []
+
+                if required_ids not in (None, []):
                     valid_shape = (
                         isinstance(required_ids, list)
                         and all(
@@ -2955,6 +2971,15 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         })
                         continue
                     rule_data["required_provider_ids"] = sorted(set(required_ids))
+                elif required_ids is None or required_ids == []:
+                    rule_data["required_provider_ids"] = []
+                else:
+                    errors.append({
+                        "rule_index": i,
+                        "rule_name": rule_name,
+                        "errors": ["required_provider_ids must be a list"],
+                    })
+                    continue
 
                 # Strip transient name fields from rule-level data
                 rule_data.pop("target_group_name", None)

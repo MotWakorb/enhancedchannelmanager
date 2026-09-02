@@ -56,6 +56,19 @@ def test_request_and_worker_loader_use_fresh_detached_snapshot(test_session):
     assert worker_snapshot[0].name == "Edited before worker"
 
 
+def test_selected_rule_validation_rejects_malformed_required_provider_state():
+    from selected_pipeline_rules import selected_rule_issues
+
+    rule = _rule("Malformed coverage", 1)
+    rule.id = 7
+    rule.required_provider_ids = "{}"
+
+    issues = selected_rule_issues(rule)
+
+    assert issues[0]["reason"] == "invalid"
+    assert "required_provider_ids is malformed" in issues[0]["errors"]
+
+
 @pytest.mark.asyncio
 async def test_selected_engine_loads_worker_snapshot_before_external_data():
     engine = ChannelPipelineEngine(MagicMock())

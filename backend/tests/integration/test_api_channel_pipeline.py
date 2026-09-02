@@ -65,6 +65,7 @@ class TestChannelPipelineRulesAPI:
         mock_rule.active_until = None
         mock_rule.get_conditions.return_value = [{"type": "always"}]
         mock_rule.get_actions.return_value = [{"type": "skip"}]
+        mock_rule.get_required_provider_ids_error.return_value = None
         mock_rule.is_event_sync.return_value = False
         mock_rule.to_dict.return_value = {
             "id": 1,

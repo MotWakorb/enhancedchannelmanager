@@ -186,6 +186,23 @@ class TestDbasRestoreRoundTrip:
         ).one()
         assert restored.get_required_provider_ids() == [11, 22]
 
+    @pytest.mark.parametrize("value", [[11], {}, False, 0, ""])
+    def test_backup_restore_rejects_malformed_required_providers_without_deleting_rules(
+        self, test_session, value
+    ):
+        from routers.backup import _restore_auto_creation_rules
+
+        existing = _create_rule(test_session, name="Must survive invalid restore")
+        item = existing.to_dict()
+        item["required_provider_ids"] = value
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             pytest.raises(ValueError, match="required_provider_ids"):
+            _restore_auto_creation_rules([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
     def test_provider_scoped_config_round_trips(self, test_session):
         """bead 1bftz: a PROVIDER-SCOPED config survives DBAS restore with the
         nested {group_id, m3u_account_id} scopes preserved."""

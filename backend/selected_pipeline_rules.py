@@ -64,6 +64,9 @@ def selected_rule_issues(
     errors = list(validate_rule(
         rule.get_conditions(), rule.get_actions()
     ).get("errors", []))
+    required_provider_error = rule.get_required_provider_ids_error()
+    if required_provider_error:
+        errors.append(required_provider_error)
     if rule.is_event_sync():
         config = rule.get_event_sync_config()
         if config is None:

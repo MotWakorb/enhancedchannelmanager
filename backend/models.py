@@ -2165,28 +2165,41 @@ class ChannelPipelineRule(Base):
         self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
 
     def get_required_provider_ids(self) -> list[int]:
-        """Parse the required M3U account IDs, returning no gate when unset."""
-        if not self.required_provider_ids:
-            return []
+        """Return valid required M3U account IDs without breaking rule reads."""
+        provider_ids, _error = self._parse_required_provider_ids()
+        return provider_ids
+
+    def get_required_provider_ids_error(self) -> str | None:
+        """Return a persisted-value validation error, if any."""
+        _provider_ids, error = self._parse_required_provider_ids()
+        return error
+
+    def _parse_required_provider_ids(self) -> tuple[list[int], str | None]:
+        if self.required_provider_ids is None:
+            return [], None
         try:
             parsed = json.loads(self.required_provider_ids)
-        except (ValueError, TypeError) as exc:
-            raise ValueError("required_provider_ids is malformed") from exc
+        except (ValueError, TypeError):
+            return [], "required_provider_ids is malformed"
+        if parsed is None or parsed == []:
+            return [], None
         if not isinstance(parsed, list) or any(
             not isinstance(item, int) or isinstance(item, bool) or item <= 0
             for item in parsed
         ):
-            raise ValueError("required_provider_ids must contain at least two provider IDs")
+            return [], "required_provider_ids is malformed"
         provider_ids = sorted(set(parsed))
         if len(provider_ids) < 2:
-            raise ValueError("required_provider_ids must contain at least two distinct provider IDs")
-        return provider_ids
+            return [], "required_provider_ids must contain at least two distinct provider IDs"
+        return provider_ids, None
 
-    def set_required_provider_ids(self, ids: list[int]) -> None:
+    def set_required_provider_ids(self, ids: list[int] | None) -> None:
         """Store stable, distinct M3U account IDs in deterministic order."""
-        if not ids:
+        if ids is None or ids == []:
             self.required_provider_ids = None
             return
+        if not isinstance(ids, list):
+            raise ValueError("required_provider_ids must be a list")
         if any(
             not isinstance(item, int) or isinstance(item, bool) or item <= 0
             for item in ids

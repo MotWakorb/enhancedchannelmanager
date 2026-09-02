@@ -1561,5 +1561,27 @@ describe('RuleBuilder', () => {
       expect(await screen.findByRole('button', { name: 'Required Providers' }))
         .toHaveTextContent('2 providers selected');
     });
+
+    it('routes a one-provider save error to Targeting and focuses the provider control', async () => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule = {
+        name: 'Incomplete coverage',
+        conditions: [{ type: 'always' }],
+        actions: [{ type: 'skip' }],
+        required_provider_ids: [1],
+      } as ChannelPipelineRule;
+      render(<RuleBuilder rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+
+      await gotoStep(user, 3);
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('rule-step-2')).toHaveAttribute('aria-current', 'step');
+        expect(screen.getByText(/select at least two distinct providers/i)).toBeVisible();
+        expect(screen.getByRole('button', { name: 'Required Providers' })).toHaveFocus();
+      });
+      expect(onSave).not.toHaveBeenCalled();
+    });
   });
 });

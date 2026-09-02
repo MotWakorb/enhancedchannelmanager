@@ -273,6 +273,7 @@ class ChannelPipelineEngine:
         self._struck_stream_ids = set()
         self._required_provider_names: dict[int, str] = {}
         self._required_provider_unavailable_ids: set[int] = set()
+        self._required_provider_cohort_keys: dict[tuple[int, int], tuple[int, str]] = {}
         self._stream_fetch_facts = {
             "rule_fetch_successes": {}, "rule_fetch_failures": {},
         }
@@ -1634,8 +1635,12 @@ class ChannelPipelineEngine:
         A stream is available for this gate when it matched the rule and survives
         the rule's existing struck-stream policy. No probe is introduced here.
         """
+        self._required_provider_cohort_keys = {}
         passthrough = []
         cohorts = defaultdict(list)
+        coverage_entries = defaultdict(list)
+        normalization_failures = []
+        invalid_rules = defaultdict(list)
         for entry in matched_entries:
             stream, rule = entry[0], entry[1]
             required = rule.get_required_provider_ids()
@@ -1644,9 +1649,17 @@ class ChannelPipelineEngine:
                 == "create_channel"
                 for action in rule.get_actions()
             )
-            if not required or not has_create:
+            if not has_create:
                 passthrough.append(entry)
                 continue
+            configuration_error = rule.get_required_provider_ids_error()
+            if isinstance(configuration_error, str):
+                invalid_rules[rule.id].append((entry, configuration_error))
+                continue
+            if not required:
+                passthrough.append(entry)
+                continue
+            coverage_entries[rule.id].append(entry)
 
             cohort_name = stream.stream_name
             group_ids = rule.get_normalization_group_ids()
@@ -1661,10 +1674,106 @@ class ChannelPipelineEngine:
                         "failed for rule %s stream %s: %s",
                         rule.id, stream.stream_id, exc,
                     )
-                    cohort_name = None
-            cohorts[(rule.id, cohort_name)].append(entry)
+                    normalization_failures.append((entry, str(exc)))
+                    continue
+            cohort_key = (rule.id, cohort_name)
+            cohorts[cohort_key].append(entry)
+            self._required_provider_cohort_keys[
+                (rule.id, stream.stream_id)
+            ] = cohort_key
 
         accepted = list(passthrough)
+        rule_presence = {}
+        for rule_id, entries in coverage_entries.items():
+            rule = entries[0][1]
+            present = {entry[0].m3u_account_id for entry in entries}
+            available = {
+                entry[0].m3u_account_id
+                for entry in entries
+                if not rule.skip_struck_streams
+                or entry[0].stream_id not in self._struck_stream_ids
+            }
+            rule_presence[rule_id] = (present, available)
+
+        def record_block(block, entries, description):
+            results["required_provider_blocks"].append(block)
+            results["execution_log"].append({
+                "stream_id": block.get("stream_id"),
+                "stream_name": block["cohort"],
+                "m3u_account_id": None,
+                "rules_evaluated": [],
+                "actions_executed": [{
+                    "type": "required_provider_coverage",
+                    "description": description,
+                    "success": True,
+                    "entity_id": None,
+                    "error": None,
+                    "details": block,
+                }],
+            })
+            if dry_run:
+                results["dry_run_results"].append({
+                    "stream_id": block.get("stream_id"),
+                    "stream_name": block["cohort"],
+                    "rule_id": block["rule_id"],
+                    "rule_name": block["rule_name"],
+                    "action": description,
+                    "would_create": False,
+                    "would_modify": False,
+                })
+            results["streams_skipped"] += len(entries)
+
+        for entries_with_errors in invalid_rules.values():
+            entries = [item[0] for item in entries_with_errors]
+            rule = entries[0][1]
+            configuration_error = entries_with_errors[0][1]
+            block = {
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "cohort": "[invalid required-provider configuration]",
+                "missing_provider_ids": [],
+                "missing_providers": [],
+                "unavailable_provider_ids": [],
+                "unavailable_providers": [],
+                "reason": "invalid_configuration",
+                "configuration_error": configuration_error,
+            }
+            record_block(
+                block, entries,
+                f"Skipped required-provider channel creation because {configuration_error}",
+            )
+
+        for entry, normalization_error in normalization_failures:
+            stream, rule = entry[0], entry[1]
+            required = set(rule.get_required_provider_ids())
+            present, available = rule_presence[rule.id]
+            unavailable = sorted(
+                (required & self._required_provider_unavailable_ids)
+                | ((required & present) - available)
+            )
+            missing = sorted(required - present - set(unavailable))
+            provider_name = lambda provider_id: self._required_provider_names.get(
+                provider_id, f"Provider #{provider_id}"
+            )
+            block = {
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "cohort": "[normalization unavailable]",
+                "missing_provider_ids": missing,
+                "missing_providers": [provider_name(item) for item in missing],
+                "unavailable_provider_ids": unavailable,
+                "unavailable_providers": [provider_name(item) for item in unavailable],
+                "reason": "normalization_failed",
+                "normalization_error": normalization_error,
+                "stream_id": stream.stream_id,
+                "stream_name": stream.stream_name,
+            }
+            record_block(
+                block, [entry],
+                f"Skipped stream '{stream.stream_name}' because required-provider "
+                f"cohort normalization failed: {normalization_error}",
+            )
+
         for (_rule_id, cohort_name), entries in cohorts.items():
             rule = entries[0][1]
             required = set(rule.get_required_provider_ids())
@@ -1680,12 +1789,10 @@ class ChannelPipelineEngine:
                 | ((required & present) - available)
             )
             missing = sorted(required - present - set(unavailable))
-            if cohort_name is not None and not missing and not unavailable:
+            if not missing and not unavailable:
                 accepted.extend(entries)
                 continue
 
-            if cohort_name is None:
-                missing = sorted(required - set(unavailable))
             provider_name = lambda provider_id: self._required_provider_names.get(
                 provider_id, f"Provider #{provider_id}"
             )
@@ -1698,7 +1805,6 @@ class ChannelPipelineEngine:
                 "unavailable_provider_ids": unavailable,
                 "unavailable_providers": [provider_name(item) for item in unavailable],
             }
-            results["required_provider_blocks"].append(block)
             reasons = []
             if block["missing_providers"]:
                 reasons.append("missing " + ", ".join(block["missing_providers"]))
@@ -1708,31 +1814,7 @@ class ChannelPipelineEngine:
                 f"Skipped channel cohort '{block['cohort']}' because required "
                 f"provider coverage was incomplete: {'; '.join(reasons)}"
             )
-            results["execution_log"].append({
-                "stream_id": None,
-                "stream_name": block["cohort"],
-                "m3u_account_id": None,
-                "rules_evaluated": [],
-                "actions_executed": [{
-                    "type": "required_provider_coverage",
-                    "description": description,
-                    "success": True,
-                    "entity_id": None,
-                    "error": None,
-                    "details": block,
-                }],
-            })
-            if dry_run:
-                results["dry_run_results"].append({
-                    "stream_id": None,
-                    "stream_name": block["cohort"],
-                    "rule_id": rule.id,
-                    "rule_name": rule.name,
-                    "action": description,
-                    "would_create": False,
-                    "would_modify": False,
-                })
-            results["streams_skipped"] += len(entries)
+            record_block(block, entries, description)
 
         return accepted
 
@@ -3004,6 +3086,23 @@ class ChannelPipelineEngine:
 
         logger.debug("[AUTO-CREATE-ENGINE] Total sorted entries: %s", len(sorted_entries))
 
+        # Keep admitted provider cohorts contiguous so the live cap can finish
+        # one cohort atomically without starting another after the cap is hit.
+        if self._required_provider_cohort_keys:
+            grouped_entries = defaultdict(list)
+            group_order = []
+            for index, entry in enumerate(sorted_entries):
+                stream, rule = entry[0], entry[1]
+                key = self._required_provider_cohort_keys.get(
+                    (rule.id, stream.stream_id), ("entry", index)
+                )
+                if key not in grouped_entries:
+                    group_order.append(key)
+                grouped_entries[key].append(entry)
+            sorted_entries = [
+                entry for key in group_order for entry in grouped_entries[key]
+            ]
+
         # Track channel IDs per rule in sorted order for:
         # - Pass 3 renumber: ONLY channels the rule owns (created this run OR pre-run managed)
         # - Pass 3.5 stream reorder: channels the rule owns OR channels it actually modified this run
@@ -3040,8 +3139,16 @@ class ChannelPipelineEngine:
         # channel_cap <= 0 or in dry-run (a dry run mutates nothing).
         _channel_cap = results.get("channel_cap", 0)
         _cap_active = bool(_channel_cap) and not dry_run
+        _admitted_provider_cohorts = set()
         for _idx, (stream, winning_rule, losing_rules, stream_rules_log) in enumerate(sorted_entries):
-            if _cap_active and results["channels_created"] >= _channel_cap:
+            _provider_cohort = self._required_provider_cohort_keys.get(
+                (winning_rule.id, stream.stream_id)
+            )
+            if (
+                _cap_active
+                and results["channels_created"] >= _channel_cap
+                and _provider_cohort not in _admitted_provider_cohorts
+            ):
                 # Soft-abort: stop creating further channels, leave what we have
                 # consistent, record N-of-M for a non-silent surface.
                 remaining = len(sorted_entries) - _idx
@@ -3077,6 +3184,8 @@ class ChannelPipelineEngine:
                     }],
                 })
                 break
+            if _provider_cohort is not None:
+                _admitted_provider_cohorts.add(_provider_cohort)
 
             # Skip struck-out streams if the winning rule has skip_struck_streams enabled
             if getattr(winning_rule, 'skip_struck_streams', False) and stream.stream_id in self._struck_stream_ids:

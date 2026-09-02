@@ -43,6 +43,7 @@ export interface GroupMultiSelectOption {
 }
 
 export interface GroupMultiSelectDropdownProps {
+  id?: string;
   options: GroupMultiSelectOption[];
   selectedIds: number[];
   onChange: (ids: number[]) => void;
@@ -67,6 +68,7 @@ const MENU_MAX_HEIGHT_PX = 300;
 const MENU_MIN_USABLE_HEIGHT_PX = 124;
 
 export function GroupMultiSelectDropdown({
+  id,
   options,
   selectedIds,
   onChange,
@@ -183,6 +185,7 @@ export function GroupMultiSelectDropdown({
   return (
     <div className={`group-multiselect-dropdown ${className}`} ref={wrapperRef}>
       <button
+        id={id}
         ref={buttonRef}
         type="button"
         className="filter-dropdown-button"

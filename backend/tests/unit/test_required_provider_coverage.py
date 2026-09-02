@@ -8,6 +8,7 @@ import pytest
 from channel_pipeline_engine import ChannelPipelineEngine
 from channel_pipeline_evaluator import StreamContext
 from channel_pipeline_executor import ActionResult
+from config import DispatcharrSettings
 from models import ChannelPipelineRule
 
 
@@ -38,7 +39,10 @@ def _stream(stream_id, name, provider_id, provider_name):
     )
 
 
-def _run(streams, *, required=(1, 2), struck=(), dry_run=True, normalization=None):
+def _run(
+    streams, *, required=(1, 2), struck=(), dry_run=True, normalization=None,
+    channel_cap=None,
+):
     client = MagicMock()
     engine = ChannelPipelineEngine(client)
     engine._existing_channels = []
@@ -57,6 +61,7 @@ def _run(streams, *, required=(1, 2), struck=(), dry_run=True, normalization=Non
 
     async def execute(_self, _action, stream, _ctx, *args, **kwargs):
         executed.append(stream.stream_id)
+        _ctx.channels_created += 1
         return ActionResult(
             success=True,
             action_type="create_channel",
@@ -64,7 +69,12 @@ def _run(streams, *, required=(1, 2), struck=(), dry_run=True, normalization=Non
             created=True,
         )
 
+    settings = DispatcharrSettings()
+    if channel_cap is not None:
+        settings.max_auto_created_channels_per_run = channel_cap
+
     with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
+         patch("channel_pipeline_engine.get_settings", return_value=settings), \
          patch("normalization_engine.get_normalization_engine", return_value=normalization), \
          patch("channel_pipeline_engine.ActionExecutor.execute", new=execute):
         result = asyncio.get_event_loop().run_until_complete(
@@ -183,3 +193,86 @@ def test_rule_without_required_providers_keeps_per_stream_behavior():
 
     assert executed == [10]
     assert result["required_provider_blocks"] == []
+
+
+def test_live_cap_finishes_admitted_cohort_without_starting_next_cohort():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(40, "CNN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+        _stream(50, "CNN", 2, "Backup"),
+        _stream(30, "ESPN", 3, "Extra"),
+    ], required=(1, 2), dry_run=False, channel_cap=1)
+
+    assert executed == [10, 20, 30]
+    assert result["channels_created"] == 3
+    assert result["capped"] is True
+
+
+def test_normalization_failure_blocks_without_claiming_present_providers_missing():
+    normalization = MagicMock()
+    normalization.normalize.side_effect = RuntimeError("invalid normalization rule")
+
+    result, executed = _run([
+        _stream(10, "ESPN US", 1, "Primary"),
+        _stream(20, "ESPN UK", 2, "Backup"),
+    ], normalization=normalization)
+
+    assert executed == []
+    assert len(result["required_provider_blocks"]) == 2
+    for block in result["required_provider_blocks"]:
+        assert block["missing_provider_ids"] == []
+        assert block["unavailable_provider_ids"] == []
+        assert block["reason"] == "normalization_failed"
+        assert block["normalization_error"] == "invalid normalization rule"
+        assert block["stream_id"] in {10, 20}
+
+
+@pytest.mark.parametrize("stored", ["[11]", "{}", "false", "0", "\"\"", "not-json"])
+def test_malformed_stored_required_providers_are_safe_to_read_but_remain_invalid(stored):
+    rule = _rule()
+    rule.required_provider_ids = stored
+
+    assert rule.get_required_provider_ids() == []
+    assert rule.get_required_provider_ids_error() is not None
+
+
+@pytest.mark.parametrize("stored", [None, "null", "[]"])
+def test_unconfigured_stored_required_providers_are_valid(stored):
+    rule = _rule()
+    rule.required_provider_ids = stored
+
+    assert rule.get_required_provider_ids() == []
+    assert rule.get_required_provider_ids_error() is None
+
+
+def test_malformed_required_provider_configuration_blocks_creation():
+    rule = _rule()
+    rule.required_provider_ids = "{}"
+    client = MagicMock()
+    engine = ChannelPipelineEngine(client)
+    engine._existing_channels = []
+    engine._existing_groups = []
+    engine._struck_stream_ids = set()
+    engine._reconcile_orphans = AsyncMock()
+    engine._update_rule_stats = AsyncMock()
+    engine._refresh_dummy_epg_and_retry = AsyncMock()
+    executed = []
+
+    async def execute(_self, _action, stream, _ctx, *args, **kwargs):
+        executed.append(stream.stream_id)
+        return ActionResult(success=True, action_type="create_channel", created=True)
+
+    with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
+         patch("channel_pipeline_engine.get_settings", return_value=DispatcharrSettings()), \
+         patch("normalization_engine.get_normalization_engine", return_value=None), \
+         patch("channel_pipeline_engine.ActionExecutor.execute", new=execute):
+        result = asyncio.get_event_loop().run_until_complete(
+            engine._process_streams(
+                [_stream(10, "ESPN", 1, "Primary")], [rule], MagicMock(id=99),
+                dry_run=False,
+            )
+        )
+
+    assert executed == []
+    assert result["required_provider_blocks"][0]["reason"] == "invalid_configuration"

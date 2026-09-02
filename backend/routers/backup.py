@@ -6361,6 +6361,14 @@ def _restore_auto_creation_rules(items: list) -> dict:
     # config keeps the rule excluded from pipeline execution.
     from channel_pipeline_schema import validate_event_sync_config
 
+    serialized_required_provider_ids = []
+    for item in items:
+        validator = ChannelPipelineRule()
+        validator.set_required_provider_ids(
+            item.get("required_provider_ids")
+            if "required_provider_ids" in item else None
+        )
+        serialized_required_provider_ids.append(validator.required_provider_ids)
     session = get_session()
     warnings: list[str] = []
     # bead 8fq6x: the delete-all below CASCADEs to event_sync_reviews, dropping
@@ -6412,7 +6420,9 @@ def _restore_auto_creation_rules(items: list) -> dict:
         # with the restored rules' new ids below.
         session.query(EventSyncReview).delete()
         session.query(EventSyncExclusion).delete()
-        for item in items:
+        for item, required_provider_ids in zip(
+            items, serialized_required_provider_ids
+        ):
             # ti939.1.3: the export (to_dict) carries event_sync_config as a
             # parsed dict — re-serialize for the Text column. Dropping it
             # here would resurrect the rule as a STANDARD rule whose dormant
@@ -6452,10 +6462,7 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 quality_tie_break_order=item.get("quality_tie_break_order", "desc"),
                 quality_m3u_tie_break_enabled=item.get("quality_m3u_tie_break_enabled", True),
                 normalization_group_ids=_resolve_backup_normalization_group_ids(item, session),
-                required_provider_ids=(
-                    json.dumps(sorted(set(item.get("required_provider_ids", []))))
-                    if item.get("required_provider_ids") else None
-                ),
+                required_provider_ids=required_provider_ids,
                 skip_struck_streams=item.get("skip_struck_streams", False),
                 orphan_action=item.get("orphan_action", "delete"),
                 # bd-p6ko9: restore the stored per-rule value; ECM-generated
