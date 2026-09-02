@@ -45,6 +45,59 @@ class TestChannelPipelineEngineInit:
         assert engine._stream_stats_cache == {}
         assert engine._smart_sort_stats_cache == {}
 
+    def test_selected_rule_outcomes_preserve_order_and_attribute_failures(self):
+        rules = [
+            SimpleNamespace(id=4, name="First", is_event_sync=lambda: False),
+            SimpleNamespace(id=9, name="Second", is_event_sync=lambda: False),
+        ]
+        results = {
+            "rule_match_counts": {4: 3, 9: 1},
+            "failed_actions": [
+                {"rule_id": 9, "error": "assignment failed"},
+                {"rule_id": 9, "error": "profile failed"},
+            ],
+        }
+
+        outcomes = ChannelPipelineEngine._selected_rule_outcomes(rules, results)
+
+        assert outcomes == [
+            {
+                "rule_id": 4,
+                "rule_name": "First",
+                "rule_kind": "standard",
+                "status": "completed",
+                "match_count": 3,
+                "error_count": 0,
+            },
+            {
+                "rule_id": 9,
+                "rule_name": "Second",
+                "rule_kind": "standard",
+                "status": "completed_with_errors",
+                "match_count": 1,
+                "error_count": 2,
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_load_rules_uses_priority_then_id_not_submission_order(self):
+        engine = ChannelPipelineEngine(MagicMock())
+        query = MagicMock()
+        session = MagicMock()
+        session.query.return_value = query
+        query.filter.return_value = query
+        query.order_by.return_value = query
+        query.all.return_value = []
+
+        with patch("channel_pipeline_engine.get_session", return_value=session):
+            await engine._load_rules([9, 4])
+
+        order_args = query.order_by.call_args.args
+        assert order_args == (
+            __import__("models").ChannelPipelineRule.priority,
+            __import__("models").ChannelPipelineRule.id,
+        )
+
     def test_load_stream_stats_keeps_failed_rows_only_for_smart_sort(self):
         client = MagicMock()
         engine = ChannelPipelineEngine(client)
@@ -456,6 +509,43 @@ class TestChannelPipelineEngineRunPipeline:
             method = getattr(self.client, method_name, None)
             if method is not None:
                 method.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_selected_run_revalidates_rule_configuration_before_processing(self):
+        from channel_pipeline_schema import validate_rule
+
+        invalid_rule = MagicMock()
+        invalid_rule.id = 7
+        invalid_rule.name = "Became invalid after enqueue"
+        invalid_rule.get_conditions.return_value = [{"type": "always"}]
+        invalid_rule.get_actions.return_value = [{"type": "skip"}]
+        invalid_rule.is_event_sync.return_value = False
+
+        assert validate_rule(
+            invalid_rule.get_conditions(), invalid_rule.get_actions()
+        )["valid"]
+        invalid_rule.get_conditions.return_value = [{"type": "not_a_condition"}]
+
+        self.engine._load_existing_data = AsyncMock()
+        self.engine._load_selected_rule_snapshots = AsyncMock(
+            side_effect=RuntimeError(
+                "Selected rule configuration changed before execution"
+            )
+        )
+        self.engine._fetch_streams = AsyncMock()
+        self.engine._process_streams = AsyncMock()
+
+        with pytest.raises(
+            RuntimeError,
+            match="Selected rule configuration changed before execution",
+        ):
+            await self.engine.run_pipeline(
+                rule_ids=[invalid_rule.id],
+                require_all_rule_ids=True,
+            )
+
+        self.engine._fetch_streams.assert_not_awaited()
+        self.engine._process_streams.assert_not_awaited()
 
     @patch("channel_pipeline_engine.get_session")
     def test_run_pipeline_dry_run(self, mock_get_session):

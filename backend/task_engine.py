@@ -287,16 +287,29 @@ def _abandon_orphaned_auto_creation_executions(session=None) -> int:
     if owns_session:
         session = get_session()
     try:
-        abandoned_count = session.query(ChannelPipelineExecution).filter(
+        orphaned = session.query(ChannelPipelineExecution).filter(
             ChannelPipelineExecution.status == "running"
-        ).update({
-            "status": "abandoned",
-            "completed_at": datetime.utcnow(),
-            "error_message": (
+        ).all()
+        abandoned_count = len(orphaned)
+        for execution in orphaned:
+            execution.status = "abandoned"
+            execution.completed_at = datetime.utcnow()
+            execution.error_message = (
                 "Abandoned: run was interrupted by a system restart "
                 "(likely an out-of-memory kill). See GH #473."
-            ),
-        }, synchronize_session=False)
+            )
+            selected_state = execution.get_selected_rule_outcome_state()
+            if selected_state["integrity"] == "valid":
+                terminal = {
+                    "completed", "completed_with_errors", "skipped", "capped",
+                    "failed", "interrupted", "not_run", "abandoned",
+                }
+                execution.set_selected_rule_outcomes([
+                    outcome if outcome["status"] in terminal else {
+                        **outcome, "status": "abandoned",
+                    }
+                    for outcome in selected_state["outcomes"]
+                ])
         session.commit()
 
         if abandoned_count > 0:

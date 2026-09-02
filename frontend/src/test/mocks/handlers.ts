@@ -193,6 +193,10 @@ export function createMockChannelPipelineExecution(overrides: Partial<MockChanne
     warnings: overrides.warnings ?? undefined,
     is_event_sync: overrides.is_event_sync ?? false,
     event_sync_summary: overrides.event_sync_summary ?? undefined,
+    run_scope: overrides.run_scope ?? 'all',
+    selected_rule_integrity: overrides.selected_rule_integrity ?? 'not_selected',
+    selected_rule_ids: overrides.selected_rule_ids ?? [],
+    selected_rule_outcomes: overrides.selected_rule_outcomes ?? [],
   }
 }
 
@@ -399,6 +403,30 @@ interface MockChannelPipelineExecution {
     review_enqueued?: number
     capped?: boolean
     cap_overage?: number
+  }[]
+  run_scope?: 'all' | 'single' | 'selected'
+  selected_rule_integrity?: 'not_selected' | 'valid' | 'corrupt'
+  selected_rule_ids?: number[]
+  selected_rule_outcomes?: {
+    rule_id: number
+    rule_name: string
+    rule_kind: 'standard' | 'event_sync'
+    status:
+      | 'pending'
+      | 'running'
+      | 'completed'
+      | 'completed_with_errors'
+      | 'skipped'
+      | 'capped'
+      | 'failed'
+      | 'interrupted'
+      | 'not_run'
+      | 'abandoned'
+    match_count?: number
+    attach_count?: number
+    error_count?: number
+    skip_reason?: string
+    cap_reason?: string
   }[]
 }
 
@@ -1183,6 +1211,34 @@ export const handlers = [
         message: 'Pipeline started; poll /api/channel-pipeline/executions/{id} for status',
       },
       { status: 202 }
+    )
+  }),
+
+  http.post(`${API_BASE}/channel-pipeline/run-selected`, async ({ request }) => {
+    const body = await request.json() as { dry_run?: boolean; rule_ids?: number[] }
+    const outcomes = (body.rule_ids ?? []).map(ruleId => {
+      const rule = mockDataStore.channelPipelineRules.find(item => item.id === ruleId)
+      return {
+        rule_id: ruleId,
+        rule_name: rule?.name ?? `Rule ${ruleId}`,
+        rule_kind: rule?.event_sync_config ? 'event_sync' as const : 'standard' as const,
+        status: 'completed' as const,
+        match_count: 0,
+        error_count: 0,
+      }
+    })
+    const execution = createMockChannelPipelineExecution({
+      mode: body.dry_run ? 'dry_run' : 'execute',
+      status: 'completed',
+      run_scope: 'selected',
+      selected_rule_integrity: 'valid',
+      selected_rule_ids: body.rule_ids ?? [],
+      selected_rule_outcomes: outcomes,
+    })
+    mockDataStore.channelPipelineExecutions.unshift(execution)
+    return HttpResponse.json(
+      { execution_id: execution.id, status: 'running', message: 'started' },
+      { status: 202 },
     )
   }),
 

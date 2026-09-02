@@ -298,6 +298,7 @@ _PIPELINE_AUTOMATION = {
         ("POST", f"{prefix}/rules/{{rule_id}}/run"),
         ("POST", f"{prefix}/rules/{{rule_id}}/toggle"),
         ("POST", f"{prefix}/run"),
+        ("POST", f"{prefix}/run-selected"),
         ("POST", f"{prefix}/run/prepare"),
         ("POST", f"{prefix}/run/commit"),
     )

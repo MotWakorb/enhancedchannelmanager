@@ -2318,6 +2318,10 @@ class ChannelPipelineExecution(Base):
     # returns [] for NULL.
     event_sync_summary = Column(Text, nullable=True)
 
+    # Canonical scope and per-rule results for selected-rule runs. NULL keeps
+    # legacy, run-all, and single-rule execution records unchanged.
+    selected_rule_outcomes = Column(Text, nullable=True)
+
     # True only for a PURE event_sync run — event_sync rule(s) ran and NO
     # standard rules were in scope. Lets the executions UI swap the standard
     # counter block for the event_sync block reliably even after the source
@@ -2446,9 +2450,124 @@ class ChannelPipelineExecution(Base):
         """Set event_sync_summary from list (JSON), NULL when empty."""
         self.event_sync_summary = json.dumps(summaries) if summaries else None
 
+    _SELECTED_RULE_STATUSES = frozenset({
+        "pending", "running", "completed", "completed_with_errors",
+        "skipped", "capped", "failed", "interrupted", "not_run",
+        "abandoned",
+    })
+    _SELECTED_RULE_KINDS = frozenset({"standard", "event_sync"})
+    _SELECTED_RULE_COUNT_FIELDS = frozenset({
+        "match_count", "attach_count", "error_count",
+    })
+    _SELECTED_RULE_REQUIRED_FIELDS = frozenset({
+        "rule_id", "rule_name", "rule_kind", "status",
+    })
+    _SELECTED_RULE_OPTIONAL_FIELDS = _SELECTED_RULE_COUNT_FIELDS | frozenset({
+        "skip_reason", "cap_reason",
+    })
+    _SELECTED_RULE_MAX_ENTRIES = 500
+    _SELECTED_RULE_NAME_MAX_CHARS = 100
+    _SELECTED_RULE_REASON_MAX_CHARS = 1024
+    _SELECTED_RULE_MAX_COUNT = 2_147_483_647
+    # Derived from the 500-entry request cap and bounded fields, not an
+    # independent operator policy. json.dumps may use two six-byte surrogate
+    # escapes per Unicode character; 512 bytes per item covers keys, punctuation,
+    # integer text, status, and kind around the bounded name and two reasons.
+    _SELECTED_RULE_MAX_SERIALIZED_BYTES = _SELECTED_RULE_MAX_ENTRIES * (
+        12 * (
+            _SELECTED_RULE_NAME_MAX_CHARS
+            + 2 * _SELECTED_RULE_REASON_MAX_CHARS
+        ) + 512
+    )
+
+    def get_selected_rule_outcome_state(self) -> dict:
+        """Strictly parse selected-run audit data without losing its scope."""
+        if self.selected_rule_outcomes is None:
+            return {"integrity": "not_selected", "outcomes": []}
+        if (
+            not isinstance(self.selected_rule_outcomes, str)
+            or len(self.selected_rule_outcomes)
+            > self._SELECTED_RULE_MAX_SERIALIZED_BYTES
+            or len(self.selected_rule_outcomes.encode("utf-8"))
+            > self._SELECTED_RULE_MAX_SERIALIZED_BYTES
+        ):
+            return {"integrity": "corrupt", "outcomes": []}
+        try:
+            value = json.loads(self.selected_rule_outcomes)
+        except (ValueError, TypeError):
+            return {"integrity": "corrupt", "outcomes": []}
+        if (
+            not isinstance(value, list)
+            or not value
+            or len(value) > self._SELECTED_RULE_MAX_ENTRIES
+        ):
+            return {"integrity": "corrupt", "outcomes": []}
+
+        ids = set()
+        for item in value:
+            if not isinstance(item, dict):
+                return {"integrity": "corrupt", "outcomes": []}
+            keys = frozenset(item)
+            if (
+                not self._SELECTED_RULE_REQUIRED_FIELDS.issubset(keys)
+                or not keys.issubset(
+                    self._SELECTED_RULE_REQUIRED_FIELDS
+                    | self._SELECTED_RULE_OPTIONAL_FIELDS
+                )
+            ):
+                return {"integrity": "corrupt", "outcomes": []}
+            rule_id = item.get("rule_id")
+            if (
+                not isinstance(rule_id, int)
+                or isinstance(rule_id, bool)
+                or rule_id <= 0
+                or rule_id in ids
+            ):
+                return {"integrity": "corrupt", "outcomes": []}
+            ids.add(rule_id)
+            if (
+                not isinstance(item.get("rule_name"), str)
+                or not item["rule_name"].strip()
+                or len(item["rule_name"]) > self._SELECTED_RULE_NAME_MAX_CHARS
+            ):
+                return {"integrity": "corrupt", "outcomes": []}
+            if item.get("rule_kind") not in self._SELECTED_RULE_KINDS:
+                return {"integrity": "corrupt", "outcomes": []}
+            if item.get("status") not in self._SELECTED_RULE_STATUSES:
+                return {"integrity": "corrupt", "outcomes": []}
+            for field in self._SELECTED_RULE_COUNT_FIELDS:
+                if field not in item:
+                    continue
+                count = item[field]
+                if (
+                    not isinstance(count, int)
+                    or isinstance(count, bool)
+                    or count < 0
+                    or count > self._SELECTED_RULE_MAX_COUNT
+                ):
+                    return {"integrity": "corrupt", "outcomes": []}
+            for field in ("skip_reason", "cap_reason"):
+                if field in item and (
+                    not isinstance(item[field], str)
+                    or not item[field].strip()
+                    or len(item[field]) > self._SELECTED_RULE_REASON_MAX_CHARS
+                ):
+                    return {"integrity": "corrupt", "outcomes": []}
+        return {"integrity": "valid", "outcomes": value}
+
+    def get_selected_rule_outcomes(self) -> list:
+        """Return validated selected outcomes, or an empty list when unavailable."""
+        return self.get_selected_rule_outcome_state()["outcomes"]
+
+    def set_selected_rule_outcomes(self, outcomes: list) -> None:
+        """Persist selected-rule outcomes in canonical execution order."""
+        self.selected_rule_outcomes = json.dumps(outcomes) if outcomes else None
+
     def to_dict(self, include_entities: bool = False, include_log: bool = False) -> dict:
         """Convert to dictionary for API responses."""
         _warnings = self.get_warnings()
+        _selected_rule_state = self.get_selected_rule_outcome_state()
+        _selected_rule_outcomes = _selected_rule_state["outcomes"]
         result = {
             "id": self.id,
             "rule_id": self.rule_id,
@@ -2484,6 +2603,16 @@ class ChannelPipelineExecution(Base):
             # and any legacy NULL row to a real boolean.
             "is_event_sync": bool(self.is_event_sync),
             "event_sync_summary": self.get_event_sync_summary(),
+            "run_scope": (
+                "selected" if self.selected_rule_outcomes is not None else
+                "single" if self.rule_id is not None or self.rule_name else "all"
+            ),
+            "selected_rule_integrity": _selected_rule_state["integrity"],
+            "selected_rule_ids": [
+                item["rule_id"] for item in _selected_rule_outcomes
+                if isinstance(item, dict) and isinstance(item.get("rule_id"), int)
+            ],
+            "selected_rule_outcomes": _selected_rule_outcomes,
             # y3m6o.1 review (Finding 3): True when this run mutated
             # channel-profile membership non-reversibly. Derived from the
             # persisted ``non_reversible_profile_changes`` warning (no schema

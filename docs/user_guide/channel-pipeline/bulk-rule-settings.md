@@ -34,6 +34,27 @@ that group on.
 and only those groups. A rule's conditions, actions, and any setting group
 you left unchecked are untouched.
 
+### Run only the selected rules
+
+1. Check the rules you want to run. Selection follows the same checkboxes and
+   survives search or filtering.
+2. Click **Run selected (N)**.
+3. Review the confirmation. It names every selected rule in the order ECM will
+   use, then starts one execution containing exactly that scope.
+
+Disabled rules and rules outside their active date window are marked in the
+confirmation and block the whole run. ECM does not run only the eligible subset.
+The API performs the same check again and also rejects stale, deleted, duplicate,
+or invalid rule IDs, so an empty or changed selection can never turn into a
+run-all operation. After a successful request, the selection clears. Cancelling
+or a rejected request leaves it intact so you can adjust the rules.
+
+Selected runs appear as **Selected Rules (N)** in Execution History. The history
+row preserves the selected rule names, canonical order, match counts, and
+per-rule error outcome. Rule order is ascending priority with rule ID as the
+stable tie-break; Standard and Event Sync rules retain their existing execution
+phases.
+
 ### What you can bulk-edit
 
 | Group | What it sets |

@@ -239,6 +239,20 @@ export async function runChannelPipeline(options?: {
   });
 }
 
+/** Enqueue an atomically validated run containing exactly the selected rules. */
+export async function runSelectedChannelPipelineRules(options: {
+  ruleIds: number[];
+  dryRun?: boolean;
+}): Promise<RunPipelineEnqueuedResponse> {
+  return fetchJson<RunPipelineEnqueuedResponse>(`${API_BASE}/channel-pipeline/run-selected`, {
+    method: 'POST',
+    body: JSON.stringify({
+      dry_run: options.dryRun ?? false,
+      rule_ids: options.ruleIds,
+    }),
+  });
+}
+
 /**
  * Enqueue a single-rule channel pipeline run (bd-enfsy 202+poll, see
  * ``runChannelPipeline`` for the contract).

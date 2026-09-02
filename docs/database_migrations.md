@@ -98,6 +98,58 @@ destructive = False  # opt OUT of a scanner false positive. Justify it in the
 Bias toward over-detection: a false positive costs one extra (idempotent)
 migration actually running; a false negative is silent data loss.
 
+### Selected-rule audit data (revision 0051)
+
+Revision `0051` adds nullable `TEXT` column
+`auto_creation_executions.selected_rule_outcomes`. Upgrade is idempotent only
+when an existing column has that exact compatible shape; startup and migration
+both fail closed if the column is non-text or non-nullable. Deploy the backend
+revision before a frontend that expects selected-rule integrity and per-rule
+outcomes.
+
+The JSON array remains in canonical audit/display order (ascending rule priority,
+then rule ID), even though temporal processing is phase-ordered: all selected
+Standard rules run before selected Event Sync rules. During a selected run the
+same column receives bounded phase checkpoints: one Standard start write, one
+Standard boundary write, and start/terminal writes around each Event Sync rule.
+Run-all and single-rule executions keep the column `NULL` and do not use these
+checkpoints.
+
+Before any downgrade to `0050`, **stop every ECM instance and create a
+full-fidelity recovery copy of `journal.db`**. A standard backup and a legacy
+Full Backup are not sufficient: both deliberately remove Channel Pipeline
+execution history. After stopping every instance, use SQLite's backup facility
+to write a separate database file, or copy `journal.db` only after shutdown has
+completed. An encrypted DBAS artifact may be retained as an additional recovery
+artifact, but restore preview alone does not expose or validate its embedded
+SQLite database and is not sufficient evidence for this downgrade.
+
+Verify the raw recovery copy before altering history: open that copy with SQLite,
+require `PRAGMA integrity_check` to return `ok`, and query
+`auto_creation_executions` to confirm the expected rows and non-null
+`selected_rule_outcomes` values are present. Keep the verified file outside the
+active configuration directory. Do not delete selected-rule audit rows until
+this verification is complete.
+
+To recover, stop every ECM instance again, preserve the failed database and its
+`-wal`/`-shm` sidecars for diagnosis, restore the verified database file to the
+configured `journal.db` path without mixing in sidecars from another copy, and
+then restart ECM. Re-run `PRAGMA integrity_check` against the restored file
+before startup if the restore operation copied or transformed it.
+
+Downgrade is safe only under operator-provided quiescence and while every row has
+`selected_rule_outcomes IS NULL`. Revision `0051` refuses when it observes an
+active/running execution or selected-rule audit data, but SQLite's
+nontransactional DDL leaves a race between those checks and the native column
+drop: the migration cannot prove that an external ECM process stayed stopped.
+Once any selected-rule run has persisted audit data, `alembic downgrade 0050`
+intentionally refuses rather than silently erase execution history. Roll back
+application code without downgrading the database, or explicitly archive and
+remove that audit data only after establishing the verified recovery point
+above. The guard is a data-safety check under quiescence, not atomic
+cross-process locking and not a migration failure to bypass during routine
+deployment rollback.
+
 Two consequences for authoring:
 
 - **Keep destructive migrations idempotent** (`inspect`-guarded), like every
@@ -236,7 +288,7 @@ docker exec ecm-ecm-1 sh -c "cd /app && alembic stamp <known-good-rev>"
 
 ## SQLite-specific gotchas
 
-- **`ALTER TABLE` is limited.** SQLite cannot `DROP COLUMN` or `ALTER COLUMN` in older versions. Any column removal or type change must use `op.batch_alter_table(...)`, which recreates the table under the hood. Alembic emits batch mode when `render_as_batch=True`; when hand-editing a migration you must wrap the ops yourself.
+- **Choose native drops before batch reconstruction.** The supported SQLite 3.35+ versions can remove a simple, unconstrained column with `op.drop_column(...)`; use that path when possible. Reserve `op.batch_alter_table(...)` for changes SQLite still cannot perform natively, such as type or constraint alterations. Batch mode recreates the table, and replacing a referenced parent while `PRAGMA foreign_keys=ON` can fire inbound `ON DELETE CASCADE` constraints and erase child rows. Before any unavoidable batch reconstruction, inventory inbound foreign keys and add a populated round-trip test that proves parent and child rows survive.
 - **Name your constraints explicitly.** `CHECK` and `UNIQUE` constraint names are unstable across SQLite versions. Pass `name=...` to `sa.CheckConstraint` / `sa.UniqueConstraint` rather than relying on auto-generated names.
 - **Foreign keys are per-connection.** They are only enforced when `PRAGMA foreign_keys=ON`. The app-wide connect listener in `database.py` handles this everywhere SQLAlchemy opens a connection (including Alembic via `env.py`), but if you run raw `sqlite3` in a shell for debugging, you must set the PRAGMA yourself. Raw `sqlite3.connect()` calls bypass the listener.
 - **WAL journal mode is per-connection too.** The listener sets it on every connect, but direct `sqlite3` CLI sessions will use `delete` mode. This is expected and harmless: both modes see the same committed state.

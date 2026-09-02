@@ -445,8 +445,118 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
-    // Note: Per-rule selection with checkboxes is not implemented.
-    // The run pipeline executes all enabled rules.
+    it('confirms and runs exactly the selected rules in displayed order, then clears selection', async () => {
+      const user = userEvent.setup();
+      const bodies: Array<{ dry_run?: boolean; rule_ids?: number[] }> = [];
+      const later = createMockChannelPipelineRule({ name: 'Later', priority: 20, enabled: true });
+      const first = createMockChannelPipelineRule({ name: 'First', priority: 10, enabled: true });
+      const unselected = createMockChannelPipelineRule({ name: 'Unselected', priority: 30, enabled: true });
+      mockDataStore.channelPipelineRules.push(later, first, unselected);
+      server.use(
+        http.post('/api/channel-pipeline/run-selected', async ({ request }) => {
+          const body = await request.json() as { dry_run?: boolean; rule_ids?: number[] };
+          bodies.push(body);
+          const execution = createMockChannelPipelineExecution({
+            status: 'completed',
+            selected_rule_ids: body.rule_ids,
+            run_scope: 'selected',
+          });
+          mockDataStore.channelPipelineExecutions.unshift(execution);
+          return HttpResponse.json(
+            { execution_id: execution.id, status: 'running', message: 'started' },
+            { status: 202 },
+          );
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('First');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Later' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select First' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /run 2 selected rules/i });
+      expect(within(dialog).getByText('First')).toBeInTheDocument();
+      expect(within(dialog).getByText('Later')).toBeInTheDocument();
+      expect(within(dialog).queryByText('Unselected')).not.toBeInTheDocument();
+      await user.click(within(dialog).getByRole('button', { name: /^run selected$/i }));
+
+      await waitFor(() => expect(bodies).toEqual([
+        { dry_run: false, rule_ids: [first.id, later.id] },
+      ]));
+      await waitFor(() => {
+        expect(screen.getByRole('checkbox', { name: 'Select First' })).not.toBeChecked();
+        expect(screen.getByRole('checkbox', { name: 'Select Later' })).not.toBeChecked();
+      });
+    });
+
+    it('rejects partial eligibility in confirmation without sending a request', async () => {
+      const user = userEvent.setup();
+      let requestCount = 0;
+      const runnable = createMockChannelPipelineRule({ name: 'Runnable', priority: 1, enabled: true });
+      const disabled = createMockChannelPipelineRule({ name: 'Disabled', priority: 2, enabled: false });
+      mockDataStore.channelPipelineRules.push(runnable, disabled);
+      server.use(
+        http.post('/api/channel-pipeline/run-selected', () => {
+          requestCount += 1;
+          return HttpResponse.json({}, { status: 500 });
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('Runnable');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Runnable' }));
+      await user.click(screen.getByRole('checkbox', { name: 'Select Disabled' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /run 2 selected rules/i });
+      expect(within(dialog).getByText(/disabled rules cannot run/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
+      await user.click(within(dialog).getByRole('button', { name: /cancel/i }));
+      expect(requestCount).toBe(0);
+      expect(screen.getByRole('checkbox', { name: 'Select Runnable' })).toBeChecked();
+      expect(screen.getByRole('checkbox', { name: 'Select Disabled' })).toBeChecked();
+    });
+
+    it('identifies an out-of-window selection as ineligible', async () => {
+      const user = userEvent.setup();
+      const inactive = createMockChannelPipelineRule({
+        name: 'Future Rule', enabled: true, active_from: '2099-01-01',
+      });
+      mockDataStore.channelPipelineRules.push(inactive);
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('Future Rule');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Future Rule' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+
+      const dialog = await screen.findByRole('dialog', { name: /run 1 selected rule/i });
+      expect(within(dialog).getByText(/outside its active date window/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
+    });
+
+    it('blocks a selected rule that disappears during a rules refresh', async () => {
+      const user = userEvent.setup();
+      const vanishing = createMockChannelPipelineRule({
+        name: 'Vanishing Rule', enabled: true,
+      });
+      mockDataStore.channelPipelineRules.push(vanishing);
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('Vanishing Rule');
+      await user.click(screen.getByRole('checkbox', { name: 'Select Vanishing Rule' }));
+
+      mockDataStore.channelPipelineRules.length = 0;
+      await user.click(screen.getByRole('button', { name: /^run$/i }));
+      await waitFor(() => {
+        expect(screen.queryByText('Vanishing Rule')).not.toBeInTheDocument();
+      });
+
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+      const dialog = await screen.findByRole('dialog', { name: /run 1 selected rule/i });
+      expect(within(dialog).getByText(/rule no longer exists/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
+    });
   });
 
   describe('event_sync per-rule run (utswf)', () => {
@@ -676,6 +786,75 @@ describe('ChannelPipelineTab', () => {
   });
 
   describe('execution history', () => {
+    it('labels selected-rule history and names its scope', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          run_scope: 'selected',
+          selected_rule_ids: [4, 9],
+          selected_rule_outcomes: [
+            { rule_id: 4, rule_name: 'First', rule_kind: 'standard', status: 'completed', match_count: 3, error_count: 0 },
+            { rule_id: 9, rule_name: 'Second', rule_kind: 'event_sync', status: 'completed_with_errors', attach_count: 1, error_count: 2 },
+          ],
+          selected_rule_integrity: 'valid',
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      expect(await screen.findByText('Selected Rules (2)')).toBeInTheDocument();
+      expect(screen.getByText(/first.*completed.*3 matched.*0 errors/i)).toBeInTheDocument();
+      expect(screen.getByText(/second.*completed with errors.*1 attached.*2 errors/i)).toBeInTheDocument();
+    });
+
+    it('renders corrupt selected audit data as unavailable, never zero rules', async () => {
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          run_scope: 'selected',
+          selected_rule_integrity: 'corrupt',
+          selected_rule_ids: [],
+          selected_rule_outcomes: [],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      expect(await screen.findByText('Selected Rules (data corrupt)')).toBeInTheDocument();
+      expect(screen.getByText(/selected rule outcome data is unavailable or corrupt/i)).toBeInTheDocument();
+      expect(screen.queryByText('Selected Rules (0)')).not.toBeInTheDocument();
+    });
+
+    it('shows selected rule skip and cap facts in execution details', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          run_scope: 'selected',
+          selected_rule_integrity: 'valid',
+          selected_rule_ids: [4, 9],
+          selected_rule_outcomes: [
+            {
+              rule_id: 4, rule_name: 'Fetch skipped', rule_kind: 'event_sync',
+              status: 'skipped', attach_count: 0, error_count: 1,
+              skip_reason: 'secondary stream fetch failed',
+            },
+            {
+              rule_id: 9, rule_name: 'Promotion capped', rule_kind: 'event_sync',
+              status: 'capped', attach_count: 2, error_count: 0,
+              cap_reason: 'promotion cap reached',
+            },
+          ],
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await user.click(await screen.findByRole('button', { name: /view details/i }));
+
+      const dialog = within(screen.getByRole('dialog', { name: 'Execution Details' }));
+      expect(dialog.getByText(/fetch skipped.*skipped.*0 attached.*1 error/i)).toBeInTheDocument();
+      expect(dialog.getByText(/secondary stream fetch failed/i)).toBeInTheDocument();
+      expect(dialog.getByText(/promotion capped.*capped.*2 attached.*0 errors/i)).toBeInTheDocument();
+      expect(dialog.getByText(/promotion cap reached/i)).toBeInTheDocument();
+    });
+
     it('displays execution history', async () => {
       mockDataStore.channelPipelineExecutions.push(
         createMockChannelPipelineExecution({ status: 'completed', channels_created: 5 }),

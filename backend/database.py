@@ -1056,6 +1056,32 @@ def _bootstrap_alembic(engine) -> None:
             )
 
 
+def _selected_outcomes_shape_error(engine) -> str | None:
+    """Return a stable error when migration 0051's audit column is incompatible."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    if "auto_creation_executions" not in inspector.get_table_names():
+        return None
+    columns = {
+        column["name"]: column
+        for column in inspector.get_columns("auto_creation_executions")
+    }
+    column = columns.get("selected_rule_outcomes")
+    if column is None:
+        return None
+    if (
+        type(column["type"]).__name__.upper() != "TEXT"
+        or column.get("nullable") is not True
+    ):
+        return (
+            "auto_creation_executions.selected_rule_outcomes has incompatible "
+            f"shape (type={column['type']}, nullable={column.get('nullable')}); "
+            "expected nullable TEXT"
+        )
+    return None
+
+
 def _assert_schema_matches_models(engine) -> None:
     """Verify every SQLAlchemy model column exists on the live DB.
 
@@ -1098,6 +1124,10 @@ def _assert_schema_matches_models(engine) -> None:
 
     inspector = inspect(engine)
     live_tables = set(inspector.get_table_names())
+
+    shape_error = _selected_outcomes_shape_error(engine)
+    if shape_error:
+        raise RuntimeError(f"schema drift detected — {shape_error}")
 
     drift: list[str] = []
     for table_name, table in Base.metadata.tables.items():
@@ -1177,6 +1207,9 @@ def _schema_matches_head(engine) -> bool:
 
     inspector = inspect(engine)
     live_tables = set(inspector.get_table_names())
+
+    if _selected_outcomes_shape_error(engine):
+        return False
 
     for table_name, table in Base.metadata.tables.items():
         if table_name not in live_tables:

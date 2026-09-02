@@ -232,6 +232,12 @@ class RunPipelineRequest(BaseModel):
     rule_ids: Optional[List[int]] = None
 
 
+class RunSelectedRulesRequest(BaseModel):
+    """Strict scope for an atomic selected-rule run."""
+    dry_run: bool = False
+    rule_ids: List[int] = Field(default_factory=list, max_length=500)
+
+
 class CommitPipelinePlanRequest(BaseModel):
     plan_id: str
     plan_hash: str
@@ -1377,6 +1383,7 @@ def _create_pending_execution(
     triggered_by: str,
     rule_id: int | None = None,
     rule_name: str | None = None,
+    selected_rules: list | None = None,
 ) -> int:
     """Create a status='running' execution row up front (bd-enfsy 202+poll).
 
@@ -1396,6 +1403,18 @@ def _create_pending_execution(
             rule_id=rule_id,
             rule_name=rule_name,
         )
+        if selected_rules:
+            execution.set_selected_rule_outcomes([
+                {
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "rule_kind": (
+                        "event_sync" if rule.is_event_sync() else "standard"
+                    ),
+                    "status": "pending",
+                }
+                for rule in selected_rules
+            ])
         session.add(execution)
         session.commit()
         session.refresh(execution)
@@ -1431,6 +1450,23 @@ def _mark_execution_failed(
             )
             execution.status = "failed"
             execution.error_message = f"{type(error).__name__}: {error}"
+            selected_state = execution.get_selected_rule_outcome_state()
+            if selected_state["integrity"] == "valid":
+                terminal = {
+                    "completed", "completed_with_errors", "skipped", "capped",
+                    "failed", "interrupted", "not_run", "abandoned",
+                }
+                execution.set_selected_rule_outcomes([
+                    outcome if outcome["status"] in terminal else {
+                        **outcome,
+                        "status": (
+                            "interrupted"
+                            if outcome["status"] == "running"
+                            else "not_run"
+                        ),
+                    }
+                    for outcome in selected_state["outcomes"]
+                ])
             if partial_replay is not None:
                 execution.set_execution_log([{
                     "type": "partial_replay_failure",
@@ -1472,7 +1508,27 @@ def _supervise_background_pipeline(coro, *, execution_id: int, label: str) -> as
             )
             _mark_execution_failed(execution_id, e)
 
-    task = asyncio.create_task(_runner(), name=f"auto-creation-{label}-exec-{execution_id}")
+    runner = _runner()
+    try:
+        task = asyncio.create_task(
+            runner, name=f"auto-creation-{label}-exec-{execution_id}"
+        )
+    except Exception as error:
+        # create_task failed synchronously: neither coroutine can ever be
+        # awaited. Close both before durable finalization so GC cannot emit a
+        # delayed "was never awaited" warning in an unrelated request/test.
+        runner.close()
+        if asyncio.iscoroutine(coro):
+            coro.close()
+        from cloud_storage.upload_security import redact_secrets
+        logger.error(
+            "[AUTO-CREATE] Background %s execution=%s scheduling failed "
+            "(%s: %s)",
+            label, execution_id, type(error).__name__, redact_secrets(str(error)),
+        )
+        safe_error = RuntimeError("Background task scheduling failed")
+        _mark_execution_failed(execution_id, safe_error)
+        raise safe_error from None
     _BACKGROUND_TASKS.add(task)
     task.add_done_callback(_BACKGROUND_TASKS.discard)
     return task
@@ -1526,6 +1582,82 @@ async def run_auto_creation_pipeline(
         raise
     except Exception as e:
         logger.exception("[AUTO-CREATE] Failed to enqueue auto-creation pipeline: %s", e)
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/run-selected", status_code=202)
+async def run_selected_auto_creation_rules(
+    request: RunSelectedRulesRequest,
+    _admin=RequireAdminIfEnabled,
+    caller_is_mcp: bool = ResolveIsMcpServicePrincipalIfEnabled,
+):
+    """Run exactly the selected runnable rules after atomic validation."""
+    from selected_pipeline_rules import (
+        SelectedRuleValidationError,
+        load_selected_rule_snapshots,
+    )
+
+    if caller_is_mcp and not request.dry_run:
+        raise HTTPException(
+            status_code=409,
+            detail="MCP execution requires prepare and commit",
+        )
+
+    if not request.rule_ids:
+        raise HTTPException(status_code=400, detail={
+            "code": "empty_rule_selection",
+            "message": "Select at least one rule",
+        })
+    if len(request.rule_ids) != len(set(request.rule_ids)):
+        raise HTTPException(status_code=400, detail={
+            "code": "duplicate_rule_ids",
+            "message": "rule_ids must be unique",
+        })
+
+    try:
+        rules = load_selected_rule_snapshots(request.rule_ids)
+    except SelectedRuleValidationError as error:
+        detail = {"code": error.code, "message": error.message}
+        if error.rule_ids:
+            detail["rule_ids"] = error.rule_ids
+        if error.issues:
+            detail["issues"] = error.issues
+        raise HTTPException(
+            status_code=404 if error.code == "unknown_rule_ids" else 409,
+            detail=detail,
+        )
+
+    try:
+        engine = await _ensure_engine()
+        execution_id = _create_pending_execution(
+            mode="dry_run" if request.dry_run else "execute",
+            triggered_by="api",
+            selected_rules=rules,
+        )
+        canonical_rule_ids = [rule.id for rule in rules]
+        _supervise_background_pipeline(
+            engine.run_pipeline(
+                dry_run=request.dry_run,
+                triggered_by="api",
+                rule_ids=canonical_rule_ids,
+                execution_id=execution_id,
+                require_all_rule_ids=True,
+            ),
+            execution_id=execution_id,
+            label="run_selected_rules",
+        )
+        return JSONResponse(status_code=202, content={
+            "execution_id": execution_id,
+            "status": "running",
+            "rule_ids": canonical_rule_ids,
+            "message": "Selected rules started; poll execution status",
+        })
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.exception(
+            "[AUTO-CREATE] Failed to enqueue selected rules: %s", error
+        )
         raise HTTPException(status_code=500, detail="Internal server error")
 
 

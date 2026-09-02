@@ -228,11 +228,34 @@
   cursor: pointer;
 }
 
-.rules-bulk-edit-btn {
+.rules-bulk-edit-btn,
+.rules-run-selected-btn {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
   white-space: nowrap;
+}
+
+.selected-run-rule-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.selected-run-rule-list li {
+  padding-left: 4px;
+}
+
+.selected-run-ineligible {
+  display: block;
+  color: var(--error-color, #dc3545);
+  font-size: var(--type-meta-size);
+}
+
+.selected-run-blocked {
+  color: var(--error-color, #dc3545);
+  font-weight: 600;
 }
 
 /* Rules List Table */
@@ -698,6 +721,10 @@
 
 .channel-pipeline-tab.mobile .search-input {
   min-width: 100%;
+}
+
+.channel-pipeline-tab.mobile .section-controls {
+  flex-wrap: wrap;
 }
 
 .channel-pipeline-tab.mobile .rules-list {

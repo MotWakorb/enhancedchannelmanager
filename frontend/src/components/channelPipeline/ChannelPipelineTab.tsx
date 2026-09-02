@@ -12,6 +12,7 @@ import type {
   RestoreSnapshotResponse,
   FailedChannel,
   EventSyncExecutionSummary,
+  SelectedRuleOutcome,
 } from '../../types/channelPipeline';
 import {
   isNormalizationWarning,
@@ -60,6 +61,15 @@ const EXECUTION_STATUS_LABEL: Partial<Record<string, string>> = {
   capped: 'Capped',
   abandoned: 'Abandoned',
   completed_with_errors: 'Completed with Errors',
+};
+
+const selectedOutcomeSummary = (outcome: SelectedRuleOutcome) => {
+  const status = EXECUTION_STATUS_LABEL[outcome.status] ?? outcome.status.replace(/_/g, ' ');
+  const count = outcome.rule_kind === 'event_sync'
+    ? `${outcome.attach_count ?? 0} attached`
+    : `${outcome.match_count ?? 0} matched`;
+  const errors = `${outcome.error_count ?? 0} error${outcome.error_count === 1 ? '' : 's'}`;
+  return `${outcome.rule_name}: ${status}, ${count}, ${errors}`;
 };
 
 /**
@@ -316,6 +326,8 @@ export function ChannelPipelineTab() {
   /** Multi-select rules for bulk settings edit */
   const [selectedRuleIds, setSelectedRuleIds] = useState<Set<number>>(new Set());
   const [showBulkRuleModal, setShowBulkRuleModal] = useState(false);
+  const [showSelectedRunConfirm, setShowSelectedRunConfirm] = useState(false);
+  const [runningSelectedCount, setRunningSelectedCount] = useState(0);
 
   // Drag-and-drop state for rule reordering
   const dragRuleId = useRef<number | null>(null);
@@ -392,6 +404,33 @@ export function ChannelPipelineTab() {
     () => Array.from(selectedRuleIds).sort((a, b) => a - b),
     [selectedRuleIds],
   );
+
+  const selectedRules = useMemo(
+    () => rules
+      .filter(rule => selectedRuleIds.has(rule.id))
+      .sort((a, b) => a.priority - b.priority || a.id - b.id),
+    [rules, selectedRuleIds],
+  );
+
+  const missingSelectedRuleIds = useMemo(
+    () => Array.from(selectedRuleIds)
+      .filter(id => !rules.some(rule => rule.id === id))
+      .sort((a, b) => a - b),
+    [rules, selectedRuleIds],
+  );
+
+  const selectedRuleEligibility = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return selectedRules.map(rule => ({
+      rule,
+      reason: !rule.enabled
+        ? 'Disabled rules cannot run.'
+        : (rule.active_from && rule.active_from > today) ||
+            (rule.active_until && rule.active_until < today)
+          ? 'This rule is outside its active date window.'
+          : null,
+    }));
+  }, [selectedRules]);
 
   // Handlers
   const handleCreateRule = useCallback(() => {
@@ -585,7 +624,11 @@ export function ChannelPipelineTab() {
     }
   }, [filteredRules, reorderRules, notifications]);
 
-  const handleRun = useCallback(async (dryRun: boolean = false, ruleIds?: number[]) => {
+  const handleRun = useCallback(async (
+    dryRun: boolean = false,
+    ruleIds?: number[],
+    selected: boolean = false,
+  ): Promise<boolean> => {
     try {
       // bd-enfsy: runPipelineApi now polls the backend until the execution
       // reaches a terminal status, then resolves with the ChannelPipelineExecution
@@ -594,7 +637,7 @@ export function ChannelPipelineTab() {
       // so the success message only quotes the persisted channels_created
       // figure now. Detail-level orphan counts are still visible via the
       // Execution History pane (which fetches the full execution).
-      const response = await runPipelineApi({ dryRun, ruleIds });
+      const response = await runPipelineApi({ dryRun, ruleIds, selected });
 
       if (response) {
         const created = response.channels_created ?? 0;
@@ -687,10 +730,13 @@ export function ChannelPipelineTab() {
         if (!dryRun && (succeeded || completedWithErrors)) {
           window.dispatchEvent(new CustomEvent('channels-changed'));
         }
+        return true;
       }
       // If response is undefined, the hook caught an error and set executionsError
+      return false;
     } catch (err) {
       notifications.error(err instanceof Error ? err.message : 'Pipeline failed', 'Channel Pipeline');
+      return false;
     }
   }, [runPipelineApi, fetchExecutions, fetchRules, notifications, rules]);
 
@@ -702,6 +748,26 @@ export function ChannelPipelineTab() {
       setRunningSingleRule(null);
     }
   }, [handleRun]);
+
+  const handleConfirmSelectedRun = useCallback(async () => {
+    if (
+      selectedRuleEligibility.some(item => item.reason) ||
+      missingSelectedRuleIds.length > 0 ||
+      selectedRules.length === 0
+    ) {
+      return;
+    }
+    const ids = selectedRules.map(rule => rule.id);
+    setShowSelectedRunConfirm(false);
+    setRunningSelectedCount(ids.length);
+    try {
+      if (await handleRun(false, ids, true)) {
+        setSelectedRuleIds(new Set());
+      }
+    } finally {
+      setRunningSelectedCount(0);
+    }
+  }, [handleRun, missingSelectedRuleIds, selectedRuleEligibility, selectedRules]);
 
   // Live-run confirm (utswf): an event_sync live run attaches streams, so the
   // row Run icon routes through a confirm. Reuses handleRunSingleRule — the
@@ -1054,6 +1120,18 @@ export function ChannelPipelineTab() {
                 Bulk edit
                 {selectedRuleIds.size > 0 ? ` (${selectedRuleIds.size})` : ''}
               </button>
+              <button
+                type="button"
+                className="btn-secondary rules-run-selected-btn"
+                disabled={selectedRuleIds.size === 0 || rulesLoading || runningPipeline}
+                onClick={() => setShowSelectedRunConfirm(true)}
+                title={selectedRuleIds.size === 0 ? 'Select one or more rules' : 'Run exactly the selected rules'}
+                aria-label="Run selected rules"
+              >
+                <span className="material-icons">play_arrow</span>
+                Run selected
+                {selectedRuleIds.size > 0 ? ` (${selectedRuleIds.size})` : ''}
+              </button>
               <input
                 type="text"
                 className="search-input"
@@ -1322,7 +1400,11 @@ export function ChannelPipelineTab() {
                       Running
                     </span>
                     <span className="execution-mode">
-                      {runningSingleRule ? 'Single Rule' : 'Pipeline'}
+                      {runningSingleRule
+                        ? 'Single Rule'
+                        : runningSelectedCount > 0
+                          ? `Selected Rules (${runningSelectedCount})`
+                          : 'Pipeline'}
                     </span>
                     <span className="execution-date">
                       {new Date().toLocaleString(getDateLocale())}
@@ -1340,7 +1422,11 @@ export function ChannelPipelineTab() {
                       {EXECUTION_STATUS_LABEL[execution.status] ?? execution.status}
                     </span>
                     <span className="execution-mode">
-                      {execution.mode === 'dry_run' ? 'Dry Run' : 'Execute'}
+                      {execution.run_scope === 'selected'
+                        ? execution.selected_rule_integrity === 'corrupt'
+                          ? 'Selected Rules (data corrupt)'
+                          : `Selected Rules (${execution.selected_rule_ids?.length ?? 0})`
+                        : execution.mode === 'dry_run' ? 'Dry Run' : 'Execute'}
                     </span>
                     <span className="execution-date">
                       {new Date(execution.started_at).toLocaleString(getDateLocale())}
@@ -1351,6 +1437,14 @@ export function ChannelPipelineTab() {
                         // standard counters are structurally 0 ("0 matched" is
                         // the bug); show event_sync counts instead.
                         const esTotals = aggregateEventSyncSummary(execution.event_sync_summary);
+                        if (execution.run_scope === 'selected') {
+                          if (execution.selected_rule_integrity === 'corrupt') {
+                            return 'Selected rule outcome data is unavailable or corrupt';
+                          }
+                          return (execution.selected_rule_outcomes ?? [])
+                            .map(selectedOutcomeSummary)
+                            .join(' | ');
+                        }
                         if (execution.is_event_sync && esTotals) {
                           const attachWord = execution.mode === 'dry_run' ? 'would attach' : 'attached';
                           const parts = [`${esTotals.attached} ${attachWord}`];
@@ -1460,6 +1554,71 @@ export function ChannelPipelineTab() {
         rules={rules}
         onApply={handleBulkRuleSettingsApply}
       />
+
+      {showSelectedRunConfirm && (
+        <ModalOverlay
+          onClose={() => setShowSelectedRunConfirm(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={`${dialogId}-selected-run-title`}
+        >
+          <div className="modal-container modal-sm selected-run-confirm">
+            <div className="modal-header">
+              <h2 id={`${dialogId}-selected-run-title`}>
+                Run {selectedRuleIds.size} selected rule{selectedRuleIds.size === 1 ? '' : 's'}
+              </h2>
+            </div>
+            <div className="modal-body">
+              <p>
+                One pipeline execution will run exactly these rules in displayed
+                priority order:
+              </p>
+              <ol className="selected-run-rule-list">
+                {selectedRuleEligibility.map(({ rule, reason }) => (
+                  <li key={rule.id}>
+                    <span>{rule.name}</span>
+                    {reason && <span className="selected-run-ineligible" role="alert">{reason}</span>}
+                  </li>
+                ))}
+                {missingSelectedRuleIds.map(ruleId => (
+                  <li key={ruleId}>
+                    <span>Rule {ruleId}</span>
+                    <span className="selected-run-ineligible" role="alert">
+                      This rule no longer exists.
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              {(selectedRuleEligibility.some(item => item.reason) || missingSelectedRuleIds.length > 0) && (
+                <p className="selected-run-blocked" role="alert">
+                  Nothing will run until every selected rule is eligible. Adjust
+                  the selection or rule settings and try again.
+                </p>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => setShowSelectedRunConfirm(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleConfirmSelectedRun}
+                disabled={
+                  selectedRuleEligibility.some(item => item.reason) ||
+                  missingSelectedRuleIds.length > 0
+                }
+              >
+                Run selected
+              </button>
+            </div>
+          </div>
+        </ModalOverlay>
+      )}
 
       {/* Rule Builder Modal */}
       {showRuleBuilder && (() => {
@@ -2000,6 +2159,26 @@ export function ChannelPipelineTab() {
                   totals={eventSyncTotals}
                   isDryRun={details.mode === 'dry_run'}
                 />
+              )}
+              {details.run_scope === 'selected' && (
+                <section className="selected-outcomes" aria-label="Selected rule outcomes">
+                  <h3>Selected Rule Outcomes</h3>
+                  {details.selected_rule_integrity === 'corrupt' ? (
+                    <p className="selected-outcomes-corrupt" role="alert">
+                      Selected rule outcome data is unavailable or corrupt.
+                    </p>
+                  ) : (
+                    <ul>
+                      {(details.selected_rule_outcomes ?? []).map(outcome => (
+                        <li key={outcome.rule_id}>
+                          <span>{selectedOutcomeSummary(outcome)}</span>
+                          {outcome.skip_reason && <small>{outcome.skip_reason}</small>}
+                          {outcome.cap_reason && <small>{outcome.cap_reason}</small>}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </section>
               )}
               {details.error_message && (
                 <div className="detail-row error">

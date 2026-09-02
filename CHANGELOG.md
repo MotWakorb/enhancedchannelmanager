@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Run an exact checkbox selection of Channel Pipeline rules as one auditable execution (bead `enhancedchannelmanager-rtst2.4`, GitHub #874, build 0006).** The Rules table's existing bulk-selection checkboxes now expose **Run selected (N)** with a confirmation naming the complete scope. Selected rules execute deterministically by priority and rule ID, while disabled, inactive, stale, duplicate, or invalid selections reject atomically rather than being silently dropped or widened to run-all. Execution History labels selected runs and preserves each selected rule's name, order, match count, and error outcome. Existing run-all and single-rule behavior is unchanged.
+
 - **Channel Pipeline rules can preserve provider-supplied channel numbers (bead `enhancedchannelmanager-rtst2.8`, GitHub #920, build 0005).** Set Channel Number now exposes `{provider_channel_number}`, and Create Channel offers a matching **Provider Channel Number** numbering option. Both preview and execution read Dispatcharr's existing `stream_chno` value; a missing value skips without assigning a fallback, while malformed provider data fails visibly without changing or creating a channel.
 
 - **Scheduled stream probes can refresh health metadata without changing curated stream order (bead `enhancedchannelmanager-8gmk8.2`, build 0003).** Each Stream Probe schedule now has an **Allow stream reordering** option. It remains enabled by default and still follows the global auto-reorder setting; disabling it suppresses reordering for only that schedule invocation, including group-scoped probes, without affecting other probe runs.

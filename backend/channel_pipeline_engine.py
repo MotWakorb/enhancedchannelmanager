@@ -273,6 +273,9 @@ class ChannelPipelineEngine:
         self._stream_stats_cache = {}
         self._smart_sort_stats_cache = {}
         self._struck_stream_ids = set()
+        self._stream_fetch_facts = {
+            "rule_fetch_successes": {}, "rule_fetch_failures": {},
+        }
 
     async def run_pipeline(
         self,
@@ -284,6 +287,7 @@ class ChannelPipelineEngine:
         record_execution: bool = True,
         plan_only: bool = False,
         skip_prerefresh: bool = False,
+        require_all_rule_ids: bool = False,
     ) -> dict:
         """
         Run the full auto-creation pipeline.
@@ -298,6 +302,9 @@ class ChannelPipelineEngine:
                 themselves to reach the manual-run-only attach phase.
             m3u_account_ids: Optional list of M3U account IDs to process (None = all)
             rule_ids: Optional list of rule IDs to run (None = all enabled)
+            require_all_rule_ids: Fail before processing when any requested ID
+                is no longer enabled or active. Used by atomically validated
+                selected runs to close the validation-to-worker race.
             execution_id: Optional pre-created execution record id. When the
                 router enqueues a background task (bd-enfsy 202+poll pattern)
                 it creates an ChannelPipelineExecution(status="running") up front
@@ -310,13 +317,28 @@ class ChannelPipelineEngine:
             Dict with execution summary and results
         """
         started_at = datetime.utcnow()
+        self._stream_fetch_facts = {
+            "rule_fetch_successes": {}, "rule_fetch_failures": {},
+        }
         logger.info("[AUTO-CREATE-ENGINE] Starting auto-creation pipeline (dry_run=%s, triggered_by=%s, execution_id=%s)", dry_run, triggered_by, execution_id)
 
-        # Load existing channels and groups
+        selected_rules = None
+        if require_all_rule_ids:
+            selected_rules = await self._load_selected_rule_snapshots(rule_ids or [])
+            rules = selected_rules
+            if execution_id is not None:
+                await self._persist_selected_worker_snapshot(
+                    execution_id, selected_rules
+                )
+        else:
+            rules = None
+
+        # The selected definition boundary is above. External reads and later
+        # edits cannot alter the detached worker snapshot for this run.
         await self._load_existing_data()
 
-        # Load enabled rules
-        rules = await self._load_rules(rule_ids)
+        if rules is None:
+            rules = await self._load_rules(rule_ids)
 
         # ---------------------------------------------------------------------
         # event_sync routing (bead ti939.1.3 exclusion + ti939.2.1 attach path).
@@ -386,6 +408,12 @@ class ChannelPipelineEngine:
                     len(excluded), triggered_by,
                     [r.id for r in excluded],
                 )
+
+        if selected_rules and execution_id is not None and rules:
+            await self._persist_selected_rule_checkpoints(
+                execution_id,
+                [{"rule_id": rule.id, "status": "running"} for rule in rules],
+            )
 
         if not rules and not event_sync_to_run:
             if event_sync_rules:
@@ -511,6 +539,8 @@ class ChannelPipelineEngine:
             "triggered_by": triggered_by,
             "event_sync_rules": event_sync_to_run,
         }
+        if selected_rules is not None:
+            process_options["selected_rules"] = selected_rules
         # Preserve the long-standing internal call contract for ordinary API
         # runs and test/custom subclasses. Planning-only controls are supplied
         # only by the new prepare path that needs them.
@@ -521,6 +551,8 @@ class ChannelPipelineEngine:
         results = await self._process_streams(
             streams, rules, execution, dry_run, **process_options,
         )
+        for key, value in self._stream_fetch_facts.items():
+            results[key] = value
 
         # Prepend exclusion log entries and set streams_excluded count
         results["execution_log"] = exclusion_log + results["execution_log"]
@@ -541,7 +573,25 @@ class ChannelPipelineEngine:
         # ``capped`` takes precedence (it is already a non-green terminal state
         # and carries its own operator guidance).
         failed_actions = results.get("failed_actions", [])
-        if results.get("capped"):
+        selected_outcomes = (
+            self._selected_rule_outcomes(selected_rules, results)
+            if selected_rules else None
+        )
+        selected_capped = any(
+            outcome["status"] == "capped"
+            for outcome in selected_outcomes or []
+        )
+        selected_has_errors = any(
+            outcome["status"] in {
+                "completed_with_errors", "failed", "interrupted",
+            }
+            or (
+                outcome["status"] == "skipped"
+                and outcome.get("error_count", 0) > 0
+            )
+            for outcome in selected_outcomes or []
+        )
+        if results.get("capped") or selected_capped:
             execution.status = "capped"
             would = results.get("channels_created", 0) + results.get("cap_would_create", 0)
             execution.error_message = (
@@ -563,11 +613,12 @@ class ChannelPipelineEngine:
                 execution.error_message += (
                     "\n\n" + self._summarize_failed_actions(failed_actions)
                 )
-        elif failed_actions:
+        elif failed_actions or selected_has_errors:
             execution.status = "completed_with_errors"
-            execution.error_message = self._summarize_failed_actions(
-                failed_actions
-            )
+            if failed_actions:
+                execution.error_message = self._summarize_failed_actions(
+                    failed_actions
+                )
         else:
             execution.status = "completed"
         execution.streams_evaluated = results["streams_evaluated"]
@@ -592,8 +643,8 @@ class ChannelPipelineEngine:
         # invalid configs) ride the same surface — popped from results so the
         # transient list is not duplicated on the API response (the persisted
         # record and the structured results["event_sync"] summaries carry it).
-        run_warnings = list(normalization_warnings) + results.pop(
-            "event_sync_warnings", []
+        run_warnings = list(normalization_warnings) + list(
+            results.get("event_sync_warnings", [])
         )
         # y3m6o.1 review (Finding 3): if this run mutated channel-profile
         # membership non-reversibly (assign_channel_profile carries no reversible
@@ -658,6 +709,9 @@ class ChannelPipelineEngine:
         ]
         execution.set_event_sync_summary(event_sync_summaries)
         execution.is_event_sync = bool(event_sync_to_run) and not bool(rules)
+        if selected_outcomes is not None:
+            execution.set_selected_rule_outcomes(selected_outcomes)
+        results.pop("event_sync_warnings", None)
 
         if dry_run:
             execution.set_dry_run_results(results["dry_run_results"])
@@ -691,7 +745,7 @@ class ChannelPipelineEngine:
             # callers (MCP tools, tasks) and the executions UI cannot read it
             # as green. ``failed_action_count`` gives a cheap severity signal
             # without walking the (bounded) execution log.
-            "success": not failed_actions,
+            "success": not failed_actions and not selected_has_errors,
             "status": execution.status,
             "failed_action_count": len(failed_actions),
             "execution_id": execution.id if record_execution else None,
@@ -1233,7 +1287,9 @@ class ChannelPipelineEngine:
             if rule_ids:
                 query = query.filter(ChannelPipelineRule.id.in_(rule_ids))
 
-            rules = query.order_by(ChannelPipelineRule.priority).all()
+            rules = query.order_by(
+                ChannelPipelineRule.priority, ChannelPipelineRule.id
+            ).all()
             for r in rules:
                 logger.debug(
                     "[AUTO-CREATE-ENGINE] Rule id=%s name=%r priority=%s "
@@ -1247,6 +1303,110 @@ class ChannelPipelineEngine:
 
         finally:
             session.close()
+
+    async def _load_selected_rule_snapshots(
+        self, rule_ids: list[int]
+    ) -> list[ChannelPipelineRule]:
+        from selected_pipeline_rules import (
+            SelectedRuleValidationError,
+            load_selected_rule_snapshots,
+        )
+
+        try:
+            return load_selected_rule_snapshots(rule_ids)
+        except SelectedRuleValidationError as error:
+            raise RuntimeError(
+                f"Selected rule worker-start validation failed: {error.message}"
+            ) from error
+
+    @staticmethod
+    def _selected_rule_outcomes(rules: list, results: dict) -> list[dict]:
+        """Build truthful terminal outcomes from minimal per-rule facts."""
+        match_counts = results.get("rule_match_counts", {})
+        failed_actions = results.get("failed_actions", [])
+        fetch_failures = results.get("rule_fetch_failures", {})
+        fetch_successes = results.get("rule_fetch_successes", {})
+        cap_ids = results.get("rule_cap_ids", set())
+        event_summaries = {
+            summary.get("rule_id"): summary
+            for summary in results.get("event_sync", [])
+        }
+        event_warnings = results.get("event_sync_warnings", [])
+        outcomes = []
+        for rule in rules:
+            action_errors = sum(
+                1 for failure in failed_actions
+                if failure.get("rule_id") == rule.id
+            )
+            if rule.is_event_sync():
+                summary = event_summaries.get(rule.id)
+                warnings = [
+                    warning for warning in event_warnings
+                    if warning.get("rule_id") in (None, rule.id)
+                    and warning.get("type") in {
+                        "event_sync_invalid_config", "event_sync_fetch_failed",
+                        "event_sync_preflight_failed",
+                        "event_sync_auto_run_suppressed",
+                        "event_sync_review_enqueue_failed",
+                    }
+                ]
+                attach_count = summary.get("attached", 0) if summary else 0
+                # Attach failures are already expanded one-for-one into
+                # failed_actions by _record_failed_phase. That list is the
+                # authoritative source; adding summary.attach_errors again
+                # double-counts the same failed writes.
+                error_count = action_errors + len(warnings)
+                capped = bool(summary) and (
+                    summary.get("capped", False)
+                    or (summary.get("promotion") or {}).get("capped", False)
+                )
+                if warnings and summary is None:
+                    status = "skipped"
+                elif capped:
+                    status = "capped"
+                elif error_count:
+                    status = "completed_with_errors"
+                else:
+                    status = "completed"
+                outcome = {
+                    "rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "rule_kind": "event_sync",
+                    "status": status,
+                    "attach_count": attach_count,
+                    "error_count": error_count,
+                }
+                if status == "skipped":
+                    outcome["skip_reason"] = warnings[0].get(
+                        "message", "Event Sync rule was skipped"
+                    )[:ChannelPipelineExecution._SELECTED_RULE_REASON_MAX_CHARS]
+                if status == "capped":
+                    outcome["cap_reason"] = "Event Sync per-run cap reached"
+                outcomes.append(outcome)
+                continue
+
+            source_errors = len(fetch_failures.get(rule.id, []))
+            error_count = action_errors + source_errors
+            if rule.id in cap_ids:
+                status = "capped"
+            elif source_errors and fetch_successes.get(rule.id, 0) == 0:
+                status = "failed"
+            elif error_count:
+                status = "completed_with_errors"
+            else:
+                status = "completed"
+            outcome = {
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "rule_kind": "standard",
+                "status": status,
+                "match_count": match_counts.get(rule.id, 0),
+                "error_count": error_count,
+            }
+            if status == "capped":
+                outcome["cap_reason"] = "Created-channel cap reached"
+            outcomes.append(outcome)
+        return outcomes
 
     async def _detect_disabled_normalization_group_warnings(
         self, rules: list[ChannelPipelineRule]
@@ -1366,6 +1526,17 @@ class ChannelPipelineEngine:
         all_streams = []
         m3u_accounts = await self.client.get_m3u_accounts() or []
         account_map = {a["id"]: a for a in m3u_accounts}
+        scoped_accounts = {
+            rule.id: (
+                {rule.m3u_account_id}
+                if rule.m3u_account_id else set(accounts_to_fetch)
+            )
+            for rule in (rules or [])
+        }
+        self._stream_fetch_facts = {
+            "rule_fetch_successes": {rule.id: 0 for rule in (rules or [])},
+            "rule_fetch_failures": {rule.id: [] for rule in (rules or [])},
+        }
         logger.debug("[AUTO-CREATE-ENGINE] Accounts to fetch: %s", accounts_to_fetch)
 
         # Load stream stats for quality info
@@ -1377,9 +1548,14 @@ class ChannelPipelineEngine:
         if self._existing_groups:
             group_name_map = {g["id"]: g["name"] for g in self._existing_groups}
 
-        for account_id in accounts_to_fetch:
+        for account_id in sorted(accounts_to_fetch):
             account = account_map.get(account_id)
             if not account:
+                for rule_id, account_ids in scoped_accounts.items():
+                    if account_id in account_ids:
+                        self._stream_fetch_facts["rule_fetch_failures"][rule_id].append(
+                            f"M3U account {account_id}: account not found"
+                        )
                 continue
 
             try:
@@ -1414,8 +1590,16 @@ class ChannelPipelineEngine:
                     if fetched_for_account >= total or not streams:
                         break
                     page += 1
+                for rule_id, account_ids in scoped_accounts.items():
+                    if account_id in account_ids:
+                        self._stream_fetch_facts["rule_fetch_successes"][rule_id] += 1
             except Exception as e:
                 logger.error("[AUTO-CREATE-ENGINE] Failed to fetch streams from M3U account %s: %s", str(account_id).replace('\n', ''), str(e).replace('\n', ''))
+                for rule_id, account_ids in scoped_accounts.items():
+                    if account_id in account_ids:
+                        self._stream_fetch_facts["rule_fetch_failures"][rule_id].append(
+                            f"M3U account {account_id}: {e}"
+                        )
 
         return all_streams
 
@@ -2197,6 +2381,7 @@ class ChannelPipelineEngine:
         dry_run: bool,
         triggered_by: str = TRIGGERED_BY_UNSPECIFIED,
         event_sync_rules: list[ChannelPipelineRule] = None,
+        selected_rules: list[ChannelPipelineRule] = None,
         plan_only: bool = False,
         skip_prerefresh: bool = False,
     ) -> dict:
@@ -2724,6 +2909,9 @@ class ChannelPipelineEngine:
                 remaining = len(sorted_entries) - _idx
                 results["capped"] = True
                 results["cap_would_create"] = remaining
+                results.setdefault("rule_cap_ids", set()).update(
+                    entry[1].id for entry in sorted_entries[_idx:]
+                )
                 logger.warning(
                     "[AUTO-CREATE] Created-channel cap reached: %s created, "
                     "stopping with %s matched stream(s) unprocessed (cap=%s). "
@@ -2981,6 +3169,11 @@ class ChannelPipelineEngine:
         # one master channel.
         # =====================================================================
         if event_sync_rules:
+            if selected_rules is not None and rules:
+                await self._persist_selected_rule_checkpoints(
+                    execution.id,
+                    self._selected_rule_outcomes(rules, results),
+                )
             await self._run_event_sync_rules(
                 event_sync_rules, executor, results, dry_run,
                 triggered_by=triggered_by,
@@ -3002,6 +3195,7 @@ class ChannelPipelineEngine:
                 rule_channel_order=rule_channel_order,
                 plan_only=plan_only,
                 skip_prerefresh=skip_prerefresh,
+                execution_id=(execution.id if selected_rules is not None else None),
             )
 
         # =====================================================================
@@ -3640,6 +3834,7 @@ class ChannelPipelineEngine:
         catchup_stream_ids: set[int] = None,
         stream_metadata_known_ids: set[int] = None,
         settings=None,
+        execution_id: int | None = None,
     ) -> None:
         """Execute the event_sync attach phase (bead ti939.2.1 — Phase 1B).
 
@@ -3822,6 +4017,10 @@ class ChannelPipelineEngine:
             all_group_settings = {}
 
         for rule in event_sync_rules:
+            if execution_id is not None:
+                await self._persist_selected_rule_checkpoints(
+                    execution_id, [{"rule_id": rule.id, "status": "running"}],
+                )
             config = rule.get_event_sync_config()
             errors = (
                 ["event_sync_config is missing or corrupt"]
@@ -3845,12 +4044,27 @@ class ChannelPipelineEngine:
                         f"config failed re-validation ({'; '.join(errors)})"
                     ),
                 })
+                if execution_id is not None:
+                    await self._persist_selected_rule_checkpoints(
+                        execution_id,
+                        self._selected_rule_outcomes([rule], results),
+                    )
                 continue
             if not config.get("enabled", True):
                 logger.info(
                     "[EVENT-SYNC] Rule '%s' (id=%s): event_sync_config."
                     "enabled is false — skipped", rule.name, rule.id,
                 )
+                if execution_id is not None:
+                    await self._persist_selected_rule_checkpoints(
+                        execution_id, [{
+                            "rule_id": rule.id,
+                            "status": "skipped",
+                            "attach_count": 0,
+                            "error_count": 0,
+                            "skip_reason": "Event Sync rule is disabled",
+                        }],
+                    )
                 continue
 
             if unattended:
@@ -3902,6 +4116,11 @@ class ChannelPipelineEngine:
                             f"rule runs again on the next refresh."
                         ),
                     })
+                    if execution_id is not None:
+                        await self._persist_selected_rule_checkpoints(
+                            execution_id,
+                            self._selected_rule_outcomes([rule], results),
+                        )
                     continue
 
             # bead y8yby: optional pre-refresh of the rule's M3U providers
@@ -3942,6 +4161,11 @@ class ChannelPipelineEngine:
                         f"stream fetch failed ({e})"
                     ),
                 })
+                if execution_id is not None:
+                    await self._persist_selected_rule_checkpoints(
+                        execution_id,
+                        self._selected_rule_outcomes([rule], results),
+                    )
                 continue
 
             # ti939.3.2: load the rule's prior review decisions
@@ -4489,6 +4713,11 @@ class ChannelPipelineEngine:
             )
 
             results["event_sync"].append(summary)
+            if execution_id is not None:
+                await self._persist_selected_rule_checkpoints(
+                    execution_id,
+                    self._selected_rule_outcomes([rule], results),
+                )
 
     async def _assign_event_sync_dummy_epg(
         self,
@@ -5710,6 +5939,52 @@ class ChannelPipelineEngine:
                 # via _save_execution(merge) like a freshly-created one.
                 session.expunge(execution)
             return execution
+        finally:
+            session.close()
+
+    async def _persist_selected_worker_snapshot(
+        self, execution_id: int, rules: list[ChannelPipelineRule]
+    ) -> None:
+        """Replace request-time identity with the validated worker-start snapshot."""
+        session = get_session()
+        try:
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
+            ).first()
+            if execution is None:
+                return
+            execution.set_selected_rule_outcomes([{
+                "rule_id": rule.id,
+                "rule_name": rule.name,
+                "rule_kind": "event_sync" if rule.is_event_sync() else "standard",
+                "status": "pending",
+            } for rule in rules])
+            session.commit()
+        finally:
+            session.close()
+
+    async def _persist_selected_rule_checkpoints(
+        self, execution_id: int, updates: list[dict],
+    ) -> None:
+        """Persist bounded selected-run lifecycle transitions in canonical order."""
+        if not updates:
+            return
+        session = get_session()
+        try:
+            execution = session.query(ChannelPipelineExecution).filter(
+                ChannelPipelineExecution.id == execution_id
+            ).first()
+            if execution is None:
+                return
+            state = execution.get_selected_rule_outcome_state()
+            if state["integrity"] != "valid":
+                return
+            by_id = {update["rule_id"]: update for update in updates}
+            execution.set_selected_rule_outcomes([
+                {**outcome, **by_id.get(outcome["rule_id"], {})}
+                for outcome in state["outcomes"]
+            ])
+            session.commit()
         finally:
             session.close()
 
