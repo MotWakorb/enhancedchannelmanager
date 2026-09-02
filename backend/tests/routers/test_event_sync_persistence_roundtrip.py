@@ -186,6 +186,51 @@ class TestDbasRestoreRoundTrip:
         ).one()
         assert restored.get_required_provider_ids() == [11, 22]
 
+    @pytest.mark.parametrize("stored", ["{}", "not-json", "[11]"])
+    def test_dbas_export_preserves_malformed_required_providers_for_restore_rejection(
+        self, test_session, stored
+    ):
+        from routers.backup import _gather_db_tables, _restore_auto_creation_rules
+
+        existing = _create_rule(
+            test_session, name="Malformed DBAS coverage",
+            event_sync_config=None, required_provider_ids=stored,
+        )
+        with patch("routers.backup.get_session", return_value=test_session):
+            exported = _gather_db_tables()["auto_creation_rules"]
+        item = next(row for row in exported if row["name"] == existing.name)
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             pytest.raises(ValueError, match="required_provider_ids"):
+            _restore_auto_creation_rules([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
+    @pytest.mark.parametrize("coverage", ["absent", None, []])
+    def test_dbas_restore_absent_or_explicit_empty_coverage_clears_configuration(
+        self, test_session, coverage
+    ):
+        from routers.backup import _restore_auto_creation_rules
+
+        existing = _create_rule(
+            test_session, name="Cleared DBAS coverage",
+            event_sync_config=None, required_provider_ids=json.dumps([11, 22]),
+        )
+        item = existing.to_dict()
+        if coverage == "absent":
+            item.pop("required_provider_ids")
+        else:
+            item["required_provider_ids"] = coverage
+
+        with patch("routers.backup.get_session", return_value=test_session):
+            _restore_auto_creation_rules([item])
+
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Cleared DBAS coverage"
+        ).one()
+        assert restored.required_provider_ids is None
+
     @pytest.mark.parametrize("value", [[11], {}, False, 0, ""])
     def test_backup_restore_rejects_malformed_required_providers_without_deleting_rules(
         self, test_session, value

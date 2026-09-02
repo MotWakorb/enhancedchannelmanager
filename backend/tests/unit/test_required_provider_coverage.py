@@ -41,7 +41,7 @@ def _stream(stream_id, name, provider_id, provider_name):
 
 def _run(
     streams, *, required=(1, 2), struck=(), dry_run=True, normalization=None,
-    channel_cap=None,
+    normalization_groups=False, normalization_init_error=None, channel_cap=None,
 ):
     client = MagicMock()
     engine = ChannelPipelineEngine(client)
@@ -54,7 +54,7 @@ def _run(
     engine._refresh_dummy_epg_and_retry = AsyncMock()
     execution = MagicMock(id=99)
     rule = _rule(required=required, skip_struck=bool(struck))
-    if normalization:
+    if normalization or normalization_groups:
         rule.set_normalization_group_ids([5])
 
     executed = []
@@ -73,9 +73,14 @@ def _run(
     if channel_cap is not None:
         settings.max_auto_created_channels_per_run = channel_cap
 
+    normalization_patch = patch(
+        "normalization_engine.get_normalization_engine",
+        side_effect=normalization_init_error,
+        return_value=normalization,
+    )
     with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
          patch("channel_pipeline_engine.get_settings", return_value=settings), \
-         patch("normalization_engine.get_normalization_engine", return_value=normalization), \
+         normalization_patch, \
          patch("channel_pipeline_engine.ActionExecutor.execute", new=execute):
         result = asyncio.get_event_loop().run_until_complete(
             engine._process_streams(
@@ -226,6 +231,42 @@ def test_normalization_failure_blocks_without_claiming_present_providers_missing
         assert block["reason"] == "normalization_failed"
         assert block["normalization_error"] == "invalid normalization rule"
         assert block["stream_id"] in {10, 20}
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "live"])
+@pytest.mark.parametrize(
+    "names", [("ESPN", "ESPN"), ("ESPN US", "ESPN UK")],
+    ids=["same-raw-name", "different-raw-names"],
+)
+def test_normalization_initialization_failure_blocks_every_affected_stream(
+    dry_run, names
+):
+    result, executed = _run(
+        [
+            _stream(10, names[0], 1, "Primary"),
+            _stream(20, names[1], 2, "Backup"),
+        ],
+        dry_run=dry_run,
+        normalization_groups=True,
+        normalization_init_error=RuntimeError("normalization database unavailable"),
+    )
+
+    assert executed == []
+    assert len(result["required_provider_blocks"]) == 2
+    assert {block["stream_id"] for block in result["required_provider_blocks"]} == {10, 20}
+    for block in result["required_provider_blocks"]:
+        assert block["reason"] == "normalization_failed"
+        assert block["normalization_error"] == "normalization database unavailable"
+
+
+def test_normalization_initialization_failure_does_not_block_raw_name_coverage():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+    ], normalization_init_error=RuntimeError("normalization database unavailable"))
+
+    assert executed == [10, 20]
+    assert result["required_provider_blocks"] == []
 
 
 @pytest.mark.parametrize("stored", ["[11]", "{}", "false", "0", "\"\"", "not-json"])

@@ -5061,7 +5061,10 @@ def _gather_db_tables() -> dict:
 
         # Auto-creation rules
         ac_rules = session.query(ChannelPipelineRule).all()
-        sections["auto_creation_rules"] = [r.to_dict() for r in ac_rules]
+        sections["auto_creation_rules"] = [
+            r.to_dict(preserve_invalid_required_provider_ids=True)
+            for r in ac_rules
+        ]
 
         # FFmpeg profiles
         profiles = session.query(FFmpegProfile).all()

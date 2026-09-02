@@ -2235,8 +2235,16 @@ class ChannelPipelineRule(Base):
         """
         return bool(self.event_sync_config)
 
-    def to_dict(self) -> dict:
+    def to_dict(
+        self, *, preserve_invalid_required_provider_ids: bool = False
+    ) -> dict:
         """Convert to dictionary for API responses."""
+        required_provider_ids = self.get_required_provider_ids()
+        if (
+            preserve_invalid_required_provider_ids
+            and self.get_required_provider_ids_error() is not None
+        ):
+            required_provider_ids = self.required_provider_ids
         return {
             "id": self.id,
             "name": self.name,
@@ -2260,7 +2268,7 @@ class ChannelPipelineRule(Base):
             "quality_tie_break_order": self.quality_tie_break_order or "desc",
             "quality_m3u_tie_break_enabled": bool(self.quality_m3u_tie_break_enabled),
             "normalization_group_ids": self.get_normalization_group_ids(),
-            "required_provider_ids": self.get_required_provider_ids(),
+            "required_provider_ids": required_provider_ids,
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "match_scope_target_group": self.match_scope_target_group or False,

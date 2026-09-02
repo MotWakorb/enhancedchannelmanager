@@ -1532,7 +1532,7 @@ class ChannelPipelineEngine:
 
             # Required-provider coverage is additive; it must not turn an
             # otherwise unscoped ruleset into a provider-scoped run.
-            if not any(rule.m3u_account_id for rule in rules):
+            if any(not rule.m3u_account_id for rule in rules):
                 m3u_accounts = await self.client.get_m3u_accounts() or []
                 accounts_to_fetch.update(a["id"] for a in m3u_accounts)
         else:
@@ -1628,7 +1628,8 @@ class ChannelPipelineEngine:
         return all_streams
 
     def _apply_required_provider_coverage(
-        self, matched_entries: list, normalization_engine, results: dict, dry_run: bool
+        self, matched_entries: list, normalization_engine, results: dict, dry_run: bool,
+        normalization_initialization_error: str | None = None,
     ) -> list:
         """Remove incomplete normalized-name cohorts before any action executes.
 
@@ -1663,6 +1664,11 @@ class ChannelPipelineEngine:
 
             cohort_name = stream.stream_name
             group_ids = rule.get_normalization_group_ids()
+            if group_ids and normalization_initialization_error:
+                normalization_failures.append(
+                    (entry, normalization_initialization_error)
+                )
+                continue
             if group_ids and normalization_engine:
                 try:
                     cohort_name = normalization_engine.normalize(
@@ -2654,6 +2660,7 @@ class ChannelPipelineEngine:
         # creating duplicate channels when an existing channel's name would
         # collapse to the same normalized form (GH-104 / bd-u9odj).
         norm_engine = None
+        norm_initialization_error = None
         needs_norm = any(r.get_normalization_group_ids() for r in rules)
         if not needs_norm:
             # Check if any condition uses normalized_name_in_group
@@ -2691,6 +2698,7 @@ class ChannelPipelineEngine:
                 norm_engine = get_normalization_engine(session)
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to initialize normalization engine: %s", e)
+                norm_initialization_error = str(e)
 
         # Initialize evaluator (with normalization engine for normalized_name_in_group conditions)
         evaluator = ConditionEvaluator(self._existing_channels, self._existing_groups,
@@ -3036,7 +3044,8 @@ class ChannelPipelineEngine:
         )
 
         matched_entries = self._apply_required_provider_coverage(
-            matched_entries, norm_engine, results, dry_run
+            matched_entries, norm_engine, results, dry_run,
+            normalization_initialization_error=norm_initialization_error,
         )
 
         # =====================================================================

@@ -20,7 +20,7 @@ import httpx
 import journal
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_validator
 from starlette.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -90,7 +90,7 @@ class CreateChannelPipelineRuleRequest(BaseModel):
     quality_tie_break_order: str = "desc"
     quality_m3u_tie_break_enabled: bool = True
     normalization_group_ids: list[int] = Field(default_factory=list)
-    required_provider_ids: list[int] = Field(default_factory=list)
+    required_provider_ids: list[StrictInt] = Field(default_factory=list)
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
     # Default True for new rules (bd-p6ko9, GH #226) — see models.ChannelPipelineRule.
@@ -151,7 +151,7 @@ class UpdateChannelPipelineRuleRequest(BaseModel):
     quality_tie_break_order: Optional[str] = None
     quality_m3u_tie_break_enabled: Optional[bool] = None
     normalization_group_ids: Optional[list[int]] = None
-    required_provider_ids: Optional[list[int]] = None
+    required_provider_ids: Optional[list[StrictInt]] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
     match_scope_target_group: Optional[bool] = None
@@ -2731,6 +2731,16 @@ async def export_auto_creation_rules_yaml():
             }
 
             for rule in rules:
+                required_provider_ids = rule.get_required_provider_ids()
+                required_provider_names = [
+                    m3u_id_to_name.get(provider_id)
+                    for provider_id in required_provider_ids
+                ]
+                if not all(
+                    isinstance(name, str) and name.strip()
+                    for name in required_provider_names
+                ):
+                    required_provider_names = []
                 _qto = getattr(rule, "quality_tie_break_order", None)
                 if isinstance(_qto, str) and _qto.strip():
                     yaml_quality_tie = _qto.strip().lower()
@@ -2773,11 +2783,12 @@ async def export_auto_creation_rules_yaml():
                     "quality_tie_break_order": yaml_quality_tie,
                     "quality_m3u_tie_break_enabled": yaml_quality_m3u_enabled,
                     "normalization_group_ids": rule.get_normalization_group_ids(),
-                    "required_provider_ids": rule.get_required_provider_ids(),
-                    "required_provider_names": [
-                        m3u_id_to_name.get(provider_id, f"Provider #{provider_id}")
-                        for provider_id in rule.get_required_provider_ids()
-                    ],
+                    "required_provider_ids": (
+                        rule.required_provider_ids
+                        if isinstance(rule.get_required_provider_ids_error(), str)
+                        else required_provider_ids
+                    ),
+                    "required_provider_names": required_provider_names,
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete",
@@ -2820,9 +2831,9 @@ async def export_auto_creation_rules_yaml():
 async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=RequireAdminIfEnabled):
     """Import auto-creation rules from YAML.
 
-    Supports portable name fields. Group and single-provider names resolve when
-    corresponding IDs are missing; exported required-provider names always
-    resolve to local IDs so cross-installation imports ignore stale source IDs.
+    Supports portable name fields. Complete exported required-provider names
+    resolve to local IDs so cross-installation imports ignore stale source IDs;
+    exports without a complete name map retain IDs for same-install recovery.
     """
     logger.debug("[AUTO-CREATE-YAML] POST /import/yaml - overwrite=%s", request.overwrite)
     try:
