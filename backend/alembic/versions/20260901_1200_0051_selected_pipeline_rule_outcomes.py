@@ -1,11 +1,11 @@
 """selected pipeline rule outcomes.
 
-Downgrade requires every ECM instance to be stopped and a database backup to
-exist before Alembic starts. SQLite DDL is not transactionally lockable across
-this guard and the subsequent batch column drop, so the checks below are safe
-only under operator-provided quiescence. They refuse known active executions or
-selected-rule audit data; they cannot prove an external process will not write
-after the checks.
+Downgrade requires every ECM instance to be stopped and a full-fidelity
+``journal.db`` backup to exist before Alembic starts. SQLite DDL is not
+transactionally lockable across this guard and the subsequent batch column
+drop, so the checks below are safe only under operator-provided quiescence.
+They refuse known active executions or selected-rule audit data; they cannot
+prove an external process will not write after the checks.
 
 Revision ID: 0051
 Revises: 0050
@@ -63,8 +63,9 @@ def downgrade() -> None:
         if active_count:
             raise RuntimeError(
                 f"refusing downgrade: {active_count} active/running execution(s) "
-                "exist. Stop all ECM instances and create a database backup "
-                "before retrying; this guard is safe only under quiescence"
+                "exist. Stop all ECM instances and create a full-fidelity "
+                "journal.db backup before retrying; this guard is safe only "
+                "under quiescence"
             )
         selected_count = connection.execute(sa.text(
             f"SELECT COUNT(*) FROM {TABLE} WHERE {COLUMN} IS NOT NULL"
@@ -72,9 +73,9 @@ def downgrade() -> None:
         if selected_count:
             raise RuntimeError(
                 f"refusing downgrade: all ECM instances must be stopped and a "
-                f"database backup must exist first; {selected_count} row(s) "
-                "contain selected rule audit data, so this downgrade would "
-                "erase history even under quiescence"
+                f"full-fidelity journal.db backup must exist first; "
+                f"{selected_count} row(s) contain selected rule audit data, so "
+                "this downgrade would erase history even under quiescence"
             )
         with op.batch_alter_table(TABLE) as batch_op:
             batch_op.drop_column(COLUMN)

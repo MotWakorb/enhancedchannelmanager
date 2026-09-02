@@ -157,3 +157,76 @@ def test_empty_downgrade_and_reupgrade_are_allowed(tmp_path):
         assert str(_column(engine)["type"]).upper() == "TEXT"
     finally:
         engine.dispose()
+
+
+def test_downgrade_preserves_existing_history_with_null_outcomes(tmp_path):
+    url, cfg = _database(tmp_path, "null-history.db")
+    command.upgrade(cfg, "head")
+    engine = create_engine(url, future=True)
+    try:
+        before_indexes = {
+            item["name"]
+            for item in inspect(engine).get_indexes("auto_creation_executions")
+        }
+        with engine.begin() as connection:
+            execution_id = connection.execute(text(
+                "INSERT INTO auto_creation_executions "
+                "(rule_name, mode, triggered_by, started_at, completed_at, status, "
+                "streams_evaluated, streams_matched, channels_created, "
+                "channels_updated, groups_created, streams_merged, channels_touched, "
+                "streams_skipped, streams_excluded, is_event_sync, created_at, "
+                "selected_rule_outcomes) VALUES "
+                "('Preserved history', 'execute', 'api', CURRENT_TIMESTAMP, "
+                "CURRENT_TIMESTAMP, 'completed', 7, 3, 1, 2, 0, 0, 3, 4, 0, 0, "
+                "CURRENT_TIMESTAMP, NULL) RETURNING id"
+            )).scalar_one()
+    finally:
+        engine.dispose()
+
+    command.downgrade(cfg, "0050")
+
+    engine = create_engine(url, future=True)
+    try:
+        inspector = inspect(engine)
+        names = {
+            item["name"]
+            for item in inspector.get_columns("auto_creation_executions")
+        }
+        assert "selected_rule_outcomes" not in names
+        assert inspector.get_pk_constraint("auto_creation_executions")[
+            "constrained_columns"
+        ] == ["id"]
+        assert {
+            item["name"]
+            for item in inspector.get_indexes("auto_creation_executions")
+        } == before_indexes
+        assert inspector.get_foreign_keys("auto_creation_executions") == [{
+            "name": None,
+            "constrained_columns": ["rule_id"],
+            "referred_schema": None,
+            "referred_table": "auto_creation_rules",
+            "referred_columns": ["id"],
+            "options": {"ondelete": "SET NULL"},
+        }]
+        with engine.connect() as connection:
+            row = connection.execute(text(
+                "SELECT id, rule_name, mode, triggered_by, status, "
+                "streams_evaluated, streams_matched, channels_created, "
+                "channels_updated, channels_touched, streams_skipped "
+                "FROM auto_creation_executions WHERE id = :execution_id"
+            ), {"execution_id": execution_id}).mappings().one()
+        assert dict(row) == {
+            "id": execution_id,
+            "rule_name": "Preserved history",
+            "mode": "execute",
+            "triggered_by": "api",
+            "status": "completed",
+            "streams_evaluated": 7,
+            "streams_matched": 3,
+            "channels_created": 1,
+            "channels_updated": 2,
+            "channels_touched": 3,
+            "streams_skipped": 4,
+        }
+    finally:
+        engine.dispose()
