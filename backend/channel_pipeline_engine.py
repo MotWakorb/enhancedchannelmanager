@@ -747,6 +747,10 @@ class ChannelPipelineEngine:
             results['channels_created'], results['channels_updated'], orphan_info
         )
 
+        selected_error_count = sum(
+            outcome.get("error_count", 0)
+            for outcome in selected_outcomes or []
+        )
         return {
             # y3m6o.1 (0152): the top-level API result reflects action-level
             # failures — a run with any failed action is NOT a success, so
@@ -755,7 +759,7 @@ class ChannelPipelineEngine:
             # without walking the (bounded) execution log.
             "success": not failed_actions and not selected_has_errors,
             "status": execution.status,
-            "failed_action_count": len(failed_actions),
+            "failed_action_count": max(len(failed_actions), selected_error_count),
             "execution_id": execution.id if record_execution else None,
             "mode": execution.mode,
             "duration_seconds": execution.duration_seconds,
@@ -5933,6 +5937,76 @@ class ChannelPipelineEngine:
             return execution
         finally:
             session.close()
+
+    async def start_selected_execution(
+        self, *, triggered_by: str, rule_ids: list[int], execution_origin: dict
+    ) -> int:
+        """Create selected-run history before validation or external reads."""
+        session = get_session()
+        try:
+            execution = ChannelPipelineExecution(
+                mode="execute",
+                triggered_by=triggered_by,
+                started_at=datetime.utcnow(),
+                status="running",
+            )
+            execution.set_execution_log([
+                {"type": "scheduled_task_origin", **execution_origin},
+                {"type": "selected_rule_scope", "selected_rule_ids": list(rule_ids)},
+            ])
+            session.add(execution)
+            session.commit()
+            session.refresh(execution)
+            return execution.id
+        finally:
+            session.close()
+
+    async def fail_selected_execution(
+        self,
+        execution_id: int,
+        *,
+        error: str,
+        selection_issues: list | None = None,
+        missing_rule_ids: list | None = None,
+    ) -> None:
+        """Terminalize a selected run while retaining its invocation identity."""
+        execution = await self._load_execution(execution_id)
+        if execution is None or execution.status != "running":
+            return
+        now = datetime.utcnow()
+        execution.completed_at = now
+        execution.duration_seconds = (
+            (now - execution.started_at).total_seconds()
+            if execution.started_at else 0.0
+        )
+        execution.status = "failed"
+        execution.error_message = error
+        log = execution.get_execution_log()
+        for entry in log:
+            if entry.get("type") == "selected_rule_scope":
+                if selection_issues:
+                    entry["selection_issues"] = selection_issues
+                if missing_rule_ids:
+                    entry["missing_rule_ids"] = missing_rule_ids
+        execution.set_execution_log(log)
+        state = execution.get_selected_rule_outcome_state()
+        if state["integrity"] == "valid":
+            terminal = {
+                "completed", "completed_with_errors", "skipped", "capped",
+                "failed", "interrupted", "not_run", "abandoned",
+            }
+            execution.set_selected_rule_outcomes([
+                outcome if outcome["status"] in terminal else {
+                    **outcome,
+                    "status": (
+                        "interrupted"
+                        if outcome["status"] == "running"
+                        else "not_run"
+                    ),
+                }
+                for outcome in state["outcomes"]
+            ])
+        await self._save_execution(execution)
 
     async def _load_execution(self, execution_id: int) -> ChannelPipelineExecution | None:
         """Load an existing execution record by id (bd-enfsy: reuses the row

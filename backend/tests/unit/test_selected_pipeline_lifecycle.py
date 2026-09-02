@@ -429,6 +429,7 @@ async def test_event_sync_fetch_skip_makes_selected_parent_completed_with_errors
 
     status, outcomes = _stored_outcomes(factory, execution_id)
     assert result["status"] == status == "completed_with_errors"
+    assert result["failed_action_count"] == 1
     assert outcomes[0]["status"] == "skipped"
     assert outcomes[0]["error_count"] == 1
     assert all(item["status"] not in {"pending", "running"} for item in outcomes)

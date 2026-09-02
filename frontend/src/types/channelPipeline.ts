@@ -233,6 +233,9 @@ export interface ChannelPipelineRule {
   name: string;
   description?: string;
   enabled: boolean;
+  /** Backend-selected execution eligibility, including dates and validation. */
+  runnable?: boolean;
+  selection_issues?: Array<{ reason: string; errors?: string[] }>;
   priority: number;
   /** Inclusive UTC calendar-date bounds; absent/null means open-ended. */
   active_from?: string | null;

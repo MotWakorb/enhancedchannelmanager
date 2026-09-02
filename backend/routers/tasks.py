@@ -1171,15 +1171,20 @@ async def update_task_schedule(
 
             # A stale schedule must remain possible to disable. Any new scope,
             # or transition back to enabled, is revalidated before persistence.
-            if (
-                task_id != "auto_creation"
-                or data.parameters is not None
-                or data.enabled is True
-            ):
+            existing_parameters = schedule.get_parameters()
+            disabling_unchanged_pipeline_scope = (
+                task_id == "auto_creation"
+                and data.enabled is False
+                and (
+                    data.parameters is None
+                    or data.parameters == existing_parameters
+                )
+            )
+            if not disabling_unchanged_pipeline_scope:
                 effective_parameters = (
                     data.parameters
                     if data.parameters is not None
-                    else schedule.get_parameters()
+                    else existing_parameters
                 )
                 _validate_schedule_parameters(task_id, effective_parameters)
 

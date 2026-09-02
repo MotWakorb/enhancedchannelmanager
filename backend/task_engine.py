@@ -1062,6 +1062,7 @@ class TaskEngine:
             else None
         )
         invocation_config = None
+        validation_result = None
 
         try:
             # Registry instances are long-lived singletons. Treat run parameters
@@ -1081,7 +1082,15 @@ class TaskEngine:
             if triggered_by == "scheduled":
                 validator = getattr(instance, "validate_schedule_parameters", None)
                 if validator:
-                    validator(parameters)
+                    try:
+                        validator(parameters)
+                    except ValueError as error:
+                        handler = getattr(
+                            instance, "handle_schedule_validation_error", None
+                        )
+                        if handler is None:
+                            raise
+                        validation_result = await handler(parameters, error)
 
             # Apply schedule parameters to the task instance
             if parameters and hasattr(instance, 'update_config'):
@@ -1146,7 +1155,7 @@ class TaskEngine:
             )
 
             instance.set_run_trigger(triggered_by)
-            result = await instance.run()
+            result = validation_result or await instance.run()
 
             # Update execution record
             if execution_id:
@@ -1482,10 +1491,16 @@ class TaskEngine:
                         TaskSchedule.id == schedule_id,
                         TaskSchedule.task_id == task_id
                     ).first()
-                    if schedule:
-                        parameters = schedule.get_parameters()
-                        logger.info("[%s] Manual run using schedule %s parameters: %s", task_id, schedule_id,
-                                    _param_keys(parameters))
+                    if not schedule:
+                        logger.warning(
+                            "[%s] Manual run requested missing schedule %s",
+                            task_id,
+                            schedule_id,
+                        )
+                        return None
+                    parameters = schedule.get_parameters()
+                    logger.info("[%s] Manual run using schedule %s parameters: %s", task_id, schedule_id,
+                                _param_keys(parameters))
                 finally:
                     session.close()
             except Exception as e:

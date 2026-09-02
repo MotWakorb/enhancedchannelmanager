@@ -45,6 +45,14 @@ const schema = {
   }],
 };
 
+const runnableRule = {
+  id: 1,
+  name: 'Current',
+  enabled: true,
+  runnable: true,
+  priority: 0,
+} as never;
+
 function task(schedules: TaskSchedule[] = []): TaskStatus {
   return {
     task_id: 'auto_creation',
@@ -123,7 +131,7 @@ describe('TaskEditorModal scheduled Channel Pipeline rules', () => {
     stored.enabled = true;
     vi.mocked(api.getTaskSchedules).mockResolvedValue({ schedules: [stored] });
     vi.mocked(channelPipelineApi.getChannelPipelineRules).mockResolvedValue([
-      { id: 1, name: 'Current', enabled: true, priority: 0 } as never,
+      runnableRule,
     ]);
     render(<TaskEditorModal task={task([stored])} onClose={vi.fn()} onSaved={vi.fn()} />);
 
@@ -134,5 +142,39 @@ describe('TaskEditorModal scheduled Channel Pipeline rules', () => {
 
     await user.click(within(dialog).getByRole('checkbox', { name: /enable this schedule/i }));
     expect(within(dialog).getByRole('button', { name: /update schedule/i })).toBeEnabled();
+
+    await user.click(within(dialog).getByRole('button', { name: /update schedule/i }));
+    expect(api.updateTaskSchedule).toHaveBeenCalledWith(
+      'auto_creation',
+      12,
+      expect.objectContaining({ enabled: false, parameters: { rule_ids: [99] } }),
+    );
+  });
+
+  it('does not offer inactive or invalid enabled rules as runnable', async () => {
+    vi.mocked(channelPipelineApi.getChannelPipelineRules).mockResolvedValue([
+      runnableRule,
+      { id: 2, name: 'Inactive', enabled: true, runnable: false, priority: 1 } as never,
+      { id: 3, name: 'Invalid', enabled: true, runnable: false, priority: 2 } as never,
+    ]);
+    render(<TaskEditorModal task={task()} openAddSchedule onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    const dialog = screen.getByRole('dialog', { name: 'Add Schedule' });
+    expect(await within(dialog).findByText('Current')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Inactive')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Invalid')).not.toBeInTheDocument();
+  });
+
+  it('surfaces schedule API save failures in the open modal', async () => {
+    const user = userEvent.setup();
+    vi.mocked(channelPipelineApi.getChannelPipelineRules).mockResolvedValue([runnableRule]);
+    vi.mocked(api.createTaskSchedule).mockRejectedValue(new Error('scope rejected'));
+    render(<TaskEditorModal task={task()} openAddSchedule onClose={vi.fn()} onSaved={vi.fn()} />);
+
+    const dialog = screen.getByRole('dialog', { name: 'Add Schedule' });
+    await user.click(await within(dialog).findByRole('checkbox', { name: 'Current' }));
+    await user.click(within(dialog).getByRole('button', { name: /add schedule/i }));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('scope rejected');
   });
 });

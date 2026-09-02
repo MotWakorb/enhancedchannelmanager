@@ -111,7 +111,9 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
           setChannelPipelineRuleState('loading');
           loaders.push(channelPipelineApi.getChannelPipelineRules().then((rules) => {
             setChannelPipelineRules(rules);
-            setChannelPipelineRuleState(rules.some(rule => rule.enabled) ? 'ready' : 'empty');
+            setChannelPipelineRuleState(
+              rules.some(rule => rule.enabled && rule.runnable !== false) ? 'ready' : 'empty'
+            );
           }).catch((error) => {
             logger.error('Failed to load Channel Pipeline rules', error);
             setChannelPipelineRuleState('error');
@@ -166,7 +168,9 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
     }
 
     // Channel pipeline rules (for auto_creation)
-    const enabledPipelineRules = channelPipelineRules.filter(r => r.enabled);
+    const enabledPipelineRules = channelPipelineRules.filter(
+      r => r.enabled && r.runnable !== false
+    );
     if (enabledPipelineRules.length > 0) {
       options['auto_creation_rules'] = enabledPipelineRules.map(r => ({
         value: r.id,

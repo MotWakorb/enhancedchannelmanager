@@ -404,19 +404,29 @@ class ChannelPipelineTask(TaskScheduler):
 
         started_at = datetime.utcnow()
         requested_ids = list(self.rule_ids)
+        canonical_ids = requested_ids
         origin = {
             "scheduled_task_id": self.task_id,
             "schedule_id": self._invocation_schedule_id,
         }
+        engine = get_channel_pipeline_engine()
+        if not engine:
+            engine = await init_channel_pipeline_engine(get_client())
+        execution_id = await engine.start_selected_execution(
+            triggered_by=(
+                "scheduled_selected"
+                if self._run_trigger == "scheduled"
+                else self._run_trigger
+            ),
+            rule_ids=requested_ids,
+            execution_origin=origin,
+        )
         try:
             # Establish canonical order and fail before any external reads. The
             # engine repeats this at its worker boundary to preserve #874's
             # validation-to-worker race protection and detached snapshots.
             rules = load_selected_rule_snapshots(requested_ids)
             canonical_ids = [rule.id for rule in rules]
-            engine = get_channel_pipeline_engine()
-            if not engine:
-                engine = await init_channel_pipeline_engine(get_client())
             result = await engine.run_pipeline(
                 dry_run=False,
                 triggered_by=(
@@ -428,51 +438,141 @@ class ChannelPipelineTask(TaskScheduler):
                 rule_ids=canonical_ids,
                 require_all_rule_ids=True,
                 execution_origin=origin,
+                execution_id=execution_id,
             )
         except SelectedRuleValidationError as error:
-            reasons = [issue.get("reason", "stale") for issue in error.issues]
-            if error.rule_ids:
-                reasons.append("deleted")
-            reason_text = ", ".join(dict.fromkeys(reasons)) or error.code
+            await engine.fail_selected_execution(
+                execution_id,
+                error=error.message,
+                selection_issues=error.issues,
+                missing_rule_ids=error.rule_ids,
+            )
+            return self._selection_failure_result(
+                started_at, requested_ids, origin, error, execution_id
+            )
+        except Exception as error:
+            await engine.fail_selected_execution(execution_id, error=str(error))
             return TaskResult(
                 success=False,
-                message=f"Selected Channel Pipeline rules are stale: {reason_text}",
-                error=error.code,
+                message=f"Channel Pipeline schedule failed: {error}",
+                error=str(error),
                 started_at=started_at,
                 completed_at=datetime.utcnow(),
                 details={
                     **origin,
-                    "selected_rule_ids": requested_ids,
-                    "selection_issues": error.issues,
-                    "missing_rule_ids": error.rule_ids,
+                    "selected_rule_ids": canonical_ids,
+                    "execution_id": execution_id,
                 },
             )
 
-        failed_count = result.get("failed_action_count", 0)
+        return self._selected_schedule_result(
+            started_at=started_at,
+            canonical_ids=canonical_ids,
+            origin=origin,
+            pipeline_result=result,
+        )
+
+    async def handle_schedule_validation_error(
+        self, parameters: Optional[dict], error: ValueError
+    ) -> TaskResult:
+        """Persist selected-schedule validation failures before task execution."""
+        from channel_pipeline_engine import (
+            get_channel_pipeline_engine,
+            init_channel_pipeline_engine,
+        )
+        from selected_pipeline_rules import SelectedRuleValidationError
+
+        selected_error = (
+            error
+            if isinstance(error, SelectedRuleValidationError)
+            else SelectedRuleValidationError(
+                "invalid_schedule_parameters", str(error)
+            )
+        )
+        requested_ids = list((parameters or {}).get("rule_ids") or [])
+        origin = {
+            "scheduled_task_id": self.task_id,
+            "schedule_id": self._invocation_schedule_id,
+        }
+        engine = get_channel_pipeline_engine()
+        if not engine:
+            engine = await init_channel_pipeline_engine(get_client())
+        execution_id = await engine.start_selected_execution(
+            triggered_by="scheduled_selected",
+            rule_ids=requested_ids,
+            execution_origin=origin,
+        )
+        await engine.fail_selected_execution(
+            execution_id,
+            error=selected_error.message,
+            selection_issues=selected_error.issues,
+            missing_rule_ids=selected_error.rule_ids,
+        )
+        return self._selection_failure_result(
+            datetime.utcnow(), requested_ids, origin, selected_error, execution_id
+        )
+
+    @staticmethod
+    def _selection_failure_result(
+        started_at, requested_ids, origin, error, execution_id
+    ) -> TaskResult:
+        reasons = [issue.get("reason", "stale") for issue in error.issues]
+        if error.rule_ids:
+            reasons.append("deleted")
+        reason_text = ", ".join(dict.fromkeys(reasons)) or error.code
         return TaskResult(
-            success=bool(result.get("success")),
+            success=False,
+            message=f"Selected Channel Pipeline rules are stale: {reason_text}",
+            error=error.code,
+            started_at=started_at,
+            completed_at=datetime.utcnow(),
+            details={
+                **origin,
+                "selected_rule_ids": requested_ids,
+                "selection_issues": error.issues,
+                "missing_rule_ids": error.rule_ids,
+                "execution_id": execution_id,
+            },
+        )
+
+    @staticmethod
+    def _selected_schedule_result(
+        *, started_at, canonical_ids, origin, pipeline_result
+    ) -> TaskResult:
+        failed_count = pipeline_result.get("failed_action_count", 0)
+        status = pipeline_result.get("status")
+        return TaskResult(
+            success=bool(pipeline_result.get("success")),
             message=(
                 f"Channel Pipeline schedule ran {len(canonical_ids)} selected rule(s)"
             ),
-            error=None if result.get("success") else result.get("status", "pipeline_failed"),
+            error=(
+                None
+                if pipeline_result.get("success")
+                else status or "pipeline_failed"
+            ),
             started_at=started_at,
             completed_at=datetime.utcnow(),
-            total_items=result.get("streams_evaluated", 0),
-            success_count=result.get("channels_created", 0) + result.get("channels_updated", 0),
+            total_items=pipeline_result.get("streams_evaluated", 0),
+            success_count=(
+                pipeline_result.get("channels_created", 0)
+                + pipeline_result.get("channels_updated", 0)
+            ),
             failed_count=failed_count,
+            completed_degraded=status == "completed_with_errors",
             details={
                 **origin,
                 "selected_rule_ids": canonical_ids,
-                "execution_id": result.get("execution_id"),
+                "execution_id": pipeline_result.get("execution_id"),
                 "mode": "execute",
-                "status": result.get("status"),
-                "streams_evaluated": result.get("streams_evaluated", 0),
-                "streams_matched": result.get("streams_matched", 0),
-                "channels_created": result.get("channels_created", 0),
-                "channels_updated": result.get("channels_updated", 0),
-                "groups_created": result.get("groups_created", 0),
-                "streams_merged": result.get("streams_merged", 0),
-                "conflicts": len(result.get("conflicts", [])),
+                "status": status,
+                "streams_evaluated": pipeline_result.get("streams_evaluated", 0),
+                "streams_matched": pipeline_result.get("streams_matched", 0),
+                "channels_created": pipeline_result.get("channels_created", 0),
+                "channels_updated": pipeline_result.get("channels_updated", 0),
+                "groups_created": pipeline_result.get("groups_created", 0),
+                "streams_merged": pipeline_result.get("streams_merged", 0),
+                "conflicts": len(pipeline_result.get("conflicts", [])),
                 "failed_action_count": failed_count,
             },
         )

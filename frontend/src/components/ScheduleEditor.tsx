@@ -87,6 +87,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
   const [daysOfWeek, setDaysOfWeek] = useState<number[]>(schedule?.days_of_week || [1, 2, 3, 4, 5]); // Default: weekdays
   const [dayOfMonth, setDayOfMonth] = useState(schedule?.day_of_month || 1);
   const [useCustomInterval, setUseCustomInterval] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   // Task-specific parameters state
   const touchedParameters = useRef(new Set<string>());
@@ -137,6 +138,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
   };
 
   const handleSave = async () => {
+    setSaveError(null);
     const data: TaskScheduleCreate | TaskScheduleUpdate = {
       name: name || null,
       enabled,
@@ -164,7 +166,11 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
       data.parameters = parameters;
     }
 
-    await onSave(data);
+    try {
+      await onSave(data);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'Could not save schedule');
+    }
   };
 
   const missingRequiredParameter = parameterSchema?.some((param) => {
@@ -603,6 +609,9 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
       </div>
 
       {/* Modal Footer - action buttons */}
+      {saveError && (
+        <div className="schedule-wont-run-warning" role="alert">{saveError}</div>
+      )}
       <div className="modal-footer">
         <button type="button" onClick={onCancel} disabled={saving} className="modal-btn modal-btn-secondary">
           Cancel

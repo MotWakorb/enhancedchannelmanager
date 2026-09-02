@@ -1010,7 +1010,7 @@ class TestUpdateTaskSchedule:
 
         disabled = await async_client.patch(
             f"/api/tasks/auto_creation/schedules/{schedule.id}",
-            json={"enabled": False},
+            json={"enabled": False, "parameters": {"rule_ids": [rule.id]}},
         )
         blocked_enable = await async_client.patch(
             f"/api/tasks/auto_creation/schedules/{schedule.id}",
@@ -1019,6 +1019,7 @@ class TestUpdateTaskSchedule:
 
         assert disabled.status_code == 200
         assert disabled.json()["enabled"] is False
+        assert disabled.json()["parameters"] == {"rule_ids": [rule.id]}
         assert blocked_enable.status_code == 422
         test_session.refresh(schedule)
         assert schedule.enabled is False
