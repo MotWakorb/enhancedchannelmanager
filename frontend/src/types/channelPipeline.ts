@@ -428,6 +428,16 @@ export type ExecutionTrigger = 'manual' | 'scheduled' | 'scheduled_selected' | '
  */
 export type ExecutionMode = 'execute' | 'dry_run';
 
+export type ExecutionLogFilterCategory =
+  | 'assigned'
+  | 'created'
+  | 'errors'
+  | 'excluded'
+  | 'merged'
+  | 'removed'
+  | 'skipped'
+  | 'updated';
+
 /**
  * A record of a pipeline execution.
  */
@@ -454,6 +464,11 @@ export interface ChannelPipelineExecution {
   modified_entities: ModifiedEntity[];
   dry_run_results?: DryRunResult[];
   execution_log?: ExecutionLogEntry[];
+  execution_log_total?: number;
+  execution_log_filtered_total?: number;
+  execution_log_filter_counts?: Partial<Record<ExecutionLogFilterCategory, number>>;
+  execution_log_limit?: number;
+  execution_log_offset?: number;
   rolled_back_at?: string;
   rolled_back_by?: string;
   /**

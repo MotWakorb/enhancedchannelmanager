@@ -909,6 +909,170 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
+    it('requests log filters from the server and renders a filtered empty state', async () => {
+      const user = userEvent.setup();
+      const execution = createMockChannelPipelineExecution({
+        id: 844,
+        execution_log: [
+          {
+            stream_id: 1,
+            stream_name: 'Recent stream',
+            rules_evaluated: [],
+            actions_executed: [{ type: 'skip', description: 'Skipped', success: true }],
+          },
+          {
+            stream_id: 2,
+            stream_name: 'Another stream',
+            rules_evaluated: [],
+            actions_executed: [{ type: 'create_channel', description: 'Created', success: true }],
+          },
+          {
+            stream_id: 3,
+            stream_name: 'Third stream',
+            rules_evaluated: [],
+            actions_executed: [{ type: 'merge_stream', description: 'Merged', success: true }],
+          },
+          {
+            stream_id: 4,
+            stream_name: 'Fourth stream',
+            rules_evaluated: [],
+            actions_executed: [{ type: 'assign_epg', description: 'Assigned', success: true }],
+          },
+        ],
+      });
+      mockDataStore.channelPipelineExecutions.push(execution);
+      const requestedSearches: string[] = [];
+      let releaseFilteredResponse: (() => void) | undefined;
+      let markFilterRequested: (() => void) | undefined;
+      const filterRequested = new Promise<void>(resolve => { markFilterRequested = resolve; });
+      const filteredResponseReleased = new Promise<void>(resolve => { releaseFilteredResponse = resolve; });
+      server.use(
+        http.get('/api/channel-pipeline/executions/:id', async ({ request }) => {
+          const url = new URL(request.url);
+          const search = url.searchParams.get('log_search') ?? '';
+          requestedSearches.push(search);
+          if (search) {
+            markFilterRequested?.();
+            await filteredResponseReleased;
+          }
+          const entries = search ? [] : execution.execution_log;
+          return HttpResponse.json({
+            ...execution,
+            execution_log: entries,
+            execution_log_total: 4,
+            execution_log_filtered_total: entries?.length ?? 0,
+            execution_log_filter_counts: { created: 1, merged: 1, updated: 0, removed: 0, excluded: 0, skipped: 1, assigned: 1, errors: 0 },
+            execution_log_limit: 500,
+            execution_log_offset: 0,
+          });
+        })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await user.click(await screen.findByRole('button', { name: /view details/i }));
+      const search = await screen.findByPlaceholderText('Search streams...');
+      await user.type(search, 'missing %_ stream');
+
+      await filterRequested;
+      expect(await screen.findByText('Filtering execution log...')).toBeInTheDocument();
+      releaseFilteredResponse?.();
+      expect(await screen.findByText('No execution log entries match these filters.')).toBeInTheDocument();
+      expect(requestedSearches).toContain('missing %_ stream');
+    });
+
+    it('shows filter request errors instead of stale execution-log results', async () => {
+      const user = userEvent.setup();
+      const execution = createMockChannelPipelineExecution({
+        id: 845,
+        execution_log: Array.from({ length: 4 }, (_, index) => ({
+          stream_id: index + 1,
+          stream_name: `Stream ${index + 1}`,
+          rules_evaluated: [],
+          actions_executed: [{ type: 'skip', description: 'Skipped', success: true }],
+        })),
+      });
+      mockDataStore.channelPipelineExecutions.push(execution);
+      server.use(
+        http.get('/api/channel-pipeline/executions/:id', ({ request }) => {
+          const search = new URL(request.url).searchParams.get('log_search');
+          if (search) {
+            return HttpResponse.json({ detail: 'Filter unavailable' }, { status: 500 });
+          }
+          return HttpResponse.json({
+            ...execution,
+            execution_log_total: 4,
+            execution_log_filtered_total: 4,
+            execution_log_filter_counts: { skipped: 4 },
+            execution_log_limit: 500,
+            execution_log_offset: 0,
+          });
+        })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await user.click(await screen.findByRole('button', { name: /view details/i }));
+      await user.type(await screen.findByPlaceholderText('Search streams...'), 'fails');
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('Filter unavailable');
+      expect(screen.queryByText('Stream 1')).not.toBeInTheDocument();
+    });
+
+    it('ignores a stale slower filter response', async () => {
+      const user = userEvent.setup();
+      const execution = createMockChannelPipelineExecution({
+        id: 846,
+        execution_log: Array.from({ length: 4 }, (_, index) => ({
+          stream_id: index + 1,
+          stream_name: `Stream ${index + 1}`,
+          rules_evaluated: [],
+          actions_executed: [{ type: 'skip', description: 'Skipped', success: true }],
+        })),
+      });
+      mockDataStore.channelPipelineExecutions.push(execution);
+      let markSlowRequested: (() => void) | undefined;
+      let releaseSlowResponse: (() => void) | undefined;
+      const slowRequested = new Promise<void>(resolve => { markSlowRequested = resolve; });
+      const slowResponseReleased = new Promise<void>(resolve => { releaseSlowResponse = resolve; });
+      server.use(
+        http.get('/api/channel-pipeline/executions/:id', async ({ request }) => {
+          const search = new URL(request.url).searchParams.get('log_search') ?? '';
+          if (search === 'slow') {
+            markSlowRequested?.();
+            await slowResponseReleased;
+          }
+          const streamName = search === 'slow' ? 'Stale slow result' : search === 'fast' ? 'Current fast result' : 'Initial result';
+          return HttpResponse.json({
+            ...execution,
+            execution_log: [{
+              stream_id: search === 'slow' ? 10 : search === 'fast' ? 11 : 9,
+              stream_name: streamName,
+              rules_evaluated: [],
+              actions_executed: [{ type: 'skip', description: 'Skipped', success: true }],
+            }],
+            execution_log_total: 4,
+            execution_log_filtered_total: 1,
+            execution_log_filter_counts: { skipped: 4 },
+            execution_log_limit: 500,
+            execution_log_offset: 0,
+          });
+        })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await user.click(await screen.findByRole('button', { name: /view details/i }));
+      const search = await screen.findByPlaceholderText('Search streams...');
+      await user.type(search, 'slow');
+      await slowRequested;
+      await user.clear(search);
+      await user.type(search, 'fast');
+
+      expect(await screen.findByText('Current fast result')).toBeInTheDocument();
+      releaseSlowResponse?.();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(screen.getByText('Current fast result')).toBeInTheDocument();
+      expect(screen.queryByText('Stale slow result')).not.toBeInTheDocument();
+    });
+
     it('surfaces disabled-normalization-group warnings in execution details', async () => {
       // enhancedchannelmanager-e8p1h: a run that referenced a disabled
       // normalization group must show a prominent, actionable warning so the

@@ -39,6 +39,27 @@ class in seconds.
 Run the analyzer first. Fix any findings it reports, then use the dry-run to
 confirm the surviving rules produce the right channels.
 
+## Search a run's execution log
+
+Open **Execution History**, select **View details** on a run, then use **Search
+streams...** or the action chips above the execution log. Search matches stream
+names without treating `%`, `_`, or other punctuation as wildcards. The action
+chips use OR logic: with **Merged** and **Errors** active, an entry matching
+either category is shown.
+
+Filtering happens on the server before the response limit. A matching stored
+entry can therefore be returned even when it appears after the first 500 entries
+in that run. While a filter request is running, the log says **Filtering
+execution log...**. A filter with no matches and a failed request have separate
+messages; the page does not present stale rows as the new result.
+
+The result is limited to the log entries ECM retained for that run. Live runs
+normally retain at most the configured **Max execution-log entries per run**
+(500 by default) to protect memory; dry-runs retain the full trace. If a live
+run says its log was truncated, filtering cannot retrieve the omitted entries.
+Raise that setting before a diagnostic run only when the instance has enough
+memory for the larger trace.
+
 ---
 
 ## The eight finding codes

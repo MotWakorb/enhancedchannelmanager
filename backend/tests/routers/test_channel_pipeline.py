@@ -1778,6 +1778,43 @@ class TestGetExecutions:
         assert len(data["executions"]) == 2
 
     @pytest.mark.asyncio
+    async def test_pagination_is_stable_when_start_times_tie(self, async_client, test_session):
+        started_at = datetime(2026, 9, 2, 12, 0, 0)
+        executions = [
+            _create_execution(test_session, started_at=started_at)
+            for _ in range(4)
+        ]
+
+        first_page = await async_client.get(
+            "/api/auto-creation/executions", params={"limit": 2, "offset": 0}
+        )
+        second_page = await async_client.get(
+            "/api/auto-creation/executions", params={"limit": 2, "offset": 2}
+        )
+
+        assert first_page.status_code == 200
+        assert second_page.status_code == 200
+        assert [item["id"] for item in first_page.json()["executions"]] == [
+            executions[3].id,
+            executions[2].id,
+        ]
+        assert [item["id"] for item in second_page.json()["executions"]] == [
+            executions[1].id,
+            executions[0].id,
+        ]
+
+    @pytest.mark.asyncio
+    async def test_unfiltered_history_is_bounded(self, async_client, test_session):
+        for _ in range(51):
+            _create_execution(test_session)
+
+        response = await async_client.get("/api/auto-creation/executions")
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 51
+        assert len(response.json()["executions"]) == 50
+
+    @pytest.mark.asyncio
     async def test_has_snapshot_flag(self, async_client, test_session):
         """Each execution carries a derived has_snapshot boolean (ADR-010 §D6):
         true for executions that have an ChannelPipelineSnapshot row, false
@@ -1868,6 +1905,112 @@ class TestGetExecution:
         data = response.json()
         assert data["status"] == "completed"
         assert "conflicts" in data
+
+    @pytest.mark.asyncio
+    async def test_filters_stored_log_before_response_limit(self, async_client, test_session):
+        """A match after the former 500-entry response window remains searchable."""
+        execution = _create_execution(test_session, mode="dry_run")
+        execution.set_execution_log([
+            {
+                "stream_id": index,
+                "stream_name": f"Recent stream {index}",
+                "actions_executed": [{
+                    "type": "skip",
+                    "description": "Stream skipped",
+                    "success": True,
+                }],
+            }
+            for index in range(500)
+        ] + [{
+            "stream_id": 501,
+            "stream_name": "Older %_ needle stream",
+            "actions_executed": [{
+                "type": "merge_stream",
+                "description": "Merged into channel",
+                "success": False,
+            }],
+        }])
+        test_session.commit()
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}",
+            params={
+                "include_log": "true",
+                "log_search": "%_ NEEDLE",
+                "log_categories": "merged,errors",
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert [entry["stream_id"] for entry in data["execution_log"]] == [501]
+        assert data["execution_log_total"] == 501
+        assert data["execution_log_filtered_total"] == 1
+        assert data["execution_log_limit"] == 500
+        assert data["execution_log_offset"] == 0
+        assert data["execution_log_filter_counts"]["skipped"] == 500
+        assert data["execution_log_filter_counts"]["merged"] == 1
+        assert data["execution_log_filter_counts"]["errors"] == 1
+
+    @pytest.mark.asyncio
+    async def test_log_category_filters_use_or_semantics(self, async_client, test_session):
+        execution = _create_execution(test_session)
+        execution.set_execution_log([
+            {
+                "stream_id": 1,
+                "stream_name": "Created",
+                "actions_executed": [{"type": "create_channel", "success": True}],
+            },
+            {
+                "stream_id": 2,
+                "stream_name": "Assigned",
+                "actions_executed": [{"type": "assign_epg", "success": True}],
+            },
+            {
+                "stream_id": 3,
+                "stream_name": "Uncategorized",
+                "actions_executed": [{"type": "log_match", "success": True}],
+            },
+        ])
+        test_session.commit()
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}",
+            params={
+                "include_log": "true",
+                "log_categories": "assigned,created",
+                "log_limit": 1,
+                "log_offset": 1,
+            },
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["execution_log_filtered_total"] == 2
+        assert [entry["stream_id"] for entry in data["execution_log"]] == [2]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("params", "expected_status"),
+        [
+            ({"include_log": "true", "log_categories": "created,unknown"}, 422),
+            ({"include_log": "true", "log_limit": 501}, 422),
+            ({"include_log": "true", "log_limit": 0}, 422),
+            ({"include_log": "true", "log_offset": -1}, 422),
+            ({"include_log": "true", "log_search": "x" * 201}, 422),
+        ],
+    )
+    async def test_rejects_invalid_log_filter_queries(
+        self, async_client, test_session, params, expected_status
+    ):
+        execution = _create_execution(test_session)
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}",
+            params=params,
+        )
+
+        assert response.status_code == expected_status
 
     @pytest.mark.asyncio
     async def test_returns_404(self, async_client):
