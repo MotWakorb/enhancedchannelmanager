@@ -20,6 +20,7 @@ interface ScheduleEditorProps {
   parameterSchema?: TaskParameterSchema[];  // Schema defining what parameters this task accepts
   parameterOptions?: Record<string, ParameterOption[]>;  // Pre-fetched options for array parameters
   defaultParameters?: Record<string, unknown>;  // Default parameter values for new schedules
+  parameterSourceStatus?: Record<string, 'loading' | 'ready' | 'empty' | 'error'>;
 }
 
 // Common interval presets in seconds
@@ -75,7 +76,7 @@ function resolveParameters(
   };
 }
 
-export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, parameterSchema, parameterOptions, defaultParameters }: ScheduleEditorProps) {
+export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, parameterSchema, parameterOptions, defaultParameters, parameterSourceStatus }: ScheduleEditorProps) {
   // Form state
   const [name, setName] = useState(schedule?.name || '');
   const [enabled, setEnabled] = useState(schedule?.enabled ?? true);
@@ -169,8 +170,30 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
   const missingRequiredParameter = parameterSchema?.some((param) => {
     if (!param.required) return false;
     const value = parameters[param.name] ?? param.default;
-    return param.type === 'boolean' ? value !== true : value === undefined || value === '';
+    if (param.type === 'boolean') return value !== true;
+    if (param.type === 'string_array' || param.type === 'number_array') {
+      return !Array.isArray(value) || value.length === 0;
+    }
+    return value === undefined || value === '';
   }) ?? false;
+  const staleRequiredSelections = parameterSchema?.some((param) => {
+    if (!param.required || (param.type !== 'string_array' && param.type !== 'number_array')) return false;
+    const source = param.source || param.name;
+    const options = parameterOptions?.[source];
+    const rawSelected = parameters[param.name];
+    const selected = Array.isArray(rawSelected) ? rawSelected : [];
+    if (!options) return false;
+    const available = new Set(options.map(option => option.value));
+    return selected.some(value => !available.has(value));
+  }) ?? false;
+  const requiredSourceUnavailable = parameterSchema?.some((param) => {
+    if (!param.required) return false;
+    const state = parameterSourceStatus?.[param.source || param.name];
+    return state === 'loading' || state === 'empty' || state === 'error';
+  }) ?? false;
+  const scopeBlocksSave = (!schedule || enabled) && (
+    missingRequiredParameter || staleRequiredSelections || requiredSourceUnavailable
+  );
 
   const handleIntervalPreset = (value: number) => {
     setIntervalSeconds(value);
@@ -458,6 +481,12 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
           <h4 className="section-title">Task Parameters</h4>
           {parameterSchema.map((param) => {
             const descriptionId = `schedule-parameter-${param.name}-description`;
+            const source = param.source || param.name;
+            const sourceState = parameterSourceStatus?.[source];
+            const rawSelectedValues = parameters[param.name];
+            const selectedValues = Array.isArray(rawSelectedValues) ? rawSelectedValues : [];
+            const availableValues = new Set((parameterOptions?.[source] || []).map(option => option.value));
+            const staleValues = selectedValues.filter(value => !availableValues.has(value));
             return (
               <div key={param.name} className="form-group">
               {/* Show note before timeout for stream_probe */}
@@ -513,7 +542,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
                   ) : (
                     <>
                       <div className="array-hint">
-                        {((parameters[param.name] as (string | number)[]) || []).length} of {parameterOptions[param.source || param.name].length} selected
+                        {selectedValues.length} of {parameterOptions[param.source || param.name].length} selected
                       </div>
                       <div className="array-select-actions">
                         <button
@@ -529,7 +558,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
                       </div>
                       <div className="option-list">
                         {parameterOptions[param.source || param.name].map((opt) => {
-                          const selected = ((parameters[param.name] as (string | number)[]) || []).includes(opt.value);
+                          const selected = selectedValues.includes(opt.value);
                           return (
                             <label key={String(opt.value)} className="option-checkbox">
                               <input
@@ -550,8 +579,19 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
 
               {/* String/Number array without options - show text hint */}
               {(param.type === 'string_array' || param.type === 'number_array') && !parameterOptions?.[param.source || param.name] && (
-                <div className="array-hint">
-                  Empty = applies to all. Options not yet loaded.
+                sourceState === 'loading' ? (
+                  <div className="array-hint">Loading Channel Pipeline rules...</div>
+                ) : sourceState === 'empty' ? (
+                  <div className="schedule-wont-run-warning" role="alert">No runnable Channel Pipeline rules are available.</div>
+                ) : sourceState === 'error' ? (
+                  <div className="schedule-wont-run-warning" role="alert">Could not load Channel Pipeline rules. Try again before saving.</div>
+                ) : (
+                  <div className="array-hint">Options not yet loaded.</div>
+                )
+              )}
+              {staleValues.length > 0 && (
+                <div className="schedule-wont-run-warning" role="alert">
+                  Selected rule IDs no longer available: {staleValues.join(', ')}
                 </div>
               )}
               </div>
@@ -570,7 +610,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
         <button
           type="button"
           onClick={handleSave}
-          disabled={saving || missingRequiredParameter || (scheduleType !== 'interval' && !scheduleTime)}
+          disabled={saving || scopeBlocksSave || (scheduleType !== 'interval' && !scheduleTime)}
           className="modal-btn modal-btn-primary"
         >
           {saving ? (

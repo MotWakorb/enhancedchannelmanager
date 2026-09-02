@@ -1425,7 +1425,7 @@ export function ChannelPipelineTab() {
                       {execution.run_scope === 'selected'
                         ? execution.selected_rule_integrity === 'corrupt'
                           ? 'Selected Rules (data corrupt)'
-                          : `Selected Rules (${execution.selected_rule_ids?.length ?? 0})`
+                          : `${execution.triggered_by === 'scheduled_selected' ? 'Scheduled' : 'Selected'} Rules (${execution.selected_rule_ids?.length ?? 0})${execution.schedule_id ? ` · Schedule #${execution.schedule_id}` : ''}`
                         : execution.mode === 'dry_run' ? 'Dry Run' : 'Execute'}
                     </span>
                     <span className="execution-date">

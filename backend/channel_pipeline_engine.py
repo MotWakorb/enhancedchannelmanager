@@ -65,12 +65,11 @@ logger = logging.getLogger(__name__)
 
 
 # enhancedchannelmanager-ti939.2.1 (Event Sync Phase 1B): the ONLY
-# triggered_by values allowed to execute event_sync rules. Manual-run-only is
-# a Phase 1 hard constraint — event_sync rules must NEVER fire from the
-# unattended watermark task ("m3u_refresh") or any scheduled path until Phase
-# 2's explicit opt-in auto-run flag. Deny-by-default: anything not in this
-# set is treated as unattended.
-EVENT_SYNC_ALLOWED_TRIGGERS = frozenset({"manual", "api"})
+# triggered_by values allowed to execute event_sync rules. ``scheduled_selected``
+# is admitted for the exact, validated Scheduled Tasks selection added by #873;
+# the watermark task remains the separately gated ``m3u_refresh`` path below.
+# Deny-by-default: anything not in this set is treated as unattended.
+EVENT_SYNC_ALLOWED_TRIGGERS = frozenset({"manual", "api", "scheduled_selected"})
 
 # Deny-by-default sentinel for run_pipeline/run_rule's triggered_by
 # (PR #616 review, bead ti939.2.2): a caller that does not IDENTIFY its
@@ -84,8 +83,7 @@ TRIGGERED_BY_UNSPECIFIED = "unspecified"
 # Phase 2 (bead ti939.3.1): the ONE unattended trigger that can execute
 # event_sync rules — and only for rules whose config carries the explicit
 # auto_run=true opt-in. Everything else keeps the deny-by-default posture
-# above: "scheduled" and the unspecified sentinel stay denied even for
-# opted-in rules.
+# above: the unspecified sentinel stays denied even for opted-in rules.
 EVENT_SYNC_AUTO_RUN_TRIGGER = "m3u_refresh"
 
 
@@ -288,6 +286,7 @@ class ChannelPipelineEngine:
         plan_only: bool = False,
         skip_prerefresh: bool = False,
         require_all_rule_ids: bool = False,
+        execution_origin: dict | None = None,
     ) -> dict:
         """
         Run the full auto-creation pipeline.
@@ -295,7 +294,7 @@ class ChannelPipelineEngine:
         Args:
             dry_run: If True, only simulate changes without applying
             triggered_by: How the pipeline was triggered (manual, api,
-                scheduled, m3u_refresh). Defaults to the DENIED sentinel
+                scheduled_selected, m3u_refresh). Defaults to the DENIED sentinel
                 ``TRIGGERED_BY_UNSPECIFIED`` (PR #616 review): an
                 unidentified trigger runs standard rules normally but can
                 never execute event_sync rules — callers must identify
@@ -305,6 +304,8 @@ class ChannelPipelineEngine:
             require_all_rule_ids: Fail before processing when any requested ID
                 is no longer enabled or active. Used by atomically validated
                 selected runs to close the validation-to-worker race.
+            execution_origin: Optional non-rule origin metadata persisted in the
+                existing execution log (for example scheduled task/schedule IDs).
             execution_id: Optional pre-created execution record id. When the
                 router enqueues a background task (bd-enfsy 202+poll pattern)
                 it creates an ChannelPipelineExecution(status="running") up front
@@ -358,8 +359,10 @@ class ChannelPipelineEngine:
         # Phase 2 (ti939.3.1): the refresh-watermark trigger is ALSO allowed,
         # per rule, when the rule's config carries the explicit auto_run=true
         # opt-in (event_sync_trigger_allowed). Every other unattended path —
-        # "scheduled", anything unrecognized — stays denied even for opted-in
-        # rules. The task layer's watermark query selects only opted-in
+        # anything unrecognized — stays denied even for opted-in rules. Exact,
+        # prevalidated user schedules use the distinct ``scheduled_selected``
+        # trigger and may run Event Sync rules without the watermark opt-in.
+        # The task layer's watermark query selects only opted-in
         # event_sync rules (belt); this per-rule gate is the braces; the
         # phase itself re-checks per rule AND gates the unattended path on
         # the circuit breaker + a pre-flight (suspenders).
@@ -402,9 +405,9 @@ class ChannelPipelineEngine:
             if excluded:
                 logger.info(
                     "[AUTO-CREATE-ENGINE] Excluded %s event_sync rule(s) from "
-                    "this run entirely — event_sync is manual-run-only unless "
-                    "the rule's config opts into auto_run, and even then only "
-                    "for the refresh-watermark trigger (triggered_by=%s): %s",
+                    "this run entirely — event_sync requires a manual/API or "
+                    "exact selected-schedule trigger, unless its config opts "
+                    "into the refresh-watermark trigger (triggered_by=%s): %s",
                     len(excluded), triggered_by,
                     [r.id for r in excluded],
                 )
@@ -419,9 +422,9 @@ class ChannelPipelineEngine:
             if event_sync_rules:
                 message = (
                     "Only event_sync rules are in scope and none is allowed "
-                    "for this trigger — event_sync rules are manual-run-only "
-                    "unless event_sync_config.auto_run is true, and auto_run "
-                    "admits only the refresh-watermark trigger"
+                    "for this trigger — event_sync is manual-run-only by default; "
+                    "use a manual/API run, an exact selected schedule, or "
+                    "event_sync_config.auto_run with the refresh watermark trigger"
                 )
             else:
                 message = "No active enabled rules to process"
@@ -555,6 +558,11 @@ class ChannelPipelineEngine:
             results[key] = value
 
         # Prepend exclusion log entries and set streams_excluded count
+        if execution_origin:
+            results["execution_log"].insert(0, {
+                "type": "scheduled_task_origin",
+                **execution_origin,
+            })
         results["execution_log"] = exclusion_log + results["execution_log"]
         results["streams_excluded"] = len(exclusion_log)
 

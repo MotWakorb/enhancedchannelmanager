@@ -2924,6 +2924,8 @@ export interface TaskSchedule {
   description: string;
   created_at: string | null;
   updated_at: string | null;
+  /** Present when an exact stored scope is no longer runnable. */
+  selection_error?: string;
 }
 
 export interface TaskScheduleCreate {

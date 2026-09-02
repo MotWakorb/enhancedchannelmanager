@@ -323,8 +323,8 @@ TASK_PARAMETER_SCHEMAS = {
                 "name": "rule_ids",
                 "type": "number_array",
                 "label": "Rules",
-                "description": "Which auto-creation rules to run (empty = all enabled rules)",
-                "default": [],
+                "description": "Exact rules to run; empty selections are rejected",
+                "required": True,
                 "source": "auto_creation_rules",
             },
         ],
@@ -478,6 +478,11 @@ async def list_tasks():
                             days_of_week=schedule.get_days_of_week_list(),
                             day_of_month=schedule.day_of_month,
                         )
+                        selection_error = _schedule_parameter_error(
+                            task_id, schedule.get_parameters()
+                        )
+                        if selection_error:
+                            schedule_dict['selection_error'] = selection_error
                         task['schedules'].append(schedule_dict)
 
                     # Source "Next Run" from the child schedule rows (the real
@@ -559,6 +564,11 @@ async def get_task(task_id: str):
                     days_of_week=schedule.get_days_of_week_list(),
                     day_of_month=schedule.day_of_month,
                 )
+                selection_error = _schedule_parameter_error(
+                    task_id, schedule.get_parameters()
+                )
+                if selection_error:
+                    schedule_dict['selection_error'] = selection_error
                 status['schedules'].append(schedule_dict)
 
             # Source "Next Run" from the child schedule rows (the real firing
@@ -819,6 +829,15 @@ def _validate_schedule_parameters(task_id: str, parameters: Optional[dict]) -> N
             raise HTTPException(status_code=422, detail=str(e)) from e
 
 
+def _schedule_parameter_error(task_id: str, parameters: Optional[dict]) -> Optional[str]:
+    """Return a visible stale-schedule error without mutating stored scope."""
+    try:
+        _validate_schedule_parameters(task_id, parameters)
+    except HTTPException as error:
+        return str(error.detail)
+    return None
+
+
 def _bind_sync_schedule_credential_version(
     session, task_id: str, parameters: dict
 ) -> dict:
@@ -970,6 +989,11 @@ async def list_task_schedules(task_id: str):
                     days_of_week=schedule.get_days_of_week_list(),
                     day_of_month=schedule.day_of_month,
                 )
+                selection_error = _schedule_parameter_error(
+                    task_id, schedule.get_parameters()
+                )
+                if selection_error:
+                    schedule_dict['selection_error'] = selection_error
                 # Auto-cleanup: remove stale groups (deleted from Dispatcharr).
                 # Do NOT auto-add new groups — users control which groups to probe
                 # via the schedule editor. Use auto_sync_groups for "probe all".
@@ -1045,6 +1069,14 @@ async def create_task_schedule(
             if not task:
                 raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
 
+            if task_id == "auto_creation" and not (
+                isinstance(data.parameters, dict)
+                and data.parameters.get("rule_ids")
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Channel Pipeline schedules require at least one selected rule",
+                )
             _validate_schedule_parameters(task_id, data.parameters)
 
             # Create the schedule
@@ -1137,12 +1169,19 @@ async def update_task_schedule(
             if not schedule:
                 raise HTTPException(status_code=404, detail=f"Schedule {schedule_id} not found for task {task_id}")
 
-            effective_parameters = (
-                data.parameters
-                if data.parameters is not None
-                else schedule.get_parameters()
-            )
-            _validate_schedule_parameters(task_id, effective_parameters)
+            # A stale schedule must remain possible to disable. Any new scope,
+            # or transition back to enabled, is revalidated before persistence.
+            if (
+                task_id != "auto_creation"
+                or data.parameters is not None
+                or data.enabled is True
+            ):
+                effective_parameters = (
+                    data.parameters
+                    if data.parameters is not None
+                    else schedule.get_parameters()
+                )
+                _validate_schedule_parameters(task_id, effective_parameters)
 
             # Update fields if provided
             if data.name is not None:

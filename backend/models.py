@@ -2568,12 +2568,22 @@ class ChannelPipelineExecution(Base):
         _warnings = self.get_warnings()
         _selected_rule_state = self.get_selected_rule_outcome_state()
         _selected_rule_outcomes = _selected_rule_state["outcomes"]
+        _origin = next(
+            (
+                entry for entry in self.get_execution_log()
+                if isinstance(entry, dict)
+                and entry.get("type") == "scheduled_task_origin"
+            ),
+            {},
+        )
         result = {
             "id": self.id,
             "rule_id": self.rule_id,
             "rule_name": self.rule_name or (self.rule.name if self.rule else None),
             "mode": self.mode,
             "triggered_by": self.triggered_by,
+            "scheduled_task_id": _origin.get("scheduled_task_id"),
+            "schedule_id": _origin.get("schedule_id"),
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
             "completed_at": self.completed_at.isoformat() + "Z" if self.completed_at else None,
             "duration_seconds": self.duration_seconds,

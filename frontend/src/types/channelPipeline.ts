@@ -418,7 +418,7 @@ export type ExecutionStatus = 'running' | 'completed' | 'completed_with_errors' 
 /**
  * How a pipeline was triggered.
  */
-export type ExecutionTrigger = 'manual' | 'scheduled' | 'm3u_refresh';
+export type ExecutionTrigger = 'manual' | 'scheduled' | 'scheduled_selected' | 'm3u_refresh' | 'api';
 
 /**
  * Mode of execution.
@@ -432,6 +432,8 @@ export interface ChannelPipelineExecution {
   id: number;
   mode: ExecutionMode;
   triggered_by: ExecutionTrigger;
+  scheduled_task_id?: string;
+  schedule_id?: number;
   started_at: string;
   completed_at?: string;
   duration_seconds?: number;

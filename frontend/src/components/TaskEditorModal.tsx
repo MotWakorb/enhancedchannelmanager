@@ -54,6 +54,9 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
   const [m3uAccounts, setM3uAccounts] = useState<M3UAccount[]>([]);
   const [channelGroups, setChannelGroups] = useState<ChannelGroup[]>([]);
   const [channelPipelineRules, setChannelPipelineRules] = useState<ChannelPipelineRule[]>([]);
+  const [channelPipelineRuleState, setChannelPipelineRuleState] = useState<'loading' | 'ready' | 'empty' | 'error'>(
+    task.task_id === 'auto_creation' ? 'loading' : 'ready'
+  );
   const [backupSections, setBackupSections] = useState<{key: string; label: string}[]>([]);
 
   // Settings for default parameter values (stream_probe)
@@ -105,7 +108,14 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
           loaders.push(api.getM3UAccounts().then(setM3uAccounts));
         }
         if (sources.has('auto_creation_rules')) {
-          loaders.push(channelPipelineApi.getChannelPipelineRules().then(setChannelPipelineRules));
+          setChannelPipelineRuleState('loading');
+          loaders.push(channelPipelineApi.getChannelPipelineRules().then((rules) => {
+            setChannelPipelineRules(rules);
+            setChannelPipelineRuleState(rules.some(rule => rule.enabled) ? 'ready' : 'empty');
+          }).catch((error) => {
+            logger.error('Failed to load Channel Pipeline rules', error);
+            setChannelPipelineRuleState('error');
+          }));
         }
         if (sources.has('backup_sections')) {
           loaders.push(api.getExportSections().then(setBackupSections));
@@ -156,11 +166,11 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
     }
 
     // Channel pipeline rules (for auto_creation)
-    if (channelPipelineRules.length > 0) {
-      options['auto_creation_rules'] = channelPipelineRules.map(r => ({
+    const enabledPipelineRules = channelPipelineRules.filter(r => r.enabled);
+    if (enabledPipelineRules.length > 0) {
+      options['auto_creation_rules'] = enabledPipelineRules.map(r => ({
         value: r.id,
         label: r.name,
-        badge: r.enabled ? undefined : 'disabled',
       }));
     }
 
@@ -544,11 +554,17 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                         </span>
                       </div>
                     )}
+                    {schedule.selection_error && (
+                      <div className="schedule-stale-warning" role="alert">
+                        <span className="material-icons" aria-hidden="true">warning</span>
+                        <span>{schedule.selection_error}</span>
+                      </div>
+                    )}
 
                     {/* Actions */}
                     <div className="schedule-actions">
                       {/* Run Now button - only for stream_probe */}
-                      {task.task_id === 'stream_probe' && (
+                      {(task.task_id === 'stream_probe' || task.task_id === 'auto_creation') && (
                         <button
                           className={`schedule-action-btn run ${runningSchedules.has(schedule.id) ? 'running' : ''}`}
                           onClick={() => handleRunSchedule(schedule)}
@@ -904,6 +920,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
               parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
               parameterOptions={parameterOptions}
               defaultParameters={defaultParameters}
+              parameterSourceStatus={{ auto_creation_rules: channelPipelineRuleState }}
             />
           </div>
         </ModalOverlay>
@@ -928,6 +945,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
               parameterSchema={task.task_id === 'cleanup' ? [] : parameterSchema}
               parameterOptions={parameterOptions}
               defaultParameters={defaultParameters}
+              parameterSourceStatus={{ auto_creation_rules: channelPipelineRuleState }}
             />
           </div>
         </ModalOverlay>

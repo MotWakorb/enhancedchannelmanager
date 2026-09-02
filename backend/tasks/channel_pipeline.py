@@ -85,6 +85,21 @@ class ChannelPipelineTask(TaskScheduler):
     # _migrate_disable_auto_creation_schedule.
     default_enabled = False
 
+    schedule_parameter_schema = {
+        "description": "Run an exact selection of Channel Pipeline rules",
+        "parameters": [{
+            "name": "rule_ids",
+            "type": "number_array",
+            "label": "Rules",
+            "description": (
+                "The exact rules to run. Every selected rule must remain enabled, "
+                "active, and valid; an empty or stale selection will not run."
+            ),
+            "required": True,
+            "source": "auto_creation_rules",
+        }],
+    }
+
     def __init__(self, schedule_config: Optional[ScheduleConfig] = None):
         # ADR-011 (bd-ka7j9): default to an INTERVAL schedule (~60s, the engine's
         # check cadence) so the task ticks regularly. The AUTO-FIRE GUARD at the
@@ -106,6 +121,7 @@ class ChannelPipelineTask(TaskScheduler):
         self.m3u_account_ids: list[int] = []  # Empty = all accounts
         self.rule_ids: list[int] = []  # Empty = all enabled rules
         self.run_on_refresh: bool = False
+        self._invocation_schedule_id: Optional[int] = None
 
     def get_config(self) -> dict:
         """Get auto-creation configuration."""
@@ -127,6 +143,52 @@ class ChannelPipelineTask(TaskScheduler):
             self.rule_ids = config["rule_ids"] or []
         if "run_on_refresh" in config:
             self.run_on_refresh = config["run_on_refresh"]
+
+    @classmethod
+    def validate_schedule_parameters(cls, parameters: Optional[dict]) -> None:
+        """Require a complete, runnable rule selection before persistence."""
+        # The code-seeded Default Schedule has no selected scope: it is the
+        # legacy refresh-watermark cadence and must remain distinct from #873
+        # selected-rule schedules. API creation enforces a selection separately.
+        if parameters is None or parameters == {}:
+            return
+        if not isinstance(parameters, dict):
+            raise ValueError("Channel Pipeline schedule parameters must be an object")
+        rule_ids = parameters.get("rule_ids")
+        if (
+            not isinstance(rule_ids, list)
+            or not rule_ids
+            or len(rule_ids) > 500
+            or any(
+                not isinstance(rule_id, int)
+                or isinstance(rule_id, bool)
+                or rule_id <= 0
+                for rule_id in rule_ids
+            )
+        ):
+            raise ValueError("rule_ids must be a non-empty list of positive integers")
+        if len(rule_ids) != len(set(rule_ids)):
+            raise ValueError("rule_ids must be unique")
+
+        from selected_pipeline_rules import load_selected_rule_snapshots
+        load_selected_rule_snapshots(rule_ids)
+
+    def prepare_invocation_parameters(
+        self,
+        triggered_by: str,
+        schedule_id: Optional[int],
+        parameters: Optional[dict],
+    ) -> Optional[dict]:
+        self._invocation_schedule_id = (
+            schedule_id
+            if isinstance(parameters, dict) and "rule_ids" in parameters
+            else None
+        )
+        return parameters
+
+    def restore_invocation_config(self, config: dict) -> None:
+        super().restore_invocation_config(config)
+        self._invocation_schedule_id = None
 
 
     async def execute(self) -> TaskResult:
@@ -156,6 +218,9 @@ class ChannelPipelineTask(TaskScheduler):
         crash mid-run both leave the watermark consumed, preventing a re-fire
         loop against the same refresh).
         """
+        if self._invocation_schedule_id is not None:
+            return await self._run_selected_schedule()
+
         from channel_pipeline_engine import get_channel_pipeline_engine, init_channel_pipeline_engine
         from database import get_session
         from models import ChannelPipelineRule
@@ -325,6 +390,92 @@ class ChannelPipelineTask(TaskScheduler):
             self.task_id, len(rule_ids), refresh_at,
         )
         return await self._run_post_refresh_pipeline(rule_ids, rule_names, started_at)
+
+    async def _run_selected_schedule(self) -> TaskResult:
+        """Execute one stored schedule's exact rule scope without widening."""
+        from channel_pipeline_engine import (
+            get_channel_pipeline_engine,
+            init_channel_pipeline_engine,
+        )
+        from selected_pipeline_rules import (
+            SelectedRuleValidationError,
+            load_selected_rule_snapshots,
+        )
+
+        started_at = datetime.utcnow()
+        requested_ids = list(self.rule_ids)
+        origin = {
+            "scheduled_task_id": self.task_id,
+            "schedule_id": self._invocation_schedule_id,
+        }
+        try:
+            # Establish canonical order and fail before any external reads. The
+            # engine repeats this at its worker boundary to preserve #874's
+            # validation-to-worker race protection and detached snapshots.
+            rules = load_selected_rule_snapshots(requested_ids)
+            canonical_ids = [rule.id for rule in rules]
+            engine = get_channel_pipeline_engine()
+            if not engine:
+                engine = await init_channel_pipeline_engine(get_client())
+            result = await engine.run_pipeline(
+                dry_run=False,
+                triggered_by=(
+                    "scheduled_selected"
+                    if self._run_trigger == "scheduled"
+                    else self._run_trigger
+                ),
+                m3u_account_ids=self.m3u_account_ids or None,
+                rule_ids=canonical_ids,
+                require_all_rule_ids=True,
+                execution_origin=origin,
+            )
+        except SelectedRuleValidationError as error:
+            reasons = [issue.get("reason", "stale") for issue in error.issues]
+            if error.rule_ids:
+                reasons.append("deleted")
+            reason_text = ", ".join(dict.fromkeys(reasons)) or error.code
+            return TaskResult(
+                success=False,
+                message=f"Selected Channel Pipeline rules are stale: {reason_text}",
+                error=error.code,
+                started_at=started_at,
+                completed_at=datetime.utcnow(),
+                details={
+                    **origin,
+                    "selected_rule_ids": requested_ids,
+                    "selection_issues": error.issues,
+                    "missing_rule_ids": error.rule_ids,
+                },
+            )
+
+        failed_count = result.get("failed_action_count", 0)
+        return TaskResult(
+            success=bool(result.get("success")),
+            message=(
+                f"Channel Pipeline schedule ran {len(canonical_ids)} selected rule(s)"
+            ),
+            error=None if result.get("success") else result.get("status", "pipeline_failed"),
+            started_at=started_at,
+            completed_at=datetime.utcnow(),
+            total_items=result.get("streams_evaluated", 0),
+            success_count=result.get("channels_created", 0) + result.get("channels_updated", 0),
+            failed_count=failed_count,
+            details={
+                **origin,
+                "selected_rule_ids": canonical_ids,
+                "execution_id": result.get("execution_id"),
+                "mode": "execute",
+                "status": result.get("status"),
+                "streams_evaluated": result.get("streams_evaluated", 0),
+                "streams_matched": result.get("streams_matched", 0),
+                "channels_created": result.get("channels_created", 0),
+                "channels_updated": result.get("channels_updated", 0),
+                "groups_created": result.get("groups_created", 0),
+                "streams_merged": result.get("streams_merged", 0),
+                "conflicts": len(result.get("conflicts", [])),
+                "failed_action_count": failed_count,
+            },
+        )
 
     async def _handle_suppressed(self, reason: str, started_at: datetime) -> TaskResult:
         """Breaker / break-glass suppression path (migrated from the old
