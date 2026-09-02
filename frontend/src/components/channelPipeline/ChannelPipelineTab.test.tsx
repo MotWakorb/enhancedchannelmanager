@@ -980,6 +980,57 @@ describe('ChannelPipelineTab', () => {
       expect(requestedSearches).toContain('missing %_ stream');
     });
 
+    it('sends the selected category chips in the execution-log request', async () => {
+      const user = userEvent.setup();
+      const execution = createMockChannelPipelineExecution({
+        id: 846,
+        execution_log: [
+          {
+            stream_id: 1,
+            stream_name: 'Created stream',
+            rules_evaluated: [],
+            actions_executed: [{ type: 'create_channel', description: 'Created', success: true }],
+          },
+          {
+            stream_id: 2,
+            stream_name: 'Skipped stream',
+            rules_evaluated: [],
+            actions_executed: [{ type: 'skip', description: 'Skipped', success: true }],
+          },
+        ],
+      });
+      mockDataStore.channelPipelineExecutions.push(execution);
+      const requestedCategories: Array<string | null> = [];
+      server.use(
+        http.get('/api/channel-pipeline/executions/:id', ({ request }) => {
+          const categories = new URL(request.url).searchParams.get('log_categories');
+          requestedCategories.push(categories);
+          return HttpResponse.json({
+            ...execution,
+            execution_log_total: 2,
+            execution_log_filtered_total: 2,
+            execution_log_filter_counts: { created: 1, skipped: 1 },
+            execution_log_limit: 500,
+            execution_log_offset: 0,
+          });
+        })
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      await user.click(await screen.findByRole('button', { name: /view details/i }));
+
+      const createdChip = await screen.findByText('Created', { selector: 'button.log-filter-chip' });
+      await waitFor(() => {
+        expect(createdChip).toHaveClass('active');
+        expect(requestedCategories.length).toBeGreaterThanOrEqual(2);
+      });
+      requestedCategories.length = 0;
+
+      await user.click(createdChip);
+
+      await waitFor(() => expect(requestedCategories).toContain('skipped'));
+    });
+
     it('shows filter request errors instead of stale execution-log results', async () => {
       const user = userEvent.setup();
       const execution = createMockChannelPipelineExecution({

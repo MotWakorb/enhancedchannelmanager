@@ -1953,6 +1953,34 @@ class TestGetExecution:
         assert data["execution_log_filter_counts"]["errors"] == 1
 
     @pytest.mark.asyncio
+    async def test_unfiltered_stored_log_respects_response_limit(
+        self, async_client, test_session
+    ):
+        execution = _create_execution(test_session)
+        execution.set_execution_log([
+            {
+                "stream_id": index,
+                "stream_name": f"Stream {index}",
+                "actions_executed": [{"type": "skip", "success": True}],
+            }
+            for index in range(501)
+        ])
+        test_session.commit()
+
+        response = await async_client.get(
+            f"/api/auto-creation/executions/{execution.id}",
+            params={"include_log": "true"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["execution_log"]) == 500
+        assert data["execution_log_total"] == 501
+        assert data["execution_log_filtered_total"] == 501
+        assert data["execution_log_limit"] == 500
+        assert data["execution_log_offset"] == 0
+
+    @pytest.mark.asyncio
     async def test_log_category_filters_use_or_semantics(self, async_client, test_session):
         execution = _create_execution(test_session)
         execution.set_execution_log([
