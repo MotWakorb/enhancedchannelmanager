@@ -186,6 +186,88 @@ class TestDbasRestoreRoundTrip:
         ).one()
         assert restored.get_required_provider_ids() == [11, 22]
 
+    @pytest.mark.asyncio
+    async def test_restore_rejects_missing_required_provider_before_mutation(
+        self, test_session
+    ):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Must survive missing provider")
+        item = existing.to_dict()
+        item["required_provider_ids"] = [11, 22]
+        client = AsyncMock()
+        client.get_m3u_accounts.return_value = [{"id": 11, "name": "Primary"}]
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client", return_value=client), \
+             pytest.raises(ValueError, match="22.*do not exist"):
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
+    @pytest.mark.asyncio
+    async def test_restore_fails_closed_when_required_provider_lookup_fails(
+        self, test_session
+    ):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Must survive lookup failure")
+        item = existing.to_dict()
+        item["required_provider_ids"] = [11, 22]
+        client = AsyncMock()
+        client.get_m3u_accounts.side_effect = RuntimeError("Dispatcharr unavailable")
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client", return_value=client), \
+             pytest.raises(RuntimeError, match="(?i)could not validate required_provider_ids"):
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
+    @pytest.mark.asyncio
+    async def test_restore_accepts_existing_required_providers(self, test_session):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Valid provider coverage")
+        item = existing.to_dict()
+        item["required_provider_ids"] = [11, 22]
+        client = AsyncMock()
+        client.get_m3u_accounts.return_value = [
+            {"id": 11, "name": "Primary"},
+            {"id": 22, "name": "Backup"},
+        ]
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client", return_value=client):
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Valid provider coverage"
+        ).one()
+        assert restored.get_required_provider_ids() == [11, 22]
+
+    @pytest.mark.asyncio
+    async def test_legacy_restore_without_provider_gate_does_not_lookup_accounts(
+        self, test_session
+    ):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Legacy no coverage")
+        item = existing.to_dict()
+        item.pop("required_provider_ids")
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client") as get_client:
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        get_client.assert_not_called()
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Legacy no coverage"
+        ).one()
+        assert restored.required_provider_ids is None
+
     @pytest.mark.parametrize("stored", ["{}", "not-json", "[11]"])
     def test_dbas_export_preserves_malformed_required_providers_for_restore_rejection(
         self, test_session, stored

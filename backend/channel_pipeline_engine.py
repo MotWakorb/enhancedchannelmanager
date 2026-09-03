@@ -1703,6 +1703,11 @@ class ChannelPipelineEngine:
 
         def record_block(block, entries, description):
             results["required_provider_blocks"].append(block)
+            skipped_rule_ids = results.setdefault(
+                "orphan_reconciliation_skipped_rule_ids", []
+            )
+            if block["rule_id"] not in skipped_rule_ids:
+                skipped_rule_ids.append(block["rule_id"])
             results["execution_log"].append({
                 "stream_id": block.get("stream_id"),
                 "stream_name": block["cohort"],
@@ -2866,6 +2871,7 @@ class ChannelPipelineEngine:
             ),
             "rule_match_counts": {},
             "required_provider_blocks": [],
+            "orphan_reconciliation_skipped_rule_ids": [],
             "probe_stream_ids": set(),
             "streams_probed": 0,
             # enhancedchannelmanager-vy4fl: group_id -> sort_group params,
@@ -2909,6 +2915,28 @@ class ChannelPipelineEngine:
         # Track which streams have been processed by which rules
         stream_rule_matches = {}  # stream_id -> list of (rule_id, priority)
 
+        for rule in rules:
+            required_provider_ids = rule.get_required_provider_ids()
+            configuration_error = rule.get_required_provider_ids_error()
+            fetch_failures = self._stream_fetch_facts.get(
+                "rule_fetch_failures", {}
+            ).get(rule.id, [])
+            fetch_successes = self._stream_fetch_facts.get(
+                "rule_fetch_successes", {}
+            ).get(rule.id, 0)
+            provider_observation_incomplete = (
+                required_provider_ids
+                and fetch_successes < len(set(required_provider_ids))
+            )
+            if (
+                configuration_error
+                or (
+                    required_provider_ids
+                    and (fetch_failures or provider_observation_incomplete)
+                )
+            ):
+                results["orphan_reconciliation_skipped_rule_ids"].append(rule.id)
+
         # =====================================================================
         # Pass 1: Evaluate all streams against all rules, collect matches
         # =====================================================================
@@ -2932,11 +2960,20 @@ class ChannelPipelineEngine:
 
             for rule in rules:
                 # Check if rule applies to this M3U account
-                if rule.m3u_account_id and rule.m3u_account_id != stream.m3u_account_id:
+                required_provider_ids = set(rule.get_required_provider_ids())
+                eligible_provider_ids = (
+                    required_provider_ids
+                    if rule.m3u_account_id and required_provider_ids
+                    else ({rule.m3u_account_id} if rule.m3u_account_id else None)
+                )
+                if (
+                    eligible_provider_ids is not None
+                    and stream.m3u_account_id not in eligible_provider_ids
+                ):
                     logger.debug(
                         "[AUTO-CREATE-ENGINE]   Rule '%s' skipped: m3u filter "
-                        "(rule=%s != stream=%s)",
-                        rule.name, rule.m3u_account_id, stream.m3u_account_id
+                        "(eligible=%s, stream=%s)",
+                        rule.name, sorted(eligible_provider_ids), stream.m3u_account_id
                     )
                     continue
 
@@ -5834,6 +5871,16 @@ class ChannelPipelineEngine:
         session = get_session()
         try:
             for rule in rules:
+                if rule.id in results.get(
+                    "orphan_reconciliation_skipped_rule_ids", []
+                ):
+                    logger.warning(
+                        "[AUTO-CREATE-ENGINE] Rule '%s': orphan reconciliation "
+                        "skipped because required-provider coverage was not "
+                        "fully observable this run",
+                        rule.name,
+                    )
+                    continue
                 # HARD BYPASS for event_sync rules (bead ti939.1.3; epic
                 # ti939 PO decision 6). Dispatcharr owns the master channels'
                 # lifecycle (creates/updates/deletes them from the master

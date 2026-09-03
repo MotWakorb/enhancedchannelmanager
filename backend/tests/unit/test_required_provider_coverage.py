@@ -12,7 +12,7 @@ from config import DispatcharrSettings
 from models import ChannelPipelineRule
 
 
-def _rule(*, required=(1, 2), skip_struck=False):
+def _rule(*, required=(1, 2), skip_struck=False, m3u_account_id=None):
     rule = ChannelPipelineRule(
         name="Provider coverage",
         enabled=True,
@@ -24,6 +24,7 @@ def _rule(*, required=(1, 2), skip_struck=False):
             "if_exists": "merge",
         }]),
         skip_struck_streams=skip_struck,
+        m3u_account_id=m3u_account_id,
     )
     rule.id = 7
     rule.set_required_provider_ids(list(required))
@@ -42,6 +43,7 @@ def _stream(stream_id, name, provider_id, provider_name):
 def _run(
     streams, *, required=(1, 2), struck=(), dry_run=True, normalization=None,
     normalization_groups=False, normalization_init_error=None, channel_cap=None,
+    m3u_account_id=None,
 ):
     client = MagicMock()
     engine = ChannelPipelineEngine(client)
@@ -49,11 +51,19 @@ def _run(
     engine._existing_groups = []
     engine._struck_stream_ids = set(struck)
     engine._required_provider_names = {1: "Primary", 2: "Backup", 3: "Extra"}
+    engine._stream_fetch_facts = {
+        "rule_fetch_successes": {7: len(set(required))},
+        "rule_fetch_failures": {7: []},
+    }
     engine._reconcile_orphans = AsyncMock()
     engine._update_rule_stats = AsyncMock()
     engine._refresh_dummy_epg_and_retry = AsyncMock()
     execution = MagicMock(id=99)
-    rule = _rule(required=required, skip_struck=bool(struck))
+    rule = _rule(
+        required=required,
+        skip_struck=bool(struck),
+        m3u_account_id=m3u_account_id,
+    )
     if normalization or normalization_groups:
         rule.set_normalization_group_ids([5])
 
@@ -102,6 +112,7 @@ def test_complete_cohort_executes_every_required_provider_once(dry_run):
 
     assert executed == [10, 20]
     assert result["required_provider_blocks"] == []
+    assert result["orphan_reconciliation_skipped_rule_ids"] == []
 
 
 def test_missing_provider_blocks_entire_cohort_and_names_requirement():
@@ -163,6 +174,46 @@ def test_extra_provider_stream_executes_with_complete_cohort():
     ])
 
     assert executed == [10, 20, 30]
+    assert result["required_provider_blocks"] == []
+
+
+def test_scoped_rule_accepts_required_peer_and_completes_coverage():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+    ], m3u_account_id=1)
+
+    assert executed == [10, 20]
+    assert result["required_provider_blocks"] == []
+
+
+def test_scoped_rule_still_blocks_when_required_peer_is_missing():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+    ], m3u_account_id=1)
+
+    assert executed == []
+    assert result["required_provider_blocks"][0]["missing_provider_ids"] == [2]
+
+
+def test_scoped_rule_does_not_admit_provider_outside_required_set():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+        _stream(30, "ESPN", 3, "Extra"),
+    ], m3u_account_id=1)
+
+    assert executed == [10, 20]
+    assert result["required_provider_blocks"] == []
+
+
+def test_unconfigured_scoped_rule_keeps_legacy_single_provider_filter():
+    result, executed = _run([
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+    ], required=(), m3u_account_id=1)
+
+    assert executed == [10]
     assert result["required_provider_blocks"] == []
 
 
@@ -317,3 +368,115 @@ def test_malformed_required_provider_configuration_blocks_creation():
 
     assert executed == []
     assert result["required_provider_blocks"][0]["reason"] == "invalid_configuration"
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "live"])
+@pytest.mark.parametrize(
+    "block_kind",
+    ["fetch", "not_fetched", "unavailable", "normalization", "configuration"],
+)
+def test_blocked_provider_observation_preserves_managed_channels(
+    dry_run, block_kind
+):
+    rule = _rule()
+    rule.orphan_action = "move_uncategorized" if block_kind == "fetch" else "delete"
+    rule.set_managed_channel_ids([501])
+    client = MagicMock()
+    client.assign_channel_numbers = AsyncMock()
+    engine = ChannelPipelineEngine(client)
+    engine._existing_channels = [{
+        "id": 501,
+        "name": "Managed ESPN",
+        "channel_group_id": 5,
+        "channel_group": 5,
+        "streams": [],
+    }]
+    engine._existing_groups = []
+    engine._struck_stream_ids = set()
+    engine._update_rule_stats = AsyncMock()
+    engine._refresh_dummy_epg_and_retry = AsyncMock()
+    engine._stream_fetch_facts = {
+        "rule_fetch_successes": {rule.id: 2},
+        "rule_fetch_failures": {rule.id: []},
+    }
+    streams = [
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+    ]
+    normalization = None
+    if block_kind == "fetch":
+        engine._stream_fetch_facts["rule_fetch_successes"][rule.id] = 1
+        engine._stream_fetch_facts["rule_fetch_failures"][rule.id] = [
+            "M3U account 2: timed out"
+        ]
+        streams = [_stream(10, "ESPN", 1, "Primary")]
+    elif block_kind == "not_fetched":
+        engine._stream_fetch_facts["rule_fetch_successes"][rule.id] = 1
+        streams = [_stream(10, "ESPN", 1, "Primary")]
+    elif block_kind == "unavailable":
+        rule.skip_struck_streams = True
+        engine._struck_stream_ids = {20}
+    elif block_kind == "normalization":
+        rule.set_normalization_group_ids([5])
+        normalization = MagicMock()
+        normalization.normalize.side_effect = RuntimeError("normalization failed")
+        normalization.extract_core_name.return_value = None
+    else:
+        rule.required_provider_ids = "{}"
+        streams = [_stream(10, "ESPN", 1, "Primary")]
+
+    settings = DispatcharrSettings()
+    with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
+         patch("channel_pipeline_engine.get_settings", return_value=settings), \
+         patch("normalization_engine.get_normalization_engine", return_value=normalization):
+        result = asyncio.get_event_loop().run_until_complete(
+            engine._process_streams(
+                streams, [rule], MagicMock(id=99), dry_run=dry_run,
+            )
+        )
+
+    client.delete_channel.assert_not_called()
+    client.update_channel.assert_not_called()
+    assert rule.get_managed_channel_ids() == [501]
+    assert result["orphan_reconciliation_skipped_rule_ids"] == [rule.id]
+    assert not any("[Orphan]" in row.get("stream_name", "")
+                   for row in result["dry_run_results"])
+
+
+@pytest.mark.parametrize("dry_run", [True, False], ids=["dry-run", "live"])
+def test_mixed_complete_and_blocked_cohorts_skip_rule_cleanup(dry_run):
+    rule = _rule()
+    rule.set_managed_channel_ids([501])
+    client = MagicMock()
+    engine = ChannelPipelineEngine(client)
+    engine._existing_channels = [{
+        "id": 501, "name": "Managed", "channel_group_id": 5,
+        "channel_group": 5, "streams": [],
+    }]
+    engine._existing_groups = []
+    engine._struck_stream_ids = set()
+    engine._update_rule_stats = AsyncMock()
+    engine._refresh_dummy_epg_and_retry = AsyncMock()
+    engine._stream_fetch_facts = {
+        "rule_fetch_successes": {rule.id: 2},
+        "rule_fetch_failures": {rule.id: []},
+    }
+    streams = [
+        _stream(10, "ESPN", 1, "Primary"),
+        _stream(20, "ESPN", 2, "Backup"),
+        _stream(30, "CNN", 1, "Primary"),
+    ]
+
+    with patch("channel_pipeline_engine.get_session", return_value=MagicMock()), \
+         patch("channel_pipeline_engine.get_settings", return_value=DispatcharrSettings()), \
+         patch("normalization_engine.get_normalization_engine", return_value=None):
+        result = asyncio.get_event_loop().run_until_complete(
+            engine._process_streams(
+                streams, [rule], MagicMock(id=99), dry_run=dry_run,
+            )
+        )
+
+    client.delete_channel.assert_not_called()
+    client.update_channel.assert_not_called()
+    assert rule.get_managed_channel_ids() == [501]
+    assert result["orphan_reconciliation_skipped_rule_ids"] == [rule.id]
