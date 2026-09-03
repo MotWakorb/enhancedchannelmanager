@@ -4428,6 +4428,22 @@ async def get_auto_creation_action_schema():
             }
         },
         {
+            "type": ActionType.UNASSIGN_PROFILE.value,
+            "description": "Remove a stream profile from the channel",
+            "params": {
+                "target": {"type": "string", "enum": ["selected", "all"], "default": "selected", "description": "Remove only the selected profile, or explicitly remove any assigned stream profile"},
+                "profile_id": {"type": "integer", "required_when": "target=selected", "description": "Stream profile ID to remove only when currently assigned"},
+            },
+        },
+        {
+            "type": ActionType.UNASSIGN_CHANNEL_PROFILE.value,
+            "description": "Remove the channel from selected or all channel profiles",
+            "params": {
+                "target": {"type": "string", "enum": ["selected", "all"], "default": "selected", "description": "Remove only selected memberships, or explicitly remove every membership"},
+                "channel_profile_ids": {"type": "array", "items": "integer", "required_when": "target=selected", "description": "Channel profile IDs to remove"},
+            },
+        },
+        {
             "type": ActionType.SET_CHANNEL_NUMBER.value,
             "description": "Set the channel number",
             "params": {

@@ -979,6 +979,26 @@ class TestEventSyncAssignChannelProfile:
         finally:
             session.close()
 
+    def _add_profile_removal_rule(self, session_factory, config, profile_ids):
+        session = session_factory()
+        try:
+            rule = ChannelPipelineRule(
+                name="Event Rule", enabled=True, priority=0,
+                conditions=json.dumps([{"type": "always"}]),
+                actions=json.dumps([{
+                    "type": "unassign_channel_profile",
+                    "target": "selected",
+                    "channel_profile_ids": profile_ids,
+                }]),
+                event_sync_config=json.dumps(config),
+            )
+            session.add(rule)
+            session.commit()
+            session.refresh(rule)
+            return rule.id
+        finally:
+            session.close()
+
     def test_promoted_channel_gets_exclusive_profile_membership(
         self, db_session_factory
     ):
@@ -1025,3 +1045,34 @@ class TestEventSyncAssignChannelProfile:
         _manual_run(client, db_session_factory)
 
         client.update_profile_channel.assert_not_called()
+
+    def test_promoted_channel_removes_only_selected_profile(
+        self, db_session_factory
+    ):
+        self._add_profile_removal_rule(
+            db_session_factory, _promote_config(), [2]
+        )
+        state = _promote_state()
+        client = make_promote_client(state)
+        client.get_channel_profiles = AsyncMock(
+            return_value=[{"id": 1}, {"id": 2}, {"id": 3}]
+        )
+        client.update_profile_channel = AsyncMock()
+
+        result, _ = _manual_run(client, db_session_factory)
+
+        promoted_id = next(cid for cid in state.channels if cid >= 900)
+        writes = [
+            (call.args[0], call.args[1], call.args[2]["enabled"])
+            for call in client.update_profile_channel.call_args_list
+        ]
+        assert writes == [(2, promoted_id, False)]
+        summary = result["event_sync"][0]["unassign_channel_profile"]
+        assert summary["succeeded"] == summary["channels_targeted"]
+        summary_actions = [
+            action["type"]
+            for entry in result["execution_log"]
+            for action in entry["actions_executed"]
+            if action["type"].endswith("channel_profile_summary")
+        ]
+        assert summary_actions == ["event_sync_unassign_channel_profile_summary"]

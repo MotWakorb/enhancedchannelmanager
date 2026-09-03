@@ -3105,6 +3105,20 @@ class TestGetActionSchema:
         assert "create_channel" in types
         assert "skip" in types
 
+    @pytest.mark.asyncio
+    async def test_profile_unassignment_contract_is_explicit(self, async_client):
+        response = await async_client.get("/api/auto-creation/schema/actions")
+
+        actions = {action["type"]: action for action in response.json()["actions"]}
+        assert actions["unassign_profile"]["params"]["target"] == {
+            "type": "string",
+            "enum": ["selected", "all"],
+            "default": "selected",
+            "description": "Remove only the selected profile, or explicitly remove any assigned stream profile",
+        }
+        assert actions["unassign_channel_profile"]["params"]["target"]["enum"] == ["selected", "all"]
+        assert actions["unassign_channel_profile"]["params"]["channel_profile_ids"]["required_when"] == "target=selected"
+
 
 class TestGetTemplateVariables:
     """Tests for GET /api/auto-creation/schema/template-variables."""

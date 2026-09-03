@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Channel Pipeline rules can explicitly remove stream-profile and channel-profile assignments for after-season cleanup (bead `enhancedchannelmanager-o8bzu`, build 0011).** Both actions default to fail-closed **Selected** targeting and require explicit profile IDs; only choosing **All** clears any stream profile or every channel-profile membership. Dry runs report the intended removals without writing, and channel-profile removal follows the same standard and Event Sync execution, locking, ownership, and partial-failure accounting paths as channel-profile assignment.
+
 - **Channel Pipeline now identifies enabled rules outside their inclusive UTC active date window as Inactive (bead `enhancedchannelmanager-ftgqb`, build 0010).** Rule status and selected-run eligibility refresh automatically at UTC midnight without reloading the page, while disabled rules remain Disabled.
 
 - **Channel Pipeline rules can require matching streams from multiple providers before creating a channel (bead `enhancedchannelmanager-rtst2.3`, GitHub #876).** Select at least two **Required Providers** on a rule to gate each rule-scoped normalized channel cohort. ECM creates or merges the cohort only when every selected provider contributes a matching available stream; missing providers, provider fetch failures, and struck streams when **Skip Struck Streams** is enabled block the whole cohort with provider-named execution diagnostics. Rules without a requirement retain their existing behavior, and dry runs apply the same gate without adding probes.

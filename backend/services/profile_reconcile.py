@@ -165,12 +165,12 @@ def _selection_from_setting(setting: dict | None) -> list[int] | None:
 
 
 def _query_live_profile_assigning_rule_ids() -> set[int]:
-    """SYNC: ids of enabled pipeline rules that still assign channel profiles.
+    """SYNC: ids of enabled rules that still manage channel profiles.
 
     A channel is only excluded from group reconcile while its owning rule is in
     this set (decision 2b handoff). Queries the ChannelPipelineRule model
     (table ``auto_creation_rules``) for enabled rules whose JSON ``actions``
-    array contains an ``assign_channel_profile`` action. Called INLINE on the
+    array contains an assignment or removal action. Called INLINE on the
     event-loop thread (see :func:`_resolve_live_rule_ids`) — it is a handful of
     rows and, crucially, ECM's DB runs on a single shared StaticPool connection
     that every other access uses one-thread-at-a-time, so it must NOT be
@@ -193,7 +193,9 @@ def _query_live_profile_assigning_rule_ids() -> set[int]:
             except (ValueError, TypeError):
                 continue
             if any(
-                isinstance(a, dict) and a.get("type") == "assign_channel_profile"
+                isinstance(a, dict) and a.get("type") in (
+                    "assign_channel_profile", "unassign_channel_profile"
+                )
                 for a in actions
             ):
                 ids.add(rule.id)

@@ -496,6 +496,60 @@ class TestActionValidation:
         assert len(errors) > 0
         assert "value" in errors[0]
 
+    @pytest.mark.parametrize("action_type,id_key", [
+        ("unassign_profile", "profile_id"),
+        ("unassign_channel_profile", "channel_profile_ids"),
+    ])
+    def test_profile_unassignment_defaults_to_selected_and_fails_closed(
+        self, action_type, id_key
+    ):
+        action = Action(type=action_type, params={})
+
+        errors = action.validate()
+
+        assert action.params["target"] == "selected"
+        assert any(id_key in error for error in errors)
+
+    @pytest.mark.parametrize("action_type", [
+        "unassign_profile", "unassign_channel_profile",
+    ])
+    def test_profile_unassignment_rejects_null_target(self, action_type):
+        action = Action(type=action_type, params={"target": None})
+
+        errors = action.validate()
+
+        assert any("target" in error for error in errors)
+
+    def test_unassign_profile_accepts_selected_or_explicit_all(self):
+        selected = Action(
+            type="unassign_profile",
+            params={"target": "selected", "profile_id": 7},
+        )
+        all_profiles = Action(type="unassign_profile", params={"target": "all"})
+
+        assert selected.validate() == []
+        assert all_profiles.validate() == []
+
+    def test_unassign_channel_profile_accepts_selected_or_explicit_all(self):
+        selected = Action(
+            type="unassign_channel_profile",
+            params={"target": "selected", "channel_profile_ids": [2, 3]},
+        )
+        all_profiles = Action(
+            type="unassign_channel_profile", params={"target": "all"}
+        )
+
+        assert selected.validate() == []
+        assert all_profiles.validate() == []
+
+    @pytest.mark.parametrize("action", [
+        Action(type="unassign_profile", params={"target": "selected", "profile_id": None}),
+        Action(type="unassign_channel_profile", params={"target": "selected", "channel_profile_ids": None}),
+        Action(type="unassign_channel_profile", params={"target": "selected", "channel_profile_ids": []}),
+    ])
+    def test_selected_profile_unassignment_rejects_null_or_empty_ids(self, action):
+        assert action.validate()
+
     def test_valid_log_match(self):
         """Validates log_match action."""
         action = Action(

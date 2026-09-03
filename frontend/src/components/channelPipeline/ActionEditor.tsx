@@ -147,6 +147,7 @@ const ACTION_TYPES: {
   hasPriority?: boolean;
   hasProfileId?: boolean;
   hasChannelProfileId?: boolean;
+  hasProfileRemovalTarget?: boolean;
   hasSortGroupConfig?: boolean;
 }[] = [
   // Creation actions
@@ -159,6 +160,8 @@ const ACTION_TYPES: {
   { type: 'assign_epg', label: 'Assign EPG', description: 'Assign EPG data source', category: 'assignment', hasEpgId: true },
   { type: 'assign_profile', label: 'Assign Profile', description: 'Assign a stream profile', category: 'assignment', hasProfileId: true },
   { type: 'assign_channel_profile', label: 'Set Channel Profile', description: 'Enable the selected channel profiles and remove the channel from all others (exclusive membership)', category: 'assignment', hasChannelProfileId: true },
+  { type: 'unassign_profile', label: 'Remove Stream Profile', description: 'Remove a selected stream profile or explicitly clear any assigned profile', category: 'assignment', hasProfileId: true, hasProfileRemovalTarget: true },
+  { type: 'unassign_channel_profile', label: 'Remove Channel Profile', description: 'Remove the channel from selected profiles or explicitly from all profiles', category: 'assignment', hasChannelProfileId: true, hasProfileRemovalTarget: true },
   { type: 'set_channel_number', label: 'Set Channel Number', description: 'Set the channel number', category: 'assignment', hasValue: true },
   // Variables
   { type: 'set_variable', label: 'Set Variable', description: 'Define a reusable variable from stream data', category: 'variables', hasVariableConfig: true },
@@ -347,14 +350,14 @@ export function ActionEditor({
 
   // Fetch stream profiles when assign_profile action is selected
   useEffect(() => {
-    if (action.type === 'assign_profile') {
+    if (action.type === 'assign_profile' || action.type === 'unassign_profile') {
       getStreamProfiles().then(setStreamProfiles).catch(() => setStreamProfiles([]));
     }
   }, [action.type]);
 
   // Fetch channel profiles when assign_channel_profile action is selected
   useEffect(() => {
-    if (action.type === 'assign_channel_profile') {
+    if (action.type === 'assign_channel_profile' || action.type === 'unassign_channel_profile') {
       getChannelProfiles().then(setChannelProfiles).catch(() => setChannelProfiles([]));
     }
   }, [action.type]);
@@ -387,7 +390,7 @@ export function ActionEditor({
 
   // Check for dependency warnings
   const getDependencyWarning = (): string | null => {
-    if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'assign_channel_profile', 'set_channel_number'].includes(action.type)) {
+    if (['assign_logo', 'assign_tvg_id', 'assign_epg', 'assign_profile', 'assign_channel_profile', 'unassign_profile', 'unassign_channel_profile', 'set_channel_number'].includes(action.type)) {
       const hasChannelCreation = previousActions.some(a =>
         a.type === 'create_channel' || a.type === 'merge_streams'
       );
@@ -431,6 +434,15 @@ export function ActionEditor({
 
     if (action.type === 'sort_group' && action.starting_number !== undefined && action.starting_number < 1) {
       return 'Starting number must be at least 1';
+    }
+
+    if (action.type === 'unassign_profile' && (action.target ?? 'selected') === 'selected' && !action.profile_id) {
+      return 'Stream profile is required for selected removal';
+    }
+
+    if (action.type === 'unassign_channel_profile' && (action.target ?? 'selected') === 'selected'
+        && !action.channel_profile_ids?.length) {
+      return 'At least one channel profile is required for selected removal';
     }
 
     // Validate name transform regex
@@ -482,6 +494,9 @@ export function ActionEditor({
     }
     if (newType === 'merge_streams') {
       newAction.target = 'auto';
+    }
+    if (newType === 'unassign_profile' || newType === 'unassign_channel_profile') {
+      newAction.target = 'selected';
     }
     if (newType === 'set_variable') {
       newAction.variable_mode = 'regex_extract';
@@ -1331,8 +1346,30 @@ export function ActionEditor({
           </div>
         )}
 
-        {/* Stream Profile Selector for assign_profile */}
-        {actionDef?.hasProfileId && (
+        {actionDef?.hasProfileRemovalTarget && (
+          <div className="action-field">
+            <label htmlFor={`${id}-profile-removal-target`}>Removal Target</label>
+            <CustomSelect
+              id={`${id}-profile-removal-target`}
+              value={action.target ?? 'selected'}
+              onChange={val => onChange({
+                ...action,
+                target: val as 'selected' | 'all',
+                ...(val === 'all'
+                  ? { profile_id: undefined, channel_profile_ids: undefined }
+                  : {}),
+              })}
+              options={[
+                { value: 'selected', label: 'Selected profile(s) only' },
+                { value: 'all', label: 'All assigned profiles' },
+              ]}
+              disabled={readonly}
+            />
+          </div>
+        )}
+
+        {/* Stream Profile Selector for assignment or selected removal */}
+        {actionDef?.hasProfileId && (!actionDef.hasProfileRemovalTarget || (action.target ?? 'selected') === 'selected') && (
           <div className="action-field">
             <label>Stream Profile</label>
             <CustomSelect
@@ -1357,8 +1394,8 @@ export function ActionEditor({
           </div>
         )}
 
-        {/* Channel Profile Multi-Select for assign_channel_profile */}
-        {actionDef?.hasChannelProfileId && (
+        {/* Channel Profile Multi-Select for assignment or selected removal */}
+        {actionDef?.hasChannelProfileId && (!actionDef.hasProfileRemovalTarget || (action.target ?? 'selected') === 'selected') && (
           <div className="action-field">
             <label>Channel Profiles</label>
             <div className="multi-select-dropdown">
@@ -1415,12 +1452,30 @@ export function ActionEditor({
             {/* y3m6o.2: assign_channel_profile is EXCLUSIVE (subtractive). Warn
                 the operator that unselected profiles are removed — the copy
                 previously read as additive ("assign to these profiles"). */}
-            <span className="field-hint" data-testid="channel-profile-exclusive-hint">
-              Exclusive membership: the channel is <strong>enabled</strong> in the selected profiles
-              and <strong>removed from all other</strong> channel profiles. Profiles you do not select
-              here will have this channel disabled.
-            </span>
+            {action.type === 'assign_channel_profile' && (
+              <span className="field-hint" data-testid="channel-profile-exclusive-hint">
+                Exclusive membership: the channel is <strong>enabled</strong> in the selected profiles
+                and <strong>removed from all other</strong> channel profiles. Profiles you do not select
+                here will have this channel disabled.
+              </span>
+            )}
           </div>
+        )}
+
+        {action.type === 'unassign_profile' && (
+          <span className="field-hint" data-testid="stream-profile-removal-hint">
+            {(action.target ?? 'selected') === 'all'
+              ? 'Clear any assigned stream profile from the channel.'
+              : 'Remove the selected stream profile only when it is currently assigned; any other profile is left unchanged.'}
+          </span>
+        )}
+
+        {action.type === 'unassign_channel_profile' && (
+          <span className="field-hint" data-testid="channel-profile-removal-hint">
+            {(action.target ?? 'selected') === 'all'
+              ? 'Remove the channel from every channel profile. This requires an explicit All target.'
+              : 'Remove the channel from only the selected channel profiles; all other memberships are left unchanged.'}
+          </span>
         )}
 
         {/* Sort Group Config for sort_group */}
