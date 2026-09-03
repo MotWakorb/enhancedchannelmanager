@@ -535,6 +535,14 @@ class TaskExecution(Base):
         return f"<TaskExecution(id={self.id}, task_id={self.task_id}, status={self.status})>"
 
 
+class EPGEventProbeClaim(Base):
+    """Durable ownership of one EPG event/channel probe trigger."""
+    __tablename__ = "epg_event_probe_claims"
+
+    trigger_key = Column(String(1000), primary_key=True)
+    claimed_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class Notification(Base):
     """
     Persistent notification storage.

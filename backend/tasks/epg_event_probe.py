@@ -1,18 +1,21 @@
 """Probe channel streams when a matching EPG event becomes active."""
 
-import json
 import logging
 from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import safe_regex
 from database import get_session
-from models import TaskExecution
+from models import EPGEventProbeClaim
+from sqlalchemy.exc import IntegrityError
 from task_registry import register_task
 from task_scheduler import ScheduleConfig, ScheduleType, TaskResult, TaskScheduler
 
 
 logger = logging.getLogger(__name__)
+
+
+_MAX_EPG_DATA_ROWS = 50_000
 
 
 @register_task
@@ -49,7 +52,8 @@ class EPGEventProbeTask(TaskScheduler):
         schedule_config: Optional[ScheduleConfig] = None,
         *,
         now_fn: Optional[Callable[[], datetime]] = None,
-        seen_keys_loader: Optional[Callable[[datetime], set[str]]] = None,
+        claim_trigger: Optional[Callable[[str], bool]] = None,
+        release_claims: Optional[Callable[[list[str]], None]] = None,
     ):
         super().__init__(schedule_config or ScheduleConfig(
             schedule_type=ScheduleType.MANUAL
@@ -60,8 +64,8 @@ class EPGEventProbeTask(TaskScheduler):
         self._allow_reorder_after_probe = True
         self._invocation_schedule_id: Optional[int] = None
         self._now_fn = now_fn or (lambda: datetime.now(timezone.utc))
-        self._seen_keys_loader = seen_keys_loader or self._load_seen_trigger_keys
-        self._processed_trigger_keys: set[str] = set()
+        self._claim_trigger = claim_trigger or self._claim_trigger_key
+        self._release_claims = release_claims or self._release_trigger_claims
 
     def set_prober(self, prober) -> None:
         self._prober = prober
@@ -140,26 +144,27 @@ class EPGEventProbeTask(TaskScheduler):
             parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.astimezone(timezone.utc)
 
-    def _load_seen_trigger_keys(self, since: datetime) -> set[str]:
-        seen: set[str] = set()
+    def _claim_trigger_key(self, trigger_key: str) -> bool:
         session = get_session()
         try:
-            rows = session.query(TaskExecution.details).filter(
-                TaskExecution.task_id == self.task_id,
-                TaskExecution.started_at >= since.replace(tzinfo=None),
-                TaskExecution.details.isnot(None),
-            ).all()
-            for (details_json,) in rows:
-                try:
-                    details = json.loads(details_json)
-                except (TypeError, ValueError):
-                    continue
-                keys = details.get("trigger_keys") if isinstance(details, dict) else None
-                if isinstance(keys, list):
-                    seen.update(key for key in keys if isinstance(key, str))
+            session.add(EPGEventProbeClaim(trigger_key=trigger_key))
+            session.commit()
+            return True
+        except IntegrityError:
+            session.rollback()
+            return False
         finally:
             session.close()
-        return seen
+
+    def _release_trigger_claims(self, trigger_keys: list[str]) -> None:
+        session = get_session()
+        try:
+            session.query(EPGEventProbeClaim).filter(
+                EPGEventProbeClaim.trigger_key.in_(trigger_keys)
+            ).delete(synchronize_session=False)
+            session.commit()
+        finally:
+            session.close()
 
     async def _all_channels(self) -> list[dict]:
         channels: list[dict] = []
@@ -222,47 +227,64 @@ class EPGEventProbeTask(TaskScheduler):
             )
 
         channels = await self._all_channels()
-        epg_ids_by_tvg: dict[str, set[int]] = {}
-        for tvg_id in {program["tvg_id"] for program, _ in active_matches}:
-            epg_rows = await self._prober.client.get_epg_data(search=tvg_id)
-            epg_ids_by_tvg[tvg_id] = {
-                row["id"]
-                for row in epg_rows
-                if row.get("tvg_id") == tvg_id and isinstance(row.get("id"), int)
-            }
+        epg_rows = await self._prober.client.get_epg_data(
+            max_results=_MAX_EPG_DATA_ROWS + 1
+        )
+        if len(epg_rows) > _MAX_EPG_DATA_ROWS:
+            raise RuntimeError(
+                f"EPG data pagination exceeded the {_MAX_EPG_DATA_ROWS}-row safety limit"
+            )
+        epg_tvg_by_id = {
+            row["id"]: row["tvg_id"]
+            for row in epg_rows
+            if isinstance(row.get("id"), int)
+            and isinstance(row.get("tvg_id"), str)
+        }
+        channels_by_tvg: dict[str, list[dict]] = {}
+        for channel in channels:
+            epg_data_id = channel.get("epg_data_id")
+            if epg_data_id is not None:
+                tvg_id = epg_tvg_by_id.get(epg_data_id)
+                if tvg_id is not None:
+                    channels_by_tvg.setdefault(tvg_id, []).append(channel)
+                continue
+            tvg_id = channel.get("tvg_id")
+            channel_uuid = channel.get("uuid")
+            if isinstance(tvg_id, str):
+                channels_by_tvg.setdefault(tvg_id, []).append(channel)
+            if isinstance(channel_uuid, str) and channel_uuid != tvg_id:
+                channels_by_tvg.setdefault(channel_uuid, []).append(channel)
 
-        earliest_start = min(start for _, start in active_matches)
-        seen_keys = self._seen_keys_loader(earliest_start) | self._processed_trigger_keys
-        trigger_keys: list[str] = []
-        matched_channel_ids: list[int] = []
-        stream_ids: list[int] = []
-
+        candidates: list[tuple[str, int, list[int]]] = []
         for program, start in active_matches:
             tvg_id = program["tvg_id"]
-            for channel in channels:
-                epg_data_id = channel.get("epg_data_id")
-                channel_matches = (
-                    epg_data_id in epg_ids_by_tvg[tvg_id]
-                    if epg_data_id is not None
-                    else channel.get("tvg_id") == tvg_id
-                    or channel.get("uuid") == tvg_id
-                )
-                if not channel_matches or not isinstance(channel.get("id"), int):
+            for channel in channels_by_tvg.get(tvg_id, []):
+                channel_id = channel.get("id")
+                if not isinstance(channel_id, int):
                     continue
                 event_identity = program.get("id", start.isoformat())
                 trigger_key = (
                     f"{self._invocation_schedule_id or 'manual'}:"
-                    f"{event_identity}:{start.isoformat()}:{tvg_id}:{channel['id']}"
+                    f"{event_identity}:{start.isoformat()}:{tvg_id}:{channel_id}"
                 )
-                if trigger_key in seen_keys:
-                    continue
-                full_channel = await self._prober.client.get_channel(channel["id"])
-                matched_channel_ids.append(channel["id"])
-                trigger_keys.append(trigger_key)
-                seen_keys.add(trigger_key)
-                for stream_id in full_channel.get("streams", []):
-                    if isinstance(stream_id, int) and stream_id not in stream_ids:
-                        stream_ids.append(stream_id)
+                full_channel = await self._prober.client.get_channel(channel_id)
+                candidates.append(
+                    (trigger_key, channel_id, full_channel.get("streams", []))
+                )
+
+        trigger_keys: list[str] = []
+        matched_channel_ids: list[int] = []
+        stream_ids: list[int] = []
+        stream_id_set: set[int] = set()
+        for trigger_key, channel_id, channel_stream_ids in candidates:
+            if not self._claim_trigger(trigger_key):
+                continue
+            matched_channel_ids.append(channel_id)
+            trigger_keys.append(trigger_key)
+            for stream_id in channel_stream_ids:
+                if isinstance(stream_id, int) and stream_id not in stream_id_set:
+                    stream_id_set.add(stream_id)
+                    stream_ids.append(stream_id)
 
         if not trigger_keys:
             return TaskResult(
@@ -273,7 +295,6 @@ class EPGEventProbeTask(TaskScheduler):
             )
 
         if not stream_ids:
-            self._processed_trigger_keys.update(trigger_keys)
             return TaskResult(
                 success=True,
                 message="Matching EPG channels have no streams",
@@ -291,6 +312,7 @@ class EPGEventProbeTask(TaskScheduler):
             allow_reorder_after_probe=self._allow_reorder_after_probe,
         )
         if probe_result.get("status") == "already_running":
+            self._release_claims(trigger_keys)
             return TaskResult(
                 success=False,
                 message="A stream probe is already in progress",
@@ -299,7 +321,6 @@ class EPGEventProbeTask(TaskScheduler):
                 completed_at=datetime.utcnow(),
             )
 
-        self._processed_trigger_keys.update(trigger_keys)
         failed_count = int(probe_result.get("failed", 0))
         success_count = int(probe_result.get("success", 0))
         total = int(probe_result.get("total", len(stream_ids)))

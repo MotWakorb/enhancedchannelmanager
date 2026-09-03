@@ -509,6 +509,10 @@ _STANDARD_ARTIFACT_EXCLUDED: dict[str, str] = {
     "pending_merges": "The merge review queue — transient, regenerates on the next run.",
     "pending_merge_journal": "Merge review action history, keyed by actor_token_id.",
     "event_sync_reviews": "The event-sync review queue — transient, regenerates.",
+    "epg_event_probe_claims": (
+        "Probe-trigger idempotency history tied to live EPG events and channel ids; "
+        "a restored instance evaluates its current guide state independently."
+    ),
     "profile_conflict_reviews": (
         "The channel-profile conflict review queue — transient workflow state; "
         "conflicts are detected again from live M3U group settings."
