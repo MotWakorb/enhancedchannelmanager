@@ -156,6 +156,47 @@ describe('ChannelPipelineTab', () => {
       });
     });
 
+    it('shows enabled standard and Event Sync rules outside their inclusive UTC active window as inactive', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const offsetUtcDate = (days: number) => {
+        const date = new Date(`${today}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() + days);
+        return date.toISOString().slice(0, 10);
+      };
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({
+          name: 'Future Standard Rule',
+          enabled: true,
+          active_from: offsetUtcDate(1),
+        }),
+        createMockChannelPipelineRule({
+          name: 'Expired Event Sync Rule',
+          enabled: true,
+          active_until: offsetUtcDate(-1),
+          event_sync_config: {
+            master_group_id: 1, secondary_group_ids: [2], auto_run: false,
+          },
+        }),
+        createMockChannelPipelineRule({
+          name: 'Boundary Rule',
+          enabled: true,
+          active_from: today,
+          active_until: today,
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const futureRow = (await screen.findByText('Future Standard Rule')).closest('tr')!;
+      const expiredEventSyncRow = screen.getByText('Expired Event Sync Rule').closest('tr')!;
+      const boundaryRow = screen.getByText('Boundary Rule').closest('tr')!;
+      const inactiveLabel = 'Inactive: enabled, but outside its active UTC date window';
+
+      expect(within(futureRow).getByText('Inactive')).toHaveAttribute('aria-label', inactiveLabel);
+      expect(within(expiredEventSyncRow).getByText('Inactive')).toHaveAttribute('aria-label', inactiveLabel);
+      expect(within(boundaryRow).getByText('Enabled')).toHaveClass('badge-success');
+    });
+
     it('shows rule priority', async () => {
       mockDataStore.channelPipelineRules.push(
         createMockChannelPipelineRule({ name: 'High Priority', priority: 1 }),

@@ -45,6 +45,7 @@ const getStatusBadgeClass = (status: string) => {
   const map: Record<string, string> = {
     enabled: 'badge-success', completed: 'badge-success',
     disabled: '', failed: 'badge-error',
+    inactive: 'badge-warning',
     running: 'badge-info', rolled_back: 'badge-warning',
     capped: 'badge-warning', abandoned: 'badge-error',
     // y3m6o.1 (0152): a run in which an action failed is amber/warning — some
@@ -54,6 +55,15 @@ const getStatusBadgeClass = (status: string) => {
   };
   return `badge badge-sm badge-uppercase ${map[status] || ''}`;
 };
+
+const isOutsideActiveWindow = (rule: ChannelPipelineRule, today: string) =>
+  Boolean(
+    (rule.active_from && rule.active_from > today) ||
+    (rule.active_until && rule.active_until < today),
+  );
+
+const getRuleStatus = (rule: ChannelPipelineRule, today: string) =>
+  !rule.enabled ? 'disabled' : isOutsideActiveWindow(rule, today) ? 'inactive' : 'enabled';
 
 /** Human-readable label for execution statuses that need one (others are fine as-is). */
 const EXECUTION_STATUS_LABEL: Partial<Record<string, string>> = {
@@ -397,18 +407,17 @@ export function ChannelPipelineTab() {
     [rules, selectedRuleIds],
   );
 
+  const today = new Date().toISOString().slice(0, 10);
   const selectedRuleEligibility = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
     return selectedRules.map(rule => ({
       rule,
       reason: !rule.enabled
         ? 'Disabled rules cannot run.'
-        : (rule.active_from && rule.active_from > today) ||
-            (rule.active_until && rule.active_until < today)
+        : isOutsideActiveWindow(rule, today)
           ? 'This rule is outside its active date window.'
           : null,
     }));
-  }, [selectedRules]);
+  }, [selectedRules, today]);
 
   // Handlers
   const handleCreateRule = useCallback(() => {
@@ -1283,8 +1292,15 @@ export function ChannelPipelineTab() {
                       </td>
                       <td className="col-priority">{index + 1}</td>
                       <td className="col-status">
-                        <span className={getStatusBadgeClass(rule.enabled ? 'enabled' : 'disabled')}>
-                          {rule.enabled ? 'Enabled' : 'Disabled'}
+                        <span
+                          className={getStatusBadgeClass(getRuleStatus(rule, today))}
+                          aria-label={getRuleStatus(rule, today) === 'inactive'
+                            ? 'Inactive: enabled, but outside its active UTC date window'
+                            : undefined}
+                        >
+                          {getRuleStatus(rule, today) === 'inactive'
+                            ? 'Inactive'
+                            : rule.enabled ? 'Enabled' : 'Disabled'}
                         </span>
                       </td>
                       <td className="col-matches">{rule.match_count || 0}</td>
