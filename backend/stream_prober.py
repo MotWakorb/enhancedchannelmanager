@@ -3188,7 +3188,12 @@ class StreamProber:
         finally:
             self._probing_in_progress = False
 
-    async def probe_streams_by_ids(self, stream_ids: list[int], start_send_alerts: bool = True):
+    async def probe_streams_by_ids(
+        self,
+        stream_ids: list[int],
+        start_send_alerts: bool = True,
+        allow_reorder_after_probe: bool = True,
+    ):
         """Probe a specific list of stream IDs in the background (on-demand bulk probe).
 
         This is the async backing for POST /api/stream-stats/probe/bulk. It reuses
@@ -3210,6 +3215,8 @@ class StreamProber:
             start_send_alerts: Whether the info-level "probe started" notification
                 should dispatch an external alert (gated value — see
                 ``probe_all_streams``; GH #462).
+            allow_reorder_after_probe: Whether this invocation may apply the global
+                auto-reorder setting. False leaves channel order unchanged.
 
         Returns:
             Dict envelope: {status, probed, total, success, failed} or
@@ -3325,7 +3332,11 @@ class StreamProber:
             # that actually contain a probed stream — matching the prior bulk
             # endpoint's scope so opted-in users don't lose that behavior.
             reordered_channels = []
-            if self.auto_reorder_after_probe and not self._probe_cancelled:
+            if (
+                self.auto_reorder_after_probe
+                and allow_reorder_after_probe
+                and not self._probe_cancelled
+            ):
                 self._probe_progress_status = "reordering"
                 self._probe_progress_current_stream = "Reordering streams..."
                 try:

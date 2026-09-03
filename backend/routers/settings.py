@@ -2405,7 +2405,12 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
             try:
                 from task_registry import get_registry
                 registry = get_registry()
-                for tid in ("stream_probe", "failed_stream_reprobe", "black_screen_scan"):
+                for tid in (
+                    "stream_probe",
+                    "epg_event_probe",
+                    "failed_stream_reprobe",
+                    "black_screen_scan",
+                ):
                     task_instance = registry.get_task_instance(tid)
                     if task_instance:
                         task_instance.set_prober(new_prober)

@@ -27,11 +27,12 @@ Three of ECM's Dispatcharr integration bugs (`q6xjl`, `lsa0s`, and the settings-
 
 1. Fetch the live schema: `GET /api/schema/?format=json` (see above — do not fetch the bare route).
 2. Check the `paths` object in the response for the exact path you intend to call, and inspect its `get`/`post`/`patch`/`delete` keys for the request/response shape.
-3. If you cannot reach a live instance, use the recorded fixtures below — they are literal slices of a real 0.28.2 response, not hand-written examples:
+3. If you cannot reach a live instance, use the recorded fixtures below. Most are literal slices of a real 0.28.2 response; fixtures captured from another version or shape-preserving redactions say so in their metadata:
    - `backend/tests/fixtures/dispatcharr_openapi_recorded.json` — a slice of the `/api/schema/?format=json` document (the `/api/core/settings/` and `/api/core/settings/{id}/` path items, plus the `User` component schema).
    - `backend/tests/fixtures/dispatcharr_core_settings_recorded.json` — the shape of `GET /api/core/settings/` (a bare list, non-contiguous integer ids).
    - `backend/tests/fixtures/dispatcharr_dvr_recurring_rules_recorded.json` — the shape of `GET /api/channels/recurring-rules/` and the dead-endpoint capture for the old `/api/dvr/rules/` guess.
    - `backend/tests/fixtures/dispatcharr_recordings_recorded.json` — `GET`/`POST`/`DELETE` on `/api/channels/recordings/`, captured on **0.29.0** (the others are 0.28.2). The only fixture here with populated rows *and* a refused request: it records the `400 "End time must be in the future."` a past-dated create earns, and the destination writing its own key into `custom_properties` between the 201 and the next GET.
+   - `backend/tests/fixtures/dispatcharr_epg_grid_recorded.json` — the `{"data": [...]}` response shape from `GET /api/epg/grid/`, captured on **0.29.0** with one synthetic program and then value-redacted without changing fields or scalar types.
    - `backend/tests/fixtures/dispatcharr_openapi_paths_manifest.json` — **every** path and method the live 0.28.2 document exposes (all 224), with bodies stripped. Use it to answer "does this path exist, and does it allow this method?" without a live instance; use the fixtures above when you need the *shape* of a response.
 4. A path that "sounds right" by analogy to another resource is a guess, not a fact — Dispatcharr's namespacing is not fully consistent (see the DVR rules case below), and a wrong guess here has shipped a JSON-parse failure, a 404 on every apply, and a silently-empty backup category.
 

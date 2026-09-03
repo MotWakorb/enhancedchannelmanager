@@ -110,9 +110,53 @@ function makeStreamProbeTask(): TaskStatus {
   };
 }
 
+function makeEpgEventProbeTask(): TaskStatus {
+  return {
+    ...makeCleanupTask(),
+    task_id: 'epg_event_probe',
+    task_name: 'EPG Event Probe',
+    task_description: 'Probe streams when matching EPG events start',
+    enabled: false,
+    config: {},
+  };
+}
+
 describe('TaskEditorModal — bd-ia28g retention fields', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('renders and persists the EPG event probe title expression and reorder choice', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getTaskParameterSchema).mockResolvedValue({
+      task_id: 'epg_event_probe',
+      description: 'EPG event probe parameters',
+      parameters: [
+        { name: 'title_pattern', type: 'string', label: 'Title match expression', description: 'Regular expression matched against active EPG titles', required: true },
+        { name: 'allow_reorder_after_probe', type: 'boolean', label: 'Allow stream reordering', description: 'Reorder after probing', default: true },
+      ],
+    });
+    const createSchedule = vi.spyOn(api, 'createTaskSchedule').mockResolvedValue(undefined as never);
+
+    render(<TaskEditorModal task={makeEpgEventProbeTask()} onClose={vi.fn()} onSaved={vi.fn()} openAddSchedule />);
+    const dialog = await screen.findByRole('dialog', { name: 'Add Schedule' });
+    const expression = within(dialog).getByRole('textbox', { name: 'Title match expression' });
+    const save = within(dialog).getByRole('button', { name: /add schedule/i });
+    expect(save).toBeDisabled();
+
+    await user.type(expression, 'Premier League');
+    await user.click(within(dialog).getByRole('checkbox', { name: 'Allow stream reordering' }));
+    await user.click(save);
+
+    await waitFor(() => expect(createSchedule).toHaveBeenCalledWith(
+      'epg_event_probe',
+      expect.objectContaining({
+        parameters: {
+          title_pattern: 'Premier League',
+          allow_reorder_after_probe: false,
+        },
+      }),
+    ));
   });
 
   it('blocks every parent dismissal affordance while the task save is unresolved', async () => {
