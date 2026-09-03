@@ -522,6 +522,7 @@ class TestDispatchToAlertChannels:
                 "send_to_email": True,
                 "send_to_discord": False,
                 "send_to_telegram": False,
+                "send_to_ntfy": False,
             },
         )
         assert results["email"] is True
@@ -613,3 +614,123 @@ class TestDispatchToAlertChannels:
 
         assert failing_send.await_count == 1
         assert results["email"] is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_ntfy_only_configuration_queues_generic_alert(self, test_session):
+        """An enabled ntfy method bypasses legacy global-channel early returns."""
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = False
+
+        from models import AlertMethod
+        test_session.add(AlertMethod(
+            name="ntfy",
+            method_type="ntfy",
+            enabled=True,
+            config=json.dumps({"server_url": "https://ntfy.example", "topic": "ecm"}),
+        ))
+        test_session.commit()
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as send:
+            from services.notification_service import _dispatch_to_alert_channels
+            results = await _dispatch_to_alert_channels(
+                title="Task complete", message="Done", notification_type="success",
+                source="task", metadata={"task_name": "Refresh"},
+                channel_settings={
+                    "send_to_email": False,
+                    "send_to_discord": False,
+                    "send_to_telegram": False,
+                },
+            )
+
+        send.assert_awaited_once_with(
+            title="Task complete", message="Done", notification_type="success",
+            source="task", metadata={"task_name": "Refresh"}, alert_category=None,
+            entity_id=None,
+            channel_settings={
+                "send_to_email": False,
+                "send_to_discord": False,
+                "send_to_telegram": False,
+                "send_to_ntfy": True,
+            },
+        )
+        assert results["ntfy"] is True
+
+    @pytest.mark.asyncio
+    async def test_dispatch_generic_selection_prevents_smtp_ntfy_duplicates(self, test_session):
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = True
+
+        from models import AlertMethod
+        test_session.add_all([
+            AlertMethod(name="Email", method_type="smtp", enabled=True, config="{}"),
+            AlertMethod(name="ntfy", method_type="ntfy", enabled=True, config="{}"),
+        ])
+        test_session.commit()
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as send:
+            from services.notification_service import _dispatch_to_alert_channels
+            await _dispatch_to_alert_channels(
+                title="Task", message="Done", notification_type="success",
+                source="task", metadata=None,
+                channel_settings={"send_to_email": True, "send_to_discord": False, "send_to_telegram": False},
+            )
+
+        assert send.await_count == 1
+        channels = send.await_args.kwargs["channel_settings"]
+        assert channels["send_to_email"] is True
+        assert channels["send_to_ntfy"] is True
+        assert channels["send_to_discord"] is False
+        assert channels["send_to_telegram"] is False
+
+    @pytest.mark.asyncio
+    async def test_dispatch_skips_disabled_ntfy_method(self, test_session):
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = False
+
+        from models import AlertMethod
+        test_session.add(AlertMethod(name="ntfy", method_type="ntfy", enabled=False, config="{}"))
+        test_session.commit()
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new_callable=AsyncMock) as send:
+            from services.notification_service import _dispatch_to_alert_channels
+            results = await _dispatch_to_alert_channels(
+                title="Task", message="Done", notification_type="success",
+                source="task", metadata=None,
+            )
+
+        send.assert_not_awaited()
+        assert results["ntfy"] is None
+
+    @pytest.mark.asyncio
+    async def test_dispatch_ntfy_exception_is_contained(self, test_session):
+        mock_settings = MagicMock()
+        mock_settings.is_discord_configured.return_value = False
+        mock_settings.is_telegram_configured.return_value = False
+        mock_settings.is_smtp_configured.return_value = False
+
+        from models import AlertMethod
+        test_session.add(AlertMethod(name="ntfy", method_type="ntfy", enabled=True, config="{}"))
+        test_session.commit()
+
+        with patch("services.notification_service.get_settings", return_value=mock_settings), \
+             patch("services.notification_service.get_session", return_value=test_session), \
+             patch("alert_methods.send_alert", new=AsyncMock(side_effect=RuntimeError("delivery failed"))):
+            from services.notification_service import _dispatch_to_alert_channels
+            results = await _dispatch_to_alert_channels(
+                title="Task", message="Done", notification_type="error",
+                source="task", metadata=None,
+            )
+
+        assert results["ntfy"] is False

@@ -78,6 +78,7 @@ ALERT_METHOD_CREDENTIAL_KEYS: tuple[str, ...] = (
     "bot_token",
     "webhook_url",
     "api_key",
+    "access_token",
 )
 CREDENTIAL_SECRET_KEYS: frozenset[str] = frozenset(
     {key.lower() for key in SETTINGS_CREDENTIAL_FIELDS}

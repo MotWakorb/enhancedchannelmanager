@@ -2089,6 +2089,7 @@ class TestZipExportRedaction:
         smtp_password_literal = "TOPSECRET-SMTP-LITERAL-XYZ"
         webhook_url_literal = "https://discord.example/leakme-WEBHOOK-XYZ"
         bot_token_literal = "tg-bot-LEAK-XYZ"
+        ntfy_token_literal = "ntfy-token-LEAK-XYZ"
         _create_journal_db_with_alert_methods(db_file, [
             {
                 "id": 1,
@@ -2113,6 +2114,16 @@ class TestZipExportRedaction:
                 "method_type": "telegram",
                 "config": {"bot_token": bot_token_literal, "chat_id": "1234"},
             },
+            {
+                "id": 4,
+                "name": "ntfy Alerts",
+                "method_type": "ntfy",
+                "config": {
+                    "server_url": "https://ntfy.example.test/base",
+                    "topic": "ecm",
+                    "access_token": ntfy_token_literal,
+                },
+            },
         ])
 
         mock_engine = MagicMock()
@@ -2129,7 +2140,7 @@ class TestZipExportRedaction:
         assert response.status_code == 200
         # The whole archive payload must not contain any of the raw secrets.
         archive_bytes = response.content
-        for literal in (smtp_password_literal, webhook_url_literal, bot_token_literal):
+        for literal in (smtp_password_literal, webhook_url_literal, bot_token_literal, ntfy_token_literal):
             assert literal.encode() not in archive_bytes, (
                 f"raw alert_methods credential {literal!r} leaked into the ZIP"
             )
@@ -2153,6 +2164,9 @@ class TestZipExportRedaction:
         assert configs[1]["host"] == "smtp.example.com"  # non-cred preserved
         assert configs[2]["webhook_url"] == "***REDACTED***"
         assert configs[3]["bot_token"] == "***REDACTED***"
+        assert configs[4]["access_token"] == "***REDACTED***"
+        assert configs[4]["server_url"] == "https://ntfy.example.test/base"
+        assert configs[4]["topic"] == "ecm"
         # ``chat_id`` was asserted here as "non-cred preserved". Bead …-gi4zn
         # reclassifies it: a Telegram chat id is a bearer capability to post
         # into a chat, which is why the SETTINGS-level ``telegram_chat_id`` is

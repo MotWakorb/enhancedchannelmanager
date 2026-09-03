@@ -13,6 +13,7 @@ import { AlertMethodsSection } from './AlertMethodsSection';
 
 vi.mock('../../services/api', () => ({
   listAlertMethods: vi.fn(),
+  createAlertMethod: vi.fn(),
   testAlertMethod: vi.fn(),
   deleteAlertMethod: vi.fn(),
 }));
@@ -73,6 +74,85 @@ describe('AlertMethodsSection', () => {
     });
   });
 
+  it('renders a create-only ntfy form with password token input', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    render(<AlertMethodsSection isAdmin />);
+
+    expect(await screen.findByRole('heading', { name: 'Add ntfy target' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toBeRequired();
+    expect(screen.getByLabelText('Server URL')).toBeRequired();
+    expect(screen.getByLabelText('Topic')).toBeRequired();
+    expect(screen.getByLabelText('Access token (optional)')).toHaveAttribute('type', 'password');
+  });
+
+  it('validates ntfy server URL and topic before create', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    render(<AlertMethodsSection isAdmin />);
+    await screen.findByRole('heading', { name: 'Add ntfy target' });
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Home' } });
+    fireEvent.change(screen.getByLabelText('Server URL'), { target: { value: 'ftp://host' } });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'bad topic' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Add ntfy target' }).closest('form')!);
+
+    expect(api.createAlertMethod).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith(expect.stringMatching(/HTTP.*server URL/i), 'Alert Methods');
+  });
+
+  it('rejects an invalid ntfy topic before create', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    render(<AlertMethodsSection isAdmin />);
+    await screen.findByRole('heading', { name: 'Add ntfy target' });
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Home' } });
+    fireEvent.change(screen.getByLabelText('Server URL'), { target: { value: 'https://ntfy.example.test' } });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'bad topic' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add ntfy target' }));
+
+    expect(api.createAlertMethod).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith(expect.stringMatching(/Topic must contain 1-64/i), 'Alert Methods');
+  });
+
+  it('creates an unauthenticated ntfy target with notification defaults', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    vi.mocked(api.createAlertMethod).mockResolvedValue({ id: 3, name: 'Home', method_type: 'ntfy', enabled: true });
+    render(<AlertMethodsSection isAdmin />);
+    await screen.findByRole('heading', { name: 'Add ntfy target' });
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Home' } });
+    fireEvent.change(screen.getByLabelText('Server URL'), { target: { value: 'http://192.168.1.20:8080/base/' } });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'ECM_home-1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add ntfy target' }));
+
+    await waitFor(() => expect(api.createAlertMethod).toHaveBeenCalledWith({
+      name: 'Home', method_type: 'ntfy',
+      config: { server_url: 'http://192.168.1.20:8080/base/', topic: 'ECM_home-1' },
+      enabled: true, notify_info: false, notify_success: true, notify_warning: true, notify_error: true,
+    }));
+  });
+
+  it('includes an opaque access token, reloads, and clears form state after success', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    vi.mocked(api.createAlertMethod).mockResolvedValue({ id: 3, name: 'Home', method_type: 'ntfy', enabled: true });
+    render(<AlertMethodsSection isAdmin />);
+    await screen.findByRole('heading', { name: 'Add ntfy target' });
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Home' } });
+    fireEvent.change(screen.getByLabelText('Server URL'), { target: { value: 'https://ntfy.example.test' } });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'ecm' } });
+    fireEvent.change(screen.getByLabelText('Access token (optional)'), { target: { value: '<opaque-token>' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add ntfy target' }));
+
+    await waitFor(() => expect(api.createAlertMethod).toHaveBeenCalledWith(expect.objectContaining({
+      config: {
+        server_url: 'https://ntfy.example.test', topic: 'ecm', access_token: '<opaque-token>',
+      },
+    })));
+    await waitFor(() => expect(api.listAlertMethods).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText('Name')).toHaveValue('');
+    expect(screen.getByLabelText('Access token (optional)')).toHaveValue('');
+  });
+
   it('lists alert methods with type and enabled state', async () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([smtpMethod, discordMethod]);
     render(<AlertMethodsSection isAdmin />);
@@ -85,6 +165,17 @@ describe('AlertMethodsSection', () => {
     expect(screen.getByText('Discord')).toBeInTheDocument();
     expect(screen.getByText('Enabled')).toBeInTheDocument();
     expect(screen.getByText('Disabled')).toBeInTheDocument();
+  });
+
+  it('labels ntfy rows and preserves the generic test action', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([{ ...smtpMethod, id: 9, name: 'Phone', method_type: 'ntfy' }]);
+    vi.mocked(api.testAlertMethod).mockResolvedValue({ success: true, message: 'Test notification sent successfully' });
+    render(<AlertMethodsSection isAdmin />);
+
+    await screen.findByText('Phone');
+    expect(screen.getByText('ntfy')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Send test to Phone'));
+    await waitFor(() => expect(api.testAlertMethod).toHaveBeenCalledWith(9));
   });
 
   it('sends a test message for a row and shows the result', async () => {
@@ -169,6 +260,7 @@ describe('AlertMethodsSection', () => {
       screen.getByText(/Only administrators can view or manage alert methods\./),
     ).toBeInTheDocument();
     expect(api.listAlertMethods).not.toHaveBeenCalled();
+    expect(screen.queryByRole('heading', { name: 'Add ntfy target' })).not.toBeInTheDocument();
     expect(screen.queryByText('Discord Alerts')).not.toBeInTheDocument();
   });
 });

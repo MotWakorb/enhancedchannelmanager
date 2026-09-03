@@ -42,6 +42,7 @@ from services.notification_service import (
 )
 # Import alert method implementations to register their handlers (side-effect imports)
 import alert_methods_discord  # noqa: F401
+import alert_methods_ntfy  # noqa: F401
 import alert_methods_smtp  # noqa: F401
 import alert_methods_telegram  # noqa: F401
 
@@ -106,7 +107,7 @@ tags_metadata = [
     {"name": "Providers", "description": "Stream providers (M3U accounts)"},
     {"name": "Tasks", "description": "Scheduled tasks and task execution"},
     {"name": "Notifications", "description": "System notifications"},
-    {"name": "Alert Methods", "description": "Alert delivery methods (Discord, Email, Telegram)"},
+    {"name": "Alert Methods", "description": "Alert delivery methods (Discord, Email, Telegram, ntfy)"},
     {"name": "Journal", "description": "Activity journal and audit log"},
     {"name": "Stats", "description": "Statistics and analytics"},
     {"name": "Stream Stats", "description": "Stream health monitoring and statistics"},
@@ -146,7 +147,7 @@ M3U playlists, EPG data, and more.
 - **EPG Support**: Manage Electronic Program Guide data sources
 - **Stream Monitoring**: Track stream health and statistics
 - **Scheduled Tasks**: Automate refresh and maintenance tasks
-- **Notifications**: Get alerts via Discord, Email, or Telegram
+- **Notifications**: Get alerts via Discord, Email, Telegram, or ntfy
 
 ## Authentication
 All API endpoints require JWT authentication. Obtain a token via `POST /api/auth/login`
@@ -157,7 +158,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0013",
+    version="0.18.2-0014",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

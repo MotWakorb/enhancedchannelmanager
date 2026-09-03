@@ -466,6 +466,37 @@ class TestAlertMethodManager:
         assert result is True  # Defaults to True
 
     @pytest.mark.asyncio
+    async def test_channel_selection_keeps_smtp_and_ntfy_independent(self, manager):
+        smtp = MagicMock(method_id=1, name="Email")
+        ntfy = MagicMock(method_id=2, name="ntfy")
+        manager._methods = {1: smtp, 2: ntfy}
+
+        smtp_model = MagicMock(
+            id=1, method_type="smtp", notify_info=True, alert_sources=None
+        )
+        ntfy_model = MagicMock(
+            id=2, method_type="ntfy", notify_info=True, alert_sources=None
+        )
+        session = MagicMock()
+        query = session.query.return_value
+        query.filter.return_value.first.side_effect = [smtp_model, ntfy_model]
+
+        with patch("database.get_session", return_value=session):
+            result = await manager.send_alert(
+                title="Scheduled task",
+                message="Complete",
+                channel_settings={
+                    "send_to_email": True,
+                    "send_to_discord": False,
+                    "send_to_telegram": False,
+                    "send_to_ntfy": False,
+                },
+            )
+
+        assert result == {1: True}
+        assert list(manager._alert_buffer) == [1]
+
+    @pytest.mark.asyncio
     async def test_send_alert_probe_failures_threshold_uses_streams_failed_metadata(self):
         """Regression: min_failures must see failures when only streams_failed is set (stream_probe UI keys)."""
         mt = _ensure_probe_failures_threshold_test_method_registered()

@@ -2015,6 +2015,31 @@ def test_whole_blob_sentinel_alert_config_is_repaired_from_the_destination(
     assert json.loads(raw) == {"host": "smtp.example.test", "password": DESTINATION_SMTP_SECRET}
 
 
+def test_ntfy_access_token_is_preserved_across_redacted_restore(tmp_path, monkeypatch):
+    token = "<destination-ntfy-token>"
+    config = {"server_url": "https://ntfy.example.test", "topic": "ecm", "access_token": token}
+    live = _auth_db(tmp_path / "journal.db", alert_configs=[(1, json.dumps(config))])
+    monkeypatch.setattr(backup_mod, "JOURNAL_DB_FILE", live)
+    prior = backup_mod._capture_existing_alert_method_configs()
+
+    conn = sqlite3.connect(str(live))
+    try:
+        redacted = {**config, "access_token": backup_mod.REDACTED}
+        conn.execute("UPDATE alert_methods SET config=? WHERE id=1", (json.dumps(redacted),))
+        conn.commit()
+    finally:
+        conn.close()
+
+    backup_mod._merge_alert_method_creds_after_restore(prior)
+
+    conn = sqlite3.connect(str(live))
+    try:
+        restored = json.loads(conn.execute("SELECT config FROM alert_methods WHERE id=1").fetchone()[0])
+    finally:
+        conn.close()
+    assert restored == config
+
+
 @pytest.mark.asyncio
 async def test_a_restored_standard_artifact_leaves_first_run_setup_available(
     standard_artifact, tmp_path
