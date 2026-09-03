@@ -87,6 +87,16 @@ TRIGGERED_BY_UNSPECIFIED = "unspecified"
 EVENT_SYNC_AUTO_RUN_TRIGGER = "m3u_refresh"
 
 
+def _required_provider_ids(rule) -> list[int]:
+    getter = getattr(rule, "get_required_provider_ids", None)
+    return getter() if callable(getter) else []
+
+
+def _required_provider_ids_error(rule) -> str | None:
+    getter = getattr(rule, "get_required_provider_ids_error", None)
+    return getter() if callable(getter) else None
+
+
 def event_sync_trigger_allowed(triggered_by: str, config: dict | None) -> bool:
     """Per-rule event_sync trigger gate (ti939.3.1).
 
@@ -1528,7 +1538,7 @@ class ChannelPipelineEngine:
             for rule in rules:
                 if rule.m3u_account_id:
                     accounts_to_fetch.add(rule.m3u_account_id)
-                accounts_to_fetch.update(rule.get_required_provider_ids())
+                accounts_to_fetch.update(_required_provider_ids(rule))
 
             # Required-provider coverage is additive; it must not turn an
             # otherwise unscoped ruleset into a provider-scoped run.
@@ -1550,7 +1560,7 @@ class ChannelPipelineEngine:
         self._required_provider_unavailable_ids = set()
         scoped_accounts = {
             rule.id: (
-                set(rule.get_required_provider_ids())
+                set(_required_provider_ids(rule))
                 or ({rule.m3u_account_id} if rule.m3u_account_id else set(accounts_to_fetch))
             )
             for rule in (rules or [])
@@ -1644,7 +1654,7 @@ class ChannelPipelineEngine:
         invalid_rules = defaultdict(list)
         for entry in matched_entries:
             stream, rule = entry[0], entry[1]
-            required = rule.get_required_provider_ids()
+            required = _required_provider_ids(rule)
             has_create = any(
                 (action.get("type") if isinstance(action, dict) else getattr(action, "type", None))
                 == "create_channel"
@@ -1653,7 +1663,7 @@ class ChannelPipelineEngine:
             if not has_create:
                 passthrough.append(entry)
                 continue
-            configuration_error = rule.get_required_provider_ids_error()
+            configuration_error = _required_provider_ids_error(rule)
             if isinstance(configuration_error, str):
                 invalid_rules[rule.id].append((entry, configuration_error))
                 continue
@@ -1756,7 +1766,7 @@ class ChannelPipelineEngine:
 
         for entry, normalization_error in normalization_failures:
             stream, rule = entry[0], entry[1]
-            required = set(rule.get_required_provider_ids())
+            required = set(_required_provider_ids(rule))
             present, available = rule_presence[rule.id]
             unavailable = sorted(
                 (required & self._required_provider_unavailable_ids)
@@ -1787,7 +1797,7 @@ class ChannelPipelineEngine:
 
         for (_rule_id, cohort_name), entries in cohorts.items():
             rule = entries[0][1]
-            required = set(rule.get_required_provider_ids())
+            required = set(_required_provider_ids(rule))
             present = {entry[0].m3u_account_id for entry in entries}
             available = {
                 entry[0].m3u_account_id
@@ -2916,8 +2926,8 @@ class ChannelPipelineEngine:
         stream_rule_matches = {}  # stream_id -> list of (rule_id, priority)
 
         for rule in rules:
-            required_provider_ids = rule.get_required_provider_ids()
-            configuration_error = rule.get_required_provider_ids_error()
+            required_provider_ids = _required_provider_ids(rule)
+            configuration_error = _required_provider_ids_error(rule)
             fetch_failures = self._stream_fetch_facts.get(
                 "rule_fetch_failures", {}
             ).get(rule.id, [])
@@ -2960,7 +2970,7 @@ class ChannelPipelineEngine:
 
             for rule in rules:
                 # Check if rule applies to this M3U account
-                required_provider_ids = set(rule.get_required_provider_ids())
+                required_provider_ids = set(_required_provider_ids(rule))
                 eligible_provider_ids = (
                     required_provider_ids
                     if rule.m3u_account_id and required_provider_ids
