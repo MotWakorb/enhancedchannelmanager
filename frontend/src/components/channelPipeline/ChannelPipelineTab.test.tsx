@@ -4,8 +4,8 @@
  * These tests define the expected behavior of the main channel pipeline tab BEFORE implementation.
  */
 import type * as React from 'react';
-import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { http, HttpResponse } from 'msw';
 import {
@@ -39,6 +39,7 @@ function expectDialogLabelledByVisibleHeading(dialog: HTMLElement, expectedName:
 // Setup MSW server
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => {
+  vi.useRealTimers();
   server.resetHandlers();
   resetMockDataStore();
 });
@@ -154,6 +155,110 @@ describe('ChannelPipelineTab', () => {
         expect(enabledBadge).toHaveClass('badge', 'badge-sm', 'badge-uppercase', 'badge-success');
         expect(disabledBadge).toHaveClass('badge', 'badge-sm', 'badge-uppercase');
       });
+    });
+
+    it('shows enabled standard and Event Sync rules outside their inclusive UTC active window as inactive', async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const offsetUtcDate = (days: number) => {
+        const date = new Date(`${today}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() + days);
+        return date.toISOString().slice(0, 10);
+      };
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({
+          name: 'Future Standard Rule',
+          enabled: true,
+          active_from: offsetUtcDate(1),
+        }),
+        createMockChannelPipelineRule({
+          name: 'Expired Event Sync Rule',
+          enabled: true,
+          active_until: offsetUtcDate(-1),
+          event_sync_config: {
+            master_group_id: 1, secondary_group_ids: [2], auto_run: false,
+          },
+        }),
+        createMockChannelPipelineRule({
+          name: 'Boundary Rule',
+          enabled: true,
+          active_from: today,
+          active_until: today,
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+
+      const futureRow = (await screen.findByText('Future Standard Rule')).closest('tr')!;
+      const expiredEventSyncRow = screen.getByText('Expired Event Sync Rule').closest('tr')!;
+      const boundaryRow = screen.getByText('Boundary Rule').closest('tr')!;
+      const inactiveLabel = 'Inactive: enabled, but outside its active UTC date window';
+
+      expect(within(futureRow).getByRole('cell', { name: inactiveLabel })).toBeInTheDocument();
+      expect(within(expiredEventSyncRow).getByRole('cell', { name: inactiveLabel })).toBeInTheDocument();
+      expect(within(boundaryRow).getByRole('cell', { name: 'Enabled' }))
+        .toContainElement(within(boundaryRow).getByText('Enabled'));
+    });
+
+    it('updates active-window statuses and selected-rule eligibility across UTC midnight without remounting', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(new Date('2026-09-02T23:59:59.900Z'));
+      const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({
+          name: 'Expires Tonight', enabled: true, active_until: '2026-09-02',
+        }),
+        createMockChannelPipelineRule({
+          name: 'Starts Tomorrow', enabled: true, active_from: '2026-09-03',
+        }),
+      );
+
+      const view = renderWithProviders(<ChannelPipelineTab />);
+      const expiringRow = (await screen.findByText('Expires Tonight')).closest('tr')!;
+      const startingRow = screen.getByText('Starts Tomorrow').closest('tr')!;
+      expect(within(expiringRow).getByRole('cell', { name: 'Enabled' })).toBeInTheDocument();
+      expect(within(startingRow).getByRole('cell', {
+        name: 'Inactive: enabled, but outside its active UTC date window',
+      })).toBeInTheDocument();
+
+      await user.click(within(expiringRow).getByRole('checkbox', { name: 'Select Expires Tonight' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+      const dialog = await screen.findByRole('dialog', { name: /run 1 selected rule/i });
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeEnabled();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(100);
+      });
+
+      expect(view.container).toContainElement(expiringRow);
+      expect(within(expiringRow).getByRole('cell', {
+        name: 'Inactive: enabled, but outside its active UTC date window',
+      })).toBeInTheDocument();
+      expect(within(startingRow).getByRole('cell', { name: 'Enabled' })).toBeInTheDocument();
+      expect(within(dialog).getByText(/outside its active date window/i)).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
+    });
+
+    it('keeps disabled status and selected-rule reason ahead of out-of-window status', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({
+          name: 'Disabled Future Rule',
+          enabled: false,
+          active_from: '2099-01-01',
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      const row = (await screen.findByText('Disabled Future Rule')).closest('tr')!;
+      expect(within(row).getByRole('cell', { name: 'Disabled' })).toBeInTheDocument();
+      expect(within(row).queryByRole('cell', { name: /inactive/i })).not.toBeInTheDocument();
+
+      await user.click(within(row).getByRole('checkbox', { name: 'Select Disabled Future Rule' }));
+      await user.click(screen.getByRole('button', { name: /run selected rules/i }));
+      const dialog = await screen.findByRole('dialog', { name: /run 1 selected rule/i });
+      expect(within(dialog).getByText('Disabled rules cannot run.')).toBeInTheDocument();
+      expect(within(dialog).queryByText(/outside its active date window/i)).not.toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: /^run selected$/i })).toBeDisabled();
     });
 
     it('shows rule priority', async () => {
