@@ -169,6 +169,8 @@ export function createMockChannelPipelineExecution(overrides: Partial<MockChanne
   const id = overrides.id ?? nextId()
   return {
     id,
+    rule_id: overrides.rule_id ?? null,
+    rule_name: overrides.rule_name ?? null,
     mode: overrides.mode ?? 'execute',
     triggered_by: overrides.triggered_by ?? 'manual',
     started_at: overrides.started_at ?? new Date().toISOString(),
@@ -351,6 +353,8 @@ interface MockChannelPipelineRule {
 
 interface MockChannelPipelineExecution {
   id: number
+  rule_id: number | null
+  rule_name: string | null
   mode: 'execute' | 'dry_run'
   triggered_by: 'manual' | 'scheduled' | 'm3u_refresh'
   started_at: string

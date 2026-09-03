@@ -448,6 +448,9 @@ export type ExecutionLogFilterCategory =
  */
 export interface ChannelPipelineExecution {
   id: number;
+  /** Source rule identity snapshotted when a single-rule execution starts. */
+  rule_id?: number | null;
+  rule_name?: string | null;
   mode: ExecutionMode;
   triggered_by: ExecutionTrigger;
   scheduled_task_id?: string;
