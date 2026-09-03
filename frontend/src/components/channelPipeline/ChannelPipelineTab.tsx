@@ -407,7 +407,25 @@ export function ChannelPipelineTab() {
     [rules, selectedRuleIds],
   );
 
-  const today = new Date().toISOString().slice(0, 10);
+  const [today, setToday] = useState(() => new Date().toISOString().slice(0, 10));
+  useEffect(() => {
+    let timeoutId: number;
+    const scheduleNextUtcDay = () => {
+      const now = new Date();
+      const nextUtcMidnight = Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() + 1,
+      );
+      timeoutId = window.setTimeout(() => {
+        setToday(new Date().toISOString().slice(0, 10));
+        scheduleNextUtcDay();
+      }, nextUtcMidnight - now.getTime());
+    };
+    scheduleNextUtcDay();
+    return () => window.clearTimeout(timeoutId);
+  }, []);
+
   const selectedRuleEligibility = useMemo(() => {
     return selectedRules.map(rule => ({
       rule,
@@ -1294,13 +1312,15 @@ export function ChannelPipelineTab() {
                       <td className="col-status">
                         <span
                           className={getStatusBadgeClass(getRuleStatus(rule, today))}
-                          aria-label={getRuleStatus(rule, today) === 'inactive'
-                            ? 'Inactive: enabled, but outside its active UTC date window'
-                            : undefined}
                         >
                           {getRuleStatus(rule, today) === 'inactive'
                             ? 'Inactive'
                             : rule.enabled ? 'Enabled' : 'Disabled'}
+                          {getRuleStatus(rule, today) === 'inactive' && (
+                            <span className="visually-hidden">
+                              : enabled, but outside its active UTC date window
+                            </span>
+                          )}
                         </span>
                       </td>
                       <td className="col-matches">{rule.match_count || 0}</td>
