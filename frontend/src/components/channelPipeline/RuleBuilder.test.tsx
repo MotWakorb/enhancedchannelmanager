@@ -438,6 +438,34 @@ describe('RuleBuilder', () => {
       expect(onSave).not.toHaveBeenCalled();
     });
 
+    it.each([
+      ['unassign_profile', /stream profile is required for selected removal/i],
+      ['unassign_channel_profile', /at least one channel profile is required for selected removal/i],
+    ] as const)('blocks selected %s removal without its profile selection', async (type, message) => {
+      const user = userEvent.setup();
+      const onSave = vi.fn();
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'Cleanup',
+        conditions: [{ type: 'always' }],
+        actions: [{ type, target: 'selected' }],
+      };
+
+      render(
+        <RuleBuilder
+          rule={rule as ChannelPipelineRule}
+          onSave={onSave}
+          onCancel={vi.fn()}
+        />
+      );
+
+      await user.click(screen.getByRole('button', { name: /^save$/i }));
+
+      expect(onSave).not.toHaveBeenCalled();
+      expect(screen.getAllByRole('alert').some(alert => (
+        message.test(alert.textContent || '')
+      ))).toBe(true);
+    });
+
     it('shows inline validation errors for conditions', async () => {
       const user = userEvent.setup();
       render(<RuleBuilder onSave={vi.fn()} onCancel={vi.fn()} />);

@@ -4909,18 +4909,6 @@ class TestProfileUniverseSentinelBehavioral:
         # (disable 1, 3), enable-2 is a redundant no-op that is skipped.
         assert calls == {1: False, 3: False}
 
-    def test_event_sync_unassign_channel_profile_fetches_profile_universe(self):
-        get_profiles = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
-        _client, engine = self._make_engine(get_profiles)
-        rule = self._event_rule([
-            {"type": "unassign_channel_profile", "target": "all"}
-        ])
-
-        captured = self._run_and_capture_executor(engine, event_sync_rules=[rule])
-
-        get_profiles.assert_awaited_once()
-        assert captured["all_profile_ids"] == [1, 2]
-
     def test_engine_builds_membership_map_from_profile_channels(self):
         """y3m6o.1 review follow-up: the engine inverts the profile payload's
         ``channels`` (enabled member ids) into a channel_id -> {profile_ids} map

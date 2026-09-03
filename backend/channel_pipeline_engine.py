@@ -2720,7 +2720,8 @@ class ChannelPipelineEngine:
                                        normalization_engine=norm_engine)
 
         # Fetch all profile IDs if default profiles are configured OR any rule
-        # uses a channel-profile assignment/removal action. Honoring a per-rule
+        # uses a channel-profile assignment action, or a standard rule uses a
+        # removal action. Honoring a per-rule
         # assignment selection is subtractive (enable selected, disable the rest — GH #720
         # / y3m6o), so the disable loop needs the full profile universe even
         # when no GLOBAL default is set. Event-sync rules are in scope and are
@@ -2729,8 +2730,13 @@ class ChannelPipelineEngine:
         # action shapes).
         needs_profiles = bool(settings.default_channel_profile_ids) or any(
             (a.get("type") if isinstance(a, dict) else getattr(a, "type", ""))
-            in ("assign_channel_profile", "unassign_channel_profile")
+            == "assign_channel_profile"
             for r in list(rules) + list(event_sync_rules or [])
+            for a in r.get_actions()
+        ) or any(
+            (a.get("type") if isinstance(a, dict) else getattr(a, "type", ""))
+            == "unassign_channel_profile"
+            for r in rules
             for a in r.get_actions()
         )
         # all_profile_ids carries a THREE-way availability signal consumed by
@@ -4979,7 +4985,7 @@ class ChannelPipelineEngine:
                 rule, executor, exec_ctx, results, dry_run, summary,
             )
             if profile_summary is not None:
-                summary[profile_summary.pop("summary_key")] = profile_summary
+                summary["assign_channel_profile"] = profile_summary
 
             # y3m6o.1 review (Finding 1): route this rule's event_sync attach
             # failures — master attaches AND promotion attaches — through the
@@ -5197,7 +5203,7 @@ class ChannelPipelineEngine:
         dry_run: bool,
         summary: dict,
     ) -> Optional[dict]:
-        """Apply channel-profile assignment/removal actions to touched channels.
+        """Apply the rule's ``assign_channel_profile`` action to the channels an
         event_sync rule touched this run (GH #720 / y3m6o.1 Finding 4 — 0152).
 
         event_sync rules are excluded from Pass 1/2 action evaluation, so a
@@ -5217,14 +5223,12 @@ class ChannelPipelineEngine:
         never churns Dispatcharr-owned masters it did not act on this run.
 
         Returns a step summary folded onto the rule's event_sync summary, or
-        None when the rule carries no channel-profile action (the common case
-        remains byte-identical to pre-feature behavior).
+        None when the rule carries no ``assign_channel_profile`` action (the
+        common case — byte-identical to pre-feature behavior).
         """
         profile_actions = [
             a for a in rule.get_actions()
-            if a.get("type") in (
-                "assign_channel_profile", "unassign_channel_profile"
-            )
+            if a.get("type") == "assign_channel_profile"
         ]
         if not profile_actions:
             return None
@@ -5250,14 +5254,6 @@ class ChannelPipelineEngine:
             "failed": 0,
             "channel_profile_ids": list(
                 profile_actions[0].get("channel_profile_ids", [])
-            ),
-            "summary_key": (
-                profile_actions[0]["type"]
-                if all(
-                    a["type"] == profile_actions[0]["type"]
-                    for a in profile_actions
-                )
-                else "channel_profile_actions"
             ),
         }
         if not touched_ids:
@@ -5309,7 +5305,7 @@ class ChannelPipelineEngine:
                 "m3u_account_id": None,
                 "rules_evaluated": [],
                 "actions_executed": [{
-                    "type": result.action_type,
+                    "type": "assign_channel_profile",
                     "description": result.description,
                     "success": result.success,
                     "entity_id": result.entity_id,
@@ -5345,7 +5341,7 @@ class ChannelPipelineEngine:
             "m3u_account_id": None,
             "rules_evaluated": [],
             "actions_executed": [{
-                "type": f"event_sync_{step['summary_key']}_summary",
+                "type": "event_sync_assign_channel_profile_summary",
                 "description": profile_line,
                 "success": step["failed"] == 0,
                 "entity_id": None,

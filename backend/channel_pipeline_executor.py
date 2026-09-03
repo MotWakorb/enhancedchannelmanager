@@ -3097,62 +3097,116 @@ class ActionExecutor:
             )
 
         channel = self._channel_by_id.get(channel_id, {})
-        current_profile_id = channel.get("stream_profile_id")
-        if current_profile_id is None:
-            return ActionResult(
-                success=True,
-                action_type=action.type,
-                description="Channel has no stream profile (no change)",
-                entity_type="channel",
-                entity_id=channel_id,
-            )
-        if target == "selected" and current_profile_id != profile_id:
-            return ActionResult(
-                success=True,
-                action_type=action.type,
-                description=(
-                    f"Channel uses stream profile {current_profile_id}, not selected "
-                    f"profile {profile_id} (no change)"
-                ),
-                entity_type="channel",
-                entity_id=channel_id,
-            )
-
-        description = (
-            f"Would remove stream profile {current_profile_id} from channel"
-            if exec_ctx.dry_run
-            else f"Removed stream profile {current_profile_id} from channel"
-        )
         if exec_ctx.dry_run:
+            current_profile_id = channel.get("stream_profile_id")
+            if current_profile_id is None:
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description="Channel has no stream profile (no change)",
+                    entity_type="channel",
+                    entity_id=channel_id,
+                )
+            if target == "selected" and current_profile_id != profile_id:
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=(
+                        f"Channel uses stream profile {current_profile_id}, not selected "
+                        f"profile {profile_id} (no change)"
+                    ),
+                    entity_type="channel",
+                    entity_id=channel_id,
+                )
             channel["stream_profile_id"] = None
             return ActionResult(
                 success=True,
                 action_type=action.type,
-                description=description,
+                description=f"Would remove stream profile {current_profile_id} from channel",
                 entity_type="channel",
                 entity_id=channel_id,
                 modified=True,
             )
 
-        try:
-            previous_state = {"stream_profile_id": current_profile_id}
-            await self.client.update_channel(channel_id, {"stream_profile_id": None})
-            channel["stream_profile_id"] = None
-            return ActionResult(
-                success=True,
-                action_type=action.type,
-                description=description,
-                entity_type="channel",
-                entity_id=channel_id,
-                modified=True,
-                previous_state=previous_state,
-            )
-        except Exception as e:
+        from services.profile_reconcile import effective_group_lock
+        eff_gid, has_group = await self._resolve_channel_effective_group(
+            channel_id, exec_ctx
+        )
+        if has_group and eff_gid is None:
             return ActionResult(
                 success=False,
                 action_type=action.type,
-                description="Failed to remove stream profile",
-                error=str(e),
+                description="Stream profile removal deferred: group lock unresolvable",
+                entity_type="channel",
+                entity_id=channel_id,
+                error="group lock key unresolvable; failed closed (no write)",
+            )
+        lock_cm = (
+            effective_group_lock(eff_gid)
+            if eff_gid is not None
+            else contextlib.nullcontext()
+        )
+        async with lock_cm:
+            try:
+                fresh = await self.client.get_channel(channel_id)
+            except Exception as e:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description="Failed to refresh stream profile before removal",
+                    entity_type="channel",
+                    entity_id=channel_id,
+                    error=str(e),
+                )
+            if not isinstance(fresh, dict):
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description="Failed to refresh stream profile before removal",
+                    entity_type="channel",
+                    entity_id=channel_id,
+                    error="Channel refresh returned an invalid response",
+                )
+            current_profile_id = fresh.get("stream_profile_id")
+            if current_profile_id is None:
+                channel["stream_profile_id"] = None
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description="Channel has no stream profile (no change)",
+                    entity_type="channel",
+                    entity_id=channel_id,
+                )
+            if target == "selected" and current_profile_id != profile_id:
+                channel["stream_profile_id"] = current_profile_id
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=(
+                        f"Channel uses stream profile {current_profile_id}, not selected "
+                        f"profile {profile_id} (no change)"
+                    ),
+                    entity_type="channel",
+                    entity_id=channel_id,
+                )
+            try:
+                await self.client.update_channel(channel_id, {"stream_profile_id": None})
+            except Exception as e:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description="Failed to remove stream profile",
+                    error=str(e),
+                )
+            channel["stream_profile_id"] = None
+            return ActionResult(
+                success=True,
+                action_type=action.type,
+                description=f"Removed stream profile {current_profile_id} from channel",
+                entity_type="channel",
+                entity_id=channel_id,
+                modified=True,
+                previous_state={"stream_profile_id": current_profile_id},
             )
 
     async def _resolve_channel_effective_group(self, channel_id, exec_ctx):
@@ -3393,19 +3447,20 @@ class ActionExecutor:
                 description="No channel_profile_ids specified for selected removal",
                 error="Missing channel_profile_ids",
             )
-        if target == "all":
-            if self._all_profile_ids is None:
-                return ActionResult(
-                    success=False,
-                    action_type=action.type,
-                    description="Cannot remove all channel profiles: profile universe unavailable",
-                    entity_type="channel",
-                    entity_id=channel_id,
-                    error="Channel profile universe unavailable; retry once profiles are reachable.",
-                )
-            remove_ids = list(self._all_profile_ids)
-        else:
-            remove_ids = list(selected_ids)
+        if exec_ctx.dry_run and target == "all" and self._all_profile_ids is None:
+            return ActionResult(
+                success=False,
+                action_type=action.type,
+                description="Cannot remove all channel profiles: profile universe unavailable",
+                entity_type="channel",
+                entity_id=channel_id,
+                error="Channel profile universe unavailable; retry once profiles are reachable.",
+            )
+        remove_ids = (
+            list(self._all_profile_ids or [])
+            if target == "all"
+            else list(selected_ids)
+        )
 
         disable_ids = self._profile_removal_plan(channel_id, remove_ids)
         scope_description = (
@@ -3414,6 +3469,11 @@ class ActionExecutor:
             else f"selected channel profile(s) {sorted(set(remove_ids))}"
         )
         if exec_ctx.dry_run:
+            current = self._current_profile_membership(channel_id)
+            current.difference_update(disable_ids)
+            if self._channel_profile_membership is not None:
+                self._channel_profile_membership[channel_id] = current
+                self._run_start_channel_ids.add(channel_id)
             return ActionResult(
                 success=True,
                 action_type=action.type,
@@ -3446,10 +3506,51 @@ class ActionExecutor:
             else contextlib.nullcontext()
         )
         async with lock_cm:
-            marked = await self._mark_channel_profile_ownership(channel_id, rule_id)
-            if not marked:
-                exec_ctx.profile_ownership_unestablished_channel_ids.add(channel_id)
+            try:
+                profiles = await self.client.get_channel_profiles()
+            except Exception as e:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description="Channel profile removal deferred: membership refresh failed",
+                    entity_type="channel",
+                    entity_id=channel_id,
+                    error=str(e),
+                )
+            fresh_ids = [
+                profile["id"] for profile in profiles
+                if isinstance(profile, dict) and "id" in profile
+            ]
+            current = {
+                profile["id"] for profile in profiles
+                if isinstance(profile, dict)
+                and "id" in profile
+                and channel_id in (profile.get("channels") or [])
+            }
+            self._all_profile_ids = fresh_ids
+            if self._channel_profile_membership is not None:
+                self._channel_profile_membership[channel_id] = current
+                self._run_start_channel_ids.add(channel_id)
+            effective_remove_ids = fresh_ids if target == "all" else remove_ids
+            disable_ids = [
+                profile_id for profile_id in dict.fromkeys(effective_remove_ids)
+                if profile_id in current
+            ]
+            if not disable_ids:
+                return ActionResult(
+                    success=True,
+                    action_type=action.type,
+                    description=f"Channel already removed from {scope_description} (no change)",
+                    entity_type="channel",
+                    entity_id=channel_id,
+                    rollbackable=False,
+                )
             membership = await self._apply_profile_removal(channel_id, disable_ids)
+            marked = True
+            if membership.changed:
+                marked = await self._mark_channel_profile_ownership(channel_id, rule_id)
+                if not marked:
+                    exec_ctx.profile_ownership_unestablished_channel_ids.add(channel_id)
 
         if membership.failed_profile_ids:
             failed = ", ".join(str(pid) for pid in membership.failed_profile_ids)
@@ -3615,9 +3716,7 @@ class ActionExecutor:
         self, action: Action | dict, channel_ids: list[int],
         exec_ctx: ExecutionContext, rule_id: Optional[int] = None,
     ) -> list[ActionResult]:
-        """Apply a channel-profile action to an EXPLICIT set of channel ids.
-
-        This is the event_sync execution path (GH #720 / y3m6o.1 Finding 4).
+        """Apply ``assign_channel_profile`` to an EXPLICIT set of channel ids.
 
         ``rule_id`` (GH #720 Part B handoff) is threaded into the per-channel
         ownership marker exactly as the standard path does, so event_sync-owned
@@ -3658,14 +3757,9 @@ class ActionExecutor:
         try:
             for channel_id in ordered_ids:
                 exec_ctx.current_channel_id = channel_id
-                if action.type == ActionType.UNASSIGN_CHANNEL_PROFILE.value:
-                    result = await self._execute_unassign_channel_profile(
-                        action, exec_ctx, rule_id=rule_id
-                    )
-                else:
-                    result = await self._execute_assign_channel_profile(
-                        action, dummy_ctx, exec_ctx, rule_id=rule_id
-                    )
+                result = await self._execute_assign_channel_profile(
+                    action, dummy_ctx, exec_ctx, rule_id=rule_id
+                )
                 exec_ctx.add_result(result)
                 results.append(result)
         finally:
