@@ -487,6 +487,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
           <h4 className="section-title">Task Parameters</h4>
           {parameterSchema.map((param) => {
             const descriptionId = `schedule-parameter-${param.name}-description`;
+            const inputId = `schedule-parameter-${param.name}`;
             const source = param.source || param.name;
             const sourceState = parameterSourceStatus?.[source];
             const rawSelectedValues = parameters[param.name];
@@ -501,12 +502,15 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
                   Timeout and Max Concurrent are optional overrides for the global settings in Settings → Maintenance.
                 </p>
               )}
-              <label>{param.label}</label>
+              {param.type !== 'boolean' && (
+                <label htmlFor={inputId}>{param.label}</label>
+              )}
               <p id={descriptionId} className="param-description">{param.description}</p>
 
               {/* Number input */}
               {param.type === 'number' && (
                 <input
+                  id={inputId}
                   type="number"
                   value={(parameters[param.name] as number) ?? param.default ?? 0}
                   onChange={(e) => updateParameter(param.name, parseInt(e.target.value) || 0)}
@@ -519,6 +523,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
               {/* String input */}
               {param.type === 'string' && (
                 <input
+                  id={inputId}
                   type="text"
                   value={(parameters[param.name] as string) ?? param.default ?? ''}
                   onChange={(e) => updateParameter(param.name, e.target.value)}
@@ -530,6 +535,7 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
               {param.type === 'boolean' && (
                 <label className="checkbox-label">
                   <input
+                    id={inputId}
                     type="checkbox"
                     checked={(parameters[param.name] as boolean) ?? param.default ?? false}
                     onChange={(e) => updateParameter(param.name, e.target.checked)}

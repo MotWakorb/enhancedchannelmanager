@@ -279,6 +279,34 @@ class TestTaskSchedules:
                 assert data["parameters"]["channel_groups"] == ["Sports", "News"]
 
     @pytest.mark.asyncio
+    async def test_epg_probe_rejects_invalid_regex_before_persisting_schedule(
+        self, async_client, test_session
+    ):
+        from models import TaskSchedule
+        from tasks.epg_event_probe import EPGEventProbeTask
+        from tests.fixtures.factories import create_scheduled_task
+
+        create_scheduled_task(test_session, task_id="epg_event_probe")
+
+        with patch("task_registry.get_registry") as mock_registry:
+            mock_registry.return_value.get_task_class.return_value = EPGEventProbeTask
+            response = await async_client.post(
+                "/api/tasks/epg_event_probe/schedules",
+                json={
+                    "name": "Invalid EPG Probe",
+                    "schedule_type": "interval",
+                    "interval_seconds": 60,
+                    "parameters": {"title_pattern": "["},
+                },
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "title_pattern must be a valid regex"
+        assert test_session.query(TaskSchedule).filter(
+            TaskSchedule.task_id == "epg_event_probe"
+        ).count() == 0
+
+    @pytest.mark.asyncio
     async def test_update_task_schedule(self, async_client, test_session):
         """PATCH /api/tasks/{task_id}/schedules/{schedule_id} updates schedule."""
         from tests.fixtures.factories import create_task_schedule

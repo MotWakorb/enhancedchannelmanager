@@ -157,7 +157,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0012",
+    version="0.18.2-0013",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1644,6 +1644,13 @@ async def startup_event():
                     logger.info("[MAIN] Connected StreamProber to StreamProbeTask")
                 else:
                     logger.warning("[MAIN] StreamProbeTask not found in registry")
+
+                epg_event_probe_task = registry.get_task_instance("epg_event_probe")
+                if epg_event_probe_task:
+                    epg_event_probe_task.set_prober(prober)
+                    logger.info("[MAIN] Connected StreamProber to EPGEventProbeTask")
+                else:
+                    logger.warning("[MAIN] EPGEventProbeTask not found in registry")
 
                 failed_reprobe_task = registry.get_task_instance("failed_stream_reprobe")
                 if failed_reprobe_task:

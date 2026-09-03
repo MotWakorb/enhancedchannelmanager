@@ -11,6 +11,7 @@ from tasks.m3u_change_monitor import M3UChangeMonitorTask
 from tasks.cleanup import CleanupTask
 from tasks.journal_noise_purge import JournalNoisePurgeTask
 from tasks.stream_probe import StreamProbeTask
+from tasks.epg_event_probe import EPGEventProbeTask
 from tasks.failed_stream_reprobe import FailedStreamReprobeTask
 from tasks.struck_stream_cleanup import StruckStreamCleanupTask
 from tasks.popularity_calculation import PopularityCalculationTask
@@ -30,6 +31,7 @@ __all__ = [
     "CleanupTask",
     "JournalNoisePurgeTask",
     "StreamProbeTask",
+    "EPGEventProbeTask",
     "FailedStreamReprobeTask",
     "StruckStreamCleanupTask",
     "PopularityCalculationTask",

@@ -956,7 +956,7 @@ class TestUpdateSettingsRebuildsBackgroundServices:
         mock_old_prober.stop.assert_called_once()
         mock_set_tracker.assert_called_once()
         mock_set_prober.assert_called_once_with(new_prober_instance)
-        assert mock_task_instance.set_prober.call_count == 3
+        assert mock_task_instance.set_prober.call_count == 4
         mock_task_instance.set_prober.assert_called_with(new_prober_instance)
 
     @pytest.mark.asyncio
@@ -1003,7 +1003,7 @@ class TestUpdateSettingsRebuildsBackgroundServices:
         assert response.json()["status"] == "saved"
         mock_set_tracker.assert_called_once()
         mock_set_prober.assert_called_once_with(new_prober_instance)
-        assert mock_task_instance.set_prober.call_count == 3
+        assert mock_task_instance.set_prober.call_count == 4
 
     @pytest.mark.asyncio
     async def test_rebuild_failure_does_not_break_the_save(self, async_client, caplog):

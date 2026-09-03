@@ -1,0 +1,28 @@
+{
+  "capture": {
+    "source": "GET /api/epg/grid/ from a disposable Dispatcharr 0.29.0 container seeded with one synthetic ProgramData row",
+    "fixture_kind": "shape-preserving redacted HTTP capture",
+    "literal_raw_capture": false,
+    "captured_at": "2026-09-03",
+    "redaction": "Synthetic identifiers and text were normalized after capture; field names, scalar types, nullability, envelope, and timestamp format are unchanged"
+  },
+  "response": {
+    "data": [
+      {
+        "id": 1,
+        "start_time": "2026-09-03T16:12:23.807787Z",
+        "end_time": "2026-09-03T17:12:23.807787Z",
+        "title": "Recorded Fixture Event",
+        "sub_title": null,
+        "description": "Synthetic event recorded through the real grid endpoint",
+        "tvg_id": "fixture.channel",
+        "season": null,
+        "episode": null,
+        "is_new": false,
+        "is_live": true,
+        "is_premiere": false,
+        "is_finale": false
+      }
+    ]
+  }
+}

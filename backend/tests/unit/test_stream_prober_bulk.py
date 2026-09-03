@@ -135,6 +135,23 @@ async def test_bulk_run_skips_reorder_when_setting_off():
     reorder_mock.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_bulk_run_invocation_can_suppress_global_reorder():
+    client = AsyncMock()
+    prober = _make_prober(client, auto_reorder_after_probe=True)
+    streams = [{"id": 10, "url": "http://example.com/10", "name": "Stream 10"}]
+    reorder_mock = AsyncMock()
+
+    with patch.object(prober, "_fetch_all_streams", AsyncMock(return_value=streams)), \
+         patch.object(prober, "probe_stream", AsyncMock(return_value={"probe_status": "success"})), \
+         patch.object(prober, "_auto_reorder_channels_for_streams", reorder_mock):
+        await prober.probe_streams_by_ids(
+            [10], allow_reorder_after_probe=False
+        )
+
+    reorder_mock.assert_not_awaited()
+
+
 @pytest.mark.parametrize("strategy", ["priority", "points"])
 @pytest.mark.asyncio
 async def test_probe_completion_reorder_uses_configured_smart_sort(strategy):
