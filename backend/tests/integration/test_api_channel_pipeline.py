@@ -65,6 +65,7 @@ class TestChannelPipelineRulesAPI:
         mock_rule.active_until = None
         mock_rule.get_conditions.return_value = [{"type": "always"}]
         mock_rule.get_actions.return_value = [{"type": "skip"}]
+        mock_rule.get_required_provider_ids_error.return_value = None
         mock_rule.is_event_sync.return_value = False
         mock_rule.to_dict.return_value = {
             "id": 1,
@@ -358,6 +359,7 @@ class TestAutoCreationYAMLAPI:
         mock_rule.quality_tie_break_order = "desc"
         mock_rule.quality_m3u_tie_break_enabled = True
         mock_rule.get_normalization_group_ids.return_value = []
+        mock_rule.get_required_provider_ids.return_value = []
         mock_rule.skip_struck_streams = False
         mock_rule.probe_on_sort = False
         mock_rule.orphan_action = "delete"

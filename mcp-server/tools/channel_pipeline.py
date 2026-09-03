@@ -763,6 +763,7 @@ def register(mcp: FastMCP):
         stream_sort_field: str | None = None,
         stream_sort_order: str = "asc",
         normalization_group_ids: list[int] | None = None,
+        required_provider_ids: list[int] | None = None,
         skip_struck_streams: bool = False,
         orphan_action: str = "delete",
         quality_tie_break_order: str | None = None,
@@ -904,6 +905,8 @@ def register(mcp: FastMCP):
             stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', 'video_codec', etc.)
             stream_sort_order: 'asc' or 'desc'
             normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
+            required_provider_ids: At least two M3U account IDs that must all
+                contribute a matching available stream to the normalized-name cohort
             skip_struck_streams: Skip streams with consecutive probe failures
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
             quality_tie_break_order: Tie-break order ('asc' or 'desc') when two streams
@@ -954,6 +957,8 @@ def register(mcp: FastMCP):
                 payload["stream_sort_field"] = stream_sort_field
             if normalization_group_ids is not None:
                 payload["normalization_group_ids"] = normalization_group_ids
+            if required_provider_ids is not None:
+                payload["required_provider_ids"] = required_provider_ids
             # lq38l.13 #12: both fields are accepted by the backend
             # CreateAutoCreationRuleRequest and persisted by the create handler.
             if quality_tie_break_order is not None:
@@ -995,6 +1000,7 @@ def register(mcp: FastMCP):
         stream_sort_field: str | None = None,
         stream_sort_order: str = "asc",
         normalization_group_ids: list[int] | None = None,
+        required_provider_ids: list[int] | None = None,
         skip_struck_streams: bool = False,
         orphan_action: str = "delete",
         quality_tie_break_order: str | None = None,
@@ -1026,6 +1032,7 @@ def register(mcp: FastMCP):
             stream_sort_field=stream_sort_field,
             stream_sort_order=stream_sort_order,
             normalization_group_ids=normalization_group_ids,
+            required_provider_ids=required_provider_ids,
             skip_struck_streams=skip_struck_streams,
             orphan_action=orphan_action,
             quality_tie_break_order=quality_tie_break_order,
@@ -1054,6 +1061,7 @@ def register(mcp: FastMCP):
         stream_sort_field: str | None = None,
         stream_sort_order: str | None = None,
         normalization_group_ids: list[int] | None = None,
+        required_provider_ids: list[int] | None = None,
         skip_struck_streams: bool | None = None,
         orphan_action: str | None = None,
         quality_m3u_tie_break_enabled: bool | None = None,
@@ -1082,6 +1090,8 @@ def register(mcp: FastMCP):
             stream_sort_field: How to sort streams within channels ('smart_sort', 'resolution', 'video_codec', etc.)
             stream_sort_order: 'asc' or 'desc'
             normalization_group_ids: List of normalization group IDs to apply (use list_normalization_rules to see available groups)
+            required_provider_ids: At least two M3U account IDs that must all
+                contribute a matching available stream to the normalized-name cohort
             skip_struck_streams: Skip streams with consecutive probe failures
             orphan_action: What to do with orphaned channels ('delete', 'keep', 'disable')
             quality_m3u_tie_break_enabled: When True (backend default), M3U
@@ -1110,6 +1120,7 @@ def register(mcp: FastMCP):
                 ("sort_order", sort_order), ("probe_on_sort", probe_on_sort),
                 ("sort_regex", sort_regex), ("stream_sort_field", stream_sort_field),
                 ("stream_sort_order", stream_sort_order), ("normalization_group_ids", normalization_group_ids),
+                ("required_provider_ids", required_provider_ids),
                 ("skip_struck_streams", skip_struck_streams), ("orphan_action", orphan_action),
                 ("quality_m3u_tie_break_enabled", quality_m3u_tie_break_enabled),
                 ("allow_manual_channel_merge", allow_manual_channel_merge),
@@ -1149,6 +1160,7 @@ def register(mcp: FastMCP):
         stream_sort_field: str | None = None,
         stream_sort_order: str | None = None,
         normalization_group_ids: list[int] | None = None,
+        required_provider_ids: list[int] | None = None,
         skip_struck_streams: bool | None = None,
         orphan_action: str | None = None,
         quality_m3u_tie_break_enabled: bool | None = None,
@@ -1178,6 +1190,7 @@ def register(mcp: FastMCP):
             stream_sort_field=stream_sort_field,
             stream_sort_order=stream_sort_order,
             normalization_group_ids=normalization_group_ids,
+            required_provider_ids=required_provider_ids,
             skip_struck_streams=skip_struck_streams,
             orphan_action=orphan_action,
             quality_m3u_tie_break_enabled=quality_m3u_tie_break_enabled,

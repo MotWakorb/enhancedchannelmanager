@@ -5061,7 +5061,10 @@ def _gather_db_tables() -> dict:
 
         # Auto-creation rules
         ac_rules = session.query(ChannelPipelineRule).all()
-        sections["auto_creation_rules"] = [r.to_dict() for r in ac_rules]
+        sections["auto_creation_rules"] = [
+            r.to_dict(preserve_invalid_required_provider_ids=True)
+            for r in ac_rules
+        ]
 
         # FFmpeg profiles
         profiles = session.query(FFmpegProfile).all()
@@ -6176,7 +6179,10 @@ async def _restore_section(data: dict, section_key: str) -> dict:
     db_data = data.get("database", {})
     if section_key in _SECTION_RESTORERS:
         items = db_data.get(section_key, [])
-        return _SECTION_RESTORERS[section_key](items)
+        result = _SECTION_RESTORERS[section_key](items)
+        if asyncio.iscoroutine(result):
+            return await result
+        return result
 
     # Check Dispatcharr sections
     if section_key in _DISPATCHARR_RESTORERS:
@@ -6361,6 +6367,14 @@ def _restore_auto_creation_rules(items: list) -> dict:
     # config keeps the rule excluded from pipeline execution.
     from channel_pipeline_schema import validate_event_sync_config
 
+    serialized_required_provider_ids = []
+    for item in items:
+        validator = ChannelPipelineRule()
+        validator.set_required_provider_ids(
+            item.get("required_provider_ids")
+            if "required_provider_ids" in item else None
+        )
+        serialized_required_provider_ids.append(validator.required_provider_ids)
     session = get_session()
     warnings: list[str] = []
     # bead 8fq6x: the delete-all below CASCADEs to event_sync_reviews, dropping
@@ -6412,7 +6426,9 @@ def _restore_auto_creation_rules(items: list) -> dict:
         # with the restored rules' new ids below.
         session.query(EventSyncReview).delete()
         session.query(EventSyncExclusion).delete()
-        for item in items:
+        for item, required_provider_ids in zip(
+            items, serialized_required_provider_ids
+        ):
             # ti939.1.3: the export (to_dict) carries event_sync_config as a
             # parsed dict — re-serialize for the Text column. Dropping it
             # here would resurrect the rule as a STANDARD rule whose dormant
@@ -6452,6 +6468,7 @@ def _restore_auto_creation_rules(items: list) -> dict:
                 quality_tie_break_order=item.get("quality_tie_break_order", "desc"),
                 quality_m3u_tie_break_enabled=item.get("quality_m3u_tie_break_enabled", True),
                 normalization_group_ids=_resolve_backup_normalization_group_ids(item, session),
+                required_provider_ids=required_provider_ids,
                 skip_struck_streams=item.get("skip_struck_streams", False),
                 orphan_action=item.get("orphan_action", "delete"),
                 # bd-p6ko9: restore the stored per-rule value; ECM-generated
@@ -6556,6 +6573,45 @@ def _restore_auto_creation_rules(items: list) -> dict:
         session.close()
 
 
+async def _restore_auto_creation_rules_with_provider_validation(items: list) -> dict:
+    """Validate required M3U accounts before the delete-all rule restore."""
+    required_provider_ids: set[int] = set()
+    for item in items:
+        validator = ChannelPipelineRule()
+        validator.set_required_provider_ids(
+            item.get("required_provider_ids")
+            if "required_provider_ids" in item else None
+        )
+        required_provider_ids.update(validator.get_required_provider_ids())
+
+    if required_provider_ids:
+        client = get_client()
+        if client is None:
+            raise RuntimeError(
+                "Could not validate required_provider_ids because Dispatcharr "
+                "is not connected"
+            )
+        try:
+            accounts = await client.get_m3u_accounts()
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not validate required_provider_ids because the M3U "
+                "account lookup failed"
+            ) from exc
+        existing_ids = {
+            account.get("id") for account in (accounts or [])
+            if isinstance(account, dict)
+        }
+        missing_ids = sorted(required_provider_ids - existing_ids)
+        if missing_ids:
+            raise ValueError(
+                "required_provider_ids %s do not exist; restore was not applied"
+                % ", ".join(str(provider_id) for provider_id in missing_ids)
+            )
+
+    return _restore_auto_creation_rules(items)
+
+
 def _restore_ffmpeg_profiles(items: list) -> dict:
     """Delete all FFmpeg profiles and recreate from YAML."""
     session = get_session()
@@ -6640,7 +6696,7 @@ _SECTION_RESTORERS = {
     "task_schedules": _restore_task_schedules,
     "normalization_rule_groups": _restore_normalization_rule_groups,
     "tag_groups": _restore_tag_groups,
-    "auto_creation_rules": _restore_auto_creation_rules,
+    "auto_creation_rules": _restore_auto_creation_rules_with_provider_validation,
     "ffmpeg_profiles": _restore_ffmpeg_profiles,
     "dummy_epg_profiles": _restore_dummy_epg_profiles,
 }

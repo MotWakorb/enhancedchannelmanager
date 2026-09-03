@@ -124,6 +124,7 @@ _AC_RULE_CREATE_FIELDS = frozenset(
         "quality_tie_break_order",
         "quality_m3u_tie_break_enabled",
         "normalization_group_ids",
+        "required_provider_ids",
         "skip_struck_streams",
         "orphan_action",
         "match_scope_target_group",

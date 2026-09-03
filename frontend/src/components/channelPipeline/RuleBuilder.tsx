@@ -31,7 +31,7 @@ import type { ActionFieldValidityRegistry } from './actionFieldValidity';
 import { CustomSelect } from '../CustomSelect';
 import { GroupMultiSelectDropdown } from '../GroupMultiSelectDropdown';
 import { ModalOverlay } from '../ModalOverlay';
-import { getNormalizationRules, getChannelGroups } from '../../services/api';
+import { getNormalizationRules, getChannelGroups, getM3UAccounts } from '../../services/api';
 import { analyzeChannelPipelineRuleBody } from '../../services/channelPipelineApi';
 import { stableStringify } from '../../utils/configDirty';
 import './RuleBuilder.css';
@@ -54,6 +54,7 @@ interface ValidationErrors {
   activeWindow?: string;
   conditions?: string;
   actions?: string;
+  requiredProviders?: string;
   /**
    * DOM id of the first action field whose entry the operator must fix
    * (bead `enhancedchannelmanager-ay3iq`). A VALUE, not a message: unlike the
@@ -200,6 +201,7 @@ export function RuleBuilder({
     rule?.quality_m3u_tie_break_enabled ?? true
   );
   const [normalizationGroupIds, setNormalizationGroupIds] = useState<number[]>(rule?.normalization_group_ids ?? []);
+  const [requiredProviderIds, setRequiredProviderIds] = useState<number[]>(rule?.required_provider_ids ?? []);
   const [skipStruckStreams, setSkipStruckStreams] = useState(rule?.skip_struck_streams ?? false);
   const [orphanAction, setOrphanAction] = useState(rule?.orphan_action || 'delete');
   const [matchScopeTargetGroup, setMatchScopeTargetGroup] = useState(rule?.match_scope_target_group ?? true);
@@ -239,6 +241,7 @@ export function RuleBuilder({
   const actions = useMemo(() => keyedActions.map(entry => entry.action), [keyedActions]);
 
   const [availableNormGroups, setAvailableNormGroups] = useState<{id: number; name: string; enabled: boolean}[]>([]);
+  const [availableProviders, setAvailableProviders] = useState<{id: number; name: string}[]>([]);
   const [availableChannelGroups, setAvailableChannelGroups] = useState<{id: number; name: string}[]>([]);
   const [errors, setErrors] = useState<ValidationErrors>({});
   const [saving, setSaving] = useState(false);
@@ -266,6 +269,12 @@ export function RuleBuilder({
     getNormalizationRules().then(({ groups }) => {
       setAvailableNormGroups(groups.map(g => ({ id: g.id, name: g.name, enabled: g.enabled })));
     }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    getM3UAccounts().then(accounts => {
+      setAvailableProviders(accounts.map(account => ({ id: account.id, name: account.name })));
+    }).catch(() => setAvailableProviders([]));
   }, []);
 
   // Load available channel groups for the merge-scope group selector (GH #298)
@@ -353,6 +362,7 @@ export function RuleBuilder({
     quality_tie_break_order: qualityTieBreakOrder,
     quality_m3u_tie_break_enabled: qualityM3uTieBreakEnabled,
     normalization_group_ids: normalizationGroupIds,
+    required_provider_ids: requiredProviderIds,
     skip_struck_streams: skipStruckStreams,
     orphan_action: orphanAction,
     match_scope_target_group: matchScopeTargetGroup,
@@ -362,7 +372,7 @@ export function RuleBuilder({
   }), [
     name, description, enabled, priority, activeFrom, activeUntil, conditions, actions, runOnRefresh,
     stopOnFirstMatch, sortField, sortOrder, probeOnSort, sortRegex, streamSortField,
-    streamSortOrder, qualityTieBreakOrder, qualityM3uTieBreakEnabled, normalizationGroupIds,
+    streamSortOrder, qualityTieBreakOrder, qualityM3uTieBreakEnabled, normalizationGroupIds, requiredProviderIds,
     skipStruckStreams, orphanAction, matchScopeTargetGroup, matchScopeGroupId,
     allowManualChannelMerge, foldMatchKey, rule,
   ]);
@@ -439,6 +449,9 @@ export function RuleBuilder({
     if (activeFrom && activeUntil && activeUntil < activeFrom) {
       newErrors.activeWindow = 'End date must be on or after start date';
     }
+    if (requiredProviderIds.length === 1) {
+      newErrors.requiredProviders = 'Select at least two distinct providers, or clear the selection';
+    }
 
     if (conditions.length === 0) {
       newErrors.conditions = 'At least one condition is required';
@@ -482,7 +495,7 @@ export function RuleBuilder({
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0 ? null : newErrors;
-  }, [name, activeFrom, activeUntil, conditions, actions]);
+  }, [name, activeFrom, activeUntil, conditions, actions, requiredProviderIds]);
 
   // Advisory-only save hint shown in the rail. Deliberately NOT tied to the
   // Save button's disabled state (Save stays clickable and validates on click).
@@ -504,7 +517,13 @@ export function RuleBuilder({
       // the conditions and actions in the Logic step — so route there so the
       // error is visible from whichever step Save was pressed, then focus the
       // first offending field.
-      setCurrentStep(1);
+      const hasLogicError = Boolean(
+        validationErrors.name
+        || validationErrors.conditions
+        || validationErrors.actions
+        || validationErrors.invalidActionFieldId
+      );
+      setCurrentStep(validationErrors.requiredProviders && !hasLogicError ? 2 : 1);
       // Both routes queue the focus rather than taking it here, because the
       // step this render reveals has not been committed yet; see the effect on
       // `pendingFocusFieldId`.
@@ -516,6 +535,8 @@ export function RuleBuilder({
         // operator lands on the entry they have to fix, scrolled into view,
         // rather than on a Save button that appeared to do nothing.
         setPendingFocusFieldId(validationErrors.invalidActionFieldId);
+      } else if (validationErrors.requiredProviders) {
+        setPendingFocusFieldId(`${id}-required-providers`);
       }
       return;
     }
@@ -666,6 +687,9 @@ export function RuleBuilder({
         ) : null}
         {allowManualChannelMerge && <> <strong>May merge streams into manual channels.</strong></>}
         {foldMatchKey && <> Merge matching ignores spacing &amp; case differences.</>}
+        {requiredProviderIds.length >= 2 && (
+          <> Requires all {requiredProviderIds.length} selected providers in each normalized channel cohort.</>
+        )}
         {stopOnFirstMatch && <> <strong>Stops after the first matching rule.</strong></>}
         {runOnRefresh && <> Runs automatically after each M3U refresh.</>}
         {(activeFrom || activeUntil) && (
@@ -675,7 +699,7 @@ export function RuleBuilder({
     );
   }, [
     conditions, actions, sortField, streamSortField, orphansDeleted, orphanAction,
-    allowManualChannelMerge, foldMatchKey, stopOnFirstMatch, runOnRefresh, activeFrom, activeUntil,
+    allowManualChannelMerge, foldMatchKey, requiredProviderIds, stopOnFirstMatch, runOnRefresh, activeFrom, activeUntil,
   ]);
 
   return (
@@ -1045,6 +1069,33 @@ export function RuleBuilder({
                     <span>Ignore spacing &amp; case differences when matching</span>
                   </label>
                 </div>
+              </div>
+
+              <div className="form-field">
+                <label>Required Providers</label>
+                <span className="field-hint">
+                  Optional. Create channels only when every selected provider has a matching stream in the same normalized-name cohort.
+                </span>
+                <GroupMultiSelectDropdown
+                  id={`${id}-required-providers`}
+                  options={availableProviders}
+                  selectedIds={requiredProviderIds}
+                  onChange={setRequiredProviderIds}
+                  label="Required Providers"
+                  placeholder="No provider coverage required"
+                  emptyMessage="No providers available."
+                  disabled={isLoading}
+                  itemLabelSingular="provider"
+                  itemLabelPlural="providers"
+                />
+                {(errors.requiredProviders || requiredProviderIds.length === 1) && (
+                  <span className="field-error" role="alert">
+                    {errors.requiredProviders || 'Select at least two distinct providers, or clear the selection'}
+                  </span>
+                )}
+                <span className="field-hint">
+                  Availability uses this rule's existing matching and struck-stream settings; it does not probe providers.
+                </span>
               </div>
 
               <div className="form-field">

@@ -57,7 +57,7 @@ You don't need them for a minimal rule, but know what they control:
 
 | Tab | Controls |
 |-|-|
-| **2 Targeting** | Merge lookup scope (whether "does a channel with this name already exist?" searches only this rule's target group or every group), manual-channel protection, spacing/case sensitivity in merge matching, and which normalization rule groups apply to channel names. |
+| **2 Targeting** | Merge lookup scope (whether "does a channel with this name already exist?" searches only this rule's target group or every group), manual-channel protection, spacing/case sensitivity in merge matching, which normalization rule groups apply to channel names, and optional required-provider coverage. |
 | **3 Output & Run** | Channel Sort and Stream Sort (processing/renumbering order, see [Channel Sort vs. Channel Numbering](sort-vs-numbering.md) for the full explanation and the Auto-numbering gotcha), Orphan Cleanup (what happens to channels that stop matching), and the Run behavior toggles: **Run on M3U refresh**, **Stop on first match**, **Skip struck-out streams**. |
 
 **Priority and execution order.** Every rule has a **Priority** number shown
@@ -71,6 +71,26 @@ search box and any active filter first, then drag.
 
 **Result:** you know which tab to open for a given change without
 re-reading the whole dialog each time.
+
+### Require the same channel from multiple providers
+
+Use **Required Providers** on the Targeting step when a channel should be
+created only after matching streams arrive from every selected M3U provider.
+Select at least two providers, or leave the field empty to keep normal
+per-stream behavior.
+
+Coverage is checked separately for each rule and normalized channel name. A
+stream from another channel cannot satisfy the requirement. Every stream must
+also match the rule's conditions. If **Skip struck-out streams** is enabled, a
+struck stream does not satisfy coverage. A missing provider, a failed provider
+stream fetch, or a normalization failure blocks the complete cohort before any
+Create Channel action runs; the execution details name the missing or
+unavailable providers. Extra providers are allowed and continue through the
+rule normally once all required providers are represented.
+
+Dry Run applies the same check and reports the block without creating channels
+or adding health probes. Existing rules and new rules with no Required
+Providers selected behave as before.
 
 ## Beyond the rule dialog
 

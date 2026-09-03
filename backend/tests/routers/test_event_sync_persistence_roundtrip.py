@@ -165,6 +165,171 @@ class TestDbasRestoreRoundTrip:
         assert restored.active_from == date(2026, 9, 1)
         assert restored.active_until == date(2027, 2, 15)
 
+    def test_backup_restore_round_trip_preserves_required_provider_ids(self, test_session):
+        from routers.backup import _restore_auto_creation_rules
+
+        rule = _create_rule(
+            test_session,
+            name="Provider coverage DBAS",
+            event_sync_config=None,
+            required_provider_ids=json.dumps([11, 22]),
+        )
+        exported = rule.to_dict()
+        assert exported["required_provider_ids"] == [11, 22]
+
+        with patch("routers.backup.get_session", return_value=test_session):
+            result = _restore_auto_creation_rules([exported])
+
+        assert result["warnings"] == []
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Provider coverage DBAS"
+        ).one()
+        assert restored.get_required_provider_ids() == [11, 22]
+
+    @pytest.mark.asyncio
+    async def test_restore_rejects_missing_required_provider_before_mutation(
+        self, test_session
+    ):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Must survive missing provider")
+        item = existing.to_dict()
+        item["required_provider_ids"] = [11, 22]
+        client = AsyncMock()
+        client.get_m3u_accounts.return_value = [{"id": 11, "name": "Primary"}]
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client", return_value=client), \
+             pytest.raises(ValueError, match="22.*do not exist"):
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
+    @pytest.mark.asyncio
+    async def test_restore_fails_closed_when_required_provider_lookup_fails(
+        self, test_session
+    ):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Must survive lookup failure")
+        item = existing.to_dict()
+        item["required_provider_ids"] = [11, 22]
+        client = AsyncMock()
+        client.get_m3u_accounts.side_effect = RuntimeError("Dispatcharr unavailable")
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client", return_value=client), \
+             pytest.raises(RuntimeError, match="(?i)could not validate required_provider_ids"):
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
+    @pytest.mark.asyncio
+    async def test_restore_accepts_existing_required_providers(self, test_session):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Valid provider coverage")
+        item = existing.to_dict()
+        item["required_provider_ids"] = [11, 22]
+        client = AsyncMock()
+        client.get_m3u_accounts.return_value = [
+            {"id": 11, "name": "Primary"},
+            {"id": 22, "name": "Backup"},
+        ]
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client", return_value=client):
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Valid provider coverage"
+        ).one()
+        assert restored.get_required_provider_ids() == [11, 22]
+
+    @pytest.mark.asyncio
+    async def test_legacy_restore_without_provider_gate_does_not_lookup_accounts(
+        self, test_session
+    ):
+        from routers.backup import _restore_auto_creation_rules_with_provider_validation
+
+        existing = _create_rule(test_session, name="Legacy no coverage")
+        item = existing.to_dict()
+        item.pop("required_provider_ids")
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             patch("routers.backup.get_client") as get_client:
+            await _restore_auto_creation_rules_with_provider_validation([item])
+
+        get_client.assert_not_called()
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Legacy no coverage"
+        ).one()
+        assert restored.required_provider_ids is None
+
+    @pytest.mark.parametrize("stored", ["{}", "not-json", "[11]"])
+    def test_dbas_export_preserves_malformed_required_providers_for_restore_rejection(
+        self, test_session, stored
+    ):
+        from routers.backup import _gather_db_tables, _restore_auto_creation_rules
+
+        existing = _create_rule(
+            test_session, name="Malformed DBAS coverage",
+            event_sync_config=None, required_provider_ids=stored,
+        )
+        with patch("routers.backup.get_session", return_value=test_session):
+            exported = _gather_db_tables()["auto_creation_rules"]
+        item = next(row for row in exported if row["name"] == existing.name)
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             pytest.raises(ValueError, match="required_provider_ids"):
+            _restore_auto_creation_rules([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
+    @pytest.mark.parametrize("coverage", ["absent", None, []])
+    def test_dbas_restore_absent_or_explicit_empty_coverage_clears_configuration(
+        self, test_session, coverage
+    ):
+        from routers.backup import _restore_auto_creation_rules
+
+        existing = _create_rule(
+            test_session, name="Cleared DBAS coverage",
+            event_sync_config=None, required_provider_ids=json.dumps([11, 22]),
+        )
+        item = existing.to_dict()
+        if coverage == "absent":
+            item.pop("required_provider_ids")
+        else:
+            item["required_provider_ids"] = coverage
+
+        with patch("routers.backup.get_session", return_value=test_session):
+            _restore_auto_creation_rules([item])
+
+        restored = test_session.query(ChannelPipelineRule).filter_by(
+            name="Cleared DBAS coverage"
+        ).one()
+        assert restored.required_provider_ids is None
+
+    @pytest.mark.parametrize("value", [[11], {}, False, 0, ""])
+    def test_backup_restore_rejects_malformed_required_providers_without_deleting_rules(
+        self, test_session, value
+    ):
+        from routers.backup import _restore_auto_creation_rules
+
+        existing = _create_rule(test_session, name="Must survive invalid restore")
+        item = existing.to_dict()
+        item["required_provider_ids"] = value
+
+        with patch("routers.backup.get_session", return_value=test_session), \
+             pytest.raises(ValueError, match="required_provider_ids"):
+            _restore_auto_creation_rules([item])
+
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, existing.id) is not None
+
     def test_provider_scoped_config_round_trips(self, test_session):
         """bead 1bftz: a PROVIDER-SCOPED config survives DBAS restore with the
         nested {group_id, m3u_account_id} scopes preserved."""

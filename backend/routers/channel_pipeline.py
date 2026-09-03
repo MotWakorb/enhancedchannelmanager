@@ -20,7 +20,7 @@ import httpx
 import journal
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, StrictInt, model_validator
 from starlette.responses import StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -89,7 +89,8 @@ class CreateChannelPipelineRuleRequest(BaseModel):
     stream_sort_order: str = "asc"
     quality_tie_break_order: str = "desc"
     quality_m3u_tie_break_enabled: bool = True
-    normalization_group_ids: list[int] = []
+    normalization_group_ids: list[int] = Field(default_factory=list)
+    required_provider_ids: list[StrictInt] = Field(default_factory=list)
     skip_struck_streams: bool = False
     orphan_action: str = "delete"
     # Default True for new rules (bd-p6ko9, GH #226) — see models.ChannelPipelineRule.
@@ -119,6 +120,11 @@ class CreateChannelPipelineRuleRequest(BaseModel):
             and self.active_until < self.active_from
         ):
             raise ValueError("active_until must be on or after active_from")
+        self.required_provider_ids = sorted(set(self.required_provider_ids))
+        if any(provider_id <= 0 for provider_id in self.required_provider_ids):
+            raise ValueError("required_provider_ids must contain positive provider IDs")
+        if self.required_provider_ids and len(self.required_provider_ids) < 2:
+            raise ValueError("required_provider_ids must contain at least two distinct providers")
         return self
 
 
@@ -145,6 +151,7 @@ class UpdateChannelPipelineRuleRequest(BaseModel):
     quality_tie_break_order: Optional[str] = None
     quality_m3u_tie_break_enabled: Optional[bool] = None
     normalization_group_ids: Optional[list[int]] = None
+    required_provider_ids: Optional[list[StrictInt]] = None
     skip_struck_streams: Optional[bool] = None
     orphan_action: Optional[str] = None
     match_scope_target_group: Optional[bool] = None
@@ -171,6 +178,12 @@ class UpdateChannelPipelineRuleRequest(BaseModel):
             and self.active_until < self.active_from
         ):
             raise ValueError("active_until must be on or after active_from")
+        if self.required_provider_ids is not None:
+            self.required_provider_ids = sorted(set(self.required_provider_ids))
+            if any(provider_id <= 0 for provider_id in self.required_provider_ids):
+                raise ValueError("required_provider_ids must contain positive provider IDs")
+            if self.required_provider_ids and len(self.required_provider_ids) < 2:
+                raise ValueError("required_provider_ids must contain at least two distinct providers")
         return self
 
 
@@ -347,6 +360,14 @@ def _apply_rule_scalar_updates(
                 "before": before_norm,
                 "after": after_norm,
             }
+    if request.required_provider_ids is not None:
+        before_required = rule.required_provider_ids
+        rule.set_required_provider_ids(request.required_provider_ids)
+        if before_required != rule.required_provider_ids:
+            diff["required_provider_ids"] = {
+                "before": before_required,
+                "after": rule.required_provider_ids,
+            }
     if request.skip_struck_streams is not None:
         _set("skip_struck_streams", request.skip_struck_streams)
     if request.orphan_action is not None:
@@ -468,6 +489,27 @@ def _validate_normalization_group_ids(
                 "invalid_normalization_group_ids": invalid_ids,
             },
         )
+
+
+async def _validate_required_provider_ids(submitted_ids: Optional[list[int]]) -> None:
+    """Reject missing M3U account references; an unavailable lookup fails closed."""
+    if not submitted_ids:
+        return
+    try:
+        accounts = await get_client().get_m3u_accounts() or []
+    except Exception as exc:
+        logger.warning("[AUTO-CREATE] Required-provider validation unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="M3U providers are unavailable; required providers were not saved",
+        ) from exc
+    existing_ids = {account.get("id") for account in accounts}
+    invalid_ids = [provider_id for provider_id in submitted_ids if provider_id not in existing_ids]
+    if invalid_ids:
+        raise HTTPException(status_code=422, detail={
+            "message": "One or more required_provider_ids do not exist",
+            "invalid_required_provider_ids": invalid_ids,
+        })
 
 
 # =============================================================================
@@ -873,6 +915,8 @@ async def create_auto_creation_rule(request: CreateChannelPipelineRuleRequest, _
                     "errors": es_errors
                 })
 
+        await _validate_required_provider_ids(request.required_provider_ids)
+
         session = get_session()
         try:
             # bd-j5p4k: write-time FK validation for normalization_group_ids.
@@ -912,6 +956,7 @@ async def create_auto_creation_rule(request: CreateChannelPipelineRuleRequest, _
                 quality_tie_break_order=request.quality_tie_break_order,
                 quality_m3u_tie_break_enabled=request.quality_m3u_tie_break_enabled,
                 normalization_group_ids=json.dumps(request.normalization_group_ids) if request.normalization_group_ids else None,
+                required_provider_ids=json.dumps(request.required_provider_ids) if request.required_provider_ids else None,
                 skip_struck_streams=request.skip_struck_streams,
                 orphan_action=request.orphan_action,
                 match_scope_target_group=request.match_scope_target_group,
@@ -969,6 +1014,8 @@ async def update_auto_creation_rule(rule_id: int, request: UpdateChannelPipeline
             _validate_normalization_group_ids(
                 request.normalization_group_ids, session
             )
+            if "required_provider_ids" in request.model_fields_set:
+                await _validate_required_provider_ids(request.required_provider_ids)
 
             _apply_rule_scalar_updates(rule, request)
             _validate_persisted_active_window(rule)
@@ -1098,6 +1145,10 @@ async def bulk_update_auto_creation_rules(request: BulkUpdateChannelPipelineRule
         _validate_normalization_group_ids(
             scalar_update.normalization_group_ids, session
         )
+        if "required_provider_ids" in scalar_update.model_fields_set:
+            await _validate_required_provider_ids(
+                scalar_update.required_provider_ids
+            )
 
         # Track per-rule diffs so we can emit per-entity journal entries with a
         # shared batch_id after a successful commit (bd-91mcq). Matches the
@@ -1323,6 +1374,7 @@ async def duplicate_auto_creation_rule(rule_id: int, _admin=RequireAdminIfEnable
                 quality_tie_break_order=rule.quality_tie_break_order,
                 quality_m3u_tie_break_enabled=rule.quality_m3u_tie_break_enabled,
                 normalization_group_ids=rule.normalization_group_ids,
+                required_provider_ids=rule.required_provider_ids,
                 skip_struck_streams=rule.skip_struck_streams,
                 probe_on_sort=rule.probe_on_sort,
                 sort_regex=rule.sort_regex,
@@ -2679,6 +2731,16 @@ async def export_auto_creation_rules_yaml():
             }
 
             for rule in rules:
+                required_provider_ids = rule.get_required_provider_ids()
+                required_provider_names = [
+                    m3u_id_to_name.get(provider_id)
+                    for provider_id in required_provider_ids
+                ]
+                if not all(
+                    isinstance(name, str) and name.strip()
+                    for name in required_provider_names
+                ):
+                    required_provider_names = []
                 _qto = getattr(rule, "quality_tie_break_order", None)
                 if isinstance(_qto, str) and _qto.strip():
                     yaml_quality_tie = _qto.strip().lower()
@@ -2721,6 +2783,12 @@ async def export_auto_creation_rules_yaml():
                     "quality_tie_break_order": yaml_quality_tie,
                     "quality_m3u_tie_break_enabled": yaml_quality_m3u_enabled,
                     "normalization_group_ids": rule.get_normalization_group_ids(),
+                    "required_provider_ids": (
+                        rule.required_provider_ids
+                        if isinstance(rule.get_required_provider_ids_error(), str)
+                        else required_provider_ids
+                    ),
+                    "required_provider_names": required_provider_names,
                     "skip_struck_streams": rule.skip_struck_streams or False,
                     "probe_on_sort": rule.probe_on_sort or False,
                     "orphan_action": rule.orphan_action or "delete",
@@ -2763,9 +2831,9 @@ async def export_auto_creation_rules_yaml():
 async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=RequireAdminIfEnabled):
     """Import auto-creation rules from YAML.
 
-    Supports portable name fields: if group_name/target_group_name/m3u_account_name
-    are present and corresponding IDs are missing, names are resolved to local IDs.
-    Explicit IDs always take priority over names.
+    Supports portable name fields. Complete exported required-provider names
+    resolve to local IDs so cross-installation imports ignore stale source IDs;
+    exports without a complete name map retain IDs for same-install recovery.
     """
     logger.debug("[AUTO-CREATE-YAML] POST /import/yaml - overwrite=%s", request.overwrite)
     try:
@@ -2791,6 +2859,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
         client = get_client()
         group_name_to_id = {}
         m3u_name_to_id = {}
+        m3u_ids = set()
+        m3u_lookup_available = False
         try:
             start = time.time()
             groups = await client.get_channel_groups()
@@ -2805,6 +2875,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
             elapsed_ms = (time.time() - start) * 1000
             logger.debug("[AUTO-CREATE-YAML] Fetched M3U accounts in %.1fms", elapsed_ms)
             m3u_name_to_id = {a["name"].lower(): a["id"] for a in m3u_accounts}
+            m3u_ids = {a["id"] for a in m3u_accounts}
+            m3u_lookup_available = True
         except Exception as e:
             logger.warning("[AUTO-CREATE-YAML] Could not fetch M3U accounts for YAML import: %s", e)
 
@@ -2852,9 +2924,78 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                     # Strip transient name fields from stored data
                     action.pop("group_name", None)
 
+                required_ids_present = "required_provider_ids" in rule_data
+                required_names_present = "required_provider_names" in rule_data
+                required_ids = rule_data.get("required_provider_ids")
+                required_names = rule_data.get("required_provider_names")
+                if required_names_present and required_names not in (None, []):
+                    if not isinstance(required_names, list):
+                        errors.append({
+                            "rule_index": i,
+                            "rule_name": rule_name,
+                            "errors": ["required_provider_names must be a list"],
+                        })
+                        continue
+                    required_ids = []
+                    unresolved_names = []
+                    for name in required_names:
+                        resolved_id = m3u_name_to_id.get(str(name).lower())
+                        if resolved_id is None:
+                            unresolved_names.append(name)
+                        else:
+                            required_ids.append(resolved_id)
+                    if unresolved_names:
+                        errors.append({
+                            "rule_index": i,
+                            "rule_name": rule_name,
+                            "errors": [
+                                "Required provider name(s) not found locally: "
+                                + ", ".join(map(str, unresolved_names))
+                            ],
+                        })
+                        continue
+                    rule_data["required_provider_ids"] = required_ids
+                elif not required_ids_present:
+                    required_ids = []
+
+                if required_ids not in (None, []):
+                    valid_shape = (
+                        isinstance(required_ids, list)
+                        and all(
+                            isinstance(item, int) and not isinstance(item, bool) and item > 0
+                            for item in required_ids
+                        )
+                        and len(set(required_ids)) >= 2
+                    )
+                    invalid_ids = (
+                        [item for item in required_ids if item not in m3u_ids]
+                        if valid_shape and m3u_lookup_available else []
+                    )
+                    if not valid_shape or not m3u_lookup_available or invalid_ids:
+                        errors.append({
+                            "rule_index": i,
+                            "rule_name": rule_name,
+                            "errors": [
+                                "required_provider_ids must contain at least two distinct, existing providers"
+                                + (f"; missing IDs: {invalid_ids}" if invalid_ids else "")
+                            ],
+                        })
+                        continue
+                    rule_data["required_provider_ids"] = sorted(set(required_ids))
+                elif required_ids is None or required_ids == []:
+                    rule_data["required_provider_ids"] = []
+                else:
+                    errors.append({
+                        "rule_index": i,
+                        "rule_name": rule_name,
+                        "errors": ["required_provider_ids must be a list"],
+                    })
+                    continue
+
                 # Strip transient name fields from rule-level data
                 rule_data.pop("target_group_name", None)
                 rule_data.pop("m3u_account_name", None)
+                rule_data.pop("required_provider_names", None)
                 # Validate rule
                 conditions = rule_data.get("conditions", [])
                 actions = rule_data.get("actions", [])
@@ -2890,6 +3031,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         continue
 
                 try:
+                    required_provider_ids = rule_data.get("required_provider_ids") or []
                     active_from = _parse_yaml_active_date(
                         rule_data.get("active_from"), "active_from"
                     )
@@ -2942,6 +3084,7 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                                 rule_data.get("quality_m3u_tie_break_enabled")
                             )
                         existing.normalization_group_ids = _resolve_normalization_group_ids(rule_data, session)
+                        existing.set_required_provider_ids(required_provider_ids)
                         existing.skip_struck_streams = rule_data.get("skip_struck_streams", False)
                         existing.probe_on_sort = rule_data.get("probe_on_sort", False)
                         existing.orphan_action = rule_data.get("orphan_action", "delete")
@@ -2986,6 +3129,8 @@ async def import_auto_creation_rules_yaml(request: ImportYAMLRequest, _admin=Req
                         quality_tie_break_order=rule_data.get("quality_tie_break_order", "desc"),
                         quality_m3u_tie_break_enabled=bool(rule_data.get("quality_m3u_tie_break_enabled", True)),
                         normalization_group_ids=_resolve_normalization_group_ids(rule_data, session),
+                        required_provider_ids=(json.dumps(required_provider_ids)
+                                               if required_provider_ids else None),
                         skip_struck_streams=rule_data.get("skip_struck_streams", False),
                         probe_on_sort=rule_data.get("probe_on_sort", False),
                         orphan_action=rule_data.get("orphan_action", "delete"),

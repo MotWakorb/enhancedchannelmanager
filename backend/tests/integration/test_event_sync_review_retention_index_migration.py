@@ -55,6 +55,11 @@ def test_migration_0052_adds_and_round_trips_retention_index(tmp_path):
                 "(1, 7, :stream_hash, 'event|2026-09-02T00:00:00+00:00', "
                 "'rejected', 1, 2, '{}')"
             ), {"stream_hash": "a" * 64})
+            # 0053 is a column migration. Add its model-visible shape by hand
+            # so this test can continue isolating 0052's index-only replay.
+            conn.execute(text(
+                "ALTER TABLE auto_creation_rules ADD COLUMN required_provider_ids TEXT"
+            ))
         assert database._schema_matches_head(engine) is True
         database._bootstrap_alembic(engine)
     finally:

@@ -2011,6 +2011,10 @@ class ChannelPipelineRule(Base):
     # Normalization - JSON array of NormalizationRuleGroup IDs to apply, null/empty = disabled
     normalization_group_ids = Column(Text, nullable=True)
 
+    # Optional provider-coverage gate. JSON array of at least two distinct M3U
+    # account IDs; null/empty preserves the historical per-stream behavior.
+    required_provider_ids = Column(Text, nullable=True)
+
     # Strike filtering - skip streams that have been struck out (consecutive_failures >= strike_threshold)
     skip_struck_streams = Column(Boolean, default=False, nullable=False)
 
@@ -2160,6 +2164,52 @@ class ChannelPipelineRule(Base):
         """Set normalization_group_ids from list of ints."""
         self.normalization_group_ids = json.dumps(sorted(set(ids))) if ids else None
 
+    def get_required_provider_ids(self) -> list[int]:
+        """Return valid required M3U account IDs without breaking rule reads."""
+        provider_ids, _error = self._parse_required_provider_ids()
+        return provider_ids
+
+    def get_required_provider_ids_error(self) -> str | None:
+        """Return a persisted-value validation error, if any."""
+        _provider_ids, error = self._parse_required_provider_ids()
+        return error
+
+    def _parse_required_provider_ids(self) -> tuple[list[int], str | None]:
+        if self.required_provider_ids is None:
+            return [], None
+        try:
+            parsed = json.loads(self.required_provider_ids)
+        except (ValueError, TypeError):
+            return [], "required_provider_ids is malformed"
+        if parsed is None or parsed == []:
+            return [], None
+        if not isinstance(parsed, list) or any(
+            not isinstance(item, int) or isinstance(item, bool) or item <= 0
+            for item in parsed
+        ):
+            return [], "required_provider_ids is malformed"
+        provider_ids = sorted(set(parsed))
+        if len(provider_ids) < 2:
+            return [], "required_provider_ids must contain at least two distinct provider IDs"
+        return provider_ids, None
+
+    def set_required_provider_ids(self, ids: list[int] | None) -> None:
+        """Store stable, distinct M3U account IDs in deterministic order."""
+        if ids is None or ids == []:
+            self.required_provider_ids = None
+            return
+        if not isinstance(ids, list):
+            raise ValueError("required_provider_ids must be a list")
+        if any(
+            not isinstance(item, int) or isinstance(item, bool) or item <= 0
+            for item in ids
+        ):
+            raise ValueError("required_provider_ids must contain positive provider IDs")
+        provider_ids = sorted(set(ids))
+        if len(provider_ids) < 2:
+            raise ValueError("required_provider_ids must contain at least two distinct provider IDs")
+        self.required_provider_ids = json.dumps(provider_ids)
+
     def get_event_sync_config(self) -> dict | None:
         """Parse event_sync_config JSON into a dict (None when unset/corrupt)."""
         if not self.event_sync_config:
@@ -2185,8 +2235,16 @@ class ChannelPipelineRule(Base):
         """
         return bool(self.event_sync_config)
 
-    def to_dict(self) -> dict:
+    def to_dict(
+        self, *, preserve_invalid_required_provider_ids: bool = False
+    ) -> dict:
         """Convert to dictionary for API responses."""
+        required_provider_ids = self.get_required_provider_ids()
+        if (
+            preserve_invalid_required_provider_ids
+            and self.get_required_provider_ids_error() is not None
+        ):
+            required_provider_ids = self.required_provider_ids
         return {
             "id": self.id,
             "name": self.name,
@@ -2210,6 +2268,7 @@ class ChannelPipelineRule(Base):
             "quality_tie_break_order": self.quality_tie_break_order or "desc",
             "quality_m3u_tie_break_enabled": bool(self.quality_m3u_tie_break_enabled),
             "normalization_group_ids": self.get_normalization_group_ids(),
+            "required_provider_ids": required_provider_ids,
             "skip_struck_streams": self.skip_struck_streams or False,
             "orphan_action": self.orphan_action or "delete",
             "match_scope_target_group": self.match_scope_target_group or False,

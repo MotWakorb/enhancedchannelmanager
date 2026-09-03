@@ -450,6 +450,31 @@ class TestChannelPipelineEngineFetchStreams:
         # Only account 1
         assert len(streams) == 2
 
+    @patch("channel_pipeline_engine.get_session")
+    def test_fetch_streams_mixed_scoped_and_unscoped_rules_include_all_accounts(
+        self, mock_get_session
+    ):
+        mock_get_session.return_value.query.return_value.filter.return_value.all.return_value = []
+        self.client.get_m3u_accounts = AsyncMock(return_value=[
+            {"id": 1, "name": "Required A"},
+            {"id": 2, "name": "Required B"},
+            {"id": 3, "name": "Scoped sibling"},
+            {"id": 4, "name": "Unscoped match"},
+        ])
+        self.client.get_streams = AsyncMock(return_value={"count": 0, "results": []})
+        unscoped = MagicMock(id=7, m3u_account_id=None)
+        unscoped.get_required_provider_ids.return_value = [1, 2]
+        scoped = MagicMock(id=8, m3u_account_id=3)
+        scoped.get_required_provider_ids.return_value = []
+
+        asyncio.get_event_loop().run_until_complete(
+            self.engine._fetch_streams(rules=[unscoped, scoped])
+        )
+
+        assert {
+            call.kwargs["m3u_account"] for call in self.client.get_streams.call_args_list
+        } == {1, 2, 3, 4}
+
 
 class TestChannelPipelineEngineRunPipeline:
     """Tests for run_pipeline method."""

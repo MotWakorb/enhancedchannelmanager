@@ -239,6 +239,7 @@ class TestDuplicateKeepsKind:
         source.name = "Event Rule"
         source.priority = 0
         source.event_sync_config = '{"master_group_id": 10, "secondary_group_ids": [20]}'
+        source.required_provider_ids = None
         mock_db_session.query.return_value.filter.return_value.first.return_value = source
 
         added = []
