@@ -177,6 +177,113 @@ async def test_pipeline_assign_groupless_channel_proceeds_unlocked():
 
 
 @pytest.mark.asyncio
+async def test_selected_stream_profile_removal_rechecks_after_group_lock():
+    """A profile change that lands while removal waits for the group lock must
+    be observed at the write boundary and must not be cleared from stale state."""
+    group_id = 100
+    channel_id = 10
+    live_channel = {
+        "id": channel_id,
+        "name": "CH10",
+        "channel_group": group_id,
+        "stream_profile_id": 3,
+        "custom_properties": {},
+    }
+    client = SharedClient(
+        all_settings=_settings(group_id, [1]),
+        channels_by_gid={},
+        universe=[1],
+    )
+
+    async def get_channel(_channel_id):
+        return dict(live_channel)
+
+    stream_profile_writes = []
+
+    async def update_channel(_channel_id, data):
+        if "stream_profile_id" in data:
+            stream_profile_writes.append(data["stream_profile_id"])
+
+    client.get_channel = get_channel
+    client.update_channel = update_channel
+    executor = ActionExecutor(client, existing_channels=[dict(live_channel)])
+    exec_ctx = ExecutionContext()
+    exec_ctx.current_channel_id = channel_id
+
+    lock = group_state.effective_group_lock(group_id)
+    await lock.acquire()
+    task = asyncio.create_task(executor.execute(
+        {"type": "unassign_profile", "target": "selected", "profile_id": 3},
+        StreamContext(stream_id=1, stream_name="S", m3u_account_id=1),
+        exec_ctx,
+    ))
+    await asyncio.sleep(0)
+    live_channel["stream_profile_id"] = 4
+    lock.release()
+    result = await task
+
+    assert result.success is True
+    assert result.modified is False
+    assert stream_profile_writes == []
+
+
+@pytest.mark.asyncio
+async def test_channel_profile_removal_refreshes_membership_after_group_lock():
+    """A membership enabled while removal waits for the group lock is included
+    in the removal plan built after the lock is acquired."""
+    group_id = 100
+    channel_id = 10
+    client = SharedClient(
+        all_settings=_settings(group_id, [1]),
+        channels_by_gid={},
+        universe=[1, 2],
+    )
+    live_membership = {1: [], 2: []}
+
+    async def get_channel_profiles():
+        return [
+            {"id": profile_id, "channels": list(channel_ids)}
+            for profile_id, channel_ids in live_membership.items()
+        ]
+
+    client.get_channel_profiles = get_channel_profiles
+    executor = ActionExecutor(
+        client,
+        existing_channels=[{
+            "id": channel_id,
+            "name": "CH10",
+            "channel_group": group_id,
+            "custom_properties": {},
+        }],
+        all_profile_ids=[1, 2],
+        channel_profile_membership={channel_id: set()},
+    )
+    exec_ctx = ExecutionContext()
+    exec_ctx.current_channel_id = channel_id
+
+    lock = group_state.effective_group_lock(group_id)
+    await lock.acquire()
+    task = asyncio.create_task(executor.execute(
+        {
+            "type": "unassign_channel_profile",
+            "target": "selected",
+            "channel_profile_ids": [2],
+        },
+        StreamContext(stream_id=1, stream_name="S", m3u_account_id=1),
+        exec_ctx,
+        rule_id=99,
+    ))
+    await asyncio.sleep(0)
+    live_membership[2] = [channel_id]
+    lock.release()
+    result = await task
+
+    assert result.success is True
+    assert result.modified is True
+    assert client.member[(channel_id, 2)] is False
+
+
+@pytest.mark.asyncio
 async def test_pipeline_assign_and_reconcile_different_groups_do_not_serialize():
     """A pipeline assign on group 100 and a reconcile on group 200 must NOT
     serialize against each other (no over-locking) — their writes overlap."""

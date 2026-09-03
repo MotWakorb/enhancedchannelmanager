@@ -89,6 +89,8 @@ export type ActionType =
   | 'assign_epg'
   | 'assign_profile'
   | 'assign_channel_profile'
+  | 'unassign_profile'
+  | 'unassign_channel_profile'
   | 'set_channel_number'
   | 'set_variable'
   | 'remove_from_channel'
@@ -117,7 +119,7 @@ export interface Action {
   epg_id?: number;
   profile_id?: number;
   channel_profile_ids?: number[];
-  target?: 'auto' | 'existing_channel' | 'new_channel';
+  target?: 'auto' | 'existing_channel' | 'new_channel' | 'selected' | 'all';
   find_channel_by?: 'name_exact' | 'name_regex' | 'tvg_id';
   find_channel_value?: string;
   max_streams_per_channel?: number;

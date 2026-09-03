@@ -459,6 +459,58 @@ describe('ActionEditor', () => {
     });
   });
 
+  describe('profile unassignment actions', () => {
+    it('defaults stream-profile removal to selected and exposes an explicit all choice', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      render(
+        <ActionEditor action={{ type: 'skip' }} onChange={onChange} onRemove={vi.fn()} />
+      );
+
+      await user.click(screen.getByRole('combobox', { name: /action type/i }));
+      await user.click(screen.getByRole('option', { name: /remove stream profile/i }));
+
+      expect(onChange).toHaveBeenCalledWith({ type: 'unassign_profile', target: 'selected' });
+    });
+
+    it('renders selected/all semantics for stream-profile removal', () => {
+      render(
+        <ActionEditor
+          action={{ type: 'unassign_profile', target: 'all' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByLabelText(/removal target/i)).toBeInTheDocument();
+      expect(screen.getByText(/clear any assigned stream profile/i)).toBeInTheDocument();
+      expect(screen.queryByLabelText(/^stream profile$/i)).not.toBeInTheDocument();
+    });
+
+    it('renders a multi-select only for selected channel-profile removal', () => {
+      const { rerender } = render(
+        <ActionEditor
+          action={{ type: 'unassign_channel_profile', target: 'selected', channel_profile_ids: [1] }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+
+      expect(screen.getByText('Channel Profiles')).toBeInTheDocument();
+      expect(screen.getByTestId('channel-profile-removal-hint')).toHaveTextContent(/only the selected/i);
+
+      rerender(
+        <ActionEditor
+          action={{ type: 'unassign_channel_profile', target: 'all' }}
+          onChange={vi.fn()}
+          onRemove={vi.fn()}
+        />
+      );
+      expect(screen.queryByText('Channel Profiles')).not.toBeInTheDocument();
+      expect(screen.getByTestId('channel-profile-removal-hint')).toHaveTextContent(/every channel profile/i);
+    });
+  });
+
   describe('set_channel_number action', () => {
     it('renders channel number input', () => {
       render(

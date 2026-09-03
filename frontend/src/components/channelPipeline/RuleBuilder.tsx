@@ -479,6 +479,18 @@ export function RuleBuilder({
             break;
           }
         }
+        if (action.type === 'unassign_profile'
+            && (action.target ?? 'selected') === 'selected'
+            && !action.profile_id) {
+          newErrors.actions = 'Stream profile is required for selected removal';
+          break;
+        }
+        if (action.type === 'unassign_channel_profile'
+            && (action.target ?? 'selected') === 'selected'
+            && !action.channel_profile_ids?.length) {
+          newErrors.actions = 'At least one channel profile is required for selected removal';
+          break;
+        }
       }
     }
 

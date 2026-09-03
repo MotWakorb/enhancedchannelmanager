@@ -1770,6 +1770,10 @@ class TestActionExecutorPropertyActions:
         self.channels = [
             {"id": 1, "name": "ESPN", "logo_url": None, "tvg_id": None, "auto_created": True},
         ]
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
+        self.client.get_channel = AsyncMock(side_effect=lambda channel_id: dict(
+            next(channel for channel in self.channels if channel["id"] == channel_id)
+        ))
         self.executor = ActionExecutor(
             self.client,
             existing_channels=self.channels
@@ -1963,6 +1967,78 @@ class TestActionExecutorPropertyActions:
 
         assert result.success is True
         self.client.update_channel.assert_called_with(1, {"stream_profile_id": 3})
+
+    def test_unassign_selected_stream_profile_only_when_it_matches(self):
+        self.channels[0]["stream_profile_id"] = 3
+        action = {"type": "unassign_profile", "target": "selected", "profile_id": 3}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.modified is True
+        assert result.previous_state == {"stream_profile_id": 3}
+        assert exec_ctx.channels_updated == 1
+        self.client.update_channel.assert_called_with(1, {"stream_profile_id": None})
+
+    def test_unassign_selected_stream_profile_mismatch_is_noop(self):
+        self.channels[0]["stream_profile_id"] = 4
+        action = {"type": "unassign_profile", "target": "selected", "profile_id": 3}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.modified is False
+        self.client.update_channel.assert_not_called()
+
+    def test_unassign_all_stream_profiles_requires_explicit_all(self):
+        self.channels[0]["stream_profile_id"] = 4
+        action = {"type": "unassign_profile", "target": "all"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.modified is True
+        self.client.update_channel.assert_called_once_with(1, {"stream_profile_id": None})
+
+    def test_unassign_stream_profile_omitted_target_does_not_broaden(self):
+        self.channels[0]["stream_profile_id"] = 4
+        action = {"type": "unassign_profile"}
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        self.client.update_channel.assert_not_called()
+
+    def test_unassign_stream_profile_dry_run_does_not_write(self):
+        self.channels[0]["stream_profile_id"] = 4
+        action = {"type": "unassign_profile", "target": "all"}
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 1
+
+        result = asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.modified is True
+        assert "Would remove" in result.description
+        self.client.update_channel.assert_not_called()
 
     def test_set_channel_number(self):
         """Set channel number."""
@@ -5567,6 +5643,271 @@ class TestAssignChannelProfileAction:
         assert len(results) == 1
         touched = {c.args[1] for c in self.client.update_profile_channel.call_args_list}
         assert touched == {50}
+
+
+class TestUnassignChannelProfileAction:
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.update_profile_channel = AsyncMock()
+        self.client.update_channel = AsyncMock()
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
+        self.client.get_channel_profiles = AsyncMock(return_value=[])
+        self.client.get_channel = AsyncMock(return_value={"id": 99, "custom_properties": {}})
+        self.stream_ctx = StreamContext(
+            stream_id=201, stream_name="ESPN2 HD", m3u_account_id=1,
+        )
+
+    def _run(self, executor, action, exec_ctx):
+        return asyncio.get_event_loop().run_until_complete(
+            executor.execute(action, self.stream_ctx, exec_ctx)
+        )
+
+    def test_selected_disables_only_explicit_profiles(self):
+        self.client.get_channel_profiles.return_value = [
+            {"id": 1, "channels": [99]},
+            {"id": 2, "channels": [99]},
+            {"id": 3, "channels": [99]},
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "ESPN2"}],
+            all_profile_ids=[1, 2, 3],
+            channel_profile_membership={99: {1, 2, 3}},
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(executor, {
+            "type": "unassign_channel_profile",
+            "target": "selected",
+            "channel_profile_ids": [2, 3],
+        }, exec_ctx)
+
+        assert result.success is True
+        assert result.modified is True
+        assert {call.args[0]: call.args[2]["enabled"] for call in self.client.update_profile_channel.call_args_list} == {2: False, 3: False}
+        assert result.rollbackable is False
+        assert exec_ctx.channels_updated == 1
+
+    def test_all_disables_every_current_membership(self):
+        self.client.get_channel_profiles.return_value = [
+            {"id": 1, "channels": [99]},
+            {"id": 2, "channels": []},
+            {"id": 3, "channels": [99]},
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "ESPN2"}],
+            all_profile_ids=[1, 2, 3],
+            channel_profile_membership={99: {1, 3}},
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(
+            executor,
+            {"type": "unassign_channel_profile", "target": "all"},
+            exec_ctx,
+        )
+
+        assert result.success is True
+        assert {call.args[0]: call.args[2]["enabled"] for call in self.client.update_profile_channel.call_args_list} == {1: False, 3: False}
+
+    def test_omitted_target_and_ids_fails_without_writes(self):
+        executor = ActionExecutor(self.client, all_profile_ids=[1, 2, 3])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(executor, {"type": "unassign_channel_profile"}, exec_ctx)
+
+        assert result.success is False
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_all_fails_closed_when_profile_universe_unavailable(self):
+        self.client.get_channel_profiles.side_effect = RuntimeError("profiles unavailable")
+        executor = ActionExecutor(self.client, all_profile_ids=None)
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(
+            executor,
+            {"type": "unassign_channel_profile", "target": "all"},
+            exec_ctx,
+        )
+
+        assert result.success is False
+        assert "unavailable" in (result.error or "").lower()
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_selected_removal_fails_closed_when_membership_fetch_unavailable(self):
+        self.client.get_channel_profiles.side_effect = RuntimeError("profiles unavailable")
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "ESPN2"}],
+            all_profile_ids=None,
+            channel_profile_membership={},
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(
+            executor,
+            {"type": "unassign_channel_profile", "target": "selected", "channel_profile_ids": [2]},
+            exec_ctx,
+        )
+
+        assert result.success is False
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_selected_partial_failure_reports_landed_removals(self):
+        async def update_profile(profile_id, _channel_id, _body):
+            if profile_id == 2:
+                raise RuntimeError("profile unavailable")
+
+        self.client.update_profile_channel = AsyncMock(side_effect=update_profile)
+        self.client.get_channel_profiles.return_value = [
+            {"id": 1, "channels": [99]},
+            {"id": 2, "channels": [99]},
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "ESPN2"}],
+            all_profile_ids=[1, 2],
+            channel_profile_membership={99: {1, 2}},
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(
+            executor,
+            {"type": "unassign_channel_profile", "target": "selected", "channel_profile_ids": [1, 2]},
+            exec_ctx,
+        )
+
+        assert result.success is False
+        assert result.modified is True
+        assert result.rollbackable is False
+        assert result.error and "2" in result.error
+        assert exec_ctx.channels_updated == 1
+        assert exec_ctx.non_reversible_channel_ids == {99}
+
+    def test_dry_run_reports_scope_without_writes(self):
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "ESPN2"}],
+            all_profile_ids=[1, 2, 3],
+            channel_profile_membership={99: {1, 2}},
+        )
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(
+            executor,
+            {"type": "unassign_channel_profile", "target": "selected", "channel_profile_ids": [2]},
+            exec_ctx,
+        )
+
+        assert result.success is True
+        assert result.modified is True
+        assert "selected channel profile(s) [2]" in result.description
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_dry_run_updates_simulated_membership_for_sequential_actions(self):
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "A"}],
+            all_profile_ids=[1, 2],
+            channel_profile_membership={99: {1, 2}},
+        )
+        exec_ctx = ExecutionContext(dry_run=True)
+        exec_ctx.current_channel_id = 99
+        action = {
+            "type": "unassign_channel_profile",
+            "target": "selected",
+            "channel_profile_ids": [2],
+        }
+
+        first = self._run(executor, action, exec_ctx)
+        second = self._run(executor, action, exec_ctx)
+
+        assert first.modified is True
+        assert second.modified is False
+        assert executor._channel_profile_membership[99] == {1}
+        self.client.get_channel_profiles.assert_not_called()
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_fresh_membership_inside_lock_catches_concurrent_enable(self):
+        self.client.get_channel_profiles.return_value = [
+            {"id": 1, "channels": []},
+            {"id": 2, "channels": [99]},
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "A"}],
+            all_profile_ids=[1, 2],
+            channel_profile_membership={99: set()},
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(executor, {
+            "type": "unassign_channel_profile",
+            "target": "selected",
+            "channel_profile_ids": [2],
+        }, exec_ctx)
+
+        assert result.success is True
+        self.client.update_profile_channel.assert_called_once_with(
+            2, 99, {"enabled": False}
+        )
+
+    def test_noop_does_not_stamp_ownership(self):
+        self.client.get_channel_profiles.return_value = [
+            {"id": 2, "channels": []},
+        ]
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "A"}],
+            all_profile_ids=[2],
+            channel_profile_membership={99: {2}},
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(executor, {
+            "type": "unassign_channel_profile",
+            "target": "selected",
+            "channel_profile_ids": [2],
+        }, exec_ctx)
+
+        assert result.success is True
+        assert result.modified is False
+        self.client.update_channel.assert_not_called()
+        self.client.update_profile_channel.assert_not_called()
+
+    def test_failed_removal_does_not_stamp_ownership(self):
+        self.client.get_channel_profiles.return_value = [
+            {"id": 2, "channels": [99]},
+        ]
+        self.client.update_profile_channel.side_effect = RuntimeError("write failed")
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[{"id": 99, "name": "A"}],
+            all_profile_ids=[2],
+            channel_profile_membership={99: {2}},
+        )
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 99
+
+        result = self._run(executor, {
+            "type": "unassign_channel_profile",
+            "target": "selected",
+            "channel_profile_ids": [2],
+        }, exec_ctx)
+
+        assert result.success is False
+        assert result.modified is False
+        self.client.update_channel.assert_not_called()
 
 
 class TestProfileMembershipDiffOnlyWrites:
