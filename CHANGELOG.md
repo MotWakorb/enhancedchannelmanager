@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **Channel Pipeline Execution Details now identifies the rule scope for every historical run (bead `enhancedchannelmanager-zr9l2`, GitHub #795, build 0012).** Single-rule runs show the rule name snapshotted when execution started, so later renames or deletion do not change or break history. Selected runs list every persisted rule name in execution order, while run-all and legacy rows display the explicit full-pipeline scope instead of a blank or arbitrary rule.
+
 - **Channel Pipeline rules can explicitly remove stream-profile and channel-profile assignments for after-season cleanup (bead `enhancedchannelmanager-o8bzu`, build 0011).** Both actions default to fail-closed **Selected** targeting and require explicit profile IDs; only choosing **All** clears any stream profile or every channel-profile membership. Dry runs report the intended removals without writing, and channel-profile removal uses the standard RuleBuilder and executor paths.
 
 - **Channel Pipeline now identifies enabled rules outside their inclusive UTC active date window as Inactive (bead `enhancedchannelmanager-ftgqb`, build 0010).** Rule status and selected-run eligibility refresh automatically at UTC midnight without reloading the page, while disabled rules remain Disabled.

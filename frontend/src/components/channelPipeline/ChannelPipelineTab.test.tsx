@@ -891,6 +891,61 @@ describe('ChannelPipelineTab', () => {
   });
 
   describe('execution history', () => {
+    it('shows persisted rule names and explicit multi-rule/full-pipeline scopes from history fixtures', async () => {
+      const user = userEvent.setup();
+      mockDataStore.channelPipelineRules.push(
+        createMockChannelPipelineRule({ id: 41, name: 'Renamed Sports Rule' }),
+      );
+      mockDataStore.channelPipelineExecutions.push(
+        createMockChannelPipelineExecution({
+          id: 101,
+          rule_id: 41,
+          rule_name: 'Original Sports Rule',
+          run_scope: 'single',
+        }),
+        createMockChannelPipelineExecution({
+          id: 102,
+          run_scope: 'selected',
+          selected_rule_ids: [4, 9],
+          selected_rule_integrity: 'valid',
+          selected_rule_outcomes: [
+            { rule_id: 4, rule_name: 'First Rule', rule_kind: 'standard', status: 'completed' },
+            { rule_id: 9, rule_name: 'Second Rule', rule_kind: 'event_sync', status: 'completed' },
+          ],
+        }),
+        createMockChannelPipelineExecution({
+          id: 103,
+          rule_id: null,
+          rule_name: 'Deleted Rule Snapshot',
+          run_scope: 'single',
+        }),
+        createMockChannelPipelineExecution({
+          id: 104,
+          rule_id: null,
+          rule_name: null,
+          run_scope: 'all',
+        }),
+      );
+
+      renderWithProviders(<ChannelPipelineTab />);
+      const historyRows = await screen.findAllByTestId('execution-item');
+
+      const expectedScopes = [
+        'Original Sports Rule',
+        'Selected Rules: First Rule, Second Rule',
+        'Deleted Rule Snapshot',
+        'Full Pipeline (all enabled rules)',
+      ];
+      for (const [index, expectedScope] of expectedScopes.entries()) {
+        await user.click(within(historyRows[index]).getByRole('button', { name: /view details/i }));
+        const dialog = within(screen.getByRole('dialog', { name: 'Execution Details' }));
+        expect(dialog.getByText('Rule Name:').closest('.detail-row')).toHaveTextContent(expectedScope);
+        await user.click(dialog.getByRole('button', { name: 'Close' }));
+      }
+
+      expect(screen.queryByText('Renamed Sports Rule')).toBeInTheDocument();
+    });
+
     it('labels selected-rule history and names its scope', async () => {
       mockDataStore.channelPipelineExecutions.push(
         createMockChannelPipelineExecution({

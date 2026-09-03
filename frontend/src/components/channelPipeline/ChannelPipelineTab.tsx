@@ -82,6 +82,22 @@ const selectedOutcomeSummary = (outcome: SelectedRuleOutcome) => {
   return `${outcome.rule_name}: ${status}, ${count}, ${errors}`;
 };
 
+const executionRuleScope = (execution: ChannelPipelineExecution) => {
+  if (execution.run_scope === 'selected') {
+    if (execution.selected_rule_integrity === 'corrupt') {
+      return 'Selected Rules (data corrupt)';
+    }
+    const names = (execution.selected_rule_outcomes ?? []).map(outcome => outcome.rule_name);
+    return names.length > 0
+      ? `Selected Rules: ${names.join(', ')}`
+      : `Selected Rules (${execution.selected_rule_ids?.length ?? 0})`;
+  }
+  if (execution.run_scope === 'single' || execution.rule_name) {
+    return execution.rule_name || 'Rule no longer exists';
+  }
+  return 'Full Pipeline (all enabled rules)';
+};
+
 /**
  * Aggregated event_sync run counters across an execution's per-rule summaries
  * (enhancedchannelmanager-7wuhd). One execution can span several event_sync
@@ -2108,6 +2124,10 @@ export function ChannelPipelineTab() {
               <div className="detail-row">
                 <span className="detail-label">Mode:</span>
                 <span>{details.mode === 'dry_run' ? 'Dry Run' : 'Execute'}</span>
+              </div>
+              <div className="detail-row">
+                <span className="detail-label">Rule Name:</span>
+                <span>{executionRuleScope(details)}</span>
               </div>
               <div className="detail-row">
                 <span className="detail-label">Started:</span>
