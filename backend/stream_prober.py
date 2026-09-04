@@ -1215,6 +1215,10 @@ class StreamProber:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=self.probe_timeout + 5
                 )
+            except asyncio.CancelledError:
+                process.kill()
+                await asyncio.shield(process.wait())
+                raise
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
@@ -1586,6 +1590,10 @@ class StreamProber:
                 _, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=total_timeout
                 )
+            except asyncio.CancelledError:
+                process.kill()
+                await asyncio.shield(process.wait())
+                raise
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()

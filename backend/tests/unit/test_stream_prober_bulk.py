@@ -25,6 +25,110 @@ def _make_prober(client, **kwargs):
     return prober
 
 
+def _blocking_process(started: asyncio.Event):
+    process = MagicMock(returncode=None)
+
+    async def communicate():
+        started.set()
+        await asyncio.Event().wait()
+
+    async def wait():
+        process.returncode = -9
+        return -9
+
+    process.communicate = communicate
+    process.wait = AsyncMock(side_effect=wait)
+    return process
+
+
+def _prepare_bulk_probe(prober, streams):
+    prober._fetch_all_streams = AsyncMock(return_value=streams)
+    prober._create_probe_notification = AsyncMock()
+    prober._update_probe_notification = AsyncMock()
+    prober._finalize_probe_notification = AsyncMock()
+    prober._save_probe_result = MagicMock()
+
+
+def _assert_clean_cancelled_probe_state(prober):
+    progress = prober.get_probe_progress()
+    assert progress["in_progress"] is False
+    assert progress["status"] == "cancelled"
+    assert progress["current_stream"] == ""
+    assert progress["success_count"] == 0
+    assert progress["failed_count"] == 0
+    results = prober.get_probe_results()
+    assert results["success_streams"] == []
+    assert results["failed_streams"] == []
+    assert not prober._bulk_probe_tasks
+
+
+@pytest.mark.asyncio
+async def test_bulk_cancellation_kills_and_reaps_initial_ffprobe_child():
+    prober = _make_prober(AsyncMock(), max_concurrent_probes=1)
+    streams = [{"id": 10, "url": "https://provider.example/10", "name": "Stream 10"}]
+    started = asyncio.Event()
+    process = _blocking_process(started)
+    _prepare_bulk_probe(prober, streams)
+
+    with patch(
+        "stream_prober.validated_subprocess_input",
+        asynccontextmanager(_allowed_relay_for_bulk),
+    ), patch(
+        "stream_prober.asyncio.create_subprocess_exec", return_value=process
+    ):
+        bulk = asyncio.create_task(prober.probe_streams_by_ids([10]))
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        assert prober.cancel_probe()["status"] == "cancelling"
+        result = await asyncio.wait_for(bulk, timeout=1.0)
+
+    assert result == {
+        "status": "cancelled",
+        "probed": 0,
+        "total": 1,
+        "success": 0,
+        "failed": 0,
+    }
+    process.kill.assert_called_once_with()
+    process.wait.assert_awaited_once_with()
+    prober._save_probe_result.assert_not_called()
+    _assert_clean_cancelled_probe_state(prober)
+
+
+@pytest.mark.asyncio
+async def test_bulk_cancellation_kills_and_reaps_black_screen_ffmpeg_child():
+    prober = _make_prober(
+        AsyncMock(),
+        max_concurrent_probes=1,
+        black_screen_detection_enabled=True,
+    )
+    streams = [{"id": 10, "url": "https://provider.example/10", "name": "Stream 10"}]
+    started = asyncio.Event()
+    process = _blocking_process(started)
+    _prepare_bulk_probe(prober, streams)
+    prober._run_ffprobe = AsyncMock(return_value={"streams": []})
+    prober._measure_stream_bitrate = AsyncMock(return_value=None)
+
+    with patch(
+        "stream_prober.validated_subprocess_input",
+        asynccontextmanager(_allowed_relay_for_bulk),
+    ), patch(
+        "stream_prober.asyncio.create_subprocess_exec", return_value=process
+    ):
+        bulk = asyncio.create_task(prober.probe_streams_by_ids([10]))
+        await asyncio.wait_for(started.wait(), timeout=1.0)
+
+        assert prober.cancel_probe()["status"] == "cancelling"
+        result = await asyncio.wait_for(bulk, timeout=1.0)
+
+    assert result["status"] == "cancelled"
+    assert result["probed"] == 0
+    process.kill.assert_called_once_with()
+    process.wait.assert_awaited_once_with()
+    prober._save_probe_result.assert_not_called()
+    _assert_clean_cancelled_probe_state(prober)
+
+
 @pytest.mark.asyncio
 async def test_bulk_cancellation_reaps_active_resdet_and_cancels_lock_waiters(tmp_path):
     client = AsyncMock()
