@@ -47,6 +47,9 @@ These are **source-manifest** SBOMs. They inventory:
 
 - every Python distribution pinned in the image's `requirements.txt`, with its version;
 - every npm package resolved in `frontend/package-lock.json`, with its version (ECM only);
+- every direct source-built native dependency declared in
+  `native-dependencies.json`, with its version, license, source reference, and
+  package relationships;
 - every base and build image the Dockerfile pulls, **by digest**.
 
 They do **not** inventory:
@@ -132,5 +135,6 @@ python scripts/generate_sbom.py audit --out sbom/v0.18.0   # one directory
 ```
 
 Refresh `sbom/dev/` whenever a PR changes `backend/requirements.txt`,
-`mcp-server/requirements.txt`, `frontend/package-lock.json` or a Dockerfile base
-image — the backend suite will tell you if you forget.
+`mcp-server/requirements.txt`, `frontend/package-lock.json`,
+`sbom/native-dependencies.json`, or a Dockerfile base image — the backend suite
+will tell you if you forget.

@@ -34,6 +34,36 @@ COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=frontend-builder /app/frontend/dist ./static
 """
 
+NATIVE_DEPENDENCIES = {
+    "subjects": {
+        "ecm": {
+            "packages": [
+                {
+                    "id": "resdet",
+                    "name": "resdet",
+                    "version": "2.4.3",
+                    "license": "MIT AND LGPL-2.1-only",
+                    "downloadLocation": "https://example.test/resdet.tar.gz",
+                    "purl": "pkg:github/0x09/resdet@2.4.3",
+                },
+                {
+                    "id": "kissfft",
+                    "name": "KISS FFT",
+                    "version": "131.1.0",
+                    "license": "BSD-3-Clause",
+                    "downloadLocation": "https://example.test/resdet/tree/lib/kissfft",
+                    "purl": "pkg:generic/kissfft@131.1.0",
+                },
+            ],
+            "relationships": [
+                {"source": "ecm", "type": "CONTAINS", "target": "resdet"},
+                {"source": "resdet", "type": "CONTAINS", "target": "kissfft"},
+                {"source": "kissfft", "type": "STATIC_LINK", "target": "resdet"},
+            ],
+        }
+    }
+}
+
 MCP_DOCKERFILE = "FROM python:3.12-alpine@sha256:{alpine}\nRUN apk upgrade --no-cache\n"
 
 NODE_DIGEST = "a" * 64
@@ -132,6 +162,10 @@ def tree(tmp_path: Path) -> Path:
         tmp_path / "Dockerfile",
         DOCKERFILE.format(node=NODE_DIGEST, python=PYTHON_DIGEST, uv=UV_DIGEST),
     )
+    _write(
+        tmp_path / "sbom" / "native-dependencies.json",
+        json.dumps(NATIVE_DEPENDENCIES),
+    )
     _write(tmp_path / "mcp-server" / "Dockerfile", MCP_DOCKERFILE.format(alpine=ALPINE_DIGEST))
     return tmp_path
 
@@ -161,6 +195,27 @@ def test_documents_are_spdx_2_3_with_purls_for_every_dependency(sbom, generated)
     assert "pkg:pypi/cryptography@50.0.0" in locators
     assert "pkg:npm/react@19.0.0" in locators
     assert "pkg:npm/vite@6.0.0" in locators
+    assert "pkg:github/0x09/resdet@2.4.3" in locators
+    assert "pkg:generic/kissfft@131.1.0" in locators
+
+
+def test_source_built_native_packages_include_licenses_sources_and_relationships(generated):
+    document = json.loads((generated / "ecm.spdx.json").read_text(encoding="utf-8"))
+    packages = {package["name"]: package for package in document["packages"]}
+
+    assert packages["resdet"]["versionInfo"] == "2.4.3"
+    assert packages["resdet"]["licenseDeclared"] == "MIT AND LGPL-2.1-only"
+    assert packages["resdet"]["downloadLocation"] == "https://example.test/resdet.tar.gz"
+    assert packages["KISS FFT"]["versionInfo"] == "131.1.0"
+    assert packages["KISS FFT"]["licenseDeclared"] == "BSD-3-Clause"
+    assert packages["KISS FFT"]["downloadLocation"].endswith("/lib/kissfft")
+    relationships = {
+        (item["spdxElementId"], item["relationshipType"], item["relatedSpdxElement"])
+        for item in document["relationships"]
+    }
+    assert ("SPDXRef-Package-ecm", "CONTAINS", "SPDXRef-Package-native-resdet-2.4.3") in relationships
+    assert ("SPDXRef-Package-native-resdet-2.4.3", "CONTAINS", "SPDXRef-Package-native-kissfft-131.1.0") in relationships
+    assert ("SPDXRef-Package-native-kissfft-131.1.0", "STATIC_LINK", "SPDXRef-Package-native-resdet-2.4.3") in relationships
 
 
 def test_the_coverage_limit_is_stated_inside_the_document(sbom, generated):
@@ -356,7 +411,7 @@ def test_creator_identifies_the_generator_format_version(sbom, generated):
     for name in ("ecm.spdx.json", "mcp.spdx.json"):
         document = json.loads((generated / name).read_text(encoding="utf-8"))
         assert document["creationInfo"]["creators"] == [
-            "Tool: scripts/generate_sbom.py-3"
+            "Tool: scripts/generate_sbom.py-4"
         ]
 
 
@@ -410,6 +465,30 @@ def test_a_dependency_edited_without_regenerating_is_caught(sbom, tree, generate
         "fastapi==0.136.1\ncryptography==49.0.0\n",
     )
     assert sbom.verify(tree, generated, "9.9.9") == ["ecm.spdx.json", "index.json"]
+
+
+def test_a_native_dependency_omitted_without_regenerating_is_caught(sbom, tree, generated):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    native["subjects"]["ecm"]["packages"].pop()
+    native["subjects"]["ecm"]["relationships"] = [
+        {"source": "ecm", "type": "CONTAINS", "target": "resdet"}
+    ]
+    _write(manifest, json.dumps(native))
+
+    assert sbom.verify(tree, generated, "9.9.9") == ["ecm.spdx.json", "index.json"]
+
+
+def test_a_native_relationship_to_an_unknown_package_is_rejected(sbom, tree):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    native["subjects"]["ecm"]["relationships"].append(
+        {"source": "resdet", "type": "CONTAINS", "target": "missing"}
+    )
+    _write(manifest, json.dumps(native))
+
+    with pytest.raises(sbom.SbomError, match="unknown native package"):
+        sbom.render(tree, "9.9.9", CREATED)
 
 
 def test_a_base_image_repinned_without_regenerating_is_caught(sbom, tree, generated):
@@ -887,6 +966,18 @@ def test_the_sbom_for_the_current_version_matches_the_current_tree(sbom):
         assert sbom.verify(ROOT, directory, version) == []
     else:
         assert _committed_directories()
+
+
+def test_current_ecm_sbom_inventories_the_source_built_resdet_stack(sbom):
+    version = sbom.read_version(ROOT)
+    directory = sbom.directory_for(ROOT, version)
+    document = json.loads((directory / "ecm.spdx.json").read_text(encoding="utf-8"))
+    packages = {package["name"]: package for package in document["packages"]}
+
+    assert packages["resdet"]["versionInfo"] == "2.4.3"
+    assert packages["resdet"]["licenseDeclared"] == "MIT AND LGPL-2.1-only"
+    assert packages["KISS FFT"]["versionInfo"] == "131.1.0"
+    assert packages["KISS FFT"]["licenseDeclared"] == "BSD-3-Clause"
 
 
 def test_no_committed_directory_is_a_dev_snapshot_in_the_release_namespace(sbom):

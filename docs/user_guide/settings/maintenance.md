@@ -9,6 +9,8 @@ results.
 
 ![The top of the Stream Probing section: probe timeout, bitrate measurement duration, and stream fetch page limit, with parallel probing enabled below.](../../images/user_guide/settings/4-maintenance-stream-probing.png)
 
+The screenshot predates the optional resdet control described below.
+
 ## Common tasks
 
 ### Tune stream probing before running one

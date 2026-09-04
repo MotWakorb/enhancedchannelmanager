@@ -39,20 +39,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
         curl \
-        libavcodec-dev \
-        libavformat-dev \
-        libavutil-dev \
-        libswscale-dev \
-        pkg-config \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL "https://codeload.github.com/0x09/resdet/tar.gz/${RESDET_COMMIT}" -o /tmp/resdet.tar.gz \
     && printf '%s  %s\n' "$RESDET_SHA256" /tmp/resdet.tar.gz | sha256sum -c - \
     && mkdir /tmp/resdet \
     && tar -xzf /tmp/resdet.tar.gz --strip-components=1 -C /tmp/resdet
 WORKDIR /tmp/resdet
-RUN ./configure --disable-fftw --disable-libjpeg --disable-libpng --disable-MagickWand \
+RUN ./configure --disable-everything --disable-ffmpeg --omit-pgm-reader --omit-pfm-reader \
     && sed -i 's/-march=native -mtune=native //; s/-mcpu=native //' config.mak \
-    && make resdet
+    && make resdet \
+    && test "$(./resdet -V | sed -n '/^Built with image readers:/p')" = "Built with image readers: Y4M"
 
 # Production image
 FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
@@ -79,6 +75,8 @@ RUN apt-get update \
 COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=resdet-builder /tmp/resdet/resdet /usr/local/bin/resdet
 COPY --from=resdet-builder /tmp/resdet/COPYING /tmp/resdet/COPYING.LGPL.txt /tmp/resdet/COPYING.MIT.txt /usr/share/doc/resdet/
+COPY --from=resdet-builder /tmp/resdet/lib/kissfft/COPYING /usr/share/doc/resdet/kissfft/COPYING
+COPY --from=resdet-builder /tmp/resdet/lib/kissfft/LICENSES/BSD-3-Clause /usr/share/doc/resdet/kissfft/LICENSES/BSD-3-Clause
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy backend code
@@ -94,7 +92,7 @@ RUN mkdir -p /config /config/tls /config/uploads/logos \
     && chmod 700 /config/tls \
     && sed -i 's/\r$//' /app/entrypoint.sh \
     && chmod +x /app/entrypoint.sh \
-    && resdet -V
+    && test "$(resdet -V | sed -n '/^Built with image readers:/p')" = "Built with image readers: Y4M"
 
 # Environment
 ENV PUID=1000

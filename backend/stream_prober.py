@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import shutil
+import tempfile
 import time
 from datetime import datetime, timedelta
 from numbers import Real
@@ -123,6 +124,8 @@ BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 # internal demuxers activated by https:// / hls variants.
 FFPROBE_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
 RELAY_PROTOCOL_WHITELIST = "http,tcp,crypto"
+RESDET_FRAME_MAX_BYTES = 64 * 1024 * 1024
+RESDET_OUTPUT_MAX_BYTES = 64
 
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
@@ -1239,45 +1242,136 @@ class StreamProber:
         return json.loads(output)
 
     async def _run_resdet(self, url: str) -> tuple[int, int]:
-        """Run resdet for one frame and return its best-guess source dimensions."""
+        """Decode one bounded Y4M frame, then analyze that local file with resdet."""
+
+        async def kill_and_reap(process) -> None:
+            if process.returncode is None:
+                process.kill()
+            await process.wait()
+
+        async def read_bounded_output(
+            process, limit: int, invalid_message: str
+        ) -> bytes:
+            async def read_and_wait() -> bytes:
+                try:
+                    output = await process.stdout.readexactly(limit + 1)
+                except asyncio.IncompleteReadError as exc:
+                    output = exc.partial
+                if len(output) > limit:
+                    await kill_and_reap(process)
+                    raise ResolutionDetectionError(invalid_message)
+                await process.wait()
+                return output
+
+            try:
+                return await asyncio.wait_for(
+                    read_and_wait(), timeout=self.probe_timeout + 5
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                await kill_and_reap(process)
+                raise
+
         headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
-        async with validated_subprocess_input(
-            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
-        ) as subprocess_input:
+        with tempfile.TemporaryDirectory(prefix="ecm-resdet-") as directory:
+            frame_path = Path(directory) / "frame.y4m"
+            async with validated_subprocess_input(
+                url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+            ) as subprocess_input:
+                ffmpeg = await asyncio.create_subprocess_exec(
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-protocol_whitelist",
+                    (
+                        RELAY_PROTOCOL_WHITELIST
+                        if subprocess_input.is_http_relay
+                        else FFPROBE_PROTOCOL_WHITELIST
+                    ),
+                    "-timeout",
+                    str(self.probe_timeout * 1000000),
+                    "-i",
+                    subprocess_input.argument,
+                    "-frames:v",
+                    "1",
+                    "-an",
+                    "-sn",
+                    "-dn",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-f",
+                    "yuv4mpegpipe",
+                    "-fs",
+                    str(RESDET_FRAME_MAX_BYTES),
+                    "-y",
+                    "pipe:1",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                try:
+                    frame_data = await read_bounded_output(
+                        ffmpeg,
+                        RESDET_FRAME_MAX_BYTES,
+                        "resdet returned an invalid frame",
+                    )
+                except asyncio.TimeoutError:
+                    raise ResolutionDetectionError(
+                        "resdet resolution detection timed out"
+                    ) from None
+
+            if ffmpeg.returncode != 0:
+                raise ResolutionDetectionError(
+                    "resdet frame extraction failed"
+                )
+            try:
+                frame_path.write_bytes(frame_data)
+            except OSError:
+                raise ResolutionDetectionError(
+                    "resdet frame extraction failed"
+                ) from None
+            if (
+                not frame_data
+                or len(frame_data) > RESDET_FRAME_MAX_BYTES
+                or not frame_data.startswith(b"YUV4MPEG2 ")
+            ):
+                raise ResolutionDetectionError("resdet returned an invalid frame")
+
             process = await asyncio.create_subprocess_exec(
                 "resdet",
+                "-R",
+                "Y4M",
                 "-v",
                 "1",
                 "-n",
                 "1",
-                subprocess_input.argument,
+                str(frame_path),
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
             try:
-                stdout, _stderr = await asyncio.wait_for(
-                    process.communicate(), timeout=self.probe_timeout + 5
+                stdout = await read_bounded_output(
+                    process,
+                    RESDET_OUTPUT_MAX_BYTES,
+                    "resdet returned an invalid resolution",
                 )
             except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
                 raise ResolutionDetectionError(
                     "resdet resolution detection timed out"
                 ) from None
 
-        if process.returncode != 0:
-            raise ResolutionDetectionError("resdet resolution detection failed")
+            if process.returncode != 0:
+                raise ResolutionDetectionError("resdet resolution detection failed")
 
-        parts = stdout.decode(errors="replace").strip().split()
-        try:
-            width, height = (int(value) for value in parts)
-        except (TypeError, ValueError):
-            raise ResolutionDetectionError(
-                "resdet returned an invalid resolution"
-            ) from None
-        if width <= 0 or height <= 0:
-            raise ResolutionDetectionError("resdet returned an invalid resolution")
-        return width, height
+            parts = stdout.decode(errors="replace").strip().split()
+            try:
+                width, height = (int(value) for value in parts)
+            except ValueError:
+                raise ResolutionDetectionError(
+                    "resdet returned an invalid resolution"
+                ) from None
+            if width <= 0 or height <= 0:
+                raise ResolutionDetectionError("resdet returned an invalid resolution")
+            return width, height
 
     async def _measure_stream_bitrate(self, url: str) -> Optional[int]:
         """

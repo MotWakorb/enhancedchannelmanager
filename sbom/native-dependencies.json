@@ -1,0 +1,41 @@
+{
+  "subjects": {
+    "ecm": {
+      "packages": [
+        {
+          "id": "resdet",
+          "name": "resdet",
+          "version": "2.4.3",
+          "license": "MIT AND LGPL-2.1-only",
+          "downloadLocation": "https://codeload.github.com/0x09/resdet/tar.gz/89d078b932eeb259d8e78d07d875af2623734cf4",
+          "purl": "pkg:github/0x09/resdet@2.4.3"
+        },
+        {
+          "id": "kissfft",
+          "name": "KISS FFT",
+          "version": "131.1.0",
+          "license": "BSD-3-Clause",
+          "downloadLocation": "https://github.com/0x09/resdet/tree/89d078b932eeb259d8e78d07d875af2623734cf4/lib/kissfft",
+          "purl": "pkg:generic/kissfft@131.1.0"
+        }
+      ],
+      "relationships": [
+        {
+          "source": "ecm",
+          "type": "CONTAINS",
+          "target": "resdet"
+        },
+        {
+          "source": "resdet",
+          "type": "CONTAINS",
+          "target": "kissfft"
+        },
+        {
+          "source": "kissfft",
+          "type": "STATIC_LINK",
+          "target": "resdet"
+        }
+      ]
+    }
+  }
+}

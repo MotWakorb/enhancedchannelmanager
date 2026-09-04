@@ -1,14 +1,22 @@
 """Opt-in resdet resolution detection for stream probing (6cyl3 / GH #618)."""
 
+import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from config import DispatcharrSettings
-from stream_prober import ResolutionDetectionError, StreamProber
+from stream_prober import (
+    RELAY_PROTOCOL_WHITELIST,
+    RESDET_FRAME_MAX_BYTES,
+    RESDET_OUTPUT_MAX_BYTES,
+    ResolutionDetectionError,
+    StreamProber,
+)
 
 
 FFPROBE_RESULT = {
@@ -95,78 +103,173 @@ async def test_enabled_resdet_failure_fails_probe_without_ffprobe_fallback():
     assert prober._save_probe_result.call_args.args[2] is None
 
 
-@pytest.mark.asyncio
-async def test_resdet_invocation_parses_best_guess_dimensions():
-    @asynccontextmanager
-    async def allowed(_url, **_kwargs):
-        yield SimpleNamespace(
-            argument="http://127.0.0.1:1234/resource/0",
-            response=None,
-            is_http_relay=True,
-        )
+def _stdout(data: bytes) -> asyncio.StreamReader:
+    reader = asyncio.StreamReader()
+    reader.feed_data(data)
+    reader.feed_eof()
+    return reader
 
-    process = MagicMock(returncode=0)
-    process.communicate = AsyncMock(return_value=(b"1280 720\n", b""))
-    spawn = AsyncMock(return_value=process)
+
+def _process(*, returncode=0, stdout=b""):
+    process = MagicMock(returncode=returncode)
+    process.stdout = _stdout(stdout)
+    process.wait = AsyncMock(return_value=returncode)
+    return process
+
+
+@asynccontextmanager
+async def _allowed_relay(_url, **_kwargs):
+    yield SimpleNamespace(
+        argument="http://127.0.0.1:1234/resource/0",
+        response=None,
+        is_http_relay=True,
+    )
+
+
+def _spawn_pipeline(*, frame=b"YUV4MPEG2 W2 H2 F25:1 Ip A1:1 C420\nFRAME\n" + b"\0" * 6,
+                    output=b"1280 720\n", resdet_returncode=0):
+    ffmpeg = _process(stdout=frame)
+    resdet = _process(returncode=resdet_returncode, stdout=output)
+    calls = []
+
+    async def spawn(*args, **kwargs):
+        calls.append((args, kwargs))
+        if args[0] == "ffmpeg":
+            return ffmpeg
+        return resdet
+
+    return AsyncMock(side_effect=spawn), ffmpeg, resdet, calls
+
+
+@pytest.mark.asyncio
+async def test_resdet_decodes_one_hardened_local_y4m_frame_before_analysis():
+    provider_url = "https://user:password@provider.example/live.ts"
+    spawn, ffmpeg, resdet, calls = _spawn_pipeline()
     prober = StreamProber(MagicMock(), use_resdet_for_resolution=True, probe_timeout=20)
 
-    with patch("stream_prober.validated_subprocess_input", allowed), patch(
+    with patch("stream_prober.validated_subprocess_input", _allowed_relay), patch(
         "stream_prober.asyncio.create_subprocess_exec", spawn
     ):
-        resolution = await prober._run_resdet("https://provider.example/live.ts")
+        resolution = await prober._run_resdet(provider_url)
 
     assert resolution == (1280, 720)
-    assert spawn.await_args.args == (
-        "resdet",
+    assert len(calls) == 2
+    ffmpeg_args, ffmpeg_kwargs = calls[0]
+    resdet_args, resdet_kwargs = calls[1]
+    assert ffmpeg_args[:6] == (
+        "ffmpeg",
+        "-nostdin",
         "-v",
-        "1",
-        "-n",
-        "1",
-        "http://127.0.0.1:1234/resource/0",
+        "error",
+        "-protocol_whitelist",
+        RELAY_PROTOCOL_WHITELIST,
     )
-    assert "https://provider.example/live.ts" not in spawn.await_args.args
+    assert "-frames:v" in ffmpeg_args
+    assert ffmpeg_args[ffmpeg_args.index("-frames:v") + 1] == "1"
+    assert ffmpeg_args[ffmpeg_args.index("-fs") + 1] == str(RESDET_FRAME_MAX_BYTES)
+    assert "http://127.0.0.1:1234/resource/0" in ffmpeg_args
+    assert ffmpeg_kwargs == {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.DEVNULL,
+    }
+    assert resdet_args[:7] == ("resdet", "-R", "Y4M", "-v", "1", "-n", "1")
+    assert resdet_args[-1].endswith(".y4m")
+    assert provider_url not in resdet_args
+    assert "http://127.0.0.1:1234/resource/0" not in resdet_args
+    assert resdet_kwargs == {
+        "stdout": asyncio.subprocess.PIPE,
+        "stderr": asyncio.subprocess.DEVNULL,
+    }
+    ffmpeg.wait.assert_awaited_once_with()
+    resdet.wait.assert_awaited_once_with()
+    assert not Path(resdet_args[-1]).exists()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("returncode", "stdout"),
-    [(1, b""), (0, b""), (0, b"1920x1080\n"), (0, b"0 1080\n")],
+    [
+        (1, b""),
+        (0, b""),
+        (0, b"1920x1080\n"),
+        (0, b"0 1080\n"),
+        (0, b"1920 1080 extra\n"),
+        (0, b"1" * (RESDET_OUTPUT_MAX_BYTES + 1)),
+    ],
 )
 async def test_resdet_rejects_nonzero_and_malformed_results(returncode, stdout):
-    @asynccontextmanager
-    async def allowed(url, **_kwargs):
-        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
-
-    process = MagicMock(returncode=returncode)
-    process.communicate = AsyncMock(return_value=(stdout, b"private provider output"))
+    spawn, _ffmpeg, _resdet, _calls = _spawn_pipeline(
+        output=stdout, resdet_returncode=returncode
+    )
     prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
 
-    with patch("stream_prober.validated_subprocess_input", allowed), patch(
-        "stream_prober.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+    with patch("stream_prober.validated_subprocess_input", _allowed_relay), patch(
+        "stream_prober.asyncio.create_subprocess_exec", spawn
     ):
         with pytest.raises(ResolutionDetectionError, match="resdet") as exc_info:
             await prober._run_resdet("https://user:password@provider.example/live.ts")
 
     assert "password" not in str(exc_info.value)
-    assert "private provider output" not in str(exc_info.value)
 
 
 @pytest.mark.asyncio
-async def test_resdet_timeout_kills_and_reaps_process():
-    @asynccontextmanager
-    async def allowed(url, **_kwargs):
-        yield SimpleNamespace(argument=url, response=None, is_http_relay=False)
+@pytest.mark.parametrize(
+    "frame",
+    [b"not y4m", b"YUV4MPEG2 " + b"0" * 33],
+    ids=["malformed", "oversized"],
+)
+async def test_resdet_rejects_malformed_or_oversized_frame_before_native_analysis(frame):
+    spawn, _ffmpeg, _resdet, calls = _spawn_pipeline(frame=frame)
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+    limit = 32 if frame.startswith(b"YUV4MPEG2 ") else RESDET_FRAME_MAX_BYTES
 
-    process = MagicMock(returncode=None)
-    process.communicate = AsyncMock(side_effect=TimeoutError)
-    process.wait = AsyncMock()
+    with patch("stream_prober.RESDET_FRAME_MAX_BYTES", limit), patch(
+        "stream_prober.validated_subprocess_input", _allowed_relay
+    ), patch("stream_prober.asyncio.create_subprocess_exec", spawn):
+        with pytest.raises(ResolutionDetectionError, match="frame"):
+            await prober._run_resdet("https://provider.example/live.ts")
+
+    assert [args[0] for args, _kwargs in calls] == ["ffmpeg"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["ffmpeg", "resdet"])
+async def test_resdet_timeout_kills_and_reaps_active_process(stage):
+    spawn, ffmpeg, resdet, _calls = _spawn_pipeline()
+    active = ffmpeg if stage == "ffmpeg" else resdet
+    active.returncode = None
+    active.wait = AsyncMock(side_effect=[asyncio.TimeoutError, None])
     prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
 
-    with patch("stream_prober.validated_subprocess_input", allowed), patch(
-        "stream_prober.asyncio.create_subprocess_exec", AsyncMock(return_value=process)
+    with patch("stream_prober.validated_subprocess_input", _allowed_relay), patch(
+        "stream_prober.asyncio.create_subprocess_exec", spawn
     ):
         with pytest.raises(ResolutionDetectionError, match="timed out"):
             await prober._run_resdet("https://provider.example/live.ts")
 
-    process.kill.assert_called_once_with()
-    process.wait.assert_awaited_once_with()
+    active.kill.assert_called_once_with()
+    assert active.wait.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["ffmpeg", "resdet"])
+async def test_resdet_cancellation_kills_reaps_and_reraises(stage):
+    spawn, ffmpeg, resdet, calls = _spawn_pipeline()
+    active = ffmpeg if stage == "ffmpeg" else resdet
+    active.returncode = None
+    active.wait = AsyncMock(side_effect=[asyncio.CancelledError, None])
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+
+    with patch("stream_prober.validated_subprocess_input", _allowed_relay), patch(
+        "stream_prober.asyncio.create_subprocess_exec", spawn
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await prober._run_resdet("https://provider.example/live.ts")
+
+    active.kill.assert_called_once_with()
+    assert active.wait.await_count == 2
+    if stage == "resdet":
+        ffmpeg.wait.assert_awaited_once_with()
+        ffmpeg.kill.assert_not_called()
+    frame_paths = [Path(args[-1]) for args, _kwargs in calls if args[0] == "resdet"]
+    assert all(not path.exists() for path in frame_paths)

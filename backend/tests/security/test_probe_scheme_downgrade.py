@@ -346,8 +346,8 @@ def test_every_probe_outbound_call_carries_the_policy():
             call_sites.append(node)
 
     assert len(call_sites) == 4, (
-        "expected exactly 4 outbound calls on the probe path (ffprobe, resdet, "
-        "bitrate measurement, black-screen detection); found "
+        "expected exactly 4 outbound calls on the probe path (ffprobe, resdet's "
+        "FFmpeg frame extraction, bitrate measurement, black-screen detection); found "
         f"{len(call_sites)}"
     )
     for node in call_sites:
