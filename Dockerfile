@@ -31,6 +31,29 @@ COPY backend/requirements.txt /tmp/requirements.txt
 RUN uv venv /opt/venv \
     && uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt
 
+# Build resdet from a pinned source commit for both supported image architectures.
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS resdet-builder
+ARG RESDET_COMMIT=89d078b932eeb259d8e78d07d875af2623734cf4
+ARG RESDET_SHA256=7c818aae4131b1fb4b36c20d3d8e4009e6ace209468ed8272747e5a42657be3d
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl \
+        libavcodec-dev \
+        libavformat-dev \
+        libavutil-dev \
+        libswscale-dev \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "https://codeload.github.com/0x09/resdet/tar.gz/${RESDET_COMMIT}" -o /tmp/resdet.tar.gz \
+    && printf '%s  %s\n' "$RESDET_SHA256" /tmp/resdet.tar.gz | sha256sum -c - \
+    && mkdir /tmp/resdet \
+    && tar -xzf /tmp/resdet.tar.gz --strip-components=1 -C /tmp/resdet
+WORKDIR /tmp/resdet
+RUN ./configure --disable-fftw --disable-libjpeg --disable-libpng --disable-MagickWand \
+    && sed -i 's/-march=native -mtune=native //; s/-mcpu=native //' config.mak \
+    && make resdet
+
 # Production image
 FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
 
@@ -54,6 +77,8 @@ RUN apt-get update \
 
 # Copy pre-built Python packages from builder stage (no build tools needed)
 COPY --from=python-builder /opt/venv /opt/venv
+COPY --from=resdet-builder /tmp/resdet/resdet /usr/local/bin/resdet
+COPY --from=resdet-builder /tmp/resdet/COPYING /tmp/resdet/COPYING.LGPL.txt /tmp/resdet/COPYING.MIT.txt /usr/share/doc/resdet/
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy backend code
@@ -68,7 +93,8 @@ RUN mkdir -p /config /config/tls /config/uploads/logos \
     && chown -R appuser:appuser /config /app \
     && chmod 700 /config/tls \
     && sed -i 's/\r$//' /app/entrypoint.sh \
-    && chmod +x /app/entrypoint.sh
+    && chmod +x /app/entrypoint.sh \
+    && resdet -V
 
 # Environment
 ENV PUID=1000

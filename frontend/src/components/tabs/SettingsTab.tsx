@@ -793,6 +793,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   const [streamProbeTimeout, setStreamProbeTimeout] = useState(30);
+  const [useResdetForResolution, setUseResdetForResolution] = useState(false);
   const [bitrateSampleDuration, setBitrateSampleDuration] = useState(10);
   const [parallelProbingEnabled, setParallelProbingEnabled] = useState(true);
   const [maxConcurrentProbes, setMaxConcurrentProbes] = useState(8);
@@ -924,7 +925,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     frontendLogLevel, vlcOpenBehavior, streamPreviewMode, channelPipelineExcludedTerms,
     channelPipelineExcludedGroups, channelPipelineExcludeAutoSyncGroups,
     maxAutoCreatedChannelsPerRun, maxChannelPipelineLogEntries, linkedM3UAccounts,
-    streamProbeTimeout, bitrateSampleDuration, parallelProbingEnabled,
+    streamProbeTimeout, useResdetForResolution, bitrateSampleDuration, parallelProbingEnabled,
     maxConcurrentProbes, profileDistributionStrategy, skipRecentlyProbedHours,
     refreshM3usBeforeProbe, autoReorderAfterProbe, pushStreamStatsToDispatcharr,
     probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
@@ -1263,6 +1264,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setLinkedM3UAccounts(settings.linked_m3u_accounts ?? []);
       // Stream probe settings (scheduled probing is controlled by Task Engine)
       setStreamProbeTimeout(settings.stream_probe_timeout ?? 30);
+      setUseResdetForResolution(settings.use_resdet_for_resolution ?? false);
       setBitrateSampleDuration(settings.bitrate_sample_duration ?? 10);
       setParallelProbingEnabled(settings.parallel_probing_enabled ?? true);
       setMaxConcurrentProbes(settings.max_concurrent_probes ?? 8);
@@ -1736,6 +1738,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         linked_m3u_accounts: linkedM3UAccounts,
         // Stream probe settings (scheduled probing is controlled by Task Engine)
         stream_probe_timeout: streamProbeTimeout,
+        use_resdet_for_resolution: useResdetForResolution,
         bitrate_sample_duration: bitrateSampleDuration,
         parallel_probing_enabled: parallelProbingEnabled,
         max_concurrent_probes: maxConcurrentProbes,
@@ -5223,6 +5226,22 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </p>
 
         <div className="settings-group" style={{ marginTop: '1rem' }}>
+            <div className="form-group-vertical">
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={useResdetForResolution}
+                  onChange={(e) => setUseResdetForResolution(e.target.checked)}
+                />
+                Use resdet for resolution detection
+              </label>
+              <span className="form-description">
+                Analyze one video frame to estimate the source resolution before upscaling.
+                ffprobe still supplies codec, FPS, audio, and format metadata. If resdet fails,
+                the probe fails instead of falling back to ffprobe's displayed dimensions.
+              </span>
+            </div>
+
             <div className="form-group-vertical">
               <label htmlFor="probeTimeout">Probe timeout (seconds)</label>
               <span className="form-description">Timeout for each probe attempt (5-120 seconds)</span>

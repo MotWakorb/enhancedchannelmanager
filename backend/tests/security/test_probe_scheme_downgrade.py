@@ -331,7 +331,7 @@ def test_prober_names_the_waiver_once_and_reuses_it():
 
 
 def test_every_probe_outbound_call_carries_the_policy():
-    """All three probe call sites opt in -- a missed one silently re-breaks probing."""
+    """All four probe call sites opt in -- a missed one silently re-breaks probing."""
     source = (BACKEND / "stream_prober.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
 
@@ -345,9 +345,10 @@ def test_every_probe_outbound_call_carries_the_policy():
         if name in outbound:
             call_sites.append(node)
 
-    assert len(call_sites) == 3, (
-        "expected exactly 3 outbound calls on the probe path (ffprobe, bitrate "
-        f"measurement, black-screen detection); found {len(call_sites)}"
+    assert len(call_sites) == 4, (
+        "expected exactly 4 outbound calls on the probe path (ffprobe, resdet, "
+        "bitrate measurement, black-screen detection); found "
+        f"{len(call_sites)}"
     )
     for node in call_sites:
         keywords = {kw.arg for kw in node.keywords}

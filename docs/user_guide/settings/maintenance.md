@@ -18,7 +18,9 @@ results.
    **Max concurrent probes** (match this to your lowest M3U provider
    connection limit to avoid rate limiting), **Profile distribution
    strategy**, and whether to **Refresh M3Us before probing** or run
-   **Black screen detection**.
+   **Black screen detection**. Enable **Use resdet for resolution detection**
+   if you want ECM to estimate the source resolution before upscaling instead
+   of using the displayed dimensions reported by ffprobe.
 3. Save.
 4. Trigger the actual probe from [Scheduled Tasks → Stream
    Probe](scheduled-tasks.md) (Run Now) or from wherever else your workflow
@@ -27,6 +29,12 @@ results.
 **Result:** The next probe run uses the updated settings. **Reflect stream
 stats to Dispatcharr**, if enabled, also pushes resolution/codec/fps/bitrate
 back to Dispatcharr after each successful probe.
+
+When resdet is enabled, ECM still uses ffprobe for codec, frame rate, audio,
+and format metadata. resdet analyzes one video frame and replaces only the
+resolution. If that analysis fails or times out, ECM marks the probe failed;
+it does not silently fall back to ffprobe's displayed dimensions. Leave the
+option disabled to retain the default ffprobe-only behavior.
 
 ### Recover from a stuck probe
 

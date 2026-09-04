@@ -55,6 +55,7 @@ from stream_prober import (
     OPERATOR_SAFE_EXCEPTION_TYPES,
     PROBE_NETWORK_ROUTE_GUIDANCE,
     ProbeNetworkRouteError,
+    ResolutionDetectionError,
     StreamProber,
     operator_safe_detail,
 )
@@ -121,7 +122,11 @@ class TestExceptionOriginClassification:
         assert operator_safe_detail(RuntimeError("ffprobe failed: secret")) is None
 
     def test_allowlist_holds_only_types_ecm_raises_itself(self):
-        assert set(OPERATOR_SAFE_EXCEPTION_TYPES) == {SSRFError, ProbeNetworkRouteError}
+        assert set(OPERATOR_SAFE_EXCEPTION_TYPES) == {
+            SSRFError,
+            ProbeNetworkRouteError,
+            ResolutionDetectionError,
+        }
 
     def test_empty_message_reports_no_detail(self):
         assert operator_safe_detail(SSRFError("   ")) is None

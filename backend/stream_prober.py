@@ -56,6 +56,10 @@ class ProbeNetworkRouteError(RuntimeError):
     """An upstream connection failure whose raw diagnostic must stay private."""
 
 
+class ResolutionDetectionError(RuntimeError):
+    """A resdet failure with a fixed operator-safe message."""
+
+
 # Bead enhancedchannelmanager-iyvl9. XC providers 302 an
 # https://<portal>/live/<user>/<pass>/<id>.ts request onto a plain-HTTP edge
 # node and serve the video over HTTP there regardless, so the media is already
@@ -87,6 +91,7 @@ PROBE_SCHEME_DOWNGRADE = SchemeDowngrade.ALLOW_STREAM_PROBE
 OPERATOR_SAFE_EXCEPTION_TYPES: tuple = (
     SSRFError,               # ECM's own SSRF chokepoint -- fixed guard messages
     ProbeNetworkRouteError,  # raised here, with a fixed message
+    ResolutionDetectionError,
 )
 
 
@@ -444,9 +449,11 @@ class StreamProber:
         failed_stream_sort_order: list[str] = None,  # Order of deprioritized categories (first = sorted higher)
         stream_sort_strategy: str = "priority",
         stream_sort_point_rules: tuple[PointRule, ...] = (),
+        use_resdet_for_resolution: bool = False,
     ):
         self.client = client
         self.probe_timeout = probe_timeout
+        self.use_resdet_for_resolution = use_resdet_for_resolution
         self.user_timezone = user_timezone
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
@@ -1090,6 +1097,14 @@ class StreamProber:
             result = await self._run_ffprobe(url)
             logger.info("[STREAM-PROBE] Stream %s ffprobe succeeded", stream_id)
 
+            if self.use_resdet_for_resolution:
+                width, height = await self._run_resdet(url)
+                for stream in result.get("streams", []):
+                    if stream.get("codec_type") == "video":
+                        stream["width"] = width
+                        stream["height"] = height
+                        break
+
             # Measure actual bitrate by downloading stream data
             logger.debug("[STREAM-PROBE] Measuring bitrate for stream %s", stream_id)
             measured_bitrate = await self._measure_stream_bitrate(url)
@@ -1222,6 +1237,47 @@ class StreamProber:
             raise RuntimeError("ffprobe returned empty output")
 
         return json.loads(output)
+
+    async def _run_resdet(self, url: str) -> tuple[int, int]:
+        """Run resdet for one frame and return its best-guess source dimensions."""
+        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+        async with validated_subprocess_input(
+            url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+        ) as subprocess_input:
+            process = await asyncio.create_subprocess_exec(
+                "resdet",
+                "-v",
+                "1",
+                "-n",
+                "1",
+                subprocess_input.argument,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            try:
+                stdout, _stderr = await asyncio.wait_for(
+                    process.communicate(), timeout=self.probe_timeout + 5
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                await process.wait()
+                raise ResolutionDetectionError(
+                    "resdet resolution detection timed out"
+                ) from None
+
+        if process.returncode != 0:
+            raise ResolutionDetectionError("resdet resolution detection failed")
+
+        parts = stdout.decode(errors="replace").strip().split()
+        try:
+            width, height = (int(value) for value in parts)
+        except (TypeError, ValueError):
+            raise ResolutionDetectionError(
+                "resdet returned an invalid resolution"
+            ) from None
+        if width <= 0 or height <= 0:
+            raise ResolutionDetectionError("resdet returned an invalid resolution")
+        return width, height
 
     async def _measure_stream_bitrate(self, url: str) -> Optional[int]:
         """
@@ -3705,6 +3761,7 @@ def ensure_prober() -> Optional[StreamProber]:
         prober = StreamProber(
             get_client(),
             probe_timeout=settings.stream_probe_timeout,
+            use_resdet_for_resolution=settings.use_resdet_for_resolution,
             user_timezone=settings.user_timezone,
             bitrate_sample_duration=settings.bitrate_sample_duration,
             parallel_probing_enabled=settings.parallel_probing_enabled,

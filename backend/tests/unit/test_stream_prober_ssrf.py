@@ -24,7 +24,7 @@ def _public_target(url):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["_run_ffprobe", "_detect_black_screen"])
+@pytest.mark.parametrize("method", ["_run_ffprobe", "_run_resdet", "_detect_black_screen"])
 async def test_subprocess_probe_rejects_denied_destination_before_spawn(method):
     prober = StreamProber(MagicMock())
     spawn = AsyncMock()
@@ -43,7 +43,7 @@ async def test_subprocess_probe_rejects_denied_destination_before_spawn(method):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["_run_ffprobe", "_detect_black_screen"])
+@pytest.mark.parametrize("method", ["_run_ffprobe", "_run_resdet", "_detect_black_screen"])
 async def test_real_redirect_to_metadata_is_denied_before_subprocess_spawn(method):
     async def handler(request):
         return httpx.Response(

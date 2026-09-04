@@ -1207,6 +1207,7 @@ export interface SettingsResponse {
   vlc_open_behavior: string;  // VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   stream_probe_timeout: number;  // Timeout in seconds for each probe
+  use_resdet_for_resolution?: boolean;  // Use resdet's source-resolution estimate instead of ffprobe dimensions
   stream_probe_schedule_time: string;  // Time of day to run probes (HH:MM, 24h format)
   bitrate_sample_duration: number;  // Duration in seconds to sample stream for bitrate (10, 20, or 30)
   parallel_probing_enabled: boolean;  // Probe streams from different M3Us simultaneously
@@ -1381,6 +1382,7 @@ export async function saveSettings(settings: {
   vlc_open_behavior?: string;  // Optional - VLC open behavior: "protocol_only", "m3u_fallback", "m3u_only"
   // Stream probe settings (scheduled probing is controlled by Task Engine)
   stream_probe_timeout?: number;  // Optional - timeout in seconds, defaults to 30
+  use_resdet_for_resolution?: boolean;  // Optional - use resdet for resolution only, defaults to false
   stream_probe_schedule_time?: string;  // Optional - time of day for probes (HH:MM), defaults to "03:00"
   bitrate_sample_duration?: number;  // Optional - duration in seconds to sample stream for bitrate (10, 20, or 30), defaults to 10
   parallel_probing_enabled?: boolean;  // Optional - probe streams from different M3Us simultaneously, defaults to true
