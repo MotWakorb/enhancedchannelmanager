@@ -2166,7 +2166,7 @@ class TestZipExportRedaction:
         assert configs[3]["bot_token"] == "***REDACTED***"
         assert configs[4]["access_token"] == "***REDACTED***"
         assert configs[4]["server_url"] == "https://ntfy.example.test/base"
-        assert configs[4]["topic"] == "ecm"
+        assert configs[4]["topic"] == "***REDACTED***"
         # ``chat_id`` was asserted here as "non-cred preserved". Bead …-gi4zn
         # reclassifies it: a Telegram chat id is a bearer capability to post
         # into a chat, which is why the SETTINGS-level ``telegram_chat_id`` is
@@ -2325,6 +2325,59 @@ class TestZipRestoreRedactionAware:
         # Credential fields re-merged from pre-restore snapshot
         assert by_id[1][1]["password"] == existing_smtp_pass
         assert by_id[2][1]["webhook_url"] == existing_webhook
+
+    @pytest.mark.asyncio
+    async def test_real_restore_endpoint_does_not_transplant_ntfy_on_row_id_collision(
+        self, async_client, tmp_path
+    ):
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps({"url": "http://test:9191"}))
+        db_file = tmp_path / "journal.db"
+        local_topic = "local-private-topic"
+        local_token = "<local-private-token>"
+        _create_journal_db_with_alert_methods(db_file, [{
+            "id": 1,
+            "name": "Local ntfy",
+            "method_type": "ntfy",
+            "config": {
+                "server_url": "https://ntfy.example.test",
+                "topic": local_topic,
+                "access_token": local_token,
+            },
+        }])
+
+        zipped_db = tmp_path / "zipped-journal.db"
+        _create_journal_db_with_alert_methods(zipped_db, [{
+            "id": 1,
+            "name": "Colliding SMTP",
+            "method_type": "smtp",
+            "config": {"host": "smtp.archive", "password": "***REDACTED***"},
+        }])
+        backup = _make_backup_zip(db_content=zipped_db.read_bytes())
+
+        with patch("routers.backup.CONFIG_DIR", tmp_path), \
+             patch("routers.backup.CONFIG_FILE", settings_file), \
+             patch("routers.backup.JOURNAL_DB_FILE", db_file), \
+             patch("routers.backup.close_db"), \
+             patch("routers.backup.init_db"), \
+             patch("routers.backup.clear_settings_cache"), \
+             patch("routers.backup.reset_client"):
+            response = await async_client.post(
+                "/api/backup/restore",
+                files={"file": ("backup.zip", backup, "application/zip")},
+            )
+
+        assert response.status_code == 200
+        conn = sqlite3.connect(str(db_file))
+        try:
+            method_type, config = conn.execute(
+                "SELECT method_type, config FROM alert_methods WHERE id=1"
+            ).fetchone()
+        finally:
+            conn.close()
+        assert method_type == "smtp"
+        assert local_topic not in config
+        assert local_token not in config
 
     @pytest.mark.asyncio
     async def test_zip_restore_legacy_non_redacted_preserves_only_destination_mcp_key(

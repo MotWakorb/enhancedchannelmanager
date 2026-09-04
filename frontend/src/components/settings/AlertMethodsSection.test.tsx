@@ -153,6 +153,21 @@ describe('AlertMethodsSection', () => {
     expect(screen.getByLabelText('Access token (optional)')).toHaveValue('');
   });
 
+  it('rejects an access token sent over plaintext HTTP before create', async () => {
+    vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    render(<AlertMethodsSection isAdmin />);
+    await screen.findByRole('heading', { name: 'Add ntfy target' });
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Home' } });
+    fireEvent.change(screen.getByLabelText('Server URL'), { target: { value: 'http://ntfy.internal:8080' } });
+    fireEvent.change(screen.getByLabelText('Topic'), { target: { value: 'ecm' } });
+    fireEvent.change(screen.getByLabelText('Access token (optional)'), { target: { value: '<opaque-token>' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add ntfy target' }));
+
+    expect(api.createAlertMethod).not.toHaveBeenCalled();
+    expect(mockError).toHaveBeenCalledWith(expect.stringMatching(/HTTPS/i), 'Alert Methods');
+  });
+
   it('lists alert methods with type and enabled state', async () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([smtpMethod, discordMethod]);
     render(<AlertMethodsSection isAdmin />);

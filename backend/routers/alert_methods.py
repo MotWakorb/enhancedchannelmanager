@@ -7,7 +7,7 @@ import json
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from alert_methods import get_alert_manager, get_method_types, create_method
@@ -16,11 +16,31 @@ from auth import (
     RequireHumanAdminForNotificationCredential,
     RequireHumanAdminForOutboundTest,
 )
+from auth.dependencies import require_admin_if_enabled
 from database import get_session
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/alert-methods", tags=["Alert Methods"])
+
+_require_ntfy_write_admin = require_admin_if_enabled(
+    reject_mcp_service_principal=True,
+    enforce_when_auth_disabled=True,
+    mcp_denial_detail=(
+        "The MCP service principal cannot write ntfy alert destinations. "
+        "Persisting an outbound destination must be driven by a human operator admin."
+    ),
+)
+
+
+async def _enforce_ntfy_write_admin(request: Request, method_type: str) -> None:
+    if method_type != "ntfy":
+        return
+    session = get_session()
+    try:
+        await _require_ntfy_write_admin(request=request, session=session)
+    finally:
+        session.close()
 
 
 # Request models
@@ -199,6 +219,7 @@ async def list_alert_methods(_admin=RequireAdminIfEnabled):
 
 @router.post("")
 async def create_alert_method(
+    request: Request,
     data: AlertMethodCreate,
     _admin=RequireHumanAdminForNotificationCredential,
 ):
@@ -227,6 +248,7 @@ async def create_alert_method(
 
     session = None
     try:
+        await _enforce_ntfy_write_admin(request, data.method_type)
         # Validate method type
         method_types = {mt["type"] for mt in get_method_types()}
         if data.method_type not in method_types:
@@ -340,6 +362,7 @@ async def get_alert_method(
 @router.patch("/{method_id}")
 async def update_alert_method(
     method_id: int,
+    request: Request,
     data: AlertMethodUpdate,
     _admin=RequireHumanAdminForNotificationCredential,
 ):
@@ -360,6 +383,8 @@ async def update_alert_method(
         if not method:
             logger.debug("[ALERTS] Alert method not found for update: id=%s", method_id)
             raise HTTPException(status_code=404, detail="Alert method not found")
+
+        await _enforce_ntfy_write_admin(request, method.method_type)
 
         if data.name is not None:
             method.name = data.name

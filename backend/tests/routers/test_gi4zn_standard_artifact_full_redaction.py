@@ -216,6 +216,8 @@ NON_OBJECT_ALERT_SECRET = "<bare-scalar-marker-QQQ907>"
 # fail-closed whole-blob sentinel must not destroy on restore. Same placeholder
 # convention: `"password": "<...>"` is not a scan candidate, a bare word is.
 DESTINATION_SMTP_SECRET = "<destination-smtp-relay-secret-QQQ909>"
+NTFY_TOPIC = "private-ntfy-topic-QQQ920"
+NTFY_TOKEN = "<destination-ntfy-token-QQQ921>"
 
 # Everything a STANDARD artifact must not carry, in one tuple so a newly seeded
 # value cannot be silently omitted from the whole-archive scan.
@@ -231,6 +233,8 @@ ALL_THIRD_PARTY_VALUES = (
     XC_PASSWORD,
     _URL_LEFT_HALF,
     _URL_RIGHT_HALF,
+    NTFY_TOPIC,
+    NTFY_TOKEN,
 )
 
 # The settings fields this bead newly redacts, in one place so the producer
@@ -355,7 +359,9 @@ def _seed_journal_db(path):
     """
     conn = sqlite3.connect(str(path))
     try:
-        conn.execute("CREATE TABLE alert_methods (id INTEGER PRIMARY KEY, config TEXT)")
+        conn.execute(
+            "CREATE TABLE alert_methods (id INTEGER PRIMARY KEY, method_type TEXT, config TEXT)"
+        )
         conn.execute(
             "INSERT INTO alert_methods (id, config) VALUES (?, ?)",
             (
@@ -390,6 +396,14 @@ def _seed_journal_db(path):
         conn.execute(
             "INSERT INTO alert_methods (id, config) VALUES (?, ?)",
             (4, json.dumps(NON_OBJECT_ALERT_SECRET)),
+        )
+        conn.execute(
+            "INSERT INTO alert_methods (id, method_type, config) VALUES (?, ?, ?)",
+            (5, "ntfy", json.dumps({
+                "server_url": "https://ntfy.example.test/base/",
+                "topic": NTFY_TOPIC,
+                "access_token": NTFY_TOKEN,
+            })),
         )
         conn.commit()
     finally:
@@ -712,6 +726,11 @@ def test_alert_method_identity_scrubbed_from_journal_db(standard_artifact, tmp_p
     telegram = json.loads(rows[2])
     assert telegram["chat_id"] == backup_mod.REDACTED
     assert telegram["bot_token"] == backup_mod.REDACTED
+    ntfy = json.loads(rows[5])
+    assert ntfy["server_url"] == "https://ntfy.example.test/base/"
+    assert ntfy["topic"] == backup_mod.REDACTED
+    assert ntfy["access_token"] == backup_mod.REDACTED
+    assert ntfy[backup_mod._NTFY_DESTINATION_HMAC_KEY]
 
 
 # ---------------------------------------------------------------------------
@@ -1206,6 +1225,8 @@ def test_encrypted_migration_artifact_still_carries_identities(tmp_path):
         PLEX_TOKEN,
         _URL_LEFT_HALF,
         _URL_RIGHT_HALF,
+        NTFY_TOPIC,
+        NTFY_TOKEN,
     ):
         assert value.encode() in members, "encrypted migration artifact lost %s" % value
     with zipfile.ZipFile(dec) as zf:

@@ -195,9 +195,23 @@ class TestReadRoutesMaskCredentials:
         assert by_name["Email"]["config"]["to_emails"] == ["alice@example.com"]
         assert by_name["ntfy Alerts"]["config"] == {
             "server_url": "https://ntfy.example.test/base",
-            "topic": "ecm",
+            "topic": MASK,
             "access_token": MASK,
         }
+
+    @pytest.mark.asyncio
+    async def test_non_ntfy_topic_is_not_masked(self, async_client, test_session):
+        method = _create_method(
+            test_session,
+            name="Webhook topic",
+            method_type="webhook",
+            config=json.dumps({"topic": "ordinary-routing-label"}),
+        )
+
+        response = await async_client.get(f"/api/alert-methods/{method.id}")
+
+        assert response.status_code == 200
+        assert response.json()["config"]["topic"] == "ordinary-routing-label"
 
     @pytest.mark.asyncio
     async def test_empty_credential_reads_as_null_not_as_the_mask(

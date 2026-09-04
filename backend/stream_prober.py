@@ -773,7 +773,7 @@ class StreamProber:
         except Exception as e:
             logger.error("[STREAM-PROBE] Failed to update probe notification: %s", e)
 
-    async def _finalize_probe_notification(self) -> None:
+    async def _finalize_probe_notification(self, send_alerts: bool = True) -> None:
         """Update the notification with final probe results, or delete if cancelled."""
         if not self._probe_notification_id:
             return
@@ -844,31 +844,32 @@ class StreamProber:
             )
             logger.info("[STREAM-PROBE] Finalized probe notification: %s", message)
 
-            # Dispatch to External Alerts (AlertManager) which respects notify_* type filters
-            try:
-                from alert_methods import send_alert
-                failed = self._probe_progress_failed_count
-                alert_metadata = {
-                    "streams_scheduled": self._probe_progress_total,
-                    "streams_ok": self._probe_progress_success_count,
-                    "streams_failed": failed,
-                    "streams_skipped": self._probe_progress_skipped_count,
-                    "black_screen_detections": self._probe_progress_black_screen_count,
-                    "low_fps_detections": self._probe_progress_low_fps_count,
-                    # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
-                    "failed_count": failed,
-                    "failure_breakdown": failure_breakdown,
-                }
-                await send_alert(
-                    title="Stream Probe",
-                    message=message,
-                    notification_type=notification_type,
-                    source="stream_probe",
-                    metadata=alert_metadata,
-                    alert_category="probe_failures",
-                )
-            except Exception as alert_err:
-                logger.error("[STREAM-PROBE] Failed to dispatch probe alert: %s", alert_err)
+            if send_alerts:
+                # Manual/non-scheduled probes retain their direct completion alert.
+                try:
+                    from alert_methods import send_alert
+                    failed = self._probe_progress_failed_count
+                    alert_metadata = {
+                        "streams_scheduled": self._probe_progress_total,
+                        "streams_ok": self._probe_progress_success_count,
+                        "streams_failed": failed,
+                        "streams_skipped": self._probe_progress_skipped_count,
+                        "black_screen_detections": self._probe_progress_black_screen_count,
+                        "low_fps_detections": self._probe_progress_low_fps_count,
+                        # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
+                        "failed_count": failed,
+                        "failure_breakdown": failure_breakdown,
+                    }
+                    await send_alert(
+                        title="Stream Probe",
+                        message=message,
+                        notification_type=notification_type,
+                        source="stream_probe",
+                        metadata=alert_metadata,
+                        alert_category="probe_failures",
+                    )
+                except Exception as alert_err:
+                    logger.error("[STREAM-PROBE] Failed to dispatch probe alert: %s", alert_err)
         except Exception as e:
             logger.error("[STREAM-PROBE] Failed to finalize probe notification: %s", e)
         finally:
@@ -2446,6 +2447,7 @@ class StreamProber:
         skip_m3u_refresh: bool = False,
         stream_ids_filter: list[int] = None,
         start_send_alerts: bool = True,
+        completion_send_alerts: bool = True,
         allow_reorder_after_probe: bool = True,
     ):
         """Probe all streams that are in channels (runs in background).
@@ -2466,6 +2468,9 @@ class StreamProber:
                                should dispatch an external alert. Callers pass the
                                gated ``send_alerts AND alert_on_info`` value so the
                                start alert respects the per-task config (GH #462).
+            completion_send_alerts: Whether final probe results dispatch directly
+                                    to external alerts. Scheduled tasks pass False
+                                    because TaskEngine owns their gated completion.
             allow_reorder_after_probe: Whether this invocation may apply the global
                                        auto-reorder setting. False suppresses reorder
                                        without changing the shared setting.
@@ -3170,7 +3175,7 @@ class StreamProber:
             self._save_probe_history(start_time, probed_count, reordered_channels=reordered_channels)
 
             # Finalize notification with success/warning status
-            await self._finalize_probe_notification()
+            await self._finalize_probe_notification(send_alerts=completion_send_alerts)
 
             return {"status": "completed", "probed": probed_count, "reordered_channels": len(reordered_channels)}
         except Exception as e:
@@ -3182,7 +3187,7 @@ class StreamProber:
             self._save_probe_history(start_time, probed_count, error=str(e))
 
             # Finalize notification with error status
-            await self._finalize_probe_notification()
+            await self._finalize_probe_notification(send_alerts=completion_send_alerts)
 
             return {"status": "failed", "error": str(e), "probed": probed_count}
         finally:

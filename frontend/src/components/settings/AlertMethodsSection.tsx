@@ -125,6 +125,10 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
       notifications.error('Topic must contain 1-64 letters, numbers, hyphens, or underscores.', 'Alert Methods');
       return;
     }
+    if (ntfyAccessToken && parsedUrl.protocol !== 'https:') {
+      notifications.error('Access tokens require an HTTPS ntfy server URL.', 'Alert Methods');
+      return;
+    }
 
     setCreating(true);
     try {

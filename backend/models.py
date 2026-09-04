@@ -821,7 +821,9 @@ class AlertMethod(Base):
         if not include_sensitive:
             masked_config = {}
             for key, value in config.items():
-                if key in ALERT_METHOD_CREDENTIAL_KEYS:
+                if key in ALERT_METHOD_CREDENTIAL_KEYS or (
+                    self.method_type == "ntfy" and key == "topic"
+                ):
                     masked_config[key] = '********' if value else None
                 else:
                     masked_config[key] = value

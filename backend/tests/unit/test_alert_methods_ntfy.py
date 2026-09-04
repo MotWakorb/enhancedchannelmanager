@@ -95,6 +95,26 @@ def test_rejects_invalid_access_tokens_when_supplied(token):
     assert "access_token" in error
 
 
+def test_rejects_access_token_over_plaintext_http():
+    valid, error = NtfyMethod.validate_config({
+        "server_url": "http://ntfy.internal:8080",
+        "topic": "ecm",
+        "access_token": "<opaque-token>",
+    })
+    assert valid is False
+    assert "HTTPS" in error
+
+
+def test_rejects_api_mask_literal_as_access_token():
+    valid, error = NtfyMethod.validate_config({
+        "server_url": "https://ntfy.example.test",
+        "topic": "ecm",
+        "access_token": "********",
+    })
+    assert valid is False
+    assert "masked" in error
+
+
 def _session_for_status(status=200, post_error=None):
     response = AsyncMock()
     response.status = status

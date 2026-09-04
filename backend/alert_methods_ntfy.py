@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _TOPIC_RE = re.compile(r"^[-_A-Za-z0-9]{1,64}$")
 _PRIORITIES = {"info": "3", "success": "3", "warning": "4", "error": "5"}
+_API_MASK = "********"
 
 
 @register_method
@@ -60,6 +61,10 @@ class NtfyMethod(AlertMethod):
             token = config["access_token"]
             if not isinstance(token, str) or not token or "\r" in token or "\n" in token:
                 return False, "access_token must be a non-empty string without line breaks"
+            if token == _API_MASK:
+                return False, "access_token cannot be the masked API value"
+            if parsed.scheme != "https":
+                return False, "access_token requires an HTTPS ntfy server URL"
 
         return True, ""
 

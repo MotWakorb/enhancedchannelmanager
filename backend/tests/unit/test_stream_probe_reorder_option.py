@@ -78,6 +78,7 @@ async def test_scheduled_probe_reorder_choice_is_invocation_local_and_group_scop
             channel_group_ids_override=frozenset({7}),
             skip_m3u_refresh=False,
             start_send_alerts=True,
+            completion_send_alerts=False,
             allow_reorder_after_probe=False,
         ),
         call(
@@ -85,6 +86,7 @@ async def test_scheduled_probe_reorder_choice_is_invocation_local_and_group_scop
             channel_group_ids_override=None,
             skip_m3u_refresh=False,
             start_send_alerts=True,
+            completion_send_alerts=False,
             allow_reorder_after_probe=True,
         ),
     ]

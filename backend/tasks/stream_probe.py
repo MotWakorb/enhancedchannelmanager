@@ -201,6 +201,7 @@ class StreamProbeTask(TaskScheduler):
                     # externally when this task opted into info alerts. self._send_alerts
                     # is the engine-gated (send_alerts AND alert_on_info) value (GH #462).
                     start_send_alerts=self._send_alerts,
+                    completion_send_alerts=False,
                     allow_reorder_after_probe=self._allow_reorder_after_probe,
                 )
             )
