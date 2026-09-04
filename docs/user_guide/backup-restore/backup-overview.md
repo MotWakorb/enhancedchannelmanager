@@ -79,11 +79,13 @@ On top of that, the copy of ECM's own database (`journal.db`) inside the artifac
 
 Alert methods themselves are kept, because they are configuration you authored, but the credential and identity values inside them (SMTP username and password, Telegram bot token and chat ID, webhook URLs, and ntfy topic and access token) are removed.
 
-When a standard Full Backup restore replaces `journal.db`, ECM can retain the
-destination's existing ntfy topic and token only for a matching ntfy
-destination. If the destination does not match, those values remain unset and
-must be entered again. This prevents an unrelated restored row from inheriting
-a local ntfy publishing capability.
+A standard backup exports no credential-verifiable marker for an ntfy
+destination. When a Full Backup restore replaces `journal.db`, an authenticated
+ntfy target therefore requires the operator to re-enter both its topic and
+token. A same-instance unauthenticated target may retain only its local topic,
+and only when the restored row has the same method type and server and the
+local target has no token. These checks prevent an unrelated restored row from
+inheriting a local ntfy publishing capability.
 
 !!! warning "A backup now fails rather than shipping an unscrubbed database"
     If ECM cannot open, read, or rewrite its copy of `journal.db` while removing this data, the whole backup **fails** and no artifact is written. That is deliberate. The alternative, which is what earlier builds did, was to fall back to shipping the database as-is behind a successful-looking result. A failed backup is a problem to investigate; an artifact you believed was redacted and was not is worse. See [If a backup fails while removing sensitive data](take-a-backup.md#if-a-backup-fails-while-removing-sensitive-data).

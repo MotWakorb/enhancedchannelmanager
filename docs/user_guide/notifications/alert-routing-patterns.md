@@ -43,8 +43,9 @@ now create one or more ntfy methods. The practical consequence is:
 - **EPG refresh, M3U refresh and non-scheduled stream probe alerts** can reach email and
   ntfy methods, subject to each method's severity and source filters. They
   have no Discord or Telegram alert-method row by default.
-- **Scheduled stream-probe completion alerts** use the scheduled-task path once,
-  so the task master and severity gates apply and ntfy is not duplicated.
+- **Scheduled `stream_probe` and `failed_stream_reprobe` completion alerts** are
+  owned by TaskEngine. The task master and severity gates plus the
+  `probe_failures` source filter apply once, so ntfy is not duplicated.
 
 If you need those source-level alerts in Discord or Telegram, you have to
 create an alert method of that type through the API. See

@@ -182,9 +182,10 @@ Each scheduled task has its own copy of the four notify-on-* gates and the three
 | ntfy | There is no per-task ntfy setting. Every enabled ntfy method is considered after the task master and severity gates pass. |
 | `show_notifications` | Show alerts in the in-app Notification Center (independent of the external channels). |
 
-Scheduled stream-probe completion alerts follow this task-level flow once.
-Manual and other non-scheduled probe runs keep their direct completion-alert
-behavior.
+TaskEngine owns scheduled `stream_probe` and `failed_stream_reprobe` completion
+alerts. They follow this task-level flow and the `probe_failures` source filter
+once, without duplicate delivery. Manual and other non-scheduled probe runs
+keep their direct completion-alert behavior.
 
 **Decision flow at fire time:**
 
