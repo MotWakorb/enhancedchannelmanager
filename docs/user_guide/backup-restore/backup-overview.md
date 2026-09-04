@@ -77,7 +77,13 @@ On top of that, the copy of ECM's own database (`journal.db`) inside the artifac
 - **Notification and storage targets that hold credentials.** Cloud storage targets and sync targets are dropped whole, even though their stored credentials are already encrypted at rest.
 - **Personal data belonging to other people.** M3U digest settings are dropped because they hold an email recipient list.
 
-Alert methods themselves are kept, because they are configuration you authored, but the credential and identity values inside them (SMTP username and password, Telegram bot token and chat ID, webhook URLs) are removed.
+Alert methods themselves are kept, because they are configuration you authored, but the credential and identity values inside them (SMTP username and password, Telegram bot token and chat ID, webhook URLs, and ntfy topic and access token) are removed.
+
+When a standard Full Backup restore replaces `journal.db`, ECM can retain the
+destination's existing ntfy topic and token only for a matching ntfy
+destination. If the destination does not match, those values remain unset and
+must be entered again. This prevents an unrelated restored row from inheriting
+a local ntfy publishing capability.
 
 !!! warning "A backup now fails rather than shipping an unscrubbed database"
     If ECM cannot open, read, or rewrite its copy of `journal.db` while removing this data, the whole backup **fails** and no artifact is written. That is deliberate. The alternative, which is what earlier builds did, was to fall back to shipping the database as-is behind a successful-looking result. A failed backup is a problem to investigate; an artifact you believed was redacted and was not is worse. See [If a backup fails while removing sensitive data](take-a-backup.md#if-a-backup-fails-while-removing-sensitive-data).
@@ -188,7 +194,7 @@ If you are migrating to a new install and want credentials to travel with the ba
 1. In **Settings → Backup & Restore**, open the **Encrypted Backup** card.
 2. Check the **"I understand a lost passphrase makes this artifact permanently unrecoverable"** acknowledgement.
 3. Set a passphrase of at least 12 characters. The passphrase is never stored, so keep it somewhere safe.
-4. Enable **Include credentials** to carry M3U/EPG passwords and alert-method credentials alongside the encrypted artifact.
+4. Enable **Include credentials** to carry M3U/EPG passwords and alert-method credentials, including ntfy topics and access tokens, inside the encrypted artifact.
 
 **A passphrase alone does not preserve the structured credentials.** The two settings are separate: encryption protects the artifact, and **Include credentials** is what preserves the recognized credential fields and credential-bearing URL values. An encrypted backup taken *without* **Include credentials** applies the same structured redaction rules as a standard one. With it enabled, the artifact carries everything a standard one removes, ECM's own accounts included, which is what makes it the migration path and also what makes it a file to guard.
 

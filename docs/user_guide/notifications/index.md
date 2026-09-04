@@ -137,7 +137,9 @@ URL**, and a **Topic**. Use `https://ntfy.sh` for the public service, or the
 absolute `http://` or `https://` base URL of a self-hosted server. The URL must
 not contain embedded credentials, a query, or a fragment. Topics contain 1-64
 ASCII letters, numbers, hyphens, or underscores. Add an **Access token** only
-when the server or topic requires bearer authentication.
+when the server or topic requires bearer authentication. Tokens require an
+`https://` URL; tokenless `http://` is available only for intentionally isolated
+self-hosted servers.
 
 New ntfy methods are enabled for success, warning, and error alerts; info is
 off. The normal alert-method severity and source filters still apply. Those
@@ -149,6 +151,7 @@ its name, type, **Enabled/Disabled** badge, send icon, and delete icon. Click
 the send icon on the new ntfy row to publish a real test notification to its
 stored server URL and topic. A success toast confirms delivery was accepted;
 a failure tells you to check the URL, topic, token, and server availability.
+The list and API mask both the ntfy topic and access token after saving them.
 
 > **This list does not live-update.** Saving the Discord Webhook or the
 > Telegram Bot creates or updates the underlying alert method immediately on
@@ -178,6 +181,10 @@ Each scheduled task has its own copy of the four notify-on-* gates and the three
 | `send_to_telegram` | Use the Telegram alert channel. Requires Telegram Bot configured. |
 | ntfy | There is no per-task ntfy setting. Every enabled ntfy method is considered after the task master and severity gates pass. |
 | `show_notifications` | Show alerts in the in-app Notification Center (independent of the external channels). |
+
+Scheduled stream-probe completion alerts follow this task-level flow once.
+Manual and other non-scheduled probe runs keep their direct completion-alert
+behavior.
 
 **Decision flow at fire time:**
 

@@ -33,16 +33,18 @@ different channels:
 | Alert source | Path | Channels it can reach |
 |-|-|-|
 | Scheduled task results, and anything else that raises an in-app notification | Shared Notification Settings plus Alert Methods | Discord and Telegram directly; email and ntfy by handing off to the alert-method path |
-| Per-source EPG refresh watcher, per-account M3U refresh watcher, stream probe results | Alert Methods | Whatever alert-method rows exist |
+| Per-source EPG refresh watcher, per-account M3U refresh watcher, manual and other non-scheduled stream probe results | Alert Methods | Whatever alert-method rows exist |
 
 The Notification Settings page creates the SMTP method named `Email` and can
 now create one or more ntfy methods. The practical consequence is:
 
 - **Scheduled task alerts** can reach email, Discord, Telegram, and every
   enabled ntfy method. There is no per-task ntfy toggle in this release.
-- **EPG refresh, M3U refresh and stream probe alerts** can reach email and
+- **EPG refresh, M3U refresh and non-scheduled stream probe alerts** can reach email and
   ntfy methods, subject to each method's severity and source filters. They
   have no Discord or Telegram alert-method row by default.
+- **Scheduled stream-probe completion alerts** use the scheduled-task path once,
+  so the task master and severity gates apply and ntfy is not duplicated.
 
 If you need those source-level alerts in Discord or Telegram, you have to
 create an alert method of that type through the API. See

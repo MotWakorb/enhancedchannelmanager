@@ -110,6 +110,7 @@ A standard (non-encrypted) backup applies ECM's structured credential-redaction 
 
 - **Provider credentials.** Restored M3U accounts and EPG sources come back with the credential unset rather than wrong, username as well as password. The restore report names each account and field that needs re-entering. See [Step 6 of Migrate to a new install](migrate-to-a-new-install.md#step-6-re-enter-credentials-standard-backup-only).
 - **ECM's own accounts, and the settings that hold credentials.** These live in `journal.db`, which only the **Restore Full Backup** path writes. The **Restore DBAS Backup** flow on this page does not write `journal.db` at all, so it never changes your ECM accounts in either direction.
+- **ntfy destinations in a Full Backup restore.** A standard backup does not carry the ntfy topic or access token. ECM keeps the destination's existing local values only when the restored ntfy destination matches; otherwise re-enter both values before testing the method.
 
 ### Notices after a Full Backup restore
 

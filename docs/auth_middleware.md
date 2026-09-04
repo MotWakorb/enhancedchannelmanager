@@ -48,8 +48,9 @@ Effectively the whole API. `GET`/`POST /api/settings`, `/api/channels`,
 `/api/streams`, `/api/journal`, `POST /api/backup/restore` (a wholesale config
 write), `GET /api/backup/create` and `/export` (which emit an archive
 containing your stored settings), `POST /api/settings/reset-stats`, the cloud-
-and sync-target CRUD, the alert-method CRUD, and the two TLS status reads are
-all reachable **without any credential** while the mode is on. Assume that
+and sync-target CRUD, most alert-method CRUD, and the two TLS status reads are
+reachable **without any credential** while the mode is on. Creating or updating
+an ntfy destination is an exception on an owned instance, described below. Assume that
 anything the API can read, an anonymous caller on the same network can read,
 and anything it can change, they can change.
 
@@ -84,6 +85,12 @@ had to learn and read an in-band port scan off the reply:
 | Alert methods and the M3U digest | `POST /api/alert-methods/{id}/test`, `POST /api/m3u/digest/test` |
 | Backup upload targets | `POST /api/cloud-targets/test`, `POST /api/cloud-targets/{id}/test` |
 | DNS provider | `POST /api/tls/test-dns-provider` |
+
+**ntfy destination writes.** Creating or updating an ntfy alert method on an
+owned instance requires a signed-in human admin because the topic and optional
+token grant delivery capability. This applies even when `require_auth` is
+false. A genuine first-run instance with no operator identity retains anonymous
+setup access.
 
 **Diagnostic artifacts.** `POST /api/channel-pipeline/debug-bundle` and `GET
 /api/channel-pipeline/debug-bundle/{job_id}` always require an authenticated

@@ -161,9 +161,10 @@ operation today. See
 
 Note the split if you do create one: scheduled-task alerts still go out
 over the shared **Bot Token** and **Chat ID** above, while per-source EPG
-refresh, per-account M3U refresh and stream probe alerts go through the
-alert method. [Alert routing patterns](alert-routing-patterns.md) explains
-why.
+refresh, per-account M3U refresh and manual or other non-scheduled stream
+probe alerts go through the alert method. Scheduled stream-probe completion
+alerts remain on the scheduled-task path. [Alert routing
+patterns](alert-routing-patterns.md) explains why.
 
 ## When alerts stop arriving
 
