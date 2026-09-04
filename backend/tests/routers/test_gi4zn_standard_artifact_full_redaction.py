@@ -730,7 +730,7 @@ def test_alert_method_identity_scrubbed_from_journal_db(standard_artifact, tmp_p
     assert ntfy["server_url"] == "https://ntfy.example.test/base/"
     assert ntfy["topic"] == backup_mod.REDACTED
     assert ntfy["access_token"] == backup_mod.REDACTED
-    assert ntfy[backup_mod._NTFY_DESTINATION_HMAC_KEY]
+    assert "_ecm_ntfy_destination_hmac_v1" not in ntfy
 
 
 # ---------------------------------------------------------------------------

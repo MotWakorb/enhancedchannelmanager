@@ -3,13 +3,17 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from sqlalchemy.orm import sessionmaker
 
 import alert_methods
+import database
 from alert_methods import AlertMethodManager
 from alert_methods_ntfy import NtfyMethod
-from models import AlertMethod, ScheduledTask
+from models import AlertMethod, ScheduledTask, StreamStats
 from task_engine import TaskEngine
-from tasks.stream_probe import StreamProbeTask
+from task_registry import get_registry
+from tasks.failed_stream_reprobe import FailedStreamReprobeTask  # noqa: F401
+from tasks.stream_probe import StreamProbeTask  # noqa: F401
 
 
 def _scheduled_task(**overrides):
@@ -72,14 +76,17 @@ async def test_notification_exception_does_not_escape_task_completion_path():
         )
 
 
-def _completed_prober():
+def _completed_prober(*, failed_count=0):
     prober = MagicMock()
     prober._probing_in_progress = False
     prober.probe_timeout = 10
     prober.max_concurrent_probes = 2
     prober._probe_progress_total = 1
-    prober._probe_progress_success_count = 1
-    prober._probe_progress_failed_count = 0
+    prober._probe_progress_current = 1
+    prober._probe_progress_status = "completed"
+    prober._probe_progress_current_stream = ""
+    prober._probe_progress_success_count = 1 - failed_count
+    prober._probe_progress_failed_count = failed_count
     prober._probe_progress_skipped_count = 0
     prober._probe_progress_black_screen_count = 0
     prober._probe_progress_low_fps_count = 0
@@ -88,6 +95,8 @@ def _completed_prober():
     prober._probe_skipped_streams = []
     prober._probe_black_screen_streams = []
     prober._probe_low_fps_streams = []
+    prober._last_probe_scope_kind = None
+    prober._last_probe_channel_stream_ids = set()
     prober._failure_breakdown.return_value = []
 
     async def finish(**_kwargs):
@@ -97,24 +106,28 @@ def _completed_prober():
     return prober
 
 
-@pytest.mark.parametrize("send_alerts,expected_queues", [(False, 0), (True, 1)])
-@pytest.mark.asyncio
-async def test_scheduled_stream_probe_has_one_gated_completion_alert_owner(
-    send_alerts, expected_queues, test_session, async_client
+async def _run_probe_lifecycle(
+    test_engine,
+    monkeypatch,
+    *,
+    task_id,
+    triggered_by="scheduled",
+    send_alerts=True,
+    probe_source_enabled=True,
 ):
+    SessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=test_engine, expire_on_commit=False
+    )
+    monkeypatch.setattr(database, "_SessionLocal", SessionLocal)
+
+    task = get_registry().get_task_instance(task_id)
     prober = _completed_prober()
-    task = StreamProbeTask()
     task.set_prober(prober)
-    task._send_alerts = send_alerts
 
-    result = await task.execute()
-
-    assert result.success is True
-    assert prober.probe_all_streams.await_args.kwargs["completion_send_alerts"] is False
-
+    session = SessionLocal()
     scheduled = ScheduledTask(
-        task_id="stream_probe",
-        task_name="Stream Probe",
+        task_id=task_id,
+        task_name=task.task_name,
         send_alerts=send_alerts,
         alert_on_success=True,
         alert_on_warning=True,
@@ -134,10 +147,18 @@ async def test_scheduled_stream_probe_has_one_gated_completion_alert_owner(
         notify_success=True,
         notify_warning=True,
         notify_error=True,
+        alert_sources=(
+            '{"version":1,"probe_failures":{"enabled":true,"min_failures":1}}'
+            if probe_source_enabled
+            else '{"version":1,"probe_failures":{"enabled":false,"min_failures":1}}'
+        ),
     )
-    test_session.add_all([scheduled, method_row])
-    test_session.commit()
-    test_session.refresh(method_row)
+    session.add_all([scheduled, method_row])
+    if task_id == "failed_stream_reprobe":
+        session.add(StreamStats(stream_id=42, probe_status="failed"))
+    session.commit()
+    session.refresh(method_row)
+    session.close()
 
     manager = AlertMethodManager()
     manager._methods[method_row.id] = NtfyMethod(
@@ -153,20 +174,53 @@ async def test_scheduled_stream_probe_has_one_gated_completion_alert_owner(
     with patch.object(alert_methods, "_manager", manager), patch(
         "services.notification_service.get_settings", return_value=settings
     ):
-        await TaskEngine()._notify_task_result(
-            task_name="Stream Probe",
-            task_id="stream_probe",
-            notification_type="success",
-            title="Task complete",
-            message="Done",
-            result=result,
-            alert_category="probe_failures",
-        )
+        result = await TaskEngine()._execute_task(task_id, triggered_by=triggered_by)
         await asyncio.sleep(0)
         await asyncio.sleep(0)
 
     queued = manager._alert_buffer.get(method_row.id, [])
-    assert len(queued) == expected_queues
     if manager._flush_task:
         manager._flush_task.cancel()
         await asyncio.sleep(0)
+    return result, prober, queued
+
+
+@pytest.mark.parametrize(
+    "triggered_by,send_alerts,expected_queues",
+    [
+        ("scheduled", False, 0),
+        ("scheduled", True, 1),
+        ("manual", True, 1),
+    ],
+)
+@pytest.mark.asyncio
+async def test_stream_probe_completion_alert_runs_through_task_engine_lifecycle(
+    test_engine, monkeypatch, triggered_by, send_alerts, expected_queues
+):
+    result, prober, queued = await _run_probe_lifecycle(
+        test_engine,
+        monkeypatch,
+        task_id="stream_probe",
+        triggered_by=triggered_by,
+        send_alerts=send_alerts,
+    )
+
+    assert result.success is True
+    assert prober.probe_all_streams.await_args.kwargs["completion_send_alerts"] is False
+    assert len(queued) == expected_queues
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_reprobe_completion_respects_probe_failure_source_filter(
+    test_engine, monkeypatch
+):
+    result, prober, queued = await _run_probe_lifecycle(
+        test_engine,
+        monkeypatch,
+        task_id="failed_stream_reprobe",
+        probe_source_enabled=False,
+    )
+
+    assert result.success is True
+    assert prober.probe_all_streams.await_args.kwargs["completion_send_alerts"] is False
+    assert queued == []

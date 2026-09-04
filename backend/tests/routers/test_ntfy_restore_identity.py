@@ -1,6 +1,4 @@
 """ntfy backup redaction and destination-local restore identity contract."""
-import hashlib
-import hmac
 import json
 import sqlite3
 
@@ -45,12 +43,7 @@ def _configs(path):
         conn.close()
 
 
-def _marker(server=SERVER, topic=TOPIC, token=TOKEN):
-    message = b"ecm:ntfy-destination:v1\0" + server.rstrip("/").encode() + b"\0" + topic.encode()
-    return hmac.new(token.encode(), message, hashlib.sha256).hexdigest()
-
-
-def test_standard_producer_redacts_ntfy_destination_and_adds_keyed_verifier(tmp_path):
+def test_standard_producer_contains_no_ntfy_destination_or_token_or_verifier(tmp_path):
     path = _db(tmp_path / "journal.db", [(1, "ntfy", {
         "server_url": SERVER, "topic": TOPIC, "access_token": TOKEN,
     }), (2, "webhook", {"topic": "ordinary-topic"})])
@@ -62,12 +55,12 @@ def test_standard_producer_redacts_ntfy_destination_and_adds_keyed_verifier(tmp_
         "server_url": SERVER,
         "topic": REDACTION_SENTINEL,
         "access_token": REDACTION_SENTINEL,
-        MARKER: _marker(),
     }
     assert configs[2]["topic"] == "ordinary-topic"
     decompressed_members = path.read_bytes()
     assert TOPIC.encode() not in decompressed_members
     assert TOKEN.encode() not in decompressed_members
+    assert MARKER.encode() not in decompressed_members
 
 
 def test_unauthenticated_standard_producer_has_no_verifier(tmp_path):
@@ -104,24 +97,16 @@ def _restore(tmp_path, prior_type, prior_config, archived_type, archived_config)
     return _configs(live)[1]
 
 
-@pytest.mark.parametrize("archived,expected_protected", [
+@pytest.mark.parametrize("archived", [
     ({"server_url": SERVER, "topic": REDACTION_SENTINEL, "access_token": REDACTION_SENTINEL,
-      MARKER: _marker()}, True),
+      MARKER: "0" * 64}),
     ({"server_url": "https://other.example.test", "topic": REDACTION_SENTINEL,
-      "access_token": REDACTION_SENTINEL, MARKER: _marker()}, False),
+      "access_token": REDACTION_SENTINEL, MARKER: "f" * 64}),
     ({"server_url": SERVER, "topic": REDACTION_SENTINEL, "access_token": REDACTION_SENTINEL,
-      MARKER: _marker(topic="different-topic")}, False),
-    ({"server_url": SERVER, "topic": REDACTION_SENTINEL, "access_token": REDACTION_SENTINEL,
-      MARKER: "0" * 64}, False),
-    ({"server_url": SERVER, "topic": REDACTION_SENTINEL, "access_token": REDACTION_SENTINEL,
-      MARKER: "malformed"}, False),
-    ({"server_url": SERVER, "topic": REDACTION_SENTINEL, "access_token": REDACTION_SENTINEL,
-      MARKER: _marker(token="<rotated-token>")}, False),
-    ({"server_url": SERVER, "topic": TOPIC, "access_token": REDACTION_SENTINEL}, True),
-    ({"server_url": SERVER, "topic": "other-topic", "access_token": REDACTION_SENTINEL}, False),
+      MARKER: "malformed"}),
 ])
-def test_authenticated_restore_requires_destination_identity_proof(
-    tmp_path, archived, expected_protected
+def test_old_verifier_is_ignored_and_authenticated_standard_restore_requires_reentry(
+    tmp_path, archived
 ):
     restored = _restore(
         tmp_path,
@@ -131,12 +116,32 @@ def test_authenticated_restore_requires_destination_identity_proof(
         archived,
     )
     assert MARKER not in restored
-    if expected_protected:
-        assert restored["topic"] == TOPIC
-        assert restored["access_token"] == TOKEN
-    else:
+    assert "topic" not in restored
+    assert "access_token" not in restored
+
+
+@pytest.mark.parametrize("archived_topic,server,expected_token", [
+    (TOPIC, SERVER.rstrip("/"), TOKEN),
+    ("other-topic", SERVER, None),
+    (TOPIC, "https://other.example.test", None),
+])
+def test_legacy_plaintext_topic_preserves_local_token_only_on_exact_identity(
+    tmp_path, archived_topic, server, expected_token
+):
+    restored = _restore(
+        tmp_path,
+        "ntfy",
+        {"server_url": SERVER, "topic": TOPIC, "access_token": TOKEN},
+        "ntfy",
+        {"server_url": server, "topic": archived_topic,
+         "access_token": REDACTION_SENTINEL},
+    )
+    assert MARKER not in restored
+    assert restored.get("access_token") == expected_token
+    if expected_token is None:
         assert "topic" not in restored
-        assert "access_token" not in restored
+    else:
+        assert restored["topic"] == TOPIC
 
 
 def test_unauthenticated_restore_may_preserve_only_local_topic(tmp_path):
@@ -172,7 +177,7 @@ def test_cross_type_row_id_collision_never_transfers_ntfy_values(
     )
     archived_config = (
         {"server_url": SERVER, "topic": REDACTION_SENTINEL,
-         "access_token": REDACTION_SENTINEL, MARKER: _marker()}
+         "access_token": REDACTION_SENTINEL, MARKER: "forged"}
         if archived_type == "ntfy" else {"password": REDACTION_SENTINEL}
     )
     restored = _restore(tmp_path, prior_type, prior_config, archived_type, archived_config)
@@ -213,3 +218,24 @@ def test_legacy_ntfy_backup_with_raw_credentials_is_unchanged(tmp_path):
         "ntfy",
         archived,
     ) == archived
+
+
+def test_legacy_raw_credentials_remain_authoritative_but_old_marker_is_removed(tmp_path):
+    archived = {
+        "server_url": "https://archive.example",
+        "topic": "archive-topic",
+        "access_token": "<archive-token>",
+        MARKER: "forged",
+    }
+    restored = _restore(
+        tmp_path,
+        "ntfy",
+        {"server_url": SERVER, "topic": TOPIC, "access_token": TOKEN},
+        "ntfy",
+        archived,
+    )
+    assert restored == {
+        "server_url": "https://archive.example",
+        "topic": "archive-topic",
+        "access_token": "<archive-token>",
+    }

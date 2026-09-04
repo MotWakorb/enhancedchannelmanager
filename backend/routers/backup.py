@@ -8,7 +8,6 @@ YAML export: settings + DB tables + Dispatcharr state in a single file.
 import asyncio
 import contextvars
 import hashlib
-import hmac
 import io
 import json
 import logging
@@ -133,7 +132,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0015"
+APP_VERSION = "0.18.2-0016"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -249,21 +248,6 @@ _ALERT_METHOD_PROTECTED_KEYS = tuple(
     dict.fromkeys(_ALERT_METHOD_CREDENTIAL_KEYS + _ALERT_METHOD_IDENTITY_KEYS)
 )
 _NTFY_DESTINATION_HMAC_KEY = "_ecm_ntfy_destination_hmac_v1"
-_NTFY_DESTINATION_HMAC_DOMAIN = b"ecm:ntfy-destination:v1\0"
-
-
-def _ntfy_destination_hmac(config: dict, token: str) -> Optional[str]:
-    server_url = config.get("server_url")
-    topic = config.get("topic")
-    if not isinstance(server_url, str) or not isinstance(topic, str):
-        return None
-    message = (
-        _NTFY_DESTINATION_HMAC_DOMAIN
-        + server_url.rstrip("/").encode("utf-8")
-        + b"\0"
-        + topic.encode("utf-8")
-    )
-    return hmac.new(token.encode("utf-8"), message, hashlib.sha256).hexdigest()
 
 # journal.db tables holding ECM's OWN authentication and identity state, emptied
 # out of the standard artifact (bead …-gi4zn, external security review findings
@@ -1438,12 +1422,9 @@ def _scrub_journal_db_in_place(tmp_path: Path) -> None:
                 else:
                     changed = False
                     if method_type == "ntfy":
-                        token = cfg.get("access_token")
-                        if isinstance(token, str) and credential_is_present(token):
-                            marker = _ntfy_destination_hmac(cfg, token)
-                            if marker is not None:
-                                cfg[_NTFY_DESTINATION_HMAC_KEY] = marker
-                                changed = True
+                        if _NTFY_DESTINATION_HMAC_KEY in cfg:
+                            cfg.pop(_NTFY_DESTINATION_HMAC_KEY)
+                            changed = True
                         if cfg.get("topic"):
                             cfg["topic"] = REDACTED
                             changed = True
@@ -1465,8 +1446,6 @@ def _scrub_journal_db_in_place(tmp_path: Path) -> None:
                     ) from e
                 scrubbed_rows += 1
 
-        # Alert-method ntfy verifiers must be derived from the raw token/topic
-        # before the generic deep-redaction pass removes those values.
         scrubbed_cells = 0
         for table in sorted(present & set(_STANDARD_ARTIFACT_TABLES)):
             scrubbed_cells += _scrub_permitted_table_cells(cur, table)
@@ -3732,12 +3711,19 @@ def _merge_alert_method_creds_after_restore(
                 continue
 
             if method_type == "ntfy":
-                marker = cfg.pop(_NTFY_DESTINATION_HMAC_KEY, None)
-                standard_shape = marker is not None or any(
+                marker_removed = _NTFY_DESTINATION_HMAC_KEY in cfg
+                cfg.pop(_NTFY_DESTINATION_HMAC_KEY, None)
+                standard_shape = any(
                     cfg.get(key) == REDACTED for key in ("topic", "access_token")
                 )
                 if not standard_shape:
                     # A legacy credential-bearing artifact remains authoritative.
+                    if marker_removed:
+                        cur.execute(
+                            "UPDATE alert_methods SET config=? WHERE id=?",
+                            (json.dumps(cfg), row_id),
+                        )
+                        merged_count += 1
                     continue
 
                 same_type = prior_type == "ntfy"
@@ -3750,18 +3736,6 @@ def _merge_alert_method_creds_after_restore(
                 )
                 local_topic = prior_cfg.get("topic")
                 local_token = prior_cfg.get("access_token")
-                hmac_valid = False
-                if (
-                    same_type
-                    and same_server
-                    and credential_is_present(local_token)
-                    and isinstance(local_topic, str)
-                    and isinstance(marker, str)
-                    and len(marker) == 64
-                ):
-                    expected = _ntfy_destination_hmac(prior_cfg, local_token)
-                    hmac_valid = expected is not None and hmac.compare_digest(marker, expected)
-
                 legacy_topic_match = (
                     same_type
                     and same_server
@@ -3772,14 +3746,13 @@ def _merge_alert_method_creds_after_restore(
                 unauth_topic_fallback = (
                     same_type
                     and same_server
-                    and marker is None
                     and cfg.get("topic") == REDACTED
                     and not credential_is_present(local_token)
                     and isinstance(local_topic, str)
                     and bool(local_topic)
                 )
 
-                if hmac_valid or legacy_topic_match:
+                if legacy_topic_match:
                     cfg["topic"] = local_topic
                     if credential_is_present(local_token):
                         cfg["access_token"] = local_token

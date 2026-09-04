@@ -1191,8 +1191,12 @@ class TaskEngine:
             registry.sync_to_database(task_id)
 
             # Determine alert category for granular filtering
-            # For stream_probe tasks, use "probe_failures" to allow min_failures threshold
-            alert_category = "probe_failures" if task_id == "stream_probe" else None
+            # Both stream-probe schedulers share the probe-failure source filter.
+            alert_category = (
+                "probe_failures"
+                if task_id in {"stream_probe", "failed_stream_reprobe"}
+                else None
+            )
 
             # ONE branch per TaskOutcome (bead …-fexq1). Severity is derived
             # once, in task_scheduler.task_outcome, and the Journal row, the
@@ -1399,7 +1403,11 @@ class TaskEngine:
             failure_error = getattr(e, "error_code", str(e))
 
             # Determine alert category for granular filtering
-            alert_category = "probe_failures" if task_id == "stream_probe" else None
+            alert_category = (
+                "probe_failures"
+                if task_id in {"stream_probe", "failed_stream_reprobe"}
+                else None
+            )
 
             # Log exception to journal
             log_entry(
