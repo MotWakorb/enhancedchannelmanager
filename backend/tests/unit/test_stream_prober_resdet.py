@@ -202,7 +202,7 @@ async def test_resdet_decodes_one_hardened_local_y4m_frame_before_analysis():
     assert ffmpeg_kwargs["start_new_session"] is True
     assert len(ffmpeg_kwargs["pass_fds"]) == 1
     assert resdet_args[:10] == (
-        "/usr/bin/timeout", "--signal=KILL", "25s", "resdet", "-R", "Y4M", "-v", "1", "-n", "1"
+        "/usr/bin/timeout", "--signal=KILL", "25s", "/usr/local/bin/resdet", "-R", "Y4M", "-v", "1", "-n", "1"
     )
     assert resdet_args[-1].endswith(".y4m")
     assert provider_url not in resdet_args
@@ -375,7 +375,11 @@ async def test_resdet_cancellation_kills_reaps_then_releases_lock(stage, tmp_pat
     if stage == "resdet":
         ffmpeg.wait.assert_awaited_once_with()
         ffmpeg.kill.assert_not_called()
-    frame_paths = [Path(args[-1]) for args, _kwargs in calls if "resdet" in args]
+    frame_paths = [
+        Path(args[-1])
+        for args, _kwargs in calls
+        if "/usr/local/bin/resdet" in args
+    ]
     assert all(not path.exists() for path in frame_paths)
     async with stream_prober_module.ResdetPipelineLock(lock_path):
         pass

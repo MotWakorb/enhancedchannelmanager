@@ -510,6 +510,7 @@ class StreamProber:
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
+        self._bulk_probe_tasks: set[asyncio.Task] = set()
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
         self._probe_progress_current = 0
@@ -1018,6 +1019,8 @@ class StreamProber:
         """Stop the stream prober and cancel any in-progress probes."""
         logger.info("[STREAM-PROBE] StreamProber stopping...")
         self._probe_cancelled = True
+        for task in tuple(self._bulk_probe_tasks):
+            task.cancel()
         logger.info("[STREAM-PROBE] StreamProber stopped")
 
     def cancel_probe(self) -> dict:
@@ -1031,7 +1034,8 @@ class StreamProber:
 
         logger.info("[STREAM-PROBE] Cancelling in-progress probe...")
         self._probe_cancelled = True
-        # The probe loop will detect _probe_cancelled=True and set status to "cancelled"
+        for task in tuple(self._bulk_probe_tasks):
+            task.cancel()
         return {"status": "cancelling", "message": "Probe cancellation requested"}
 
     def pause_probe(self) -> dict:
@@ -1358,7 +1362,7 @@ class StreamProber:
                 "/usr/bin/timeout",
                 "--signal=KILL",
                 f"{self.probe_timeout + 5}s",
-                "resdet",
+                "/usr/local/bin/resdet",
                 "-R",
                 "Y4M",
                 "-v",
@@ -3540,7 +3544,19 @@ class StreamProber:
                     await self._update_probe_notification()
 
             if streams_to_probe and not self._probe_cancelled:
-                await asyncio.gather(*[_probe_one(s) for s in streams_to_probe])
+                tasks = {asyncio.create_task(_probe_one(s)) for s in streams_to_probe}
+                self._bulk_probe_tasks.update(tasks)
+                try:
+                    await asyncio.gather(*tasks)
+                except asyncio.CancelledError:
+                    if not self._probe_cancelled:
+                        raise
+                finally:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    self._bulk_probe_tasks.difference_update(tasks)
 
             if self._probe_cancelled:
                 self._probe_progress_status = "cancelled"

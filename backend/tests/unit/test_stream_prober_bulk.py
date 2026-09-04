@@ -6,10 +6,13 @@ probe_all_streams, so a manual bulk run shows up in get_probe_progress /
 get_probe_results just like a scheduled probe-all run (the "manual probes don't
 feed the results envelope" half of the bug).
 """
+import asyncio
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+import stream_prober as stream_prober_module
 
 from stream_prober import StreamProber
 from smart_sort_evaluator import PointRule
@@ -20,6 +23,99 @@ def _make_prober(client, **kwargs):
     prober = StreamProber(client=client, **kwargs)
     prober._persist_probe_history = lambda: None
     return prober
+
+
+@pytest.mark.asyncio
+async def test_bulk_cancellation_reaps_active_resdet_and_cancels_lock_waiters(tmp_path):
+    client = AsyncMock()
+    lock_path = tmp_path / "resdet.pipeline.lock"
+    prober = _make_prober(
+        client,
+        max_concurrent_probes=3,
+        use_resdet_for_resolution=True,
+        _resdet_lock_path=lock_path,
+    )
+    streams = [
+        {"id": sid, "url": f"https://provider.example/{sid}", "name": f"Stream {sid}"}
+        for sid in (10, 11, 12)
+    ]
+    ffmpeg = MagicMock(returncode=0, pid=4320)
+    ffmpeg.stdout = asyncio.StreamReader()
+    ffmpeg.stdout.feed_data(
+        b"YUV4MPEG2 W2 H2 F25:1 Ip A1:1 C420\nFRAME\n" + b"\0" * 6
+    )
+    ffmpeg.stdout.feed_eof()
+    ffmpeg.wait = AsyncMock(return_value=0)
+    resdet = MagicMock(returncode=None, pid=4321)
+    resdet.stdout = asyncio.StreamReader()
+
+    async def reap():
+        resdet.returncode = -9
+        return -9
+
+    resdet.wait = AsyncMock(side_effect=reap)
+    acquire_count = 0
+    all_workers_waiting = asyncio.Event()
+    process_started = asyncio.Event()
+    spawn_count = 0
+    production_lock = stream_prober_module.ResdetPipelineLock
+
+    class TrackingLock(production_lock):
+        async def acquire(self):
+            nonlocal acquire_count
+            acquire_count += 1
+            if acquire_count == len(streams):
+                all_workers_waiting.set()
+            return await super().acquire()
+
+    async def spawn(*_args, **_kwargs):
+        nonlocal spawn_count
+        spawn_count += 1
+        if spawn_count == 1:
+            return ffmpeg
+        process_started.set()
+        return resdet
+
+    prober._fetch_all_streams = AsyncMock(return_value=streams)
+    prober._run_ffprobe = AsyncMock(return_value={"streams": []})
+    prober._create_probe_notification = AsyncMock()
+    prober._update_probe_notification = AsyncMock()
+    prober._finalize_probe_notification = AsyncMock()
+
+    with patch(
+        "stream_prober.ResdetPipelineLock",
+        lambda path: TrackingLock(path, poll_interval=0.001),
+    ), patch(
+        "stream_prober.validated_subprocess_input",
+        asynccontextmanager(_allowed_relay_for_bulk),
+    ), patch("stream_prober.asyncio.create_subprocess_exec", side_effect=spawn), patch(
+        "stream_prober.os.killpg"
+    ) as killpg:
+        bulk = asyncio.create_task(prober.probe_streams_by_ids([10, 11, 12]))
+        await asyncio.wait_for(process_started.wait(), timeout=1.0)
+        await asyncio.wait_for(all_workers_waiting.wait(), timeout=1.0)
+
+        assert prober.cancel_probe()["status"] == "cancelling"
+        result = await asyncio.wait_for(bulk, timeout=1.0)
+
+        assert result["status"] == "cancelled"
+        assert prober.get_probe_progress()["in_progress"] is False
+        assert prober.get_probe_progress()["status"] == "cancelled"
+        assert prober.get_probe_progress()["current_stream"] == ""
+        killpg.assert_called_once_with(resdet.pid, 9)
+        resdet.wait.assert_awaited_once_with()
+        assert spawn_count == 2
+        assert not prober._bulk_probe_tasks
+        async with production_lock(lock_path, poll_interval=0.001):
+            pass
+
+
+async def _allowed_relay_for_bulk(_url, **_kwargs):
+    yield SimpleNamespace(
+        argument="http://127.0.0.1:1234/resource/0",
+        response=None,
+        is_http_relay=True,
+    )
 
 
 @pytest.mark.asyncio
