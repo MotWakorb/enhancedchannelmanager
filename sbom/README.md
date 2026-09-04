@@ -49,7 +49,9 @@ These are **source-manifest** SBOMs. They inventory:
 - every npm package resolved in `frontend/package-lock.json`, with its version (ECM only);
 - every direct source-built native dependency declared in
   `native-dependencies.json`, with its version, license, source reference, and
-  package relationships;
+  package relationships. Every ECM/MCP subject is explicit even when empty;
+  resdet's source commit, archive checksum, and pixel ceiling are also the
+  values consumed directly by its Docker build;
 - every base and build image the Dockerfile pulls, **by digest**.
 
 They do **not** inventory:

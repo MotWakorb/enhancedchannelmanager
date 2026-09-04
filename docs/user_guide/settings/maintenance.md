@@ -36,7 +36,11 @@ When resdet is enabled, ECM still uses ffprobe for codec, frame rate, audio,
 and format metadata. resdet analyzes one video frame and replaces only the
 resolution. If that analysis fails or times out, ECM marks the probe failed;
 it does not silently fall back to ffprobe's displayed dimensions. Leave the
-option disabled to retain the default ffprobe-only behavior.
+option disabled to retain the default ffprobe-only behavior. resdet analysis
+accepts frames through DCI 4K (at most 4096x2160 and 8,847,360 pixels); larger
+frames are rejected before native analysis. ECM runs one resdet analysis at a
+time per stream prober even when normal stream-probe concurrency is higher, to
+bound native memory use.
 
 ### Recover from a stuck probe
 

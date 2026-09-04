@@ -7,8 +7,14 @@
           "name": "resdet",
           "version": "2.4.3",
           "license": "MIT AND LGPL-2.1-only",
-          "downloadLocation": "https://codeload.github.com/0x09/resdet/tar.gz/89d078b932eeb259d8e78d07d875af2623734cf4",
-          "purl": "pkg:github/0x09/resdet@2.4.3"
+          "purl": "pkg:github/0x09/resdet@2.4.3",
+          "build": {
+            "commit": "89d078b932eeb259d8e78d07d875af2623734cf4",
+            "archiveBaseUrl": "https://codeload.github.com/0x09/resdet/tar.gz",
+            "archiveSha256": "7c818aae4131b1fb4b36c20d3d8e4009e6ace209468ed8272747e5a42657be3d",
+            "pixelMax": 8847360,
+            "y4mLimitMultiplier": 1
+          }
         },
         {
           "id": "kissfft",
@@ -31,11 +37,15 @@
           "target": "kissfft"
         },
         {
-          "source": "kissfft",
+          "source": "resdet",
           "type": "STATIC_LINK",
-          "target": "resdet"
+          "target": "kissfft"
         }
       ]
+    },
+    "mcp": {
+      "packages": [],
+      "relationships": []
     }
   }
 }

@@ -24,25 +24,25 @@
     ]
   },
   "sources": {
-    "Dockerfile": "sha256:f2ac36ad10d1f4862c048b14d07bc79effaa99b14e73a1c98d0fde6a078560e0",
+    "Dockerfile": "sha256:31a019e9849d7e326c6088456426d683f069aef977e493d6dad53bf63f7ab6d3",
     "backend/requirements.txt": "sha256:d1dcc0302cbbe2714a411404d7aad01eb3448cabb5e9f33e1625332bed287599",
     "frontend/package-lock.json": "sha256:c1c0ac5f168feadf122bd32c1b8e714916b0a513d3c212a9e518afd10ebc7140",
     "mcp-server/Dockerfile": "sha256:c475206aed271a9593e0dfa530c0f33dbe5f911d648871c9311d055b210ab2d2",
     "mcp-server/requirements.txt": "sha256:c226a10129c51750977051f1d5efe54f1e9177f4ed240400ab3a89c56a6f1a37",
-    "sbom/native-dependencies.json": "sha256:f376ed3887fda0ca8df7dc54d39b1ad01af53544485f7cb0808998d28d3601e1"
+    "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a"
   },
   "documents": [
     {
       "path": "ecm.spdx.json",
       "subject": "ecm",
       "packages": 447,
-      "sha256": "adfd6efe7dd786839450a1f4c21ac80ddf57c9b5b06f336a43456328030920af"
+      "sha256": "d0221ae5c2b89a20622ef8e9d9a2dda733440683950505d739bbd4112e015528"
     },
     {
       "path": "mcp.spdx.json",
       "subject": "mcp",
       "packages": 43,
-      "sha256": "209663c61a70e336b13dba4136ec8f0545274a3a94e38d054436d51c35d92455"
+      "sha256": "d67933575c7bc2540044282eb730c61b7881764a04bff236d79e64af67e52a01"
     }
   ]
 }

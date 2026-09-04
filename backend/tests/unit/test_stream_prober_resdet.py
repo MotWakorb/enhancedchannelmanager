@@ -13,6 +13,9 @@ from config import DispatcharrSettings
 from stream_prober import (
     RELAY_PROTOCOL_WHITELIST,
     RESDET_FRAME_MAX_BYTES,
+    RESDET_MAX_HEIGHT,
+    RESDET_MAX_PIXELS,
+    RESDET_MAX_WIDTH,
     RESDET_OUTPUT_MAX_BYTES,
     ResolutionDetectionError,
     StreamProber,
@@ -141,6 +144,15 @@ def _spawn_pipeline(*, frame=b"YUV4MPEG2 W2 H2 F25:1 Ip A1:1 C420\nFRAME\n" + b"
     return AsyncMock(side_effect=spawn), ffmpeg, resdet, calls
 
 
+def _y4m_frame(width: int, height: int) -> bytes:
+    pixels = width * height
+    chroma = ((width + 1) // 2) * ((height + 1) // 2)
+    return (
+        f"YUV4MPEG2 W{width} H{height} F25:1 Ip A1:1 C420\nFRAME\n".encode()
+        + b"\0" * (pixels + 2 * chroma)
+    )
+
+
 @pytest.mark.asyncio
 async def test_resdet_decodes_one_hardened_local_y4m_frame_before_analysis():
     provider_url = "https://user:password@provider.example/live.ts"
@@ -233,6 +245,71 @@ async def test_resdet_rejects_malformed_or_oversized_frame_before_native_analysi
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(3840, 2160), (4096, 2160)],
+    ids=["uhd-4k", "dci-4k"],
+)
+async def test_resdet_accepts_common_dimensions_through_the_dci_4k_ceiling(width, height):
+    spawn, _ffmpeg, _resdet, calls = _spawn_pipeline(frame=_y4m_frame(width, height))
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+
+    with patch("stream_prober.validated_subprocess_input", _allowed_relay), patch(
+        "stream_prober.asyncio.create_subprocess_exec", spawn
+    ):
+        assert await prober._run_resdet("https://provider.example/live.ts") == (1280, 720)
+
+    assert [args[0] for args, _kwargs in calls] == ["ffmpeg", "resdet"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "header",
+    [
+        b"YUV4MPEG2 W4097 H1 F25:1 Ip A1:1 C420\nFRAME\n",
+        b"YUV4MPEG2 W1 H2161 F25:1 Ip A1:1 C420\nFRAME\n",
+        b"YUV4MPEG2 W4096 H2160 W2 F25:1 Ip A1:1 C420\nFRAME\n",
+        b"YUV4MPEG2 W4096 Hx F25:1 Ip A1:1 C420\nFRAME\n",
+        b"YUV4MPEG2 W999999999999999999999 H1 F25:1 Ip A1:1 C420\nFRAME\n",
+    ],
+    ids=["width", "height", "duplicate", "malformed", "overflow"],
+)
+async def test_resdet_rejects_crafted_small_artifacts_with_unsafe_dimensions_before_write_or_native(header):
+    assert len(header) < 1024
+    spawn, _ffmpeg, _resdet, calls = _spawn_pipeline(frame=header)
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+
+    with patch("stream_prober.validated_subprocess_input", _allowed_relay), patch(
+        "stream_prober.asyncio.create_subprocess_exec", spawn
+    ), patch("pathlib.Path.write_bytes") as write_bytes:
+        with pytest.raises(ResolutionDetectionError, match="frame"):
+            await prober._run_resdet("https://provider.example/live.ts")
+
+    write_bytes.assert_not_called()
+    assert [args[0] for args, _kwargs in calls] == ["ffmpeg"]
+
+
+@pytest.mark.asyncio
+async def test_resdet_rejects_a_truncated_bounded_frame_before_native_analysis():
+    frame = _y4m_frame(1920, 1080)[:-1]
+    spawn, _ffmpeg, _resdet, calls = _spawn_pipeline(frame=frame)
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+
+    with patch("stream_prober.validated_subprocess_input", _allowed_relay), patch(
+        "stream_prober.asyncio.create_subprocess_exec", spawn
+    ):
+        with pytest.raises(ResolutionDetectionError, match="frame"):
+            await prober._run_resdet("https://provider.example/live.ts")
+
+    assert [args[0] for args, _kwargs in calls] == ["ffmpeg"]
+
+
+def test_resdet_dimension_contract_matches_the_compiled_product_ceiling():
+    assert (RESDET_MAX_WIDTH, RESDET_MAX_HEIGHT) == (4096, 2160)
+    assert RESDET_MAX_PIXELS == 8_847_360
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("stage", ["ffmpeg", "resdet"])
 async def test_resdet_timeout_kills_and_reaps_active_process(stage):
     spawn, ffmpeg, resdet, _calls = _spawn_pipeline()
@@ -273,3 +350,78 @@ async def test_resdet_cancellation_kills_reaps_and_reraises(stage):
         ffmpeg.kill.assert_not_called()
     frame_paths = [Path(args[-1]) for args, _kwargs in calls if args[0] == "resdet"]
     assert all(not path.exists() for path in frame_paths)
+
+
+@pytest.mark.asyncio
+async def test_resdet_pipelines_are_serialized_per_stream_prober():
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+    active = 0
+    maximum = 0
+
+    async def pipeline(_url):
+        nonlocal active, maximum
+        active += 1
+        maximum = max(maximum, active)
+        await asyncio.sleep(0)
+        active -= 1
+        return (1920, 1080)
+
+    with patch.object(prober, "_run_resdet_pipeline", pipeline):
+        assert await asyncio.gather(
+            prober._run_resdet("https://provider.example/one"),
+            prober._run_resdet("https://provider.example/two"),
+            prober._run_resdet("https://provider.example/three"),
+        ) == [(1920, 1080)] * 3
+
+    assert maximum == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_resdet_semaphore_waiter_does_not_disturb_the_owner():
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+    owner_entered = asyncio.Event()
+    release_owner = asyncio.Event()
+    calls = 0
+
+    async def pipeline(_url):
+        nonlocal calls
+        calls += 1
+        owner_entered.set()
+        await release_owner.wait()
+        return (1920, 1080)
+
+    with patch.object(prober, "_run_resdet_pipeline", pipeline):
+        owner = asyncio.create_task(prober._run_resdet("https://provider.example/owner"))
+        await owner_entered.wait()
+        waiter = asyncio.create_task(prober._run_resdet("https://provider.example/waiter"))
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        assert calls == 1
+        assert not owner.done()
+        release_owner.set()
+        assert await owner == (1920, 1080)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_resdet_semaphore_owner_releases_the_next_pipeline():
+    prober = StreamProber(MagicMock(), use_resdet_for_resolution=True)
+    owner_entered = asyncio.Event()
+    calls = 0
+
+    async def pipeline(_url):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            owner_entered.set()
+            await asyncio.Event().wait()
+        return (1280, 720)
+
+    with patch.object(prober, "_run_resdet_pipeline", pipeline):
+        owner = asyncio.create_task(prober._run_resdet("https://provider.example/owner"))
+        await owner_entered.wait()
+        owner.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await owner
+        assert await prober._run_resdet("https://provider.example/next") == (1280, 720)

@@ -29,6 +29,14 @@ RUN npm ci
 FROM python:3.12-slim@sha256:{python} AS python-builder
 COPY --from=ghcr.io/astral-sh/uv:latest@sha256:{uv} /uv /usr/local/bin/uv
 
+FROM python:3.12-slim@sha256:{python} AS resdet-builder
+COPY scripts/generate_sbom.py sbom/native-dependencies.json /tmp/
+RUN eval "$(python /tmp/generate_sbom.py native-build --manifest /tmp/native-dependencies.json --subject ecm --package resdet)" \\
+    && curl -fsSL "$RESDET_ARCHIVE_URL" \\
+    && printf '%s' "$RESDET_ARCHIVE_SHA256" \\
+    && sed -i "s/,4,unsigned char)/,$RESDET_Y4M_LIMIT_MULTIPLIER,unsigned char)/" lib/image/y4m.c \\
+    && ./configure --pixel-max="$RESDET_PIXEL_MAX"
+
 FROM python:3.12-slim@sha256:{python}
 COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=frontend-builder /app/frontend/dist ./static
@@ -43,24 +51,33 @@ NATIVE_DEPENDENCIES = {
                     "name": "resdet",
                     "version": "2.4.3",
                     "license": "MIT AND LGPL-2.1-only",
-                    "downloadLocation": "https://example.test/resdet.tar.gz",
                     "purl": "pkg:github/0x09/resdet@2.4.3",
+                    "build": {
+                        "commit": "1" * 40,
+                        "archiveBaseUrl": "https://example.test/resdet.tar.gz",
+                        "archiveSha256": "2" * 64,
+                        "pixelMax": 8_847_360,
+                        "y4mLimitMultiplier": 1,
+                    },
                 },
                 {
                     "id": "kissfft",
                     "name": "KISS FFT",
                     "version": "131.1.0",
                     "license": "BSD-3-Clause",
-                    "downloadLocation": "https://example.test/resdet/tree/lib/kissfft",
+                    "downloadLocation": (
+                        "https://example.test/resdet/tree/" + "1" * 40 + "/lib/kissfft"
+                    ),
                     "purl": "pkg:generic/kissfft@131.1.0",
                 },
             ],
             "relationships": [
                 {"source": "ecm", "type": "CONTAINS", "target": "resdet"},
                 {"source": "resdet", "type": "CONTAINS", "target": "kissfft"},
-                {"source": "kissfft", "type": "STATIC_LINK", "target": "resdet"},
+                {"source": "resdet", "type": "STATIC_LINK", "target": "kissfft"},
             ],
-        }
+        },
+        "mcp": {"packages": [], "relationships": []},
     }
 }
 
@@ -205,7 +222,9 @@ def test_source_built_native_packages_include_licenses_sources_and_relationships
 
     assert packages["resdet"]["versionInfo"] == "2.4.3"
     assert packages["resdet"]["licenseDeclared"] == "MIT AND LGPL-2.1-only"
-    assert packages["resdet"]["downloadLocation"] == "https://example.test/resdet.tar.gz"
+    assert packages["resdet"]["downloadLocation"] == (
+        "https://example.test/resdet.tar.gz/" + "1" * 40
+    )
     assert packages["KISS FFT"]["versionInfo"] == "131.1.0"
     assert packages["KISS FFT"]["licenseDeclared"] == "BSD-3-Clause"
     assert packages["KISS FFT"]["downloadLocation"].endswith("/lib/kissfft")
@@ -215,7 +234,7 @@ def test_source_built_native_packages_include_licenses_sources_and_relationships
     }
     assert ("SPDXRef-Package-ecm", "CONTAINS", "SPDXRef-Package-native-resdet-2.4.3") in relationships
     assert ("SPDXRef-Package-native-resdet-2.4.3", "CONTAINS", "SPDXRef-Package-native-kissfft-131.1.0") in relationships
-    assert ("SPDXRef-Package-native-kissfft-131.1.0", "STATIC_LINK", "SPDXRef-Package-native-resdet-2.4.3") in relationships
+    assert ("SPDXRef-Package-native-resdet-2.4.3", "STATIC_LINK", "SPDXRef-Package-native-kissfft-131.1.0") in relationships
 
 
 def test_the_coverage_limit_is_stated_inside_the_document(sbom, generated):
@@ -411,7 +430,7 @@ def test_creator_identifies_the_generator_format_version(sbom, generated):
     for name in ("ecm.spdx.json", "mcp.spdx.json"):
         document = json.loads((generated / name).read_text(encoding="utf-8"))
         assert document["creationInfo"]["creators"] == [
-            "Tool: scripts/generate_sbom.py-4"
+            "Tool: scripts/generate_sbom.py-5"
         ]
 
 
@@ -488,6 +507,88 @@ def test_a_native_relationship_to_an_unknown_package_is_rejected(sbom, tree):
     _write(manifest, json.dumps(native))
 
     with pytest.raises(sbom.SbomError, match="unknown native package"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_a_known_subject_missing_from_the_native_manifest_is_rejected(sbom, tree):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    del native["subjects"]["mcp"]
+    _write(manifest, json.dumps(native))
+
+    with pytest.raises(sbom.SbomError, match="missing known subject.*mcp"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_a_docker_only_resdet_pin_cannot_regenerate_to_green(sbom, tree):
+    dockerfile = tree / "Dockerfile"
+    dockerfile.write_text(
+        dockerfile.read_text(encoding="utf-8").replace(
+            'RUN eval "$(python /tmp/generate_sbom.py native-build --manifest /tmp/native-dependencies.json --subject ecm --package resdet)"',
+            "ARG RESDET_COMMIT=3" + "3" * 39,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sbom.SbomError, match="must source the resdet build pin"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_a_manifest_only_resdet_pin_divergence_cannot_regenerate_to_green(sbom, tree):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    native["subjects"]["ecm"]["packages"][0]["build"]["commit"] = "3" * 40
+    _write(manifest, json.dumps(native))
+
+    with pytest.raises(sbom.SbomError, match="KISS FFT source does not match"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "message"),
+    [
+        ("relationship_type", "unsupported relationship type"),
+        ("duplicate_relationship", "duplicate native relationship"),
+        ("duplicate_package_id", "repeats native package id"),
+        ("duplicate_spdx_id", "duplicate package SPDXIDs"),
+        ("purl", "malformed purl"),
+        ("url", "malformed HTTPS URL"),
+        ("license", "unsupported SPDX license"),
+        ("checksum", "archiveSha256"),
+    ],
+)
+def test_malformed_or_duplicate_native_inventory_is_rejected(sbom, tree, mutation, message):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    ecm = native["subjects"]["ecm"]
+    if mutation == "relationship_type":
+        ecm["relationships"][0]["type"] = "INVENTED"
+    elif mutation == "duplicate_relationship":
+        ecm["relationships"].append(dict(ecm["relationships"][0]))
+    elif mutation == "duplicate_package_id":
+        ecm["packages"].append(dict(ecm["packages"][0]))
+    elif mutation == "duplicate_spdx_id":
+        ecm["packages"][1]["id"] = "kissfft_"
+        for relationship in ecm["relationships"]:
+            if relationship["source"] == "kissfft":
+                relationship["source"] = "kissfft_"
+            if relationship["target"] == "kissfft":
+                relationship["target"] = "kissfft_"
+        duplicate = dict(ecm["packages"][1])
+        duplicate["id"] = "kissfft."
+        duplicate["purl"] = "pkg:generic/kissfft-alt@131.1.0"
+        ecm["packages"].append(duplicate)
+    elif mutation == "purl":
+        ecm["packages"][0]["purl"] = "not a purl"
+    elif mutation == "url":
+        ecm["packages"][1]["downloadLocation"] = "javascript:alert(1)"
+    elif mutation == "license":
+        ecm["packages"][0]["license"] = "probably MIT"
+    else:
+        ecm["packages"][0]["build"]["archiveSha256"] = "not-a-checksum"
+    _write(manifest, json.dumps(native))
+
+    with pytest.raises(sbom.SbomError, match=message):
         sbom.render(tree, "9.9.9", CREATED)
 
 

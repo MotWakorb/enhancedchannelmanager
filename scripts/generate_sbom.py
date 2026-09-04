@@ -71,18 +71,33 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 SPDX_VERSION = "SPDX-2.3"
 DATA_LICENSE = "CC0-1.0"
 NOASSERTION = "NOASSERTION"
 INDEX_SCHEMA = 1
-GENERATOR_FORMAT_VERSION = "4"
+GENERATOR_FORMAT_VERSION = "5"
 NATIVE_DEPENDENCIES_PATH = "sbom/native-dependencies.json"
+KNOWN_NATIVE_SUBJECTS = frozenset({"ecm", "mcp"})
+ALLOWED_NATIVE_RELATIONSHIPS = frozenset({"CONTAINS", "STATIC_LINK"})
+ALLOWED_NATIVE_LICENSES = frozenset({"BSD-3-Clause", "LGPL-2.1-only", "MIT"})
+NATIVE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+NATIVE_PURL = re.compile(
+    r"^pkg:(?:github|generic)/[A-Za-z0-9._~%+-]+"
+    r"(?:/[A-Za-z0-9._~%+-]+)*@[A-Za-z0-9._~%+-]+$"
+)
+HEX_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+RESDET_DOCKER_COMMAND = (
+    "python /tmp/generate_sbom.py native-build "
+    "--manifest /tmp/native-dependencies.json --subject ecm --package resdet"
+)
 
 # SPDX 2.3 section 6.5 requires a new namespace when a document is updated.
 # Content-addressing the namespace-free document provides that uniqueness while
@@ -324,13 +339,26 @@ def parse_dockerfile_images(text: str, source: str) -> list[dict[str, str]]:
 
 def parse_native_dependencies(
     document: Any, subject: str, source: str
-) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     """Return explicitly declared source-built packages and SPDX relationships."""
     if not isinstance(document, dict) or not isinstance(document.get("subjects"), dict):
         raise SbomError(f"{source} must contain a 'subjects' object")
-    subject_entry = document["subjects"].get(subject, {"packages": [], "relationships": []})
+    subjects = document["subjects"]
+    missing = sorted(KNOWN_NATIVE_SUBJECTS - subjects.keys())
+    unexpected = sorted(subjects.keys() - KNOWN_NATIVE_SUBJECTS)
+    if missing:
+        raise SbomError(f"{source} is missing known subject(s): {', '.join(missing)}")
+    if unexpected:
+        raise SbomError(f"{source} has unknown subject(s): {', '.join(unexpected)}")
+    if subject not in KNOWN_NATIVE_SUBJECTS:
+        raise SbomError(f"{source} requested unknown subject {subject!r}")
+    subject_entry = subjects[subject]
     if not isinstance(subject_entry, dict):
         raise SbomError(f"{source} subject {subject!r} must be an object")
+    if set(subject_entry) != {"packages", "relationships"}:
+        raise SbomError(
+            f"{source} subject {subject!r} must contain only package and relationship lists"
+        )
     packages = subject_entry.get("packages")
     relationships = subject_entry.get("relationships")
     if not isinstance(packages, list) or not isinstance(relationships, list):
@@ -338,16 +366,11 @@ def parse_native_dependencies(
             f"{source} subject {subject!r} must contain package and relationship lists"
         )
 
-    required_package_fields = (
-        "id",
-        "name",
-        "version",
-        "license",
-        "downloadLocation",
-        "purl",
-    )
-    parsed_packages: list[dict[str, str]] = []
+    required_package_fields = ("id", "name", "version", "license", "purl")
+    parsed_packages: list[dict[str, Any]] = []
     aliases = {subject}
+    native_spdx_ids: set[str] = set()
+    purls: set[str] = set()
     for index, package in enumerate(packages):
         if not isinstance(package, dict):
             raise SbomError(f"{source} {subject} package {index} is not an object")
@@ -356,22 +379,66 @@ def parse_native_dependencies(
                 raise SbomError(
                     f"{source} {subject} package {index} has no {field!r} string"
                 )
-        if package["id"] in aliases:
+        package_id = package["id"]
+        if NATIVE_ID.fullmatch(package_id) is None:
+            raise SbomError(f"{source} {subject} package {index} has malformed id")
+        if any(character.isspace() for character in package["version"]):
+            raise SbomError(f"{source} {subject} package {index} has malformed version")
+        if package_id in aliases:
             raise SbomError(
-                f"{source} {subject} repeats native package id {package['id']!r}"
+                f"{source} {subject} repeats native package id {package_id!r}"
             )
-        aliases.add(package["id"])
-        parsed_packages.append({field: package[field] for field in required_package_fields})
+        aliases.add(package_id)
+        spdx_id = _spdx_id("Package", "native", package_id, package["version"])
+        if spdx_id in native_spdx_ids:
+            raise SbomError(f"document has duplicate package SPDXIDs: {spdx_id}")
+        native_spdx_ids.add(spdx_id)
+        if NATIVE_PURL.fullmatch(package["purl"]) is None:
+            raise SbomError(f"{source} {subject} package {index} has malformed purl")
+        if not package["purl"].endswith("@" + package["version"]):
+            raise SbomError(f"{source} {subject} package {index} purl version does not match")
+        if package["purl"] in purls:
+            raise SbomError(f"{source} {subject} repeats native package purl")
+        purls.add(package["purl"])
+        _validate_native_license(package["license"], source, subject, index)
+
+        parsed = {field: package[field] for field in required_package_fields}
+        has_build = "build" in package
+        expected_fields = set(required_package_fields) | ({"build"} if has_build else {"downloadLocation"})
+        if set(package) != expected_fields:
+            raise SbomError(f"{source} {subject} package {index} has unexpected or missing fields")
+        if has_build:
+            build = _parse_native_build(package["build"], source, subject, index)
+            parsed["build"] = build
+            parsed["downloadLocation"] = build["archiveUrl"]
+        else:
+            _validate_https_url(package.get("downloadLocation"), source, subject, index)
+            parsed["downloadLocation"] = package["downloadLocation"]
+        parsed_packages.append(parsed)
+
+    resdet = next((package for package in parsed_packages if package["id"] == "resdet"), None)
+    kissfft = next((package for package in parsed_packages if package["id"] == "kissfft"), None)
+    if resdet and kissfft and "build" in resdet:
+        expected = f"/tree/{resdet['build']['commit']}/lib/kissfft"
+        if not kissfft["downloadLocation"].endswith(expected):
+            raise SbomError(f"{source} KISS FFT source does not match the resdet build commit")
 
     parsed_relationships: list[dict[str, str]] = []
+    relationship_keys: set[tuple[str, str, str]] = set()
     for index, relationship in enumerate(relationships):
         if not isinstance(relationship, dict):
             raise SbomError(f"{source} {subject} relationship {index} is not an object")
+        if set(relationship) != {"source", "type", "target"}:
+            raise SbomError(f"{source} {subject} relationship {index} has unexpected fields")
         for field in ("source", "type", "target"):
             if not isinstance(relationship.get(field), str) or not relationship[field]:
                 raise SbomError(
                     f"{source} {subject} relationship {index} has no {field!r} string"
                 )
+        if relationship["type"] not in ALLOWED_NATIVE_RELATIONSHIPS:
+            raise SbomError(
+                f"{source} {subject} relationship {index} has unsupported relationship type"
+            )
         unknown = {
             relationship[endpoint]
             for endpoint in ("source", "target")
@@ -382,10 +449,91 @@ def parse_native_dependencies(
                 f"{source} {subject} relationship {index} references unknown native "
                 f"package(s): {', '.join(sorted(unknown))}"
             )
-        parsed_relationships.append(
-            {field: relationship[field] for field in ("source", "type", "target")}
-        )
+        parsed = {field: relationship[field] for field in ("source", "type", "target")}
+        key = (parsed["source"], parsed["type"], parsed["target"])
+        if key in relationship_keys:
+            raise SbomError(f"{source} {subject} has duplicate native relationship")
+        relationship_keys.add(key)
+        parsed_relationships.append(parsed)
     return parsed_packages, parsed_relationships
+
+
+def _validate_https_url(value: Any, source: str, subject: str, index: int) -> None:
+    if not isinstance(value, str) or not value:
+        raise SbomError(f"{source} {subject} package {index} has malformed HTTPS URL")
+    parsed = urlsplit(value)
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or any(character.isspace() for character in value)
+    ):
+        raise SbomError(f"{source} {subject} package {index} has malformed HTTPS URL")
+
+
+def _validate_native_license(value: str, source: str, subject: str, index: int) -> None:
+    tokens = value.split(" ")
+    if (
+        not tokens
+        or len(tokens) % 2 == 0
+        or any(
+            token not in (ALLOWED_NATIVE_LICENSES if position % 2 == 0 else {"AND", "OR"})
+            for position, token in enumerate(tokens)
+        )
+    ):
+        raise SbomError(f"{source} {subject} package {index} has unsupported SPDX license")
+
+
+def _parse_native_build(build: Any, source: str, subject: str, index: int) -> dict[str, Any]:
+    fields = {
+        "commit",
+        "archiveBaseUrl",
+        "archiveSha256",
+        "pixelMax",
+        "y4mLimitMultiplier",
+    }
+    if not isinstance(build, dict) or set(build) != fields:
+        raise SbomError(f"{source} {subject} package {index} has malformed build metadata")
+    if not isinstance(build["commit"], str) or HEX_COMMIT.fullmatch(build["commit"]) is None:
+        raise SbomError(f"{source} {subject} package {index} has malformed build commit")
+    _validate_https_url(build["archiveBaseUrl"], source, subject, index)
+    if not isinstance(build["archiveSha256"], str) or SHA256.fullmatch(build["archiveSha256"]) is None:
+        raise SbomError(f"{source} {subject} package {index} has malformed archiveSha256")
+    if type(build["pixelMax"]) is not int or build["pixelMax"] <= 0:
+        raise SbomError(f"{source} {subject} package {index} has malformed pixelMax")
+    if build["y4mLimitMultiplier"] != 1:
+        raise SbomError(
+            f"{source} {subject} package {index} has unsupported y4mLimitMultiplier"
+        )
+    return {
+        **build,
+        "archiveUrl": build["archiveBaseUrl"].rstrip("/") + "/" + build["commit"],
+    }
+
+
+def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str) -> None:
+    packages, _relationships = parse_native_dependencies(
+        document, "ecm", NATIVE_DEPENDENCIES_PATH
+    )
+    resdet = next((package for package in packages if package["id"] == "resdet"), None)
+    if resdet is None or "build" not in resdet:
+        raise SbomError(f"{NATIVE_DEPENDENCIES_PATH} has no resdet build metadata")
+    required = (
+        "COPY scripts/generate_sbom.py sbom/native-dependencies.json /tmp/",
+        RESDET_DOCKER_COMMAND,
+        'curl -fsSL "$RESDET_ARCHIVE_URL"',
+        '"$RESDET_ARCHIVE_SHA256"',
+        '--pixel-max="$RESDET_PIXEL_MAX"',
+        "$RESDET_Y4M_LIMIT_MULTIPLIER,unsigned char",
+    )
+    if any(marker not in dockerfile for marker in required) or "ARG RESDET_" in dockerfile:
+        raise SbomError(f"{source} must source the resdet build pin from {NATIVE_DEPENDENCIES_PATH}")
+    build = resdet["build"]
+    if build["commit"] in dockerfile or build["archiveSha256"] in dockerfile:
+        raise SbomError(f"{source} duplicates the resdet build pin from {NATIVE_DEPENDENCIES_PATH}")
 
 
 def _pinned_image(reference: str, source: str, line: int, role: str) -> dict[str, str]:
@@ -544,7 +692,7 @@ def build_document(
     pypi: list[dict[str, str]],
     npm: list[dict[str, Any]],
     images: list[dict[str, str]],
-    native_packages: list[dict[str, str]] | None = None,
+    native_packages: list[dict[str, Any]] | None = None,
     native_relationships: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     root_id = _spdx_id("Package", subject)
@@ -719,6 +867,9 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
     documents: dict[str, dict[str, Any]] = {}
     native_document = _read_json(root / NATIVE_DEPENDENCIES_PATH)
     sources[NATIVE_DEPENDENCIES_PATH] = sha256_file(root / NATIVE_DEPENDENCIES_PATH)
+    validate_resdet_docker_contract(
+        native_document, _read_text(root / "Dockerfile"), "Dockerfile"
+    )
 
     for subject, spec in SUBJECTS.items():
         requirements_path = spec["requirements"]
@@ -969,6 +1120,12 @@ def _parser() -> argparse.ArgumentParser:
         help="Repository root (defaults to this script's parent).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+    native = subparsers.add_parser(
+        "native-build", help="emit shell-safe source-build values from the native manifest"
+    )
+    native.add_argument("--manifest", type=Path, required=True)
+    native.add_argument("--subject", required=True)
+    native.add_argument("--package", required=True)
     for name in ("generate", "verify", "audit"):
         sub = subparsers.add_parser(name)
         sub.add_argument(
@@ -1001,6 +1158,28 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root: Path = args.repo_root
     try:
+        if args.command == "native-build":
+            document = _read_json(args.manifest)
+            packages, _relationships = parse_native_dependencies(
+                document, args.subject, str(args.manifest)
+            )
+            package = next(
+                (entry for entry in packages if entry["id"] == args.package), None
+            )
+            if package is None or "build" not in package:
+                raise SbomError(
+                    f"{args.manifest} has no build metadata for {args.subject}/{args.package}"
+                )
+            build = package["build"]
+            values = {
+                "RESDET_ARCHIVE_URL": build["archiveUrl"],
+                "RESDET_ARCHIVE_SHA256": build["archiveSha256"],
+                "RESDET_PIXEL_MAX": str(build["pixelMax"]),
+                "RESDET_Y4M_LIMIT_MULTIPLIER": str(build["y4mLimitMultiplier"]),
+            }
+            for name, value in values.items():
+                print(f"{name}={shlex.quote(value)}")
+            return 0
         version = args.version or read_version(root)
         directory = args.out or directory_for(root, version)
         if args.command == "audit" and getattr(args, "all", False):
