@@ -83,7 +83,7 @@ A standard backup exports no credential-verifiable marker for an ntfy
 destination. When a Full Backup restore replaces `journal.db`, an authenticated
 ntfy target therefore requires the operator to re-enter both its topic and
 token. A same-instance unauthenticated target may retain only its local topic,
-and only when the restored row has the same method type and server and the
+and only when the restored row has the same ID, method type, and server and the
 local target has no token. These checks prevent an unrelated restored row from
 inheriting a local ntfy publishing capability.
 
@@ -181,7 +181,7 @@ When restoring a backup produced by an older ECM onto a newer ECM, the schema ve
 
     1. **You can be signed out of your own instance.** Older ECM has no step that preserves the destination's accounts across a restore, and a new artifact carries none of its own. Restoring a new artifact onto an older instance that *has* accounts can therefore leave it with none, dropping you at first-run setup on an instance you were administering.
     2. **Alert-method usernames and chat IDs are written as the literal text `***REDACTED***`.** Older ECM restores the password half of an alert method's configuration correctly but does not know the identity half was ever removed, so it writes the placeholder in as if it were the value.
-    3. **An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety**, and stops sending notifications until you reconfigure it. Newer ECM recognises that case and keeps the destination's own configuration for that method instead.
+    3. **An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety**, and stops sending notifications until you reconfigure it. Newer ECM normally preserves the destination's configuration instead. For ntfy, a standard backup redacts the topic and token, so an authenticated target requires both values to be re-entered. Only a same-instance unauthenticated target may retain its local topic, and only when the restored row has the same ID, method type, and server and the local target has no token. An encrypted backup with **Include credentials** preserves the ntfy topic and token.
 
     If you need to roll ECM back, roll back to a backup taken **before** the upgrade rather than restoring a newer artifact onto the older build.
 
