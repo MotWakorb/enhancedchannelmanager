@@ -71,7 +71,6 @@ import argparse
 import hashlib
 import json
 import re
-import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -82,7 +81,7 @@ SPDX_VERSION = "SPDX-2.3"
 DATA_LICENSE = "CC0-1.0"
 NOASSERTION = "NOASSERTION"
 INDEX_SCHEMA = 1
-GENERATOR_FORMAT_VERSION = "5"
+GENERATOR_FORMAT_VERSION = "6"
 NATIVE_DEPENDENCIES_PATH = "sbom/native-dependencies.json"
 KNOWN_NATIVE_SUBJECTS = frozenset({"ecm", "mcp"})
 ALLOWED_NATIVE_RELATIONSHIPS = frozenset({"CONTAINS", "STATIC_LINK"})
@@ -94,9 +93,31 @@ NATIVE_PURL = re.compile(
 )
 HEX_COMMIT = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-RESDET_DOCKER_COMMAND = (
-    "python /tmp/generate_sbom.py native-build "
-    "--manifest /tmp/native-dependencies.json --subject ecm --package resdet"
+REQUIRED_ECM_NATIVE_PACKAGES = {
+    "resdet": ("resdet", "2.4.3", "pkg:github/0x09/resdet@2.4.3"),
+    "kissfft": ("KISS FFT", "131.1.0", "pkg:generic/kissfft@131.1.0"),
+}
+REQUIRED_ECM_NATIVE_RELATIONSHIPS = {
+    ("ecm", "CONTAINS", "resdet"),
+    ("resdet", "CONTAINS", "kissfft"),
+    ("resdet", "STATIC_LINK", "kissfft"),
+}
+RESDET_BUILD_COMMAND = (
+    "python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json "
+    "--work-dir /tmp/resdet-work --output-dir /tmp/resdet-output"
+)
+RESDET_BUILD_COPY = (
+    "COPY scripts/generate_sbom.py scripts/build_resdet.py "
+    "sbom/native-dependencies.json /tmp/"
+)
+RESDET_BUILDER_RUN = (
+    "apt-get update && apt-get install -y --no-install-recommends "
+    "build-essential ca-certificates pkg-config && rm -rf /var/lib/apt/lists/* && "
+    + RESDET_BUILD_COMMAND
+)
+RESDET_RUNTIME_ASSERTION = (
+    'test "$(resdet -V)" = "$(printf \'resdet version 2.4.3\\n'
+    'libresdet version 3.2.0\\nBuilt with image readers: Y4M\')"'
 )
 
 # SPDX 2.3 section 6.5 requires a new namespace when a document is updated.
@@ -455,6 +476,18 @@ def parse_native_dependencies(
             raise SbomError(f"{source} {subject} has duplicate native relationship")
         relationship_keys.add(key)
         parsed_relationships.append(parsed)
+
+    if subject == "ecm":
+        identities = {
+            package["id"]: (package["name"], package["version"], package["purl"])
+            for package in parsed_packages
+        }
+        if identities != REQUIRED_ECM_NATIVE_PACKAGES:
+            raise SbomError(f"{source} ecm does not declare the exact native package graph")
+        if relationship_keys != REQUIRED_ECM_NATIVE_RELATIONSHIPS:
+            raise SbomError(f"{source} ecm does not declare the exact native relationship graph")
+    elif parsed_packages or parsed_relationships:
+        raise SbomError(f"{source} mcp native subject must be explicitly empty")
     return parsed_packages, parsed_relationships
 
 
@@ -514,6 +547,41 @@ def _parse_native_build(build: Any, source: str, subject: str, index: int) -> di
     }
 
 
+def _docker_stages(dockerfile: str, source: str) -> list[dict[str, Any]]:
+    logical: list[tuple[int, str]] = []
+    pending = ""
+    start = 0
+    for number, raw in enumerate(dockerfile.splitlines(), start=1):
+        stripped = raw.strip()
+        if not pending and (not stripped or stripped.startswith("#")):
+            continue
+        if not pending:
+            start = number
+        pending += (" " if pending else "") + stripped.removesuffix("\\").strip()
+        if stripped.endswith("\\"):
+            continue
+        logical.append((start, re.sub(r"\s+", " ", pending)))
+        pending = ""
+    if pending:
+        raise SbomError(f"{source} line {start} has an unterminated instruction")
+
+    stages: list[dict[str, Any]] = []
+    for number, text in logical:
+        match = re.fullmatch(r"(?P<kind>[A-Za-z]+)\s+(?P<args>.+)", text)
+        if match is None:
+            raise SbomError(f"{source} line {number} has a malformed instruction")
+        kind, arguments = match["kind"].upper(), match["args"]
+        if kind == "FROM":
+            tokens = arguments.split()
+            alias = tokens[2] if len(tokens) >= 3 and tokens[1].upper() == "AS" else None
+            stages.append({"alias": alias, "instructions": []})
+        elif not stages:
+            raise SbomError(f"{source} line {number} precedes the first FROM")
+        else:
+            stages[-1]["instructions"].append((kind, arguments, number))
+    return stages
+
+
 def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str) -> None:
     packages, _relationships = parse_native_dependencies(
         document, "ecm", NATIVE_DEPENDENCIES_PATH
@@ -521,16 +589,37 @@ def validate_resdet_docker_contract(document: Any, dockerfile: str, source: str)
     resdet = next((package for package in packages if package["id"] == "resdet"), None)
     if resdet is None or "build" not in resdet:
         raise SbomError(f"{NATIVE_DEPENDENCIES_PATH} has no resdet build metadata")
-    required = (
-        "COPY scripts/generate_sbom.py sbom/native-dependencies.json /tmp/",
-        RESDET_DOCKER_COMMAND,
-        'curl -fsSL "$RESDET_ARCHIVE_URL"',
-        '"$RESDET_ARCHIVE_SHA256"',
-        '--pixel-max="$RESDET_PIXEL_MAX"',
-        "$RESDET_Y4M_LIMIT_MULTIPLIER,unsigned char",
-    )
-    if any(marker not in dockerfile for marker in required) or "ARG RESDET_" in dockerfile:
+    stages = _docker_stages(dockerfile, source)
+    builders = [stage for stage in stages if stage["alias"] == "resdet-builder"]
+    if len(builders) != 1:
         raise SbomError(f"{source} must source the resdet build pin from {NATIVE_DEPENDENCIES_PATH}")
+    instructions = builders[0]["instructions"]
+    copies = [f"{kind} {args}" for kind, args, _line in instructions if kind == "COPY"]
+    runs = [args for kind, args, _line in instructions if kind == "RUN"]
+    if (
+        copies != [RESDET_BUILD_COPY]
+        or runs != [RESDET_BUILDER_RUN]
+        or any(kind not in {"COPY", "RUN"} for kind, _args, _line in instructions)
+    ):
+        raise SbomError(f"{source} resdet-builder must contain only the fixed dedicated build recipe")
+
+    final_instructions = stages[-1]["instructions"]
+    binary_copy = "--from=resdet-builder /tmp/resdet-output/resdet /usr/local/bin/resdet"
+    notice_copy = "--from=resdet-builder /tmp/resdet-output/licenses/ /usr/share/doc/resdet/"
+    artifact_indexes = [
+        index for index, (kind, args, _line) in enumerate(final_instructions)
+        if kind == "COPY" and args in {binary_copy, notice_copy}
+    ]
+    if len(artifact_indexes) != 2 or artifact_indexes != list(range(artifact_indexes[0], artifact_indexes[0] + 2)):
+        raise SbomError(f"{source} final resdet artifacts must be copied once from the fixed output")
+    for kind, args, _line in final_instructions[artifact_indexes[0] + 2:]:
+        if kind in {"COPY", "ADD"} or kind == "RUN" and args != RESDET_RUNTIME_ASSERTION:
+            raise SbomError(f"{source} final resdet artifacts may not be replaced after copy")
+    for index, (kind, args, _line) in enumerate(final_instructions):
+        if index < artifact_indexes[0] and kind == "COPY" and (
+            args.endswith(" /usr/local/bin/resdet") or args.endswith(" /usr/share/doc/resdet/")
+        ):
+            raise SbomError(f"{source} final resdet artifacts must have one source")
     build = resdet["build"]
     if build["commit"] in dockerfile or build["archiveSha256"] in dockerfile:
         raise SbomError(f"{source} duplicates the resdet build pin from {NATIVE_DEPENDENCIES_PATH}")
@@ -906,6 +995,26 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
         for subject, document in documents.items()
     }
     channel = channel_for(version)
+    document_native_graph = {}
+    for subject, document in documents.items():
+        native_ids = {
+            package["SPDXID"]
+            for package in document["packages"]
+            if package["SPDXID"].startswith("SPDXRef-Package-native-")
+        }
+        document_native_graph[subject] = {
+            "packages": sorted(native_ids),
+            "relationships": sorted(
+                (
+                    relationship["spdxElementId"],
+                    relationship["relationshipType"],
+                    relationship["relatedSpdxElement"],
+                )
+                for relationship in document["relationships"]
+                if relationship["spdxElementId"] in native_ids
+                or relationship["relatedSpdxElement"] in native_ids
+            ),
+        }
     index = {
         "schema": INDEX_SCHEMA,
         "version": version,
@@ -930,6 +1039,8 @@ def render(root: Path, version: str, created: str) -> dict[str, Any]:
                 "path": name,
                 "subject": name.split(".", 1)[0],
                 "packages": len(documents[name.split(".", 1)[0]]["packages"]),
+                "relationships": len(documents[name.split(".", 1)[0]]["relationships"]),
+                "nativeGraph": document_native_graph[name.split(".", 1)[0]],
                 "sha256": hashlib.sha256(payload.encode("utf-8")).hexdigest(),
             }
             for name, payload in sorted(rendered.items())
@@ -1046,6 +1157,33 @@ def audit(directory: Path) -> list[str]:
             problems.append(f"{directory.name}/{name} is not {SPDX_VERSION}")
         if len(document.get("packages") or []) != entry.get("packages"):
             problems.append(f"{directory.name}/{name} package count differs from the index")
+        if "relationships" in entry and len(document.get("relationships") or []) != entry["relationships"]:
+            problems.append(f"{directory.name}/{name} relationship count differs from the index")
+        expected_graph = entry.get("nativeGraph")
+        if expected_graph is not None:
+            native_ids = sorted(
+                package["SPDXID"]
+                for package in document.get("packages") or []
+                if isinstance(package, dict)
+                and isinstance(package.get("SPDXID"), str)
+                and package["SPDXID"].startswith("SPDXRef-Package-native-")
+            )
+            native_id_set = set(native_ids)
+            relationships = sorted(
+                [
+                    relationship.get("spdxElementId"),
+                    relationship.get("relationshipType"),
+                    relationship.get("relatedSpdxElement"),
+                ]
+                for relationship in document.get("relationships") or []
+                if isinstance(relationship, dict)
+                and (
+                    relationship.get("spdxElementId") in native_id_set
+                    or relationship.get("relatedSpdxElement") in native_id_set
+                )
+            )
+            if expected_graph != {"packages": native_ids, "relationships": relationships}:
+                problems.append(f"{directory.name}/{name} native graph differs from the index")
     present = {path.name for path in directory.iterdir() if path.is_file()}
     for name in sorted(present - listed - {"index.json"}):
         problems.append(f"{directory.name}/{name} is present but not listed in the index")
@@ -1120,12 +1258,6 @@ def _parser() -> argparse.ArgumentParser:
         help="Repository root (defaults to this script's parent).",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    native = subparsers.add_parser(
-        "native-build", help="emit shell-safe source-build values from the native manifest"
-    )
-    native.add_argument("--manifest", type=Path, required=True)
-    native.add_argument("--subject", required=True)
-    native.add_argument("--package", required=True)
     for name in ("generate", "verify", "audit"):
         sub = subparsers.add_parser(name)
         sub.add_argument(
@@ -1158,28 +1290,6 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     root: Path = args.repo_root
     try:
-        if args.command == "native-build":
-            document = _read_json(args.manifest)
-            packages, _relationships = parse_native_dependencies(
-                document, args.subject, str(args.manifest)
-            )
-            package = next(
-                (entry for entry in packages if entry["id"] == args.package), None
-            )
-            if package is None or "build" not in package:
-                raise SbomError(
-                    f"{args.manifest} has no build metadata for {args.subject}/{args.package}"
-                )
-            build = package["build"]
-            values = {
-                "RESDET_ARCHIVE_URL": build["archiveUrl"],
-                "RESDET_ARCHIVE_SHA256": build["archiveSha256"],
-                "RESDET_PIXEL_MAX": str(build["pixelMax"]),
-                "RESDET_Y4M_LIMIT_MULTIPLIER": str(build["y4mLimitMultiplier"]),
-            }
-            for name, value in values.items():
-                print(f"{name}={shlex.quote(value)}")
-            return 0
         version = args.version or read_version(root)
         directory = args.out or directory_for(root, version)
         if args.command == "audit" and getattr(args, "all", False):

@@ -25,8 +25,8 @@ def _public_target(url):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["_run_ffprobe", "_run_resdet", "_detect_black_screen"])
-async def test_subprocess_probe_rejects_denied_destination_before_spawn(method):
-    prober = StreamProber(MagicMock())
+async def test_subprocess_probe_rejects_denied_destination_before_spawn(method, tmp_path):
+    prober = StreamProber(MagicMock(), _resdet_lock_path=tmp_path / "resdet.pipeline.lock")
     spawn = AsyncMock()
 
     @asynccontextmanager
@@ -44,7 +44,7 @@ async def test_subprocess_probe_rejects_denied_destination_before_spawn(method):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["_run_ffprobe", "_run_resdet", "_detect_black_screen"])
-async def test_real_redirect_to_metadata_is_denied_before_subprocess_spawn(method):
+async def test_real_redirect_to_metadata_is_denied_before_subprocess_spawn(method, tmp_path):
     async def handler(request):
         return httpx.Response(
             302,
@@ -55,7 +55,7 @@ async def test_real_redirect_to_metadata_is_denied_before_subprocess_spawn(metho
     transport = SSRFPinnedTransport(
         inner=httpx.MockTransport(handler), mode=SSRFMode.LAN_FRIENDLY
     )
-    prober = StreamProber(MagicMock())
+    prober = StreamProber(MagicMock(), _resdet_lock_path=tmp_path / "resdet.pipeline.lock")
     spawn = AsyncMock()
     url = "http://provider.example/live.ts"
 

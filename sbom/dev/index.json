@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "version": "0.18.2-0017",
-  "created": "2026-09-04T16:49:09Z",
+  "created": "2026-09-04T18:56:05Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -24,7 +24,7 @@
     ]
   },
   "sources": {
-    "Dockerfile": "sha256:31a019e9849d7e326c6088456426d683f069aef977e493d6dad53bf63f7ab6d3",
+    "Dockerfile": "sha256:ab00a994d742aeb87d3bb28bce7d1d7d1a3fd5c14ca85ee74425c05a37af4472",
     "backend/requirements.txt": "sha256:d1dcc0302cbbe2714a411404d7aad01eb3448cabb5e9f33e1625332bed287599",
     "frontend/package-lock.json": "sha256:c1c0ac5f168feadf122bd32c1b8e714916b0a513d3c212a9e518afd10ebc7140",
     "mcp-server/Dockerfile": "sha256:c475206aed271a9593e0dfa530c0f33dbe5f911d648871c9311d055b210ab2d2",
@@ -36,13 +36,42 @@
       "path": "ecm.spdx.json",
       "subject": "ecm",
       "packages": 447,
-      "sha256": "d0221ae5c2b89a20622ef8e9d9a2dda733440683950505d739bbd4112e015528"
+      "relationships": 448,
+      "nativeGraph": {
+        "packages": [
+          "SPDXRef-Package-native-kissfft-131.1.0",
+          "SPDXRef-Package-native-resdet-2.4.3"
+        ],
+        "relationships": [
+          [
+            "SPDXRef-Package-ecm",
+            "CONTAINS",
+            "SPDXRef-Package-native-resdet-2.4.3"
+          ],
+          [
+            "SPDXRef-Package-native-resdet-2.4.3",
+            "CONTAINS",
+            "SPDXRef-Package-native-kissfft-131.1.0"
+          ],
+          [
+            "SPDXRef-Package-native-resdet-2.4.3",
+            "STATIC_LINK",
+            "SPDXRef-Package-native-kissfft-131.1.0"
+          ]
+        ]
+      },
+      "sha256": "2cb439e79a5f19a20003bf58144c96bbbfac41ecea667884547f764f0e929fb2"
     },
     {
       "path": "mcp.spdx.json",
       "subject": "mcp",
       "packages": 43,
-      "sha256": "d67933575c7bc2540044282eb730c61b7881764a04bff236d79e64af67e52a01"
+      "relationships": 43,
+      "nativeGraph": {
+        "packages": [],
+        "relationships": []
+      },
+      "sha256": "50b9f75a1058c08acd8be1f0ee43bcb18c34d599300b87e3cc1061a99ef91d09"
     }
   ]
 }

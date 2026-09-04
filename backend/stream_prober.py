@@ -29,6 +29,7 @@ from security.stream_outbound import (
 
 from database import get_session
 from models import StreamStats
+from resdet_lock import RESDET_PIPELINE_LOCK_PATH, ResdetLockError, ResdetPipelineLock
 from smart_sort_evaluator import (
     PointRule,
     StreamFacts,
@@ -456,11 +457,12 @@ class StreamProber:
         stream_sort_strategy: str = "priority",
         stream_sort_point_rules: tuple[PointRule, ...] = (),
         use_resdet_for_resolution: bool = False,
+        _resdet_lock_path: Path = RESDET_PIPELINE_LOCK_PATH,
     ):
         self.client = client
         self.probe_timeout = probe_timeout
         self.use_resdet_for_resolution = use_resdet_for_resolution
-        self._resdet_semaphore = asyncio.Semaphore(1)
+        self._resdet_lock_path = _resdet_lock_path
         self.user_timezone = user_timezone
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
@@ -1247,16 +1249,22 @@ class StreamProber:
 
     async def _run_resdet(self, url: str) -> tuple[int, int]:
         """Serialize the complete native frame-extract and analysis pipeline."""
-        async with self._resdet_semaphore:
-            return await self._run_resdet_pipeline(url)
+        try:
+            async with ResdetPipelineLock(self._resdet_lock_path) as pipeline_lock:
+                return await self._run_resdet_pipeline(url, pipeline_lock.fileno())
+        except ResdetLockError:
+            raise ResolutionDetectionError("resdet pipeline lock is unavailable") from None
 
-    async def _run_resdet_pipeline(self, url: str) -> tuple[int, int]:
+    async def _run_resdet_pipeline(self, url: str, lock_fd: int) -> tuple[int, int]:
         """Decode one bounded Y4M frame, then analyze that local file with resdet."""
 
         async def kill_and_reap(process) -> None:
             if process.returncode is None:
-                process.kill()
-            await process.wait()
+                try:
+                    os.killpg(process.pid, 9)
+                except ProcessLookupError:
+                    pass
+            await asyncio.shield(process.wait())
 
         async def read_bounded_output(
             process, limit: int, invalid_message: str
@@ -1274,7 +1282,7 @@ class StreamProber:
 
             try:
                 return await asyncio.wait_for(
-                    read_and_wait(), timeout=self.probe_timeout + 5
+                    read_and_wait(), timeout=self.probe_timeout + 7
                 )
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 await kill_and_reap(process)
@@ -1287,6 +1295,9 @@ class StreamProber:
                 url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
             ) as subprocess_input:
                 ffmpeg = await asyncio.create_subprocess_exec(
+                    "/usr/bin/timeout",
+                    "--signal=KILL",
+                    f"{self.probe_timeout + 5}s",
                     "ffmpeg",
                     "-nostdin",
                     "-v",
@@ -1316,6 +1327,8 @@ class StreamProber:
                     "pipe:1",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.DEVNULL,
+                    start_new_session=True,
+                    pass_fds=(lock_fd,),
                 )
                 try:
                     frame_data = await read_bounded_output(
@@ -1328,6 +1341,8 @@ class StreamProber:
                         "resdet resolution detection timed out"
                     ) from None
 
+            if ffmpeg.returncode in (124, 137):
+                raise ResolutionDetectionError("resdet resolution detection timed out")
             if ffmpeg.returncode != 0:
                 raise ResolutionDetectionError(
                     "resdet frame extraction failed"
@@ -1340,6 +1355,9 @@ class StreamProber:
                     "resdet frame extraction failed"
                 ) from None
             process = await asyncio.create_subprocess_exec(
+                "/usr/bin/timeout",
+                "--signal=KILL",
+                f"{self.probe_timeout + 5}s",
                 "resdet",
                 "-R",
                 "Y4M",
@@ -1350,6 +1368,8 @@ class StreamProber:
                 str(frame_path),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+                pass_fds=(lock_fd,),
             )
             try:
                 stdout = await read_bounded_output(
@@ -1362,6 +1382,8 @@ class StreamProber:
                     "resdet resolution detection timed out"
                 ) from None
 
+            if process.returncode in (124, 137):
+                raise ResolutionDetectionError("resdet resolution detection timed out")
             if process.returncode != 0:
                 raise ResolutionDetectionError("resdet resolution detection failed")
 

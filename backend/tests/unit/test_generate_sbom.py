@@ -30,16 +30,18 @@ FROM python:3.12-slim@sha256:{python} AS python-builder
 COPY --from=ghcr.io/astral-sh/uv:latest@sha256:{uv} /uv /usr/local/bin/uv
 
 FROM python:3.12-slim@sha256:{python} AS resdet-builder
-COPY scripts/generate_sbom.py sbom/native-dependencies.json /tmp/
-RUN eval "$(python /tmp/generate_sbom.py native-build --manifest /tmp/native-dependencies.json --subject ecm --package resdet)" \\
-    && curl -fsSL "$RESDET_ARCHIVE_URL" \\
-    && printf '%s' "$RESDET_ARCHIVE_SHA256" \\
-    && sed -i "s/,4,unsigned char)/,$RESDET_Y4M_LIMIT_MULTIPLIER,unsigned char)/" lib/image/y4m.c \\
-    && ./configure --pixel-max="$RESDET_PIXEL_MAX"
+COPY scripts/generate_sbom.py scripts/build_resdet.py sbom/native-dependencies.json /tmp/
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates pkg-config \\
+    && rm -rf /var/lib/apt/lists/* \\
+    && python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output
 
 FROM python:3.12-slim@sha256:{python}
 COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=frontend-builder /app/frontend/dist ./static
+RUN mkdir /config
+COPY --from=resdet-builder /tmp/resdet-output/resdet /usr/local/bin/resdet
+COPY --from=resdet-builder /tmp/resdet-output/licenses/ /usr/share/doc/resdet/
+RUN test "$(resdet -V)" = "$(printf 'resdet version 2.4.3\\nlibresdet version 3.2.0\\nBuilt with image readers: Y4M')"
 """
 
 NATIVE_DEPENDENCIES = {
@@ -430,7 +432,7 @@ def test_creator_identifies_the_generator_format_version(sbom, generated):
     for name in ("ecm.spdx.json", "mcp.spdx.json"):
         document = json.loads((generated / name).read_text(encoding="utf-8"))
         assert document["creationInfo"]["creators"] == [
-            "Tool: scripts/generate_sbom.py-5"
+            "Tool: scripts/generate_sbom.py-6"
         ]
 
 
@@ -495,7 +497,49 @@ def test_a_native_dependency_omitted_without_regenerating_is_caught(sbom, tree, 
     ]
     _write(manifest, json.dumps(native))
 
-    assert sbom.verify(tree, generated, "9.9.9") == ["ecm.spdx.json", "index.json"]
+    with pytest.raises(sbom.SbomError, match="exact native package graph"):
+        sbom.verify(tree, generated, "9.9.9")
+
+
+@pytest.mark.parametrize("package_id", ["resdet", "kissfft"])
+def test_each_required_native_package_is_mandatory(sbom, tree, package_id):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    ecm = native["subjects"]["ecm"]
+    ecm["packages"] = [item for item in ecm["packages"] if item["id"] != package_id]
+    ecm["relationships"] = [
+        item for item in ecm["relationships"]
+        if item["source"] != package_id and item["target"] != package_id
+    ]
+    _write(manifest, json.dumps(native))
+    with pytest.raises(sbom.SbomError, match="exact native package graph"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize("edge_index", range(3))
+@pytest.mark.parametrize("mutation", ["missing", "reversed"])
+def test_each_required_native_edge_is_exact(sbom, tree, edge_index, mutation):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    edges = native["subjects"]["ecm"]["relationships"]
+    if mutation == "missing":
+        edges.pop(edge_index)
+    else:
+        edge = edges[edge_index]
+        edge["source"], edge["target"] = edge["target"], edge["source"]
+    _write(manifest, json.dumps(native))
+    with pytest.raises(sbom.SbomError, match="exact native relationship graph"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_kissfft_version_is_exact(sbom, tree):
+    manifest = tree / "sbom" / "native-dependencies.json"
+    native = json.loads(manifest.read_text(encoding="utf-8"))
+    native["subjects"]["ecm"]["packages"][1]["version"] = "999"
+    native["subjects"]["ecm"]["packages"][1]["purl"] = "pkg:generic/kissfft@999"
+    _write(manifest, json.dumps(native))
+    with pytest.raises(sbom.SbomError, match="exact native package graph"):
+        sbom.render(tree, "9.9.9", CREATED)
 
 
 def test_a_native_relationship_to_an_unknown_package_is_rejected(sbom, tree):
@@ -524,13 +568,53 @@ def test_a_docker_only_resdet_pin_cannot_regenerate_to_green(sbom, tree):
     dockerfile = tree / "Dockerfile"
     dockerfile.write_text(
         dockerfile.read_text(encoding="utf-8").replace(
-            'RUN eval "$(python /tmp/generate_sbom.py native-build --manifest /tmp/native-dependencies.json --subject ecm --package resdet)"',
-            "ARG RESDET_COMMIT=3" + "3" * 39,
+            "FROM python:3.12-slim@sha256:" + PYTHON_DIGEST + " AS resdet-builder",
+            "FROM python:3.12-slim@sha256:" + PYTHON_DIGEST + " AS resdet-builder\nARG RESDET_COMMIT=3" + "3" * 39,
         ),
         encoding="utf-8",
     )
 
-    with pytest.raises(sbom.SbomError, match="must source the resdet build pin"):
+    with pytest.raises(sbom.SbomError, match="resdet-builder|malformed instruction"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "ENV CFLAGS=-O0",
+        "ARG CC=clang",
+        "RUN ./configure --pixel-max=1",
+        "RUN make resdet",
+        "RUN python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output",
+        "COPY replacement /tmp/resdet-output/resdet",
+    ],
+)
+def test_resdet_builder_rejects_decoys_and_overrides(sbom, tree, marker):
+    dockerfile = tree / "Dockerfile"
+    text = dockerfile.read_text(encoding="utf-8")
+    insertion = text.index("\nFROM python:3.12-slim@sha256:", text.index("AS resdet-builder"))
+    _write(dockerfile, text[:insertion] + "\n" + marker + text[insertion:])
+    with pytest.raises(sbom.SbomError, match="resdet-builder"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_resdet_builder_command_in_a_comment_is_not_an_invocation(sbom, tree):
+    dockerfile = tree / "Dockerfile"
+    text = dockerfile.read_text(encoding="utf-8")
+    command = "RUN apt-get update && apt-get install -y build-essential ca-certificates \\\n    && python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output"
+    start = text.index("RUN apt-get update", text.index("AS resdet-builder"))
+    end = text.index("\n\nFROM ", start)
+    command = text[start:end]
+    assert command in text
+    _write(dockerfile, text.replace(command, "# " + command.replace("RUN ", "", 1)))
+    with pytest.raises(sbom.SbomError, match="resdet-builder|malformed instruction"):
+        sbom.render(tree, "9.9.9", CREATED)
+
+
+def test_final_resdet_cannot_be_replaced_after_fixed_copy(sbom, tree):
+    dockerfile = tree / "Dockerfile"
+    _write(dockerfile, dockerfile.read_text(encoding="utf-8") + "COPY replacement /usr/local/bin/resdet\n")
+    with pytest.raises(sbom.SbomError, match="final resdet artifacts"):
         sbom.render(tree, "9.9.9", CREATED)
 
 
@@ -879,6 +963,35 @@ def test_audit_catches_an_index_rehashed_to_match_a_forged_document(sbom, genera
             entry["sha256"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
     index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     assert any("package count" in problem for problem in sbom.audit(generated))
+
+
+@pytest.mark.parametrize("mutation", ["omit-package", "omit-edge", "reverse-edge"])
+def test_audit_rejects_rehashed_historical_native_graph_mutants(sbom, generated, mutation):
+    target = generated / "ecm.spdx.json"
+    document = json.loads(target.read_text(encoding="utf-8"))
+    if mutation == "omit-package":
+        package_id = "SPDXRef-Package-native-kissfft-131.1.0"
+        document["packages"] = [item for item in document["packages"] if item["SPDXID"] != package_id]
+        document["relationships"] = [
+            item for item in document["relationships"]
+            if item["spdxElementId"] != package_id and item["relatedSpdxElement"] != package_id
+        ]
+    else:
+        edge = next(item for item in document["relationships"] if item["relationshipType"] == "STATIC_LINK")
+        if mutation == "omit-edge":
+            document["relationships"].remove(edge)
+        else:
+            edge["spdxElementId"], edge["relatedSpdxElement"] = edge["relatedSpdxElement"], edge["spdxElementId"]
+    payload = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
+    target.write_text(payload, encoding="utf-8")
+    index_path = generated / "index.json"
+    index = json.loads(index_path.read_text(encoding="utf-8"))
+    entry = next(item for item in index["documents"] if item["path"] == "ecm.spdx.json")
+    entry["sha256"] = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    entry["packages"] = len(document["packages"])
+    entry["relationships"] = len(document["relationships"])
+    index_path.write_text(json.dumps(index, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    assert any("native graph" in problem for problem in sbom.audit(generated))
 
 
 def test_audit_catches_an_unlisted_file(sbom, generated):

@@ -33,27 +33,13 @@ RUN uv venv /opt/venv \
 
 # Build resdet from a pinned source commit for both supported image architectures.
 FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS resdet-builder
-COPY scripts/generate_sbom.py sbom/native-dependencies.json /tmp/
+COPY scripts/generate_sbom.py scripts/build_resdet.py sbom/native-dependencies.json /tmp/
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
-        curl \
+        pkg-config \
     && rm -rf /var/lib/apt/lists/* \
-    && eval "$(python /tmp/generate_sbom.py native-build --manifest /tmp/native-dependencies.json --subject ecm --package resdet)" \
-    && curl -fsSL "$RESDET_ARCHIVE_URL" -o /tmp/resdet.tar.gz \
-    && printf '%s  %s\n' "$RESDET_ARCHIVE_SHA256" /tmp/resdet.tar.gz | sha256sum -c - \
-    && mkdir /tmp/resdet \
-    && tar -xzf /tmp/resdet.tar.gz --strip-components=1 -C /tmp/resdet \
-    && sed -i "s/,4,unsigned char)/,$RESDET_Y4M_LIMIT_MULTIPLIER,unsigned char)/" /tmp/resdet/lib/image/y4m.c \
-    && grep -F "resdet_dims_exceed_limit(*width,*height,$RESDET_Y4M_LIMIT_MULTIPLIER,unsigned char)" /tmp/resdet/lib/image/y4m.c \
-    && printf '%s\n' "$RESDET_PIXEL_MAX" > /tmp/resdet-pixel-max
-WORKDIR /tmp/resdet
-RUN RESDET_PIXEL_MAX="$(cat /tmp/resdet-pixel-max)" \
-    && ./configure --disable-everything --disable-ffmpeg --omit-pgm-reader --omit-pfm-reader --pixel-max="$RESDET_PIXEL_MAX" \
-    && test "$(sed -n 's/^PIXEL_MAX=//p' config.mak)" = "$RESDET_PIXEL_MAX" \
-    && sed -i 's/-march=native -mtune=native //; s/-mcpu=native //' config.mak \
-    && make resdet \
-    && test "$(./resdet -V | sed -n '/^Built with image readers:/p')" = "Built with image readers: Y4M"
+    && python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output
 
 # Production image
 FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
@@ -78,10 +64,6 @@ RUN apt-get update \
 
 # Copy pre-built Python packages from builder stage (no build tools needed)
 COPY --from=python-builder /opt/venv /opt/venv
-COPY --from=resdet-builder /tmp/resdet/resdet /usr/local/bin/resdet
-COPY --from=resdet-builder /tmp/resdet/COPYING /tmp/resdet/COPYING.LGPL.txt /tmp/resdet/COPYING.MIT.txt /usr/share/doc/resdet/
-COPY --from=resdet-builder /tmp/resdet/lib/kissfft/COPYING /usr/share/doc/resdet/kissfft/COPYING
-COPY --from=resdet-builder /tmp/resdet/lib/kissfft/LICENSES/BSD-3-Clause /usr/share/doc/resdet/kissfft/LICENSES/BSD-3-Clause
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy backend code
@@ -92,12 +74,18 @@ COPY --from=frontend-builder /app/frontend/dist ./static
 
 # Create config and TLS directories with proper permissions
 # Convert entrypoint line endings (handles Windows CRLF -> Unix LF)
-RUN mkdir -p /config /config/tls /config/uploads/logos \
+RUN mkdir -p /config /config/tls /config/uploads/logos /run/ecm \
     && chown -R appuser:appuser /config /app \
+    && chown appuser:appuser /run/ecm \
+    && chmod 700 /run/ecm \
     && chmod 700 /config/tls \
     && sed -i 's/\r$//' /app/entrypoint.sh \
-    && chmod +x /app/entrypoint.sh \
-    && test "$(resdet -V | sed -n '/^Built with image readers:/p')" = "Built with image readers: Y4M"
+    && chmod +x /app/entrypoint.sh
+
+# Copy immutable native outputs after every other filesystem-mutating final-stage step.
+COPY --from=resdet-builder /tmp/resdet-output/resdet /usr/local/bin/resdet
+COPY --from=resdet-builder /tmp/resdet-output/licenses/ /usr/share/doc/resdet/
+RUN test "$(resdet -V)" = "$(printf 'resdet version 2.4.3\nlibresdet version 3.2.0\nBuilt with image readers: Y4M')"
 
 # Environment
 ENV PUID=1000

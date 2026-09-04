@@ -39,7 +39,7 @@ Each directory holds three files:
 | --- | --- |
 | `ecm.spdx.json` | SPDX 2.3 document for the ECM image's dependencies |
 | `mcp.spdx.json` | SPDX 2.3 document for the MCP image's dependencies |
-| `index.json` | The version, the channel (`release` or `dev`) and whether it is permanent, the SHA-256 of every source manifest the documents were derived from, and the SHA-256 of each document |
+| `index.json` | The version, channel, source and document hashes, package/relationship counts, and the expected native package/relationship graph for each document |
 
 ## Read this before you trust a document
 
@@ -100,6 +100,12 @@ working tree and byte-compares them against what is committed. The Release Cut
 Gate runs that as **G8** on every release PR, so a release cannot merge with a
 stale, hand-edited, deleted, or wrong-version SBOM. Every one of those mutations
 is red-proven in `backend/tests/unit/test_generate_sbom.py`.
+
+Each new index entry also records its exact native package IDs and native SPDX
+relationships. `audit` compares those semantics as well as package and
+relationship counts, so removing or reversing a required resdet/KISS FFT edge
+and merely recomputing the document hash does not make a historical document
+audit clean. Older index entries remain auditable under the format they recorded.
 
 The one field `verify` does not police is `creationInfo.created`: a timestamp
 cannot be re-derived from the tree, so it is read back out of the committed

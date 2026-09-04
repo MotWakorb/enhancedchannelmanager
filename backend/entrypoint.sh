@@ -376,6 +376,11 @@ check_filesystem() {
     # Ensure subdirectories exist (volume mounts lose Dockerfile-created dirs)
     mkdir -p /config/tls /config/uploads/logos
 
+    # Shared runtime lock directory follows the final PUID/PGID selected above.
+    mkdir -p /run/ecm
+    chown appuser:appuser /run/ecm
+    chmod 700 /run/ecm
+
     # Fix permissions
     chown -R appuser:appuser /config 2>/dev/null || true
     chmod 700 /config/tls
