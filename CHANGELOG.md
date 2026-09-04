@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- **ECM can now deliver external alerts to ntfy.sh or a self-hosted ntfy server (bead `enhancedchannelmanager-ojnxm.1`, GitHub #909, build 0.18.2-0014).** Admins can create an ntfy alert method in Settings with a server URL, topic, and optional access token, then send a test notification from the Alert Methods list. ntfy uses the existing alert-method severity and source filters; scheduled-task alerts also use the task's existing master and severity gates, without adding a per-task ntfy toggle.
+
 - **EPG events can trigger a bounded probe of every stream on their channel when the title matches an operator-supplied regular expression (bead `enhancedchannelmanager-8gmk8.1`, GitHub #901, build 0013).** The disabled-by-default EPG Event Probe task uses the schedule cadence as its timing control, evaluates only currently active programs, resolves standard and dummy EPG channel links, and records schedule/event/channel trigger keys so duplicate evaluations do not start repeated probes. Malformed expressions are rejected before schedule persistence, and each schedule can suppress stream reordering without changing the global setting.
 
 - **Channel Pipeline Execution Details now identifies the rule scope for every historical run (bead `enhancedchannelmanager-zr9l2`, GitHub #795, build 0012).** Single-rule runs show the rule name snapshotted when execution started, so later renames or deletion do not change or break history. Selected runs list every persisted rule name in execution order, while run-all and legacy rows display the explicit full-pipeline scope instead of a blank or arbitrary rule.
