@@ -60,6 +60,7 @@ from credential_sentinel import (
     REDACTION_SENTINEL,
     SETTINGS_CREDENTIAL_FIELDS,
     collect_credential_values,
+    credential_is_present,
     strip_redaction_sentinels,
 )
 from dbas import artifact_crypto
@@ -131,7 +132,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0013"
+APP_VERSION = "0.18.2-0016"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -246,6 +247,7 @@ _ALERT_METHOD_IDENTITY_KEYS = ("username", "chat_id")
 _ALERT_METHOD_PROTECTED_KEYS = tuple(
     dict.fromkeys(_ALERT_METHOD_CREDENTIAL_KEYS + _ALERT_METHOD_IDENTITY_KEYS)
 )
+_NTFY_DESTINATION_HMAC_KEY = "_ecm_ntfy_destination_hmac_v1"
 
 # journal.db tables holding ECM's OWN authentication and identity state, emptied
 # out of the standard artifact (bead …-gi4zn, external security review findings
@@ -1384,21 +1386,23 @@ def _scrub_journal_db_in_place(tmp_path: Path) -> None:
                 ) from e
             dropped[table] = before
 
-        scrubbed_cells = 0
-        for table in sorted(present & set(_STANDARD_ARTIFACT_TABLES)):
-            scrubbed_cells += _scrub_permitted_table_cells(cur, table)
-
         scrubbed_rows = 0
         if "alert_methods" in present:
             try:
-                cur.execute("SELECT id, config FROM alert_methods")
+                alert_columns = {
+                    row[1] for row in cur.execute("PRAGMA table_info(alert_methods)")
+                }
+                if "method_type" in alert_columns:
+                    cur.execute("SELECT id, method_type, config FROM alert_methods")
+                else:
+                    cur.execute("SELECT id, NULL, config FROM alert_methods")
                 rows = cur.fetchall()
             except sqlite3.DatabaseError as e:
                 raise BackupScrubError(
                     "could not read alert_methods from the journal.db copy: %s" % e
                 ) from e
 
-            for row_id, raw_config in rows:
+            for row_id, method_type, raw_config in rows:
                 if not raw_config:
                     continue
                 try:
@@ -1417,6 +1421,13 @@ def _scrub_journal_db_in_place(tmp_path: Path) -> None:
                     )
                 else:
                     changed = False
+                    if method_type == "ntfy":
+                        if _NTFY_DESTINATION_HMAC_KEY in cfg:
+                            cfg.pop(_NTFY_DESTINATION_HMAC_KEY)
+                            changed = True
+                        if cfg.get("topic"):
+                            cfg["topic"] = REDACTED
+                            changed = True
                     for key in _ALERT_METHOD_PROTECTED_KEYS:
                         if key in cfg and cfg[key]:
                             cfg[key] = REDACTED
@@ -1434,6 +1445,10 @@ def _scrub_journal_db_in_place(tmp_path: Path) -> None:
                         "could not rewrite alert_methods row id=%s: %s" % (row_id, e)
                     ) from e
                 scrubbed_rows += 1
+
+        scrubbed_cells = 0
+        for table in sorted(present & set(_STANDARD_ARTIFACT_TABLES)):
+            scrubbed_cells += _scrub_permitted_table_cells(cur, table)
 
         try:
             conn.commit()
@@ -3580,7 +3595,7 @@ def _capture_existing_alert_method_configs(
     """Read existing alert_methods rows directly from journal.db so we can
     re-merge non-redacted credential fields after the restored DB is written.
 
-    Returns {id: parsed_config_dict}. Rows with malformed JSON or missing
+    Returns {id: {method_type, config}}. Rows with malformed JSON or a missing
     table are skipped silently — the caller treats absent ids as 'no merge'.
     """
     journal_path = journal_path or JOURNAL_DB_FILE
@@ -3600,12 +3615,16 @@ def _capture_existing_alert_method_configs(
             )
             if cur.fetchone() is None:
                 return {}
-            cur.execute("SELECT id, config FROM alert_methods")
+            columns = {row[1] for row in cur.execute("PRAGMA table_info(alert_methods)")}
+            if "method_type" in columns:
+                cur.execute("SELECT id, method_type, config FROM alert_methods")
+            else:
+                cur.execute("SELECT id, NULL, config FROM alert_methods")
             rows = cur.fetchall()
         except sqlite3.DatabaseError as e:
             logger.warning("[BACKUP] Could not read alert_methods for pre-restore capture: %s", e)
             return {}
-        for row_id, raw in rows:
+        for row_id, method_type, raw in rows:
             if not raw:
                 continue
             try:
@@ -3613,7 +3632,7 @@ def _capture_existing_alert_method_configs(
             except (json.JSONDecodeError, TypeError):
                 continue
             if isinstance(cfg, dict):
-                out[row_id] = cfg
+                out[row_id] = {"method_type": method_type, "config": cfg}
     finally:
         conn.close()
     return out
@@ -3624,16 +3643,15 @@ def _merge_alert_method_creds_after_restore(
 ) -> None:
     """For each alert_methods row in the restored DB, restore non-redacted
     credential-class values from the prior snapshot when the restored value
-    is the REDACTED sentinel. Match by row id.
+    is the REDACTED sentinel. Non-ntfy rows match by row id; ntfy rows also
+    require matching type/server and destination identity proof.
 
     A restored ``config`` that is the sentinel AS A WHOLE (rather than a JSON
     object with sentinel values inside it) is the producer's fail-closed
     treatment of a row it could not parse — see
-    :func:`_scrub_journal_db_in_place`. It is merged the same way, wholesale: the
-    destination's own config for that row id is authoritative and is restored
-    intact. Without this branch the fail-closed producer change would DESTROY a
-    working alert method on every restore, which is exactly the round-trip
-    asymmetry :data:`_ALERT_METHOD_PROTECTED_KEYS` exists to prevent.
+    :func:`_scrub_journal_db_in_place`. Non-ntfy destinations preserve the
+    destination's own config; ntfy destinations remain fail-closed because
+    their identity cannot be proven from an opaque blob.
 
     Backward-compat: legacy non-redacted ZIPs carry no sentinel — every value
     survives the merge unchanged.
@@ -3654,20 +3672,31 @@ def _merge_alert_method_creds_after_restore(
             )
             if cur.fetchone() is None:
                 return
-            cur.execute("SELECT id, config FROM alert_methods")
+            columns = {row[1] for row in cur.execute("PRAGMA table_info(alert_methods)")}
+            if "method_type" in columns:
+                cur.execute("SELECT id, method_type, config FROM alert_methods")
+            else:
+                cur.execute("SELECT id, NULL, config FROM alert_methods")
             rows = cur.fetchall()
         except sqlite3.DatabaseError as e:
             logger.warning("[BACKUP] Could not read alert_methods after restore for merge: %s", e)
             return
         merged_count = 0
-        for row_id, raw in rows:
+        for row_id, method_type, raw in rows:
             if not raw:
                 continue
+            prior_record = prior.get(row_id, {})
+            if "config" in prior_record:
+                prior_type = prior_record.get("method_type")
+                prior_cfg = prior_record.get("config", {})
+            else:
+                # Compatibility for direct callers holding the former snapshot shape.
+                prior_type = None
+                prior_cfg = prior_record
             if raw == REDACTED:
                 # Whole-blob sentinel: the producer could not parse this row and
                 # refused to ship it. Reinstate the destination's own config.
-                prior_cfg = prior.get(row_id)
-                if prior_cfg:
+                if prior_cfg and method_type != "ntfy" and prior_type != "ntfy":
                     cur.execute(
                         "UPDATE alert_methods SET config=? WHERE id=?",
                         (json.dumps(prior_cfg), row_id),
@@ -3680,7 +3709,86 @@ def _merge_alert_method_creds_after_restore(
                 continue
             if not isinstance(cfg, dict):
                 continue
-            prior_cfg = prior.get(row_id, {})
+
+            if method_type == "ntfy":
+                marker_removed = _NTFY_DESTINATION_HMAC_KEY in cfg
+                cfg.pop(_NTFY_DESTINATION_HMAC_KEY, None)
+                standard_shape = any(
+                    cfg.get(key) == REDACTED for key in ("topic", "access_token")
+                )
+                if not standard_shape:
+                    # A legacy credential-bearing artifact remains authoritative.
+                    if marker_removed:
+                        cur.execute(
+                            "UPDATE alert_methods SET config=? WHERE id=?",
+                            (json.dumps(cfg), row_id),
+                        )
+                        merged_count += 1
+                    continue
+
+                same_type = prior_type == "ntfy"
+                archived_server = cfg.get("server_url")
+                local_server = prior_cfg.get("server_url")
+                same_server = (
+                    isinstance(archived_server, str)
+                    and isinstance(local_server, str)
+                    and archived_server.rstrip("/") == local_server.rstrip("/")
+                )
+                local_topic = prior_cfg.get("topic")
+                local_token = prior_cfg.get("access_token")
+                legacy_topic_match = (
+                    same_type
+                    and same_server
+                    and isinstance(local_topic, str)
+                    and cfg.get("topic") not in (None, REDACTED)
+                    and cfg.get("topic") == local_topic
+                )
+                unauth_topic_fallback = (
+                    same_type
+                    and same_server
+                    and cfg.get("topic") == REDACTED
+                    and not credential_is_present(local_token)
+                    and isinstance(local_topic, str)
+                    and bool(local_topic)
+                )
+
+                if legacy_topic_match:
+                    cfg["topic"] = local_topic
+                    if credential_is_present(local_token):
+                        cfg["access_token"] = local_token
+                    elif cfg.get("access_token") == REDACTED:
+                        cfg.pop("access_token", None)
+                elif unauth_topic_fallback:
+                    cfg["topic"] = local_topic
+                    if cfg.get("access_token") == REDACTED:
+                        cfg.pop("access_token", None)
+                else:
+                    cfg.pop("topic", None)
+                    if cfg.get("access_token") == REDACTED:
+                        cfg.pop("access_token", None)
+
+                cur.execute(
+                    "UPDATE alert_methods SET config=? WHERE id=?",
+                    (json.dumps(cfg), row_id),
+                )
+                merged_count += 1
+                continue
+
+            # A colliding ntfy row never supplies protected values to another type.
+            if prior_type == "ntfy":
+                cfg.pop(_NTFY_DESTINATION_HMAC_KEY, None)
+                if cfg.get("topic") == REDACTED:
+                    cfg.pop("topic", None)
+                if cfg.get("access_token") == REDACTED:
+                    cfg.pop("access_token", None)
+                cur.execute(
+                    "UPDATE alert_methods SET config=? WHERE id=?",
+                    (json.dumps(cfg), row_id),
+                )
+                merged_count += 1
+                continue
+
+            cfg.pop(_NTFY_DESTINATION_HMAC_KEY, None)
             changed = False
             for key in _ALERT_METHOD_PROTECTED_KEYS:
                 if cfg.get(key) == REDACTED and prior_cfg.get(key) not in (None, "", REDACTED):

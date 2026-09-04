@@ -60,7 +60,7 @@ because it has no sensitive data to redact):
 | Clean up channel names automatically when creating channels | [Channel Normalization](channel-normalization.md) | Channel Processing |
 | Manage the tag vocabularies normalization rules match against | [Tags](tags.md) | Channel Processing |
 | Configure Channel Pipeline exclusion filters and the runaway safety cap | [Channel Pipeline settings](../channel-pipeline/index.md) | Channel Processing |
-| Set up SMTP, Discord, or Telegram so scheduled-task alerts reach you | [Notifications & Alert Methods](../notifications/index.md) | Notifications & Reports |
+| Set up SMTP, Discord, Telegram, or ntfy so scheduled-task alerts reach you | [Notifications & Alert Methods](../notifications/index.md) | Notifications & Reports |
 | Get an email digest when M3U playlists change | [M3U Change Digest](m3u-digest.md) | Notifications & Reports |
 | Turn on, edit, or run any of ECM's 17 recurring tasks | [Scheduled Tasks](scheduled-tasks.md) | Upkeep |
 | Reset a stuck probe, find orphaned groups, clean up stale or struck-out streams | [Maintenance](maintenance.md) | Upkeep |

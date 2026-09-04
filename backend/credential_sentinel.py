@@ -78,6 +78,7 @@ ALERT_METHOD_CREDENTIAL_KEYS: tuple[str, ...] = (
     "bot_token",
     "webhook_url",
     "api_key",
+    "access_token",
 )
 CREDENTIAL_SECRET_KEYS: frozenset[str] = frozenset(
     {key.lower() for key in SETTINGS_CREDENTIAL_FIELDS}
@@ -199,6 +200,10 @@ def collect_credential_values(
 
     def walk(node: object) -> None:
         if isinstance(node, dict):
+            if node.get("method_type") == "ntfy" and isinstance(node.get("config"), dict):
+                topic = node["config"].get("topic")
+                if isinstance(topic, str) and topic and topic != REDACTION_SENTINEL:
+                    secrets.add(topic)
             for key, value in node.items():
                 key_lower = key.lower() if isinstance(key, str) else None
                 if (

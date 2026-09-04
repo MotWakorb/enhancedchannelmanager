@@ -170,6 +170,7 @@ class FailedStreamReprobeTask(TaskScheduler):
                     # this task's (send_alerts AND alert_on_info), surfaced by the
                     # engine as self._send_alerts (GH #462).
                     start_send_alerts=self._send_alerts,
+                    completion_send_alerts=False,
                 )
             )
 

@@ -29,6 +29,37 @@
   margin-top: 0.5rem;
 }
 
+.ntfy-create-form {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border-color, #3a3a5a);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--bg-secondary, #252540);
+}
+
+.ntfy-create-form h4 {
+  margin: 0 0 0.75rem;
+}
+
+.ntfy-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.ntfy-form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+@media (max-width: 700px) {
+  .ntfy-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .alert-method-row {
   display: flex;
   align-items: center;

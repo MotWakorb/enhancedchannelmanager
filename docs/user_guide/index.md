@@ -79,7 +79,7 @@ ECM's forensic record of every channel, EPG, M3U, watch, task, Channel Pipeline,
 
 ### [Notifications & Alert Methods](notifications/index.md)
 
-Configure SMTP, Discord webhooks, and Telegram bots so scheduled-task alerts (M3U refresh failures, EPG warnings, probe results) reach you outside the UI. Covers the Email Alert Recipients list and how per-task toggles gate dispatch.
+Configure SMTP, Discord webhooks, Telegram bots, and ntfy targets so scheduled-task alerts (M3U refresh failures, EPG warnings, probe results) reach you outside the UI. Covers the Email Alert Recipients list, per-task gates, and ntfy's alert-method routing.
 
 ### [Integrations](integrations/index.md)
 

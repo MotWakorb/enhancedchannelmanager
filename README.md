@@ -261,13 +261,13 @@ Live dashboard showing active channels, M3U connection counts, per-channel FFmpe
 Activity log tracking all changes to channels, EPG, and M3U accounts with filtering by category, action type, and time range. A daily Journal Noise Purge task auto-deletes automated-noise entries (watch start/stop telemetry and automated Channel Pipeline rule create/delete churn) older than a configurable retention window (default 3 days); operator-initiated entries and all other categories are kept.
 
 ### Settings
-Comprehensive configuration including Dispatcharr connection, channel defaults, stream name normalization (tag-based and rule-based engines), stream probing, scheduled tasks (EPG/M3U refresh, probing, cleanup), alert methods (Discord, Telegram, email), authentication (local + Dispatcharr SSO), user management, TLS certificates, VLC integration, appearance themes, and backup/restore.
+Comprehensive configuration including Dispatcharr connection, channel defaults, stream name normalization (tag-based and rule-based engines), stream probing, scheduled tasks (EPG/M3U refresh, probing, cleanup), alert methods (Discord, Telegram, email, ntfy), authentication (local + Dispatcharr SSO), user management, TLS certificates, VLC integration, appearance themes, and backup/restore.
 
 ### Authentication
 First-run setup wizard, local auth with bcrypt hashing, Dispatcharr SSO, account linking, email-based password reset, and CLI password reset for lockout recovery. JWT-based sessions with automatic token refresh.
 
 ### Notification Center
-In-app notification bell with history, active task pinning, and external alert methods (Discord webhooks, Telegram bots, SMTP email) with digest batching and source filtering.
+In-app notification bell with history, active task pinning, and external alert methods (Discord webhooks, Telegram bots, SMTP email, ntfy) with digest batching and source filtering.
 
 ## MCP Server (Claude Integration)
 
@@ -574,7 +574,7 @@ If running ECM locally, use `localhost` as your host. If the MCP container is on
 | `list_notifications` | List notifications with unread count |
 | `mark_notifications_read` | Mark all as read |
 | `delete_all_notifications` | Clear all notifications |
-| `list_alert_methods` | List configured alert methods (Discord, Telegram, email) |
+| `list_alert_methods` | List configured alert methods (Discord, Telegram, email, ntfy) |
 | `test_alert_method` | Send a test notification through an alert method. **Not usable over MCP** (build 0089): the endpoint refuses the MCP service key with `403`, by design. An admin runs the test from Settings > Alert Methods |
 | **Profiles (3)** | |
 | `list_channel_profiles` | List channel profiles |

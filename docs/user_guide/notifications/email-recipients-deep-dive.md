@@ -22,8 +22,6 @@ on your behalf: name `Email`, type `smtp`, enabled. It appears in the
 **Alert Methods** list further down the same page. Saving again updates
 that same row rather than creating a second one.
 
-![Alert Methods section with no methods configured, reading "No alert methods configured yet. Configure SMTP, Discord, or Telegram above to create one."](../../images/user_guide/notifications/4-alert-methods-empty.png)
-
 The row is created with four severity opt-ins baked in, and the UI gives
 you no way to change them:
 

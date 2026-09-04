@@ -11,6 +11,7 @@ import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from fastapi import HTTPException
 from models import AlertMethod
 
 
@@ -170,6 +171,93 @@ class TestCreateAlertMethod:
         assert "webhook_url" in response.json()["detail"]
 
 
+class TestNtfyOwnedInstanceWriteGate:
+    @staticmethod
+    def _ntfy_body():
+        return {
+            "name": "Private ntfy",
+            "method_type": "ntfy",
+            "config": {"server_url": "https://ntfy.example.test", "topic": "private"},
+        }
+
+    @pytest.mark.parametrize("operation", ["post", "patch"])
+    @pytest.mark.asyncio
+    async def test_anonymous_owned_auth_disabled_instance_refuses_ntfy_write_without_network(
+        self, operation, async_client, test_session
+    ):
+        path = "/api/alert-methods"
+        request = self._ntfy_body()
+        if operation == "patch":
+            method = _create_alert_method(
+                test_session,
+                method_type="ntfy",
+                config=json.dumps(request["config"]),
+            )
+            path += f"/{method.id}"
+            request = {"config": request["config"]}
+
+        auth_settings = MagicMock(require_auth=False, setup_complete=True)
+        with patch("auth.dependencies.get_auth_settings", return_value=auth_settings), patch(
+            "auth.dependencies.instance_has_operator_identity", return_value=True
+        ), patch(
+            "auth.dependencies.get_current_user",
+            new=AsyncMock(side_effect=HTTPException(status_code=401, detail="Not authenticated")),
+        ), patch("alert_methods_ntfy.aiohttp.ClientSession") as network:
+            response = await getattr(async_client, operation)(path, json=request)
+
+        assert response.status_code == 401
+        network.assert_not_called()
+
+    @pytest.mark.parametrize("operation", ["post", "patch"])
+    @pytest.mark.asyncio
+    async def test_authenticated_human_admin_can_write_ntfy_on_owned_auth_disabled_instance(
+        self, operation, async_client, test_session
+    ):
+        path = "/api/alert-methods"
+        request = self._ntfy_body()
+        if operation == "patch":
+            method = _create_alert_method(
+                test_session,
+                method_type="ntfy",
+                config=json.dumps(request["config"]),
+            )
+            path += f"/{method.id}"
+            request = {"config": request["config"]}
+        admin = MagicMock(is_admin=True)
+        auth_settings = MagicMock(require_auth=False, setup_complete=True)
+        with patch("auth.dependencies.get_auth_settings", return_value=auth_settings), patch(
+            "auth.dependencies.instance_has_operator_identity", return_value=True
+        ), patch("auth.dependencies.get_current_user", new=AsyncMock(return_value=admin)):
+            response = await getattr(async_client, operation)(path, json=request)
+
+        assert response.status_code == 200
+
+    @pytest.mark.parametrize("operation", ["post", "patch"])
+    @pytest.mark.asyncio
+    async def test_genuine_first_run_keeps_ntfy_write_reachable(
+        self, operation, async_client, test_session
+    ):
+        path = "/api/alert-methods"
+        request = self._ntfy_body()
+        if operation == "patch":
+            method = _create_alert_method(
+                test_session,
+                method_type="ntfy",
+                config=json.dumps(request["config"]),
+            )
+            path += f"/{method.id}"
+            request = {"config": request["config"]}
+        auth_settings = MagicMock(require_auth=False, setup_complete=False)
+        current_user = AsyncMock(side_effect=AssertionError("first run must not resolve a user"))
+        with patch("auth.dependencies.get_auth_settings", return_value=auth_settings), patch(
+            "auth.dependencies.instance_has_operator_identity", return_value=False
+        ), patch("auth.dependencies.get_current_user", new=current_user):
+            response = await getattr(async_client, operation)(path, json=request)
+
+        assert response.status_code == 200
+        current_user.assert_not_awaited()
+
+
 class TestGetAlertMethod:
     """Tests for GET /api/alert-methods/{method_id}."""
 
@@ -254,6 +342,50 @@ class TestUpdateAlertMethod:
             )
 
         assert response.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_ntfy_patch_rejects_mask_literal_and_omission_replaces_config(
+        self, async_client, test_session
+    ):
+        method = _create_alert_method(
+            test_session,
+            name="ntfy",
+            method_type="ntfy",
+            config=json.dumps({
+                "server_url": "https://ntfy.example.test",
+                "topic": "private-topic",
+                "access_token": "<stored-token>",
+            }),
+        )
+
+        masked = await async_client.get(f"/api/alert-methods/{method.id}")
+        assert masked.json()["config"]["access_token"] == "********"
+
+        rejected = await async_client.patch(
+            f"/api/alert-methods/{method.id}",
+            json={"config": {
+                "server_url": "https://ntfy.example.test",
+                "topic": "new-topic",
+                "access_token": "********",
+            }},
+        )
+        assert rejected.status_code == 400
+        test_session.refresh(method)
+        assert json.loads(method.config)["access_token"] == "<stored-token>"
+
+        omitted = await async_client.patch(
+            f"/api/alert-methods/{method.id}",
+            json={"config": {
+                "server_url": "https://ntfy.example.test",
+                "topic": "new-topic",
+            }},
+        )
+        assert omitted.status_code == 200
+        test_session.refresh(method)
+        assert json.loads(method.config) == {
+            "server_url": "https://ntfy.example.test",
+            "topic": "new-topic",
+        }
 
 
 class TestDeleteAlertMethod:

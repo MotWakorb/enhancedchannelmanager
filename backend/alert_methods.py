@@ -421,7 +421,7 @@ class AlertMethodManager:
             metadata: Additional metadata
             alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
             entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
-            channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram).
+            channel_settings: Per-task channel settings keyed by send_to_<method>.
                              If None, all channels are allowed.
 
         Returns:
@@ -468,6 +468,7 @@ class AlertMethodManager:
             "send_to_email": "smtp",
             "send_to_discord": "discord",
             "send_to_telegram": "telegram",
+            "send_to_ntfy": "ntfy",
         }
 
         try:
@@ -640,7 +641,7 @@ async def send_alert(
         metadata: Additional metadata
         alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
         entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
-        channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram).
+        channel_settings: Per-task channel settings keyed by send_to_<method>.
                          If None, all channels are allowed.
     """
     manager = get_alert_manager()

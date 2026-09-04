@@ -75,7 +75,7 @@ async def create_notification_internal(
         send_alerts: If True (default), also dispatch to configured alert channels.
         alert_category: Category for granular filtering ("epg_refresh", "m3u_refresh", "probe_failures")
         entity_id: Source/account ID for filtering (EPG source ID or M3U account ID)
-        channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram)
+        channel_settings: Per-task legacy channel settings; ntfy has no per-task toggle.
 
     Returns:
         Notification dict or None if message is empty
@@ -244,13 +244,13 @@ async def _dispatch_to_alert_channels(
     settings configured in Settings > Notification Settings.
 
     Args:
-        channel_settings: Per-task channel settings (send_to_email, send_to_discord, send_to_telegram).
-                         If None, all channels are allowed.
+        channel_settings: Per-task legacy channel settings. Enabled ntfy methods
+                         receive alerts without a per-task toggle.
     """
     import aiohttp
 
     settings = get_settings()
-    results = {"email": None, "discord": None, "telegram": None}
+    results = {"email": None, "discord": None, "telegram": None, "ntfy": None}
     alert_title = title or "ECM Notification"
 
     # Determine which channels are enabled
@@ -258,8 +258,31 @@ async def _dispatch_to_alert_channels(
     send_discord = channel_settings.get("send_to_discord", True) if channel_settings else True
     send_telegram = channel_settings.get("send_to_telegram", True) if channel_settings else True
 
+    # Generic alert methods are configured independently of the legacy global
+    # notification settings. Read enabled method types once so SMTP and ntfy can
+    # share one precisely-filtered manager dispatch.
+    enabled_method_types = set()
+    try:
+        from models import AlertMethod as AlertMethodModel
+
+        method_session = get_session()
+        try:
+            enabled_method_types = {
+                row.method_type
+                for row in method_session.query(AlertMethodModel).filter(
+                    AlertMethodModel.enabled == True
+                ).all()
+            }
+        finally:
+            method_session.close()
+    except Exception as e:
+        logger.error("[NOTIFY-SVC] Failed to read enabled alert methods: %s", e)
+
+    has_ntfy_method = "ntfy" in enabled_method_types
+    has_smtp_method = "smtp" in enabled_method_types
+
     # If caller explicitly disabled all channels, do nothing.
-    if channel_settings and not send_email and not send_discord and not send_telegram:
+    if channel_settings and not send_email and not send_discord and not send_telegram and not has_ntfy_method:
         return results
 
     # If nothing is configured, do nothing (prevents noisy "failed" logs).
@@ -271,6 +294,7 @@ async def _dispatch_to_alert_channels(
         and not settings.is_smtp_configured()
         and not settings.is_discord_configured()
         and not settings.is_telegram_configured()
+        and not has_ntfy_method
     ):
         return results
 
@@ -360,50 +384,47 @@ async def _dispatch_to_alert_channels(
             results["email"] = False
             logger.warning("[NOTIFY-SVC] Email alerts enabled but shared SMTP settings are not configured")
         else:
-            # If there is at least one enabled SMTP alert method, queue an alert to it.
-            # Keep Discord/Telegram on the legacy "shared settings" path below to avoid
-            # behavioral changes for those channels.
-            try:
-                from models import AlertMethod as AlertMethodModel
-
-                session = get_session()
-                try:
-                    has_smtp_method = session.query(AlertMethodModel).filter(
-                        AlertMethodModel.enabled == True,
-                        AlertMethodModel.method_type == "smtp",
-                    ).count() > 0
-                finally:
-                    session.close()
-
-                if not has_smtp_method:
-                    results["email"] = False
-                    logger.warning(
-                        "[NOTIFY-SVC] Email alerts enabled but no SMTP alert method is configured. "
-                        "Create an Email alert channel and set recipients."
-                    )
-                else:
-                    # Ensure method types are registered (normally imported by main.py).
-                    import alert_methods_smtp  # noqa: F401
-                    from alert_methods import send_alert as send_alert_via_methods
-
-                    await send_alert_via_methods(
-                        title=alert_title,
-                        message=message,
-                        notification_type=notification_type,
-                        source=source,
-                        metadata=metadata,
-                        alert_category=alert_category,
-                        entity_id=entity_id,
-                        channel_settings={
-                            "send_to_email": True,
-                            "send_to_discord": False,
-                            "send_to_telegram": False,
-                        },
-                    )
-                    results["email"] = True
-            except Exception as e:
+            if not has_smtp_method:
                 results["email"] = False
-                logger.error("[NOTIFY-SVC] Failed to queue email alert via alert methods: %s", e)
+                logger.warning(
+                    "[NOTIFY-SVC] Email alerts enabled but no SMTP alert method is configured. "
+                    "Create an Email alert channel and set recipients."
+                )
+
+    queue_smtp = send_email and settings.is_smtp_configured() and has_smtp_method
+    if queue_smtp or has_ntfy_method:
+        try:
+            # Ensure method types are registered when this service is imported
+            # without main.py (tests and task workers).
+            import alert_methods_ntfy  # noqa: F401
+            import alert_methods_smtp  # noqa: F401
+            from alert_methods import send_alert as send_alert_via_methods
+
+            await send_alert_via_methods(
+                title=alert_title,
+                message=message,
+                notification_type=notification_type,
+                source=source,
+                metadata=metadata,
+                alert_category=alert_category,
+                entity_id=entity_id,
+                channel_settings={
+                    "send_to_email": queue_smtp,
+                    "send_to_discord": False,
+                    "send_to_telegram": False,
+                    "send_to_ntfy": has_ntfy_method,
+                },
+            )
+            if queue_smtp:
+                results["email"] = True
+            if has_ntfy_method:
+                results["ntfy"] = True
+        except Exception as e:
+            if queue_smtp:
+                results["email"] = False
+            if has_ntfy_method:
+                results["ntfy"] = False
+            logger.error("[NOTIFY-SVC] Failed to queue generic alert methods: %s", e)
 
     # Log summary
     sent = [k for k, v in results.items() if v is True]

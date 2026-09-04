@@ -75,6 +75,7 @@ async def test_scheduled_probe_uses_resolved_smart_sort_configuration(strategy):
         channel_group_ids_override=None,
         skip_m3u_refresh=False,
         start_send_alerts=True,
+        completion_send_alerts=False,
         allow_reorder_after_probe=True,
     )
 

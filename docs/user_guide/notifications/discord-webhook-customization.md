@@ -134,7 +134,7 @@ If you do create one, the two paths coexist and behave differently:
 | Alert source | Path taken | Format |
 |-|-|-|
 | Scheduled task results | Shared **Webhook URL** above | Plain `content` message |
-| Per-source EPG refresh, per-account M3U refresh, stream probe results | Discord alert method, if one exists | Embed |
+| Per-source EPG refresh, per-account M3U refresh, manual and other non-scheduled stream probe results | Discord alert method, if one exists | Embed |
 
 A Discord alert method also brings its own per-severity opt-ins and the
 granular `alert_sources` filter, which is the only mechanism in ECM for
@@ -150,7 +150,7 @@ for the request shapes.
 |-|-|
 | Test succeeds, task alerts never appear | The task's **Send external alerts** toggle and its **Discord** channel toggle |
 | Everything stopped at once | The webhook was probably deleted in Discord. Re-test; a deleted webhook reports `Webhook not found - may have been deleted` |
-| Alerts arrive late or in bursts | Not Discord. Discord posts are immediate; the batching you may be thinking of applies to the email path only |
+| Alerts arrive late or in bursts | Not Discord. Discord posts are immediate; the batching you may be thinking of applies to email and ntfy alert methods |
 | Alerts appear under an unexpected name | Expected. ECM overrides the webhook name with `ECM Alerts` on every post |
 
 Failures on the live alert path are logged with a `[NOTIFY-SVC]` prefix and

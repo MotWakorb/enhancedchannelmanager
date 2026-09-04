@@ -8,6 +8,7 @@ from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateT
 from sqlalchemy import text as sa_text
 from sqlalchemy.orm import relationship
 from db_base import Base
+from credential_sentinel import ALERT_METHOD_CREDENTIAL_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -820,7 +821,9 @@ class AlertMethod(Base):
         if not include_sensitive:
             masked_config = {}
             for key, value in config.items():
-                if key in ('password', 'bot_token', 'webhook_url', 'api_key'):
+                if key in ALERT_METHOD_CREDENTIAL_KEYS or (
+                    self.method_type == "ntfy" and key == "topic"
+                ):
                     masked_config[key] = '********' if value else None
                 else:
                     masked_config[key] = value

@@ -65,6 +65,7 @@ async def test_scheduled_probe_preserves_resolved_group_scope(
         channel_group_ids_override=expected_group_ids,
         skip_m3u_refresh=False,
         start_send_alerts=True,
+        completion_send_alerts=False,
         allow_reorder_after_probe=True,
     )
 

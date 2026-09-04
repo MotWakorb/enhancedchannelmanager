@@ -77,7 +77,15 @@ On top of that, the copy of ECM's own database (`journal.db`) inside the artifac
 - **Notification and storage targets that hold credentials.** Cloud storage targets and sync targets are dropped whole, even though their stored credentials are already encrypted at rest.
 - **Personal data belonging to other people.** M3U digest settings are dropped because they hold an email recipient list.
 
-Alert methods themselves are kept, because they are configuration you authored, but the credential and identity values inside them (SMTP username and password, Telegram bot token and chat ID, webhook URLs) are removed.
+Alert methods themselves are kept, because they are configuration you authored, but the credential and identity values inside them (SMTP username and password, Telegram bot token and chat ID, webhook URLs, and ntfy topic and access token) are removed.
+
+A standard backup exports no credential-verifiable marker for an ntfy
+destination. When a Full Backup restore replaces `journal.db`, an authenticated
+ntfy target therefore requires the operator to re-enter both its topic and
+token. A same-instance unauthenticated target may retain only its local topic,
+and only when the restored row has the same ID, method type, and server and the
+local target has no token. These checks prevent an unrelated restored row from
+inheriting a local ntfy publishing capability.
 
 !!! warning "A backup now fails rather than shipping an unscrubbed database"
     If ECM cannot open, read, or rewrite its copy of `journal.db` while removing this data, the whole backup **fails** and no artifact is written. That is deliberate. The alternative, which is what earlier builds did, was to fall back to shipping the database as-is behind a successful-looking result. A failed backup is a problem to investigate; an artifact you believed was redacted and was not is worse. See [If a backup fails while removing sensitive data](take-a-backup.md#if-a-backup-fails-while-removing-sensitive-data).
@@ -173,7 +181,7 @@ When restoring a backup produced by an older ECM onto a newer ECM, the schema ve
 
     1. **You can be signed out of your own instance.** Older ECM has no step that preserves the destination's accounts across a restore, and a new artifact carries none of its own. Restoring a new artifact onto an older instance that *has* accounts can therefore leave it with none, dropping you at first-run setup on an instance you were administering.
     2. **Alert-method usernames and chat IDs are written as the literal text `***REDACTED***`.** Older ECM restores the password half of an alert method's configuration correctly but does not know the identity half was ever removed, so it writes the placeholder in as if it were the value.
-    3. **An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety**, and stops sending notifications until you reconfigure it. Newer ECM recognises that case and keeps the destination's own configuration for that method instead.
+    3. **An alert method whose configuration could not be read at backup time is left as the literal text `***REDACTED***` in its entirety**, and stops sending notifications until you reconfigure it. Newer ECM normally preserves the destination's configuration instead. ntfy is intentionally excluded from this whole-config restoration: the sentinel remains unresolved, and you must re-enter the ntfy configuration. This whole-blob case is distinct from a parsed ntfy JSON config in a standard backup, where the topic and token are redacted. An authenticated target requires both values to be re-entered. A local topic may be retained only for an unauthenticated same-instance destination when the row ID, method type, and normalized server URL all match and the local row has no token. An encrypted backup with **Include credentials** preserves the ntfy config.
 
     If you need to roll ECM back, roll back to a backup taken **before** the upgrade rather than restoring a newer artifact onto the older build.
 
@@ -188,7 +196,7 @@ If you are migrating to a new install and want credentials to travel with the ba
 1. In **Settings → Backup & Restore**, open the **Encrypted Backup** card.
 2. Check the **"I understand a lost passphrase makes this artifact permanently unrecoverable"** acknowledgement.
 3. Set a passphrase of at least 12 characters. The passphrase is never stored, so keep it somewhere safe.
-4. Enable **Include credentials** to carry M3U/EPG passwords and alert-method credentials alongside the encrypted artifact.
+4. Enable **Include credentials** to carry M3U/EPG passwords and alert-method credentials, including ntfy topics and access tokens, inside the encrypted artifact.
 
 **A passphrase alone does not preserve the structured credentials.** The two settings are separate: encryption protects the artifact, and **Include credentials** is what preserves the recognized credential fields and credential-bearing URL values. An encrypted backup taken *without* **Include credentials** applies the same structured redaction rules as a standard one. With it enabled, the artifact carries everything a standard one removes, ECM's own accounts included, which is what makes it the migration path and also what makes it a file to guard.
 

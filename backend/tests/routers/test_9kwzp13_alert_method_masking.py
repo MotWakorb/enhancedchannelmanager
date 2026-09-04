@@ -52,6 +52,7 @@ FAKE_CREDENTIALS = {
     "bot_token": "<synthetic-telegram-bot-token>",
     "webhook_url": "<synthetic-discord-webhook-url>",
     "api_key": "<synthetic-generic-api-key>",
+    "access_token": "<synthetic-ntfy-access-token>",
 }
 
 
@@ -148,7 +149,7 @@ class TestReadRoutesMaskCredentials:
 
     @pytest.mark.asyncio
     async def test_masks_each_real_method_type(self, async_client, test_session):
-        """Discord, Telegram and SMTP rows in one list, as an install has them."""
+        """Every first-class alert method row is safely represented in one list."""
         _create_method(
             test_session,
             name="Discord Alerts",
@@ -170,6 +171,16 @@ class TestReadRoutesMaskCredentials:
             method_type="smtp",
             config=json.dumps({"to_emails": ["alice@example.com"]}),
         )
+        _create_method(
+            test_session,
+            name="ntfy Alerts",
+            method_type="ntfy",
+            config=json.dumps({
+                "server_url": "https://ntfy.example.test/base",
+                "topic": "ecm",
+                "access_token": FAKE_CREDENTIALS["access_token"],
+            }),
+        )
 
         response = await async_client.get("/api/alert-methods")
         assert response.status_code == 200
@@ -182,6 +193,25 @@ class TestReadRoutesMaskCredentials:
         # over-masking would silently blank an operator's recipient list.
         assert by_name["Telegram Alerts"]["config"]["chat_id"] == "-1001234567890"
         assert by_name["Email"]["config"]["to_emails"] == ["alice@example.com"]
+        assert by_name["ntfy Alerts"]["config"] == {
+            "server_url": "https://ntfy.example.test/base",
+            "topic": MASK,
+            "access_token": MASK,
+        }
+
+    @pytest.mark.asyncio
+    async def test_non_ntfy_topic_is_not_masked(self, async_client, test_session):
+        method = _create_method(
+            test_session,
+            name="Webhook topic",
+            method_type="webhook",
+            config=json.dumps({"topic": "ordinary-routing-label"}),
+        )
+
+        response = await async_client.get(f"/api/alert-methods/{method.id}")
+
+        assert response.status_code == 200
+        assert response.json()["config"]["topic"] == "ordinary-routing-label"
 
     @pytest.mark.asyncio
     async def test_empty_credential_reads_as_null_not_as_the_mask(
