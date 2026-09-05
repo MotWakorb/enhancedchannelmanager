@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "version": "0.18.2-0017",
-  "created": "2026-09-04T18:56:05Z",
+  "version": "0.18.2-0018",
+  "created": "2026-09-05T20:12:47Z",
   "kind": "source-manifest",
   "channel": "dev",
   "permanent": false,
@@ -27,7 +27,7 @@
     "Dockerfile": "sha256:ab00a994d742aeb87d3bb28bce7d1d7d1a3fd5c14ca85ee74425c05a37af4472",
     "backend/requirements.txt": "sha256:d1dcc0302cbbe2714a411404d7aad01eb3448cabb5e9f33e1625332bed287599",
     "frontend/package-lock.json": "sha256:c1c0ac5f168feadf122bd32c1b8e714916b0a513d3c212a9e518afd10ebc7140",
-    "mcp-server/Dockerfile": "sha256:c475206aed271a9593e0dfa530c0f33dbe5f911d648871c9311d055b210ab2d2",
+    "mcp-server/Dockerfile": "sha256:58e90f5183dbf0e42069e3b752690a3f049721c1baa18f33f36aa9819433781c",
     "mcp-server/requirements.txt": "sha256:c226a10129c51750977051f1d5efe54f1e9177f4ed240400ab3a89c56a6f1a37",
     "sbom/native-dependencies.json": "sha256:530f7498262e5c38541513e01ca12b4f6964b61b80273f75ec8956ff5e17a82a"
   },
@@ -60,7 +60,7 @@
           ]
         ]
       },
-      "sha256": "2cb439e79a5f19a20003bf58144c96bbbfac41ecea667884547f764f0e929fb2"
+      "sha256": "7f19066abf9f2bfa2d8b4dfee8a3c2afcaca1c668adf6d6561003e65ed576bd3"
     },
     {
       "path": "mcp.spdx.json",
@@ -71,7 +71,7 @@
         "packages": [],
         "relationships": []
       },
-      "sha256": "50b9f75a1058c08acd8be1f0ee43bcb18c34d599300b87e3cc1061a99ef91d09"
+      "sha256": "776343252180f473e61d3755ac700f0ce7bca95f7d0f383dc157d78f4608d878"
     }
   ]
 }

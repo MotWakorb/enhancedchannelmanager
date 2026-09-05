@@ -50,6 +50,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Security
 
+- **The MCP image now requires Alpine libuuid 2.42.3-r1 or newer (bead `enhancedchannelmanager-s0nem`, build 0.18.2-0018).** The explicit package floor invalidates the cached OS-upgrade layer and refuses vulnerable older packages, including revision r0, which Alpine lists as affected by CVE-2026-78408. The reviewed base digest, OpenSSL floors, non-root user, and existing image scan gates are retained.
+
 - **Removed the unpatched `ecdsa` runtime dependency by replacing `python-jose` with PyJWT for ECM's existing HS256-only tokens (bead `enhancedchannelmanager-tm9ma`, build 0169).** This resolves Dependabot alert #1 / [GHSA-wj6h-64fc-37mp](https://github.com/advisories/GHSA-wj6h-64fc-37mp) without changing access, refresh, password-reset, expiry, claim-validation, or revocation behavior. The separate `josepy` dependency remains for ACME certificate management.
 
 ### Fixed

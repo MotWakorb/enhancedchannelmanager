@@ -5,10 +5,12 @@ WORKDIR /app
 # Apply Alpine security updates that may have landed after the pinned base
 # manifest was published. The digest makes the input reviewable; this upgrade
 # step closes fixed OS advisories until the next intentional digest refresh.
+# Alpine v3.24 secdb requires libuuid 2.42.3-r1 for CVE-2026-78408.
 RUN apk upgrade --no-cache \
     && apk add --no-cache \
         'libcrypto3>=3.5.8-r0' \
         'libssl3>=3.5.8-r0' \
+        'libuuid>=2.42.3-r1' \
     && addgroup -g 1000 appgroup \
     && adduser -D -u 1000 -G appgroup appuser
 
