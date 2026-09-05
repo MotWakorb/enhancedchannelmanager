@@ -139,6 +139,38 @@ If a channel name created before the bd-eio04.1 cutover still carries `²`, `³`
 | Ligature | `ﬁrst` | `ﬁrst` (preserved; NFC, not NFKC) |
 | Fullwidth digit | `ESPN１` | `ESPN１` (preserved; NFC) |
 
+## Mapped Channels
+
+Use **Mapped channels** to add, review, edit or remove reusable preferred-name
+mappings. In Channel Manager, select streams on the right and choose **Add
+mapping**, then **Existing** (a mapping, not a Dispatcharr channel) or **Add new**.
+Selected stream names prefill the alternatives; enter one literal name per line.
+
+Examples:
+
+| Preferred name | Alternative names |
+| --- | --- |
+| Polonia | Polonia, Polonia 1, Polonia1, Polonia.1 |
+| Stars TV | Stars TV, Stars.TV, Stars-TV |
+| TVN | TVN, TVN HD, TVN-HD |
+
+Matching is case-insensitive whole-name equality across providers. Punctuation
+is literal: `Stars.TV` does not match `StarsXTV`; `TVN` does not match `TVN24`.
+The preferred name matches itself. Repeated aliases within a mapping are
+deduplicated; names owned by another mapping are rejected with a visible error.
+
+Mappings take precedence over normalization rules for matched original names,
+including when Create's Normalization Rules toggle or Pipeline normalization
+groups are off. The preferred spelling is not stripped for quality grouping.
+Unmapped names still follow the existing normalization options. Existing Pipeline
+`if_exists` choices and manual-channel / target-group safeguards still apply;
+use the existing merge behavior when you want matching streams attached together.
+
+Saving does not assign streams immediately. Definitions are used by subsequent
+explicit Create / Pipeline runs and already-configured automation. Removing a
+mapping removes only the definition, not channels or attachments. This feature
+does not clean up existing duplicates or install refresh automation.
+
 ## Authoring rules
 
 ### Condition types
@@ -146,14 +178,14 @@ If a channel name created before the bd-eio04.1 cutover still carries `²`, `³`
 - **`contains`**: substring match, case-insensitive.
 - **`starts_with` / `ends_with`**: anchored substring, case-insensitive.
 - **`regex`**: Python regex via `safe_regex` (100 ms timeout, size-bounded). Patterns run against the post-policy input.
-- **`equals`**: exact string match.
+- For literal preferred-name aliases, use **Mapped channels**, not an `equals` condition (unsupported).
 - **Compound**: boolean combinations via the `conditions[]` JSON; useful when one rule needs to match multiple unrelated suffixes.
 
 ### Action types
 
 - **`replace`**: replace the matched portion with a literal string.
 - **`remove`**: replace the matched portion with the empty string.
-- **`set`**: overwrite the entire name with a literal (use sparingly; defeats composition).
+- For an authoritative preferred spelling, use **Mapped channels**, not a `set` action (unsupported).
 - **Conditional else-action**: the `else_action_value` branch fires when the condition does *not* match. Useful for "strip suffix if present, pass through otherwise."
 
 `action_value` and `else_action_value` are literal templates. They are **not** regexes and **not** linted for regex safety.

@@ -149,6 +149,35 @@ describe('App bulk-create staging', () => {
     });
   });
 
+  it('numbers mixed mapped and unmapped Create groups by visible natural name', async () => {
+    const names = ['ZDF alias', 'ABC', 'C-SPAN 10', 'C-SPAN 2', 'C-SPAN'];
+    const streams = names.map((name, index) => ({ ...makeStream(index), name }));
+    const resolution = new NameResolution(
+      new Map(names.map(name => [name, name === 'ZDF alias' ? 'ZDF' : name])),
+      false, new Set(['ZDF alias']),
+    );
+    render(<App />);
+    const editButton = await screen.findByRole('button', { name: /edit mode/i });
+    await waitFor(() => expect(editButton).toBeEnabled());
+    fireEvent.click(editButton);
+    await waitFor(() => expect(testState.channelManagerProps?.isEditMode).toBe(true));
+    await act(async () => {
+      await testState.channelManagerProps!.onBulkCreateFromGroup(
+        streams, 100, null, undefined, undefined, undefined, false, undefined,
+        false, undefined, undefined, undefined, undefined, undefined, undefined,
+        [], false, resolution,
+      );
+    });
+    await waitFor(() => {
+      const ledger = JSON.parse(sessionStorage.getItem(STAGED_LEDGER_STORAGE_KEY)!) as PersistedStagedLedger;
+      const channels = ledger.operations.filter(op => op.apiCall.type === 'createChannel')
+        .map(op => op.afterSnapshot[0]);
+      expect(channels.map(channel => [channel.name, channel.channel_number])).toEqual([
+        ['ABC', 100], ['C-SPAN', 101], ['C-SPAN 2', 102], ['C-SPAN 10', 103], ['ZDF', 104],
+      ]);
+    });
+  });
+
   it('stages and applies every one-stream channel through the real App callback', async () => {
     const count = 316;
     const streams = Array.from({ length: count }, (_, index) => makeStream(index));

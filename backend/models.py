@@ -13,6 +13,30 @@ from credential_sentinel import ALERT_METHOD_CREDENTIAL_KEYS
 logger = logging.getLogger(__name__)
 
 
+class ChannelNameMapping(Base):
+    """Reusable preferred spelling, independent of Dispatcharr channel IDs."""
+    __tablename__ = "channel_name_mappings"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    preferred_name = Column(String(255), nullable=False)
+    aliases = relationship(
+        "ChannelNameAlias", cascade="all, delete-orphan", order_by="ChannelNameAlias.id",
+    )
+
+    def to_dict(self):
+        return {"id": self.id, "preferred_name": self.preferred_name,
+                "aliases": [alias.name for alias in self.aliases]}
+
+
+class ChannelNameAlias(Base):
+    __tablename__ = "channel_name_aliases"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    mapping_id = Column(Integer, ForeignKey("channel_name_mappings.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    match_key = Column(String(765), nullable=False, unique=True)
+
+
 class JournalEntry(Base):
     """
     Represents a single change entry in the journal.

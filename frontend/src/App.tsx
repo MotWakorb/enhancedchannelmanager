@@ -17,6 +17,7 @@ import {
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
+import { MappedChannels } from './components/MappedChannels';
 import { OperatorDashboard } from './components/tabs/OperatorDashboard';
 import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
 import { useAuth } from './hooks/useAuth';
@@ -2437,7 +2438,7 @@ function App() {
           // established that the resolution answers for every one of these.
           const normalizedName = nameResolution.nameFor(stream.name);
           // Strip quality suffixes for grouping (so HD/FHD/4K/SD variants merge together)
-          const groupingKey = api.stripQualitySuffixes(normalizedName);
+          const groupingKey = nameResolution.groupingKeyFor(stream.name);
           const existing = streamsByBaseName.get(groupingKey);
           if (existing) {
             existing.streams.push(stream);
@@ -2524,8 +2525,10 @@ function App() {
         // Use natural sort so "C-SPAN" comes before "C-SPAN 2" which comes before "C-SPAN 3"
         const sortedEntries = Array.from(streamsByBaseName.entries()).sort((a, b) => {
           // Natural sort comparison that handles trailing numbers properly
-          const nameA = a[0];
-          const nameB = b[0];
+          const nameA = nameResolution.isMapped(a[1].streams[0].name)
+            ? a[1].normalizedName : api.stripQualitySuffixes(a[1].normalizedName);
+          const nameB = nameResolution.isMapped(b[1].streams[0].name)
+            ? b[1].normalizedName : api.stripQualitySuffixes(b[1].normalizedName);
 
           // Extract base name and trailing number (if any)
           const matchA = nameA.match(/^(.+?)(\s*\d+)?$/);
@@ -2567,7 +2570,9 @@ function App() {
           };
 
           let channelName = normalizedName;
-          if (addChannelNumber && keepCountryPrefix) {
+          if (addChannelNumber && nameResolution.isMapped(groupedStreams[0].name)) {
+            channelName = `${channelNumber} ${numberSeparator} ${normalizedName}`;
+          } else if (addChannelNumber && keepCountryPrefix) {
             // Strip existing channel number before checking for country prefix
             const nameWithoutNumber = stripChannelNumber(normalizedName);
             const countryMatch = nameWithoutNumber.match(new RegExp(`^([A-Z]{2,6})\\s*[${countrySeparator ?? '|'}]\\s*(.+)$`));
@@ -3392,6 +3397,7 @@ function App() {
             />
             </ErrorBoundary>
           )}
+          {activeTab === 'mapped-channels' && <MappedChannels />}
           {activeTab === 'm3u-manager' && (
             <ErrorBoundary key="tab-m3u-manager" scopeLabel="M3U Manager tab" reloadMode="reset">
             <M3UManagerTab

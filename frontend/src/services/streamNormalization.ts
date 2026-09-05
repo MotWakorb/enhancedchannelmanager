@@ -7,6 +7,7 @@
  */
 
 import { logger } from '../utils/logger';
+import { fetchJson } from './httpClient';
 import {
   QUALITY_SUFFIXES,
   NETWORK_PREFIXES,
@@ -605,14 +606,13 @@ export class ResolvedCreateChannelNames {
   private readonly resolved: ReadonlyMap<string, string>;
 
   /**
-   * True only when normalization was REQUESTED and the backend call failed or
-   * came back incomplete, so the names are raw provider names the operator did
-   * not ask for. False when the operator turned normalization off — those raw
-   * names are the requested outcome, not a failure.
+   * A mapping lookup or requested regex normalization failed. Unmapped names
+   * fall back to raw provider names; validated mapping results retain their
+   * preferred spelling if the subsequent regex request fails.
    */
   readonly normalizationFailed: boolean;
 
-  constructor(resolved: ReadonlyMap<string, string>, normalizationFailed: boolean) {
+  constructor(resolved: ReadonlyMap<string, string>, normalizationFailed: boolean, private readonly mapped: ReadonlySet<string> = new Set()) {
     this.resolved = resolved;
     this.normalizationFailed = normalizationFailed;
   }
@@ -625,6 +625,15 @@ export class ResolvedCreateChannelNames {
   /** Whether this resolution answers for `streamName`. */
   has(streamName: string): boolean {
     return this.resolved.has(streamName);
+  }
+
+  isMapped(streamName: string): boolean {
+    return this.mapped.has(streamName);
+  }
+
+  groupingKeyFor(streamName: string): string {
+    const name = this.nameFor(streamName);
+    return this.isMapped(streamName) ? `mapped:${name}` : `unmapped:${stripQualitySuffixes(name)}`;
   }
 
   /** Whether this resolution answers for every one of `streamNames`. */
@@ -680,6 +689,7 @@ export async function resolveCreateChannelNames(
   streamNames: string[],
   normalize: boolean,
 ): Promise<ResolvedCreateChannelNames> {
+  const preferredNames = new Map<string, string>();
   const identity = (): Map<string, string> => {
     const map = new Map<string, string>();
     for (const name of streamNames) {
@@ -708,15 +718,37 @@ export async function resolveCreateChannelNames(
       );
       return new ResolvedCreateChannelNames(identity(), true);
     }
-    return new ResolvedCreateChannelNames(names, normalizationFailed);
+    for (const [original, preferred] of preferredNames) names.set(original, preferred);
+    return new ResolvedCreateChannelNames(names, normalizationFailed, new Set(preferredNames.keys()));
   };
 
-  if (!normalize || streamNames.length === 0) {
+  if (streamNames.length === 0) {
     return finish(identity(), false);
   }
 
   try {
-    return finish(await normalizeStreamNamesWithBackend(streamNames), false);
+    const requested = new Set(streamNames);
+    const response = await fetchJson<{ results: { original: string; preferred_name: string | null }[] }>(
+      '/api/normalization/mappings/resolve', { method: 'POST', body: JSON.stringify({ texts: [...requested] }) },
+    );
+    const seen = new Set<string>();
+    for (const result of response.results) {
+      if (!requested.has(result.original) || seen.has(result.original)
+        || (result.preferred_name !== null && typeof result.preferred_name !== 'string')) {
+        throw new Error('Invalid mapping resolution response');
+      }
+      seen.add(result.original);
+    }
+    if (seen.size !== requested.size) throw new Error('Incomplete mapping resolution response');
+    for (const result of response.results) {
+      if (result.preferred_name !== null) preferredNames.set(result.original, result.preferred_name);
+    }
+    const unmapped = [...requested].filter(name => !preferredNames.has(name));
+    const names = identity();
+    if (normalize && unmapped.length) {
+      for (const [name, normalized] of await normalizeStreamNamesWithBackend(unmapped)) names.set(name, normalized);
+    }
+    return finish(names, false);
   } catch (error) {
     // Carry on with the raw names rather than abandoning a create the
     // operator already confirmed — but say so, so the resulting names are

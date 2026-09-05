@@ -2692,7 +2692,7 @@ class ChannelPipelineEngine:
             # Fall back to DB: any enabled group means lookups should consult
             # the normalized indices even if no rule explicitly opts in.
             try:
-                from models import NormalizationRuleGroup
+                from models import NormalizationRuleGroup, ChannelNameMapping
                 session = get_session()
                 try:
                     has_enabled_group = session.query(
@@ -2700,9 +2700,10 @@ class ChannelPipelineEngine:
                     ).filter(
                         NormalizationRuleGroup.enabled == True  # noqa: E712 — SQLA needs ==
                     ).first() is not None
+                    has_name_mapping = session.query(ChannelNameMapping.id).first() is not None
                 finally:
                     session.close()
-                if has_enabled_group:
+                if has_enabled_group or has_name_mapping:
                     needs_norm = True
             except Exception as e:
                 logger.warning("[AUTO-CREATE-ENGINE] Failed to probe enabled normalization groups: %s", e)

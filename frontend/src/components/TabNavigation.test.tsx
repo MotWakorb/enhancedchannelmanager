@@ -23,6 +23,7 @@ describe('grouped primary navigation', () => {
     ]);
     expect(within(nav).getAllByRole('link').map((link) => link.getAttribute('aria-label'))).toEqual([
       'Dashboard', 'M3U Manager', 'EPG Manager', 'Logo Manager', 'Channel Manager',
+      'Mapped channels',
       'Channel Pipeline', 'Guide', 'Stats', 'M3U Changes', 'Journal', 'Settings',
     ]);
     expect(within(nav).getByRole('link', { name: 'Stats' })).toHaveAttribute('aria-current', 'page');

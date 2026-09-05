@@ -3,6 +3,7 @@ import type { TabId } from './TabNavigation';
 export const ROUTE_TITLES: Record<TabId, string> = {
   dashboard: 'Dashboard',
   'channel-manager': 'Channel Manager',
+  'mapped-channels': 'Mapped channels',
   guide: 'Guide',
   'm3u-manager': 'M3U Manager',
   'epg-manager': 'EPG Manager',

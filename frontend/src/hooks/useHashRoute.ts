@@ -11,7 +11,7 @@ export type { SettingsPage };
 const VALID_TABS: Set<string> = new Set([
   'dashboard', 'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
   'logo-manager', 'm3u-changes', 'channel-pipeline', 'journal',
-  'stats', 'settings',
+  'stats', 'settings', 'mapped-channels',
 ]);
 
 /**

@@ -403,6 +403,7 @@ class ActionExecutor:
         self.existing_channels = existing_channels or []
         self.existing_groups = existing_groups or []
         self._normalization_engine = normalization_engine
+        self._preferred_names = dict(normalization_engine.get_name_mappings()) if normalization_engine else {}
         self._settings = settings
         # ``all_profile_ids`` carries a THREE-way availability signal, kept
         # DISTINCT (do NOT coerce ``None`` -> ``[]`` here):
@@ -996,9 +997,8 @@ class ActionExecutor:
         — so it fell back to the raw stream name everywhere except create_channel,
         which alone re-normalized its expanded name afterward.
 
-        When the rule has no normalization groups (or no engine), it falls back
-        to the raw stream name — unchanged from prior behavior, so the only rules
-        affected are those that actually opted into normalization.
+        Without selected groups, unmapped names remain raw. Literal mappings
+        resolve independently of the regex-group selection.
         """
         quality_str = None
         if stream_ctx.resolution_height:
@@ -1027,6 +1027,7 @@ class ActionExecutor:
                     "[AUTO-CREATE-EXEC] Failed to normalize {normalized_name} for '%s': %s",
                     stream_ctx.stream_name, e)
         normalized_name = normalized_name or stream_ctx.stream_name
+        normalized_name = self._preferred_names.get(stream_ctx.stream_name.casefold(), normalized_name)
 
         ctx = {
             TemplateVariables.STREAM_NAME: stream_ctx.stream_name,
@@ -1227,7 +1228,11 @@ class ActionExecutor:
 
         # Apply normalization engine if enabled (non-empty group IDs list)
         pre_norm_name = channel_name
-        if normalization_group_ids and self._normalization_engine:
+        preferred_name = self._preferred_names.get(stream_ctx.stream_name.casefold())
+        if preferred_name is not None:
+            channel_name = preferred_name
+            action_details.append(f"Preferred-name mapping: '{pre_norm_name}' -> '{channel_name}'")
+        elif normalization_group_ids and self._normalization_engine:
             logger.debug("[AUTO-CREATE-EXEC] Applying normalization groups %s to '%s'", normalization_group_ids, channel_name)
             try:
                 # bd-eio04.1: preserve_superscripts kwarg removed. The
@@ -1235,7 +1240,7 @@ class ActionExecutor:
                 # Test Rules — both strip letter-superscripts AND convert
                 # numeric superscripts (ESPN² -> ESPN2). Closes GH #104.
                 norm_result = self._normalization_engine.normalize(
-                    channel_name, group_ids=normalization_group_ids)
+                    channel_name, group_ids=normalization_group_ids, resolve_mapping=False)
                 if norm_result.normalized != channel_name:
                     logger.debug("[AUTO-CREATE-EXEC] Normalized channel name: '%s' -> '%s'", channel_name, norm_result.normalized)
                     for rule_id, before, after in norm_result.transformations:
@@ -1284,10 +1289,12 @@ class ActionExecutor:
         # channels unless the rule explicitly opts in.
         existing = self._find_channel_by_name(
             channel_name, scope_group_id=scope_group_id,
+            exact_only=preferred_name is not None,
+            resolve_mapping=False,
             block_manual=not allow_manual_channel_merge,
             # GH #645 / bead 0vao3: opt-in whitespace/case fold on the merge
             # lookup's comparison key (never on the stored name).
-            fold_key=fold_match_key,
+            fold_key=fold_match_key and preferred_name is None,
         )
         if existing is not None and allow_manual_channel_merge \
                 and self._is_manual_channel(existing):
@@ -2047,6 +2054,8 @@ class ActionExecutor:
         # streams via the word-prefix step). Set loose_name_match=True on the
         # action to restore the legacy cascade.
         loose_name_match = params.get("loose_name_match", False) is True
+        if target == "auto" and stream_ctx.stream_name.casefold() in self._preferred_names:
+            loose_name_match = False
         # enhancedchannelmanager-jnzst: SCORED-FUZZY path. When loose_name_match
         # is on AND a min_score is configured, channel resolution runs through
         # the unified scoring core (services.dedup_matcher.score_all) instead of
@@ -5865,7 +5874,8 @@ class ActionExecutor:
     def _find_channel_by_name(self, name: str, scope_group_id: Optional[int] = None,
                               exact_only: bool = False,
                               block_manual: bool = True,
-                              fold_key: bool = False) -> Optional[dict]:
+                              fold_key: bool = False,
+                              resolve_mapping: bool = True) -> Optional[dict]:
         """Find channel by exact name (case-insensitive).
 
         Also checks the base-name mapping so that a lookup for "USA Network"
@@ -5994,7 +6004,7 @@ class ActionExecutor:
         # (exact_only=False) where they prevent duplicate channels (GH-104).
         if not exact_only and self._normalization_engine is not None:
             try:
-                norm = self._normalization_engine.normalize(name)
+                norm = self._normalization_engine.normalize(name, resolve_mapping=resolve_mapping)
                 norm_lower = (norm.normalized or "").strip().lower()
             except Exception as e:
                 logger.warning("[AUTO-CREATE-EXEC] Normalization of lookup name '%s' failed: %s", name, e)

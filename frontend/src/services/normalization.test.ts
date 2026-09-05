@@ -359,7 +359,33 @@ describe('Normalization API', () => {
   });
 
   describe('resolveCreateChannelNames', () => {
-    it('does not call the backend and keeps the raw provider names when normalization is off', async () => {
+    it('does not accept a partial mapping response as a partial success', async () => {
+      server.use(http.post('/api/normalization/mappings/resolve', () => HttpResponse.json({ results: [
+        { original: 'Stars.TV', preferred_name: 'Stars TV' },
+      ] })));
+      const result = await resolveCreateChannelNames(['Stars.TV', 'TVN'], false);
+      expect(result.normalizationFailed).toBe(true);
+      expect(result.nameFor('Stars.TV')).toBe('Stars.TV');
+      expect(result.isMapped('Stars.TV')).toBe(false);
+    });
+    it.each([false, true])('uses authoritative mapped spelling and grouping with normalization=%s', async normalize => {
+      server.use(http.post('/api/normalization/normalize', async ({ request }) => {
+        const { texts } = await request.json() as { texts: string[] };
+        expect(texts).toEqual(['Stars TV']);
+        return HttpResponse.json({ results: texts.map(original => ({ original, normalized: original.replace(/ HD$/, '') })) });
+      }));
+      server.use(http.post('/api/normalization/mappings/resolve', () => HttpResponse.json({ results: [
+        { original: 'Stars.TV', preferred_name: 'Stars TV HD' },
+        { original: 'Stars-TV', preferred_name: 'Stars TV HD' },
+        { original: 'Stars TV', preferred_name: null },
+      ] })));
+      const result = await resolveCreateChannelNames(['Stars.TV', 'Stars-TV', 'Stars TV'], normalize);
+      expect(result.nameFor('Stars.TV')).toBe('Stars TV HD');
+      expect(result.normalizationFailed).toBe(false);
+      expect(result.groupingKeyFor('Stars.TV')).toBe(result.groupingKeyFor('Stars-TV'));
+      expect(result.groupingKeyFor('Stars.TV')).not.toBe(result.groupingKeyFor('Stars TV'));
+    });
+    it('does not run regex normalization and keeps unmapped names when normalization is off', async () => {
       let called = false;
       server.use(
         http.post('/api/normalization/normalize', async () => {
