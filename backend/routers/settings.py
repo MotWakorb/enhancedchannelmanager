@@ -454,6 +454,8 @@ class SettingsRequest(BaseModel):
     vlc_open_behavior: str = "m3u_fallback"
     # Stream probe settings (scheduled probing is controlled by Task Engine)
     stream_probe_timeout: int = 30
+    # Optional so an older cached frontend preserves an enabled stored value.
+    use_resdet_for_resolution: Optional[bool] = None
     stream_probe_schedule_time: str = "03:00"  # HH:MM format, 24h
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate (10, 20, or 30)
     parallel_probing_enabled: bool = True  # Probe multiple streams from different M3Us simultaneously
@@ -605,6 +607,7 @@ class SettingsResponse(BaseModel):
     vlc_open_behavior: str
     # Stream probe settings (scheduled probing is controlled by Task Engine)
     stream_probe_timeout: int
+    use_resdet_for_resolution: bool
     stream_probe_schedule_time: str  # HH:MM format, 24h
     bitrate_sample_duration: int
     parallel_probing_enabled: bool  # Probe multiple streams from different M3Us simultaneously
@@ -871,6 +874,7 @@ async def get_current_settings(
         frontend_log_level=settings.frontend_log_level,
         vlc_open_behavior=settings.vlc_open_behavior,
         stream_probe_timeout=settings.stream_probe_timeout,
+        use_resdet_for_resolution=settings.use_resdet_for_resolution,
         stream_probe_schedule_time=settings.stream_probe_schedule_time,
         bitrate_sample_duration=settings.bitrate_sample_duration,
         parallel_probing_enabled=settings.parallel_probing_enabled,
@@ -1108,6 +1112,11 @@ async def update_settings(
         if request.stream_sort_point_rules is not None
         else current_settings.stream_sort_point_rules
     )
+    use_resdet_for_resolution = (
+        request.use_resdet_for_resolution
+        if request.use_resdet_for_resolution is not None
+        else current_settings.use_resdet_for_resolution
+    )
 
     # MCP API key is never accepted on this endpoint (it has dedicated
     # generate/revoke endpoints) — always preserve the stored value so a
@@ -1193,6 +1202,7 @@ async def update_settings(
         frontend_log_level=request.frontend_log_level,
         vlc_open_behavior=request.vlc_open_behavior,
         stream_probe_timeout=request.stream_probe_timeout,
+        use_resdet_for_resolution=use_resdet_for_resolution,
         stream_probe_schedule_time=request.stream_probe_schedule_time,
         bitrate_sample_duration=request.bitrate_sample_duration,
         parallel_probing_enabled=request.parallel_probing_enabled,
@@ -1507,6 +1517,11 @@ async def update_settings(
         if new_settings.stream_probe_timeout != current_settings.stream_probe_timeout:
             prober.probe_timeout = new_settings.stream_probe_timeout
             changed.append(f"probe_timeout={new_settings.stream_probe_timeout}")
+        if new_settings.use_resdet_for_resolution != current_settings.use_resdet_for_resolution:
+            prober.use_resdet_for_resolution = new_settings.use_resdet_for_resolution
+            changed.append(
+                f"use_resdet_for_resolution={new_settings.use_resdet_for_resolution}"
+            )
         if new_settings.bitrate_sample_duration != current_settings.bitrate_sample_duration:
             prober.bitrate_sample_duration = new_settings.bitrate_sample_duration
             changed.append(f"bitrate_sample_duration={new_settings.bitrate_sample_duration}")
@@ -2369,6 +2384,7 @@ async def _restart_background_services(settings: DispatcharrSettings) -> dict:
             new_prober = StreamProber(
                 get_client(),
                 probe_timeout=settings.stream_probe_timeout,
+                use_resdet_for_resolution=settings.use_resdet_for_resolution,
                 user_timezone=settings.user_timezone,
                 bitrate_sample_duration=settings.bitrate_sample_duration,
                 parallel_probing_enabled=settings.parallel_probing_enabled,

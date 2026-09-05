@@ -31,6 +31,16 @@ COPY backend/requirements.txt /tmp/requirements.txt
 RUN uv venv /opt/venv \
     && uv pip install --python /opt/venv/bin/python --no-cache -r /tmp/requirements.txt
 
+# Build resdet from a pinned source commit for both supported image architectures.
+FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a AS resdet-builder
+COPY scripts/generate_sbom.py scripts/build_resdet.py sbom/native-dependencies.json /tmp/
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && python /tmp/build_resdet.py --manifest /tmp/native-dependencies.json --work-dir /tmp/resdet-work --output-dir /tmp/resdet-output
+
 # Production image
 FROM python:3.12-slim@sha256:2c941e860699f878900b0edc2403613c234d4b32eda3cc9fa7036991a2a63c4a
 
@@ -64,11 +74,18 @@ COPY --from=frontend-builder /app/frontend/dist ./static
 
 # Create config and TLS directories with proper permissions
 # Convert entrypoint line endings (handles Windows CRLF -> Unix LF)
-RUN mkdir -p /config /config/tls /config/uploads/logos \
+RUN mkdir -p /config /config/tls /config/uploads/logos /run/ecm \
     && chown -R appuser:appuser /config /app \
+    && chown appuser:appuser /run/ecm \
+    && chmod 700 /run/ecm \
     && chmod 700 /config/tls \
     && sed -i 's/\r$//' /app/entrypoint.sh \
     && chmod +x /app/entrypoint.sh
+
+# Copy immutable native outputs after every other filesystem-mutating final-stage step.
+COPY --from=resdet-builder /tmp/resdet-output/resdet /usr/local/bin/resdet
+COPY --from=resdet-builder /tmp/resdet-output/licenses/ /usr/share/doc/resdet/
+RUN test "$(resdet -V)" = "$(printf 'resdet version 2.4.3\nlibresdet version 3.2.0\nBuilt with image readers: Y4M')"
 
 # Environment
 ENV PUID=1000

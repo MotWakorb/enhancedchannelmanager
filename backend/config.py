@@ -670,6 +670,8 @@ class DispatcharrSettings(BaseModel):
     # Stream probe settings - uses ffprobe to gather stream metadata
     # Note: Scheduled probing is now controlled by the Task Engine (StreamProbeTask)
     stream_probe_timeout: int = 30  # Timeout in seconds for each probe
+    # Opt in to resdet's source-resolution estimate; ffprobe remains the metadata source.
+    use_resdet_for_resolution: bool = False
     stream_probe_schedule_time: str = "03:00"  # Time of day to run probes (HH:MM, 24h format, user's local time)
     bitrate_sample_duration: int = 10  # Duration in seconds to sample stream for bitrate measurement (10, 20, or 30)
     # Parallel probing - probe streams from different M3U accounts simultaneously

@@ -67,6 +67,7 @@ def _mock_settings(**overrides):
         "vlc_open_behavior": "stream",
         "stream_probe_batch_size": 50,
         "stream_probe_timeout": 30,
+        "use_resdet_for_resolution": False,
         "stream_probe_schedule_time": "03:00",
         "bitrate_sample_duration": 5,
         "parallel_probing_enabled": False,
@@ -170,6 +171,18 @@ class TestGetSettings:
         assert "password" not in data
 
     @pytest.mark.asyncio
+    async def test_exposes_resdet_resolution_setting(self, async_client):
+        mock = _mock_settings(use_resdet_for_resolution=True)
+
+        with patch("routers.settings.get_settings", return_value=mock), patch(
+            "routers.settings._has_discord_alert_method", return_value=False
+        ):
+            response = await async_client.get("/api/settings")
+
+        assert response.status_code == 200
+        assert response.json()["use_resdet_for_resolution"] is True
+
+    @pytest.mark.asyncio
     async def test_exposes_date_format(self, async_client):
         """GET exposes the global date_format preference (bd-8j47e)."""
         mock = _mock_settings(date_format="dmy")
@@ -262,6 +275,31 @@ class TestUpdateSettings:
 
         assert response.status_code == 200
         assert response.json()["status"] == "saved"
+
+    @pytest.mark.asyncio
+    async def test_persists_and_live_updates_resdet_resolution_setting(self, async_client):
+        current = _mock_settings(use_resdet_for_resolution=False)
+        prober = MagicMock(use_resdet_for_resolution=False)
+
+        with patch("routers.settings.get_settings", return_value=current), patch(
+            "routers.settings.save_settings"
+        ) as mock_save, patch("routers.settings.clear_settings_cache"), patch(
+            "routers.settings.reset_client"
+        ), patch("routers.settings.get_prober", return_value=prober), patch(
+            "routers.settings.get_cache", return_value=MagicMock()
+        ):
+            response = await async_client.post(
+                "/api/settings",
+                json={
+                    "url": current.url,
+                    "username": current.username,
+                    "use_resdet_for_resolution": True,
+                },
+            )
+
+        assert response.status_code == 200
+        assert mock_save.call_args.args[0].use_resdet_for_resolution is True
+        assert prober.use_resdet_for_resolution is True
 
     @pytest.mark.asyncio
     async def test_rotation_fields_preserve_omitted_values_and_do_not_require_restart(

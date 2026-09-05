@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import shutil
+import tempfile
 import time
 from datetime import datetime, timedelta
 from numbers import Real
@@ -28,6 +29,7 @@ from security.stream_outbound import (
 
 from database import get_session
 from models import StreamStats
+from resdet_lock import RESDET_PIPELINE_LOCK_PATH, ResdetLockError, ResdetPipelineLock
 from smart_sort_evaluator import (
     PointRule,
     StreamFacts,
@@ -54,6 +56,10 @@ NETWORK_FAILURE_MARKERS = (
 
 class ProbeNetworkRouteError(RuntimeError):
     """An upstream connection failure whose raw diagnostic must stay private."""
+
+
+class ResolutionDetectionError(RuntimeError):
+    """A resdet failure with a fixed operator-safe message."""
 
 
 # Bead enhancedchannelmanager-iyvl9. XC providers 302 an
@@ -87,6 +93,7 @@ PROBE_SCHEME_DOWNGRADE = SchemeDowngrade.ALLOW_STREAM_PROBE
 OPERATOR_SAFE_EXCEPTION_TYPES: tuple = (
     SSRFError,               # ECM's own SSRF chokepoint -- fixed guard messages
     ProbeNetworkRouteError,  # raised here, with a fixed message
+    ResolutionDetectionError,
 )
 
 
@@ -118,6 +125,11 @@ BITRATE_SAMPLE_DURATION = 8  # seconds to sample stream for bitrate measurement
 # internal demuxers activated by https:// / hls variants.
 FFPROBE_PROTOCOL_WHITELIST = "http,https,tls,crypto,tcp,udp,rtp,rtmp,pipe"
 RELAY_PROTOCOL_WHITELIST = "http,tcp,crypto"
+RESDET_MAX_WIDTH = 4096
+RESDET_MAX_HEIGHT = 2160
+RESDET_MAX_PIXELS = 8_847_360
+RESDET_FRAME_MAX_BYTES = RESDET_MAX_PIXELS * 3 // 2 + 8192
+RESDET_OUTPUT_MAX_BYTES = 64
 
 # Per-account ramp-up configuration
 RAMP_INITIAL_LIMIT = 1         # Start each account at 1 concurrent probe
@@ -444,9 +456,13 @@ class StreamProber:
         failed_stream_sort_order: list[str] = None,  # Order of deprioritized categories (first = sorted higher)
         stream_sort_strategy: str = "priority",
         stream_sort_point_rules: tuple[PointRule, ...] = (),
+        use_resdet_for_resolution: bool = False,
+        _resdet_lock_path: Path = RESDET_PIPELINE_LOCK_PATH,
     ):
         self.client = client
         self.probe_timeout = probe_timeout
+        self.use_resdet_for_resolution = use_resdet_for_resolution
+        self._resdet_lock_path = _resdet_lock_path
         self.user_timezone = user_timezone
         self.bitrate_sample_duration = bitrate_sample_duration
         self.parallel_probing_enabled = parallel_probing_enabled
@@ -494,6 +510,7 @@ class StreamProber:
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
         self._probe_paused = False  # Controls pausing of in-progress probe
         self._probing_in_progress = False
+        self._bulk_probe_tasks: set[asyncio.Task] = set()
         # Progress tracking for probe all streams
         self._probe_progress_total = 0
         self._probe_progress_current = 0
@@ -1002,6 +1019,8 @@ class StreamProber:
         """Stop the stream prober and cancel any in-progress probes."""
         logger.info("[STREAM-PROBE] StreamProber stopping...")
         self._probe_cancelled = True
+        for task in tuple(self._bulk_probe_tasks):
+            task.cancel()
         logger.info("[STREAM-PROBE] StreamProber stopped")
 
     def cancel_probe(self) -> dict:
@@ -1015,7 +1034,8 @@ class StreamProber:
 
         logger.info("[STREAM-PROBE] Cancelling in-progress probe...")
         self._probe_cancelled = True
-        # The probe loop will detect _probe_cancelled=True and set status to "cancelled"
+        for task in tuple(self._bulk_probe_tasks):
+            task.cancel()
         return {"status": "cancelling", "message": "Probe cancellation requested"}
 
     def pause_probe(self) -> dict:
@@ -1089,6 +1109,14 @@ class StreamProber:
             logger.debug("[STREAM-PROBE] Running ffprobe for stream %s", stream_id)
             result = await self._run_ffprobe(url)
             logger.info("[STREAM-PROBE] Stream %s ffprobe succeeded", stream_id)
+
+            if self.use_resdet_for_resolution:
+                width, height = await self._run_resdet(url)
+                for stream in result.get("streams", []):
+                    if stream.get("codec_type") == "video":
+                        stream["width"] = width
+                        stream["height"] = height
+                        break
 
             # Measure actual bitrate by downloading stream data
             logger.debug("[STREAM-PROBE] Measuring bitrate for stream %s", stream_id)
@@ -1187,6 +1215,10 @@ class StreamProber:
                 stdout, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=self.probe_timeout + 5
                 )
+            except asyncio.CancelledError:
+                process.kill()
+                await asyncio.shield(process.wait())
+                raise
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
@@ -1222,6 +1254,204 @@ class StreamProber:
             raise RuntimeError("ffprobe returned empty output")
 
         return json.loads(output)
+
+    async def _run_resdet(self, url: str) -> tuple[int, int]:
+        """Serialize the complete native frame-extract and analysis pipeline."""
+        try:
+            async with ResdetPipelineLock(self._resdet_lock_path) as pipeline_lock:
+                return await self._run_resdet_pipeline(url, pipeline_lock.fileno())
+        except ResdetLockError:
+            raise ResolutionDetectionError("resdet pipeline lock is unavailable") from None
+
+    async def _run_resdet_pipeline(self, url: str, lock_fd: int) -> tuple[int, int]:
+        """Decode one bounded Y4M frame, then analyze that local file with resdet."""
+
+        async def kill_and_reap(process) -> None:
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, 9)
+                except ProcessLookupError:
+                    pass
+            await asyncio.shield(process.wait())
+
+        async def read_bounded_output(
+            process, limit: int, invalid_message: str
+        ) -> bytes:
+            async def read_and_wait() -> bytes:
+                try:
+                    output = await process.stdout.readexactly(limit + 1)
+                except asyncio.IncompleteReadError as exc:
+                    output = exc.partial
+                if len(output) > limit:
+                    await kill_and_reap(process)
+                    raise ResolutionDetectionError(invalid_message)
+                await process.wait()
+                return output
+
+            try:
+                return await asyncio.wait_for(
+                    read_and_wait(), timeout=self.probe_timeout + 7
+                )
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                await kill_and_reap(process)
+                raise
+
+        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+        with tempfile.TemporaryDirectory(prefix="ecm-resdet-") as directory:
+            frame_path = Path(directory) / "frame.y4m"
+            async with validated_subprocess_input(
+                url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
+            ) as subprocess_input:
+                ffmpeg = await asyncio.create_subprocess_exec(
+                    "/usr/bin/timeout",
+                    "--signal=KILL",
+                    f"{self.probe_timeout + 5}s",
+                    "ffmpeg",
+                    "-nostdin",
+                    "-v",
+                    "error",
+                    "-protocol_whitelist",
+                    (
+                        RELAY_PROTOCOL_WHITELIST
+                        if subprocess_input.is_http_relay
+                        else FFPROBE_PROTOCOL_WHITELIST
+                    ),
+                    "-timeout",
+                    str(self.probe_timeout * 1000000),
+                    "-i",
+                    subprocess_input.argument,
+                    "-frames:v",
+                    "1",
+                    "-an",
+                    "-sn",
+                    "-dn",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-f",
+                    "yuv4mpegpipe",
+                    "-fs",
+                    str(RESDET_FRAME_MAX_BYTES),
+                    "-y",
+                    "pipe:1",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    start_new_session=True,
+                    pass_fds=(lock_fd,),
+                )
+                try:
+                    frame_data = await read_bounded_output(
+                        ffmpeg,
+                        RESDET_FRAME_MAX_BYTES,
+                        "resdet returned an invalid frame",
+                    )
+                except asyncio.TimeoutError:
+                    raise ResolutionDetectionError(
+                        "resdet resolution detection timed out"
+                    ) from None
+
+            if ffmpeg.returncode in (124, 137):
+                raise ResolutionDetectionError("resdet resolution detection timed out")
+            if ffmpeg.returncode != 0:
+                raise ResolutionDetectionError(
+                    "resdet frame extraction failed"
+                )
+            self._validate_resdet_y4m_frame(frame_data)
+            try:
+                frame_path.write_bytes(frame_data)
+            except OSError:
+                raise ResolutionDetectionError(
+                    "resdet frame extraction failed"
+                ) from None
+            process = await asyncio.create_subprocess_exec(
+                "/usr/bin/timeout",
+                "--signal=KILL",
+                f"{self.probe_timeout + 5}s",
+                "/usr/local/bin/resdet",
+                "-R",
+                "Y4M",
+                "-v",
+                "1",
+                "-n",
+                "1",
+                str(frame_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+                start_new_session=True,
+                pass_fds=(lock_fd,),
+            )
+            try:
+                stdout = await read_bounded_output(
+                    process,
+                    RESDET_OUTPUT_MAX_BYTES,
+                    "resdet returned an invalid resolution",
+                )
+            except asyncio.TimeoutError:
+                raise ResolutionDetectionError(
+                    "resdet resolution detection timed out"
+                ) from None
+
+            if process.returncode in (124, 137):
+                raise ResolutionDetectionError("resdet resolution detection timed out")
+            if process.returncode != 0:
+                raise ResolutionDetectionError("resdet resolution detection failed")
+
+            parts = stdout.decode(errors="replace").strip().split()
+            try:
+                width, height = (int(value) for value in parts)
+            except ValueError:
+                raise ResolutionDetectionError(
+                    "resdet returned an invalid resolution"
+                ) from None
+            if width <= 0 or height <= 0:
+                raise ResolutionDetectionError("resdet returned an invalid resolution")
+            return width, height
+
+    @staticmethod
+    def _validate_resdet_y4m_frame(frame_data: bytes) -> None:
+        """Validate FFmpeg's one-frame yuv420p Y4M artifact without allocating from it."""
+        if not frame_data or len(frame_data) > RESDET_FRAME_MAX_BYTES:
+            raise ResolutionDetectionError("resdet returned an invalid frame")
+        header_end = frame_data.find(b"\n")
+        if header_end < 0 or header_end > 4096:
+            raise ResolutionDetectionError("resdet returned an invalid frame")
+        try:
+            tokens = frame_data[:header_end].decode("ascii").split(" ")
+        except UnicodeDecodeError:
+            raise ResolutionDetectionError("resdet returned an invalid frame") from None
+        if not tokens or tokens[0] != "YUV4MPEG2" or any(not token for token in tokens):
+            raise ResolutionDetectionError("resdet returned an invalid frame")
+
+        dimensions: dict[str, int] = {}
+        for axis in ("W", "H"):
+            values = [token[1:] for token in tokens[1:] if token.startswith(axis)]
+            if len(values) != 1 or re.fullmatch(r"[1-9][0-9]{0,9}", values[0]) is None:
+                raise ResolutionDetectionError("resdet returned an invalid frame")
+            dimensions[axis] = int(values[0])
+        chroma = [token for token in tokens[1:] if token.startswith("C")]
+        if len(chroma) != 1 or chroma[0] not in {
+            "C420",
+            "C420jpeg",
+            "C420mpeg2",
+            "C420paldv",
+        }:
+            raise ResolutionDetectionError("resdet returned an invalid frame")
+
+        width, height = dimensions["W"], dimensions["H"]
+        pixels = width * height
+        if (
+            width > RESDET_MAX_WIDTH
+            or height > RESDET_MAX_HEIGHT
+            or pixels > RESDET_MAX_PIXELS
+        ):
+            raise ResolutionDetectionError("resdet returned an invalid frame")
+        frame_start = header_end + 1
+        marker = b"FRAME\n"
+        if frame_data[frame_start : frame_start + len(marker)] != marker:
+            raise ResolutionDetectionError("resdet returned an invalid frame")
+        chroma_pixels = ((width + 1) // 2) * ((height + 1) // 2)
+        required_size = frame_start + len(marker) + pixels + 2 * chroma_pixels
+        if required_size > RESDET_FRAME_MAX_BYTES or len(frame_data) != required_size:
+            raise ResolutionDetectionError("resdet returned an invalid frame")
 
     async def _measure_stream_bitrate(self, url: str) -> Optional[int]:
         """
@@ -1360,6 +1590,10 @@ class StreamProber:
                 _, stderr = await asyncio.wait_for(
                     process.communicate(), timeout=total_timeout
                 )
+            except asyncio.CancelledError:
+                process.kill()
+                await asyncio.shield(process.wait())
+                raise
             except asyncio.TimeoutError:
                 process.kill()
                 await process.wait()
@@ -3318,7 +3552,19 @@ class StreamProber:
                     await self._update_probe_notification()
 
             if streams_to_probe and not self._probe_cancelled:
-                await asyncio.gather(*[_probe_one(s) for s in streams_to_probe])
+                tasks = {asyncio.create_task(_probe_one(s)) for s in streams_to_probe}
+                self._bulk_probe_tasks.update(tasks)
+                try:
+                    await asyncio.gather(*tasks)
+                except asyncio.CancelledError:
+                    if not self._probe_cancelled:
+                        raise
+                finally:
+                    for task in tasks:
+                        if not task.done():
+                            task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                    self._bulk_probe_tasks.difference_update(tasks)
 
             if self._probe_cancelled:
                 self._probe_progress_status = "cancelled"
@@ -3705,6 +3951,7 @@ def ensure_prober() -> Optional[StreamProber]:
         prober = StreamProber(
             get_client(),
             probe_timeout=settings.stream_probe_timeout,
+            use_resdet_for_resolution=settings.use_resdet_for_resolution,
             user_timezone=settings.user_timezone,
             bitrate_sample_duration=settings.bitrate_sample_duration,
             parallel_probing_enabled=settings.parallel_probing_enabled,
