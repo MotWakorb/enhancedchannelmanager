@@ -30,6 +30,7 @@ class PlannedWrite:
     method: str
     args: list[Any]
     kwargs: dict[str, Any]
+    event_sync: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +110,27 @@ class PlanningDispatcharrClient:
         if channel_id in self._shadow_channels:
             return copy.deepcopy(self._shadow_channels[channel_id])
         return await self._client.get_channel(channel_id)
+
+    async def event_sync_change(self, operation: dict) -> dict:
+        """Record the semantic operation; only real replay writes its intent."""
+        channel_id = operation["channel_id"]
+        current = await self.get_channel(channel_id)
+        from services.event_sync_cleanup import _ids
+        before = _ids(current)
+        sid = operation["stream_id"]
+        after = ([s for s in before if s != sid] if operation["action"] == "detach"
+                 else before if sid in before else [*before, sid])
+        if after == before:
+            return {"skipped": True, "channel": current, "before": before}
+        self.plan.channel_preconditions.setdefault(str(channel_id), {
+            key: copy.deepcopy(current.get(key)) for key in
+            ("id", "uuid", "name", "streams", "channel_group_id", "auto_created", "auto_created_by")
+        })
+        current["streams"] = after
+        self._shadow_channels[channel_id] = copy.deepcopy(current)
+        self.plan.writes.append(PlannedWrite("update_channel", [channel_id, {"streams": after}], {},
+                                            event_sync=copy.deepcopy(operation)))
+        return {"skipped": False, "channel": current, "before": before}
 
     async def _channel_before(self, channel_id: int) -> dict[str, Any]:
         if channel_id in self._shadow_channels:
@@ -223,7 +245,7 @@ async def validate_read_set(client, plan: PipelineWritePlan) -> None:
 
 
 async def replay_write_plan(
-    client, plan: PipelineWritePlan, *, read_set_validated: bool = False
+    client, plan: PipelineWritePlan, *, read_set_validated: bool = False, execution_id: int | None = None
 ) -> tuple[list[Any], dict[int, int]]:
     """Validate first, then replay only recorded writes with temp-ID remapping."""
     if not read_set_validated:
@@ -248,7 +270,11 @@ async def replay_write_plan(
         for write in plan.writes:
             args = mapped(write.args)
             kwargs = mapped(write.kwargs)
-            result = await getattr(client, write.method)(*args, **kwargs)
+            if write.event_sync:
+                from services.event_sync_cleanup import apply_change
+                result = await apply_change(client, write.event_sync, execution_id)
+            else:
+                result = await getattr(client, write.method)(*args, **kwargs)
             if write.method.startswith("create_"):
                 real_id = result.get("id") if isinstance(result, dict) else None
                 if real_id is None:
@@ -259,9 +285,16 @@ async def replay_write_plan(
             completed.append((write, args, result))
     except Exception as exc:
         compensation_errors: list[str] = []
+        if any(write.event_sync for write in plan.writes):
+            from services.event_sync_cleanup import rollback_batch
+            recovery = await rollback_batch(client, str(execution_id))
+            if not recovery["success"]:
+                compensation_errors.append(recovery["error"])
         # Best effort for reversible writes. Deletes and profile membership are
         # explicitly not recreated because upstream cannot preserve their IDs.
         for done, args, result in reversed(completed):
+            if done.event_sync:
+                continue
             try:
                 if done.method == "create_channel":
                     await client.delete_channel(result["id"])
@@ -270,6 +303,11 @@ async def replay_write_plan(
                 elif done.method == "update_channel" and args[0] > 0:
                     before = plan.channel_preconditions.get(str(args[0]))
                     if before:
+                        if any(write.event_sync and write.event_sync["channel_id"] == args[0] for write in plan.writes):
+                            compensation_errors.append(
+                                f"update_channel:{args[0]} overlaps Event Sync recovery; full preimage refused"
+                            )
+                            continue
                         await client.update_channel(args[0], {
                             key: value for key, value in before.items() if key != "id"
                         })
@@ -308,6 +346,9 @@ def journal_entries_for_plan(
         for channel_id, value in plan.channel_preconditions.items()
     }
     for write in plan.writes:
+        if write.event_sync:
+            # Already durably journaled at real replay, not reconstructed.
+            continue
         method = write.method
         if method.startswith("create_"):
             entity_id = remap.get(next_temp, next_temp)

@@ -425,6 +425,22 @@ describe('EventSyncRuleEditor', () => {
   });
 
   describe('stale-dateless demote guard (bead jqwfq)', () => {
+    it('keeps stale attachment cleanup off by default and saves explicit opt-in', async () => {
+      const user = userEvent.setup();
+      seedGroups();
+      stubGroupSettings({ 1: true, 2: false });
+      const onSave = vi.fn();
+      render(<EventSyncRuleEditor rule={EXISTING_RULE} onSave={onSave} onCancel={vi.fn()} />);
+      await user.click(screen.getByRole('button', { name: /3.*Behavior/ }));
+      const toggle = screen.getByTestId('event-sync-detach-stale-streams');
+      expect(toggle).not.toBeChecked();
+      await user.click(toggle);
+      expect(screen.getByText('Stale attachment cleanup', { selector: '.badge' })).toBeInTheDocument();
+      expect(screen.queryByText(/No risk flags set/)).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+      expect(onSave.mock.calls[0][0].event_sync_config.detach_stale_streams).toBe(true);
+    });
     it('defaults ON, is disabled without the date assumption, and omits the key', async () => {
       const user = userEvent.setup();
       seedGroups();
