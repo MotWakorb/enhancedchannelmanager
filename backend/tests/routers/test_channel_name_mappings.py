@@ -70,9 +70,11 @@ async def test_persisted_crud_and_literal_matching(async_client, test_session):
     fresh = NormalizationEngine(test_session)
     assert fresh.resolve_preferred_name("tvn sd") == "TVN"
     assert fresh.resolve_preferred_name("TVN HD") is None
-    assert (await async_client.delete(f"/api/normalization/mappings/{ids[2]}")).status_code == 204
+    response = await async_client.delete(f"/api/normalization/mappings/{ids[2]}")
+    assert response.status_code == 204
     assert NormalizationEngine(test_session).resolve_preferred_name("TVN-HD") is None
-    assert (await async_client.delete(f"/api/normalization/mappings/{ids[2]}")).status_code == 404
+    response = await async_client.delete(f"/api/normalization/mappings/{ids[2]}")
+    assert response.status_code == 404
 
 
 @pytest.mark.asyncio
