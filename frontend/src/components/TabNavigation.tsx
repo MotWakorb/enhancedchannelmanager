@@ -5,7 +5,7 @@ import { GROUPS } from './navigationGroups';
 import { settingsSectionGroups, type SettingsPage } from './settingsSections';
 import './TabNavigation.css';
 
-export type TabId = 'dashboard' | 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'guide' | 'logo-manager' | 'm3u-changes' | 'channel-pipeline' | 'journal' | 'stats' | 'settings';
+export type TabId = 'dashboard' | 'm3u-manager' | 'epg-manager' | 'channel-manager' | 'mapped-channels' | 'guide' | 'logo-manager' | 'm3u-changes' | 'channel-pipeline' | 'journal' | 'stats' | 'settings';
 
 interface TabNavigationProps {
   activeTab: TabId;

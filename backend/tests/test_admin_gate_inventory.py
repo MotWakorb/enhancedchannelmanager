@@ -270,6 +270,11 @@ _CHANNEL_AUTOMATION = {
     ("POST", "/api/channels/{channel_id}/remove-stream"),
     ("POST", "/api/channels/{channel_id}/reorder-streams"),
     ("POST", "/api/normalization/apply-to-channels"),
+    # u0ko6: local naming configuration, same admin tier as channel automation.
+    # This does not add any MCP mapping tool or outbound write on save.
+    ("POST", "/api/normalization/mappings"),
+    ("PUT", "/api/normalization/mappings/{mapping_id}"),
+    ("DELETE", "/api/normalization/mappings/{mapping_id}"),
     ("POST", "/api/m3u/accounts/{account_id}/group-auto-sync-toggle"),
 }
 

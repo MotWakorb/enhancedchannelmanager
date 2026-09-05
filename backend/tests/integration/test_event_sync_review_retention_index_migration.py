@@ -8,6 +8,7 @@ from sqlalchemy import create_engine, inspect, text
 import pytest
 
 import database
+from models import ChannelNameMapping, ChannelNameAlias
 
 
 TABLE = "event_sync_reviews"
@@ -65,6 +66,8 @@ def test_migration_0052_adds_and_round_trips_retention_index(tmp_path):
                 "trigger_key VARCHAR(1000) NOT NULL PRIMARY KEY, "
                 "claimed_at DATETIME NOT NULL)"
             ))
+        ChannelNameMapping.__table__.create(engine)
+        ChannelNameAlias.__table__.create(engine)
         assert database._schema_matches_head(engine) is True
         database._bootstrap_alembic(engine)
     finally:

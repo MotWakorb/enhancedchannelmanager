@@ -59,7 +59,7 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 import safe_regex  # bd-eio04.14: ReDoS-guarded wrapper for user-supplied regex
-from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag
+from models import NormalizationRule, NormalizationRuleGroup, TagGroup, Tag, ChannelNameAlias, ChannelNameMapping
 
 logger = logging.getLogger(__name__)
 
@@ -799,6 +799,7 @@ class NormalizationEngine:
         self.db = db
         self._rules_cache: Optional[list] = None
         self._groups_cache: Optional[list] = None
+        self._mapping_cache: dict[str, str] | None = None
         # Per-instance memo for extract_core_name(for_matching=True) — see
         # extract_core_name (bd-xxzxe). Bounded by the request's unique names.
         self._core_name_match_cache: dict[str, str] = {}
@@ -807,6 +808,7 @@ class NormalizationEngine:
         """Clear cached rules to force reload from database."""
         self._rules_cache = None
         self._groups_cache = None
+        self._mapping_cache = None
         self._core_name_match_cache.clear()
         # Also clear tag group cache
         global _tag_group_cache
@@ -1357,7 +1359,20 @@ class NormalizationEngine:
             logger.warning("[NORMALIZE] Unknown else action type: %s", action_type)
             return text
 
-    def normalize(self, name: str, group_ids: list[int] | None = None) -> NormalizationResult:
+    def get_name_mappings(self) -> dict[str, str]:
+        """Snapshot the mappings for this normalization request or pipeline run."""
+        if self._mapping_cache is None:
+            self._mapping_cache = dict(self.db.query(
+                ChannelNameAlias.match_key, ChannelNameMapping.preferred_name,
+            ).join(ChannelNameMapping, ChannelNameAlias.mapping_id == ChannelNameMapping.id).all())
+        return self._mapping_cache
+
+    def resolve_preferred_name(self, name: str) -> str | None:
+        """Match original whole names only; no preprocessing or regex interpretation."""
+        return self.get_name_mappings().get(name.casefold())
+
+    def normalize(self, name: str, group_ids: list[int] | None = None, *,
+                  resolve_mapping: bool = True) -> NormalizationResult:
         """
         Apply enabled rules to normalize a stream name.
 
@@ -1369,6 +1384,8 @@ class NormalizationEngine:
             name: The stream name to normalize
             group_ids: Optional list of NormalizationRuleGroup IDs to apply.
                        None = all enabled groups (default behavior).
+            resolve_mapping: False when a caller already resolved ownership on
+                             the original name before applying a name template.
 
         Returns:
             NormalizationResult with original, normalized name, and applied rules.
@@ -1401,6 +1418,11 @@ class NormalizationEngine:
             rules_applied=[],
             transformations=[]
         )
+
+        preferred = self.resolve_preferred_name(name) if resolve_mapping else None
+        if preferred is not None:
+            result.normalized = preferred
+            return result
 
         current = name.strip()
 

@@ -9,19 +9,25 @@ import json
 import logging
 import re
 import time
+from contextlib import contextmanager
+from threading import RLock
 from typing import List, Literal, Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import create_engine
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import NullPool
 
 import journal
 from auth import RequireAdminIfEnabled, ResolveIsMcpServicePrincipalIfEnabled
 from auth.routes import limiter
 from concurrency import run_cpu_bound
 from config import get_settings
-from database import get_session
+from database import get_database_url, get_session
 from dispatcharr_client import get_client
 from regex_lint import (
     lint_conditions_json,
@@ -32,6 +38,92 @@ from regex_lint import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/normalization", tags=["Normalization"])
+
+# Serialize local mapping CRUD; generic readers do not take this lock.
+_mapping_lock = RLock()
+
+
+@contextmanager
+def _mapping_write_session():
+    # A generic StaticPool session must not see or roll back a mapping's
+    # uncommitted writes. NullPool closes this private connection on exit.
+    engine = create_engine(get_database_url(), poolclass=NullPool)
+    try:
+        with Session(engine, autoflush=False) as session:
+            yield session
+    finally:
+        engine.dispose()
+
+
+class ChannelNameMappingRequest(BaseModel):
+    preferred_name: str = Field(min_length=1, max_length=255)
+    aliases: list[str] = Field(max_length=1000)
+
+    @field_validator("preferred_name", "aliases")
+    @classmethod
+    def validate_names(cls, value):
+        names = [value] if isinstance(value, str) else value
+        for name in names:
+            if not name.strip() or len(name) > 255 or any(ord(c) < 32 for c in name):
+                raise ValueError("Names must be non-blank, single-line text of at most 255 characters")
+        return value
+
+
+@router.get("/mappings")
+def get_channel_name_mappings():
+    from models import ChannelNameMapping
+    with _mapping_lock, get_session() as session:
+        return {"mappings": [m.to_dict() for m in session.query(ChannelNameMapping).order_by(ChannelNameMapping.id).all()]}
+
+
+def _save_channel_name_mapping(request: ChannelNameMappingRequest, mapping_id: int | None = None):
+    from models import ChannelNameAlias, ChannelNameMapping
+    with _mapping_lock, _mapping_write_session() as session:
+        if mapping_id is not None:
+            # First acquire SQLite's writer lock and delete the CURRENT set,
+            # not an ORM collection that another writer may have replaced.
+            session.query(ChannelNameAlias).filter_by(mapping_id=mapping_id).delete(synchronize_session=False)
+        mapping = session.get(ChannelNameMapping, mapping_id) if mapping_id is not None else ChannelNameMapping()
+        if mapping is None:
+            raise HTTPException(404, "Mapping not found")
+        # Reserve the preferred identity as well, making repeated resolution stable.
+        names = {}
+        for name in [request.preferred_name, *request.aliases]:
+            names.setdefault(name.casefold(), name)
+        try:
+            mapping.preferred_name = request.preferred_name
+            session.add(mapping)
+            session.flush()
+            mapping.aliases = [ChannelNameAlias(name=name, match_key=key) for key, name in names.items()]
+            session.flush()
+            result = mapping.to_dict()
+            session.commit()
+            return result
+        except IntegrityError:
+            session.rollback()
+            raise HTTPException(409, "An alias or preferred name is already owned by another mapping")
+
+
+@router.post("/mappings", status_code=201)
+def create_channel_name_mapping(request: ChannelNameMappingRequest, _admin=RequireAdminIfEnabled):
+    return _save_channel_name_mapping(request)
+
+
+@router.put("/mappings/{mapping_id}")
+def update_channel_name_mapping(mapping_id: int, request: ChannelNameMappingRequest, _admin=RequireAdminIfEnabled):
+    return _save_channel_name_mapping(request, mapping_id)
+
+
+@router.delete("/mappings/{mapping_id}", status_code=204)
+def delete_channel_name_mapping(mapping_id: int, _admin=RequireAdminIfEnabled):
+    from models import ChannelNameAlias, ChannelNameMapping
+    with _mapping_lock, _mapping_write_session() as session:
+        session.query(ChannelNameAlias).filter_by(mapping_id=mapping_id).delete(synchronize_session=False)
+        mapping = session.get(ChannelNameMapping, mapping_id)
+        if mapping is None:
+            raise HTTPException(404, "Mapping not found")
+        session.delete(mapping)
+        session.commit()
 
 
 # Request models
@@ -125,6 +217,15 @@ class TestRuleRequest(BaseModel):
 
 class TestRulesBatchRequest(BaseModel):
     texts: list[str]
+
+
+@router.post("/mappings/resolve")
+def resolve_channel_name_mappings(request: TestRulesBatchRequest):
+    from normalization_engine import get_normalization_engine
+    with get_session() as session:
+        engine = get_normalization_engine(session)
+        return {"results": [{"original": name, "preferred_name": engine.resolve_preferred_name(name)}
+                            for name in dict.fromkeys(request.texts)]}
 
 
 class ReorderRulesRequest(BaseModel):

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import type { Stream, StreamGroupInfo, M3UAccount, Channel, ChannelGroup, ChannelProfile, M3UGroupSetting } from '../types';
 import { useSelection, useExpandCollapse, useAddStreamDedup } from '../hooks';
-import { detectRegionalVariants, filterStreamsByTimezone, resolveCreateChannelNames, stripQualitySuffixes, type ResolvedCreateChannelNames, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
+import { detectRegionalVariants, filterStreamsByTimezone, resolveCreateChannelNames, type ResolvedCreateChannelNames, type TimezonePreference, type NumberSeparator, type PrefixOrder, type SortCriterion, type SortEnabledMap, type M3UAccountPriorities } from '../services/api';
 import { naturalCompare } from '../utils/naturalSort';
 import { channelNumberInputError, parseChannelNumberInput } from '../utils/channelNumber';
 import { categorizeStreamGroups } from '../utils/streamGroupCategories';
@@ -12,6 +12,7 @@ import { useDropdown } from '../hooks/useDropdown';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { CustomSelect } from './CustomSelect';
 import { StreamCreateMenu } from './StreamCreateMenu';
+import { MappedChannels } from './MappedChannels';
 import { PreviewStreamModal } from './PreviewStreamModal';
 import { ModalOverlay } from './ModalOverlay';
 import { useOwnedDialog } from '../hooks/useOwnedDialog';
@@ -593,6 +594,7 @@ export function StreamsPane({
   // the `streams` prop no longer contains the previously selected streams.
   // This cache ensures we can still resolve those IDs to full Stream objects.
   const selectedStreamsCacheRef = useRef<Map<number, Stream>>(new Map());
+  const [mappingNames, setMappingNames] = useState<string[] | null>(null);
   useEffect(() => {
     const cache = selectedStreamsCacheRef.current;
     // Add any currently visible selected streams to cache
@@ -1571,7 +1573,7 @@ export function StreamsPane({
         // groups is two entries rather than a collision. NUL is the joiner
         // because a group name may contain any printable separator, and
         // "A B" + "C" must not collide with "A" + "B C".
-        const groupingKey = `${bucket.key}\u0000${stripQualitySuffixes(resolvedName)}`;
+        const groupingKey = `${bucket.key}\u0000${createNameResolution.groupingKeyFor(stream.name)}`;
         const existing = channelMap.get(groupingKey);
         if (existing) {
           existing.streams.push(stream);
@@ -2176,6 +2178,12 @@ export function StreamsPane({
               {selectedCount} stream{selectedCount !== 1 ? 's' : ''}
               {selectedGroupNames.size > 0 && ` (${selectedGroupNames.size} group${selectedGroupNames.size !== 1 ? 's' : ''})`}
             </span>
+            <button className="create-channels-btn" onClick={() => setMappingNames(
+              Array.from(new Set(Array.from(selectedIds).flatMap(streamId => {
+                const stream = selectedStreamsCacheRef.current.get(streamId);
+                return stream ? [stream.name] : [];
+              })))
+            )}>Add mapping</button>
             {isEditMode && onBulkCreateFromGroup && (
               <button
                 className="create-channels-btn"
@@ -2225,6 +2233,10 @@ export function StreamsPane({
         )}
       </div>
 
+      {mappingNames && <div>
+        <button className="btn-secondary" onClick={() => setMappingNames(null)}>Close mapping editor</button>
+        <MappedChannels key={JSON.stringify(mappingNames)} selectedNames={mappingNames} />
+      </div>}
       <div className="streams-pane-filters">
         <div className="search-row">
           <div className="search-input-wrapper">

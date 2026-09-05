@@ -1,0 +1,33 @@
+.mapped-channels {
+  padding: 16px;
+  max-width: 960px;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  min-height: 0;
+}
+
+.mapped-channels fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border-primary);
+  min-width: 0;
+}
+
+.mapped-channels input:not([type="radio"]),
+.mapped-channels textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.mapped-channels-actions,
+.mapped-channels-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.mapped-channels-list article {
+  border-bottom: 1px solid var(--border-primary);
+  padding: 16px 0;
+}

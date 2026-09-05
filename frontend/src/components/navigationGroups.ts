@@ -27,6 +27,7 @@ export const GROUPS: NavigationGroup[] = [
     { id: 'epg-manager', label: 'EPG Manager', icon: 'schedule' },
     { id: 'logo-manager', label: 'Logo Manager', icon: 'image' },
     { id: 'channel-manager', label: 'Channel Manager', icon: 'tv' },
+    { id: 'mapped-channels', label: 'Mapped channels', icon: 'link' },
   ] },
   { label: 'Automation', destinations: [
     { id: 'channel-pipeline', label: 'Channel Pipeline', icon: 'auto_fix_high' },

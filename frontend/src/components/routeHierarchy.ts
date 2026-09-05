@@ -121,6 +121,7 @@ function route(
 
 export const ROUTE_HIERARCHY: Record<TabId, RouteHierarchy> = {
   dashboard: route('OVERVIEW', 'dashboard', 'Review ECM status and move directly to the workspace that needs attention.'),
+  'mapped-channels': route('OPERATIONS', 'mapped-channels', 'Define reusable preferred channel names and literal aliases.'),
   // No related-settings link, on the same reasoning that removed M3U Manager's
   // (see below, bead enhancedchannelmanager-hmr0e). Channel Defaults is a
   // standing Settings destination with its own navigation entry, so the header
@@ -174,6 +175,7 @@ export interface RouteHeaderPolicy {
 export const ROUTE_HEADER_POLICIES: Record<TabId, RouteHeaderPolicy> = {
   dashboard: { primaryAction: null, exception: 'Read-only operational summary; actions remain on destination pages.' },
   'channel-manager': { primaryAction: 'Edit Mode' },
+  'mapped-channels': { primaryAction: null, exception: 'Add and save remain mapping-form scoped.' },
   guide: { primaryAction: null, exception: 'Guide refresh, print, and temporal selectors remain one source-scoped control group.' },
   'm3u-manager': { primaryAction: 'Add M3U Account' },
   'epg-manager': { primaryAction: 'Add Standard EPG' },

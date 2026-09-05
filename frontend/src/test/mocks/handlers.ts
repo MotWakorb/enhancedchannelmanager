@@ -557,6 +557,10 @@ export function resetMockDataStore(): void {
 // =============================================================================
 
 export const handlers = [
+  http.post('/api/normalization/mappings/resolve', async ({ request }) => {
+    const { texts } = await request.json() as { texts: string[] };
+    return HttpResponse.json({ results: [...new Set(texts)].map(original => ({ original, preferred_name: null })) });
+  }),
   // -------------------------------------------------------------------------
   // Auth (no-auth mode — tests run with require_auth=false so no user is needed)
   // -------------------------------------------------------------------------

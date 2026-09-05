@@ -369,6 +369,8 @@ _STANDARD_ARTIFACT_TABLES: dict[str, str] = {
     ),
     "normalization_rule_groups": "Normalization rule groups — operator-authored configuration.",
     "normalization_rules": "Normalization rules — operator-authored configuration.",
+    "channel_name_mappings": "Preferred channel names - operator-authored normalization configuration.",
+    "channel_name_aliases": "Literal aliases and comparison keys required to restore preferred-name mappings.",
     "tag_groups": "Tag groups — the normalization vocabulary, operator-authored configuration.",
     "tags": "Tags — the normalization vocabulary, operator-authored configuration.",
     "ffmpeg_profiles": "FFmpeg profiles — operator-authored configuration (name + config).",
