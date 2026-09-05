@@ -81,6 +81,29 @@ def test_policy_rejects_comment_only_mcp_openssl_package_floors(tmp_path):
     assert sum("OpenSSL package floor" in failure for failure in failures) == 2, failures
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    ["", "'libuuid>=2.42.1-r0'", "'libuuid>=2.42.3-r0'", "libuuid"],
+)
+def test_policy_enforces_fixed_mcp_libuuid_package_floor(tmp_path, replacement):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+    required = "'libuuid>=2.42.3-r1'"
+    assert required in contents
+    assert gate.check_repository(tmp_path) == []
+    dockerfile.write_text(
+        f"# Retain reviewed floor {required}\n"
+        + contents.replace(required, replacement, 1),
+        encoding="utf-8",
+    )
+
+    failures = gate.check_repository(tmp_path)
+
+    assert any("libuuid package floor" in failure for failure in failures), failures
+
+
 def test_policy_rejects_a_different_digest_pinned_mcp_base(tmp_path):
     gate = _load_gate()
     _copy_policy_files(gate, tmp_path)

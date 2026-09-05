@@ -90,6 +90,11 @@ def check_repository(root: Path) -> list[str]:
                 "MCP image must enforce the reviewed OpenSSL package floor: "
                 f"missing '{required}' from executable apk add arguments"
             )
+    if not _has_apk_add_argument(mcp_dockerfile, "libuuid>=2.42.3-r1"):
+        failures.append(
+            "MCP image must enforce the reviewed libuuid package floor: "
+            "missing 'libuuid>=2.42.3-r1' from executable apk add arguments"
+        )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:
         failures.append("MCP dependency audit is absent from the publication workflow")
