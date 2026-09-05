@@ -9,8 +9,19 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { EventSyncPreviewPanel } from './EventSyncPreviewPanel';
+import { EventSyncPreviewPanel, EventSyncCleanupResults } from './EventSyncPreviewPanel';
 import type { EventSyncPreviewResponse } from '../../types/eventSync';
+
+it('renders uncertain history without claiming the attachment was preserved', () => {
+  render(<EventSyncCleanupResults cleanup={{ error: 'mutation_outcome_uncertain', decisions: [
+    { channel_id: 100, channel_name: 'Events', stream_id: 2, decision: 'uncertain', reason: 'mutation_outcome_uncertain' },
+  ] }} />);
+  const region = screen.getByRole('region', { name: 'Stale attachment cleanup' });
+  expect(region).toHaveTextContent('1 uncertain');
+  expect(region).toHaveTextContent('0 preserved');
+  expect(region).toHaveTextContent('uncertain stream 2');
+  expect(region).not.toHaveTextContent('Uncertain attachments preserved');
+});
 
 function buildPreview(overrides: Partial<EventSyncPreviewResponse> = {}): EventSyncPreviewResponse {
   return {
@@ -94,6 +105,17 @@ function buildPreview(overrides: Partial<EventSyncPreviewResponse> = {}): EventS
 }
 
 describe('EventSyncPreviewPanel', () => {
+  it('shows would-detach and preserve reasons without mutation controls', () => {
+    render(<EventSyncPreviewPanel preview={buildPreview({ cleanup: {
+      error: null, decisions: [
+        { channel_id: 7, channel_name: 'Event', stream_id: 101, decision: 'would_detach', reason: 'no_longer_matches_current_rule' },
+        { channel_id: 7, channel_name: 'Event', stream_id: 102, decision: 'preserve', reason: 'same_account_protected' },
+      ],
+    } })} loading={false} error={null} onRunPreview={vi.fn()} />);
+    expect(screen.getByText(/would detach.*101/i)).toBeInTheDocument();
+    expect(screen.getByText(/same account protected/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^detach/i })).not.toBeInTheDocument();
+  });
   it('renders the band as a text label with an icon, never color alone', () => {
     render(
       <EventSyncPreviewPanel

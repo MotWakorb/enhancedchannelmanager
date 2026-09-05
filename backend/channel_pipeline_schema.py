@@ -941,6 +941,7 @@ _EVENT_SYNC_ALLOWED_KEYS = frozenset({
     "include_master_group_streams",
     "assume_current_date",
     "demote_stale_dateless",
+    "detach_stale_streams",
     "parse_master_from_stream",
     # Unmatched-stream promotion (bead ti939.4.1) — the ONE sanctioned
     # exception to "ECM never creates channels". Opt-in; absent keys mean
@@ -1349,6 +1350,10 @@ def validate_event_sync_config(config: Any) -> list[str]:
     # every stored config that predates the key keeps manual-run-only
     # behavior unchanged. Filled in place like the other defaults so stored
     # configs are explicit.
+    if "detach_stale_streams" in config and type(config["detach_stale_streams"]) is not bool:
+        errors.append(_event_sync_error(
+            "detach_stale_streams", config["detach_stale_streams"], "a boolean (default false)",
+        ))
     auto_run = config.get("auto_run")
     if auto_run is None:
         config["auto_run"] = False

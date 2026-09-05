@@ -702,6 +702,7 @@ def resolve_event_sync(
     decisions: ReviewDecisions | None = None,
     exclusions: frozenset[tuple[int, str, str]] | None = None,
     attached_stream_ids: set[int] | frozenset[int] | None = None,
+    team_aliases=None,
 ) -> EventSyncResolution:
     """Resolve every secondary stream against the master channel names.
 
@@ -841,6 +842,7 @@ def resolve_event_sync(
             threshold=threshold,
             now=now,
             assume_current_date=assume_current_date,
+            **({"team_aliases": team_aliases} if team_aliases is not None else {}),
         )
         for stream, result in zip(streams, results):
             rs = _resolve_stream(

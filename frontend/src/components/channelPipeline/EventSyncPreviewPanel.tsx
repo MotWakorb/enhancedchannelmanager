@@ -16,6 +16,7 @@ import { useState } from 'react';
 import type {
   EventSyncPreviewResponse,
   EventSyncStreamRow,
+  EventSyncCleanupSummary,
 } from '../../types/eventSync';
 import {
   BAND_META,
@@ -28,6 +29,23 @@ import './EventSyncPreviewPanel.css';
 
 /** Cards rendered before the "Show more" affordance kicks in. */
 const CARDS_PER_PAGE = 50;
+
+export function EventSyncCleanupResults({ cleanup }: { cleanup: EventSyncCleanupSummary }) {
+  const [limit, setLimit] = useState(CARDS_PER_PAGE);
+  return <section className="event-sync-section" aria-label="Stale attachment cleanup">
+    <h4>Stale attachment cleanup</h4>
+    {cleanup.error && <p role="alert">Cleanup incomplete: {cleanup.error.split('_').join(' ')}. See individual outcomes below.</p>}
+    <p>{cleanup.decisions.filter(r => r.decision === 'would_detach').length} would detach;{' '}
+      {cleanup.decisions.filter(r => r.decision === 'detached').length} detached;{' '}
+      {cleanup.decisions.filter(r => r.decision === 'preserve').length} preserved;{' '}
+      {cleanup.decisions.filter(r => r.decision === 'uncertain').length} uncertain</p>
+    <ul>{cleanup.decisions.slice(0, limit).map(row => <li key={`${row.channel_id}:${row.stream_id}`}>
+      {row.decision.split('_').join(' ')} stream {row.stream_id} on {row.channel_name}: {row.reason.split('_').join(' ')}
+    </li>)}</ul>
+    {limit < cleanup.decisions.length && <button type="button" className="btn-secondary"
+      onClick={() => setLimit(limit + CARDS_PER_PAGE)}>Show more cleanup decisions</button>}
+  </section>;
+}
 
 /**
  * S5 (bead sf8dj): the caution behind each provenance chip — why this
@@ -346,6 +364,7 @@ export function EventSyncPreviewPanel({
             stale ? ' event-sync-preview-results--stale' : ''
           }`}
         >
+          {preview.cleanup && <EventSyncCleanupResults cleanup={preview.cleanup} />}
           {/* Pre-flight failures never block the preview — surface them loudly.
               Warnings (bead 2ey2y) are advisory: rendered in the same block,
               same teaching shape, without flipping ok. */}

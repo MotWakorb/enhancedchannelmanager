@@ -4,7 +4,7 @@
  * These types mirror the backend schema and are used throughout the frontend
  * for type safety when working with channel pipeline rules, conditions, and actions.
  */
-import type { EventSyncConfig } from './eventSync';
+import type { EventSyncConfig, EventSyncCleanupSummary } from './eventSync';
 
 // =============================================================================
 // Condition Types
@@ -558,6 +558,7 @@ export interface SelectedRuleOutcome {
  * matches the Event Sync preview panel + debug-bundle taxonomy.
  */
 export interface EventSyncExecutionSummary {
+  cleanup?: EventSyncCleanupSummary;
   rule_id: number | null;
   rule_name?: string | null;
   /** Secondary-provider streams evaluated against the master channels. */

@@ -37,6 +37,8 @@ export interface EventSyncGroupScope {
 }
 
 export interface EventSyncConfig {
+  /** Off by default; only proven rule-owned cross-account stale attachments. */
+  detach_stale_streams?: boolean;
   /**
    * bead 3p2af / 38dzi: canonical provider-scoped shape. The editor (P4)
    * reads and writes these nested scopes; the backend validator derives the
@@ -393,7 +395,14 @@ export interface EventSyncParseFailureGroup {
   stream_names: string[];
 }
 
+export interface EventSyncCleanupSummary {
+  error: string | null;
+  decisions: { channel_id: number; channel_name: string; stream_id: number;
+    decision: 'preserve' | 'would_detach' | 'detached' | 'uncertain'; reason: string }[];
+}
+
 export interface EventSyncPreviewResponse {
+  cleanup?: EventSyncCleanupSummary;
   preflight: EventSyncPreflight;
   summary: EventSyncPreviewSummary;
   streams: EventSyncStreamRow[];
@@ -409,7 +418,7 @@ export interface EventSyncPreviewResponse {
 /** Request body: exactly one of rule_id / event_sync_config. */
 export type EventSyncPreviewRequest =
   | { rule_id: number }
-  | { event_sync_config: EventSyncConfig };
+  | { event_sync_config: EventSyncConfig; cleanup_rule_id?: number };
 
 // =============================================================================
 // Review queue (bead ti939.3.2) — /api/event-sync-reviews

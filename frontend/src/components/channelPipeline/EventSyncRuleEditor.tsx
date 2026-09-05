@@ -343,6 +343,7 @@ export function EventSyncRuleEditor({
   // Phase 2 opt-in (ti939.3.1): unattended auto-run on the refresh
   // watermark. Default OFF — the backend treats an absent key as false.
   const [autoRun, setAutoRun] = useState(config?.auto_run ?? false);
+  const [detachStaleStreams, setDetachStaleStreams] = useState(config?.detach_stale_streams ?? false);
   // bead y8yby: refresh the rule's M3U providers before a MANUAL run (live Run
   // AND dry-run Test). Default OFF — the backend treats an absent key as false.
   // With it on, Test is no longer zero-write (it triggers a real refresh).
@@ -664,6 +665,9 @@ export function EventSyncRuleEditor({
     if (autoRun || config?.auto_run != null) {
       built.auto_run = autoRun;
     }
+    if (detachStaleStreams || config?.detach_stale_streams != null) {
+      built.detach_stale_streams = detachStaleStreams;
+    }
     // bead y8yby: emit refresh_providers_before_run when checked, and preserve
     // an explicit stored value (the backend validator fills the key on save).
     // A legacy config without the key stays without it while the box is
@@ -814,7 +818,9 @@ export function EventSyncRuleEditor({
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const response = await previewEventSync({ event_sync_config: builtConfig });
+      const response = await previewEventSync({ event_sync_config: builtConfig,
+        ...(builtConfig.detach_stale_streams && rule?.id ? { cleanup_rule_id: rule.id } : {}),
+      });
       setPreview(response);
     } catch (err) {
       setPreviewError(err instanceof Error ? err.message : 'Preview failed');
@@ -946,6 +952,7 @@ export function EventSyncRuleEditor({
       thresholdText !== (config?.attach_threshold ?? EVENT_ATTACH_FLOOR).toFixed(2) ||
       enforceTimeWindow !== (config?.enforce_time_window ?? true) ||
       autoRun !== (config?.auto_run ?? false) ||
+      detachStaleStreams !== (config?.detach_stale_streams ?? false) ||
       refreshProvidersBeforeRun !== (config?.refresh_providers_before_run ?? false) ||
       includeMasterGroupStreams !== (config?.include_master_group_streams ?? false) ||
       assumeCurrentDate !== (config?.assume_current_date ?? false) ||
@@ -960,7 +967,7 @@ export function EventSyncRuleEditor({
   }, [
     name, description, enabled, activeFrom, activeUntil, masterScope, secondaryScopes, selectedPatternIds,
     customShared, groupOverrides, timeWindowText, thresholdText, enforceTimeWindow,
-    autoRun, refreshProvidersBeforeRun, includeMasterGroupStreams, assumeCurrentDate,
+    autoRun, detachStaleStreams, refreshProvidersBeforeRun, includeMasterGroupStreams, assumeCurrentDate,
     demoteStaleDateless, parseMasterFromStream, promoteUnmatched,
     promoteTargetGroupId, dummyEpgProfileId, config, rule,
     initial, customSharedMeta, streamSortField, streamSortOrder,
@@ -1059,6 +1066,7 @@ export function EventSyncRuleEditor({
           <> <strong>Refreshes this rule&apos;s M3U providers before each
           manual Run/Test</strong> (so Test is no longer zero-write).</>
         )}
+        {detachStaleStreams && <> <strong>Detaches proven stale cross-account attachments made by this rule.</strong></>}
         {includeMasterGroupStreams && secCount > 0 && (
           <> Also matches the master group&apos;s own streams.</>
         )}
@@ -1086,6 +1094,7 @@ export function EventSyncRuleEditor({
     currentTimeWindow,
     currentThreshold,
     autoRun,
+    detachStaleStreams,
     refreshProvidersBeforeRun,
     assumeCurrentDate,
     demoteStaleDateless,
@@ -1235,6 +1244,8 @@ export function EventSyncRuleEditor({
       const chips: ReactNode[] = [];
       if (autoRun)
         chips.push(<span key="ar" className="badge badge-sm badge-warning">Auto-run</span>);
+      if (detachStaleStreams)
+        chips.push(<span key="cleanup" className="badge badge-sm badge-warning">Stale attachment cleanup</span>);
       if (refreshProvidersBeforeRun)
         chips.push(<span key="rp" className="badge badge-sm badge-warning">Refresh before run</span>);
       if (!enforceTimeWindow)
@@ -1863,6 +1874,21 @@ export function EventSyncRuleEditor({
                 <span className="event-sync-phase-num">3</span> Behavior
               </h2>
 
+              <div className="form-group">
+                <label className="checkbox-option">
+                  <input type="checkbox" checked={detachStaleStreams}
+                    onChange={e => setDetachStaleStreams(e.target.checked)} disabled={isLoading}
+                    data-testid="event-sync-detach-stale-streams" />
+                  <span>Detach stale streams attached by this rule</span>
+                </label>
+                <span className="form-hint">
+                  Off by default. Removes only proven rule-owned stale attachments from a different
+                  provider account than the native channel owner, even with no replacement.
+                  Same-account, manual, preexisting and uncertain attachments are preserved with reasons.
+                  Preview first; removals are journaled for surgical rollback. Avoid concurrent edits
+                  in Dispatcharr while running: its stream-list API has no compare-and-swap.
+                </span>
+              </div>
               {/* Automation subgroup (S2). */}
               <details className="modal-subgroup">
                 <summary>

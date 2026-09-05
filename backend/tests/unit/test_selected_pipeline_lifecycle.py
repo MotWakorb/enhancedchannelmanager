@@ -39,6 +39,7 @@ def _rule(rule_id, name, *, event_sync=False, priority=0):
     return SimpleNamespace(
         id=rule_id,
         name=name,
+        created_at=datetime(2026, 9, 5),
         priority=priority,
         is_event_sync=lambda: event_sync,
         get_event_sync_config=lambda: config if event_sync else None,

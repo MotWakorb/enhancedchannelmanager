@@ -1998,7 +1998,10 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
             _mark_execution_failed(execution_id, exc)
             raise HTTPException(status_code=409, detail=f"pipeline state drifted: {exc}") from exc
         try:
-            _, remap = await replay_write_plan(engine.client, write_plan, read_set_validated=True)
+            replay_options = {"read_set_validated": True}
+            if any(write.event_sync for write in write_plan.writes):
+                replay_options["execution_id"] = execution_id
+            _, remap = await replay_write_plan(engine.client, write_plan, **replay_options)
         except PartialReplayError as exc:
             partial_replay = {
                 "failed_index": exc.failed_index,
@@ -2029,6 +2032,10 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
         if planned_journal:
             journal.log_entries(entries=planned_journal)
         result = remapped(plan.payload["result"])
+        for summary in result.get("event_sync", []):
+            for decision in summary.get("cleanup", {}).get("decisions", []):
+                if decision["decision"] == "would_detach":
+                    decision["decision"] = "detached"
         review_counts: dict[int, dict] = {}
         from services.event_sync_review_store import enqueue_review_candidates
         for review in result.get("planned_review_candidates", []):
@@ -3443,6 +3450,7 @@ class EventSyncPreviewRequest(BaseModel):
 
     rule_id: Optional[int] = None
     event_sync_config: Optional[dict] = None
+    cleanup_rule_id: Optional[int] = Field(default=None, strict=True, gt=0)
 
     @model_validator(mode="after")
     def _exactly_one_source(self):
@@ -3451,6 +3459,10 @@ class EventSyncPreviewRequest(BaseModel):
                 "provide exactly one of rule_id (preview a saved rule) or "
                 "event_sync_config (preview before saving)"
             )
+        if self.cleanup_rule_id is not None and (
+            self.rule_id is not None or not (self.event_sync_config or {}).get("detach_stale_streams")
+        ):
+            raise ValueError("cleanup_rule_id requires an inline cleanup-enabled config")
         return self
 
 
@@ -3805,6 +3817,7 @@ async def preview_event_sync(
     )
 
     config = await _load_event_sync_preview_config(request)
+    preview_rule_id = request.rule_id if request.rule_id is not None else request.cleanup_rule_id
     master_group_id = config["master_group_id"]
     secondary_group_ids = config["secondary_group_ids"]
     client = get_client()
@@ -3818,16 +3831,16 @@ async def preview_event_sync(
     decisions = None
     pending_fps: frozenset = frozenset()
     exclusion_keys: frozenset = frozenset()
-    if request.rule_id is not None:
+    if preview_rule_id is not None:
         session = get_session()
         try:
-            decisions = load_review_decisions(session, request.rule_id)
-            pending_fps = load_pending_fingerprints(session, request.rule_id)
+            decisions = load_review_decisions(session, preview_rule_id)
+            pending_fps = load_pending_fingerprints(session, preview_rule_id)
             # ti939.3.5: operator never-attach exclusions feed the SAME
             # shared resolver, so the preview predicts exactly what a run
             # would suppress (excluded pairings report as
             # excluded_by_operator, never as would_attach).
-            exclusion_keys = load_exclusion_keys(session, request.rule_id)
+            exclusion_keys = load_exclusion_keys(session, preview_rule_id)
         except Exception as e:
             logger.warning(
                 "[EVENT-SYNC] preview: failed to load review-queue state "
@@ -3896,6 +3909,10 @@ async def preview_event_sync(
         config, client, effective_master_group_id, decisions=decisions,
         exclusions=exclusion_keys,
     )
+    if config.get("detach_stale_streams") is True:
+        from services.event_sync_cleanup import plan_cleanup
+        fetched["cleanup"] = await plan_cleanup(client, preview_rule_id, config)
+        fetched["cleanup"].pop("operations")
     resolution = fetched["resolution"]
     name_to_id = fetched["name_to_id"]
     group_names = fetched["group_names"]
@@ -4244,6 +4261,7 @@ async def preview_event_sync(
         # in (promotion_out is None otherwise → the two ** expansions are
         # empty and the payload is byte-identical to the pre-feature shape).
         **({"promotion": promotion_out} if promotion_out is not None else {}),
+        **({"cleanup": fetched["cleanup"]} if "cleanup" in fetched else {}),
         "preflight": preflight,
         "summary": {
             "secondary_streams": len(resolution.resolved),

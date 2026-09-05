@@ -19,6 +19,45 @@
 
 ## Overview
 
+### Optional Stale Attachment Cleanup
+
+Under **Behavior**, **Detach stale streams attached by this rule** is off by
+default (`detach_stale_streams` absent or false). It applies to normal manual,
+already-configured automatic and prepared runs; preview remains read-only.
+Cleanup can remove an old attachment after a native channel is renamed in place,
+including when no replacement matches.
+
+Only confirmed attachments owned by the current rule's creation identity are
+eligible. The channel UUID and stream account must still agree with the journal.
+The channel must be native auto-created with a known `auto_created_by` account,
+and the stream must belong to a different account. Every same-account stream is
+protected, not merely the first stream. `source_stream`, order and names are
+not native-parent authority. Existing matching criteria still decide staleness.
+
+Manual/preexisting attachments, other-rule attachments, missing or expired
+ownership history, malformed identities, failed dependencies and incomplete
+reads are preserved. Unparsed or ambiguous matching is not proof of staleness.
+Preview and execution details display would-detach, detached and preserve reasons.
+When editing a saved rule, inline cleanup preview carries `cleanup_rule_id` so
+it can evaluate the draft with that saved rule's ownership and review context.
+Unsaved rules cannot claim historical ownership.
+
+New cleanup-enabled writes commit a journal intent before PATCH and confirm its
+outcome afterward, on private SQLite connections. Prepared planning only records
+the operation; real replay writes the intent. A failed intent prevents the write.
+Uncertain HTTP outcomes block subsequent cleanup rather than being reported as
+success. Rollback uses surgical membership inverses, with or without a snapshot;
+missing/expired recovery evidence or partial failures do not mark a run rolled
+back. Mixed non-stream rollback and overlapping generic prepared compensation
+are refused rather than restoring full preimages over unrelated current streams.
+
+History created before durable ownership evidence existed is not backfilled or
+adopted. Retention is unchanged: when proof expires, cleanup preserves the stream.
+Avoid simultaneous manual edits or native sync while running: Dispatcharr replaces
+the full stream list and offers no compare-and-swap. Fresh rereads preserve
+unrelated memberships observed before PATCH, but cannot make that API atomic
+against concurrent external writers.
+
 Operators with multiple IPTV providers get N duplicate channels per
 sports/PPV event, one per provider's auto-sync event group, because the
 same real-world event is named differently by every provider (slot

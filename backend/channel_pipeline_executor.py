@@ -1714,6 +1714,27 @@ class ActionExecutor:
                 skipped=True
             )
 
+        cleanup_operation = (merge_provenance or {}).get("cleanup_operation")
+        if cleanup_operation and not exec_ctx.dry_run:
+            try:
+                from services.event_sync_cleanup import apply_change
+                if self._plan_only:
+                    outcome = await self.client.event_sync_change(cleanup_operation)
+                else:
+                    outcome = await apply_change(self.client, cleanup_operation, self._execution_id)
+                channel.update(outcome["channel"])
+                exec_ctx.current_channel_id = channel_id
+                return ActionResult(
+                    success=True, action_type="merge_stream", entity_type="channel",
+                    entity_id=channel_id, entity_name=channel_name,
+                    description=f"Added stream to channel '{channel_name}'",
+                    skipped=outcome.get("skipped", False), modified=not outcome.get("skipped", False),
+                    previous_state={"streams": outcome.get("before", current_streams)},
+                )
+            except Exception as error:
+                return ActionResult(success=False, action_type="merge_stream",
+                                    description="Event Sync attach failed", error=str(error))
+
         new_count = stream_count + 1
 
         def _track_m3u_count():
@@ -5008,7 +5029,8 @@ class ActionExecutor:
                                       exec_ctx: ExecutionContext,
                                       decisions=None,
                                       effective_master_group_id=None,
-                                      exclusions=None) -> dict:
+                                      exclusions=None,
+                                      rule_created_at=None) -> dict:
         """Execute one event_sync rule's attach path (bead ti939.2.1).
 
         Phase 1B — the FIRST write path for event_sync. Resolves every
@@ -5138,6 +5160,32 @@ class ActionExecutor:
             "excluded_suppressed": 0,
         }
 
+        if config.get("detach_stale_streams") is True:
+            from services.event_sync_cleanup import UncertainMutationError, apply_change, plan_cleanup
+            cleanup = await plan_cleanup(self.client, rule_id, config)
+            summary["cleanup"] = cleanup
+            for operation in cleanup["operations"]:
+                row = next(r for r in cleanup["decisions"] if r["channel_id"] == operation["channel_id"]
+                           and r["stream_id"] == operation["stream_id"])
+                if exec_ctx.dry_run:
+                    continue
+                try:
+                    outcome = (await self.client.event_sync_change(operation) if self._plan_only
+                               else await apply_change(self.client, operation, self._execution_id))
+                    self._channel_by_id[operation["channel_id"]].update(outcome["channel"])
+                    row["decision"] = "would_detach" if self._plan_only else "detached"
+                    exec_ctx.modified_entities.append({"type": "channel", "id": operation["channel_id"],
+                                                       "previous": {"streams": outcome["before"]}})
+                    exec_ctx.merged_channel_ids.add(operation["channel_id"])
+                except Exception as error:
+                    row.update(decision="uncertain" if isinstance(error, UncertainMutationError) else "preserve",
+                               reason="mutation_outcome_uncertain" if isinstance(error, UncertainMutationError)
+                               else "cleanup_cancelled_before_mutation")
+                    cleanup["error"] = str(error)
+                    summary["attach_errors"] += 1
+                    break
+            cleanup.pop("operations")
+
         for r in resolution.resolved:
             summary["rejected_suppressed"] += r.rejected_suppressed
             summary["excluded_suppressed"] += r.excluded_suppressed
@@ -5262,6 +5310,9 @@ class ActionExecutor:
             provenance = {
                 "kind": "event_sync",
                 "rule_id": rule_id,
+                "rule_created_at": rule_created_at,
+                "channel_uuid": channel.get("uuid"),
+                "stream_account": r.stream.provider_id,
                 "secondary_stream_id": r.stream.stream_id,
                 "secondary_stream_name": r.stream.name,
                 "provider": r.stream.provider,
@@ -5278,6 +5329,17 @@ class ActionExecutor:
                 # queue-driven attach is auditable as such.
                 "attach_source": r.attach_source,
             }
+            if config.get("detach_stale_streams") is True and not already_attached:
+                from services.event_sync_cleanup import rule_identity
+                try:
+                    provenance["cleanup_operation"] = {
+                        **rule_identity(rule_id), "channel_id": master_channel_id,
+                        "channel_uuid": channel.get("uuid"), "stream_id": r.stream.stream_id,
+                        "stream_account": r.stream.provider_id, "action": "attach", "config": config,
+                    }
+                except Exception:
+                    summary["attach_errors"] += 1
+                    continue
             stream_ctx = StreamContext(
                 stream_id=r.stream.stream_id,
                 stream_name=r.stream.name,

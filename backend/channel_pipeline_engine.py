@@ -886,6 +886,25 @@ class ChannelPipelineEngine:
             if execution.mode == "dry_run":
                 return {"success": False, "error": "Cannot rollback a dry-run execution"}
 
+            if any("cleanup" in summary for summary in execution.get_event_sync_summary()):
+                from services.event_sync_cleanup import rollback_batch
+                modified = execution.get_modified_entities()
+                if execution.get_created_entities() or any(
+                    entity.get("type") != "channel" or set((entity.get("previous") or {}).keys()) != {"streams"}
+                    for entity in modified
+                ):
+                    return {"success": False, "error": "Cleanup rollback cannot safely restore mixed non-stream mutations"}
+                # End the reader transaction before private intent writes or HTTP.
+                session.close()
+                result = await rollback_batch(self.client, str(execution_id), expected_count=len(modified))
+                if result["success"]:
+                    execution = session.get(ChannelPipelineExecution, execution_id)
+                    execution.status = "rolled_back"
+                    execution.rolled_back_at = datetime.utcnow()
+                    execution.rolled_back_by = rolled_back_by
+                    session.commit()
+                return {**result, "execution_id": execution_id}
+
             # --- uc51o.5: unify on the snapshot when one exists ---------------
             # If this execution has a pre-run snapshot, the FULL restore is the
             # right revert (the legacy path cannot re-add streams the run
@@ -1127,6 +1146,10 @@ class ChannelPipelineEngine:
                     "success": False,
                     "error": "Execution already reverted",
                 }
+
+            if any("cleanup" in summary for summary in execution.get_event_sync_summary()):
+                session.close()
+                return await self.rollback_execution(execution_id, rolled_back_by=restored_by, confirm=True)
 
             snapshot = session.query(ChannelPipelineSnapshot).filter(
                 ChannelPipelineSnapshot.execution_id == execution_id
@@ -4518,6 +4541,7 @@ class ChannelPipelineEngine:
                 decisions=decisions,
                 effective_master_group_id=effective_master_group_id,
                 exclusions=exclusions,
+                rule_created_at=rule.created_at.isoformat() if isinstance(rule.created_at, datetime) else None,
             )
 
             # ti939.3.2: persist the run's ambiguous pairings as pending

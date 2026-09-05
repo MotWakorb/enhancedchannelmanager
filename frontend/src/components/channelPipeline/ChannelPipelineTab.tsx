@@ -24,6 +24,7 @@ import { useChannelPipelineRules } from '../../hooks/useChannelPipelineRules';
 import { useChannelPipelineExecution } from '../../hooks/useChannelPipelineExecution';
 import { RuleBuilder } from './RuleBuilder';
 import { EventSyncRuleEditor } from './EventSyncRuleEditor';
+import { EventSyncCleanupResults } from './EventSyncPreviewPanel';
 import { EventSyncReviewQueue } from './EventSyncReviewQueue';
 import { EventSyncExclusionsPanel } from './EventSyncExclusionsPanel';
 import { BulkRuleSettingsModal } from './BulkRuleSettingsModal';
@@ -1838,6 +1839,10 @@ export function ChannelPipelineTab() {
                     where they match. Attaches are journaled and reversible via
                     rollback.
                   </p>
+                  {showEventSyncRunConfirm.rule.event_sync_config?.detach_stale_streams && (
+                    <p>This rule also removes proven stale cross-account attachments made by this rule,
+                      even without replacements. Same-account and uncertain attachments are preserved.</p>
+                  )}
                   {showEventSyncRunConfirm.rule.event_sync_config
                     ?.refresh_providers_before_run && (
                     <p data-testid="event-sync-run-refresh-note">
@@ -2115,6 +2120,8 @@ export function ChannelPipelineTab() {
             </div>
             <div className="modal-body">
               {/* Summary Section */}
+              {(details.event_sync_summary ?? []).map(summary => summary.cleanup &&
+                <EventSyncCleanupResults key={summary.rule_id} cleanup={summary.cleanup} />)}
               <div className="detail-row">
                 <span className="detail-label">Status:</span>
                 <span className={getStatusBadgeClass(details.status)}>
