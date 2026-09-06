@@ -47,6 +47,69 @@ afterEach(() => {
 afterAll(() => server.close());
 
 describe('ChannelPipelineTab', () => {
+  describe('GH969 duplicate targeting', () => {
+    it.each([
+      { scope: true, pin: 42, manual: true, fold: true, providers: [1, 2] },
+      { scope: false, pin: null, manual: false, fold: false, providers: [] },
+      { scope: true, pin: null, manual: false, fold: false, providers: [] },
+    ])('preserves targeting through Duplicate and reopen: %j', async ({ scope, pin, manual, fold, providers }) => {
+      const user = userEvent.setup();
+      const targeting = {
+        match_scope_target_group: scope, match_scope_group_id: pin,
+        allow_manual_channel_merge: manual, fold_match_key: fold,
+        required_provider_ids: providers, m3u_account_id: 1, target_group_id: scope ? 43 : null,
+      };
+      const source = {
+        ...createMockChannelPipelineRule({
+          name: 'Targeted', priority: 0, match_count: 9,
+          actions: [{ type: 'create_channel', name_template: '{stream_name}', group_id: 43 }],
+        }),
+        ...targeting, managed_channel_ids: [123],
+      };
+      const before = structuredClone(source);
+      mockDataStore.channelPipelineRules.push(source);
+      const requests: Record<string, unknown>[] = [];
+      server.use(
+        http.get('/api/channel-groups', () => HttpResponse.json([
+          { id: 42, name: 'Pinned Sports' }, { id: 43, name: 'Action Sports' },
+        ])),
+        http.post('/api/channel-pipeline/rules', async ({ request }) => {
+          const payload = await request.json() as Record<string, unknown>;
+          requests.push(payload);
+          const copy = { ...createMockChannelPipelineRule(), ...payload };
+          mockDataStore.channelPipelineRules.push(copy);
+          return HttpResponse.json(copy);
+        }),
+      );
+      const view = renderWithProviders(<ChannelPipelineTab />);
+      await screen.findByText('Targeted');
+      await user.click(screen.getByRole('button', { name: 'Duplicate' }));
+      await screen.findByText('Targeted (Copy)');
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        ...targeting, name: 'Targeted (Copy)', enabled: false,
+        conditions: source.conditions, actions: source.actions,
+      });
+      for (const key of ['id', 'last_run_at', 'match_count', 'managed_channel_ids', 'created_at', 'updated_at']) {
+        expect(requests[0]).not.toHaveProperty(key);
+      }
+      expect(source).toEqual(before);
+      const copy = mockDataStore.channelPipelineRules.find(rule => rule.name === 'Targeted (Copy)')!;
+      expect(copy.id).not.toBe(source.id);
+      view.unmount();
+      renderWithProviders(<ChannelPipelineTab />);
+      const row = (await screen.findByText('Targeted (Copy)')).closest('[data-testid="rule-row"]')!;
+      await user.click(within(row as HTMLElement).getByRole('button', { name: /^edit$/i }));
+      await user.click(screen.getByRole('button', { name: /next/i }));
+      expect(screen.getByRole('checkbox', { name: 'Scope merge lookups to a target group' })).toHaveProperty('checked', scope);
+      expect(screen.getByRole('checkbox', { name: 'Allow merging into manual channels' })).toHaveProperty('checked', manual);
+      expect(screen.getByRole('checkbox', { name: 'Ignore spacing and case differences when matching' })).toHaveProperty('checked', fold);
+      if (scope) {
+        expect(screen.getByRole('button', { name: pin === null ? /Auto.*use the Create Channel/ : /Pinned Sports/ })).toBeVisible();
+      }
+    });
+  });
+
   describe('GH968 bulk channel sorting', () => {
     it.each(['clear', 'set', 'unchecked'] as const)(
       '%s goes through the bulk handler and survives reopening from GET',

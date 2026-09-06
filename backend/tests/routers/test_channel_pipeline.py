@@ -97,6 +97,87 @@ def test_request_models_reject_coerced_required_provider_ids(model, payload, val
         model(**payload, required_provider_ids=value)
 
 
+class TestDuplicateTargetingGH969:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scope,pin,manual,fold,providers,target", [
+        (True, 42, True, True, [1, 2], 43),
+        (False, None, False, False, [], None),
+        (True, None, False, False, [], 43),
+    ])
+    async def test_create_and_duplicate_preserve_targeting(
+        self, async_client, test_session, scope, pin, manual, fold, providers, target
+    ):
+        targeting = {
+            "match_scope_target_group": scope, "match_scope_group_id": pin,
+            "allow_manual_channel_merge": manual, "fold_match_key": fold,
+            "required_provider_ids": providers, "target_group_id": target,
+            "m3u_account_id": 1,
+        }
+        payload = {
+            "name": "Targeted", "enabled": True,
+            "conditions": [{"type": "stream_name_contains", "value": "Sports"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}",
+                         "group_id": 43}],
+            **targeting,
+        }
+        client = MagicMock()
+        client.get_m3u_accounts = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
+        with patch("routers.channel_pipeline.journal"), patch(
+            "routers.channel_pipeline.get_client", return_value=client
+        ):
+            created = await async_client.post("/api/auto-creation/rules", json=payload)
+            assert created.status_code == 200, created.text
+            source = created.json()
+            original = test_session.get(ChannelPipelineRule, source["id"])
+            original.set_managed_channel_ids([123])
+            original.match_count = 9
+            original.last_run_at = datetime(2026, 1, 1)
+            test_session.commit()
+            source = (await async_client.get(f'/api/auto-creation/rules/{source["id"]}')).json()
+            execution = _create_execution(test_session, rule_id=source["id"])
+            copied = await async_client.post(f'/api/auto-creation/rules/{source["id"]}/duplicate')
+        assert copied.status_code == 200, copied.text
+        clone = copied.json()
+        assert clone["id"] != source["id"]
+        assert clone["name"] == "Targeted (Copy)"
+        assert clone["enabled"] is False
+        for rule_id in [source["id"], clone["id"]]:
+            loaded = await async_client.get(f"/api/auto-creation/rules/{rule_id}")
+            assert loaded.status_code == 200
+            for key, value in targeting.items():
+                assert loaded.json()[key] == value
+            assert loaded.json()["actions"] == payload["actions"]
+            test_session.expire_all()
+            persisted = test_session.get(ChannelPipelineRule, rule_id).to_dict()
+            for key, value in targeting.items():
+                assert persisted[key] == value
+        assert (await async_client.get(f'/api/auto-creation/rules/{source["id"]}')).json() == source
+        assert test_session.get(ChannelPipelineExecution, execution.id).rule_id == source["id"]
+        assert test_session.query(ChannelPipelineExecution).filter_by(rule_id=clone["id"]).count() == 0
+        assert clone["match_count"] == 0
+        assert clone["last_run_at"] is None
+        assert test_session.get(ChannelPipelineRule, clone["id"]).get_managed_channel_ids() == []
+        assert test_session.get(ChannelPipelineRule, source["id"]).get_managed_channel_ids() == [123]
+
+    @pytest.mark.asyncio
+    async def test_omitted_create_targeting_retains_defaults(self, async_client):
+        with patch("routers.channel_pipeline.journal"):
+            created = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Defaults",
+                "conditions": [{"type": "stream_name_contains", "value": "Sports"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            })
+        assert created.status_code == 200, created.text
+        loaded = await async_client.get(f'/api/auto-creation/rules/{created.json()["id"]}')
+        assert loaded.status_code == 200
+        for key, value in {
+            "match_scope_target_group": True, "match_scope_group_id": None,
+            "allow_manual_channel_merge": False, "fold_match_key": False,
+            "required_provider_ids": [], "target_group_id": None,
+        }.items():
+            assert loaded.json()[key] == value
+
+
 class TestChannelGroupConditionGH856:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("value", ["Sports", "42", "", None])

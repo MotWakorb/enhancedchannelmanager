@@ -15,13 +15,109 @@
 | Order | GitHub Issue | Status at Dispatch | Scope |
 | --- | --- | --- | --- |
 | 1 | #801 | Prior fix verified, per parent handoff | Parent reports 273 backend and 4 MCP tests; closure deferred to final merge. |
-| 2 | #975 | Active | Scheduled broad pipeline must not require rule `run_on_refresh`. |
+| 2 | #975 | Implemented; focused verification complete | Explicit broad vs refresh decision retained; `90bf87f2`, fixture correction `51e82a94`. |
 | 3 | #856 | Implemented; focused verification complete | Existing Channel Group Is selects names and serializes integer IDs; assigned-channel semantics retained. Batch typecheck blocker noted below. |
 | 4 | #970 | Not reproduced; regression coverage verified | Current code preserves false through save/reopen and persisted merge execution. Reporter-build confirmation remains pending. |
 | 5 | #968 | Implemented; focused verification complete | Explicit null clears channel sorting; omitted fields retain prior values. |
 | 6 | #962 | Implemented; focused verification complete | Checkbox glyph clipping reproduced and repaired; desktop/narrow exact-build browser regression passes. Mobile shell limitations noted below. |
-| 7 | #858 | Pending | Not investigated in this dispatch. |
-| 8 | #969 | Pending | Not investigated in this dispatch. |
+| 7 | #858 | Implemented; focused verification complete | PO global-stop behavior in `98961c33`; [frozen plan and evidence](gh858-stop-processing-plan.md). |
+| 8 | #969 | Implemented; focused verification complete | Five missing Targeting fields copied; frozen acceptance and evidence below. |
+
+All ordered items are locally implementation-complete (GH801 prior verification,
+GH970 regression-only), not merged/reporter-confirmed. Preserved implementation
+references: GH856 `d7ecf085`, GH970 `b063cc51`, GH968 `ece74161`, GH962 `fc8963ee`.
+The historical GH856 typecheck blocker below was resolved by `51e82a94`; current
+frontend typecheck passes. Parent final full gates, independent review, single
+batch merge and reporter/closure disposition remain pending. GH858's separate
+plan is authoritative; its frozen choices have not been rewritten here.
+
+## GH969 Frozen Acceptance
+
+Bead: `enhancedchannelmanager-0m06f.2.3.6`; intake HEAD `98961c33`.
+Read full bead and GH969 body (v0.18.1), both with zero comments.
+
+1. Actual Duplicate UI must preserve all current Targeting controls:
+   `match_scope_target_group`, `match_scope_group_id`,
+   `allow_manual_channel_merge`, `fold_match_key`, `required_provider_ids`.
+   Preserve true/false, pinned/null group and populated/empty provider lists.
+2. Preserve existing `m3u_account_id`, `target_group_id`, conditions and action
+   targeting. No truthy defaults; null is tested where the API supports it.
+3. Keep normal clone identity: new ID, `(Copy)` name, disabled, existing ordering.
+   Do not mutate source configuration or adopt history/managed channel ownership.
+4. Tests first: rendered tab Duplicate -> real hook -> API JSON -> reopen Targeting,
+   plus real API create/duplicate/GET and isolated SQLite persistence. HTTP mocks
+   in UI tests are not claimed as browser-to-Python E2E evidence.
+5. Minimal manual-payload fix only; no new options, generalized clone abstraction,
+   migrations, sorting/Event Sync expansion, or changes to earlier batch decisions.
+   Focused tests/lint/types here; parent owns final full gates and all shipping,
+   tracker transitions and closure. Every check waits synchronously to completion.
+
+## GH969 Implementation and Verification
+
+Root cause: `ChannelPipelineTab.handleDuplicate` calls the rules hook, which
+assembles a `CreateRuleData` payload and POSTs `/api/channel-pipeline/rules`.
+It does not call the server duplicate endpoint. The manual payload omitted all
+five current Targeting controls listed above, so creation used true/null/false/
+false/empty defaults. The server create model, assignments and serialization
+already preserve supplied values; its duplicate endpoint already copies them.
+
+The production fix is five direct assignments in
+`frontend/src/hooks/useChannelPipelineRules.ts`. Existing provider ID, target
+group ID and conditions/actions are copied unchanged. No default substitutions,
+new options, server production changes or identity/ordering changes were made.
+Sorting and Event Sync payload differences are outside this targeting-only scope.
+
+Tests in `frontend/src/components/channelPipeline/ChannelPipelineTab.test.tsx`
+click the actual Duplicate control, capture real hook/service POST JSON at MSW,
+remount from GET and reopen the actual Targeting editor. Three cases pin checked,
+unchecked, pinned and Auto values, including fold matching and required providers
+in the payload. Source configuration is unchanged, the copy is disabled with a
+new ID and `(Copy)` name, and identity/history/ownership fields are absent from
+the create request. Existing GH755 tests continue to pin clone placement.
+
+Four new cases in `backend/tests/routers/test_channel_pipeline.py` cross real
+FastAPI create/duplicate/GET and isolated SQLite commit/reload. They verify the
+same targeting values, null target group, omitted-create defaults, fresh identity,
+unchanged source, no copied execution history/counters and no adopted managed
+channel IDs. Only external provider lookup and journal are mocked, not validation
+or persistence. No live Dispatcharr writes or shared database cleanup occurred.
+
+### Red and Green
+
+- Before production edits, the three UI cases failed at POST JSON assertions:
+  all five Targeting fields were missing. After the five-line fix, all three pass.
+- Backend production needed no change. Initial populated-provider setup failed
+  because the fixture lacked the external provider mock (503 from an invalid,
+  empty test URL, not a live service). After supplying that boundary, three cases
+  passed. The added omission control initially lacked a required condition (400);
+  corrected before the final run. Neither setup error is counted as bug red proof.
+- Final frontend selection: **282 passed in 10.92s**. Backend router selection:
+  **286 passed in 12.34s**. Frontend typecheck and changed-file ESLint: **exit 0**.
+
+Commands from `frontend/`, Node 24.13.0 installation `bin` on PATH:
+
+```bash
+npx vitest run src/components/channelPipeline/ChannelPipelineTab.test.tsx -t GH969 --silent
+npx vitest run src/components/channelPipeline/ChannelPipelineTab.test.tsx src/components/channelPipeline/RuleBuilder.test.tsx src/hooks/useChannelPipelineRules.test.ts src/services/channelPipelineApi.test.ts --silent
+npm run typecheck
+npx eslint src/hooks/useChannelPipelineRules.ts src/components/channelPipeline/ChannelPipelineTab.test.tsx --max-warnings 0
+```
+
+Commands from worktree root:
+
+```bash
+env TMPDIR=/tmp/opencode ECM_PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python scripts/backend-gate.sh --subset tests/routers/test_channel_pipeline.py -k GH969
+env TMPDIR=/tmp/opencode ECM_PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python scripts/backend-gate.sh --subset tests/routers/test_channel_pipeline.py
+/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python -m ruff check backend/tests/routers/test_channel_pipeline.py
+git diff --check
+```
+
+Ruff exited 1: `No module named ruff`; no dependency installation attempted.
+Diff whitespace check passed. UI verification is rendered jsdom plus mocked HTTP,
+not a deployed browser or reporter-build acceptance test. Full canonical gates
+were deliberately deferred to the parent; all invoked checks terminated in the
+foreground. No push, PR, merge, tracker transition or GitHub closure in this
+engineer dispatch. No dependencies, lockfiles or prior implementation changed.
 
 ## GH962 Frozen Acceptance
 
