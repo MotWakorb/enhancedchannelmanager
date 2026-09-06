@@ -17,11 +17,116 @@
 | 1 | #801 | Prior fix verified, per parent handoff | Parent reports 273 backend and 4 MCP tests; closure deferred to final merge. |
 | 2 | #975 | Active | Scheduled broad pipeline must not require rule `run_on_refresh`. |
 | 3 | #856 | Implemented; focused verification complete | Existing Channel Group Is selects names and serializes integer IDs; assigned-channel semantics retained. Batch typecheck blocker noted below. |
-| 4 | #970 | Pending | Not investigated in this dispatch. |
+| 4 | #970 | Not reproduced; regression coverage verified | Current code preserves false through save/reopen and persisted merge execution. Reporter-build confirmation remains pending. |
 | 5 | #968 | Pending | Not investigated in this dispatch. |
 | 6 | #962 | Pending | Not investigated in this dispatch. |
 | 7 | #858 | Pending | Not investigated in this dispatch. |
 | 8 | #969 | Pending | Not investigated in this dispatch. |
+
+## GH970 Frozen Acceptance
+
+Bead: `enhancedchannelmanager-0m06f.2.3.5`. Intake base: `d7ecf085`.
+Source: https://github.com/MotWakorb/enhancedchannelmanager/issues/970
+Read the full bead and GitHub body; GitHub returned zero comments.
+GH975 fixture-only prerequisite is commit `51e82a94`: legacy null is isolated
+with the existing unknown-cast test pattern without changing API types.
+ScheduleEditor: 38 tests passed; frontend typecheck and file ESLint exited 0.
+
+1. Render the real RuleBuilder, navigate to Targeting, uncheck scope, click Next
+   and Save, and reopen from the serialized API response. Explicit false must
+   remain in the request and the reopened checkbox must remain unchecked.
+2. Cross real API create/update/GET and isolated SQLite persistence. False must
+   survive creation and updates; omitted updates must not reset it. New rules
+   with omitted scope retain the scoped default.
+3. Execute persisted rules in preview and live modes against mocked Dispatcharr
+   boundaries. Explicit false alone permits all-group lookup; scoped defaults
+   retain target-group lookup. Preserve the existing pinned-group contract:
+   a pin wins while scoped, is ignored while off, and the editor clears it on save.
+4. Tests precede production changes. If current code already satisfies the report,
+   record that evidence and add regression coverage, not an invented fix or red
+   failure. No new scope policy, default, migration, dependency, or refactor.
+5. Preserve GH975/GH856 production changes; do not investigate or fix GH968,
+   GH962, GH858, or GH969. Run focused tests, frontend typecheck, and changed-file
+   lint here; canonical full gates remain at the end of the ordered batch.
+   No live writes, main-tree edits, push, PR, merge, or tracker/GitHub mutations.
+
+## GH970 Investigation and Verification
+
+No production fix was needed on intake HEAD `d7ecf085`. The reported v0.18.1
+failure was not reproduced; its historical/deployed root cause is not established.
+Do not treat this result as reporter confirmation or close the issue from it.
+
+The traced path already distinguishes false from absence:
+
+- `RuleBuilder` initializes scope with `?? true`, reads `event.target.checked`,
+  and includes the boolean in `buildConfig`. Switching off serializes a null pin.
+- `ChannelPipelineTab.handleSaveRule` passes the config to `useChannelPipelineRules`;
+  the hook forwards it to the API service and retains the returned rule unchanged.
+- `channelPipelineApi` JSON-serializes the POST/PUT body without dropping false.
+- The backend create request defaults to true only when omitted; scalar updates
+  use `is not None`, so false is assigned and committed. `to_dict` retains false.
+- The engine passes the persisted boolean and pin to the executor. Off disables
+  the lookup group filter; on retains the action-derived or explicit pinned group.
+
+### Regression Evidence
+
+Tests were added before any production edits. Initial unmodified-code probes
+passed: 2 UI cases and 13 backend cases. UI coverage was then expanded to four
+create/edit and pinned/Auto cases; backend execution now includes a real PUT from
+true to false before loading and running the persisted rule.
+
+The UI tests render the actual RuleBuilder in jsdom, use Next/Save, call the real
+API service, capture JSON at MSW, and reopen from GET. They verify unchecked scope
+and a cleared pin on reload and a second save. The HTTP server is mocked in this
+layer; this is not a browser-to-Python end-to-end test.
+
+Backend coverage crosses real FastAPI POST/PUT/GET, validation, isolated SQLite
+commits/reloads, pipeline rule loading, and real executor lookup. Thirteen cases
+cover create omission/false/true, update false, unrelated rename, pin clearing,
+and preview/live lookup against an existing same-name channel outside the action
+target group. Scoped default/true does not merge across groups; false does. A pin
+overrides the action group while on and is ignored while off. Live-mode writes
+are asserted against mocked Dispatcharr methods only; preview does not call those
+write methods. No live instance or user data was touched.
+
+Mutation checks establish that the regression tests can fail, not that the intake
+code was broken:
+
+- Temporarily replacing UI `?? true` with `|| true` caused **4 failures** at the
+  reopened checkbox assertion.
+- Temporarily replacing backend `is not None` with a truthiness check caused
+  **6 failures, 7 passes**: true remained in responses/persisted rows after PUT false.
+- Both mutations were restored with explicit patches. `git diff --exit-code`
+  confirmed no production diff before the final green runs.
+
+### Final Focused Checks
+
+From the worktree root:
+
+```bash
+env TMPDIR=/tmp/opencode/ecm-gh970-tmp ECM_PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python scripts/backend-gate.sh --subset tests/routers/test_channel_pipeline.py tests/unit/test_channel_pipeline_engine.py tests/unit/test_channel_pipeline_executor.py tests/unit/test_g0uuf_duplicate_name_scoped_lookup.py
+```
+
+Result: **828 passed in 16.56s**. Private test configuration was created under
+the dedicated TMPDIR; only one backend verification ran at a time.
+
+From `frontend/`, with Node 24.13.0 on PATH:
+
+```bash
+npx vitest run src/components/channelPipeline/RuleBuilder.test.tsx src/components/channelPipeline/ConditionEditor.test.tsx src/hooks/useChannelPipelineRules.test.ts src/services/channelPipelineApi.test.ts src/components/ScheduleEditor.test.tsx --silent
+npm run typecheck
+npx eslint src/components/channelPipeline/RuleBuilder.test.tsx src/components/ScheduleEditor.test.tsx --max-warnings 0
+```
+
+Results: **253 passed in 8.32s**, frontend typecheck **exit 0**, ESLint **exit 0**.
+Existing worktree-local dependencies/cache directories were used without changes
+to dependencies, lockfiles, shared tooling, or global configuration.
+
+Python lint remains unavailable: the supplied virtualenv reports `No module named
+ruff`. Canonical full gates remain deferred to ordered-batch completion, as above.
+No deployed browser/reporter-build acceptance or independent review was performed.
+All invoked checks finished synchronously. No push, PR, merge, tracker transition,
+GitHub mutation, or later-bug work occurred.
 
 ## GH856 Frozen Acceptance
 
