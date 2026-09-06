@@ -94,6 +94,14 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
   const [parameters, setParameters] = useState<Record<string, unknown>>(() =>
     resolveParameters(parameterSchema, defaultParameters, schedule?.parameters)
   );
+  const broadPipeline = taskId === 'auto_creation' && parameters.run_all_rules === true;
+  const legacyRefreshPoll = taskId === 'auto_creation' && !!schedule
+    && Object.keys(schedule.parameters || {}).length === 0
+    && parameters.run_all_rules === undefined
+    && (!Array.isArray(parameters.rule_ids) || parameters.rule_ids.length === 0);
+  const activeParameterSchema = parameterSchema?.filter(param =>
+    !(broadPipeline && param.name === 'rule_ids')
+  );
 
   // The modal loads schema, task defaults, and options asynchronously. Rebuild
   // untouched values as those inputs arrive without overwriting user edits.
@@ -163,7 +171,9 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
 
     // Include task-specific parameters if we have a schema
     if (parameterSchema && parameterSchema.length > 0) {
-      data.parameters = parameters;
+      data.parameters = { ...parameters };
+      if (broadPipeline) delete data.parameters.rule_ids;
+      if (legacyRefreshPoll) data.parameters = {};
     }
 
     try {
@@ -173,7 +183,8 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
     }
   };
 
-  const missingRequiredParameter = parameterSchema?.some((param) => {
+  const missingRequiredParameter = activeParameterSchema?.some((param) => {
+    if (legacyRefreshPoll && param.name === 'rule_ids') return false;
     if (!param.required) return false;
     const value = parameters[param.name] ?? param.default;
     if (param.type === 'boolean') return value !== true;
@@ -182,7 +193,8 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
     }
     return value === undefined || value === '';
   }) ?? false;
-  const staleRequiredSelections = parameterSchema?.some((param) => {
+  const staleRequiredSelections = activeParameterSchema?.some((param) => {
+    if (legacyRefreshPoll && param.name === 'rule_ids') return false;
     if (!param.required || (param.type !== 'string_array' && param.type !== 'number_array')) return false;
     const source = param.source || param.name;
     const options = parameterOptions?.[source];
@@ -192,7 +204,8 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
     const available = new Set(options.map(option => option.value));
     return selected.some(value => !available.has(value));
   }) ?? false;
-  const requiredSourceUnavailable = parameterSchema?.some((param) => {
+  const requiredSourceUnavailable = activeParameterSchema?.some((param) => {
+    if (legacyRefreshPoll && param.name === 'rule_ids') return false;
     if (!param.required) return false;
     const state = parameterSourceStatus?.[param.source || param.name];
     return state === 'loading' || state === 'empty' || state === 'error';
@@ -485,7 +498,13 @@ export function ScheduleEditor({ schedule, onSave, onCancel, saving, taskId, par
       {parameterSchema && parameterSchema.length > 0 && (
         <div className="parameters-section">
           <h4 className="section-title">Task Parameters</h4>
-          {parameterSchema.map((param) => {
+          {legacyRefreshPoll && (
+            <p className="parameters-note">
+              This existing schedule polls for completed M3U refreshes. Keep its scope unchanged,
+              or explicitly choose all enabled rules or a selection below.
+            </p>
+          )}
+          {activeParameterSchema?.map((param) => {
             const descriptionId = `schedule-parameter-${param.name}-description`;
             const inputId = `schedule-parameter-${param.name}`;
             const source = param.source || param.name;

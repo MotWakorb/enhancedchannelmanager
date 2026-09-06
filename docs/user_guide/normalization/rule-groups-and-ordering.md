@@ -68,7 +68,8 @@ The consequences:
 
 After every group and rule has run once, ECM runs the entire set again, and
 keeps going until a pass produces no change. There is a ceiling of ten
-passes as a loop guard.
+passes as a loop guard. A matching rule with **Stop Processing After Match**
+ends normalization immediately instead, as described below.
 
 This is deliberate: it lets stacked suffixes collapse. `4K/UHD` needs one
 pass to strip `UHD` and another to strip the `4K` that is now at the end.
@@ -86,13 +87,21 @@ Two practical consequences:
 
 ## Stop Processing After Match
 
-The rule editor has a **Stop Processing After Match** checkbox. It stops
-the **remaining rules in that rule's own group** for the current pass.
-Later groups still run, and the outer repeat loop still runs.
+The rule editor has a **Stop Processing After Match** checkbox. When the
+condition matches, the action runs and its exact output becomes final for
+that name. No remaining rules, later groups, repeat passes, legacy custom
+tags, or final whitespace cleanup run. A match stops processing even if the
+action leaves the text unchanged.
 
-Use it for "first match wins" sets: several alternative patterns in one
-group where exactly one should apply. Do not reach for it expecting a
-global halt, because it is not one.
+For example, replace `Los Angeles Clippers` with `LA Clippers` and check
+this box: a later Title Case rule will not change it to `La Clippers`.
+This global stop replaces the earlier group-local behavior (GH858).
+
+A condition that does not match does not trigger the global stop. If its
+else action runs with this box checked, the existing behavior remains:
+skip only the remaining rules in that group for the current pass. Later
+groups, legacy tags, whitespace cleanup, and repeat passes still run.
+Disabled rules and groups do not trigger either stop.
 
 ## Enabled and disabled
 

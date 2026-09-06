@@ -333,7 +333,8 @@ def _apply_rule_scalar_updates(
         _set("run_on_refresh", request.run_on_refresh)
     if request.stop_on_first_match is not None:
         _set("stop_on_first_match", request.stop_on_first_match)
-    if request.sort_field is not None:
+    # Explicit null means "No sorting"; an omitted field leaves sorting unchanged.
+    if "sort_field" in request.model_fields_set:
         _set("sort_field", request.sort_field or None)
     if request.sort_order is not None:
         _set("sort_order", request.sort_order)

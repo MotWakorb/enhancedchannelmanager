@@ -14,8 +14,9 @@ import {
   createMockChannelGroup,
 } from '../../test/mocks/server';
 import { RuleBuilder } from './RuleBuilder';
+import { createChannelPipelineRule, getChannelPipelineRule, updateChannelPipelineRule } from '../../services/channelPipelineApi';
 import { ModalOverlay } from '../ModalOverlay';
-import type { ChannelPipelineRule } from '../../types/channelPipeline';
+import type { ChannelPipelineRule, CreateRuleData } from '../../types/channelPipeline';
 
 /**
  * Reveal a wizard step by clicking its pill (bead 09x38.10). The Standard
@@ -605,6 +606,61 @@ describe('RuleBuilder', () => {
   });
 
   describe('merge scope group (GH #298)', () => {
+    it.each([
+      { pin: null, editing: false }, { pin: 42, editing: false },
+      { pin: null, editing: true }, { pin: 42, editing: true },
+    ])('GH970 preserves unchecked scope through Next, save, and API reload ($pin, editing $editing)', async ({ pin, editing }) => {
+      const user = userEvent.setup();
+      let stored: Partial<ChannelPipelineRule> = {};
+      const requests: unknown[] = [];
+      const persist = async ({ request }: { request: Request }) => {
+        const body = await request.json();
+        requests.push(body);
+        stored = { ...body, id: 970 };
+        return HttpResponse.json(stored);
+      };
+      server.use(
+        http.post('/api/channel-pipeline/rules', persist),
+        http.put('/api/channel-pipeline/rules/970', persist),
+        http.get('/api/channel-pipeline/rules/970', () => HttpResponse.json(stored)),
+      );
+      const rule: Partial<ChannelPipelineRule> = {
+        name: 'GH970', conditions: [{ type: 'always' }],
+        actions: [{ type: 'create_channel', group_id: 42, if_exists: 'merge' }],
+        match_scope_group_id: pin, ...(editing ? { id: 970, match_scope_target_group: true } : {}),
+      };
+      const onSave = vi.fn(async (data: CreateRuleData) => {
+        if (editing) await updateChannelPipelineRule(970, data);
+        else await createChannelPipelineRule(data);
+      });
+      const view = render(<RuleBuilder rule={rule} onSave={onSave} onCancel={vi.fn()} />);
+      await gotoStep(user, 2);
+      const checkbox = screen.getByRole('checkbox', { name: /scope merge lookups to a target group/i });
+      expect(checkbox).toBeChecked();
+      await user.click(checkbox);
+      expect(checkbox).not.toBeChecked();
+      await user.click(screen.getByRole('button', { name: /next/i }));
+      await user.click(screen.getByRole('button', { name: /save/i }));
+      await waitFor(() => expect(requests).toHaveLength(1));
+      const loaded = await getChannelPipelineRule(970);
+      expect(requests[0]).toEqual(expect.objectContaining({
+        match_scope_target_group: false, match_scope_group_id: null,
+        actions: rule.actions,
+      }));
+      view.unmount();
+
+      render(<RuleBuilder rule={loaded} onSave={async data => { await updateChannelPipelineRule(970, data); }} onCancel={vi.fn()} />);
+      await gotoStep(user, 2);
+      expect(screen.getByRole('checkbox', { name: /scope merge lookups to a target group/i })).not.toBeChecked();
+      expect(screen.queryByText('Scope group')).not.toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /next/i }));
+      await user.click(screen.getByRole('button', { name: /save/i }));
+      await waitFor(() => expect(requests).toHaveLength(2));
+      expect(await getChannelPipelineRule(970)).toEqual(expect.objectContaining({
+        match_scope_target_group: false, match_scope_group_id: null,
+      }));
+    });
+
     it('shows the Scope group selector when merge scope is on', async () => {
       const user = userEvent.setup();
       mockDataStore.channelGroups.push(

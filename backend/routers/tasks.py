@@ -1080,11 +1080,11 @@ async def create_task_schedule(
 
             if task_id == "auto_creation" and not (
                 isinstance(data.parameters, dict)
-                and data.parameters.get("rule_ids")
+                and (data.parameters.get("rule_ids") or data.parameters.get("run_all_rules") is True)
             ):
                 raise HTTPException(
                     status_code=422,
-                    detail="Channel Pipeline schedules require at least one selected rule",
+                    detail="Channel Pipeline schedules require selected rules or explicit run_all_rules",
                 )
             _validate_schedule_parameters(task_id, data.parameters)
 

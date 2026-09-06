@@ -105,8 +105,11 @@ differently in the else branch:
 
 ## Stop Processing After Match
 
-**Stop Processing After Match** halts the remaining rules **in that rule's
-own group**. Later groups still run. See
+**Stop Processing After Match** preserves the matching action's exact output,
+even if unchanged. It halts all further normalization for that name, including
+later groups, repeat passes, legacy tags, and final whitespace cleanup.
+An unmatched condition does not trigger this global stop; an executed else
+action retains its group-local stop for the current pass. See
 [Rule groups and ordering](rule-groups-and-ordering.md).
 
 ## Safety behaviours you should expect

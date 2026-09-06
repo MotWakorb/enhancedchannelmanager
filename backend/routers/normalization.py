@@ -200,6 +200,7 @@ class TestRuleRequest(BaseModel):
     condition_type: str
     condition_value: Optional[str] = None
     case_sensitive: bool = False
+    stop_processing: bool = False
     # Tag group condition
     tag_group_id: Optional[int] = None
     tag_match_position: Optional[str] = None  # 'prefix', 'suffix', or 'contains'
@@ -734,6 +735,7 @@ async def test_normalization_rule(request: TestRuleRequest):
                 else_action_type=request.else_action_type,
                 else_action_value=request.else_action_value,
                 require_delimiter=request.require_delimiter,
+                stop_processing=request.stop_processing,
             )
             return result
         finally:
@@ -1223,7 +1225,8 @@ async def _build_apply_diff(client, engine) -> list[dict]:
                            ch.get("id"), current_name, e)
             continue
 
-        normalized_core = (norm_result.normalized or core).strip()
+        # The engine owns cleanup; a matched stop preserves its exact output.
+        normalized_core = norm_result.normalized or core.strip()
         proposed_name = f"{prefix}{normalized_core}" if prefix else normalized_core
 
         # Skip rows where nothing would change

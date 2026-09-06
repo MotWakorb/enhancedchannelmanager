@@ -97,6 +97,272 @@ def test_request_models_reject_coerced_required_provider_ids(model, payload, val
         model(**payload, required_provider_ids=value)
 
 
+class TestDuplicateTargetingGH969:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scope,pin,manual,fold,providers,target", [
+        (True, 42, True, True, [1, 2], 43),
+        (False, None, False, False, [], None),
+        (True, None, False, False, [], 43),
+    ])
+    async def test_create_and_duplicate_preserve_targeting(
+        self, async_client, test_session, scope, pin, manual, fold, providers, target
+    ):
+        targeting = {
+            "match_scope_target_group": scope, "match_scope_group_id": pin,
+            "allow_manual_channel_merge": manual, "fold_match_key": fold,
+            "required_provider_ids": providers, "target_group_id": target,
+            "m3u_account_id": 1,
+        }
+        payload = {
+            "name": "Targeted", "enabled": True,
+            "conditions": [{"type": "stream_name_contains", "value": "Sports"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}",
+                         "group_id": 43}],
+            **targeting,
+        }
+        client = MagicMock()
+        client.get_m3u_accounts = AsyncMock(return_value=[{"id": 1}, {"id": 2}])
+        with patch("routers.channel_pipeline.journal"), patch(
+            "routers.channel_pipeline.get_client", return_value=client
+        ):
+            created = await async_client.post("/api/auto-creation/rules", json=payload)
+            assert created.status_code == 200, created.text
+            source = created.json()
+            original = test_session.get(ChannelPipelineRule, source["id"])
+            original.set_managed_channel_ids([123])
+            original.match_count = 9
+            original.last_run_at = datetime(2026, 1, 1)
+            test_session.commit()
+            source = (await async_client.get(f'/api/auto-creation/rules/{source["id"]}')).json()
+            execution = _create_execution(test_session, rule_id=source["id"])
+            copied = await async_client.post(f'/api/auto-creation/rules/{source["id"]}/duplicate')
+        assert copied.status_code == 200, copied.text
+        clone = copied.json()
+        assert clone["id"] != source["id"]
+        assert clone["name"] == "Targeted (Copy)"
+        assert clone["enabled"] is False
+        for rule_id in [source["id"], clone["id"]]:
+            loaded = await async_client.get(f"/api/auto-creation/rules/{rule_id}")
+            assert loaded.status_code == 200
+            for key, value in targeting.items():
+                assert loaded.json()[key] == value
+            assert loaded.json()["actions"] == payload["actions"]
+            test_session.expire_all()
+            persisted = test_session.get(ChannelPipelineRule, rule_id).to_dict()
+            for key, value in targeting.items():
+                assert persisted[key] == value
+        assert (await async_client.get(f'/api/auto-creation/rules/{source["id"]}')).json() == source
+        assert test_session.get(ChannelPipelineExecution, execution.id).rule_id == source["id"]
+        assert test_session.query(ChannelPipelineExecution).filter_by(rule_id=clone["id"]).count() == 0
+        assert clone["match_count"] == 0
+        assert clone["last_run_at"] is None
+        assert test_session.get(ChannelPipelineRule, clone["id"]).get_managed_channel_ids() == []
+        assert test_session.get(ChannelPipelineRule, source["id"]).get_managed_channel_ids() == [123]
+
+    @pytest.mark.asyncio
+    async def test_omitted_create_targeting_retains_defaults(self, async_client):
+        with patch("routers.channel_pipeline.journal"):
+            created = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Defaults",
+                "conditions": [{"type": "stream_name_contains", "value": "Sports"}],
+                "actions": [{"type": "create_channel", "name_template": "{stream_name}"}],
+            })
+        assert created.status_code == 200, created.text
+        loaded = await async_client.get(f'/api/auto-creation/rules/{created.json()["id"]}')
+        assert loaded.status_code == 200
+        for key, value in {
+            "match_scope_target_group": True, "match_scope_group_id": None,
+            "allow_manual_channel_merge": False, "fold_match_key": False,
+            "required_provider_ids": [], "target_group_id": None,
+        }.items():
+            assert loaded.json()[key] == value
+
+
+class TestChannelGroupConditionGH856:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["Sports", "42", "", None])
+    async def test_rejects_text_group_values_with_integer_id_error(self, async_client, value):
+        response = await async_client.post("/api/auto-creation/rules", json={
+            "name": "Channel group",
+            "conditions": [{"type": "channel_in_group", "value": value}],
+            "actions": [{"type": "log_match", "message": "Group matched"}],
+        })
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["errors"] == [
+            "conditions[0]: channel_in_group requires a group ID (integer)"
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "live"])
+    async def test_persisted_group_id_matches_assigned_channels(
+        self, async_client, test_session, test_engine, dry_run
+    ):
+        from sqlalchemy.orm import sessionmaker
+        from channel_pipeline_engine import ChannelPipelineEngine
+
+        condition = {"type": "channel_in_group", "value": 42}
+        with patch("routers.channel_pipeline.journal"):
+            created = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Channel group",
+                "conditions": [condition],
+                "actions": [{"type": "log_match", "message": "Group matched"}],
+            })
+        assert created.status_code == 200, created.text
+        rule_id = created.json()["id"]
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, rule_id).get_conditions() == [condition]
+        loaded = await async_client.get(f"/api/auto-creation/rules/{rule_id}")
+        assert loaded.status_code == 200
+        assert loaded.json()["conditions"] == [condition]
+
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 2, "results": [
+            {"id": 10, "name": "Sports Channel", "channel_group_id": 42, "streams": [101]},
+            {"id": 11, "name": "News Channel", "channel_group_id": 43, "streams": [102]},
+        ]})
+        client.get_channel_groups = AsyncMock(return_value=[
+            {"id": 42, "name": "Sports"}, {"id": 43, "name": "News"},
+        ])
+        client.get_m3u_accounts = AsyncMock(return_value=[{"id": 1, "name": "Provider"}])
+        client.get_streams = AsyncMock(return_value={"count": 3, "results": [
+            {"id": 101, "name": "Assigned Sports", "group_title": "Other"},
+            {"id": 102, "name": "Assigned News", "group_title": "Sports"},
+            {"id": 103, "name": "Unassigned", "group_title": "Sports"},
+        ]})
+        engine = ChannelPipelineEngine(client)
+        with patch("channel_pipeline_engine.get_session", sessionmaker(bind=test_engine)):
+            result = await engine.run_pipeline(dry_run=dry_run)
+
+        assert result["success"] is True, result
+        assert result["streams_evaluated"] == 3
+        assert result["streams_matched"] == 1
+        assert result["mode"] == ("dry_run" if dry_run else "execute")
+        matched = [entry for entry in result["execution_log"] if entry.get("actions_executed")]
+        assert [entry["stream_id"] for entry in matched] == [101]
+        assert matched[0]["actions_executed"][0]["success"] is True
+        if dry_run:
+            assert [entry["stream_id"] for entry in result["dry_run_results"]] == [101]
+        assert all(call[0].startswith("get_") for call in client.mock_calls)
+
+
+class TestMergeScopeGH970:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("initial_scope", [None, False, True])
+    async def test_false_survives_create_update_and_reopen(
+        self, async_client, test_session, initial_scope
+    ):
+        payload = {
+            "name": "GH970",
+            "conditions": [{"type": "always"}],
+            "actions": [{"type": "create_channel", "group_id": 42, "if_exists": "merge"}],
+            "match_scope_group_id": 42,
+        }
+        if initial_scope is not None:
+            payload["match_scope_target_group"] = initial_scope
+        with patch("routers.channel_pipeline.journal"):
+            created = await async_client.post("/api/channel-pipeline/rules", json=payload)
+            assert created.status_code == 200, created.text
+            rule_id = created.json()["id"]
+            expected = True if initial_scope is None else initial_scope
+            assert created.json()["match_scope_target_group"] is expected
+            test_session.expire_all()
+            assert test_session.get(ChannelPipelineRule, rule_id).match_scope_target_group is expected
+
+            # The editor clears the pin when scope is switched off.
+            updated = await async_client.put(f"/api/channel-pipeline/rules/{rule_id}", json={
+                "match_scope_target_group": False, "match_scope_group_id": None,
+            })
+            assert updated.status_code == 200, updated.text
+            assert updated.json()["match_scope_target_group"] is False
+            renamed = await async_client.put(f"/api/channel-pipeline/rules/{rule_id}", json={"name": "Renamed"})
+            assert renamed.status_code == 200, renamed.text
+
+        test_session.expire_all()
+        persisted = test_session.get(ChannelPipelineRule, rule_id)
+        assert persisted.match_scope_target_group is False
+        assert persisted.match_scope_group_id is None
+        loaded = await async_client.get(f"/api/channel-pipeline/rules/{rule_id}")
+        assert loaded.status_code == 200
+        assert loaded.json()["match_scope_target_group"] is False
+        assert loaded.json()["match_scope_group_id"] is None
+        assert loaded.json()["actions"] == payload["actions"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "live"])
+    @pytest.mark.parametrize("scope,pin,merges", [
+        (None, None, False), (True, None, False),
+        (False, None, True), (False, 42, True), (True, 43, True),
+    ])
+    async def test_persisted_scope_controls_pipeline_lookup(
+        self, async_client, test_session, test_engine, dry_run, scope, pin, merges
+    ):
+        from sqlalchemy.orm import sessionmaker
+        from channel_pipeline_engine import ChannelPipelineEngine
+
+        payload = {
+            "name": "GH970 merge", "conditions": [{"type": "always"}],
+            "actions": [{"type": "create_channel", "name_template": "{stream_name}",
+                         "group_id": 42, "if_exists": "merge"}],
+            "match_scope_group_id": pin, "orphan_action": "none",
+        }
+        if scope is not None:
+            payload["match_scope_target_group"] = True
+        with patch("routers.channel_pipeline.journal"):
+            created = await async_client.post("/api/channel-pipeline/rules", json=payload)
+            assert created.status_code == 200, created.text
+            if scope is False:
+                updated = await async_client.put(
+                    f"/api/channel-pipeline/rules/{created.json()['id']}",
+                    json={"match_scope_target_group": False},
+                )
+                assert updated.status_code == 200, updated.text
+        test_session.expire_all()
+        persisted = test_session.get(ChannelPipelineRule, created.json()["id"])
+        assert persisted.match_scope_target_group is (True if scope is None else scope)
+        assert persisted.match_scope_group_id == pin
+
+        channel = {"id": 10, "name": "ESPN", "channel_group_id": 43,
+                   "channel_number": 100, "streams": [100], "auto_created": True}
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 1, "results": [channel]})
+        client.get_channel = AsyncMock(return_value=channel)
+        client.get_channel_groups = AsyncMock(return_value=[
+            {"id": 42, "name": "Target"}, {"id": 43, "name": "Other"},
+        ])
+        client.get_m3u_accounts = AsyncMock(return_value=[{"id": 1, "name": "Provider"}])
+        client.get_streams = AsyncMock(return_value={"count": 1, "results": [
+            {"id": 101, "name": "ESPN", "m3u_account": 1},
+        ]})
+        client.create_channel = AsyncMock(side_effect=lambda data: {"id": 20, **data})
+        client.update_channel = AsyncMock(return_value={**channel, "streams": [100, 101]})
+        engine = ChannelPipelineEngine(client)
+        with patch("channel_pipeline_engine.get_session", sessionmaker(bind=test_engine)):
+            result = await engine.run_pipeline(dry_run=dry_run)
+
+        assert result["success"] is True, result
+        assert result["streams_matched"] == 1
+        assert result["channels_created"] == (0 if merges else 1)
+        assert result["streams_merged"] == (1 if merges else 0)
+        entries = [entry for entry in result["execution_log"] if entry.get("actions_executed")]
+        action = entries[0]["actions_executed"][0]
+        assert action["success"] is True, action
+        if merges:
+            assert action["entity_id"] == 10
+        elif not dry_run:
+            assert action["entity_id"] == 20
+        if dry_run:
+            client.create_channel.assert_not_awaited()
+            client.update_channel.assert_not_awaited()
+        elif merges:
+            client.create_channel.assert_not_awaited()
+            client.update_channel.assert_awaited_with(10, {"streams": [100, 101]})
+        else:
+            client.create_channel.assert_awaited_once()
+            assert client.create_channel.call_args.args[0]["channel_group_id"] == 42
+            client.update_channel.assert_not_awaited()
+
+
 class TestGetChannelPipelineRules:
     """Tests for GET /api/auto-creation/rules."""
 
@@ -852,6 +1118,93 @@ class TestManualChannelIsolationRun:
 
 class TestBulkUpdateChannelPipelineRules:
     """Tests for POST /api/auto-creation/rules/bulk-update."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sort_patch", [
+        {"sort_field": None, "sort_order": "asc", "sort_regex": None},
+        {"sort_field": "group_name", "sort_order": "desc"},
+        {"orphan_action": "none"},
+    ])
+    async def test_gh968_sort_patch_persists_without_changing_untouched_fields(
+        self, async_client, test_session, sort_patch
+    ):
+        from models import JournalEntry
+
+        rules = [
+            _create_rule(
+                test_session, name=f"GH968 {index}", sort_field=sort_field,
+                stream_sort_field="quality", probe_on_sort=True,
+                skip_struck_streams=True,
+            )
+            for index, sort_field in enumerate(["stream_name", "quality", "provider_order"])
+        ]
+        before = {rule.id: rule.to_dict() for rule in rules}
+        ids = [rule.id for rule in rules[:2]]
+        history = _create_execution(test_session, rule_id=ids[0])
+        history_before = history.to_dict()
+
+        response = await async_client.post(
+            "/api/channel-pipeline/rules/bulk-update",
+            json={"rule_ids": ids, **sort_patch},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["updated_count"] == 2
+        expected_sort = {
+            rid: sort_patch.get("sort_field", before[rid]["sort_field"])
+            for rid in ids
+        }
+        assert {r["id"]: r["sort_field"] for r in response.json()["rules"]} == expected_sort
+
+        test_session.expire_all()
+        for rule in rules:
+            reopened = await async_client.get(f"/api/channel-pipeline/rules/{rule.id}")
+            assert reopened.status_code == 200
+            expected = {**before[rule.id], **(sort_patch if rule.id in ids else {})}
+            for field, value in expected.items():
+                if field != "updated_at":
+                    assert reopened.json()[field] == value, field
+            assert test_session.get(ChannelPipelineRule, rule.id).sort_field == expected["sort_field"]
+        assert test_session.get(ChannelPipelineExecution, history.id).to_dict() == history_before
+
+        entries = test_session.query(JournalEntry).filter_by(action_type="bulk_update").all()
+        assert {entry.entity_id for entry in entries} == set(ids)
+        assert len({entry.batch_id for entry in entries}) == 1
+        for entry in entries:
+            changed = {
+                key: value for key, value in sort_patch.items()
+                if before[entry.entity_id][key] != value
+            }
+            assert json.loads(entry.before_value) == {
+                key: before[entry.entity_id][key] for key in changed
+            }
+            assert json.loads(entry.after_value) == changed
+
+        # Repeating the same choice is a no-op, not another history action.
+        repeated = await async_client.post(
+            "/api/channel-pipeline/rules/bulk-update",
+            json={"rule_ids": ids, **sort_patch},
+        )
+        assert repeated.status_code == 200
+        assert test_session.query(JournalEntry).filter_by(action_type="bulk_update").count() == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sort_patch,expected", [
+        ({"sort_field": None}, None),
+        ({"sort_field": ""}, None),
+        ({"name": "Renamed"}, "stream_name"),
+    ])
+    async def test_gh968_shared_single_update_sort_presence(
+        self, async_client, test_session, sort_patch, expected
+    ):
+        rule = _create_rule(test_session, sort_field="stream_name")
+        response = await async_client.put(
+            f"/api/channel-pipeline/rules/{rule.id}", json=sort_patch,
+        )
+        assert response.status_code == 200, response.text
+        reopened = await async_client.get(f"/api/channel-pipeline/rules/{rule.id}")
+        assert reopened.json()["sort_field"] == expected
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, rule.id).sort_field == expected
 
     @pytest.mark.asyncio
     async def test_updates_multiple_rules(self, async_client, test_session):

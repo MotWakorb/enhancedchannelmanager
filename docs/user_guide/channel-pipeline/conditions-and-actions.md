@@ -54,6 +54,19 @@ rest of the rule dialog.
 condition in plain English, e.g. *"When a stream matches 1 condition..."*
 This confirms the rule engine parsed what you meant before you add an action.
 
+### Match an assigned channel's group
+
+Choose **Channel Group** / **Is**, then search for and select the group by
+name. The choices show channel counts and include groups with existing channels.
+ECM saves the selected group's integer ID, so you do not need to look it up or
+type it manually. API rules use, for example,
+`{"type": "channel_in_group", "value": 42}` (not `"42"` or a group name).
+
+This condition checks the group of the channel the stream is already assigned
+to. An unassigned stream does not match, even if its provider group has the same
+name. Use **Stream Group Is** to match the provider's M3U group instead, or
+**Normalized Match in Group** to compare names against channels in a group.
+
 ### Add an action to do something with a match
 
 1. Click **Add Action**, then pick an **Action type** from the dropdown.

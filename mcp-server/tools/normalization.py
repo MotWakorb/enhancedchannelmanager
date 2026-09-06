@@ -260,8 +260,10 @@ def register(mcp: FastMCP):
             else_action_type: Action to apply when the condition does NOT
                 match — same vocabulary as action_type
             else_action_value: Value for else_action_type
-            stop_processing: If True, stop evaluating further normalization
-                rules once this rule fires (default False)
+            stop_processing: If True, a condition match preserves the exact
+                action output and halts all further normalization, even when
+                unchanged (default False). An executed else action still stops
+                only its own group for the current pass.
         """
         try:
             client = get_ecm_client()
