@@ -166,7 +166,7 @@ describe('ChannelPipelineTab', () => {
         const reopened = screen.getByRole('dialog', { name: /bulk edit rules/i });
         await user.click(within(reopened).getByRole('checkbox', { name: 'Apply channel sort' }));
         expect(within(reopened).getByRole('button', {
-          name: choice === 'unchecked' ? /^Stream Name/ : new RegExp(label.replace(/[()]/g, '\\$&')),
+          name: choice === 'unchecked' ? /^Stream Name/ : (name) => name.includes(label),
         })).toBeVisible();
         expect(rules[1].sort_field).toBe(choice === 'unchecked' ? 'quality' : choice === 'set' ? 'group_name' : null);
       },
