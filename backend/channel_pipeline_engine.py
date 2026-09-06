@@ -67,9 +67,10 @@ logger = logging.getLogger(__name__)
 # enhancedchannelmanager-ti939.2.1 (Event Sync Phase 1B): the ONLY
 # triggered_by values allowed to execute event_sync rules. ``scheduled_selected``
 # is admitted for the exact, validated Scheduled Tasks selection added by #873;
+# ``scheduled_all`` identifies the explicit broad operator scope from #975.
 # the watermark task remains the separately gated ``m3u_refresh`` path below.
 # Deny-by-default: anything not in this set is treated as unattended.
-EVENT_SYNC_ALLOWED_TRIGGERS = frozenset({"manual", "api", "scheduled_selected"})
+EVENT_SYNC_ALLOWED_TRIGGERS = frozenset({"manual", "api", "scheduled_selected", "scheduled_all"})
 
 # Deny-by-default sentinel for run_pipeline/run_rule's triggered_by
 # (PR #616 review, bead ti939.2.2): a caller that does not IDENTIFY its
@@ -307,7 +308,7 @@ class ChannelPipelineEngine:
         Args:
             dry_run: If True, only simulate changes without applying
             triggered_by: How the pipeline was triggered (manual, api,
-                scheduled_selected, m3u_refresh). Defaults to the DENIED sentinel
+                scheduled_selected, scheduled_all, m3u_refresh). Defaults to the DENIED sentinel
                 ``TRIGGERED_BY_UNSPECIFIED`` (PR #616 review): an
                 unidentified trigger runs standard rules normally but can
                 never execute event_sync rules — callers must identify

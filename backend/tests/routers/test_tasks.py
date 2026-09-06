@@ -751,6 +751,21 @@ class TestCreateTaskSchedule:
         assert persisted.get_parameters() == {"rule_ids": [later.id, first.id]}
 
     @pytest.mark.asyncio
+    async def test_channel_pipeline_persists_explicit_broad_scope(self, async_client, test_session):
+        _create_scheduled_task(test_session, task_id="auto_creation")
+        response = await async_client.post(
+            "/api/tasks/auto_creation/schedules",
+            json={
+                "schedule_type": "daily",
+                "schedule_time": "06:00",
+                "parameters": {"run_all_rules": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        persisted = test_session.get(TaskSchedule, response.json()["id"])
+        assert persisted.get_parameters() == {"run_all_rules": True}
+
+    @pytest.mark.asyncio
     async def test_channel_pipeline_rejects_empty_selection(self, async_client, test_session):
         _create_scheduled_task(test_session, task_id="auto_creation")
 

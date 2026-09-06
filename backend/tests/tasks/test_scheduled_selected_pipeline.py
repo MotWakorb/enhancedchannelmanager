@@ -262,8 +262,12 @@ async def test_due_stale_selection_returns_structured_history_failure():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("parameters", [
+    {"rule_ids": [4, 7]},
+    {"run_all_rules": False, "rule_ids": [4, 7]},
+])
 async def test_due_schedule_seam_persists_selected_validation_details(
-    test_session, monkeypatch
+    test_session, monkeypatch, parameters
 ):
     import database
     from models import TaskExecution
@@ -286,7 +290,7 @@ async def test_due_schedule_seam_persists_selected_validation_details(
     registry.get_task_instance.return_value = task
     schedule = SimpleNamespace(
         id=22,
-        get_parameters=lambda: {"rule_ids": [4, 7]},
+        get_parameters=lambda: parameters,
     )
 
     with patch("task_engine.get_registry", return_value=registry), patch(

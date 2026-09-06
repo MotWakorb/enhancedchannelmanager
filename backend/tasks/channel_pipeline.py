@@ -86,8 +86,17 @@ class ChannelPipelineTask(TaskScheduler):
     default_enabled = False
 
     schedule_parameter_schema = {
-        "description": "Run an exact selection of Channel Pipeline rules",
+        "description": "Run all enabled Channel Pipeline rules or an exact selection",
         "parameters": [{
+            "name": "run_all_rules",
+            "type": "boolean",
+            "label": "Run all enabled rules",
+            "description": (
+                "Run the full pipeline on this schedule, independently of M3U refresh. "
+                "Leave unchecked to select exact rules. Existing parameterless "
+                "schedules remain refresh-only polls."
+            ),
+        }, {
             "name": "rule_ids",
             "type": "number_array",
             "label": "Rules",
@@ -122,6 +131,7 @@ class ChannelPipelineTask(TaskScheduler):
         self.rule_ids: list[int] = []  # Empty = all enabled rules
         self.run_on_refresh: bool = False
         self._invocation_schedule_id: Optional[int] = None
+        self._invocation_run_all_rules = False
 
     def get_config(self) -> dict:
         """Get auto-creation configuration."""
@@ -154,6 +164,13 @@ class ChannelPipelineTask(TaskScheduler):
             return
         if not isinstance(parameters, dict):
             raise ValueError("Channel Pipeline schedule parameters must be an object")
+        if "run_all_rules" in parameters:
+            if type(parameters["run_all_rules"]) is not bool:
+                raise ValueError("run_all_rules must be a boolean")
+            if parameters["run_all_rules"]:
+                if "rule_ids" in parameters:
+                    raise ValueError("Choose all enabled rules or selected rule_ids, not both")
+                return
         rule_ids = parameters.get("rule_ids")
         if (
             not isinstance(rule_ids, list)
@@ -179,6 +196,15 @@ class ChannelPipelineTask(TaskScheduler):
         schedule_id: Optional[int],
         parameters: Optional[dict],
     ) -> Optional[dict]:
+        self._invocation_run_all_rules = False
+        if isinstance(parameters, dict) and "run_all_rules" in parameters:
+            if type(parameters["run_all_rules"]) is not bool:
+                raise ValueError("run_all_rules must be a boolean")
+            # Validate broad Run Now too; leave selected validation at its
+            # existing boundary so stale selections retain their audit record.
+            if parameters["run_all_rules"]:
+                self.validate_schedule_parameters(parameters)
+            self._invocation_run_all_rules = parameters["run_all_rules"]
         self._invocation_schedule_id = (
             schedule_id
             if isinstance(parameters, dict) and "rule_ids" in parameters
@@ -189,10 +215,14 @@ class ChannelPipelineTask(TaskScheduler):
     def restore_invocation_config(self, config: dict) -> None:
         super().restore_invocation_config(config)
         self._invocation_schedule_id = None
+        self._invocation_run_all_rules = False
 
 
     async def execute(self) -> TaskResult:
-        """Run the post-refresh auto-creation pipeline, behind the AUTO-FIRE GUARD.
+        """Run explicit schedule scope, or the guarded post-refresh pipeline.
+
+        GH975: explicit broad schedules bypass the refresh guard, just as exact
+        selected schedules do. Parameterless schedules remain refresh polls.
 
         ADR-011 (bd-ka7j9): this is now the SINGLE auto-creation entry point for
         the unattended path. It ticks on an INTERVAL schedule (~60s); the guard
@@ -218,6 +248,8 @@ class ChannelPipelineTask(TaskScheduler):
         crash mid-run both leave the watermark consumed, preventing a re-fire
         loop against the same refresh).
         """
+        if self._invocation_run_all_rules:
+            return await self._run_broad_schedule()
         if self._invocation_schedule_id is not None:
             return await self._run_selected_schedule()
 
@@ -390,6 +422,46 @@ class ChannelPipelineTask(TaskScheduler):
             self.task_id, len(rule_ids), refresh_at,
         )
         return await self._run_post_refresh_pipeline(rule_ids, rule_names, started_at)
+
+    async def _run_broad_schedule(self) -> TaskResult:
+        """Explicit operator schedule, not the legacy refresh-watermark poll."""
+        from channel_pipeline_engine import get_channel_pipeline_engine, init_channel_pipeline_engine
+
+        started_at = datetime.utcnow()
+        self._set_progress(status="running_pipeline")
+        triggered_by = "scheduled_all" if self._run_trigger == "scheduled" else self._run_trigger
+        engine = get_channel_pipeline_engine()
+        if not engine:
+            engine = await init_channel_pipeline_engine(get_client())
+        result = await engine.run_pipeline(
+            dry_run=False,
+            triggered_by=triggered_by,
+            m3u_account_ids=self.m3u_account_ids or None,
+            rule_ids=None,
+        )
+        status = result.get("status")
+        return TaskResult(
+            success=bool(result.get("success")),
+            message="Channel Pipeline schedule ran all enabled rules",
+            error=None if result.get("success") else status or "pipeline_failed",
+            started_at=started_at,
+            completed_at=datetime.utcnow(),
+            total_items=result.get("streams_evaluated", 0),
+            success_count=result.get("channels_created", 0) + result.get("channels_updated", 0),
+            failed_count=result.get("failed_action_count", 0),
+            completed_degraded=status == "completed_with_errors",
+            details={
+                "execution_id": result.get("execution_id"),
+                "mode": "execute",
+                "triggered_by": triggered_by,
+                "status": status,
+                "streams_evaluated": result.get("streams_evaluated", 0),
+                "streams_matched": result.get("streams_matched", 0),
+                "channels_created": result.get("channels_created", 0),
+                "channels_updated": result.get("channels_updated", 0),
+                "failed_action_count": result.get("failed_action_count", 0),
+            },
+        )
 
     async def _run_selected_schedule(self) -> TaskResult:
         """Execute one stored schedule's exact rule scope without widening."""

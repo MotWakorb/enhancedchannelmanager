@@ -35,6 +35,25 @@ Now here. Trigger those from their own page instead.
 update to reflect the change. A disabled task shows a paused-circle badge
 and **Next Run: Disabled**.
 
+### Run the full Channel Pipeline on a schedule
+
+When adding or editing a Channel Pipeline schedule, check **Run all enabled
+rules** to run the full pipeline independently of M3U refresh. Rules do not need
+**Run on refresh** checked. Disabled rules and rules outside their active date
+windows remain excluded. **Run Now** for that schedule uses the same broad scope
+as its due execution.
+
+Leave the option unchecked and select rules to retain exact selected scope:
+every selected rule must remain runnable, and stale selections fail rather than
+falling back to all rules. Selected runs retain their existing ordering behavior.
+
+The built-in 60-second poll and existing schedules without parameters remain
+refresh-only. They consume completed M3U refreshes and apply the existing
+refresh opt-ins and circuit breaker. Upgrading does not convert them into
+every-minute full pipeline runs. To convert an existing operator schedule,
+explicitly check **Run all enabled rules** and save; keep the built-in poll
+separate if you also want refresh-triggered execution.
+
 ### Probe selected groups without changing stream order
 
 When adding or editing a **Stream Probe** schedule, select the channel groups

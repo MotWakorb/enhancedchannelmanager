@@ -1604,6 +1604,15 @@ before that fresh load apply to the run; edits committed after it do not alter o
 cancel the detached definitions already being executed. The worker takes this
 snapshot before any Dispatcharr reads.
 
+For an explicit broad Channel Pipeline schedule, send
+`parameters: {"run_all_rules": true}` to the Scheduled Tasks schedule API
+(`/api/tasks/auto_creation/schedules`). Do not combine this with `rule_ids`.
+Due executions use `triggered_by: "scheduled_all"`; Run Now with that schedule's
+ID uses `manual`. Both request the full enabled, active rule set, without the
+refresh flag or watermark requirement. Existing parameterless schedules retain
+their refresh-only poll behavior, including the built-in 60-second poll. Exact
+`rule_ids` schedules keep the selected execution contract above.
+
 ---
 
 ### `GET /api/channel-pipeline/fuzzy-preview`

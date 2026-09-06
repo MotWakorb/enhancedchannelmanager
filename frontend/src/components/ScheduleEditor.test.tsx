@@ -46,6 +46,45 @@ describe('ScheduleEditor', () => {
     vi.clearAllMocks();
   });
 
+  it('saves explicit broad pipeline scope without a required rule selection', async () => {
+    const user = userEvent.setup();
+    render(<ScheduleEditor {...defaultProps} taskId="auto_creation"
+      parameterSchema={[
+        { name: 'run_all_rules', type: 'boolean', label: 'Run all enabled rules', description: 'Full pipeline' },
+        { name: 'rule_ids', type: 'number_array', label: 'Rules', description: 'Exact rules', required: true, source: 'auto_creation_rules' },
+      ]}
+      defaultParameters={{ rule_ids: [99] }}
+      parameterOptions={{ auto_creation_rules: [] }}
+      parameterSourceStatus={{ auto_creation_rules: 'empty' }}
+    />);
+    expect(screen.getByRole('button', { name: /Add Schedule/ })).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Run all enabled rules' }));
+    await user.click(screen.getByRole('button', { name: /Add Schedule/ }));
+    expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+      parameters: { run_all_rules: true },
+    }));
+    await user.click(screen.getByRole('checkbox', { name: 'Run all enabled rules' }));
+    expect(screen.getByRole('button', { name: /Add Schedule/ })).toBeDisabled();
+  });
+
+  it('keeps an installed parameterless refresh poll unchanged when editing its name', async () => {
+    const user = userEvent.setup();
+    render(<ScheduleEditor {...defaultProps} taskId="auto_creation"
+      schedule={{ ...mockSchedule, task_id: 'auto_creation', parameters: null, schedule_type: 'interval', interval_seconds: 60 }}
+      parameterSchema={[
+        { name: 'run_all_rules', type: 'boolean', label: 'Run all enabled rules', description: 'Full pipeline' },
+        { name: 'rule_ids', type: 'number_array', label: 'Rules', description: 'Exact rules', required: true, source: 'auto_creation_rules' },
+      ]}
+      defaultParameters={{ rule_ids: [], run_on_refresh: false }}
+      parameterOptions={{ auto_creation_rules: [] }}
+    />);
+    await user.type(screen.getByDisplayValue('Test Schedule'), ' renamed');
+    await user.click(screen.getByRole('button', { name: /Update Schedule/ }));
+    expect(mockOnSave).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'Test Schedule renamed', parameters: {}, interval_seconds: 60,
+    }));
+  });
+
   describe('rendering', () => {
     it('renders schedule name input', () => {
       render(<ScheduleEditor {...defaultProps} schedule={mockSchedule} />);
