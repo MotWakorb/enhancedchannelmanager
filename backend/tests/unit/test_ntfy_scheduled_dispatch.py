@@ -90,6 +90,7 @@ def _completed_prober(*, failed_count=0):
     prober._probe_progress_skipped_count = 0
     prober._probe_progress_black_screen_count = 0
     prober._probe_progress_low_fps_count = 0
+    prober._probe_progress_low_bitrate_count = 0
     prober._probe_success_streams = []
     prober._probe_failed_streams = []
     prober._probe_skipped_streams = []

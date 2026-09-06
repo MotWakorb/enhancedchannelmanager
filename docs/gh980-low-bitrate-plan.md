@@ -140,3 +140,68 @@ supplied Python environment and PATH; no backend Ruff pass is claimed. No new
 dependency was added. No production probe/service capture, Dispatcharr write,
 deployment, external quality calibration, or independent review was performed.
 All started test commands reached a terminal result; no watcher remains.
+
+## Combined Gate Remediation Evidence
+
+2026-09-06, bounded GH980 remediation on combined HEAD `098086ce`, after
+GH971. This records gate fixes, not new acceptance criteria or review approval.
+Both frozen product contracts remain unchanged.
+
+- Reproduced the handoff's nine backend failures and one frontend failure before
+  fixes. These were introduced in the GH980 parent, not an out-of-scope baseline.
+- `StreamStats.is_low_bitrate` now has the same false server default as 0056.
+  Metadata-created tables therefore agree with migrated tables. No migration
+  history was edited. The migration regression additionally verifies absence at
+  0055, existing-row false backfill, upgraded schema matching, and a raw insert
+  omitting the new column on metadata bootstrap. The bootstrap insert was proven
+  red with a NOT NULL violation before the model fix.
+- The old-schema SmartBootstrap and 0052 retention-index fixtures now include
+  additive 0056 when establishing their model-matching premises. Destructive
+  replay targets, row retention, index round-trip and drift assertions remain
+  intact; the fast-path fixture also asserts its schema premise explicitly.
+- Two probe doubles supply the real zero-valued low-bitrate progress counter.
+  No producer-contract weakening or production mock guards were added.
+- The Catch-up test scopes its query to the criterion list rather than matching
+  Low Bitrate in the separate health-order list, and asserts eight criteria.
+  YAML source, version metadata, and unrelated legacy issues were not changed.
+
+Terminal verification results on this remediation tree:
+
+| Check | Result |
+| --- | --- |
+| Focused six backend files below | 107 passed, 35.86 seconds |
+| Catch-up rendered component | 3 passed |
+| Canonical backend coverage gate | 13,149 passed, 3 skipped, 2 deselected; 82.82%; 814.87 seconds |
+| Full frontend coverage | 261 files / 3,709 tests passed; 70.69 seconds |
+| Frontend coverage detail | Statements 60.10%, branches 56.60%, functions 53.18%, lines 61.44% |
+| Frontend lint / TypeScript / Vite build | Passed; Vite reports large-chunk warning |
+| Combined exact-build Chromium real-API smoke | 4 passed, 9.8 seconds |
+
+Commands from the worktree root, using Node 24.13.0 and Python 3.12.3:
+
+```bash
+TMPDIR=/tmp/opencode scripts/backend-gate.sh --subset tests/integration/test_alembic_smoke.py tests/integration/test_event_sync_review_retention_index_migration.py tests/unit/test_alembic_baseline.py tests/unit/test_ntfy_scheduled_dispatch.py tests/unit/test_stream_probe_reorder_option.py tests/integration/test_low_bitrate_migration.py -q -o addopts=''
+TMPDIR=/tmp/opencode ECM_PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python scripts/backend-gate.sh
+TMPDIR=/tmp/opencode PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python E2E_EXACT_BUILD=true npx playwright test e2e/smart-sort-points.spec.ts --project=chromium --workers=1 --retries=0 --reporter=list
+```
+
+From `frontend/`, with its own installed dependencies:
+
+```bash
+npm test -- src/components/settings/SmartSortCatchupCriterion.test.tsx
+npm run test:coverage -- --coverage.reportOnFailure
+npm run lint && npm run typecheck && npm run build
+```
+
+Full backend output:
+`/home/lecaptainc/.local/share/opencode/tool-output/tool_075930dd8001oc0qRlavBtThrU`.
+Full frontend coverage output:
+`/home/lecaptainc/.local/share/opencode/tool-output/tool_07586afb8001pybRiX56OwTP11`.
+Backend skips remain the seeded Dispatcharr fixture and the two documented
+SSRF-adapter exceptions. Ruff remains unavailable (`No module named ruff`);
+no backend lint pass is claimed and no dependency was installed. Existing
+frontend mock/network and React warnings were not treated as new scope.
+Tests use private temporary SQLite/config paths; browser servers use dynamic
+loopback ports. All waits completed synchronously; no watcher was armed.
+Parent independent verification/review and final build 0020 preparation remain
+separate. No push, PR, merge, tracker, or GitHub mutation was performed.

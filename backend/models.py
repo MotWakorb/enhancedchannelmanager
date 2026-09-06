@@ -278,7 +278,7 @@ class StreamStats(Base):
     consecutive_failures = Column(Integer, default=0, nullable=False)  # Strike rule: consecutive probe failures
     is_black_screen = Column(Boolean, default=False, nullable=False)  # Black screen detected during probe
     is_low_fps = Column(Boolean, default=False, nullable=False)  # Low FPS detected during probe (< 20 FPS)
-    is_low_bitrate = Column(Boolean, default=False, nullable=False)
+    is_low_bitrate = Column(Boolean, default=False, server_default=sa_text("0"), nullable=False)
 
     __table_args__ = (
         Index("idx_stream_stats_stream_id", stream_id),

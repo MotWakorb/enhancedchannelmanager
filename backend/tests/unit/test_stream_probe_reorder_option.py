@@ -22,6 +22,7 @@ def _task_prober() -> SimpleNamespace:
         _probe_progress_skipped_count=0,
         _probe_progress_black_screen_count=0,
         _probe_progress_low_fps_count=0,
+        _probe_progress_low_bitrate_count=0,
         _probe_success_streams=[],
         _probe_failed_streams=[],
         probe_timeout=30,

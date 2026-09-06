@@ -1850,6 +1850,12 @@ class TestSmartBootstrapFastPath:
                     "ALTER TABLE auto_creation_rules "
                     "ADD COLUMN required_provider_ids TEXT"
                 ))
+                # 0056: create_all() cannot add the classification column to
+                # the baseline stream_stats table either.
+                conn.execute(text(
+                    "ALTER TABLE stream_stats "
+                    "ADD COLUMN is_low_bitrate BOOLEAN NOT NULL DEFAULT 0"
+                ))
 
             # Sanity: alembic_version is still at 0005 (create_all does not
             # touch the version row), but every model table is now present.
@@ -1858,6 +1864,7 @@ class TestSmartBootstrapFastPath:
                     text("SELECT version_num FROM alembic_version")
                 ).fetchone()[0]
             assert rev == "0005"
+            assert database._schema_matches_head(engine) is True
 
             head = database.get_alembic_head_revision()
             assert head != "0005", "test premise: head must be > 0005"

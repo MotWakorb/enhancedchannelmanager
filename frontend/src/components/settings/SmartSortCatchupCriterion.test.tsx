@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SettingsTab } from '../tabs/SettingsTab';
 import * as api from '../../services/api';
@@ -82,9 +82,12 @@ describe('Smart Sort catch-up criterion (enhancedchannelmanager-jnbka / GH #652)
   it('renders as the eighth criterion with the catch-up clock and requested subheading', async () => {
     renderOnChannelDefaults();
 
-    await screen.findByText('Catch-up');
+    const catchup = await screen.findByText('Catch-up');
     expect(screen.getByText('Catch-up enabled')).toBeInTheDocument();
-    const rows = screen.getAllByText(/Resolution|Bitrate|Framerate|Video Codec|M3U Priority|Audio Channels|Custom Streams|Catch-up/);
+    const criteriaList = catchup.closest<HTMLElement>('.sort-priority-list');
+    expect(criteriaList).not.toBeNull();
+    const rows = within(criteriaList!).getAllByText(/^(Resolution|Bitrate|Framerate|Video Codec|M3U Priority|Audio Channels|Custom Streams|Catch-up)$/);
+    expect(rows).toHaveLength(8);
     expect(rows[rows.length - 1]).toHaveTextContent('Catch-up');
     expect(screen.getByText('history')).toBeInTheDocument();
   });
