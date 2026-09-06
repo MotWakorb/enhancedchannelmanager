@@ -1039,6 +1039,93 @@ class TestBulkUpdateChannelPipelineRules:
     """Tests for POST /api/auto-creation/rules/bulk-update."""
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("sort_patch", [
+        {"sort_field": None, "sort_order": "asc", "sort_regex": None},
+        {"sort_field": "group_name", "sort_order": "desc"},
+        {"orphan_action": "none"},
+    ])
+    async def test_gh968_sort_patch_persists_without_changing_untouched_fields(
+        self, async_client, test_session, sort_patch
+    ):
+        from models import JournalEntry
+
+        rules = [
+            _create_rule(
+                test_session, name=f"GH968 {index}", sort_field=sort_field,
+                stream_sort_field="quality", probe_on_sort=True,
+                skip_struck_streams=True,
+            )
+            for index, sort_field in enumerate(["stream_name", "quality", "provider_order"])
+        ]
+        before = {rule.id: rule.to_dict() for rule in rules}
+        ids = [rule.id for rule in rules[:2]]
+        history = _create_execution(test_session, rule_id=ids[0])
+        history_before = history.to_dict()
+
+        response = await async_client.post(
+            "/api/channel-pipeline/rules/bulk-update",
+            json={"rule_ids": ids, **sort_patch},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["updated_count"] == 2
+        expected_sort = {
+            rid: sort_patch.get("sort_field", before[rid]["sort_field"])
+            for rid in ids
+        }
+        assert {r["id"]: r["sort_field"] for r in response.json()["rules"]} == expected_sort
+
+        test_session.expire_all()
+        for rule in rules:
+            reopened = await async_client.get(f"/api/channel-pipeline/rules/{rule.id}")
+            assert reopened.status_code == 200
+            expected = {**before[rule.id], **(sort_patch if rule.id in ids else {})}
+            for field, value in expected.items():
+                if field != "updated_at":
+                    assert reopened.json()[field] == value, field
+            assert test_session.get(ChannelPipelineRule, rule.id).sort_field == expected["sort_field"]
+        assert test_session.get(ChannelPipelineExecution, history.id).to_dict() == history_before
+
+        entries = test_session.query(JournalEntry).filter_by(action_type="bulk_update").all()
+        assert {entry.entity_id for entry in entries} == set(ids)
+        assert len({entry.batch_id for entry in entries}) == 1
+        for entry in entries:
+            changed = {
+                key: value for key, value in sort_patch.items()
+                if before[entry.entity_id][key] != value
+            }
+            assert json.loads(entry.before_value) == {
+                key: before[entry.entity_id][key] for key in changed
+            }
+            assert json.loads(entry.after_value) == changed
+
+        # Repeating the same choice is a no-op, not another history action.
+        repeated = await async_client.post(
+            "/api/channel-pipeline/rules/bulk-update",
+            json={"rule_ids": ids, **sort_patch},
+        )
+        assert repeated.status_code == 200
+        assert test_session.query(JournalEntry).filter_by(action_type="bulk_update").count() == 2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("sort_patch,expected", [
+        ({"sort_field": None}, None),
+        ({"sort_field": ""}, None),
+        ({"name": "Renamed"}, "stream_name"),
+    ])
+    async def test_gh968_shared_single_update_sort_presence(
+        self, async_client, test_session, sort_patch, expected
+    ):
+        rule = _create_rule(test_session, sort_field="stream_name")
+        response = await async_client.put(
+            f"/api/channel-pipeline/rules/{rule.id}", json=sort_patch,
+        )
+        assert response.status_code == 200, response.text
+        reopened = await async_client.get(f"/api/channel-pipeline/rules/{rule.id}")
+        assert reopened.json()["sort_field"] == expected
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, rule.id).sort_field == expected
+
+    @pytest.mark.asyncio
     async def test_updates_multiple_rules(self, async_client, test_session):
         """Applies the same scalar updates to several rules."""
         r1 = _create_rule(test_session, name="BulkA", run_on_refresh=False, orphan_action="delete")

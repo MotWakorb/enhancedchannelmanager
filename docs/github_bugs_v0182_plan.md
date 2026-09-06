@@ -18,10 +18,103 @@
 | 2 | #975 | Active | Scheduled broad pipeline must not require rule `run_on_refresh`. |
 | 3 | #856 | Implemented; focused verification complete | Existing Channel Group Is selects names and serializes integer IDs; assigned-channel semantics retained. Batch typecheck blocker noted below. |
 | 4 | #970 | Not reproduced; regression coverage verified | Current code preserves false through save/reopen and persisted merge execution. Reporter-build confirmation remains pending. |
-| 5 | #968 | Pending | Not investigated in this dispatch. |
+| 5 | #968 | Implemented; focused verification complete | Explicit null clears channel sorting; omitted fields retain prior values. |
 | 6 | #962 | Pending | Not investigated in this dispatch. |
 | 7 | #858 | Pending | Not investigated in this dispatch. |
 | 8 | #969 | Pending | Not investigated in this dispatch. |
+
+## GH968 Frozen Acceptance
+
+Bead: `enhancedchannelmanager-0m06f.2.3.7`. Intake HEAD: `b063cc51`.
+Source: https://github.com/MotWakorb/enhancedchannelmanager/issues/968
+Read full bead and GitHub body; both have zero comments.
+
+1. Select multiple configured rules, check Apply channel sort, choose No sorting,
+   and Apply to selected. Explicit null clears persisted channel sorting (the
+   actual API/model field is `sort_field`, not `channel_sort`). API GET and the
+   reopened bulk UI must retain No sorting.
+2. Unchecked Apply channel sort omits its fields and preserves prior sorting.
+   Untouched bulk sections and unselected rules retain their prior values.
+   Setting a new sort continues to work.
+3. Preserve existing action semantics: clearing sorting changes rule configuration,
+   not rule actions or historical execution records. The bulk-update journal must
+   report the actual old sort to null change, not a successful no-op.
+4. Tests first: reproduce against the real API and isolated SQLite, and exercise
+   the actual rendered frontend bulk handler through hook and JSON serialization.
+   Demonstrate behavioral red before the minimal backend patch. Distinguish
+   explicit None from omission without a broad API redesign or other null changes.
+5. Preserve previous commits; do not investigate/fix GH962, GH858, or GH969.
+   Focused tests, lint and typecheck here; full canonical gates at batch end.
+   No live writes, push, PR, merge, tracker transition, or status/issue closure.
+
+## GH968 Implementation and Verification
+
+Cause confirmed on `b063cc51`: `BulkRuleSettingsModal.handleSubmit` sends
+`sort_field: null` for No sorting. The tab's actual bulk handler and rules hook
+forward that patch to the API service, whose `JSON.stringify` retains null.
+The backend's `model_dump(exclude_unset=True)` and reconstruction of the scalar
+request also retain explicit null. `_apply_rule_scalar_updates` then discarded
+it with `if request.sort_field is not None`, leaving the old database value.
+
+The production change is one presence check plus its comment: use
+`"sort_field" in request.model_fields_set`. This follows the existing nullable
+field pattern and retains the existing empty-string clear. The shared PUT path
+gets the same correct null behavior. No other nullable field, schema, action,
+engine behavior, dependency, or frontend production code changed.
+
+### TDD Evidence
+
+- Before the production patch, six new API cases returned **2 failed, 4 passed**.
+  Bulk clear returned `stream_name` and `quality` instead of null; single-rule
+  PUT/GET also retained `stream_name`. Replacement and omission cases passed.
+- The same six cases passed after the patch. They cross real FastAPI requests,
+  request validation/serialization, isolated SQLite commit/reload, and real
+  journal persistence. No validator, journal, or database operation is mocked.
+- The three bulk cases compare every serialized rule field except `updated_at`,
+  including actions, conditions, stream sorting, probing, and rule options.
+  They verify an unselected rule and an existing execution-history row remain
+  unchanged, exact journal before/after payloads share a batch ID, and repeated
+  identical changes produce no additional journal entries.
+- Three rendered jsdom tests exercise actual tab selection, modal controls,
+  `handleBulkRuleSettingsApply`, hook, and API JSON serialization at MSW. They
+  cover clear, replacement, and changing then unchecking Apply channel sort;
+  assert exact request fields and selection reset; then remount the tab, fetch
+  GET data, and reopen the bulk modal to verify its label. The HTTP boundary is
+  mocked here, not a browser-to-Python end-to-end test. All three passed without
+  frontend production edits after correcting a test-only orphan-checkbox label.
+- Typecheck caught an unsupported test query `exact` option; removed it, then
+  reran typecheck, lint, and the complete focused frontend set successfully.
+
+### Final Focused Checks
+
+From the worktree root:
+
+```bash
+env TMPDIR=/tmp/opencode ECM_PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python scripts/backend-gate.sh --subset tests/routers/test_channel_pipeline.py -k gh968
+env TMPDIR=/tmp/opencode ECM_PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python scripts/backend-gate.sh --subset tests/routers/test_channel_pipeline.py tests/unit/test_channel_pipeline_sort.py tests/unit/test_channel_pipeline_engine.py
+```
+
+Results: **6 passed in 1.51s**, then **462 passed in 13.23s**. Each run used
+private configuration created by the test harness under `/tmp/opencode` and
+isolated SQLite. Backend runs were strictly sequential; no live writes occurred.
+
+From `frontend/`, with
+`/home/lecaptainc/.local/share/fnm/node-versions/v24.13.0/installation/bin` on PATH:
+
+```bash
+npx vitest run src/components/channelPipeline/ChannelPipelineTab.test.tsx src/components/channelPipeline/BulkRuleSettingsModal.test.tsx src/hooks/useChannelPipelineRules.test.ts src/services/channelPipelineApi.test.ts --silent
+npm run typecheck
+npx eslint src/components/channelPipeline/ChannelPipelineTab.test.tsx --max-warnings 0
+```
+
+Results: **188 passed in 9.11s**, typecheck **exit 0**, ESLint **exit 0**.
+`/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python -m ruff check backend/routers/channel_pipeline.py backend/tests/routers/test_channel_pipeline.py`
+could not run: **No module named ruff**. No tooling installation was attempted.
+
+Full canonical gates remain at ordered-batch completion. Deployed browser and
+reporter-build verification, independent review, shipping, and closure remain
+pending with the parent. All invoked checks reached terminal status synchronously.
+Prior commits were preserved; no later bug work or tracker/GitHub mutation occurred.
 
 ## GH970 Frozen Acceptance
 

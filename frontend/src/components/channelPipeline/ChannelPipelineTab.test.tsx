@@ -18,6 +18,7 @@ import {
 import { ChannelPipelineTab } from './ChannelPipelineTab';
 import { NotificationProvider } from '../../contexts/NotificationContext';
 import { AuthProvider } from '../../hooks/useAuth';
+import type { BulkUpdateRulesPatch } from '../../types/channelPipeline';
 
 const renderWithProviders = (ui: React.JSX.Element) =>
   render(
@@ -46,6 +47,69 @@ afterEach(() => {
 afterAll(() => server.close());
 
 describe('ChannelPipelineTab', () => {
+  describe('GH968 bulk channel sorting', () => {
+    it.each(['clear', 'set', 'unchecked'] as const)(
+      '%s goes through the bulk handler and survives reopening from GET',
+      async (choice) => {
+        const user = userEvent.setup();
+        const rules = [
+          createMockChannelPipelineRule({ name: 'Sort A', sort_field: 'stream_name' }),
+          createMockChannelPipelineRule({ name: 'Sort B', sort_field: 'quality' }),
+          createMockChannelPipelineRule({ name: 'Unselected', sort_field: 'provider_order' }),
+        ];
+        mockDataStore.channelPipelineRules.push(...rules);
+        const requests: (BulkUpdateRulesPatch & { rule_ids: number[] })[] = [];
+        server.use(http.post('/api/channel-pipeline/rules/bulk-update', async ({ request }) => {
+          const payload = await request.json() as BulkUpdateRulesPatch & { rule_ids: number[] };
+          requests.push(payload);
+          const { rule_ids, ...patch } = payload;
+          // HTTP boundary only: persistence is exercised by the real SQLite API tests.
+          const updated = mockDataStore.channelPipelineRules
+            .filter(rule => rule_ids.includes(rule.id))
+            .map(rule => Object.assign(rule, patch));
+          return HttpResponse.json({ rules: updated, updated_count: updated.length });
+        }));
+
+        const view = renderWithProviders(<ChannelPipelineTab />);
+        await user.click(await screen.findByRole('checkbox', { name: 'Select Sort A' }));
+        await user.click(screen.getByRole('checkbox', { name: 'Select Sort B' }));
+        await user.click(screen.getByRole('button', { name: 'Bulk edit selected rules' }));
+        const dialog = screen.getByRole('dialog', { name: /bulk edit rules/i });
+        await user.click(within(dialog).getByRole('checkbox', { name: 'Apply channel sort' }));
+        await user.click(within(dialog).getByRole('button', { name: /^Stream Name/ }));
+        const label = choice === 'set' ? 'Group Name' : 'No sorting (keep manual numbers)';
+        await user.click(screen.getByRole('option', { name: label }));
+        if (choice === 'unchecked') {
+          await user.click(within(dialog).getByRole('checkbox', { name: 'Apply channel sort' }));
+          await user.click(within(dialog).getByRole('checkbox', { name: 'Apply orphan cleanup' }));
+        }
+        await user.click(within(dialog).getByRole('button', { name: /apply to selected/i }));
+        await waitFor(() => expect(dialog).not.toBeInTheDocument());
+        expect(requests).toEqual([{
+          rule_ids: [rules[0].id, rules[1].id],
+          ...(choice === 'unchecked'
+            ? { orphan_action: 'delete' }
+            : { sort_field: choice === 'set' ? 'group_name' : null, sort_order: 'asc', sort_regex: null }),
+        }]);
+        expect(screen.getByRole('checkbox', { name: 'Select Sort A' })).not.toBeChecked();
+        expect(rules[2].sort_field).toBe('provider_order');
+
+        // A fresh tab fetches rules instead of reusing hook state from the POST.
+        view.unmount();
+        renderWithProviders(<ChannelPipelineTab />);
+        await user.click(await screen.findByRole('checkbox', { name: 'Select Sort A' }));
+        await user.click(screen.getByRole('checkbox', { name: 'Select Sort B' }));
+        await user.click(screen.getByRole('button', { name: 'Bulk edit selected rules' }));
+        const reopened = screen.getByRole('dialog', { name: /bulk edit rules/i });
+        await user.click(within(reopened).getByRole('checkbox', { name: 'Apply channel sort' }));
+        expect(within(reopened).getByRole('button', {
+          name: choice === 'unchecked' ? /^Stream Name/ : new RegExp(label.replace(/[()]/g, '\\$&')),
+        })).toBeVisible();
+        expect(rules[1].sort_field).toBe(choice === 'unchecked' ? 'quality' : choice === 'set' ? 'group_name' : null);
+      },
+    );
+  });
+
   describe('rendering', () => {
     it('renders the channel pipeline tab container', () => {
       renderWithProviders(<ChannelPipelineTab />);
