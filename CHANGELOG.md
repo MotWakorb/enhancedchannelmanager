@@ -42,9 +42,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Explicit broad Channel Pipeline schedules now run all enabled rules without requiring Run on Refresh (GitHub #975, build 0.18.2-0019).** Selecting the broad scope stores `run_all_rules: true` and applies equally to due schedules and Run Now. Existing parameterless schedules, including the built-in 60-second poll, remain refresh-only with their existing guards; no schedule is silently reclassified. Exact selected-rule scope remains separate and fail-closed.
+
+- **Channel Group / Is conditions now use a searchable group selector that saves integer IDs (GitHub #856, build 0.18.2-0019).** The editor displays group names without submitting them as invalid string values. Matching still uses the stream's assigned channel group, not its provider stream group.
+
+- **Bulk rule settings now persist No sorting when Apply channel sort is checked (GitHub #968, build 0.18.2-0019).** Explicit null clears the saved channel sort; omitting the field preserves it. Other settings, unselected rules, and execution history remain unchanged.
+
+- **Channels Edit Mode checkbox glyphs no longer lose their right-hand side (GitHub #962, build 0.18.2-0019).** Owner-local horizontal padding now leaves room for the full icon without changing grid tracks, row height, or selection behavior.
+
+- **A matching normalization rule with Stop processing now preserves its exact output globally (GitHub #858, build 0.18.2-0019).** Per the approved global-stop behavior, no later rule, group, repeat pass, legacy tag removal, or whitespace cleanup runs for that name, even when the matching action makes no change. Saved-rule execution and previews agree. Preferred-name mappings retain precedence; executed else branches retain their existing group-local stop behavior.
+
+- **Duplicating a Channel Pipeline rule now preserves all current Targeting controls (GitHub #969, build 0.18.2-0019).** Copies retain merge scope, pinned group, manual-channel merge permission, folded-name matching, and required providers, including false, null, and empty values. Copies still receive a new ID and `(Copy)` name, start disabled, and do not adopt execution history or managed channels.
+
 - **Scheduled Stream Probe group filters now fail closed when no configured groups resolve (bead `enhancedchannelmanager-8gmk8.3`, build 0004).** An omitted group selection still probes all groups, while an explicit empty selection or an all-stale selection completes without probing metadata or reordering channels. Mixed selections probe and reorder only currently valid groups.
 
 - **Post-merge dev publication checks now follow the actual reusable workflow and fail closed on incomplete evidence (bead `enhancedchannelmanager-69dxb`, build 0002).** The checker selects the exact successful `Tests` push attempt and its final reusable manifest job, requires the current mutable tag to contain exactly matching AMD64 and ARM64 version/full-commit markers, and treats a fresh pull as an additional marker cross-check rather than a fallback. Malformed API or manifest data, duplicate markers, missing platforms, command failures, and a request to skip both checks now return actionable failures. The result is explicitly a point-in-time consistency check that trusts registry writers, not cryptographic workflow-to-image attestation.
+
+### Changed
+
+- **The build 0.18.2-0019 bug batch also records existing-behavior verification, not additional fixes.** GitHub #970 was not reproduced on the current code; new regression coverage verifies that unchecked merge scope survives save/reopen and persisted execution. GitHub #801's prior fix in PR #850 was verified before this batch; no new fix for #801 is included. These checks do not constitute reporter-build confirmation.
 
 ## [0.18.1] — 2026-08-30
 
