@@ -97,6 +97,74 @@ def test_request_models_reject_coerced_required_provider_ids(model, payload, val
         model(**payload, required_provider_ids=value)
 
 
+class TestChannelGroupConditionGH856:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("value", ["Sports", "42", "", None])
+    async def test_rejects_text_group_values_with_integer_id_error(self, async_client, value):
+        response = await async_client.post("/api/auto-creation/rules", json={
+            "name": "Channel group",
+            "conditions": [{"type": "channel_in_group", "value": value}],
+            "actions": [{"type": "log_match", "message": "Group matched"}],
+        })
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["errors"] == [
+            "conditions[0]: channel_in_group requires a group ID (integer)"
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("dry_run", [True, False], ids=["preview", "live"])
+    async def test_persisted_group_id_matches_assigned_channels(
+        self, async_client, test_session, test_engine, dry_run
+    ):
+        from sqlalchemy.orm import sessionmaker
+        from channel_pipeline_engine import ChannelPipelineEngine
+
+        condition = {"type": "channel_in_group", "value": 42}
+        with patch("routers.channel_pipeline.journal"):
+            created = await async_client.post("/api/auto-creation/rules", json={
+                "name": "Channel group",
+                "conditions": [condition],
+                "actions": [{"type": "log_match", "message": "Group matched"}],
+            })
+        assert created.status_code == 200, created.text
+        rule_id = created.json()["id"]
+        test_session.expire_all()
+        assert test_session.get(ChannelPipelineRule, rule_id).get_conditions() == [condition]
+        loaded = await async_client.get(f"/api/auto-creation/rules/{rule_id}")
+        assert loaded.status_code == 200
+        assert loaded.json()["conditions"] == [condition]
+
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 2, "results": [
+            {"id": 10, "name": "Sports Channel", "channel_group_id": 42, "streams": [101]},
+            {"id": 11, "name": "News Channel", "channel_group_id": 43, "streams": [102]},
+        ]})
+        client.get_channel_groups = AsyncMock(return_value=[
+            {"id": 42, "name": "Sports"}, {"id": 43, "name": "News"},
+        ])
+        client.get_m3u_accounts = AsyncMock(return_value=[{"id": 1, "name": "Provider"}])
+        client.get_streams = AsyncMock(return_value={"count": 3, "results": [
+            {"id": 101, "name": "Assigned Sports", "group_title": "Other"},
+            {"id": 102, "name": "Assigned News", "group_title": "Sports"},
+            {"id": 103, "name": "Unassigned", "group_title": "Sports"},
+        ]})
+        engine = ChannelPipelineEngine(client)
+        with patch("channel_pipeline_engine.get_session", sessionmaker(bind=test_engine)):
+            result = await engine.run_pipeline(dry_run=dry_run)
+
+        assert result["success"] is True, result
+        assert result["streams_evaluated"] == 3
+        assert result["streams_matched"] == 1
+        assert result["mode"] == ("dry_run" if dry_run else "execute")
+        matched = [entry for entry in result["execution_log"] if entry.get("actions_executed")]
+        assert [entry["stream_id"] for entry in matched] == [101]
+        assert matched[0]["actions_executed"][0]["success"] is True
+        if dry_run:
+            assert [entry["stream_id"] for entry in result["dry_run_results"]] == [101]
+        assert all(call[0].startswith("get_") for call in client.mock_calls)
+
+
 class TestGetChannelPipelineRules:
     """Tests for GET /api/auto-creation/rules."""
 

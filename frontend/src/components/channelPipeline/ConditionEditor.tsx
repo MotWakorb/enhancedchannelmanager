@@ -109,7 +109,7 @@ const FIELDS: FieldDef[] = [
   },
   {
     id: 'channel_group', label: 'Channel Group', category: 'channel',
-    operators: [{ id: 'is', label: 'Is', valueType: 'string', placeholder: 'Enter group name' }],
+    operators: [{ id: 'is', label: 'Is', valueType: 'select' }],
   },
   {
     id: 'normalized_match_group', label: 'Normalized Match in Group', category: 'channel',
@@ -601,19 +601,19 @@ export function ConditionEditor({
                 <CustomSelect
                   options={
                     currentField === 'provider' ? providerOptions
-                    : currentField === 'normalized_match_group' ? groupOptions
+                    : currentField === 'normalized_match_group' || currentField === 'channel_group' ? groupOptions
                     : currentField === 'stream_group_is' ? streamGroupOptions
                     : (operatorDef?.selectOptions ?? [])
                   }
                   value={String(displayValue ?? '')}
                   onChange={(val) => handleValueChange(currentField === 'stream_group_is' ? val : Number(val))}
                   placeholder={
-                    currentField === 'normalized_match_group' || currentField === 'stream_group_is'
+                    currentField === 'normalized_match_group' || currentField === 'channel_group' || currentField === 'stream_group_is'
                       ? "Select group..." : "Select..."
                   }
                   disabled={readonly}
                   className="condition-value-select"
-                  searchable={currentField === 'provider' || currentField === 'normalized_match_group' || currentField === 'stream_group_is'}
+                  searchable={currentField === 'provider' || currentField === 'normalized_match_group' || currentField === 'channel_group' || currentField === 'stream_group_is'}
                 />
               ) : isNumber ? (
                 <input

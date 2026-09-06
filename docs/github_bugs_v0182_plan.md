@@ -16,12 +16,105 @@
 | --- | --- | --- | --- |
 | 1 | #801 | Prior fix verified, per parent handoff | Parent reports 273 backend and 4 MCP tests; closure deferred to final merge. |
 | 2 | #975 | Active | Scheduled broad pipeline must not require rule `run_on_refresh`. |
-| 3 | #856 | Pending | Not investigated in this dispatch. |
+| 3 | #856 | Implemented; focused verification complete | Existing Channel Group Is selects names and serializes integer IDs; assigned-channel semantics retained. Batch typecheck blocker noted below. |
 | 4 | #970 | Pending | Not investigated in this dispatch. |
 | 5 | #968 | Pending | Not investigated in this dispatch. |
 | 6 | #962 | Pending | Not investigated in this dispatch. |
 | 7 | #858 | Pending | Not investigated in this dispatch. |
 | 8 | #969 | Pending | Not investigated in this dispatch. |
+
+## GH856 Frozen Acceptance
+
+Bead: `enhancedchannelmanager-0m06f.2.3.3`. Base: `90bf87f2` (GH975 preserved).
+Source: https://github.com/MotWakorb/enhancedchannelmanager/issues/856
+Intake read the full body, zero comments, and the attached screenshot. The
+screenshot reports `channel_in_group requires a group ID (integer)`.
+
+1. Keep the existing Channel Group / Is field and `channel_in_group` condition.
+   Replace its misleading group-name text input with the existing searchable
+   channel-group selector pattern: display names/counts, submit integer IDs.
+2. Preserve the existing populated-group choices used for channel matching.
+   An unselected value remains invalid; do not silently select a group.
+3. Create, persist, reload, and edit the numeric condition without changing its
+   meaning. Names and string IDs submitted directly to the API retain its clear
+   integer-ID validation error.
+4. Verify preview and live-mode evaluation through the existing pipeline:
+   match the stream's assigned channel group, reject other groups and unassigned
+   streams, and do not confuse provider stream groups with channel membership.
+5. Prove the UI regression red before production edits. Add API persistence and
+   engine coverage without mocking the validator/evaluator. Mock Dispatcharr
+   boundaries only; no live writes. No new condition, engine changes, refactor,
+   dependency, migration, or unrelated bug fix.
+6. Run focused tests, frontend types, and changed-file lint. Canonical full gates
+   remain deferred to batch completion. Parent owns all tracker/shipping actions.
+
+## GH856 Implementation Evidence
+
+Root cause: `ConditionEditor` rendered a text input with `Enter group name` and
+passed `event.target.value` unchanged. Both `Sports` and typed `42` therefore
+became JSON strings. The existing schema requires an integer, and the evaluator
+compares that ID against the stream's assigned channel group. The existing
+pipeline enriches channel associations from channel stream lists before matching.
+
+Production change is four editor lines: select value type, reuse group options,
+group placeholder, and searchability. The existing select handler already converts
+IDs to numbers. No backend production change, new condition, or migration.
+
+### Red and Baseline
+
+- Before production edits, `npx vitest run src/components/channelPipeline/ConditionEditor.test.tsx -t GH856`
+  returned **1 failed, 33 skipped**: the Channel Group value selector was absent.
+- After correcting the test fixture's Log Match payload (message is a top-level
+  action field, not nested `params`), the six new backend cases passed on the
+  unchanged backend. They reproduce the exact error for names, string IDs, empty
+  strings, and null; integer IDs create/reload successfully and match in both
+  preview and live mode. Fixture-setup failures are not counted as bug red proof.
+- The first green UI attempt reached search and exposed jsdom's missing
+  `scrollIntoView`; a test-only stub follows the existing CustomSelect test pattern.
+
+### Final Focused Checks
+
+Backend, from the worktree root:
+
+```bash
+env TMPDIR=/tmp/opencode/ecm-gh856-tmp ECM_PYTHON=/home/lecaptainc/ecm/enhancedchannelmanager/.venv/bin/python scripts/backend-gate.sh --subset tests/routers/test_channel_pipeline.py tests/unit/test_channel_pipeline_evaluator.py tests/unit/test_channel_pipeline_schema.py tests/unit/test_channel_pipeline_engine.py
+```
+
+Result: **659 passed in 12.34s**. The test harness creates its own private config
+under the dedicated TMPDIR and isolated SQLite databases. The new tests cross real
+HTTP creation/GET, SQL persistence, rule loading, stream fetching/enrichment,
+evaluation, and Log Match execution. Only Dispatcharr calls and the creation
+journal are mocked; the engine uses a test-database session factory. Assertions
+pin stream 101 as the sole action recipient, preview output, and read-only mock
+client calls. No live Dispatcharr writes occurred.
+
+Frontend, from `frontend/`, with Node 24.13.0 on PATH:
+
+```bash
+npx vitest run src/components/channelPipeline/ConditionEditor.test.tsx src/components/channelPipeline/RuleBuilder.test.tsx --silent
+npx eslint src/components/channelPipeline/ConditionEditor.tsx src/components/channelPipeline/ConditionEditor.test.tsx --max-warnings 0
+npx tsc --ignoreConfig --noEmit --target ES2020 --useDefineForClassFields --lib ES2020,ES2022.Error,DOM,DOM.Iterable --module ESNext --skipLibCheck --moduleResolution bundler --allowImportingTsExtensions --resolveJsonModule --isolatedModules --jsx react-jsx --strict --noUnusedLocals --noUnusedParameters --noFallthroughCasesInSwitch --types @testing-library/jest-dom/vitest src/vite-env.d.ts src/components/channelPipeline/ConditionEditor.tsx src/components/channelPipeline/ConditionEditor.test.tsx
+```
+
+Results: **123 passed in 6.67s**, ESLint **exit 0**, scoped types **exit 0**.
+The scoped type command mirrors `tsconfig.json` compiler options and includes
+the Vitest matcher augmentation. UI evidence is rendered jsdom component testing
+with MSW group responses, not a deployed-browser end-to-end run. The test checks
+field discovery, empty validation, name search, integer serialization, JSON
+round-trip label, editing the selected group, and connector preservation.
+
+### Parent Handoff / Verification Gaps
+
+- `npm run typecheck` **failed** at the existing
+  `frontend/src/components/ScheduleEditor.test.tsx:73`: TS2322, `parameters: null`
+  is not assignable to `Record<string, unknown>`. Confirmed present in `90bf87f2`
+  using `git show HEAD:frontend/src/components/ScheduleEditor.test.tsx`. GH975
+  commit/files were not changed; parent must resolve this before full batch gates.
+- Python Ruff is not installed in the project virtualenv and neither Ruff nor
+  Flake8 is on PATH; Python lint was not run. No tooling dependency was added.
+- Full canonical gates, deployed-browser acceptance, independent review, and
+  shipping remain with the parent. No push, PR, merge, tracker transition, or
+  GitHub closure was performed. No later batch bug was investigated or changed.
 
 ## GH975 Frozen Acceptance
 

@@ -152,6 +152,47 @@ describe('ConditionEditor', () => {
     });
   });
 
+  describe('channel_in_group (GH856)', () => {
+    beforeAll(() => {
+      // jsdom omits scrolling; CustomSelect scrolls the highlighted search result.
+      Element.prototype.scrollIntoView = vi.fn();
+    });
+
+    it('selects a channel group by name, emits an integer ID, and reloads its label', async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      server.use(http.get('/api/channel-groups', () => HttpResponse.json([
+        { id: 42, name: 'Sports', channel_count: 2 },
+        { id: 43, name: 'News', channel_count: 1 },
+      ])));
+      const props = { onChange, onRemove: vi.fn() };
+      const { container, rerender } = render(
+        <ConditionEditor {...props} condition={{ type: 'always', connector: 'or' }} />
+      );
+
+      await user.click(screen.getByText('Always'));
+      await user.click(screen.getByText('Channel Group'));
+      expect(onChange).toHaveBeenLastCalledWith({ type: 'channel_in_group', value: '', connector: 'or' });
+      rerender(<ConditionEditor {...props} condition={onChange.mock.lastCall![0]} showValidation />);
+      expect(screen.getByRole('alert')).toHaveTextContent('Value is required');
+
+      const trigger = container.querySelector('.condition-value-select button');
+      expect(trigger).toBeTruthy();
+      await user.click(trigger!);
+      await user.type(screen.getByPlaceholderText('Search...'), 'Sports');
+      await user.click(await screen.findByText('Sports (2)'));
+      expect(onChange).toHaveBeenLastCalledWith({ type: 'channel_in_group', value: 42, connector: 'or' });
+
+      const persisted = JSON.parse(JSON.stringify(onChange.mock.lastCall![0]));
+      rerender(<ConditionEditor {...props} condition={persisted} showValidation />);
+      expect(screen.getByText('Sports (2)')).toBeInTheDocument();
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      await user.click(container.querySelector('.condition-value-select button')!);
+      await user.click(await screen.findByText('News (1)'));
+      expect(onChange).toHaveBeenLastCalledWith({ type: 'channel_in_group', value: 43, connector: 'or' });
+    });
+  });
+
   describe('stream_group_is (provider group dropdown)', () => {
     it('parses a stream_group_is condition to the Stream Group Is field with Is operator', () => {
       render(
