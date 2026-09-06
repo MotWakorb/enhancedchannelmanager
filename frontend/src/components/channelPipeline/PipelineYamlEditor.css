@@ -1,0 +1,66 @@
+.pipeline-yaml-editor {
+  padding: 16px;
+  min-width: 0;
+  font-size: var(--type-body-size);
+}
+
+.pipeline-yaml-editor p {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.pipeline-yaml-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin: 16px 0;
+}
+
+.pipeline-yaml-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pipeline-yaml-controls input {
+  padding: 8px 12px;
+  background: var(--input-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  font-size: var(--type-body-size);
+  min-width: 0;
+}
+
+.pipeline-yaml-editor textarea {
+  width: 100%;
+  min-height: 24rem;
+  resize: vertical;
+  font-family: monospace;
+  font-size: var(--type-body-size);
+  tab-size: 2;
+}
+
+.pipeline-yaml-error {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--error);
+}
+
+.pipeline-rule-views {
+  display: flex;
+  gap: 8px;
+  margin: 16px;
+}
+
+.channel-pipeline-tab [hidden] {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .pipeline-yaml-controls label {
+    width: 100%;
+  }
+}

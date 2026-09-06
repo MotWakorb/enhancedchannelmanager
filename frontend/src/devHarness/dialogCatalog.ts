@@ -141,6 +141,10 @@ export const DIALOG_CATALOG = [
   { id: 'cp-revert-confirm', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → undo this run confirm', status: 'stubbed', via: 'host' },
   { id: 'cp-revert-result', file: 'src/components/channelPipeline/ChannelPipelineTab.tsx', label: 'Pipeline tab → revert complete summary', status: 'stubbed', via: 'host' },
 
+  // --------------------------------------- host interaction not supported
+  { id: 'cp-yaml-delete', file: 'src/components/channelPipeline/PipelineYamlEditor.tsx', label: 'Pipeline YAML deletion confirmation', status: 'gap', via: 'host', reason: 'Requires editing a textarea before Save; this dev harness supports click/wait only. The real-API GH971 browser case renders and exercises this dialog without adding a new harness interaction API.' },
+  { id: 'cp-yaml-reload', file: 'src/components/channelPipeline/PipelineYamlEditor.tsx', label: 'Pipeline YAML dirty reload confirmation', status: 'gap', via: 'host', reason: 'Requires a dirty textarea before Reload; this dev harness supports click/wait only. PipelineYamlEditor component tests exercise the real dialog and preserve/cancel behavior.' },
+
   // --------------------------------------------------------- not a dialog
   { id: 'modal-overlay-base', file: 'src/components/ModalOverlay.tsx', label: 'ModalOverlay (shared wrapper, renders no dialog of its own)', status: 'gap', reason: 'Not a dialog. It is the shared overlay wrapper every other dialog composes; it contributes the .modal-overlay box and nothing else. Matched the marker scan because it names ModalOverlay. Measured indirectly by every stubbed entry above.', via: 'direct' },
 ] as const satisfies readonly DialogCatalogEntry[]

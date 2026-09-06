@@ -297,6 +297,7 @@ _PIPELINE_AUTOMATION = {
         ("POST", f"{prefix}/rules"),
         ("POST", f"{prefix}/rules/bulk-update"),
         ("POST", f"{prefix}/rules/reorder"),
+        ("PUT", f"{prefix}/rules/yaml"),
         ("DELETE", f"{prefix}/rules/{{rule_id}}"),
         ("PUT", f"{prefix}/rules/{{rule_id}}"),
         ("POST", f"{prefix}/rules/{{rule_id}}/duplicate"),

@@ -23,6 +23,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useChannelPipelineRules } from '../../hooks/useChannelPipelineRules';
 import { useChannelPipelineExecution } from '../../hooks/useChannelPipelineExecution';
 import { RuleBuilder } from './RuleBuilder';
+import { PipelineYamlEditor } from './PipelineYamlEditor';
 import { EventSyncRuleEditor } from './EventSyncRuleEditor';
 import { EventSyncCleanupResults } from './EventSyncPreviewPanel';
 import { EventSyncReviewQueue } from './EventSyncReviewQueue';
@@ -282,6 +283,8 @@ export function ChannelPipelineTab() {
 
   // Local state
   const [search, setSearch] = useState('');
+  const [showYaml, setShowYaml] = useState(false);
+  const [yamlOpened, setYamlOpened] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [runningSingleRule, setRunningSingleRule] = useState<number | null>(null);
@@ -1137,6 +1140,14 @@ export function ChannelPipelineTab() {
         </div>
       </div></RouteHeaderSlot>
 
+      <nav className="pipeline-rule-views" aria-label="Rule views">
+        <button className={showYaml ? 'btn-secondary' : 'btn-primary'} aria-pressed={!showYaml} onClick={() => setShowYaml(false)}>Rule list</button>
+        <button className={showYaml ? 'btn-primary' : 'btn-secondary'} aria-pressed={showYaml} onClick={() => { setYamlOpened(true); setShowYaml(true); }}>YAML</button>
+      </nav>
+      {yamlOpened && <div hidden={!showYaml}>
+        <PipelineYamlEditor onSaved={fetchRules} />
+      </div>}
+      <div hidden={showYaml}>
       {/* Event Sync review queue (ti939.3.2) — only meaningful when an
           event_sync rule exists; the component self-fetches its rows. */}
       {rules.some(r => r.event_sync_config) && (
@@ -1600,6 +1611,8 @@ export function ChannelPipelineTab() {
             </div>
           )}
         </section>
+      </div>
+
       </div>
 
       {/* Bulk rule settings */}

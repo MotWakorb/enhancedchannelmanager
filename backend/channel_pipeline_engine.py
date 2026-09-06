@@ -5986,7 +5986,10 @@ class ChannelPipelineEngine:
                     current_ids = set(rule_channel_order.get(rule.id, []))
                     if current_ids and not dry_run:
                         rule.set_managed_channel_ids(list(current_ids))
-                        session.merge(rule)
+                        session.query(ChannelPipelineRule).filter(
+                            ChannelPipelineRule.id == rule.id,
+                            ChannelPipelineRule.created_at == rule.created_at,
+                        ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
                     continue
 
                 current_ids = set(rule_channel_order.get(rule.id, []))
@@ -5997,7 +6000,10 @@ class ChannelPipelineEngine:
                 if rule.managed_channel_ids is None:
                     if current_ids and not dry_run:
                         rule.set_managed_channel_ids(list(current_ids))
-                        session.merge(rule)
+                        session.query(ChannelPipelineRule).filter(
+                            ChannelPipelineRule.id == rule.id,
+                            ChannelPipelineRule.created_at == rule.created_at,
+                        ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
                     logger.info(
                         "[AUTO-CREATE-ENGINE] Rule '%s': first run, populated "
                         "%s managed channel IDs",
@@ -6062,7 +6068,10 @@ class ChannelPipelineEngine:
                     # No orphans — just update managed set
                     if persist and current_ids != previous_ids:
                         rule.set_managed_channel_ids(list(current_ids))
-                        session.merge(rule)
+                        session.query(ChannelPipelineRule).filter(
+                            ChannelPipelineRule.id == rule.id,
+                            ChannelPipelineRule.created_at == rule.created_at,
+                        ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
                     continue
 
                 logger.info(
@@ -6242,7 +6251,10 @@ class ChannelPipelineEngine:
                 # the execution_log, and aggregated into completed_with_errors.
                 if persist:
                     rule.set_managed_channel_ids(list(current_ids))
-                    session.merge(rule)
+                    session.query(ChannelPipelineRule).filter(
+                        ChannelPipelineRule.id == rule.id,
+                        ChannelPipelineRule.created_at == rule.created_at,
+                    ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
 
             if persist:
                 session.commit()
@@ -6569,7 +6581,15 @@ class ChannelPipelineEngine:
                 rule.last_run_at = datetime.utcnow()
                 matches = rule_match_counts.get(rule.id, 0)
                 rule.match_count = matches
-                session.merge(rule)
+                # A detached run snapshot is not current configuration. Update
+                # runtime columns only, and never recreate a deleted identity.
+                session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.id == rule.id,
+                    ChannelPipelineRule.created_at == rule.created_at,
+                ).update({
+                    "last_run_at": rule.last_run_at,
+                    "match_count": rule.match_count,
+                }, synchronize_session=False)
             session.commit()
         finally:
             session.close()

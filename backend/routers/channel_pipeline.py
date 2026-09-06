@@ -280,6 +280,13 @@ class ImportYAMLRequest(BaseModel):
     overwrite: bool = False
 
 
+class SavePipelineYAMLRequest(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    yaml_content: str
+    revision: str
+    confirm_deletions: bool = Field(default=False, strict=True)
+
+
 def _apply_merge_streams_remove_non_matching(actions: list, value: bool) -> list:
     """Set remove_non_matching on every merge_streams action (stored as flat keys on the action dict)."""
     out = []
@@ -516,6 +523,18 @@ async def _validate_required_provider_ids(submitted_ids: Optional[list[int]]) ->
 # =============================================================================
 # Rule CRUD Endpoints
 # =============================================================================
+
+
+@router.get("/rules/yaml")
+def get_pipeline_rules_yaml():
+    from pipeline_yaml_editor import read_collection
+    return read_collection()
+
+
+@router.put("/rules/yaml")
+async def save_pipeline_rules_yaml(request: SavePipelineYAMLRequest, _admin=RequireAdminIfEnabled):
+    from pipeline_yaml_editor import save_collection
+    return await save_collection(request.yaml_content, request.revision, request.confirm_deletions)
 
 
 @router.get("/rules")

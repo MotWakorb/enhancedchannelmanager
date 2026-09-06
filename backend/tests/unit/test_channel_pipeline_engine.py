@@ -2093,7 +2093,11 @@ class TestChannelPipelineEngineExecutionTracking:
         )
 
         assert mock_rule.last_run_at is not None
-        mock_session.merge.assert_called_once_with(mock_rule)
+        mock_session.merge.assert_not_called()
+        mock_session.query.return_value.filter.return_value.update.assert_called_once_with(
+            {"last_run_at": mock_rule.last_run_at, "match_count": 0},
+            synchronize_session=False,
+        )
         mock_session.commit.assert_called_once()
 
 
