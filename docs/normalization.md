@@ -80,6 +80,15 @@ Consequences:
 - A rule later in the pipeline sees the *output* of earlier rules, not the raw input. If rule 1 strips `HD` and rule 2 matches `HD`, rule 2 will not fire against the original input.
 - Groups are a coarse bucket for sharing across Channel Pipeline rules. You can assign one group to many Channel Pipeline rules; the same group applied twice will produce the same output (idempotent).
 
+**Stop Processing After Match** makes a matching rule's exact action output
+final for that name, including when the action makes no change. Remaining
+rules, later groups, repeat passes, legacy tags, and final whitespace cleanup
+are skipped. This replaces the earlier group-local matched stop (GH858).
+Unmatched conditions do not trigger the global stop; an executed else action
+still stops only its own group for the current pass. Preferred-name mappings
+still take precedence before rules run. See
+[Rule groups and ordering](user_guide/normalization/rule-groups-and-ordering.md#stop-processing-after-match).
+
 ### NormalizationPolicy: the Unicode preprocessor
 
 Before any user-authored rule runs, a **policy** preprocesses the input. The policy is not configurable per rule. It applies uniformly to every code path. Under the default `ECM_NORMALIZATION_UNIFIED_POLICY=true` (bd-eio04.1), the policy does three things in order:
@@ -366,6 +375,12 @@ The instance is process-global. Read it via `get_default_policy()`; mutate it vi
 - `NormalizationEngine.test_rules_batch(texts)`: all-rules multi-input preview.
 
 All three call `get_default_policy().apply_to_text(...)` at the same position at the top of their pipelines. The parity tests in `backend/tests/unit/test_normalization_parity.py` enforce this by fixture sweep; the nightly canary (`backend/scripts/normalization_canary.py`) enforces it end-to-end.
+
+Single-rule preview accepts `stop_processing` (default `false`) through
+`POST /api/normalization/test`. A match with this flag skips final whitespace
+cleanup, just as saved-rule execution does. Unmatched/else cleanup is unchanged.
+The global-stop regressions are in
+`backend/tests/routers/test_normalization_stop_processing.py`.
 
 ### Metrics (`ecm_normalization_*`)
 

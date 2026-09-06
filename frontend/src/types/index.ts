@@ -891,6 +891,7 @@ export interface TestRuleRequest {
   condition_type: NormalizationConditionType;
   condition_value: string;
   case_sensitive: boolean;
+  stop_processing?: boolean;
   // Tag group condition
   tag_group_id?: number;
   tag_match_position?: TagMatchPosition;

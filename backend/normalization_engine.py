@@ -1376,7 +1376,8 @@ class NormalizationEngine:
         """
         Apply enabled rules to normalize a stream name.
 
-        Rules are applied in multiple passes until no more changes occur.
+        Rules are applied in multiple passes until no more changes occur or a
+        matching stop_processing rule preserves its exact action output.
         This handles cases like "4K/UHD" (both quality tags) or "HD (NA)"
         where stripping one suffix reveals another that should also be stripped.
 
@@ -1448,7 +1449,9 @@ class NormalizationEngine:
             before_pass = current
 
             # Apply database rules
-            current = self._apply_rules_single_pass(current, grouped_rules, result)
+            current, stopped = self._apply_rules_single_pass(current, grouped_rules, result)
+            if stopped:
+                break
 
             # Apply legacy custom_normalization_tags from settings
             current = self._apply_legacy_custom_tags(current, result)
@@ -1516,8 +1519,8 @@ class NormalizationEngine:
         text: str,
         grouped_rules: list,
         result: NormalizationResult
-    ) -> str:
-        """Apply all database rules once through the text."""
+    ) -> tuple[str, bool]:
+        """Return the pass output and whether a matched rule halted normalization."""
         current = text
 
         for group, rules in grouped_rules:
@@ -1538,9 +1541,9 @@ class NormalizationEngine:
                             rule.id, rule.name, group.name, before, current
                         )
 
-                    # Stop processing if rule says so
+                    # A match stops globally, even when the action changed nothing.
                     if rule.stop_processing:
-                        break
+                        return current, True
 
                 elif rule.else_action_type:
                     # Condition didn't match but rule has an else action
@@ -1557,11 +1560,11 @@ class NormalizationEngine:
                             rule.id, rule.name, before, current
                         )
 
-                    # Stop processing applies to else branch too
+                    # Preserve the else branch's group-local stop for this pass.
                     if rule.stop_processing:
                         break
 
-        return current
+        return current, False
 
     def _apply_legacy_custom_tags(self, text: str, result: NormalizationResult) -> str:
         """
@@ -1834,7 +1837,8 @@ class NormalizationEngine:
         tag_match_position: str = "contains",
         else_action_type: Optional[str] = None,
         else_action_value: Optional[str] = None,
-        require_delimiter: bool = False
+        require_delimiter: bool = False,
+        stop_processing: bool = False,
     ) -> dict:
         """
         Test a rule configuration against sample text without saving.
@@ -1854,6 +1858,8 @@ class NormalizationEngine:
             else_action_value: Value for else action
             require_delimiter: Require a strong delimiter (bd-0emgo.2) rather
                 than a bare space for the tag prefix/suffix match
+            stop_processing: Preserve exact action output on a match, without
+                final whitespace cleanup (GH858).
 
         Returns:
             Dict with matched, before, after, match_details
@@ -1901,8 +1907,8 @@ class NormalizationEngine:
 
         if match.matched:
             result["after"] = self._apply_action(preprocessed_text, rule, match)
-            # Final cleanup
-            result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
+            if not stop_processing:
+                result["after"] = re.sub(r'\s+', ' ', result["after"]).strip()
         elif else_action_type:
             # Condition didn't match, apply else action
             result["after"] = self._apply_else_action(preprocessed_text, rule)

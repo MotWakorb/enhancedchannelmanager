@@ -780,6 +780,7 @@ export function NormalizationEngineSection() {
         condition_type: ruleEditor.conditionType,
         condition_value: ruleEditor.conditionValue,
         case_sensitive: ruleEditor.caseSensitive,
+        stop_processing: ruleEditor.stopProcessing,
         conditions: ruleEditor.useCompoundConditions ? ruleEditor.conditions : undefined,
         condition_logic: ruleEditor.useCompoundConditions ? ruleEditor.conditionLogic : undefined,
         tag_group_id: ruleEditor.conditionType === 'tag_group' ? ruleEditor.tagGroupId ?? undefined : undefined,
