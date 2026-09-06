@@ -69,8 +69,13 @@ describe('ScheduleEditor', () => {
 
   it('keeps an installed parameterless refresh poll unchanged when editing its name', async () => {
     const user = userEvent.setup();
+    // Installed polls can contain legacy null parameters outside the current API type.
+    const legacySchedule = {
+      ...mockSchedule, task_id: 'auto_creation', parameters: null,
+      schedule_type: 'interval', interval_seconds: 60,
+    } as unknown as TaskSchedule;
     render(<ScheduleEditor {...defaultProps} taskId="auto_creation"
-      schedule={{ ...mockSchedule, task_id: 'auto_creation', parameters: null, schedule_type: 'interval', interval_seconds: 60 }}
+      schedule={legacySchedule}
       parameterSchema={[
         { name: 'run_all_rules', type: 'boolean', label: 'Run all enabled rules', description: 'Full pipeline' },
         { name: 'rule_ids', type: 'number_array', label: 'Rules', description: 'Exact rules', required: true, source: 'auto_creation_rules' },
