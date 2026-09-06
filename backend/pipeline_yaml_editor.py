@@ -55,6 +55,17 @@ class _EditorLoader(yaml.SafeLoader):
         finally:
             self.depth -= 1
 
+    def construct_object(self, node, deep=False):
+        if not isinstance(node, yaml.ScalarNode):
+            return super().construct_object(node, deep=deep)
+        try:
+            return super().construct_object(node, deep=deep)
+        except ValueError as exc:
+            # SafeLoader's date/integer constructors can raise plain ValueError.
+            raise yaml.MarkedYAMLError(
+                problem=f"Invalid YAML scalar: {exc}", problem_mark=node.start_mark,
+            ) from exc
+
     def construct_mapping(self, node, deep=False):
         keys = set()
         for key_node, _ in node.value:

@@ -101,3 +101,44 @@ revision conflicts may be documented; expected atomicity is not weakened.
 The focused GH971 commit preserves committed GH980. Combined build 0020 metadata
 is prepared separately after implementation, with status/diff/log inspection and
 explicit path staging. No amend, push, PR/merge, tracker, or GitHub state changes.
+
+## Narrow Scalar Remediation Evidence
+
+Starting HEAD: `b3077fc84097cfffdc185ab3dd34c9a10053900c`; base remains
+`066d340d`. This addresses only the reported security Low (2/10): SafeLoader
+scalar constructors raised plain `ValueError` for an unquoted invalid date
+(`2026-02-30`) and a 5000-digit integer, bypassing the editor's YAML 422 handler.
+The frozen contract and acceptance matrix above are unchanged.
+
+- TDD red: `scripts/backend-gate.sh --subset
+  tests/integration/test_pipeline_yaml_editor.py -k 'yaml_scalar or date_and_integer'
+  -q` produced two failures (actual route HTTP 500 instead of 422) and one passing
+  valid date/integer control before the production edit.
+- Fix: only `_EditorLoader.construct_object` translates scalar-construction
+  `ValueError` into `MarkedYAMLError` with the node's original source mark. The
+  existing parser produces actionable 422 line/column errors. Non-scalar
+  construction and other exception types remain outside this translation.
+  No API-wide catch, shared YAML changes, new limits, dependencies, DB changes,
+  frontend changes, or version bump.
+- Green: `scripts/backend-gate.sh --subset
+  tests/integration/test_pipeline_yaml_editor.py -o addopts='' -q`:
+  **55 passed** (6.18s), including both scalar regressions, valid controls,
+  duplicate keys, aliases, excessive nesting, malformed YAML and unsafe tags.
+  The scalar route tests assert exact line/column, no catalog calls, no save DB
+  session opened, and unchanged file-SQLite rows despite an earlier edited rule.
+- Portable YAML regression: `scripts/backend-gate.sh --subset
+  tests/routers/test_channel_pipeline.py -k yaml -o addopts='' -q`:
+  **39 passed, 247 deselected** (2.57s).
+- Full foreground gate: `timeout 1200 scripts/backend-gate.sh`:
+  **13152 passed, 3 skipped, 2 deselected**, **82.82% coverage**, 881.25s.
+  Skips: seeded Dispatcharr stream-matcher test and the existing Dropbox/OneDrive
+  raw-outbound baselines. Canonical E2E/performance exclusions remain unchanged.
+- Environment: main checkout `.venv/bin/python`, Python 3.12.3, PyYAML 6.0.3,
+  SQLite 3.45.1, cryptography 46.0.7, interpreter integer conversion limit 4300.
+  Tests use the existing isolated config harness and per-test temporary SQLite.
+- `scripts/generate_sbom.py verify` with project Python: **PASS**, `sbom/dev`
+  matches the source tree; build 0020 needs no regeneration. `git diff --check`
+  passes. Ruff is unavailable in the project venv and on PATH; no dependency was
+  installed. Frontend gates were not rerun because no frontend code changed.
+- Remaining review: security delta confirmation of this loader-local translation
+  and its route regressions; this evidence is not independent security approval.

@@ -148,6 +148,47 @@ def test_unsafe_yaml_is_actionable_and_atomic(editor, content):
     assert rows(sessions) == before
 
 
+@pytest.mark.parametrize("field,scalar,message", [
+    ("active_from", "2026-02-30", "day is out of range"),
+    ("id", "9" * 5000, "integer string conversion"),
+], ids=["invalid-date", "oversized-integer"])
+def test_invalid_yaml_scalar_is_actionable_before_io(editor, monkeypatch, field, scalar, message):
+    import pipeline_yaml_editor
+
+    client, sessions, upstream, _ = editor
+    snapshot, doc = load(client)
+    before = rows(sessions)
+    doc["rules"][0]["name"] = "Must not persist"
+    doc["rules"][-1][field] = "SCALAR_PLACEHOLDER"
+    content = yaml.safe_dump(doc).replace("SCALAR_PLACEHOLDER", scalar)
+    line = next(index for index, value in enumerate(content.splitlines(), 1) if scalar in value)
+    column = content.splitlines()[line - 1].index(scalar) + 1
+    save_session = MagicMock(side_effect=AssertionError("Invalid scalar must not open a DB session"))
+    monkeypatch.setattr(pipeline_yaml_editor, "_session", save_session)
+    with TestClient(client.app, raise_server_exceptions=False) as route_client:
+        response = route_client.put(PATH, json={**snapshot, "yaml_content": content})
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert message in detail["message"]
+    assert (detail["line"], detail["column"]) == (line, column)
+    assert upstream.mock_calls == []
+    save_session.assert_not_called()
+    assert rows(sessions) == before
+
+
+def test_valid_yaml_date_and_integer_scalars_save(editor):
+    client, sessions, upstream, _ = editor
+    snapshot, doc = load(client)
+    doc["rules"][0]["active_from"] = "SCALAR_PLACEHOLDER"
+    content = yaml.safe_dump(doc).replace("SCALAR_PLACEHOLDER", "2026-02-28")
+    response = client.put(PATH, json={**snapshot, "yaml_content": content})
+    assert response.status_code == 200, response.text
+    after = rows(sessions)
+    assert after[0]["active_from"] == "2026-02-28"
+    assert [row["id"] for row in after] == [1, 2, 3, 4]
+    upstream.get_channel_groups.assert_awaited_once()
+
+
 def test_delete_all_requires_confirmation_and_retains_draft_revision(editor):
     client, sessions, upstream, _ = editor
     snapshot, _ = load(client)
