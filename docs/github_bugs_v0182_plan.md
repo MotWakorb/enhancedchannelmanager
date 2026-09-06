@@ -19,9 +19,125 @@
 | 3 | #856 | Implemented; focused verification complete | Existing Channel Group Is selects names and serializes integer IDs; assigned-channel semantics retained. Batch typecheck blocker noted below. |
 | 4 | #970 | Not reproduced; regression coverage verified | Current code preserves false through save/reopen and persisted merge execution. Reporter-build confirmation remains pending. |
 | 5 | #968 | Implemented; focused verification complete | Explicit null clears channel sorting; omitted fields retain prior values. |
-| 6 | #962 | Pending | Not investigated in this dispatch. |
+| 6 | #962 | Implemented; focused verification complete | Checkbox glyph clipping reproduced and repaired; desktop/narrow exact-build browser regression passes. Mobile shell limitations noted below. |
 | 7 | #858 | Pending | Not investigated in this dispatch. |
 | 8 | #969 | Pending | Not investigated in this dispatch. |
+
+## GH962 Frozen Acceptance
+
+Bead: `enhancedchannelmanager-0m06f.2.3.1`. Intake HEAD: `ece74161`.
+Read the full bead, GH962 body (zero comments), and actual attached screenshot:
+https://github.com/user-attachments/assets/e020d909-3087-409e-bc7e-a426523072af
+The report is against 0.18.2-0002; the screenshot shows half-width checkbox glyphs.
+
+1. Channels view -> Edit Mode -> expand group: full unchecked and checked glyphs
+   must be visible at 1920x1080, 1280x720, and 390x844, including dense rows.
+2. Pointer selection and keyboard Space/Enter retain their existing behavior;
+   group expansion and multi-selection remain intact. Check actual rendered
+   glyph bounds, clipping ancestors, hit targets, and state, not CSS source text.
+3. Preserve the existing grid tracks, row height, density, and chrome. No redesign,
+   shared icon changes, new dependencies, or work on GH858/GH969.
+4. Add a separate browser regression using the existing base fixture and route
+   interception pattern. Statically skip unsupported modes, never top-level throw.
+   Build this worktree on the harness-owned isolated preview (4173, no reuse),
+   mock API boundaries, and never use live 6100 or write to a live API.
+5. First measure and capture the unmodified source. Suspected cause, not yet
+   browser-confirmed: 24px grid cell minus 16px horizontal button padding leaves
+   8px for an 18px flex-shrinkable, overflow-hidden Material Icon. If reproduced,
+   make the smallest owner-local CSS repair; otherwise lock the existing behavior
+   with tests and do not invent a production patch.
+6. Run focused browser/component tests, lint and types with Node 24 and local
+   lockfile dependencies. Inspect desktop/narrow screenshots. Full batch gates,
+   review, reporter confirmation and shipping stay with the parent. No push, PR,
+   merge, tracker transition or GitHub closure in this dispatch.
+
+## GH962 Implementation and Verification
+
+Confirmed local cause: `.channel-item` reserves a 24px first grid track, while
+`.channel-select-indicator` used 8px padding on each side. Its flex child is an
+18px Material Icon with `width: 1em`, default flex shrinking and `overflow: hidden`
+from `index.css`. Chromium measured **8x18px** for the glyph inside a **24x34px**
+button. The glyph clips itself; no ancestor was clipping it. The captured local
+unchecked screenshot matches the reporter's missing right half.
+
+The only production change is `padding: 0.5rem 0` plus a short comment in
+`frontend/src/components/ChannelsPane.css`. It leaves grid tracks, gaps, vertical
+padding, button target dimensions, row styles and shared icons unchanged.
+
+`e2e/edit-mode-checkbox-bounds.spec.ts` uses the existing base fixture and
+backendless Edit Mode route-interception pattern. It renders the actual app,
+enters Edit Mode and expands Radio. It checks all three unchecked glyphs, checked
+marks, clipping ancestors, containment, left/right hit testing, unchanged 24x34px
+targets, pointer selection, Space/Enter, independent multi-selection, and state
+retention after collapsing/reopening. The bounded 5-second assertion retry allows
+the existing expansion/selection transitions to settle before hit testing.
+No injected CSS or product-handler mocks are used. Every API call is intercepted;
+unexpected non-GET requests are aborted. No live backend or Dispatcharr is involved.
+
+### Red and Green
+
+- Initial fixture setup needed the current profile-conflict response shape
+  (`reviews: []`); setup failures are not claimed as bug reproduction.
+- Before the CSS edit, all three viewports failed with **8px width vs 18px em**.
+- After finalizing the test, the CSS repair was temporarily removed with a patch.
+  `git diff --exit-code -- frontend/src/components/ChannelsPane.css` confirmed
+  original production source. Final red: **3 failed**, each with the same 8x18px
+  glyph and 24x34px target. The repair was restored with an explicit patch.
+- Final exact-build run: **3 passed in 4.0s**, no retries. Each invocation rebuilt
+  this worktree and served it through the existing non-reusing preview harness at
+  `127.0.0.1:4173`; 6100 was not contacted. Visible version: 0.18.2-0018.
+- Unsupported-mode run against the unused `127.0.0.1:9`: **3 statically skipped**,
+  exit 0, no page navigation or API access. No collection-time throw was added.
+
+### Commands and Artifacts
+
+Commands from the worktree root, with Node 24.13.0's installation `bin` on PATH:
+
+```bash
+E2E_EXACT_BUILD=true E2E_START_SERVER=true ./node_modules/.bin/playwright test e2e/edit-mode-checkbox-bounds.spec.ts --project=chromium --workers=1 --retries=0 --reporter=list --output=test-results/gh962-green-final
+E2E_BASE_URL=http://127.0.0.1:9 ./node_modules/.bin/playwright test e2e/edit-mode-checkbox-bounds.spec.ts --project=chromium --workers=1 --retries=0 --reporter=list --output=test-results/gh962-skip
+./frontend/node_modules/.bin/eslint --config frontend/eslint.config.mjs e2e/edit-mode-checkbox-bounds.spec.ts --max-warnings 0
+./frontend/node_modules/.bin/tsc --ignoreConfig --noEmit --target ES2020 --module NodeNext --moduleResolution NodeNext --skipLibCheck --strict --typeRoots ./frontend/node_modules/@types --types node e2e/edit-mode-checkbox-bounds.spec.ts
+git diff --check
+```
+
+ESLint, scoped E2E types and diff whitespace checks: **exit 0**. An initial scoped
+type invocation lacked root Node types; pointing at the already-installed frontend
+types fixed the command without a dependency change. From `frontend/`:
+
+```bash
+npm run typecheck
+npx vitest run src/components/ChannelsPane.selectionBar.test.tsx src/components/ChannelsPane.groupActions.test.tsx --silent
+```
+
+Frontend types: **exit 0**. Existing component tests: **22 passed in 2.38s**.
+No jsdom-only CSS test or boilerplate unit suite was added. Root dependencies were
+absent and installed locally using `npm ci --no-audit --no-fund`; existing frontend
+dependencies are local directories, and `npm ls --depth=0` matched the manifest.
+Neither lockfile nor dependency manifest changed. Vite builds passed with their
+existing >500kB chunk-size advisory. No dedicated CSS linter is configured here.
+
+Local screenshot artifacts (not committed binaries):
+
+- `test-results/gh962-red-final/`: original CSS, `unchecked.png` and failure evidence.
+- `test-results/gh962-green-final/`: `unchecked.png` and `checked.png` per viewport.
+- Viewport subdirectories end in `85678-le-and-selectable-at-1920px-chromium`,
+  `05163-le-and-selectable-at-1280px-chromium`, and
+  `41b79-ole-and-selectable-at-390px-chromium`, prefixed `edit-mode-checkbox-bounds--`.
+- Actual original attachment inspected at `/tmp/opencode/gh962-original.png`.
+
+Desktop and narrow checked/unchecked screenshots were opened and inspected. At
+390px the test uses the shipped sidebar collapse and splitter End controls (70%
+Channels). The default expanded rail/50% split compresses the group toggle to an
+unusable width; even after these controls, toolbar text and channel identity are
+compressed. These are pre-existing shell limitations, **not fixed or accepted as
+mobile-wide usability** by this checkbox patch. Checkbox visibility/interaction
+passes in the stated narrow configuration. Keep this observation with the parent;
+no shell redesign or later-bug work was performed.
+
+Full canonical gates remain deferred to batch end. Independent review, reporter
+confirmation, shipping and closure remain pending. All invoked checks terminated
+synchronously. No push, PR, merge, bead transition or GitHub mutation occurred.
 
 ## GH968 Frozen Acceptance
 

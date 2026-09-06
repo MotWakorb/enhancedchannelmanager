@@ -1092,7 +1092,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0.5rem;
+  /* Leave the 1.5rem grid track wide enough for the full checkbox glyph. */
+  padding: 0.5rem 0;
   color: var(--text-muted);
   cursor: pointer;
   /* Reset button styles -- the selector is a real <button role="checkbox">
