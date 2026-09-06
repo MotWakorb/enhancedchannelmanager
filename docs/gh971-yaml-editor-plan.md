@@ -1,7 +1,9 @@
 # GH971 YAML Editor: Frozen Contract
 
-Status: PO-approved implementation contract, frozen before tests or product code.
-This document specifies required behavior, not verified implementation claims.
+Status: implemented in `098086ce`, with combined remediation in `802cc77a` and
+build 0.18.2-0020 metadata prepared. Parent frozen-HEAD verification and independent
+review remain pending. The contract below was frozen before tests or product code;
+it is not a release or review approval.
 Bead: enhancedchannelmanager-rtst2.10. Combined with GH980 in one PR.
 Base: 066d340d. GH980 boundary: 4337ed3575d8029c1b2b9b56aa930f40bc4e83d3.
 
@@ -96,7 +98,6 @@ new rule kind, new dependency, global validation hardening, general fixes,
 force overwrite, backup/undo system, or scheduler repair. Valid catalog or
 revision conflicts may be documented; expected atomicity is not weakened.
 
-Preserve committed GH980. No metadata/version changes before combined completion
-unless a required gate needs them; parent prepares build 0020 later. Authorized
-delivery is a focused GH971 commit after status/diff/log inspection and explicit
-path staging. No amend, push, PR/merge, tracker, or GitHub state changes.
+The focused GH971 commit preserves committed GH980. Combined build 0020 metadata
+is prepared separately after implementation, with status/diff/log inspection and
+explicit path staging. No amend, push, PR/merge, tracker, or GitHub state changes.

@@ -1,9 +1,10 @@
 # GH980 Low-Bitrate Frozen Contract
 
-Scope: GH980 / enhancedchannelmanager-8gmk8.4 only, first feature on
-`feat/low-bitrate-yaml-editor`, base `066d340d`. GH971 follows serially in the
-same worktree and eventual combined PR. This document records the PO-approved
-review boundary, not a claim that implementation or verification is complete.
+Scope: GH980 / enhancedchannelmanager-8gmk8.4, implemented alongside GH971 on
+`feat/low-bitrate-yaml-editor`, base `066d340d`, for one combined PR. Build
+0.18.2-0020 metadata is prepared; parent frozen-HEAD verification and independent
+review remain pending. This document retains the PO-approved review boundary
+and the earlier implementation evidence, not release or review approval.
 
 ## Approved Behavior
 
@@ -203,5 +204,7 @@ no backend lint pass is claimed and no dependency was installed. Existing
 frontend mock/network and React warnings were not treated as new scope.
 Tests use private temporary SQLite/config paths; browser servers use dynamic
 loopback ports. All waits completed synchronously; no watcher was armed.
-Parent independent verification/review and final build 0020 preparation remain
-separate. No push, PR, merge, tracker, or GitHub mutation was performed.
+Build 0020 metadata preparation follows this remediation. Parent independent
+verification/review must run against the final frozen HEAD; the results above
+are earlier implementation evidence. No push, PR, merge, tracker, or GitHub
+mutation was performed.
