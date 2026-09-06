@@ -1,6 +1,7 @@
 """Isolated backend for the Smart Sort Points browser contract."""
 
 import os
+import json
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response
@@ -13,7 +14,10 @@ from config import (
     save_settings,
 )
 from database import get_session, init_db
-from models import StreamStats
+from models import StreamStats, ChannelPipelineRule
+from routers import channel_pipeline
+from routers.event_sync_reviews import router as reviews_router
+from routers.event_sync_exclusions import router as exclusions_router
 from routers.settings import router as settings_router
 from routers.stream_stats import router as stream_stats_router
 
@@ -241,6 +245,34 @@ async def mutate_sort_settings() -> dict[str, str]:
 
 app.include_router(settings_router)
 app.include_router(stream_stats_router)
+
+# GH971 shares the isolated real-API/file-SQLite browser gate with GH980.
+# This catalog client has no write methods and cannot reach Dispatcharr.
+class PipelineCatalog:
+    async def get_channel_groups(self):
+        return [{"id": 7, "name": "Fixture Channels"}, {"id": 8, "name": "Secondary"}]
+
+    async def get_m3u_accounts(self):
+        return [{"id": 7, "name": "Fixture Provider"}]
+
+
+channel_pipeline.get_client = lambda: PipelineCatalog()
+app.include_router(channel_pipeline.router, prefix="/api/channel-pipeline")
+app.include_router(reviews_router)
+app.include_router(exclusions_router)
+
+
+@app.on_event("startup")
+async def initialize_pipeline_rules():
+    with get_session() as session:
+        for index in range(4):
+            session.add(ChannelPipelineRule(
+                name=f"YAML fixture {index}", enabled=index % 2 == 0, priority=index,
+                conditions='[{"type":"always"}]', actions='[{"type":"skip"}]',
+                match_count=7, managed_channel_ids="[41]",
+                event_sync_config=json.dumps({"master_group_id": 7, "secondary_group_ids": [8]}) if index > 1 else None,
+            ))
+        session.commit()
 
 
 if __name__ == "__main__":

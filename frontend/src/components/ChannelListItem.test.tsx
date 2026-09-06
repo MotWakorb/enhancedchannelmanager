@@ -272,6 +272,7 @@ describe('ChannelListItem — canonical identity and compact health summary', ()
     ['stale', { hasStaleStreams: true, staleStreamCount: 1 }, 'history', '1 stream; stale'],
     ['black screen', { hasBlackScreenStreams: true }, 'videocam_off', '1 stream; black screen'],
     ['low FPS', { hasLowFpsStreams: true }, 'slow_motion_video', '1 stream; low FPS'],
+    ['low bitrate', { hasLowBitrateStreams: true }, 'speed', '1 stream; low bitrate'],
     ['healthy', {}, 'lan', '1 stream; healthy'],
   ])('renders one non-color-only summary for %s', (_name, flags, icon, label) => {
     const streams = _name === 'no streams' ? [] : [1];

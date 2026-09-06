@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 import errno
 import fcntl
 import json
@@ -465,7 +465,7 @@ _STREAM_SORT_NUMERIC_CRITERIA = frozenset(
     {"resolution", "bitrate", "framerate", "m3u_priority", "audio_channels"}
 )
 _STREAM_SORT_BOOLEAN_CRITERIA = frozenset(
-    {"custom_streams", "catchup", "failed", "black_screen", "low_fps"}
+    {"custom_streams", "catchup", "failed", "black_screen", "low_fps", "low_bitrate"}
 )
 _STREAM_SORT_ORDERED_OPERATORS = frozenset({"eq", "ne", "gt", "gte", "lt", "lte"})
 StreamSortStrategy = Literal["priority", "points"]
@@ -719,6 +719,8 @@ class DispatcharrSettings(BaseModel):
     black_screen_detection_enabled: bool = False
     black_screen_sample_duration: int = 5  # Seconds to sample for black screen detection (3-30)
     low_fps_threshold: int = 20  # FPS below this value is considered "low FPS" (5, 10, 15, or 20)
+    low_bitrate_threshold: float = Field(default=1.0, gt=0, allow_inf_nan=False)
+    deprioritize_low_bitrate: bool = False
     deprioritize_failed_streams: bool = True
     # Per-category deprioritization overrides.  When False the category's
     # streams are sorted by their actual quality stats instead of being
@@ -727,8 +729,14 @@ class DispatcharrSettings(BaseModel):
     deprioritize_black_screen: bool = True
     deprioritize_low_fps: bool = True
     # Order of deprioritized stream categories (first = sorted higher among deprioritized)
-    # Valid values: "failed", "black_screen", "low_fps"
-    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps"]
+    # Valid values: "failed", "black_screen", "low_fps", "low_bitrate"
+    failed_stream_sort_order: list[str] = ["failed", "black_screen", "low_fps", "low_bitrate"]
+
+    @field_validator("failed_stream_sort_order")
+    @classmethod
+    def append_low_bitrate_category(cls, value: list[str]) -> list[str]:
+        return value if "low_bitrate" in value else [*value, "low_bitrate"]
+
     # Strike rule - flag streams with consecutive probe failures (0 = disabled)
     strike_threshold: int = 3
     # Normalization settings - user-configurable tags for stream name normalization

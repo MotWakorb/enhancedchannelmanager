@@ -222,6 +222,7 @@ def _prober_stream_facts(
         getattr(stat, "is_black_screen", None) if stats_available else None
     )
     low_fps = getattr(stat, "is_low_fps", None) if stats_available else None
+    low_bitrate = getattr(stat, "is_low_bitrate", None) if stats_available else None
     return StreamFacts(
         stream_id=stream_id,
         probe_succeeded=status == "success",
@@ -254,6 +255,7 @@ def _prober_stream_facts(
         ),
         black_screen=black_screen if type(black_screen) is bool else None,
         low_fps=low_fps if type(low_fps) is bool else None,
+        low_bitrate=low_bitrate if type(low_bitrate) is bool else None,
     )
 
 
@@ -274,6 +276,7 @@ def smart_sort_streams(
     stream_sort_strategy: str = "priority",
     stream_sort_point_rules: tuple[PointRule, ...] = (),
     stream_metadata_known_ids: set[int] | None = None,
+    deprioritize_low_bitrate: bool = False,
 ) -> list[int]:
     """
     Pure function — sort stream IDs by quality/priority criteria.
@@ -322,7 +325,7 @@ def smart_sort_streams(
     if m3u_account_priorities is None:
         m3u_account_priorities = {}
     if failed_stream_sort_order is None:
-        failed_stream_sort_order = ["failed", "black_screen", "low_fps"]
+        failed_stream_sort_order = ["failed", "black_screen", "low_fps", "low_bitrate"]
 
     active_criteria = [
         criterion
@@ -363,6 +366,7 @@ def smart_sort_streams(
         deprioritize_failed=deprioritize_failed_streams,
         deprioritize_black_screen=deprioritize_black_screen,
         deprioritize_low_fps=deprioritize_low_fps,
+        deprioritize_low_bitrate=deprioritize_low_bitrate,
         failed_stream_sort_order=failed_stream_sort_order,
     )
 
@@ -409,6 +413,7 @@ def _priority_deprioritized_streams(
             deprioritize_failed=sort_settings["deprioritize_failed_streams"],
             deprioritize_black_screen=sort_settings["deprioritize_black_screen"],
             deprioritize_low_fps=sort_settings["deprioritize_low_fps"],
+            deprioritize_low_bitrate=sort_settings.get("deprioritize_low_bitrate", False),
         )
         reason = health_deprioritization_reason(
             facts, category, getattr(stat, "probe_status", None)
@@ -458,6 +463,8 @@ class StreamProber:
         stream_sort_point_rules: tuple[PointRule, ...] = (),
         use_resdet_for_resolution: bool = False,
         _resdet_lock_path: Path = RESDET_PIPELINE_LOCK_PATH,
+        low_bitrate_threshold: float = 1.0,
+        deprioritize_low_bitrate: bool = False,
     ):
         self.client = client
         self.probe_timeout = probe_timeout
@@ -476,6 +483,10 @@ class StreamProber:
         self.deprioritize_failed_streams = deprioritize_failed_streams
         self.deprioritize_black_screen = deprioritize_black_screen
         self.deprioritize_low_fps = deprioritize_low_fps
+        self.deprioritize_low_bitrate = deprioritize_low_bitrate
+        if not math.isfinite(low_bitrate_threshold) or low_bitrate_threshold <= 0:
+            raise ValueError("low_bitrate_threshold must be positive and finite")
+        self.low_bitrate_threshold = low_bitrate_threshold
         self.black_screen_detection_enabled = black_screen_detection_enabled
         self.low_fps_threshold = max(1, min(60, low_fps_threshold))  # Clamp 1-60
         self.black_screen_sample_duration = max(3, min(30, black_screen_sample_duration))  # Clamp 3-30
@@ -503,8 +514,10 @@ class StreamProber:
         self.failed_stream_sort_order = (
             failed_stream_sort_order
             if failed_stream_sort_order is not None
-            else ["failed", "black_screen", "low_fps"]
+            else ["failed", "black_screen", "low_fps", "low_bitrate"]
         )
+        if "low_bitrate" not in self.failed_stream_sort_order:
+            self.failed_stream_sort_order = [*self.failed_stream_sort_order, "low_bitrate"]
         self.stream_sort_strategy = stream_sort_strategy
         self.stream_sort_point_rules = tuple(stream_sort_point_rules)
         self._probe_cancelled = False  # Controls cancellation of in-progress probe
@@ -526,6 +539,8 @@ class StreamProber:
         self._probe_progress_black_screen_count = 0
         self._probe_low_fps_streams = []  # List of {id, name, url} for low FPS probes
         self._probe_progress_low_fps_count = 0
+        self._probe_low_bitrate_streams = []
+        self._probe_progress_low_bitrate_count = 0
         # Probe history - list of last 5 probe runs
         self._probe_history = []  # List of {timestamp, total, success_count, failed_count, status, success_streams, failed_streams}
         # Scope from the last successful scheduled probe (used to scope reprobes).
@@ -604,6 +619,7 @@ class StreamProber:
         deprioritize_low_fps: bool = None,
         stream_sort_strategy: str = None,
         stream_sort_point_rules: tuple[PointRule, ...] = None,
+        deprioritize_low_bitrate: bool = None,
     ) -> None:
         """Update the sort settings.
 
@@ -631,6 +647,10 @@ class StreamProber:
             self.deprioritize_black_screen = deprioritize_black_screen
         if deprioritize_low_fps is not None:
             self.deprioritize_low_fps = deprioritize_low_fps
+        if deprioritize_low_bitrate is not None:
+            self.deprioritize_low_bitrate = deprioritize_low_bitrate
+        if "low_bitrate" not in self.failed_stream_sort_order:
+            self.failed_stream_sort_order = [*self.failed_stream_sort_order, "low_bitrate"]
         if stream_sort_strategy is not None:
             self.stream_sort_strategy = stream_sort_strategy
         if stream_sort_point_rules is not None:
@@ -658,6 +678,7 @@ class StreamProber:
             "deprioritize_failed_streams": self.deprioritize_failed_streams,
             "deprioritize_black_screen": self.deprioritize_black_screen,
             "deprioritize_low_fps": self.deprioritize_low_fps,
+            "deprioritize_low_bitrate": self.deprioritize_low_bitrate,
             "failed_stream_sort_order": tuple(self.failed_stream_sort_order),
             "stream_sort_strategy": self.stream_sort_strategy,
             "stream_sort_point_rules": tuple(self.stream_sort_point_rules),
@@ -772,6 +793,7 @@ class StreamProber:
                     "skipped": self._probe_progress_skipped_count,
                     "black_screen": self._probe_progress_black_screen_count,
                     "low_fps": self._probe_progress_low_fps_count,
+                    "low_bitrate": self._probe_progress_low_bitrate_count,
                     "status": self._probe_progress_status,
                     "current_stream": self._probe_progress_current_stream
                 }
@@ -812,6 +834,8 @@ class StreamProber:
                 notification_type = "warning"
             elif self._probe_progress_low_fps_count > 0:
                 notification_type = "warning"
+            elif self._probe_progress_low_bitrate_count > 0:
+                notification_type = "warning"
             else:
                 notification_type = "success"
 
@@ -828,6 +852,8 @@ class StreamProber:
             )
             if black or low:
                 message += f" ({black} black screen, {low} low FPS)"
+            if self._probe_progress_low_bitrate_count:
+                message += f" ({self._probe_progress_low_bitrate_count} low bitrate)"
 
             # Name the dominant failure cause instead of leaving the operator a
             # bare count (bead enhancedchannelmanager-3dn59). Reasons are the
@@ -848,6 +874,7 @@ class StreamProber:
                     "skipped": self._probe_progress_skipped_count,
                     "black_screen": self._probe_progress_black_screen_count,
                     "low_fps": self._probe_progress_low_fps_count,
+                    "low_bitrate": self._probe_progress_low_bitrate_count,
                     "status": "completed",
                     "current_stream": ""
                 }
@@ -873,6 +900,7 @@ class StreamProber:
                         "streams_skipped": self._probe_progress_skipped_count,
                         "black_screen_detections": self._probe_progress_black_screen_count,
                         "low_fps_detections": self._probe_progress_low_fps_count,
+                        "low_bitrate_detections": self._probe_progress_low_bitrate_count,
                         # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
                         "failed_count": failed,
                         "failure_breakdown": failure_breakdown,
@@ -1673,6 +1701,11 @@ class StreamProber:
             elif status == "success":
                 stats.is_low_fps = False
 
+            stats.is_low_bitrate = (
+                status == "success"
+                and self._is_low_bitrate(ffprobe_data, measured_bitrate)
+            )
+
             # Apply measured bitrate if available (overrides ffprobe metadata)
             if measured_bitrate is not None:
                 stats.video_bitrate = measured_bitrate
@@ -1688,6 +1721,32 @@ class StreamProber:
             raise
         finally:
             session.close()
+
+    def _is_low_bitrate(self, data: Optional[dict], measured_bitrate: Optional[int]) -> bool:
+        """Classify fresh probe inputs, never retained database quality fields."""
+        if not data:
+            return False
+        video = next((s for s in data.get("streams", []) if s.get("codec_type") == "video"), {})
+        tags = video.get("tags", {})
+        candidates = (
+            measured_bitrate, video.get("bit_rate"), tags.get("BPS"),
+            tags.get("BPS-eng"), data.get("format", {}).get("bit_rate"),
+        )
+        bitrate = None
+        for candidate in candidates:
+            value = _normalized_number(candidate, parse_string=True)
+            if value is not None and value > 0:
+                bitrate = value
+                break
+        width = _normalized_number(video.get("width"), parse_string=True)
+        height = _normalized_number(video.get("height"), parse_string=True)
+        if bitrate is None or width is None or height is None or width <= 0 or height <= 0:
+            return False
+        try:
+            floor = width * height * self.low_bitrate_threshold
+            return math.isfinite(floor) and bitrate < floor
+        except OverflowError:
+            return False
 
     async def _push_stats_to_dispatcharr(self, stream_id: int, ecm_stats: dict) -> None:
         """Reflect ECM probe stats back to Dispatcharr via PATCH.
@@ -1816,7 +1875,7 @@ class StreamProber:
                 try:
                     stats.video_bitrate = int(video_bit_rate)
                     logger.debug("[STREAM-PROBE] Extracted video bitrate: %s bps", stats.video_bitrate)
-                except (ValueError, TypeError):
+                except (ValueError, TypeError, OverflowError):
                     logger.warning("[STREAM-PROBE] Failed to parse video bitrate: %s", video_bit_rate)
 
         # Find audio stream
@@ -1836,7 +1895,7 @@ class StreamProber:
         if bit_rate:
             try:
                 stats.bitrate = int(bit_rate)
-            except (ValueError, TypeError) as e:
+            except (ValueError, TypeError, OverflowError) as e:
                 logger.debug("[STREAM-PROBE] Suppressed bitrate parse error: %s", e)
 
     def _parse_fps(self, video_stream: dict) -> Optional[float]:
@@ -2736,6 +2795,8 @@ class StreamProber:
         self._probe_progress_black_screen_count = 0
         self._probe_low_fps_streams = []
         self._probe_progress_low_fps_count = 0
+        self._probe_low_bitrate_streams = []
+        self._probe_progress_low_bitrate_count = 0
         self._account_ramp_state = {}  # Fresh ramp state for each probe run
 
         probed_count = 0
@@ -2980,6 +3041,8 @@ class StreamProber:
                                     stream_info["is_black_screen"] = True
                                 if result.get("is_low_fps", False):
                                     stream_info["is_low_fps"] = True
+                                if result.get("is_low_bitrate", False):
+                                    stream_info["is_low_bitrate"] = True
 
                             return (probe_status, stream_info)
                         finally:
@@ -3211,6 +3274,9 @@ class StreamProber:
                                         if stream_info.get("is_low_fps"):
                                             self._probe_progress_low_fps_count += 1
                                             self._probe_low_fps_streams.append(stream_info)
+                                        if stream_info.get("is_low_bitrate"):
+                                            self._probe_progress_low_bitrate_count += 1
+                                            self._probe_low_bitrate_streams.append(stream_info)
                                     else:
                                         self._probe_progress_failed_count += 1
                                         self._probe_failed_streams.append(stream_info)
@@ -3356,6 +3422,9 @@ class StreamProber:
                         if result.get("is_low_fps", False):
                             self._probe_progress_low_fps_count += 1
                             self._probe_low_fps_streams.append(stream_info)
+                        if result.get("is_low_bitrate", False):
+                            self._probe_progress_low_bitrate_count += 1
+                            self._probe_low_bitrate_streams.append(stream_info)
                         if m3u_account_id:
                             self._record_probe_success(m3u_account_id)
                     else:
@@ -3486,6 +3555,8 @@ class StreamProber:
         self._probe_progress_black_screen_count = 0
         self._probe_low_fps_streams = []
         self._probe_progress_low_fps_count = 0
+        self._probe_low_bitrate_streams = []
+        self._probe_progress_low_bitrate_count = 0
         self._account_ramp_state = {}
 
         probed_count = 0
@@ -3543,6 +3614,9 @@ class StreamProber:
                             if result.get("is_low_fps", False):
                                 self._probe_progress_low_fps_count += 1
                                 self._probe_low_fps_streams.append(stream_info)
+                            if result.get("is_low_bitrate", False):
+                                self._probe_progress_low_bitrate_count += 1
+                                self._probe_low_bitrate_streams.append(stream_info)
                         else:
                             self._probe_progress_failed_count += 1
                             stream_info["error"] = error_message or "Unknown error"
@@ -3635,6 +3709,7 @@ class StreamProber:
             "skipped_count": self._probe_progress_skipped_count,
             "black_screen_count": self._probe_progress_black_screen_count,
             "low_fps_count": self._probe_progress_low_fps_count,
+            "low_bitrate_count": self._probe_progress_low_bitrate_count,
             "percentage": round((self._probe_progress_current / self._probe_progress_total * 100) if self._probe_progress_total > 0 else 0, 1),
             "rate_limited": rate_limit_info["is_rate_limited"],
             "rate_limited_hosts": rate_limit_info["hosts"],
@@ -3699,11 +3774,13 @@ class StreamProber:
             "skipped_streams": self._probe_skipped_streams,
             "black_screen_streams": self._probe_black_screen_streams,
             "low_fps_streams": self._probe_low_fps_streams,
+            "low_bitrate_streams": self._probe_low_bitrate_streams,
             "success_count": len(self._probe_success_streams),
             "failed_count": len(self._probe_failed_streams),
             "skipped_count": len(self._probe_skipped_streams),
             "black_screen_count": len(self._probe_black_screen_streams),
             "low_fps_count": len(self._probe_low_fps_streams),
+            "low_bitrate_count": len(self._probe_low_bitrate_streams),
             # Cause breakdown, not just a count (bead
             # enhancedchannelmanager-3dn59).
             "failure_breakdown": self._failure_breakdown(),
@@ -3733,6 +3810,8 @@ class StreamProber:
             "black_screen_count": self._probe_progress_black_screen_count,
             "black_screen_streams": list(self._probe_black_screen_streams),  # Copy the list
             "low_fps_count": self._probe_progress_low_fps_count,
+            "low_bitrate_count": self._probe_progress_low_bitrate_count,
+            "low_bitrate_streams": list(self._probe_low_bitrate_streams),
             "low_fps_streams": list(self._probe_low_fps_streams),  # Copy the list
             "reordered_channels": reordered_channels or [],  # List of channels that were reordered
             # Include sort configuration used for this run (for UI display)
@@ -3742,6 +3821,8 @@ class StreamProber:
                 "deprioritize_failed": self.deprioritize_failed_streams,
                 "deprioritize_black_screen": self.deprioritize_black_screen,
                 "deprioritize_low_fps": self.deprioritize_low_fps,
+                "deprioritize_low_bitrate": self.deprioritize_low_bitrate,
+                "low_bitrate_threshold": self.low_bitrate_threshold,
             } if reordered_channels else None,
         }
 
@@ -3965,6 +4046,8 @@ def ensure_prober() -> Optional[StreamProber]:
             deprioritize_failed_streams=settings.deprioritize_failed_streams,
             deprioritize_black_screen=settings.deprioritize_black_screen,
             deprioritize_low_fps=settings.deprioritize_low_fps,
+            deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
+            low_bitrate_threshold=settings.low_bitrate_threshold,
             black_screen_detection_enabled=settings.black_screen_detection_enabled,
             black_screen_sample_duration=settings.black_screen_sample_duration,
             low_fps_threshold=settings.low_fps_threshold,

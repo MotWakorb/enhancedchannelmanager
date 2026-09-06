@@ -113,6 +113,11 @@ The health controls are evaluated before the enabled criteria:
 - **Deprioritize Black Screen Streams** and **Deprioritize Low FPS Streams**
   put those detected conditions into their own lower health categories. They
   apply only while **Deprioritize Failed Streams** is on.
+- **Deprioritize Low Bitrate Streams** is off by default. Enable it to place
+  resolution-relative low-bitrate detections in a lower Priority category,
+  also subject to **Deprioritize Failed Streams**. It follows Low FPS in the
+  default category order and when a stream has both flags. Existing custom
+  orders are preserved, with Low Bitrate appended when missing.
 - **Failed Stream Ordering** controls which lower health category sits closer
   to working streams. The enabled criteria still order streams within the same
   health category.
@@ -129,7 +134,7 @@ and a stream with no matching rules scores 0.
 
 Displayed rule order is organizational only. It does not create precedence or
 change the result. The Priority health controls and health buckets do not apply
-in Points mode; add explicit Failed Streams, Black Screen, or Low FPS rules if
+in Points mode; add explicit Failed Streams, Black Screen, Low FPS, or Low Bitrate rules if
 health should affect the score.
 
 Numeric and Video Codec conditions support every operator shown below. Boolean
@@ -159,6 +164,7 @@ conditions support **Equals (=)** only.
 | Failed Streams | `True` or `False` | `True` for probe status failed, timeout, or pending. |
 | Black Screen | `True` or `False` | The saved black-screen detection result. |
 | Low FPS | `True` or `False` | The saved low-FPS detection result, based on the configured FPS threshold. |
+| Low Bitrate | `True` or `False` | The saved resolution-relative low-bitrate flag. No automatic penalty or default Points rule is added. |
 
 If a stream has no usable value for a Points condition, that rule does not
 match. Unknown is not treated as zero or `False`: for example, a stream with no
@@ -166,6 +172,31 @@ Custom Streams metadata does not match either `Custom Streams = True` or
 `Custom Streams = False`. Missing or malformed probe metrics and unknown video
 codecs behave the same way. In Priority mode, missing criterion values compare
 as 0, subject to the health-category behavior described above.
+
+#### Low-bitrate detection
+
+In **Settings > Maintenance > Stream Probing**, set **Low bitrate threshold
+(bits/pixel/second)** to any positive finite value. The default is `1.0`.
+A probe is flagged when its fresh bitrate in bits/second is strictly less than
+`width * height * threshold`; equality is not low and FPS is not part of the
+formula. At `1.0`, the floors are 307,200 bps for 640x480, 2,073,600 bps for
+1920x1080, and 8,294,400 bps for 3840x2160. At `0.5`, those floors halve.
+
+The probe prefers measured throughput (including connection time), then video
+bitrate metadata, then overall bitrate metadata. Dimensions come from that
+probe, including resdet's effective dimensions when opted in. Stale saved
+measurements are not used for this flag. Missing or invalid measurements,
+failure, and timeout clear the flag to `False`. Thus `Low Bitrate = False`
+matches a cleared saved flag too: it is not proof that the stream is healthy.
+Streams without any saved probe facts match neither boolean Points condition.
+
+Classification runs even when deprioritization is off. A connected probe may
+report Success and Low Bitrate together. Badges, probe progress/history, and
+MCP probe results expose the flag. This is a resolution-based heuristic, not a
+watchability guarantee or codec-specific quality model. Threshold changes apply
+to future probes; toggles and order apply to future sorts. Existing rows are
+not reclassified when settings change. Numeric Bitrate criteria and direct
+single-field sorting keep their existing behavior.
 
 After the selected strategy has finished, equal streams always sort by numeric
 stream ID in ascending order. This final tie-break makes the result

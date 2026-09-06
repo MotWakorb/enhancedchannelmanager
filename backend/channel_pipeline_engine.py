@@ -2309,6 +2309,7 @@ class ChannelPipelineEngine:
                                     deprioritize_failed=settings.deprioritize_failed_streams,
                                     deprioritize_black_screen=settings.deprioritize_black_screen,
                                     deprioritize_low_fps=settings.deprioritize_low_fps,
+                                    deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
                                 )
                                 reason = health_deprioritization_reason(
                                     facts,
@@ -5985,7 +5986,10 @@ class ChannelPipelineEngine:
                     current_ids = set(rule_channel_order.get(rule.id, []))
                     if current_ids and not dry_run:
                         rule.set_managed_channel_ids(list(current_ids))
-                        session.merge(rule)
+                        session.query(ChannelPipelineRule).filter(
+                            ChannelPipelineRule.id == rule.id,
+                            ChannelPipelineRule.created_at == rule.created_at,
+                        ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
                     continue
 
                 current_ids = set(rule_channel_order.get(rule.id, []))
@@ -5996,7 +6000,10 @@ class ChannelPipelineEngine:
                 if rule.managed_channel_ids is None:
                     if current_ids and not dry_run:
                         rule.set_managed_channel_ids(list(current_ids))
-                        session.merge(rule)
+                        session.query(ChannelPipelineRule).filter(
+                            ChannelPipelineRule.id == rule.id,
+                            ChannelPipelineRule.created_at == rule.created_at,
+                        ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
                     logger.info(
                         "[AUTO-CREATE-ENGINE] Rule '%s': first run, populated "
                         "%s managed channel IDs",
@@ -6061,7 +6068,10 @@ class ChannelPipelineEngine:
                     # No orphans — just update managed set
                     if persist and current_ids != previous_ids:
                         rule.set_managed_channel_ids(list(current_ids))
-                        session.merge(rule)
+                        session.query(ChannelPipelineRule).filter(
+                            ChannelPipelineRule.id == rule.id,
+                            ChannelPipelineRule.created_at == rule.created_at,
+                        ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
                     continue
 
                 logger.info(
@@ -6241,7 +6251,10 @@ class ChannelPipelineEngine:
                 # the execution_log, and aggregated into completed_with_errors.
                 if persist:
                     rule.set_managed_channel_ids(list(current_ids))
-                    session.merge(rule)
+                    session.query(ChannelPipelineRule).filter(
+                        ChannelPipelineRule.id == rule.id,
+                        ChannelPipelineRule.created_at == rule.created_at,
+                    ).update({"managed_channel_ids": rule.managed_channel_ids}, synchronize_session=False)
 
             if persist:
                 session.commit()
@@ -6568,7 +6581,15 @@ class ChannelPipelineEngine:
                 rule.last_run_at = datetime.utcnow()
                 matches = rule_match_counts.get(rule.id, 0)
                 rule.match_count = matches
-                session.merge(rule)
+                # A detached run snapshot is not current configuration. Update
+                # runtime columns only, and never recreate a deleted identity.
+                session.query(ChannelPipelineRule).filter(
+                    ChannelPipelineRule.id == rule.id,
+                    ChannelPipelineRule.created_at == rule.created_at,
+                ).update({
+                    "last_run_at": rule.last_run_at,
+                    "match_count": rule.match_count,
+                }, synchronize_session=False)
             session.commit()
         finally:
             session.close()
@@ -6833,6 +6854,7 @@ def _pipeline_stream_facts(
     status = stats.get("probe_status") if stats else None
     black_screen = stats.get("is_black_screen") if stats else None
     low_fps = stats.get("is_low_fps") if stats else None
+    low_bitrate = stats.get("is_low_bitrate") if stats else None
     m3u_account_id = stream_m3u_map.get(stream_id)
     metadata_known = (
         stream_metadata_known_ids is None
@@ -6879,6 +6901,7 @@ def _pipeline_stream_facts(
         ),
         black_screen=black_screen if type(black_screen) is bool else None,
         low_fps=low_fps if type(low_fps) is bool else None,
+        low_bitrate=low_bitrate if type(low_bitrate) is bool else None,
     )
 
 
@@ -6974,6 +6997,7 @@ def _smart_sort_streams(
         deprioritize_failed=deprioritize_failed,
         deprioritize_black_screen=deprioritize_black_screen,
         deprioritize_low_fps=deprioritize_low_fps,
+        deprioritize_low_bitrate=getattr(settings, "deprioritize_low_bitrate", False),
         failed_stream_sort_order=fail_order,
     )
 

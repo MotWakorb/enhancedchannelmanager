@@ -47,6 +47,23 @@ function fetchText(url: string, options?: RequestInit): Promise<string> {
 // Rules CRUD
 // =============================================================================
 
+export interface PipelineRulesYamlResponse {
+  yaml_content: string;
+  revision: string;
+}
+
+export function getPipelineRulesYaml(): Promise<PipelineRulesYamlResponse> {
+  return fetchJson(`${API_BASE}/channel-pipeline/rules/yaml`);
+}
+
+export function savePipelineRulesYaml(
+  body: PipelineRulesYamlResponse & { confirm_deletions: boolean },
+): Promise<PipelineRulesYamlResponse> {
+  return fetchJson(`${API_BASE}/channel-pipeline/rules/yaml`, {
+    method: 'PUT', body: JSON.stringify(body),
+  });
+}
+
 /**
  * Get all channel pipeline rules.
  */

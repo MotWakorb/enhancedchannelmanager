@@ -59,6 +59,9 @@ def test_migration_0052_adds_and_round_trips_retention_index(tmp_path):
             # Add newer model-visible shapes by hand so this test can continue
             # isolating 0052's index-only replay.
             conn.execute(text(
+                "ALTER TABLE stream_stats ADD COLUMN is_low_bitrate BOOLEAN NOT NULL DEFAULT 0"
+            ))
+            conn.execute(text(
                 "ALTER TABLE auto_creation_rules ADD COLUMN required_provider_ids TEXT"
             ))
             conn.execute(text(

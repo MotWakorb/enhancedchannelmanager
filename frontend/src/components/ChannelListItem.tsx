@@ -45,6 +45,7 @@ export interface ChannelListItemProps {
   hasFailedStreams?: boolean;
   hasBlackScreenStreams?: boolean;
   hasLowFpsStreams?: boolean;
+  hasLowBitrateStreams?: boolean;
   /**
    * bead enhancedchannelmanager-po78p / GH #696 — true when one or more of
    * the channel's assigned streams are flagged `is_stale` by Dispatcharr
@@ -339,6 +340,7 @@ export const ChannelListItem = memo(function ChannelListItem({
   hasFailedStreams = false,
   hasBlackScreenStreams = false,
   hasLowFpsStreams = false,
+  hasLowBitrateStreams = false,
   hasStaleStreams = false,
   staleStreamCount = 0,
   onPreviewChannel,
@@ -401,7 +403,9 @@ export const ChannelListItem = memo(function ChannelListItem({
           ? { key: 'black-screen', icon: 'videocam_off', label: `${streamCountText}; black screen`, detail: 'One or more streams detected as black screen' }
           : hasLowFpsStreams
             ? { key: 'low-fps', icon: 'slow_motion_video', label: `${streamCountText}; low FPS`, detail: 'One or more streams have low FPS' }
-            : { key: 'healthy', icon: 'lan', label: `${streamCountText}; healthy`, detail: `${streamCountText}; healthy` };
+            : hasLowBitrateStreams
+              ? { key: 'low-bitrate', icon: 'speed', label: `${streamCountText}; low bitrate`, detail: 'One or more streams have low bitrate for their resolution' }
+              : { key: 'healthy', icon: 'lan', label: `${streamCountText}; healthy`, detail: `${streamCountText}; healthy` };
   const healthIconClass = health.key === 'no-streams'
     ? 'warning-icon'
     : health.key === 'healthy'

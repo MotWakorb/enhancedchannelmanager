@@ -280,6 +280,13 @@ class ImportYAMLRequest(BaseModel):
     overwrite: bool = False
 
 
+class SavePipelineYAMLRequest(BaseModel):
+    model_config = {"extra": "forbid", "strict": True}
+    yaml_content: str
+    revision: str
+    confirm_deletions: bool = Field(default=False, strict=True)
+
+
 def _apply_merge_streams_remove_non_matching(actions: list, value: bool) -> list:
     """Set remove_non_matching on every merge_streams action (stored as flat keys on the action dict)."""
     out = []
@@ -516,6 +523,18 @@ async def _validate_required_provider_ids(submitted_ids: Optional[list[int]]) ->
 # =============================================================================
 # Rule CRUD Endpoints
 # =============================================================================
+
+
+@router.get("/rules/yaml")
+def get_pipeline_rules_yaml():
+    from pipeline_yaml_editor import read_collection
+    return read_collection()
+
+
+@router.put("/rules/yaml")
+async def save_pipeline_rules_yaml(request: SavePipelineYAMLRequest, _admin=RequireAdminIfEnabled):
+    from pipeline_yaml_editor import save_collection
+    return await save_collection(request.yaml_content, request.revision, request.confirm_deletions)
 
 
 @router.get("/rules")
@@ -5398,6 +5417,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
                     "video_bitrate": stat.video_bitrate,
                     "is_black_screen": stat.is_black_screen or False,
                     "is_low_fps": stat.is_low_fps or False,
+                    "is_low_bitrate": stat.is_low_bitrate or False,
                     "consecutive_failures": stat.consecutive_failures or 0,
                     "last_probed": stat.last_probed.isoformat() + "Z" if stat.last_probed else None,
                 }
@@ -5827,6 +5847,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
             "unprobed": total_streams - probed_success - probed_failed,
             "black_screen": black_screen_count,
             "low_fps": low_fps_count,
+            "low_bitrate": sum(1 for s in stream_stats_lookup.values() if s.is_low_bitrate),
         },
     }
     manifest_str = json.dumps(manifest, indent=2)

@@ -194,6 +194,11 @@ export const StreamListItem = memo(function StreamListItem({
             <span className="material-icons">slow_motion_video</span>
           </span>
         )}
+        {streamStats?.probe_status === 'success' && streamStats.is_low_bitrate && (
+          <span className="meta-tag probe-low-fps" title="Low bitrate detected for this resolution">
+            <span className="material-icons">speed</span>
+          </span>
+        )}
         {/* Strike count badge */}
         {streamStats && streamStats.probe_status !== 'failed' && streamStats.probe_status !== 'timeout' && streamStats.consecutive_failures > 0 && strikeThreshold > 0 && (
           <span

@@ -1,0 +1,17 @@
+{
+    "programs": [],
+    "stream_groups": [],
+    "streams": [
+        {
+            "codec_type": "video",
+            "width": 640,
+            "height": 480,
+            "r_frame_rate": "25/1",
+            "bit_rate": "1514264"
+        }
+    ],
+    "format": {
+        "duration": "1.000000",
+        "bit_rate": "1522296"
+    }
+}

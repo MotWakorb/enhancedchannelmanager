@@ -71,9 +71,10 @@ const FAILED_CATEGORY_CONFIG: Record<FailedStreamCategory, { icon: string; label
   failed: { icon: 'error', label: 'Failed Streams', description: 'Dead, timeout, or pending' },
   black_screen: { icon: 'videocam_off', label: 'Black Screen', description: 'Probe OK but no video content' },
   low_fps: { icon: 'slow_motion_video', label: 'Low FPS', description: 'Below FPS threshold' },
+  low_bitrate: { icon: 'speed', label: 'Low Bitrate', description: 'Below resolution-based bitrate threshold' },
 };
 
-const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps'];
+const DEFAULT_FAILED_STREAM_ORDER: FailedStreamCategory[] = ['failed', 'black_screen', 'low_fps', 'low_bitrate'];
 
 // Emby channel-logo image types for the Clear Logos control (GH #475, bd-v9tp7).
 // Defined locally (not read from the api module at render time) so the
@@ -109,6 +110,7 @@ const ALL_POINT_CRITERIA: StreamSortPointCriterion[] = [
   'failed',
   'black_screen',
   'low_fps',
+  'low_bitrate',
 ];
 
 const POINT_CRITERION_CONFIG: Record<StreamSortPointCriterion, PointCriterionConfig> = {
@@ -123,6 +125,7 @@ const POINT_CRITERION_CONFIG: Record<StreamSortPointCriterion, PointCriterionCon
   failed: { label: 'Failed Streams', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
   black_screen: { label: 'Black Screen', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
   low_fps: { label: 'Low FPS', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
+  low_bitrate: { label: 'Low Bitrate', input: 'boolean', defaultValue: true, defaultOperator: 'eq', valueLabel: 'Matches when' },
 };
 
 const POINT_CRITERION_OPTIONS = ALL_POINT_CRITERIA.map((criterion) => ({
@@ -663,6 +666,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [deprioritizeFailedStreams, setDeprioritizeFailedStreams] = useState(true);
   const [deprioritizeBlackScreen, setDeprioritizeBlackScreen] = useState(true);
   const [deprioritizeLowFps, setDeprioritizeLowFps] = useState(true);
+  const [deprioritizeLowBitrate, setDeprioritizeLowBitrate] = useState(false);
   const [failedStreamSortOrder, setFailedStreamSortOrder] = useState<FailedStreamCategory[]>(DEFAULT_FAILED_STREAM_ORDER);
   const [strikeThreshold, setStrikeThreshold] = useState(3);
 
@@ -807,6 +811,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [blackScreenDetectionEnabled, setBlackScreenDetectionEnabled] = useState(false);
   const [blackScreenSampleDuration, setBlackScreenSampleDuration] = useState(5);
   const [lowFpsThreshold, setLowFpsThreshold] = useState(20);
+  const [lowBitrateThreshold, setLowBitrateThreshold] = useState(1.0);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
   const [, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
@@ -821,24 +826,27 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     skipped_count: number;
     black_screen_count: number;
     low_fps_count: number;
+    low_bitrate_count?: number;
     percentage: number;
     rate_limited?: boolean;
     rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
     max_backoff_remaining?: number;
   } | null>(null);
   const [showProbeResultsModal, setShowProbeResultsModal] = useState(false);
-  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped' | 'black_screen' | 'low_fps'>('success');
+  const [probeResultsType, setProbeResultsType] = useState<'success' | 'failed' | 'skipped' | 'black_screen' | 'low_fps' | 'low_bitrate'>('success');
   const [probeResults, setProbeResults] = useState<{
     success_streams: Array<{ id: number; name: string; url?: string }>;
     failed_streams: Array<{ id: number; name: string; url?: string; error?: string }>;
     skipped_streams: Array<{ id: number; name: string; url?: string; reason?: string }>;
     black_screen_streams: Array<{ id: number; name: string; url?: string }>;
     low_fps_streams: Array<{ id: number; name: string; url?: string }>;
+    low_bitrate_streams?: Array<{ id: number; name: string; url?: string }>;
     success_count: number;
     failed_count: number;
     skipped_count: number;
     black_screen_count: number;
     low_fps_count: number;
+    low_bitrate_count?: number;
   } | null>(null);
   const [probeHistory, setProbeHistory] = useState<ProbeHistoryEntry[]>([]);
   const [showReorderModal, setShowReorderModal] = useState(false);
@@ -930,6 +938,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     refreshM3usBeforeProbe, autoReorderAfterProbe, pushStreamStatsToDispatcharr,
     probeRetryCount, probeRetryDelay, blackScreenDetectionEnabled,
     blackScreenSampleDuration, lowFpsThreshold, streamFetchPageLimit,
+    lowBitrateThreshold, deprioritizeLowBitrate,
     streamSortPriority, streamSortEnabled, streamSortStrategy, streamSortPointRules,
     m3uAccountPriorities,
     deprioritizeFailedStreams, deprioritizeBlackScreen, deprioritizeLowFps,
@@ -1280,6 +1289,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setBlackScreenDetectionEnabled(settings.black_screen_detection_enabled ?? false);
       setBlackScreenSampleDuration(settings.black_screen_sample_duration ?? 5);
       setLowFpsThreshold(settings.low_fps_threshold ?? 20);
+      setLowBitrateThreshold(settings.low_bitrate_threshold ?? 1.0);
       setStreamFetchPageLimit(settings.stream_fetch_page_limit ?? 200);
       // Merge saved criteria with any new criteria that may have been added in updates
       const merged = mergeSortCriteria(settings.stream_sort_priority, settings.stream_sort_enabled);
@@ -1292,7 +1302,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       setDeprioritizeFailedStreams(settings.deprioritize_failed_streams ?? true);
       setDeprioritizeBlackScreen(settings.deprioritize_black_screen ?? true);
       setDeprioritizeLowFps(settings.deprioritize_low_fps ?? true);
-      setFailedStreamSortOrder(settings.failed_stream_sort_order ?? DEFAULT_FAILED_STREAM_ORDER);
+      setDeprioritizeLowBitrate(settings.deprioritize_low_bitrate ?? false);
+      const failedOrder = settings.failed_stream_sort_order ?? DEFAULT_FAILED_STREAM_ORDER;
+      setFailedStreamSortOrder(failedOrder.includes('low_bitrate') ? failedOrder : [...failedOrder, 'low_bitrate']);
       setStrikeThreshold(settings.strike_threshold ?? 3);
       setPublicBaseUrl(settings.public_base_url ?? '');
       // Shared SMTP settings
@@ -1641,6 +1653,10 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   const handleSave = async () => {
+    if (!Number.isFinite(lowBitrateThreshold) || lowBitrateThreshold <= 0) {
+      notifications.error('Low bitrate threshold must be positive and finite');
+      return;
+    }
     // Check if password-auth fields have changed (only meaningful in password mode)
     const authChanged = url !== originalUrl || username !== originalUsername;
 
@@ -1752,6 +1768,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         black_screen_detection_enabled: blackScreenDetectionEnabled,
         black_screen_sample_duration: blackScreenSampleDuration,
         low_fps_threshold: lowFpsThreshold,
+        low_bitrate_threshold: lowBitrateThreshold,
+        deprioritize_low_bitrate: deprioritizeLowBitrate,
         stream_fetch_page_limit: streamFetchPageLimit,
         stream_sort_priority: streamSortPriority,
         stream_sort_strategy: streamSortStrategy,
@@ -2152,7 +2170,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     }
   };
 
-  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped' | 'black_screen' | 'low_fps') => {
+  const handleShowHistoryResults = async (historyEntry: ProbeHistoryEntry, type: 'success' | 'failed' | 'skipped' | 'black_screen' | 'low_fps' | 'low_bitrate') => {
     // Use the history entry's streams for the modal
     setProbeResults({
       success_streams: historyEntry.success_streams,
@@ -2160,6 +2178,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       skipped_streams: historyEntry.skipped_streams || [],
       black_screen_streams: historyEntry.black_screen_streams || [],
       low_fps_streams: historyEntry.low_fps_streams || [],
+      low_bitrate_streams: historyEntry.low_bitrate_streams || [],
+      low_bitrate_count: historyEntry.low_bitrate_count || 0,
       success_count: historyEntry.success_count,
       failed_count: historyEntry.failed_count,
       skipped_count: historyEntry.skipped_count || 0,
@@ -3333,6 +3353,19 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                 </label>
                 <p className="form-hint">
                   When disabled, streams with low frame rates will be sorted by their actual quality stats instead of being pushed to the bottom.
+                </p>
+              </div>
+
+              <div className="form-group">
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={deprioritizeLowBitrate}
+                    onChange={(e) => setDeprioritizeLowBitrate(e.target.checked)} />
+                  <span>Deprioritize Low Bitrate Streams</span>
+                </label>
+                <p className="form-hint">
+                  Off by default. In Priority mode, move low-bitrate streams below working streams
+                  when Deprioritize Failed Streams is enabled. Classification remains visible when off.
+                  In Points mode, use an explicit Low Bitrate rule instead.
                 </p>
               </div>
 
@@ -5518,6 +5551,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               />
             </div>
 
+            <div className="form-group-vertical">
+              <label htmlFor="lowBitrateThreshold">Low bitrate threshold (bits/pixel/second)</label>
+              <span className="form-description">
+                Flag fresh bitrate below width x height x threshold, independent of FPS.
+                Default 1.0: 1080p needs 2,073,600 bps. Applies to future probes only.
+                This is a heuristic, not a watchability guarantee; missing measurements clear the flag.
+              </span>
+              <input id="lowBitrateThreshold" type="number" step="any" min="0"
+                value={Number.isFinite(lowBitrateThreshold) ? lowBitrateThreshold : ''}
+                onChange={(e) => setLowBitrateThreshold(e.target.valueAsNumber)} />
+            </div>
+
           </div>
         </div>
 
@@ -5557,6 +5602,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   Success: {probeProgress.success_count} | Failed: {probeProgress.failed_count}
                   {probeProgress.black_screen_count > 0 && ` | Black Screen: ${probeProgress.black_screen_count}`}
                   {probeProgress.low_fps_count > 0 && ` | Low FPS: ${probeProgress.low_fps_count}`}
+                  {(probeProgress.low_bitrate_count ?? 0) > 0 && ` | Low Bitrate: ${probeProgress.low_bitrate_count}`}
                   {probeProgress.skipped_count > 0 && ` | Skipped: ${probeProgress.skipped_count}`}
                 </div>
               )}
@@ -5824,6 +5870,13 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                     >
                       <span className="material-icons" style={{ fontSize: '16px' }}>slow_motion_video</span>
                       {entry.low_fps_count}
+                    </button>
+                  )}
+                  {(entry.low_bitrate_count ?? 0) > 0 && (
+                    <button className="probe-history-btn low-bitrate" title="View low bitrate streams"
+                      onClick={() => handleShowHistoryResults(entry, 'low_bitrate')}>
+                      <span className="material-icons">speed</span>
+                      {entry.low_bitrate_count}
                     </button>
                   )}
                   {(entry.reordered_channels && entry.reordered_channels.length > 0) && (
@@ -6497,9 +6550,9 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             ref={probeResultsContainerRef}
           >
             <div className="modal-header">
-              <h2 id={probeResultsTitleId} className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : probeResultsType === 'low_fps' ? 'low-fps' : 'failed'}>
-                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : probeResultsType === 'black_screen' ? 'Black Screen Streams' : probeResultsType === 'low_fps' ? 'Low FPS Streams' : 'Failed Streams'} (
-                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResultsType === 'black_screen' ? probeResults.black_screen_count : probeResultsType === 'low_fps' ? probeResults.low_fps_count : probeResults.failed_count})
+              <h2 id={probeResultsTitleId} className={probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : ['low_fps', 'low_bitrate'].includes(probeResultsType) ? 'low-fps' : 'failed'}>
+                {probeResultsType === 'success' ? 'Successful Streams' : probeResultsType === 'skipped' ? 'Skipped Streams' : probeResultsType === 'black_screen' ? 'Black Screen Streams' : probeResultsType === 'low_fps' ? 'Low FPS Streams' : probeResultsType === 'low_bitrate' ? 'Low Bitrate Streams' : 'Failed Streams'} (
+                {probeResultsType === 'success' ? probeResults.success_count : probeResultsType === 'skipped' ? probeResults.skipped_count : probeResultsType === 'black_screen' ? probeResults.black_screen_count : probeResultsType === 'low_fps' ? probeResults.low_fps_count : probeResultsType === 'low_bitrate' ? probeResults.low_bitrate_count : probeResults.failed_count})
               </h2>
               <button
                 onClick={() => setShowProbeResultsModal(false)}
@@ -6521,6 +6574,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   ? probeResults.black_screen_streams
                   : probeResultsType === 'low_fps'
                   ? probeResults.low_fps_streams
+                  : probeResultsType === 'low_bitrate'
+                  ? probeResults.low_bitrate_streams ?? []
                   : probeResults.failed_streams;
                 const emptyText = probeResultsType === 'success'
                   ? 'successful'
@@ -6530,6 +6585,8 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                   ? 'black screen'
                   : probeResultsType === 'low_fps'
                   ? 'low FPS'
+                  : probeResultsType === 'low_bitrate'
+                  ? 'low bitrate'
                   : 'failed';
 
                 return streams.length === 0 ? (
@@ -6542,7 +6599,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                       {streams.map((stream) => (
                         <div
                           key={stream.id}
-                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : probeResultsType === 'low_fps' ? 'low-fps' : 'failed'}`}
+                          className={`probe-result-item ${probeResultsType === 'success' ? 'success' : probeResultsType === 'skipped' ? 'skipped' : probeResultsType === 'black_screen' ? 'black-screen' : ['low_fps', 'low_bitrate'].includes(probeResultsType) ? 'low-fps' : 'failed'}`}
                         >
                           <div className="probe-result-item-info">
                             <div className="probe-result-item-name">{stream.name}</div>

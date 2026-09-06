@@ -5916,6 +5916,10 @@ export function ChannelsPane({
                         return stats && stats.probe_status === 'success' && stats.is_low_fps;
                       })}
                       hasStaleStreams={channel.streams.some(streamId => staleStreamIds.has(streamId))}
+                      hasLowBitrateStreams={channel.streams.some(streamId => {
+                        const stats = streamStatsMap.get(streamId);
+                        return stats?.probe_status === 'success' && stats.is_low_bitrate;
+                      })}
                       staleStreamCount={channel.streams.filter(streamId => staleStreamIds.has(streamId)).length}
                       onPreviewChannel={() => handlePreviewChannel(channel)}
                       proposedNormalizedName={(() => {

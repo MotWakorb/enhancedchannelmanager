@@ -158,7 +158,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0019",
+    version="0.18.2-0020",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -1571,6 +1571,8 @@ async def startup_event():
                 deprioritize_failed_streams=settings.deprioritize_failed_streams,
                 deprioritize_black_screen=settings.deprioritize_black_screen,
                 deprioritize_low_fps=settings.deprioritize_low_fps,
+                deprioritize_low_bitrate=settings.deprioritize_low_bitrate,
+                low_bitrate_threshold=settings.low_bitrate_threshold,
                 black_screen_detection_enabled=settings.black_screen_detection_enabled,
                 black_screen_sample_duration=settings.black_screen_sample_duration,
                 low_fps_threshold=settings.low_fps_threshold,
