@@ -929,6 +929,23 @@
   border-left: 3px solid #f59e0b;
 }
 
+.probe-history-btn.low-bitrate {
+  padding: 0.4rem 0.8rem;
+  font-size: 13px;
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.probe-history-btn.low-bitrate .material-icons {
+  font-size: 16px;
+}
+
 .probe-result-item-info {
   flex: 1;
   min-width: 0;

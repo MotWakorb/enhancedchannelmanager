@@ -552,6 +552,18 @@ class TestPendingMergesIntCoercion:
 
 class TestProbeResultsEmpty:
     @pytest.mark.asyncio
+    async def test_low_bitrate_bucket_and_count_render_generically(self):
+        mcp = _register("streams")
+        resp = {"success_count": 1, "failed_count": 0, "low_bitrate_count": 1,
+                "low_bitrate_streams": [{"id": 980, "name": "Local test stream"}]}
+        with patch("tools.streams.get_ecm_client", return_value=_client(return_value=resp)):
+            result = await mcp.call_tool("get_probe_results", {})
+        text = result[0][0].text
+        assert "Low Bitrate Count: 1" in text
+        assert "Low Bitrate Streams:" in text
+        assert "Local test stream" in text
+
+    @pytest.mark.asyncio
     async def test_all_zero_counts_reports_no_results(self):
         mcp = _register("streams")
         resp = {

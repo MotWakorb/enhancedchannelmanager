@@ -229,6 +229,7 @@ export interface StreamStats {
   consecutive_failures: number;    // Strike rule: consecutive probe failures
   is_black_screen: boolean;        // Black screen detected during probe
   is_low_fps: boolean;             // Low FPS detected during probe (< 20 FPS)
+  is_low_bitrate?: boolean;
 }
 
 export interface StreamStatsSummary {

@@ -399,6 +399,7 @@ def _task_execution_metadata_extra(task_id: str, result: TaskResult) -> dict:
             "streams_skipped": result.skipped_count,
             "black_screen_detections": details.get("black_screen_count", 0),
             "low_fps_detections": details.get("low_fps_count", 0),
+            "low_bitrate_detections": details.get("low_bitrate_count", 0),
             # Legacy key — alert_methods probe_failures min_failures threshold reads failed_count
             "failed_count": failed,
         })
@@ -435,6 +436,8 @@ def _success_task_completion_message(task_id: str, result: TaskResult) -> str:
         msg = f"Probed {total} stream(s){dur}: {ok} ok, {failed} failed, {skipped} skipped"
         if black or low:
             msg += f" ({black} black screen, {low} low FPS)"
+        if details.get("low_bitrate_count", 0):
+            msg += f" ({details['low_bitrate_count']} low bitrate)"
         return msg
 
     if task_id == "dbas_backup":

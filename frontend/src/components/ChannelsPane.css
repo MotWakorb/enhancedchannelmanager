@@ -1473,11 +1473,13 @@
   color: #a855f7;
 }
 
-.channel-streams-count.has-low-fps {
+.channel-streams-count.has-low-fps,
+.channel-streams-count.has-low-bitrate {
   color: #f59e0b;
 }
 
-.channel-streams-count .low-fps-icon {
+.channel-streams-count .low-fps-icon,
+.channel-streams-count .low-bitrate-icon {
   font-size: var(--icon-badge);
   color: #f59e0b;
 }

@@ -49,6 +49,7 @@ interface ProbeProgress {
   skipped: number;
   black_screen: number;
   low_fps: number;
+  low_bitrate?: number;
   status: 'idle' | 'starting' | 'fetching' | 'refreshing' | 'probing' | 'paused' | 'cancelled' | 'completed' | 'reordering' | 'failed' | 'fetching_sources' | 'fetching_accounts' | 'building_digest' | 'sending_email' | 'sending_discord' | 'clearing';
   current_stream: string;
 }
@@ -501,6 +502,12 @@ export function NotificationCenter({
               <span className="probe-stat probe-stat-low-fps">
                 <span className="material-icons">slow_motion_video</span>
                 {progress.low_fps}
+              </span>
+            )}
+            {(progress.low_bitrate ?? 0) > 0 && (
+              <span className="probe-stat probe-stat-low-fps" title="Low bitrate streams">
+                <span className="material-icons">speed</span>
+                {progress.low_bitrate}
               </span>
             )}
             {progress.skipped > 0 && (

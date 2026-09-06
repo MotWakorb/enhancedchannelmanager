@@ -1137,7 +1137,7 @@ export type SortCriterion = 'resolution' | 'bitrate' | 'framerate' | 'video_code
 export type SortEnabledMap = Record<SortCriterion, boolean>;
 
 // Deprioritized stream categories for ordering within the "failed" group
-export type FailedStreamCategory = 'failed' | 'black_screen' | 'low_fps';
+export type FailedStreamCategory = 'failed' | 'black_screen' | 'low_fps' | 'low_bitrate';
 
 export type StreamSortStrategy = 'priority' | 'points';
 export type StreamSortPointCriterion = SortCriterion | FailedStreamCategory;
@@ -1228,6 +1228,8 @@ export interface SettingsResponse {
   black_screen_detection_enabled: boolean;  // Run ffmpeg blackdetect after successful probe
   black_screen_sample_duration: number;  // Seconds to sample for black screen detection (3-30)
   low_fps_threshold: number;  // FPS below this value is considered "low FPS"
+  low_bitrate_threshold?: number;
+  deprioritize_low_bitrate?: boolean;
   deprioritize_failed_streams: boolean;  // When enabled, failed/timeout/pending streams sort to bottom
   deprioritize_black_screen: boolean;  // When disabled, black screen streams sort by quality stats
   deprioritize_low_fps: boolean;  // When disabled, low FPS streams sort by quality stats
@@ -1403,6 +1405,8 @@ export async function saveSettings(settings: {
   black_screen_detection_enabled?: boolean;  // Optional - run ffmpeg blackdetect after successful probe, defaults to false
   black_screen_sample_duration?: number;  // Optional - seconds to sample for black screen detection (3-30), defaults to 5
   low_fps_threshold?: number;  // Optional - FPS below this value is considered "low FPS", defaults to 20
+  low_bitrate_threshold?: number;
+  deprioritize_low_bitrate?: boolean;
   deprioritize_failed_streams?: boolean;  // Optional - deprioritize failed/timeout/pending streams in sort, defaults to true
   deprioritize_black_screen?: boolean;  // Optional - deprioritize black screen streams, defaults to true
   deprioritize_low_fps?: boolean;  // Optional - deprioritize low FPS streams, defaults to true
@@ -2712,6 +2716,7 @@ export async function getProbeProgress(): Promise<{
   skipped_count: number;
   black_screen_count: number;
   low_fps_count: number;
+  low_bitrate_count?: number;
   percentage: number;
   rate_limited?: boolean;
   rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
@@ -2730,6 +2735,7 @@ export async function getProbeProgress(): Promise<{
     skipped_count: number;
     black_screen_count: number;
     low_fps_count: number;
+    low_bitrate_count?: number;
     percentage: number;
     rate_limited?: boolean;
     rate_limited_hosts?: Array<{ host: string; backoff_remaining: number; consecutive_429s: number }>;
@@ -2839,6 +2845,8 @@ export interface ProbeHistoryEntry {
   black_screen_count: number;
   black_screen_streams: Array<{ id: number; name: string; url?: string }>;
   low_fps_count: number;
+  low_bitrate_count?: number;
+  low_bitrate_streams?: Array<{ id: number; name: string; url?: string }>;
   low_fps_streams: Array<{ id: number; name: string; url?: string }>;
   reordered_channels?: Array<{
     channel_id: number;

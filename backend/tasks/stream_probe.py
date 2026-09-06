@@ -256,6 +256,7 @@ class StreamProbeTask(TaskScheduler):
 
             black_screen = self._prober._probe_progress_black_screen_count
             low_fps = self._prober._probe_progress_low_fps_count
+            low_bitrate = self._prober._probe_progress_low_bitrate_count
 
             # Why the failures happened, not just how many (bead
             # enhancedchannelmanager-3dn59). ``failed_streams`` below is capped
@@ -274,6 +275,7 @@ class StreamProbeTask(TaskScheduler):
             details = {
                 "black_screen_count": black_screen,
                 "low_fps_count": low_fps,
+                "low_bitrate_count": low_bitrate,
                 "failure_breakdown": failure_breakdown,
                 "success_streams": [
                     {"id": s.get("id"), "name": s.get("name")}
@@ -326,6 +328,7 @@ class StreamProbeTask(TaskScheduler):
                         else ""
                     )
                     + failure_summary
+                    + (f" ({low_bitrate} low bitrate)" if low_bitrate else "")
                 ),
                 started_at=started_at,
                 completed_at=datetime.utcnow(),

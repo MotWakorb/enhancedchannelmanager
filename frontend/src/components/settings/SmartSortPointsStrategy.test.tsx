@@ -84,6 +84,7 @@ const ALL_POINT_RULES: api.StreamSortPointRule[] = [
   { criterion: 'failed', operator: 'eq', value: true, points: 40 },
   { criterion: 'black_screen', operator: 'eq', value: true, points: -30 },
   { criterion: 'low_fps', operator: 'eq', value: true, points: -20 },
+  { criterion: 'low_bitrate', operator: 'eq', value: false, points: 10 },
 ];
 
 function makeSettings(overrides: Partial<SettingsResponse> = {}): SettingsResponse {
@@ -271,6 +272,7 @@ describe('Smart Sort Priority and Points strategies', () => {
       'failed',
       'black_screen',
       'low_fps',
+      'low_bitrate',
     ]);
 
     const orderedOperators = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte'];

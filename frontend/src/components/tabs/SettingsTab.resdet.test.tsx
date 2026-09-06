@@ -90,4 +90,42 @@ describe('resdet resolution setting (6cyl3 / GH #618)', () => {
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
     expect(vi.mocked(api.saveSettings).mock.calls[0][0].use_resdet_for_resolution).toBe(false);
   });
+
+  it('loads and saves the resolution-based low bitrate threshold', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({ ...makeSettings(false), low_bitrate_threshold: 0.5 });
+    render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="maintenance" />);
+    const threshold = await screen.findByRole('spinbutton', { name: /Low bitrate threshold/i });
+    expect(threshold).toHaveValue(0.5);
+    fireEvent.change(threshold, { target: { value: '1.25' } });
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings/i }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    expect(vi.mocked(api.saveSettings).mock.calls[0][0].low_bitrate_threshold).toBe(1.25);
+  });
+
+  it('defaults low bitrate deprioritization off and preserves old category order', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue({ ...makeSettings(false), deprioritize_failed_streams: true,
+      failed_stream_sort_order: ['low_fps', 'failed', 'black_screen'] });
+    render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="channel-defaults" />);
+    const toggle = await screen.findByRole('checkbox', { name: /Deprioritize Low Bitrate Streams/i });
+    expect(toggle).not.toBeChecked();
+    fireEvent.click(toggle);
+    fireEvent.click(screen.getByRole('button', { name: /Save Settings/i }));
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled());
+    const payload = vi.mocked(api.saveSettings).mock.calls[0][0];
+    expect(payload.deprioritize_low_bitrate).toBe(true);
+    expect(payload.failed_stream_sort_order).toEqual(['low_fps', 'failed', 'black_screen', 'low_bitrate']);
+  });
+
+  it('opens the low bitrate history bucket without changing the success count', async () => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings(false));
+    vi.mocked(api.getProbeHistory).mockResolvedValue([{
+      timestamp: '2026-09-06T00:00:00Z', total: 1, success_count: 1, failed_count: 0,
+      status: 'completed', low_bitrate_count: 1,
+      low_bitrate_streams: [{ id: 980, name: 'Generated local test stream' }],
+    } as api.ProbeHistoryEntry]);
+    render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="maintenance" />);
+    fireEvent.click(await screen.findByTitle('View low bitrate streams'));
+    expect(await screen.findByRole('heading', { name: /Low Bitrate Streams \(1\)/ })).toBeVisible();
+    expect(screen.getByText('Generated local test stream')).toBeVisible();
+  });
 });

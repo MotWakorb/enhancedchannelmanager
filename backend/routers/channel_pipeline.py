@@ -5398,6 +5398,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
                     "video_bitrate": stat.video_bitrate,
                     "is_black_screen": stat.is_black_screen or False,
                     "is_low_fps": stat.is_low_fps or False,
+                    "is_low_bitrate": stat.is_low_bitrate or False,
                     "consecutive_failures": stat.consecutive_failures or 0,
                     "last_probed": stat.last_probed.isoformat() + "Z" if stat.last_probed else None,
                 }
@@ -5827,6 +5828,7 @@ async def _build_debug_bundle() -> tuple[str, bytes]:
             "unprobed": total_streams - probed_success - probed_failed,
             "black_screen": black_screen_count,
             "low_fps": low_fps_count,
+            "low_bitrate": sum(1 for s in stream_stats_lookup.values() if s.is_low_bitrate),
         },
     }
     manifest_str = json.dumps(manifest, indent=2)
