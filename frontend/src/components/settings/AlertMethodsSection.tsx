@@ -163,8 +163,7 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
     return (
       <div className="settings-section alert-methods-section">
         <div className="settings-section-header">
-          <span className="material-icons">notifications_active</span>
-          <h3>Alert Methods</h3>
+          <h3>ntfy Notifications</h3>
         </div>
         <div className="alert-methods-empty empty-inline">
           <span className="material-icons">lock</span>
@@ -177,8 +176,7 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
   return (
     <div className="settings-section alert-methods-section">
       <div className="settings-section-header">
-        <span className="material-icons">notifications_active</span>
-        <h3>Alert Methods</h3>
+        <h3>ntfy Notifications</h3>
       </div>
       <p className="section-description">
         Send a test message or remove an alert method you no longer use.
