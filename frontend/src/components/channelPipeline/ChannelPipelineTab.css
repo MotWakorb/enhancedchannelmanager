@@ -1317,7 +1317,8 @@
    Scoped through the banner: bare, it tied index.css's base `.material-icons`
    at 0-1-0 and lost on source order, so the glyph rendered at 24px
    (bead enhancedchannelmanager-7bsxj). */
-.revert-warning-banner .revert-warning-icon {
+.revert-warning-banner .revert-warning-icon,
+.revert-partial-failure .revert-warning-icon {
   color: var(--status-warning, #f59e0b);
   font-size: var(--icon-status);
   flex-shrink: 0;
@@ -1330,6 +1331,19 @@
   font-weight: var(--type-body-weight);
   color: var(--text-secondary);
   margin: 0;
+  line-height: var(--type-body-line-height);
+}
+
+.selected-outcomes li > small {
+  display: block;
+  margin-top: 0.25rem;
+}
+
+.selected-run-confirm .modal-body > p,
+.selected-run-confirm .selected-run-rule-list,
+.pipeline-confirm-prose {
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
   line-height: var(--type-body-line-height);
 }
 

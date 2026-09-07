@@ -3499,6 +3499,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           {config.input === 'number' ? (
                             <input
                               id={valueId}
+                              className="form-input"
                               type="number"
                               step={config.step}
                               value={typeof rule.value === 'number' && Number.isFinite(rule.value)
@@ -3534,6 +3535,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
                           <label htmlFor={pointsId}>Points (signed integer)</label>
                           <input
                             id={pointsId}
+                            className="form-input"
                             type="number"
                             step="1"
                             value={Number.isFinite(rule.points) ? rule.points : ''}
@@ -4796,7 +4798,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               placeholder={'172.16.0.0/24\n172.16.0.19'}
               rows={4}
               data-testid="trusted-media-networks-input"
-              className="settings-text-input"
+              className="form-input"
             />
           </div>
         </div>

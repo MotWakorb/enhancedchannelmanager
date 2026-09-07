@@ -43,6 +43,7 @@
 
 /* Control: body role's SIZE only, authored weight kept. 12.8px -> 13px. */
 .section-actions .action-btn {
+  width: auto;
   padding: 0.375rem 0.75rem;
   font-size: var(--type-body-size);
   background-color: var(--bg-tertiary);

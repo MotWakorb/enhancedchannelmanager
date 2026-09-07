@@ -585,6 +585,9 @@
 }
 
 .guide-migration-summary {
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
@@ -596,6 +599,8 @@
 }
 
 .guide-migration-table-wrap table {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   width: 100%;
   border-collapse: collapse;
 }
@@ -608,6 +613,8 @@
 }
 
 .guide-migration-confirm {
+  font-size: var(--type-label-size);
+  line-height: var(--type-label-line-height);
   display: flex;
   align-items: flex-start;
   gap: 0.5rem;

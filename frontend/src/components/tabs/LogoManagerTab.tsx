@@ -555,13 +555,13 @@ export function LogoManagerTab() {
       {deletingLogo && (
         <ModalOverlay onClose={closeDelete} role="dialog" aria-modal="true" aria-labelledby={deleteTitleId}>
           <div
-            className="modal-content delete-confirm-modal"
+            className="modal-container modal-sm delete-confirm-modal"
             ref={deleteContainerRef}
           >
             <div className="modal-header">
               <h2 id={deleteTitleId}>Delete Logo</h2>
-              <button className="close-btn" onClick={closeDelete} disabled={deleteLoading} aria-label="Close">
-                &times;
+              <button className="modal-close-btn" onClick={closeDelete} disabled={deleteLoading} aria-label="Close">
+                <span className="material-icons" aria-hidden="true">close</span>
               </button>
             </div>
             <div className="modal-body">

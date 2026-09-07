@@ -534,7 +534,7 @@ export function EventSyncReviewQueue() {
               </h3>
             </div>
             <div className="modal-body">
-              <p>
+              <p className="pipeline-confirm-prose">
                 This removes only the selected pending review items. It does not
                 detach streams or change accepted and rejected decisions.
               </p>

@@ -42,6 +42,9 @@ export interface HeatmapProps {
    */
   rowLabels?: readonly string[];
 
+  /** Space reserved for row labels; provider names need a wider band. */
+  rowLabelWidth?: number;
+
   /**
    * Labels for each column (hour of day, day of week, etc.). If
    * shorter than the column count, extra columns render unlabeled.
@@ -118,6 +121,7 @@ function dataRange(
 export function Heatmap({
   data,
   rowLabels = [],
+  rowLabelWidth = ROW_LABEL_WIDTH,
   columnLabels = [],
   cellSize = 48,
   colorFor,
@@ -144,7 +148,7 @@ export function Heatmap({
   // Default value→color mapping. Pulled out so consumer can override.
   const resolveColor = colorFor ?? ((_v: number, n: number) => sequentialColor(n));
 
-  const width = ROW_LABEL_WIDTH + columnCount * cellSize;
+  const width = rowLabelWidth + columnCount * cellSize;
   const height = COLUMN_LABEL_HEIGHT + data.length * cellSize;
 
   return (
@@ -170,7 +174,7 @@ export function Heatmap({
             trailing edge at the pivot, sitting at the column center just
             above the cell grid. */}
         {columnLabels.slice(0, columnCount).map((label, colIdx) => {
-          const pivotX = ROW_LABEL_WIDTH + colIdx * cellSize + cellSize / 2;
+          const pivotX = rowLabelWidth + colIdx * cellSize + cellSize / 2;
           const pivotY = COLUMN_LABEL_HEIGHT - 4;
           return (
             <text
@@ -191,7 +195,7 @@ export function Heatmap({
           <text
             key={`row-${rowIdx}`}
             className="heatmap-row-label"
-            x={ROW_LABEL_WIDTH - 6}
+            x={rowLabelWidth - 6}
             y={COLUMN_LABEL_HEIGHT + rowIdx * cellSize + cellSize / 2 + 4}
             textAnchor="end"
           >
@@ -204,7 +208,7 @@ export function Heatmap({
           row.slice(0, columnCount).map((value, colIdx) => {
             const normalized = range === 0 ? 0 : (value - min) / range;
             const fill = resolveColor(value, normalized);
-            const x = ROW_LABEL_WIDTH + colIdx * cellSize;
+            const x = rowLabelWidth + colIdx * cellSize;
             const y = COLUMN_LABEL_HEIGHT + rowIdx * cellSize;
             const rowName = rowLabels[rowIdx] ?? `Row ${rowIdx + 1}`;
             const colName = columnLabels[colIdx] ?? `Col ${colIdx + 1}`;

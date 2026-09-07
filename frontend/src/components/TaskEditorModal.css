@@ -275,7 +275,9 @@
 .task-editor-modal .config-section label.section-label {
   display: block;
   margin-bottom: 0.75rem;
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
 }
 
 /* Meta role. 13.6px -> 11px. */
@@ -293,6 +295,9 @@
 }
 
 .task-editor-modal .config-checkbox {
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -366,7 +371,9 @@
 }
 
 .task-editor-modal .alert-config-header .section-label {
-  font-weight: 500;
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   display: block;
 }
 

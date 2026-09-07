@@ -504,7 +504,7 @@
 }
 
 :where(.tag-engine-group-modal) .modal-content {
-  background: var(--card-bg);
+  background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: 12px;
   width: 100%;

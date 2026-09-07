@@ -189,12 +189,13 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
         <div className="ntfy-form-grid">
           <label>
             <span>Name</span>
-            <input value={ntfyName} onChange={(event) => setNtfyName(event.target.value)} required />
+            <input className="form-input" value={ntfyName} onChange={(event) => setNtfyName(event.target.value)} required />
           </label>
           <label>
             <span>Server URL</span>
             <input
               type="url"
+              className="form-input"
               value={ntfyServerUrl}
               onChange={(event) => setNtfyServerUrl(event.target.value)}
               placeholder="https://ntfy.sh"
@@ -203,12 +204,13 @@ export function AlertMethodsSection({ isAdmin }: AlertMethodsSectionProps) {
           </label>
           <label>
             <span>Topic</span>
-            <input value={ntfyTopic} onChange={(event) => setNtfyTopic(event.target.value)} required />
+            <input className="form-input" value={ntfyTopic} onChange={(event) => setNtfyTopic(event.target.value)} required />
           </label>
           <label>
             <span>Access token (optional)</span>
             <input
               type="password"
+              className="form-input"
               value={ntfyAccessToken}
               onChange={(event) => setNtfyAccessToken(event.target.value)}
               autoComplete="new-password"

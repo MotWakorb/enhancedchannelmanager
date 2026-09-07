@@ -952,7 +952,9 @@
 }
 
 .probe-result-item-name {
-  font-weight: bold;
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary);
   word-break: break-word;
 }
@@ -1092,6 +1094,17 @@
 .smart-sort-point-field .custom-select {
   width: 100%;
   min-width: 0;
+}
+
+.smart-sort-point-field .custom-select-trigger {
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+}
+
+.smart-sort-point-field .custom-select-value {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .smart-sort-add-rule {

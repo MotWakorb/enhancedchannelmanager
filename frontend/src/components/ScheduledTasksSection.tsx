@@ -289,6 +289,7 @@ function TaskCard({ task, onRunNow, onCancel, /* onToggleEnabled - reserved for 
           <div style={{
             color: task.status === 'running' ? '#3498db' :
                    task.status === 'failed' ? '#e74c3c' :
+                   task.status === 'completed' && task.enabled ? 'var(--success)' :
                    task.enabled ? '#2ecc71' : 'var(--text-muted)',
           }}>
             {task.status.charAt(0).toUpperCase() + task.status.slice(1)}

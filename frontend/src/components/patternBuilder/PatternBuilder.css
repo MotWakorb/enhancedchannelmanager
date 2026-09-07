@@ -492,6 +492,8 @@
 
 /* --- Annotation popover --- */
 .pb-popover {
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
   background: var(--bg-secondary);
   border: 1px solid var(--border-primary);
   border-radius: var(--radius-md);

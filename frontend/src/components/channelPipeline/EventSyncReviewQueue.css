@@ -75,6 +75,11 @@
   line-height: var(--type-body-line-height);
 }
 
+.event-sync-review-notice > .material-icons {
+  font-size: var(--icon-status);
+  flex-shrink: 0;
+}
+
 /* Contested-pairing caution (bead 8rzkq): rejecting one side may auto-attach
    the sibling — surface it inline on contested cards so the reject is not a
    surprise.

@@ -2501,7 +2501,7 @@ export function EventSyncRuleEditor({
               <h3 id={`${id}-discard-title`} className="modal-title">Discard this rule?</h3>
             </div>
             <div className="modal-body">
-              <p>Your patterns and scope selections will be lost.</p>
+              <p className="pipeline-confirm-prose">Your patterns and scope selections will be lost.</p>
             </div>
             <div className="modal-footer">
               <button

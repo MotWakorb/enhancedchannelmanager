@@ -313,7 +313,7 @@
    (bead enhancedchannelmanager-6z299.4). */
 .enhanced-stats-panel .list-header {
   display: grid;
-  grid-template-columns: 32px 1fr 90px 80px 80px;
+  grid-template-columns: 32px 1fr 90px 100px 80px;
   gap: 8px;
   padding: 8px 12px;
   background: var(--bg-tertiary);
@@ -322,7 +322,7 @@
 
 .enhanced-stats-panel .bandwidth-item {
   display: grid;
-  grid-template-columns: 32px 1fr 90px 80px 80px;
+  grid-template-columns: 32px 1fr 90px 100px 80px;
   gap: 8px;
   padding: 10px 12px;
   font-size: var(--type-body-size);

@@ -415,9 +415,9 @@ export function GuideTab({
     const durationMinutes = (visibleEnd - visibleStart) / (1000 * 60);
 
     const left = (offsetMinutes / SLOT_MINUTES) * SLOT_WIDTH_PX;
-    const width = Math.max(50, (durationMinutes / SLOT_MINUTES) * SLOT_WIDTH_PX - 4); // -4 for margin
+    const width = Math.max(0, (durationMinutes / SLOT_MINUTES) * SLOT_WIDTH_PX - 4); // -4 for margin
 
-    return { left: `${left}px`, width: `${width}px` };
+    return { left: `${left}px`, width: `${width}px`, paddingInline: width < 20 ? 0 : undefined };
   }, [timeRange]);
 
   // Check if a program is currently airing
@@ -707,7 +707,7 @@ export function GuideTab({
                 {nowIndicatorPosition !== null && (
                   <div
                     className="now-indicator"
-                    style={{ left: `${200 + nowIndicatorPosition}px` }}
+                    style={{ left: `calc(var(--guide-channel-width) + ${nowIndicatorPosition}px)` }}
                   />
                 )}
               </div>

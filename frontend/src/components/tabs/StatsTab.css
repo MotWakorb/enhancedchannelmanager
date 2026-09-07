@@ -716,7 +716,7 @@
 }
 
 .stat-value.speed-good {
-  color: var(--success-text);
+  color: var(--success);
 }
 
 .stat-value.speed-warning {

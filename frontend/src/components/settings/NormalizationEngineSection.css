@@ -1110,8 +1110,6 @@
 }
 
 .norm-engine-condition-checkbox input {
-  width: 12px;
-  height: 12px;
   accent-color: var(--accent-primary);
 }
 

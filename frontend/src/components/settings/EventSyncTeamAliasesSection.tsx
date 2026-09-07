@@ -118,7 +118,7 @@ export function EventSyncTeamAliasesSection() {
         <h3>Event Sync Team Aliases</h3>
       </div>
       <div className="settings-group">
-        <span className="form-description">
+        <span className="form-description team-aliases-description">
           Known-equivalent team spellings for the Event Sync matcher — e.g.
           {' '}<em>Man Utd == Manchester United == MUFC</em>.
           Aliases raise recall on abbreviation-heavy providers without
@@ -175,6 +175,7 @@ export function EventSyncTeamAliasesSection() {
               <div className="add-email-row">
                 <input
                   type="text"
+                  className="form-input"
                   placeholder="Add a spelling, e.g. MUFC"
                   value={termInputs[index] ?? ''}
                   onChange={(e) =>
@@ -195,7 +196,7 @@ export function EventSyncTeamAliasesSection() {
               </div>
               <input
                 type="text"
-                className="team-alias-note-input"
+                className="form-input team-alias-note-input"
                 placeholder="Evidence note (optional), e.g. corpus pair 2026-07-18"
                 value={group.note ?? ''}
                 onChange={(e) => setNote(index, e.target.value)}

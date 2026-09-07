@@ -426,6 +426,7 @@
 
 /* Status/panel glyph -> --icon-status. 18px -> 18px. */
 .action-warning .material-icons {
+  flex-shrink: 0;
   font-size: var(--icon-status);
 }
 
