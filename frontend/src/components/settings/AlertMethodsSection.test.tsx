@@ -72,6 +72,8 @@ describe('AlertMethodsSection', () => {
     await waitFor(() => {
       expect(screen.getByText(/no alert methods configured/i)).toBeInTheDocument();
     });
+    expect(screen.getByRole('heading', { level: 3, name: 'ntfy Notifications' }).parentElement)
+      .toHaveTextContent(/^ntfy Notifications$/);
   });
 
   it('renders a create-only ntfy form with password token input', async () => {
@@ -271,6 +273,8 @@ describe('AlertMethodsSection', () => {
 
     render(<AlertMethodsSection isAdmin={false} />);
 
+    expect(screen.getByRole('heading', { level: 3, name: 'ntfy Notifications' }).parentElement)
+      .toHaveTextContent(/^ntfy Notifications$/);
     expect(
       screen.getByText(/Only administrators can view or manage alert methods\./),
     ).toBeInTheDocument();

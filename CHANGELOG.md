@@ -46,6 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **ntfy settings header (bead `enhancedchannelmanager-dulo7`).** Show exactly `ntfy Notifications` without the notification icon in both administrator and non-administrator views.
 - **Desktop visual repairs now have a distinct dev build (bead `enhancedchannelmanager-0m06f.8.1`, PR #987, build 0.18.2-0021).** The merged desktop repairs address clipped controls and glyphs, overlapping labels, typography, spacing, and theme contrast across pages and dialogs. This follow-up advances the UI/image, backup-export, and OpenAPI version metadata together after PR #987 retained 0.18.2-0020. Phone-only repairs remain outside this delivery's scope.
 
 - **Explicit broad Channel Pipeline schedules now run all enabled rules without requiring Run on Refresh (GitHub #975, build 0.18.2-0019).** Selecting the broad scope stores `run_all_rules: true` and applies equally to due schedules and Run Now. Existing parameterless schedules, including the built-in 60-second poll, remain refresh-only with their existing guards; no schedule is silently reclassified. Exact selected-rule scope remains separate and fail-closed.
