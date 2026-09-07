@@ -39,6 +39,9 @@
 }
 
 .server-group-name {
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
   color: var(--text-primary, #ffffff);
 }
 

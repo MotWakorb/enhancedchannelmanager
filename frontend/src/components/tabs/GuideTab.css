@@ -1,6 +1,7 @@
 /* Guide Tab Styles */
 
 .guide-tab {
+  --guide-channel-width: 200px;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -189,7 +190,7 @@
 }
 
 .timeline-header-spacer {
-  width: 200px;
+  width: var(--guide-channel-width);
   flex-shrink: 0;
   background-color: var(--bg-secondary);
   border-right: 1px solid var(--border-primary);
@@ -278,7 +279,7 @@
 
 /* Channel Info (Sticky Left) */
 .guide-row .channel-info {
-  width: 200px;
+  width: var(--guide-channel-width);
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -463,9 +464,8 @@
    space before it needs to truncate at all — the spacer and sticky info
    column must stay in lockstep since the spacer aligns with it. */
 @media (min-width: 1280px) {
-  .timeline-header-spacer,
-  .guide-row .channel-info {
-    width: 260px;
+  .guide-tab {
+    --guide-channel-width: 260px;
   }
 }
 
@@ -476,9 +476,8 @@
     gap: 0.75rem;
   }
 
-  .timeline-header-spacer,
-  .guide-row .channel-info {
-    width: 150px;
+  .guide-tab {
+    --guide-channel-width: 150px;
   }
 
   .guide-row .channel-logo {

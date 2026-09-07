@@ -633,9 +633,13 @@
 
 /* --text-muted is deliberate and allowed here: this glyph is a decorative
    illustration, not text, so the 4.5:1 text floor does not apply to it. */
-.empty-state .material-icons {
+.empty-state > .material-icons {
   font-size: var(--icon-empty);
   color: var(--text-muted);
+}
+
+.empty-state button .material-icons {
+  font-size: var(--icon-action);
 }
 
 .empty-state h3 {
@@ -1320,6 +1324,7 @@
    keeps them right-aligned so a wrapped cluster still hugs the row edge. */
 .header-actions {
   display: flex;
+  max-width: 100%;
   gap: 0.75rem;
   align-items: center;
   flex-wrap: wrap;

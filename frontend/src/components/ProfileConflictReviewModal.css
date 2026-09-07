@@ -86,6 +86,10 @@
   background: var(--error-bg);
 }
 
+.profile-conflict-message > .material-icons {
+  flex-shrink: 0;
+}
+
 .profile-conflict-message.is-warning {
   color: var(--warning-text);
   background: var(--warning-bg);

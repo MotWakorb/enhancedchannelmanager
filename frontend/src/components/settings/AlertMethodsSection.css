@@ -38,6 +38,9 @@
 }
 
 .ntfy-create-form h4 {
+  font-size: var(--type-section-size);
+  font-weight: var(--type-section-weight);
+  line-height: var(--type-section-line-height);
   margin: 0 0 0.75rem;
 }
 
@@ -49,6 +52,9 @@
 }
 
 .ntfy-form-grid label {
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
   display: flex;
   flex-direction: column;
   gap: 0.3rem;

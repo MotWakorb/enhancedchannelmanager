@@ -44,6 +44,7 @@
 }
 
 .rcs-outcome-icon {
+  flex-shrink: 0;
   font-size: 1.5rem;
   line-height: 1.4;
 }

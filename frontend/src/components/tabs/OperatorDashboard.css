@@ -19,7 +19,7 @@
 .dashboard-card-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 32px; width: 32px; height: 32px; border-radius: 8px; background: color-mix(in srgb, var(--dashboard-accent) 16%, transparent); color: var(--dashboard-accent); }
 .dashboard-card-icon .material-icons { font-size: 19px; }
 .operator-dashboard-card h3 { margin: 0; color: var(--text-secondary); font-size: .8rem; letter-spacing: .04em; text-transform: uppercase; }
-.dashboard-card-value { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: 1.45rem; font-weight: 700; }
+.dashboard-card-value { display: flex; flex-wrap: wrap; gap: .25rem 1rem; font-size: var(--type-metric-size); font-weight: var(--type-metric-weight); line-height: var(--type-metric-line-height); }
 .dashboard-card-status { display: flex; align-items: center; gap: .35rem; margin: .5rem 0 .2rem; font-size: .82rem; }
 /* Only the icon takes the semantic colour. Status text keeps its inherited
    colour so the >=4.5:1 result verified in enhancedchannelmanager-rv84z holds. */
@@ -31,7 +31,7 @@
 /* --text-secondary, not --text-muted: muted renders 2.61:1 on --bg-secondary
    under the light theme (enhancedchannelmanager-eo7er). */
 .dashboard-card-freshness { margin: 0; color: var(--text-secondary); font-size: .75rem; }
-.dashboard-card-link { margin-top: auto; min-height: 44px; display: inline-flex; align-items: center; gap: .25rem; width: fit-content; font-weight: 600; }
+.dashboard-card-link { margin-top: auto; min-height: 44px; display: inline-flex; align-items: center; gap: .25rem; width: fit-content; font-size: var(--type-body-size); line-height: var(--type-body-line-height); font-weight: 600; }
 .dashboard-card-link .material-icons { font-size: 1rem; }
 .dashboard-card-skeleton span { display: block; height: 1rem; margin: .45rem 0; border-radius: 4px; background: var(--bg-tertiary); }
 .dashboard-card-skeleton span:first-child { width: 55%; height: 1.7rem; }

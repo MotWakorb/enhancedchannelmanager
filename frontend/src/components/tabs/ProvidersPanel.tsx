@@ -815,6 +815,7 @@ export function ProvidersPanel() {
             <Heatmap
               data={heatmapGrid.data}
               rowLabels={heatmapGrid.rowLabels}
+              rowLabelWidth={192}
               columnLabels={heatmapGrid.columnLabels}
               ariaLabel="Provider × channel byte heatmap"
             />

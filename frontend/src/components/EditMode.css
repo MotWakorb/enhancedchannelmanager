@@ -295,6 +295,7 @@
 }
 
 .edit-mode-dialog-commit-failure-intro .material-icons {
+  flex-shrink: 0;
   color: var(--danger-text);
   font-size: 1.25rem;
 }

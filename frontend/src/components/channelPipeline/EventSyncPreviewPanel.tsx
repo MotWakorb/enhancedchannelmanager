@@ -32,7 +32,7 @@ const CARDS_PER_PAGE = 50;
 
 export function EventSyncCleanupResults({ cleanup }: { cleanup: EventSyncCleanupSummary }) {
   const [limit, setLimit] = useState(CARDS_PER_PAGE);
-  return <section className="event-sync-section" aria-label="Stale attachment cleanup">
+  return <section className="event-sync-section event-sync-cleanup-results" aria-label="Stale attachment cleanup">
     <h4>Stale attachment cleanup</h4>
     {cleanup.error && <p role="alert">Cleanup incomplete: {cleanup.error.split('_').join(' ')}. See individual outcomes below.</p>}
     <p>{cleanup.decisions.filter(r => r.decision === 'would_detach').length} would detach;{' '}

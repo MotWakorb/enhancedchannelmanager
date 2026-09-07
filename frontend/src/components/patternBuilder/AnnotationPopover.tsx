@@ -3,7 +3,7 @@
  * Appears when the user selects text in the AnnotationCanvas.
  * Also supports edit mode when clicking an existing annotation.
  */
-import { useState, useRef, useEffect, memo } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, memo } from 'react';
 import type { Annotation, VariableType } from './types';
 import { VARIABLE_TYPE_LABELS, NAME_TYPE_HINTS } from './types';
 
@@ -71,9 +71,31 @@ export const AnnotationPopover = memo(function AnnotationPopover({
   const popoverRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  useLayoutEffect(() => {
+    const popover = popoverRef.current;
+    if (!popover) return;
+    const position = () => {
+      // Measure away from the right edge so shrink-to-fit cannot change width
+      // after clamping. Account for transformed modal ancestors via rect offsets.
+      popover.style.left = '8px';
+      popover.style.top = '8px';
+      const rect = popover.getBoundingClientRect();
+      const left = Math.max(8, Math.min(anchorRect.left, window.innerWidth - rect.width - 8));
+      const top = Math.max(8, Math.min(anchorRect.bottom + 8, window.innerHeight - rect.height - 8));
+      popover.style.left = `${parseFloat(popover.style.left) + left - rect.left}px`;
+      popover.style.top = `${parseFloat(popover.style.top) + top - rect.top}px`;
+    };
+    position();
+    // Custom-regex fields and validation messages can change the required height.
+    const observer = new ResizeObserver(position);
+    observer.observe(popover);
+    window.addEventListener('resize', position);
+    return () => { observer.disconnect(); window.removeEventListener('resize', position); };
+  }, [anchorRect]);
+
   // Auto-focus the name input
   useEffect(() => {
-    inputRef.current?.focus();
+    inputRef.current?.focus({ preventScroll: true });
   }, []);
 
   // Close on outside click

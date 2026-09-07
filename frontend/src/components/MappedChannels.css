@@ -1,9 +1,24 @@
 .mapped-channels {
+  font-size: var(--type-body-size);
+  line-height: var(--type-body-line-height);
   padding: 16px;
   max-width: 960px;
   overflow-wrap: anywhere;
   overflow: auto;
   min-height: 0;
+}
+
+.mapped-channels label,
+.mapped-channels legend {
+  font-size: var(--type-label-size);
+  font-weight: var(--type-label-weight);
+  line-height: var(--type-label-line-height);
+}
+
+.mapped-channels-list h3 {
+  font-size: var(--type-item-title-size);
+  font-weight: var(--type-item-title-weight);
+  line-height: var(--type-item-title-line-height);
 }
 
 .mapped-channels fieldset {

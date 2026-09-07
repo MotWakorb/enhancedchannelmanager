@@ -1565,15 +1565,14 @@ export function ActionEditor({
             />
           </div>
         )}
+        {/* Dependency Warning */}
+        {dependencyWarning && !readonly && (
+          <div className="action-warning">
+            <span className="material-icons">warning</span>
+            {dependencyWarning}
+          </div>
+        )}
       </div>
-
-      {/* Dependency Warning */}
-      {dependencyWarning && !readonly && (
-        <div className="action-warning">
-          <span className="material-icons">warning</span>
-          {dependencyWarning}
-        </div>
-      )}
 
       {/* Validation Error */}
       {validationError && (

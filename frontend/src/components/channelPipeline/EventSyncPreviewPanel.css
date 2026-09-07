@@ -53,6 +53,11 @@
   gap: 8px;
 }
 
+.event-sync-preflight .warning-message > .material-icons {
+  font-size: var(--icon-status);
+  flex-shrink: 0;
+}
+
 /* Body role. 14px -> 13px. */
 .event-sync-summary {
   margin: 0;
@@ -295,4 +300,10 @@
 .event-sync-promote-streams {
   margin: 0;
   padding-left: 18px;
+}
+.event-sync-cleanup-results > p,
+.event-sync-cleanup-results > ul {
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
 }

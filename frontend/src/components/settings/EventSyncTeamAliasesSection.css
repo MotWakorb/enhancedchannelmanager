@@ -43,6 +43,12 @@
   box-sizing: border-box;
 }
 
+.team-aliases-description {
+  font-size: var(--type-body-size);
+  font-weight: var(--type-body-weight);
+  line-height: var(--type-body-line-height);
+}
+
 /* Type and colour come from `.empty-inline` in shared/common.css § 7, added to
    the element in EventSyncTeamAliasesSection.tsx. Only the margin is local.
    This declared no font-size at all, so it rendered at the UA default 16px;
