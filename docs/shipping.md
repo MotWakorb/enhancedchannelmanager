@@ -33,6 +33,8 @@ bd update <id> --description "Detailed description of changes made"
 
 **Not every change does.** A change containing only approved root machine-generated `.beads` state carries no build to advance. Every other path requires a bump.
 
+**Bump on every delivery**, including UI/CSS repairs and corrective follow-ups; a previous delivery's bump does not cover the next one. Before committing, compare against current `origin/dev` and increment its zero-padded `BUILD` suffix for the same target release. Do not reuse a build number. This is a manual checklist requirement, not an advancement gate; the inert machine-state exception above remains unchanged.
+
 The rule is mechanical and you can apply it from what you edited, without running anything:
 
 | Every file you changed | What to do |
