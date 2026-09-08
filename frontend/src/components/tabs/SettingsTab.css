@@ -990,6 +990,8 @@
 }
 
 .smart-sort-strategy-option {
+  /* Keep hidden radio focus within the card's scroll container. */
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
@@ -1380,6 +1382,12 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 0.5rem;
+}
+
+.emby-clear-logos-actions > .btn-secondary {
+  /* Keep the shared icon-button layout inside .form-group-vertical. */
+  display: inline-flex;
+  margin-left: 0;
 }
 
 /* Clear Emby Logos type checkboxes (GH #475, bd-v9tp7) */

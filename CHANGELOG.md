@@ -46,6 +46,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Settings layout (bead `enhancedchannelmanager-9nd9o`, build 0.18.2-0023).** Keep Clear Emby Logos left aligned with its icon centered beside the text, and prevent selecting Smart Sort Points from scrolling the entire app offscreen when the hidden radio receives focus.
 - **ntfy settings header (bead `enhancedchannelmanager-dulo7`).** Show exactly `ntfy Notifications` without the notification icon in both administrator and non-administrator views.
 - **Desktop visual repairs now have a distinct dev build (bead `enhancedchannelmanager-0m06f.8.1`, PR #987, build 0.18.2-0021).** The merged desktop repairs address clipped controls and glyphs, overlapping labels, typography, spacing, and theme contrast across pages and dialogs. This follow-up advances the UI/image, backup-export, and OpenAPI version metadata together after PR #987 retained 0.18.2-0020. Phone-only repairs remain outside this delivery's scope.
 
