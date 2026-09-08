@@ -4,6 +4,24 @@ import { useHashRoute, _parseHash, _buildHash, type RouteChangeGuardDetail } fro
 import { SETTINGS_PAGE_IDS } from '../components/settingsSections';
 
 describe('parseHash', () => {
+  it('redirects shipped mapping bookmarks to the Settings section', () => {
+    expect(_parseHash('#mapped-channels')).toEqual({
+      tab: 'settings', settingsPage: 'normalization', section: 'settings-normalization-section-mapped-channels',
+    });
+  });
+
+  it('replaces a mapping bookmark without adding history or dropping route state', () => {
+    window.history.replaceState({ ecmRouteIndex: 3, ecmRouteEpoch: 2 }, '', '#mapped-channels');
+    const length = window.history.length;
+    const { result, unmount } = renderHook(() => useHashRoute());
+    expect(result.current.activeTab).toBe('settings');
+    expect(result.current.settingsPage).toBe('normalization');
+    expect(window.location.hash).toBe('#settings/normalization?section=settings-normalization-section-mapped-channels');
+    expect(window.history.length).toBe(length);
+    expect(window.history.state).toEqual({ ecmRouteIndex: 3, ecmRouteEpoch: 2 });
+    unmount();
+    window.history.replaceState(null, '', '/');
+  });
   it('preserves supported section deep links on audited long pages', () => {
     expect(_parseHash('#stats?section=stats-section-watch-history')).toEqual({
       tab: 'stats', settingsPage: null, section: 'stats-section-watch-history',

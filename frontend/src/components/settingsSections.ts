@@ -101,7 +101,7 @@ const SECTION_DEFINITIONS = [
   {
     id: 'normalization', label: 'Channel Normalization', icon: 'auto_fix_high',
     group: 'Channel Processing',
-    description: 'Configure tag-based patterns for cleaning up channel names during bulk channel creation.',
+    description: 'Configure normalization rules and reusable preferred-name mappings for channel creation.',
   },
   {
     id: 'tag-engine', label: 'Tags', icon: 'label',

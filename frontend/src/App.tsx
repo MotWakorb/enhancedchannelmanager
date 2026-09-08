@@ -17,7 +17,6 @@ import {
   type TabId,
 } from './components';
 import { ChannelManagerTab } from './components/tabs/ChannelManagerTab';
-import { MappedChannels } from './components/MappedChannels';
 import { OperatorDashboard } from './components/tabs/OperatorDashboard';
 import { useChangeHistory, useEditMode, useHashRoute, useDedupOnDrop, useServerDataInvalidation } from './hooks';
 import { useAuth } from './hooks/useAuth';
@@ -3397,7 +3396,6 @@ function App() {
             />
             </ErrorBoundary>
           )}
-          {activeTab === 'mapped-channels' && <MappedChannels />}
           {activeTab === 'm3u-manager' && (
             <ErrorBoundary key="tab-m3u-manager" scopeLabel="M3U Manager tab" reloadMode="reset">
             <M3UManagerTab

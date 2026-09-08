@@ -11,7 +11,7 @@ export type { SettingsPage };
 const VALID_TABS: Set<string> = new Set([
   'dashboard', 'm3u-manager', 'epg-manager', 'channel-manager', 'guide',
   'logo-manager', 'm3u-changes', 'channel-pipeline', 'journal',
-  'stats', 'settings', 'mapped-channels',
+  'stats', 'settings',
 ]);
 
 /**
@@ -139,6 +139,11 @@ function parseHash(hash: string): HashRoute {
     ? Number(hoursParam) : null;
   const sectionParam = new URLSearchParams(query).get('section');
   const section = sectionParam && /^[a-z0-9-]+$/.test(sectionParam) ? sectionParam : undefined;
+
+  // Preserve shipped bookmarks after moving the manager into Settings (81sy8).
+  if (path === 'mapped-channels') {
+    return { tab: 'settings', settingsPage: 'normalization', section: 'settings-normalization-section-mapped-channels' };
+  }
 
   // Check for settings/sub-page format
   if (path.startsWith('settings/')) {

@@ -23,6 +23,13 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, within, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+vi.mock('../../services/channelNameMappings', () => ({
+  getChannelNameMappings: vi.fn(),
+  saveChannelNameMapping: vi.fn(),
+  deleteChannelNameMapping: vi.fn(),
+}));
 
 vi.mock('../../services/api', () => ({
   getSettings: vi.fn(),
@@ -98,6 +105,7 @@ vi.mock('../DeleteOrphanedGroupsModal', () => ({
 }));
 
 import * as api from '../../services/api';
+import * as mappings from '../../services/channelNameMappings';
 import type { SettingsPage } from '../../hooks';
 import { SettingsTab } from './SettingsTab';
 
@@ -158,6 +166,49 @@ describe('Settings section rail — complete from first paint (bead b32co)', () 
       ['Email Recipients', 'settings-m3u-digest-section-email-recipients'],
       ['Discord Notification', 'settings-m3u-digest-section-discord-notification'],
     ]);
+  });
+
+  it('mounts the mapping manager with its own CRUD saves and a stable section anchor', async () => {
+    const user = userEvent.setup();
+    vi.mocked(mappings.getChannelNameMappings).mockResolvedValue({ mappings: [] });
+    vi.mocked(mappings.saveChannelNameMapping).mockResolvedValue({ id: 1, preferred_name: 'Stars TV', aliases: ['Stars.TV'] });
+    vi.mocked(mappings.deleteChannelNameMapping).mockResolvedValue(undefined);
+    const { container } = renderPage('normalization');
+    expect(screen.getByRole('heading', { name: 'Mapped channels' })).toBeInTheDocument();
+    await expectRail(container, [
+      ['Default Behavior', 'settings-normalization-section-default-behavior'],
+      ['Country Prefix Format', 'settings-normalization-section-country-prefix-format'],
+      ['Mapped channels', 'settings-normalization-section-mapped-channels'],
+    ]);
+    const manager = within(screen.getByRole('region', { name: 'Mapped channels' }));
+    await user.click(await manager.findByRole('button', { name: 'Add mapping' }));
+    await user.type(manager.getByLabelText('Preferred name'), 'Stars TV');
+    await user.type(manager.getByLabelText('Alternative names (one per line)'), 'Stars.TV');
+    await user.click(manager.getByRole('button', { name: 'Save mapping' }));
+    expect(mappings.saveChannelNameMapping).toHaveBeenCalledWith({ preferred_name: 'Stars TV', aliases: ['Stars.TV'] }, undefined);
+    await user.click(await manager.findByRole('button', { name: 'Edit Stars TV' }));
+    await user.click(manager.getByRole('button', { name: 'Save mapping' }));
+    expect(mappings.saveChannelNameMapping).toHaveBeenLastCalledWith({ preferred_name: 'Stars TV', aliases: ['Stars.TV'] }, 1);
+    await user.click(await manager.findByRole('button', { name: 'Remove Stars TV' }));
+    expect(mappings.deleteChannelNameMapping).toHaveBeenCalledWith(1);
+    expect(await manager.findByText('No mappings defined.')).toBeInTheDocument();
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    expect(screen.queryByRole('status', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+  });
+
+  it('keeps mapping API permission denials visible in Settings without saving', async () => {
+    const user = userEvent.setup();
+    vi.mocked(mappings.getChannelNameMappings).mockResolvedValue({ mappings: [] });
+    vi.mocked(mappings.saveChannelNameMapping).mockRejectedValue(new Error('Admin access required'));
+    renderPage('normalization');
+    const manager = within(screen.getByRole('region', { name: 'Mapped channels' }));
+    await user.click(await manager.findByRole('button', { name: 'Add mapping' }));
+    await user.type(manager.getByLabelText('Preferred name'), 'Stars TV');
+    await user.click(manager.getByRole('button', { name: 'Save mapping' }));
+    expect(await manager.findByRole('alert')).toHaveTextContent('Admin access required');
+    expect(manager.getByLabelText('Preferred name')).toHaveValue('Stars TV');
+    expect(manager.queryByText(/Mapping saved/)).not.toBeInTheDocument();
+    expect(api.saveSettings).not.toHaveBeenCalled();
   });
 
   it('lists every Authentication section while the auth fetch is still pending', async () => {

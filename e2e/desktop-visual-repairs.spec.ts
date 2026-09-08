@@ -775,13 +775,15 @@ for (const theme of ['dark', 'light', 'high-contrast']) {
     });
     test(`G05 mapped editor roles ${theme} ${viewport.width}`, async ({ page }, testInfo) => {
       await page.setViewportSize(viewport);
-      await openSynthetic(page, 'mapped-channels', theme, {
+      await openSynthetic(page, 'settings/normalization?section=settings-normalization-section-mapped-channels', theme, {
+        '/api/normalization/rules': { groups: [] },
+        '/api/tags/groups': { groups: [] },
         '/api/normalization/mappings': { mappings: [{ id: 1, preferred_name: 'BBC One', aliases: ['BBC ONE HD'] }] },
       });
       await page.getByRole('button', { name: 'Add mapping', exact: true }).click();
       await capture(page, testInfo, 'G05');
       await page.setViewportSize({ width: 1280, height: 900 });
-      await capture(page, testInfo, 'G05-standalone-1280');
+      await capture(page, testInfo, 'G05-settings-1280');
       await expect.soft(page.locator('.mapped-channels label').first()).toHaveCSS('font-size', '13px');
       await page.setViewportSize(viewport);
       await expect.soft(page.locator('.mapped-channels > p').first()).toHaveCSS('font-size', '13px');
@@ -792,12 +794,16 @@ for (const theme of ['dark', 'light', 'high-contrast']) {
         : route.fallback());
       await page.getByRole('button', { name: 'Save mapping', exact: true }).click();
       await expect(page.locator('.mapped-channels [role=alert]')).toBeVisible();
-      await capture(page, testInfo, 'G05-standalone-validation');
+      await capture(page, testInfo, 'G05-settings-validation');
       await expect(page.locator('.mapped-channels [role=alert]')).toHaveCSS('font-size', '13px');
       await expect.soft(page.locator('.mapped-channels h3')).toHaveCSS('font-size', '13px');
       await expect.soft(page.locator('.mapped-channels h3')).toHaveCSS('font-weight', '600');
       await page.goto('about:blank');
-      await openSynthetic(page, 'mapped-channels', theme, { '/api/normalization/mappings': { mappings: [] } });
+      await openSynthetic(page, 'settings/normalization?section=settings-normalization-section-mapped-channels', theme, {
+        '/api/normalization/rules': { groups: [] },
+        '/api/tags/groups': { groups: [] },
+        '/api/normalization/mappings': { mappings: [] },
+      });
       await expect(page.getByText('No mappings defined.', { exact: true })).toBeVisible();
       await page.getByRole('button', { name: 'Add mapping', exact: true }).click();
       await capture(page, testInfo, 'G05-empty-list-editor');
