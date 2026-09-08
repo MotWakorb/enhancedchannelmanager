@@ -166,6 +166,98 @@ test.afterAll(async () => {
   if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true })
 })
 
+test('physical Points selection keeps the document and editor onscreen', async ({ page }, testInfo) => {
+  for (const [width, height] of [[1920, 1080], [1366, 768], [1100, 800], [1024, 768]]) {
+    await page.setViewportSize({ width, height })
+    await page.goto('about:blank')
+    await page.goto(`${appURL}/#settings/channel-defaults`)
+    const group = page.getByRole('radiogroup', { name: 'Smart Sort strategy' })
+    await expect(group.getByRole('radio', { name: 'Priority' })).toBeChecked()
+    await group.evaluate((element) => {
+      const container = element.closest('.settings-content')!
+      container.scrollTop += element.getBoundingClientRect().top - container.getBoundingClientRect().top - 180
+    })
+    const points = group.getByText('Points', { exact: true })
+    const box = await points.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.y).toBeGreaterThanOrEqual(0)
+    expect(box!.y + box!.height).toBeLessThan(height)
+    // Locator clicks auto-scroll and can conceal the document focus-scroll bug.
+    await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2)
+    await expect(group.getByRole('radio', { name: 'Points' })).toBeChecked()
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0)
+    const geometry = await page.locator('.smart-sort-points-editor').evaluate((element) => {
+      const rect = element.getBoundingClientRect()
+      return {
+        top: rect.top,
+        bottom: rect.bottom,
+        appTop: document.querySelector('.app')!.getBoundingClientRect().top,
+        hit: element.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)),
+      }
+    })
+    expect(geometry.appTop).toBe(0)
+    expect(geometry.top).toBeGreaterThanOrEqual(0)
+    expect(geometry.bottom).toBeLessThanOrEqual(height)
+    expect(geometry.hit).toBe(true)
+    await page.screenshot({ path: testInfo.outputPath(`points-physical-${width}.png`), fullPage: false })
+  }
+})
+
+test('default settings survive the Priority to Points render transition', async ({ page }) => {
+  const errors: string[] = []
+  page.on('pageerror', (error) => errors.push(error.message))
+  const response = await page.request.get(`${appURL}/api/settings`)
+  expect(response.ok()).toBe(true)
+  expect(await response.json()).toMatchObject({
+    stream_sort_strategy: 'priority',
+    stream_sort_point_rules: [],
+  })
+
+  await page.goto(`${appURL}/#settings/channel-defaults`)
+  await expect(page.getByRole('radio', { name: 'Priority' })).toBeChecked()
+  await chooseStrategy(page, 'Points')
+  await expect(page.getByText('No point rules configured. Every stream will receive a score of 0.')).toBeVisible()
+  await page.getByRole('button', { name: 'Add rule' }).click()
+  await expect(pointRule(page, 0).getByLabel('Condition')).toContainText('Resolution')
+  await chooseStrategy(page, 'Priority')
+  await chooseStrategy(page, 'Points')
+  await expect(page.getByTestId('smart-sort-point-rule')).toHaveCount(1)
+  await chooseStrategy(page, 'Priority')
+  await page.getByRole('button', { name: /Reorder$/ }).click()
+  await expect(page.getByRole('button', { name: /Done$/ })).toBeVisible()
+  await chooseStrategy(page, 'Points')
+  await expect(page.getByTestId('smart-sort-point-rule')).toHaveCount(1)
+  expect(errors).toEqual([])
+})
+
+test('Clear Emby Logos stays left aligned with its icon level with the text', async ({ page }) => {
+  await page.goto(`${appURL}/#settings/integrations`)
+  const button = page.getByTestId('emby-clear-logos-btn')
+  await expect(button).toBeVisible()
+  // Inspect only: never invoke the destructive action, even in this harness.
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 })
+    await expect(button).toHaveCSS('display', 'flex')
+    await expect(button).toHaveCSS('align-items', 'center')
+    await expect(button).toHaveCSS('margin-left', '0px')
+    const geometry = await button.evaluate((element) => {
+      const buttonRect = element.getBoundingClientRect()
+      const parentRect = element.parentElement!.getBoundingClientRect()
+      const iconRect = element.querySelector('.material-icons')!.getBoundingClientRect()
+      const range = document.createRange()
+      range.selectNodeContents(element)
+      range.setStartAfter(element.querySelector('.material-icons')!)
+      const textRect = range.getBoundingClientRect()
+      return {
+        leftOffset: buttonRect.left - parentRect.left,
+        centerOffset: (iconRect.top + iconRect.bottom - textRect.top - textRect.bottom) / 2,
+      }
+    })
+    expect(Math.abs(geometry.leftOffset)).toBeLessThan(1)
+    expect(Math.abs(geometry.centerOffset)).toBeLessThan(2)
+  }
+})
+
 test('GH971 complete YAML collection crosses real API and file SQLite on desktop and mobile', async ({ page }, testInfo) => {
   test.setTimeout(90_000)
   await page.goto(`${appURL}/#channel-pipeline`)

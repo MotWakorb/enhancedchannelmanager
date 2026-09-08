@@ -4515,7 +4515,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
               ))}
             </div>
 
-            <div className="integration-test-actions">
+            <div className="integration-test-actions emby-clear-logos-actions">
               <button
                 type="button"
                 className="btn-secondary"
