@@ -4,6 +4,7 @@ import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode, StreamSortStrategy, StreamSortPointCriterion, StreamSortPointOperator, StreamSortPointRule } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
+import { MappedChannels } from '../MappedChannels';
 import { TagEngineSection } from '../settings/TagEngineSection';
 import { AuthSettingsSection } from '../settings/AuthSettingsSection';
 import { UserManagementSection } from '../settings/UserManagementSection';
@@ -3660,6 +3661,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       {/* Advanced Normalization Rules Engine */}
       <NormalizationEngineSection />
+
+      <div className="settings-section" data-section-id="settings-normalization-section-mapped-channels">
+        <div className="settings-section-header">
+          <span className="material-icons" aria-hidden="true">link</span>
+          <h3>Mapped channels</h3>
+        </div>
+        <MappedChannels />
+      </div>
 
       <div className="settings-actions">
         <div className="settings-actions-left" />

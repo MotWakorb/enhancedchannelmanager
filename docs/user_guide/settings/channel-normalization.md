@@ -1,8 +1,9 @@
 # Channel Normalization
 
 Channel Normalization, under **Channel Processing** in the Settings
-navigation, holds two Settings-level toggles plus the full normalization
-rules engine. This article covers only the two toggles. Rule authoring,
+navigation, holds two Settings-level toggles, the full normalization
+rules engine, and **Mapped channels**. This article covers the toggles and mapping
+management. Rule authoring,
 condition/action types, testing, and the developer reference all live in
 the dedicated normalization guide linked below. That guide is the source of
 truth; this page exists so the two Settings-only toggles have a documented
@@ -33,6 +34,22 @@ channel names entirely.
 
 **Result:** Instead of removing country prefixes, normalization now keeps
 them with a consistent separator format.
+
+### Manage preferred-name mappings
+
+1. Go to **Settings > Channel Normalization**.
+2. Choose **Mapped channels** in the **On this page** rail, or scroll to that section.
+3. Use **Add mapping**, **Edit**, or **Remove** to manage literal aliases.
+4. Use **Save mapping** in the editor. Mapping changes save immediately and do
+   not require **Save Settings**. Mapping writes require an administrator when
+   authentication is enabled.
+
+The direct bookmark is
+`#settings/normalization?section=settings-normalization-section-mapped-channels`.
+Old `#mapped-channels` bookmarks redirect here; there is no separate Operations
+destination. The stream-selection **Add mapping** shortcut in Channel Manager
+is still available. See [Mapped Channels](https://github.com/MotWakorb/enhancedchannelmanager/blob/main/docs/normalization.md#mapped-channels)
+for matching rules and examples.
 
 ## Going deeper
 

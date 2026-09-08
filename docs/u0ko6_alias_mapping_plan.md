@@ -4,6 +4,13 @@ Owner: project-engineer. GitHub: #775. Base: origin/dev `144334cf`.
 Status: frozen contract implemented locally; final bounded code and DBA reviews complete.
 This supplements, rather than replaces, the original request in the owning bead.
 
+> Superseding PO decision, 2026-09-08 (`enhancedchannelmanager-81sy8`): move
+> management into **Settings > Channel Normalization > Mapped channels** and
+> redirect shipped `#mapped-channels` bookmarks to
+> `#settings/normalization?section=settings-normalization-section-mapped-channels`.
+> Only the dedicated-tab policy below is superseded; mapping behavior and the
+> stream-selection shortcut are unchanged. Relocation is local and unshipped.
+
 ## Approved Behavior
 
 - Right-side stream selection offers Add mapping, with Existing / Add new.

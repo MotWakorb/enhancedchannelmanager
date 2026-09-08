@@ -41,6 +41,8 @@ test('selected names -> persisted mapping -> Create grouping and management', as
         '/api/auth/status': { require_auth: false, setup_complete: true, dispatcharr_enabled: false },
         '/api/auth/setup-required': { required: false },
         '/api/settings': { configured: true, url: 'https://fixture.invalid', normalize_on_channel_create: false, show_hide_controls: true, default_channel_profile_ids: [] },
+        '/api/normalization/rules': { groups: [] },
+        '/api/tags/groups': { groups: [] },
         '/api/channels/logos': paginated([]),
         '/api/channels': paginated([]),
         '/api/channel-groups': [{ id: 5, name: 'Mapped output', channel_count: 0 }],
@@ -82,10 +84,18 @@ test('selected names -> persisted mapping -> Create grouping and management', as
     await expect(page.locator('.channels-pane .channel-item')).toContainText('Stars TV HD');
     await expect(page.locator('.channels-pane .channel-item .channel-streams-count')).toHaveAttribute('aria-label', /^2 streams;/);
     // Staging exercises App's grouping/assignment, but never commits to Dispatcharr.
-    await page.getByRole('link', { name: 'Mapped channels', exact: true }).click();
+    await expect(page.getByRole('link', { name: 'Mapped channels', exact: true })).toHaveCount(0);
+    await page.getByRole('link', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await page.getByRole('link', { name: 'Channel Normalization', exact: true }).click();
+    await page.getByRole('navigation', { name: 'On this page' }).getByRole('button', { name: 'Mapped channels', exact: true }).click();
+    await expect(page).toHaveURL(/#settings\/normalization\?section=settings-normalization-section-mapped-channels$/);
+    await expect(page.getByRole('heading', { name: 'Mapped channels', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Edit Stars TV HD' })).toBeVisible();
+    await page.goto('/#mapped-channels');
+    await expect(page).toHaveURL(/#settings\/normalization\?section=settings-normalization-section-mapped-channels$/);
     await page.reload();
+    await expect(page.getByRole('heading', { name: 'Mapped channels', exact: true })).toBeInViewport();
     await expect(page.getByRole('button', { name: 'Edit Stars TV HD' })).toBeVisible();
     await page.getByRole('button', { name: 'Edit Stars TV HD' }).click();
     await expect(page.getByLabel('Alternative names (one per line)')).toHaveValue('Stars TV HD\nStars.TV\nStars-TV');

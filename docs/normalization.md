@@ -150,8 +150,15 @@ If a channel name created before the bd-eio04.1 cutover still carries `²`, `³`
 
 ## Mapped Channels
 
-Use **Mapped channels** to add, review, edit or remove reusable preferred-name
-mappings. In Channel Manager, select streams on the right and choose **Add
+Use **Settings > Channel Normalization > Mapped channels** to add, review, edit
+or remove reusable preferred-name mappings. The **On this page** rail links to
+the section. Its bookmark is
+`#settings/normalization?section=settings-normalization-section-mapped-channels`;
+older `#mapped-channels` bookmarks redirect there. **Save mapping** and **Remove**
+persist immediately, independently of **Save Settings**. Mapping writes still
+require an administrator when authentication is enabled.
+
+In Channel Manager, select streams on the right and choose **Add
 mapping**, then **Existing** (a mapping, not a Dispatcharr channel) or **Add new**.
 Selected stream names prefill the alternatives; enter one literal name per line.
 

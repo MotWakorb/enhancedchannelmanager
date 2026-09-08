@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Mapped channels moved to Settings > Channel Normalization (bead `enhancedchannelmanager-81sy8`, GitHub #775, build 0.18.2-0024).** The existing manager is now a headed, section-linked Settings section instead of an Operations sidebar destination. Old `#mapped-channels` bookmarks redirect to the new section. Mapping saves, API permissions, and the stream-selection **Add mapping** shortcut are unchanged.
+
 ### Added
 
 - **Stream probes now classify resolution-relative low bitrate (bead `enhancedchannelmanager-8gmk8.4`, GitHub #980, build 0.18.2-0020).** Fresh bitrate in bits/second is low only when strictly below `width * height * low_bitrate_threshold`, independent of FPS. The configurable positive finite threshold defaults to 1.0 bit/pixel/second. Inputs prefer fresh measured throughput, then video metadata, then overall format metadata, using current effective dimensions including opt-in resdet results. Missing or invalid inputs and failed probes clear the flag rather than reusing stale values. Classification remains visible independently of sorting; Priority deprioritization defaults off and follows the existing global health gate. Points mode uses explicit `low_bitrate` rules only, with no hidden bucket, injected rule, or automatic penalty. Existing numeric bitrate ranking and direct sorts are unchanged.
