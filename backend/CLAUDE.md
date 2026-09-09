@@ -101,12 +101,44 @@ finally:
 
 ```bash
 scripts/backend-gate.sh          # THE backend gate
-echo $?                          # 0 = green. Read the code, not a piped tail.
+echo $?                          # Also require this run's terminal marker/receipt below.
 ```
 
 Do not hand-type a pytest invocation and call it the gate. Two invocations used to circulate — one from this file's prose, one from CI — differing by 72 collected tests, so "backend gate green" could be reported by a run that never executed them (bead `enhancedchannelmanager-c9lb9`). The script is the single invocation, and `backend/tests/unit/test_backend_gate_contract.py` asserts it still matches `.github/workflows/test.yml` flag for flag.
 
 The script selects the interpreter itself (`$ECM_PYTHON`, else the repo `.venv`, else — in a worktree, which has none — the main checkout's, derived from `git-common-dir`) and refuses to run rather than fall back to ambient `python`. That fallback is a real trap: ambient `python` resolves an older `cryptography` and *silently self-skips 9 TLS tests* instead of failing, so the run still reports success. The gap is invisible unless you compare skip counts.
+
+Interpreter selection, exact installed-pin verification, and execution now live in
+`scripts/gate_runner.py`, shared by the Bash and Windows quality entrypoints.
+An ambient Python may bootstrap worktree discovery, but cannot run the tests
+unless explicitly selected with `ECM_PYTHON` and verified against the current
+`backend/requirements.txt`. Run `scripts/backend-gate.sh --check-deps` to check
+pins without running tests. The generated lock format is intentionally strict:
+one exact `name==version` per line plus whole-line comments; empty, duplicate,
+malformed, range, include, URL, wildcard, and marker requirements fail closed.
+No dependencies are installed by the gate. Repair in a private aligned venv and
+set `ECM_PYTHON`; never mutate a shared environment while a process uses it.
+Skip counts are historical clues, not dependency-version verification.
+
+**Completion evidence:** retain the whole log and the actual process exit status.
+`ECM_GATE_START` identifies a fresh private temporary directory and `run_id` for
+this invocation. Only on terminal completion does the runner atomically publish
+that directory's `receipt.json`, followed by a final `ECM_GATE_COMPLETE` JSON line.
+Require the receipt and final marker to match each other and this invocation's
+start ID, tree, interpreter, scope, arguments, and zero exit status before claiming
+success. Never select a previous receipt by glob, reuse an old log, or manufacture
+`gate.exit` with `echo 0`. Interrupted execution has no completion receipt; pytest
+exit 2 is conservatively treated as interrupted, including collection failures.
+Missing tooling/pins and completed command failures are nonzero, failed results,
+not successes. A killed runner before startup has no start marker either.
+
+Harness timeouts vary by tool, version, and host: **there is no portable fixed
+10-minute ceiling**. Measure the current run and provision a sufficient foreground
+timeout. The runner emits a heartbeat at bounded 30-second waits and does not
+impose a suite deadline or retry expensive commands. On forced cancellation,
+terminate the whole invocation's process group/tree, not just its parent. A
+partial log, missing receipt, or missing terminal marker means incomplete
+verification, regardless of an external wrapper's reported zero.
 
 **What the gate excludes, and why** — every exclusion is named, none is a bare number:
 
@@ -116,7 +148,9 @@ The script selects the interpreter itself (`$ECM_PYTHON`, else the repo `.venv`,
 | `tests/performance/` | 2 files | Seeds 250k rows; runs in the `perf-benchmarks` workflow (`bd-skqln.10`). |
 | `-m "not slow"` | 2 tests | A 5ms-per-call microbenchmark (host contention false-fails it) and a 5M-row migration volume gate. Named individually in `DOCUMENTED_SLOW_TESTS` in `test_backend_gate_contract.py`. |
 
-Expected shape on a green `dev`: **`3 skipped, 2 deselected`**. The full-tree run (`pytest tests/`, no ignores) instead reports **9 skipped** — the extra 6 live in the excluded trees. `18 skipped` from either means the wrong interpreter.
+Historical green runs reported `3 skipped, 2 deselected`; full-tree runs reported
+9 skipped. These counts are not a current baseline or an environment attestation:
+the installed-pin check, rather than skip counts, verifies dependency alignment.
 
 **Subset runs: coverage will fail you, and it is not real.** `pytest.ini` sets `--cov=. --cov-fail-under=56`, and coverage is measured over the whole tree regardless of what you selected — so *any* subset run exits non-zero even when every test in it passes (a bare `--collect-only` reports `Total coverage: 18.39%`). Use the subset mode, which disables coverage and prints the warning:
 
@@ -125,6 +159,11 @@ scripts/backend-gate.sh --subset tests/unit/test_foo.py -k some_case   # adds --
 ```
 
 A `--subset` run is **not** the gate and must never be reported as one.
+Other extra pytest arguments are labeled `backend-custom`, also not the unmodified
+gate. Unset `PYTEST_ADDOPTS` for the canonical gate so it cannot silently override
+selection or coverage. These completion and fail-closed contracts are exercised
+by `backend/tests/unit/test_quality_gate_runtime.py`; CI selector parity remains
+independently checked by `test_backend_gate_contract.py`.
 
 - In-memory SQLite with `StaticPool` for isolation
 - **Mock at router module level**: `patch("routers.channels.get_client", ...)` — NOT `patch("main.get_client", ...)`

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import re
-import shlex
 import sys
 from pathlib import Path
 
@@ -36,11 +35,44 @@ _USES = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)", re.MULTILINE)
 _FROM = re.compile(r"^FROM\s+(\S+)", re.MULTILINE)
 
 
-def _has_apk_add_argument(dockerfile: str, required: str) -> bool:
+def _has_canonical_mcp_instructions(dockerfile: str) -> bool:
+    """Recognize the reviewed recipe, not arbitrary Docker or shell semantics.
+
+    Freeze the entire sequence: later RUN/COPY, SHELL, ENV or parser directives
+    could otherwise undo or bypass an effective apk add. Quotes are significant;
+    only horizontal whitespace, continuations and ordinary comments may vary.
+    Final immutable-image scans still verify the resulting artifact.
+    """
+    expected = [
+        f"FROM {MCP_BASE_IMAGE}",
+        "WORKDIR /app",
+        "RUN apk upgrade --no-cache && apk add --no-cache "
+        f"'libcrypto3>={MCP_OPENSSL_MINIMUM}' 'libssl3>={MCP_OPENSSL_MINIMUM}' "
+        "'libuuid>=2.42.3-r1' && addgroup -g 1000 appgroup "
+        "&& adduser -D -u 1000 -G appgroup appuser",
+        "COPY requirements.txt .",
+        "RUN pip install --no-cache-dir -r requirements.txt",
+        "COPY . .",
+        "RUN chown -R appuser:appgroup /app",
+        "ENV MCP_SECRETS_DIR=/run/secrets/ecm-mcp",
+        "ENV ECM_URL=http://ecm:6100",
+        "ENV MCP_PORT=6101",
+        "ENV MCP_BIND_ADDRESS=127.0.0.1",
+        "ENV HOME=/tmp",
+        "EXPOSE 6101",
+        "HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 "
+        'CMD python -c "import urllib.request; '
+        "urllib.request.urlopen('http://localhost:6101/health')\" || exit 1",
+        "USER appuser:appgroup",
+        'CMD ["python", "server.py"]',
+    ]
+    instructions: list[str] = []
     instruction_lines: list[str] = []
-    for raw_line in dockerfile.splitlines():
-        line = raw_line.strip()
+    for raw_line in dockerfile.split("\n"):
+        line = raw_line.strip(" \t\r")
         if line.startswith("#"):
+            if re.match(r"#\s*(syntax|escape|check)\s*=", line, re.IGNORECASE):
+                return False
             continue
         if not instruction_lines and not line:
             continue
@@ -49,24 +81,9 @@ def _has_apk_add_argument(dockerfile: str, required: str) -> bool:
         if line.endswith("\\"):
             continue
 
-        instruction = " ".join(instruction_lines)
+        instructions.append(re.sub(r"[ \t]+", " ", " ".join(instruction_lines)))
         instruction_lines = []
-        if not instruction.startswith("RUN "):
-            continue
-
-        lexer = shlex.shlex(instruction[4:], posix=True, punctuation_chars=";&|")
-        lexer.whitespace_split = True
-        lexer.commenters = "#"
-        tokens = list(lexer)
-        command: list[str] = []
-        for token in tokens + [";"]:
-            if token not in {"&&", ";", "||", "|", "&"}:
-                command.append(token)
-                continue
-            if command[:2] == ["apk", "add"] and required in command[2:]:
-                return True
-            command = []
-    return False
+    return not instruction_lines and instructions == expected
 
 
 def check_repository(root: Path) -> list[str]:
@@ -83,17 +100,18 @@ def check_repository(root: Path) -> list[str]:
             "MCP image must use the reviewed Alpine base digest: "
             f"expected {MCP_BASE_IMAGE}, found {mcp_base_images}"
         )
+    canonical_mcp = _has_canonical_mcp_instructions(mcp_dockerfile)
     for package in ("libcrypto3", "libssl3"):
         required = f"{package}>={MCP_OPENSSL_MINIMUM}"
-        if not _has_apk_add_argument(mcp_dockerfile, required):
+        if not canonical_mcp:
             failures.append(
                 "MCP image must enforce the reviewed OpenSSL package floor: "
-                f"missing '{required}' from executable apk add arguments"
+                f"'{required}' requires the canonical MCP Docker instruction sequence"
             )
-    if not _has_apk_add_argument(mcp_dockerfile, "libuuid>=2.42.3-r1"):
+    if not canonical_mcp:
         failures.append(
             "MCP image must enforce the reviewed libuuid package floor: "
-            "missing 'libuuid>=2.42.3-r1' from executable apk add arguments"
+            "'libuuid>=2.42.3-r1' requires the canonical MCP Docker instruction sequence"
         )
 
     if "pip-audit -r mcp-server/requirements.txt" not in build:
