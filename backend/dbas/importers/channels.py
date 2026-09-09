@@ -1,11 +1,10 @@
-"""The channels restore importer — channel-row create + profile reattach + streams.
+"""The channels restore importer — channel-row create + streams.
 
 Bead ``enhancedchannelmanager-4vouz`` (split 2/4) created the channel-row +
 profile-reattach layer; bead ``enhancedchannelmanager-0i2vt.14`` (the INTEGRATION
 umbrella) extends it with the stream layer. This module restores the CHANNEL
 entity category from a Dispatcharr export archive: it creates each archived
-channel row, reattaches each channel to its archived channel-profile memberships,
-AND re-attaches each channel's archived embedded streams to the destination.
+channel row and re-attaches its archived embedded streams to the destination.
 
 THE STREAM LAYER (``0i2vt.14`` integration — wires the three sibling splits).
 For each restored channel, the archived embedded ``streams`` are matched against
@@ -68,15 +67,8 @@ the producer/consumer seam, applied to the importer/reattach seam.
   these fields are DROPPED from the create payload. (A later logo/epg bead
   reattaches them; this importer must not invent or forward a stale id.)
 
-Channel-profile membership reattach. Channels belong to channel profiles. After a
-channel is created, each archived membership is reattached via
-``client.update_profile_channel(dest_profile_id, dest_channel_id, {"enabled": ...})``.
-The destination profile id is resolved through the IdRemapTable
-(:data:`EntityType.CHANNEL_PROFILE`, populated by ``0i2vt.12``). If the profile
-is NOT in the remap (the channel-profiles importer did not run, or did not
-restore that profile), the membership is handled as ``DEPENDENCY_UNRESOLVED`` and
-recorded under the :data:`EntityType.CHANNEL_PROFILE` category — never crashing,
-never guessing a profile id.
+Channel-profile membership restoration is owned by
+``dbas/channel_reattach.py`` and driven by archived PROFILE rows, not channels.
 
 Collision taxonomy. A channel whose ``(name, channel_number)`` already exists on
 the destination is skipped ``ALREADY_EXISTS_IDENTICAL`` (never overwritten); its
@@ -104,8 +96,7 @@ Opt-in. The category does nothing unless the operator selected it (``selected``)
 
 Integration with the restore contracts (bead ``kxuj2``): results land in the
 shared :class:`~dbas.restore_contracts.RestoreReport`
-(:data:`EntityType.CHANNEL` category, plus :data:`EntityType.CHANNEL_PROFILE` for
-unresolved memberships), created channels register source->dest in the
+(:data:`EntityType.CHANNEL` category), created channels register source->dest in the
 :class:`~dbas.restore_contracts.IdRemapTable`, and every created channel is
 recorded in the :class:`~dbas.restore_contracts.RollbackLedger` so a later
 failure compensates by deleting it. This importer imports the contracts module
@@ -183,9 +174,9 @@ _SOURCE_PROVENANCE_KEYS = frozenset(
 _DERIVED_ECHO_PREFIX = "effective_"
 
 # Embedded/derived keys that are NOT part of a channel create payload. ``streams``
-# is the stream-attachment SEAM owned by bead 0i2vt.14 — this importer strips it
-# and never attaches a stream. ``profile_memberships`` is consumed separately by
-# the profile-reattach step (post-create), not sent in the create body.
+# is stripped from create and attached separately by the stream layer below.
+# ``profile_memberships`` is stripped defensively in case a GET ever echoes it;
+# no producer supplies it and it is not consumed. Memberships use profile rows.
 # ARCHIVE_EPG_TVG_ID_KEY is the EPG link's natural key that the backup producer
 # resolves off the source's guide row (bead …-dfkbn); it is ARCHIVE metadata
 # consumed by the post-create reattach pass (dbas/channel_reattach.py), not a
@@ -311,7 +302,7 @@ async def import_channels(
     created_source_ids: set[int] | None = None,
     matched_existing_channels: dict[int, dict] | None = None,
 ) -> None:
-    """Restore the CHANNEL category: create channel rows + reattach profiles.
+    """Restore the CHANNEL category: create channel rows + attach streams.
 
     Args:
         archive_channels: The channel records from the export archive. Each is a
@@ -321,12 +312,11 @@ async def import_channels(
         selected: The per-category opt-in flag. When ``False`` the entire category
             is skipped (no creates) — every channel recorded EXCLUDED_BY_OPERATOR.
         report: The shared :class:`RestoreReport`; channel results land in the
-            ``EntityType.CHANNEL`` category, unresolved profile memberships in
-            ``EntityType.CHANNEL_PROFILE``.
+            ``EntityType.CHANNEL`` category and stream results in ``EntityType.STREAM``.
         ledger: The shared :class:`RollbackLedger`; each created channel is
             recorded for compensating deletes.
         remap: The shared :class:`IdRemapTable`. READ to resolve channel FK
-            references (channel_group / stream_profile) and channel-profile ids;
+            references (channel_group / stream_profile);
             WRITTEN with each created channel's source->dest id (under
             ``EntityType.CHANNEL``) so the stream-attachment bead and the profile
             reattach can resolve channels.
@@ -416,11 +406,6 @@ async def import_channels(
     except Exception as exc:
         logger.warning("[DBAS-CHANNELS] Could not list existing channels: %s", exc)
 
-    # Channels created/resolved this run, paired with their archive record, so the
-    # profile-reattach pass (post-create) can resolve each channel's dest id.
-    # Each tuple: (archive_channel, destination_channel_id).
-    reattach_queue: list[tuple[dict, int]] = []
-
     # Per-channel stream-attach plans, built during the create loop and resolved
     # after the batched custom-stream fallback runs. Each is a _ChannelStreamPlan
     # carrying the channel's dest id + one ordered slot per archived stream.
@@ -485,7 +470,6 @@ async def import_channels(
                 if matched_existing_channels is not None:
                     matched_existing_channels[source_key] = dict(existing)
                 if not is_dry_run:
-                    reattach_queue.append((archive_channel, int(existing_id)))
                     _plan_streams(
                         stream_plans,
                         archive_channel,
@@ -561,7 +545,6 @@ async def import_channels(
                 if created_source_ids is not None:
                     created_source_ids.add(source_key)
             ledger.record_created(EntityType.CHANNEL, dest_id, label)
-            reattach_queue.append((archive_channel, dest_id))
             _plan_streams(
                 stream_plans,
                 archive_channel,
@@ -572,10 +555,7 @@ async def import_channels(
             )
         logger.info("[DBAS-CHANNELS] Restored channel '%s' (id=%s).", label, dest_id)
 
-    # Profile reattach pass — runs AFTER all channels are created so every channel
-    # has a destination id. Dry-run reattaches nothing.
     if not is_dry_run:
-        await _reattach_profiles(reattach_queue, client=client, report=report, remap=remap)
         # Stream layer: synthesize orphans (batched, one fallback state) + attach
         # the matched + synthesized stream ids to each channel in archived order.
         await _attach_streams(
@@ -817,94 +797,6 @@ async def _attach_streams(
                 plan.dest_channel_id,
                 FailureReason.UPSTREAM_API_ERROR.value,
             )
-
-
-async def _reattach_profiles(
-    reattach_queue: list[tuple[dict, int]],
-    *,
-    client: DispatcharrClient,
-    report: RestoreReport,
-    remap: IdRemapTable,
-) -> None:
-    """Reattach each restored channel to its archived channel-profile memberships.
-
-    For each membership, resolve the destination profile id through the
-    IdRemapTable (``EntityType.CHANNEL_PROFILE``). An unresolved profile means
-    the membership is NOT applied (no guessed id). A reattach upstream error is
-    recorded ``UPSTREAM_API_ERROR``.
-
-    THE ONE PRODUCER ON THIS PASS THAT CARRIES BOTH HALVES of bead ``…-4mkoe``,
-    and by volume the loudest: a membership is a LINK INTO the CHANNEL_PROFILE
-    category, and it is recorded under that category rather than under CHANNEL
-    for exactly that reason. With profiles DESELECTED every membership of every
-    channel is unresolvable by construction — the absence is what the operator
-    asked for, it would recur on every unattended cycle forever, and it is
-    recorded ``DEPENDENCY_DESELECTED`` and never counted as a shortfall. With
-    profiles SELECTED, the same row means a profile the run WAS asked to deliver
-    is not there, which is a real loss. The decision is
-    ``RestoreReport.record_dependency_unresolved``'s, not this function's.
-    """
-    for archive_channel, dest_channel_id in reattach_queue:
-        label = _channel_label(archive_channel)
-        for membership in _profile_memberships(archive_channel):
-            source_profile_id = membership.get("profile_id")
-            if source_profile_id is None:
-                continue
-            dest_profile_id = remap.resolve(
-                EntityType.CHANNEL_PROFILE, int(source_profile_id)
-            )
-            if dest_profile_id is None:
-                reason = report.record_dependency_unresolved(
-                    recorded_under=EntityType.CHANNEL_PROFILE,
-                    dependency=EntityType.CHANNEL_PROFILE,
-                    label=label,
-                    remap=remap,
-                    is_dry_run=False,
-                    source_export_id=int(source_profile_id),
-                )
-                logger.info(
-                    "[DBAS-CHANNELS] Channel '%s' profile membership skipped "
-                    "(%s) — profile (source id %s) is not on the destination.",
-                    label,
-                    reason.value,
-                    source_profile_id,
-                )
-                continue
-            enabled = bool(membership.get("enabled", True))
-            try:
-                await client.update_profile_channel(
-                    dest_profile_id, dest_channel_id, {"enabled": enabled}
-                )
-            except Exception as exc:
-                prof_cat = report.category(EntityType.CHANNEL_PROFILE)
-                prof_cat.failed += 1
-                prof_cat.failure_details.append(
-                    FailureDetail(
-                        reason=FailureReason.UPSTREAM_API_ERROR,
-                        label=label,
-                        message=_sanitize_failure(exc),
-                        source_export_id=int(source_profile_id),
-                    )
-                )
-                logger.warning(
-                    "[DBAS-CHANNELS] Failed to reattach channel '%s' to profile "
-                    "(dest id %s): %s",
-                    label,
-                    dest_profile_id,
-                    exc,
-                )
-
-
-def _profile_memberships(archive_channel: dict) -> list[dict]:
-    """Extract the channel's archived profile memberships as a list of dicts.
-
-    Accepts the canonical ``profile_memberships`` list (``{profile_id, enabled}``
-    records). Returns an empty list when the archive carries no memberships.
-    """
-    memberships = archive_channel.get("profile_memberships")
-    if not isinstance(memberships, list):
-        return []
-    return [m for m in memberships if isinstance(m, dict)]
 
 
 def _skip(

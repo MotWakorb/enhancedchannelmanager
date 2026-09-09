@@ -286,12 +286,6 @@ def strip_network_suffix(name: str, custom_suffixes: Optional[list[str]] = None)
         if m:
             result = m.group(1).strip().rstrip("-|: ")
             continue
-        # Pattern 4: Bare suffix with just space
-        bare_space = re.compile(rf"^(.{{3,}})\s+{escaped}\s*$", re.IGNORECASE)  # nosemgrep: no-bare-re-on-dynamic-pattern
-        m = bare_space.match(result)
-        if m:
-            result = m.group(1).strip().rstrip("-|: ")
-            continue
 
     return result
 

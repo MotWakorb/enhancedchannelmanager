@@ -25,7 +25,9 @@ this restore records under that category rather than under the entity's own. So:
     a skip is faithful when it is recorded UNDER the same category as the
     dependency it could not resolve, AND that category was deselected.
 
-Both halves of that conjunction are asserted below, per producer.
+Both halves of that conjunction are asserted below. Profile memberships use
+profile rows (pi9k2): deselection gates the live pass off, while a refused PATCH
+is a category failure. Neither case manufactures a dependency skip.
 
 WHY EVERY OUTCOME TEST HERE IS MULTI-CYCLE. Both halves fail on a second cycle in
 opposite directions: a shortfall that is honest once and then silent (``…-ukjx5``)
@@ -38,8 +40,8 @@ places carry this, and every assertion below names which one it reads:
 * ``EntityCategoryReport.skip_details`` -> ``SkipDetail.reason`` ->
   :class:`~dbas.restore_contracts.SkipReason` — the per-entity CLASSIFICATION,
   and the named drill-down. NOT a failure: none of these rows errored.
-* ``failure_details`` / :class:`~dbas.restore_contracts.FailureReason` — NOT used
-  here at all, and asserted empty where it matters. A skip is not a failure.
+* ``failure_details`` / :class:`~dbas.restore_contracts.FailureReason` — used for
+  a refused membership PATCH, but empty for dependency skips. A skip is not a failure.
 * ``RestoreReport.entities_blocked_by_dependency`` — a TOP-LEVEL ``int``
   aggregate, and the only one of the three the outcome decision reads (through
   :data:`RestoreReport.DELIVERY_SHORTFALL_FIELDS`).
@@ -114,9 +116,7 @@ def _dependency_reasons(
 class _StatefulDest:
     """A destination that remembers what it was given, across cycles.
 
-    Enough of the client surface for the channel + groups/profiles importers.
-    Deliberately NOT a fault injector: both halves of this bead reach a report
-    with ZERO category failures, which is the whole reason the loss was invisible.
+    Client surface for the importers and supported profile-row reattach pass.
     """
 
     def __init__(self) -> None:
@@ -126,6 +126,7 @@ class _StatefulDest:
         self.stream_profiles: list[dict] = []
         self.user_agents: list[dict] = []
         self.memberships: list[tuple[int, int, bool]] = []
+        self.reject_memberships = False
         self._next_id = 5000
 
     def _mint(self) -> int:
@@ -152,6 +153,11 @@ class _StatefulDest:
                 row = dict(payload) if isinstance(payload, dict) else {"name": payload}
                 row["id"] = self._mint()
                 store.append(row)
+                if store is self.channel_profiles:
+                    row["channels"] = [c["id"] for c in self.channels]
+                elif store is self.channels:
+                    for profile in self.channel_profiles:
+                        profile.setdefault("channels", []).append(row["id"])
                 return row
 
             return _create
@@ -167,6 +173,15 @@ class _StatefulDest:
         client.create_user_agent = AsyncMock(side_effect=_creator(self.user_agents))
 
         async def _update_profile_channel(profile_id, channel_id, data):
+            if self.reject_memberships:
+                raise RuntimeError("destination refused membership PATCH")
+            profile = next(p for p in self.channel_profiles if p["id"] == profile_id)
+            enabled = set(profile.get("channels", []))
+            if data["enabled"]:
+                enabled.add(channel_id)
+            else:
+                enabled.discard(channel_id)
+            profile["channels"] = sorted(enabled)
             self.memberships.append(
                 (int(profile_id), int(channel_id), bool(data.get("enabled", True)))
             )
@@ -204,7 +219,7 @@ def _membership_plan(*, profiles_selected: bool) -> ImportPlan:
             PlanCategory(
                 entity_type=EntityType.CHANNEL_PROFILE,
                 selected=profiles_selected,
-                entities=[{"id": 11, "name": "Restricted"}],
+                entities=[{"id": 11, "name": "Restricted", "channels": []}],
             ),
             PlanCategory(
                 entity_type=EntityType.CHANNEL,
@@ -214,7 +229,6 @@ def _membership_plan(*, profiles_selected: bool) -> ImportPlan:
                         "id": 1,
                         "name": "CNN",
                         "channel_number": 5,
-                        "profile_memberships": [{"profile_id": 11, "enabled": True}],
                     }
                 ],
             ),
@@ -270,12 +284,13 @@ async def test_a_deselected_upstream_is_named_on_no_cycle(tmp_path):
     assert dest.memberships == []
 
     for cycle, report in enumerate(reports, start=1):
-        # The profile ROW itself is EXCLUDED_BY_OPERATOR (its own importer's
-        # verdict, unchanged); the MEMBERSHIP into it is the row this bead
-        # reclassifies, so the assertion is on the dependency reasons only.
-        assert _dependency_reasons(report, EntityType.CHANNEL_PROFILE) == [
-            SkipReason.DEPENDENCY_DESELECTED
+        # The live pass is gated off, not a producer of dependency skips.
+        assert _reasons(report, EntityType.CHANNEL_PROFILE) == [
+            SkipReason.EXCLUDED_BY_OPERATOR
         ], cycle
+        assert all(not c.failure_details for c in report.categories), cycle
+        assert report.profile_membership_drift == 0, cycle
+        assert not any("channel selection could not be re-applied" in n for n in report.notes), cycle
         assert report.entities_blocked_by_dependency == 0, cycle
         assert report.delivery_shortfalls() == {}, cycle
         assert report.outcome == RestoreOutcome.SUCCESS, cycle
@@ -314,7 +329,7 @@ async def test_a_dependency_that_was_in_scope_and_absent_is_named_on_every_cycle
 
 @pytest.mark.asyncio
 async def test_the_two_halves_are_distinguished_inside_one_run(tmp_path):
-    """Both producers in ONE cycle: one clause, counting only the genuine half.
+    """Deselected profiles and a genuine dependency loss in the same run.
 
     A rule that fires per-run rather than per-skip would report 2 or 0 here.
     """
@@ -322,44 +337,62 @@ async def test_the_two_halves_are_distinguished_inside_one_run(tmp_path):
     plan.categories.extend(_degraded_user_agent_plan().categories)
     dest = _StatefulDest()
 
-    report = await _cycle(plan, dest, tmp_path)
-
-    assert _dependency_reasons(report, EntityType.CHANNEL_PROFILE) == [
-        SkipReason.DEPENDENCY_DESELECTED
-    ]
-    assert _dependency_reasons(report, EntityType.STREAM_PROFILE) == [
-        SkipReason.DEPENDENCY_UNRESOLVED
-    ]
-    assert report.entities_blocked_by_dependency == 1
-    assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+    for _ in range(2):
+        report = await _cycle(plan, dest, tmp_path)
+        assert dest.memberships == []
+        assert dest.stream_profiles == []
+        assert _reasons(report, EntityType.CHANNEL_PROFILE) == [
+            SkipReason.EXCLUDED_BY_OPERATOR
+        ]
+        assert _dependency_reasons(report, EntityType.STREAM_PROFILE) == [
+            SkipReason.DEPENDENCY_UNRESOLVED
+        ]
+        assert all(not c.failure_details for c in report.categories)
+        assert not any("channel selection could not be re-applied" in n for n in report.notes)
+        assert report.entities_blocked_by_dependency == 1
+        assert report.delivery_shortfalls() == {"entities_blocked_by_dependency": 1}
+        assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES
+        assert "1 archived item(s) were not restored" in DbasRestoreTask._summary_message(report, True)
 
 
 @pytest.mark.asyncio
 async def test_a_membership_whose_profile_was_in_scope_is_the_genuine_half(tmp_path):
-    """The SAME producer, the other way. Selection is what separates them — not
-    which line of code recorded the skip.
-
-    The channel references profile 11 and the archive's SELECTED profile slice
-    carries only profile 12, so the membership is lost from a category the
-    operator asked for.
-    """
+    """A refused live profile-row PATCH is a category failure, not a dependency skip."""
     plan = _membership_plan(profiles_selected=True)
-    plan.category(EntityType.CHANNEL_PROFILE).entities = [{"id": 12, "name": "Other"}]
     dest = _StatefulDest()
+    dest.reject_memberships = True
 
     reports = [await _cycle(plan, dest, tmp_path) for _ in range(2)]
 
     for cycle, report in enumerate(reports, start=1):
-        assert (
-            SkipReason.DEPENDENCY_UNRESOLVED
-            in _reasons(report, EntityType.CHANNEL_PROFILE)
-        ), cycle
-        assert (
-            SkipReason.DEPENDENCY_DESELECTED
-            not in _reasons(report, EntityType.CHANNEL_PROFILE)
-        ), cycle
-        assert report.entities_blocked_by_dependency == 1, cycle
+        cat = report.category(EntityType.CHANNEL_PROFILE)
+        assert cat.failed == 1, cycle
+        assert len(cat.failure_details) == 1, cycle
+        detail = cat.failure_details[0]
+        assert detail.reason == FailureReason.UPSTREAM_API_ERROR, cycle
+        assert (detail.label, detail.source_export_id) == ("Restricted", 11), cycle
+        assert "CNN" in detail.message and "disabled" in detail.message, cycle
+        assert _dependency_reasons(report, EntityType.CHANNEL_PROFILE) == [], cycle
+        assert report.entities_blocked_by_dependency == 0, cycle
+        assert report.delivery_shortfalls() == {}, cycle
         assert report.outcome == RestoreOutcome.COMPLETED_WITH_FAILURES, cycle
+        assert "failed 1" in DbasRestoreTask._summary_message(report, True), cycle
+    assert dest.memberships == []
+    assert dest.channel_profiles[0]["channels"] == [dest.channels[0]["id"]]
+
+    # Repair the destination refusal: the same real pass now writes the archived
+    # restriction, then reasserts it without reporting recurring drift.
+    dest.reject_memberships = False
+    for cycle in range(2):
+        report = await _cycle(plan, dest, tmp_path)
+        assert dest.channel_profiles[0]["channels"] == []
+        assert dest.memberships[-1] == (
+            dest.channel_profiles[0]["id"], dest.channels[0]["id"], False
+        )
+        assert all(not c.failure_details for c in report.categories)
+        assert report.profile_membership_drift == (1 if cycle == 0 else 0)
+        assert report.delivery_shortfalls() == {}
+        assert report.outcome == RestoreOutcome.SUCCESS
 
 
 # ---------------------------------------------------------------------------

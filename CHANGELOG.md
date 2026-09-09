@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Removed redundant internal work (beads `enhancedchannelmanager-hym4q`, `hym4q.2` through `hym4q.5`, `v4h9e`, and `pi9k2`; build 0.18.2-0026).** Settings no longer requests an unused stream count, and Add Stream and drag-drop deduplication share one candidate API client/type family. Network-suffix normalization skips an unreachable regex branch; normalized-name conditions reuse the existing normalization helper with regression coverage for fallback, diagnostics, and inversion. Existing matching behavior is preserved. Retired the unused channel-side profile-membership importer path; membership restoration remains driven by profile rows, with regression coverage for defensive field stripping and supported reporting behavior.
+
 - **Mapped channels moved to Settings > Channel Normalization (bead `enhancedchannelmanager-81sy8`, GitHub #775, build 0.18.2-0024).** The existing manager is now a headed, section-linked Settings section instead of an Operations sidebar destination. Old `#mapped-channels` bookmarks redirect to the new section. Mapping saves, API permissions, and the stream-selection **Add mapping** shortcut are unchanged.
 
 ### Added

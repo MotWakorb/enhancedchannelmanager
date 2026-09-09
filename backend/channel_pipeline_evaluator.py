@@ -689,15 +689,7 @@ class ConditionEvaluator:
 
         # Normalize the stream name
         stream_name = context.stream_name
-        if self._normalization_engine:
-            try:
-                result = self._normalization_engine.normalize(stream_name)
-                normalized = result.normalized
-            except Exception as e:
-                logger.warning("[AUTO-CREATE-EVAL] Normalization failed for '%s': %s", stream_name, e)
-                normalized = stream_name
-        else:
-            normalized = stream_name
+        normalized = self._normalize_stream_name(context)
 
         # Check if normalized name matches any channel in the group (case-insensitive)
         matched = normalized.lower() in group_names

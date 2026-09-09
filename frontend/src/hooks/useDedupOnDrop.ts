@@ -21,7 +21,7 @@
  */
 import { useCallback, useRef, useState } from 'react';
 import * as api from '../services/api';
-import type { DedupCandidate } from '../services/api';
+import type { ChannelMergeCandidate } from '../services/api';
 import { logger } from '../utils/logger';
 
 /** Duration of the `.is-dedup-returning` outline pulse in ms. */
@@ -38,7 +38,7 @@ export interface DedupModalState {
   streamId: number;
   streamName: string;
   targetGroupId: number | null;
-  candidate: DedupCandidate;
+  candidate: ChannelMergeCandidate;
   /** The original drag-drop create path, retained so onCreateNew can run it. */
   fallback: () => void;
 }
@@ -166,7 +166,7 @@ export function useDedupOnDrop({
     async (request: DedupDropRequest, fallback: () => void): Promise<DedupDropOutcome> => {
       let response;
       try {
-        response = await api.getDedupCandidates(
+        response = await api.getChannelMergeCandidates(
           request.streamName,
           request.targetGroupId,
         );

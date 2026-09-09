@@ -242,6 +242,8 @@ describe('SettingsTab public base URL (bead qsqfv)', () => {
     vi.mocked(api.listAlertMethods).mockResolvedValue([]);
     vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
     vi.mocked(api.getStreams).mockResolvedValue({ count: 0, next: null, previous: null, results: [] });
+    vi.mocked(api.getProbeHistory).mockResolvedValue([]);
+    vi.mocked(api.getProbeProgress).mockResolvedValue({ in_progress: false } as Awaited<ReturnType<typeof api.getProbeProgress>>);
   });
 
   it('loads the stored value and reports it as configured', async () => {
@@ -255,6 +257,40 @@ describe('SettingsTab public base URL (bead qsqfv)', () => {
       expect(screen.getByLabelText('Public Base URL')).toHaveValue('https://ecm.example.com');
     });
     expect(publicBaseUrlBadge()).toHaveTextContent('Configured');
+  });
+
+  it.each([false, true])('mounts and remounts without a discarded stream lookup (loader failures: %s)', async (failLoads) => {
+    vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
+      public_base_url: 'https://ecm.example.com',
+    }));
+    if (failLoads) {
+      vi.mocked(api.getProbeHistory).mockRejectedValue(new Error('history unavailable'));
+      vi.mocked(api.getProbeProgress).mockRejectedValue(new Error('progress unavailable'));
+      vi.mocked(api.getM3UAccounts).mockRejectedValue(new Error('accounts unavailable'));
+    }
+
+    let firstPayload: Parameters<typeof api.saveSettings>[0] | undefined;
+    for (let mount = 1; mount <= 2; mount++) {
+      const view = renderEmailPage();
+      await waitFor(() => expect(screen.getByLabelText('Public Base URL')).toHaveValue('https://ecm.example.com'));
+      for (const load of [api.getSettings, api.getProbeHistory, api.getProbeProgress, api.getM3UAccounts]) {
+        expect(load).toHaveBeenCalledTimes(mount);
+      }
+      await saveSettingsPage();
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(mount));
+      const payload = vi.mocked(api.saveSettings).mock.calls[mount - 1][0];
+      expect(payload).toMatchObject({
+        public_base_url: 'https://ecm.example.com',
+        stream_probe_timeout: 30,
+        max_concurrent_probes: 8,
+        stream_fetch_page_limit: 200,
+      });
+      expect(payload).not.toHaveProperty('total_stream_count');
+      if (firstPayload) expect(payload).toEqual(firstPayload);
+      firstPayload = payload;
+      view.unmount();
+      expect(api.getStreams).not.toHaveBeenCalled();
+    }
   });
 
   it('shows Not set when the install is still on header-derived links', async () => {
