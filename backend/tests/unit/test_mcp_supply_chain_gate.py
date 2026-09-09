@@ -34,6 +34,56 @@ def test_repository_satisfies_mcp_publication_policy():
     assert gate.check_repository(REPO_ROOT) == []
 
 
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("apk add --no-cache", "apk add --simulate --no-cache"),
+        ("apk add --no-cache", "apk add --no-cache --help"),
+        ("RUN apk upgrade", "RUN true || apk upgrade"),
+        ("RUN apk upgrade", "RUN exit 0; apk upgrade"),
+        ("&& apk add", "|| apk add"),
+        ("&& apk add", "; false && apk add"),
+        ("&& apk add", "&& echo apk add"),
+        ("RUN pip install", "RUN apk del libssl3 libcrypto3\nRUN pip install"),
+        ("RUN chown", "RUN apk add --simulate libssl3\nRUN chown"),
+        ("WORKDIR /app", 'SHELL ["/bin/true"]\nWORKDIR /app'),
+        ("WORKDIR /app", "ENV PATH=/app\nWORKDIR /app"),
+        ("COPY . .", "COPY . /usr"),
+        ("RUN apk upgrade", "RUN --mount=type=cache,target=/lib apk upgrade"),
+        ("'libssl3>=3.5.8-r0'", "libssl3>=3.5.8-r0"),
+        ("'libssl3>=3.5.8-r0'", '"libssl3>=3.5.8-r0$(true)"'),
+        ("'libssl3>=3.5.8-r0'", "'libssl3>=3.5.8-r0' # ignored remainder"),
+        ("&& apk add", "'&&' apk add"),
+        ("&& apk add", '"&&" apk add'),
+        ("RUN apk upgrade", "RUN (apk upgrade"),
+        ("RUN apk upgrade", "RUN 'apk upgrade"),
+        ("FROM python", "# escape=`\nFROM python"),
+        ("FROM python", "# syntax=unknown/frontend\nFROM python"),
+    ],
+)
+def test_canonical_mcp_policy_rejects_ineffective_or_unknown_instructions(tmp_path, old, new):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+    assert old in contents
+    dockerfile.write_text(contents.replace(old, new, 1), encoding="utf-8")
+    assert gate.check_repository(tmp_path), "unsafe Docker policy mutation accepted"
+
+
+def test_canonical_mcp_policy_accepts_comments_and_whitespace(tmp_path):
+    gate = _load_gate()
+    _copy_policy_files(gate, tmp_path)
+    dockerfile = tmp_path / "mcp-server/Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+    dockerfile.write_text(
+        "# apk del libssl3; $(false) is comment data\n\n"
+        + contents.replace("apk add --no-cache", "apk   add    --no-cache"),
+        encoding="utf-8",
+    )
+    assert gate.check_repository(tmp_path) == []
+
+
 def test_policy_pins_mcp_to_reviewed_alpine_base():
     gate = _load_gate()
 

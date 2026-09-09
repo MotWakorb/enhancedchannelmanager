@@ -4,6 +4,42 @@
 
 This project has comprehensive test coverage at three levels.
 
+### Security policy contracts
+
+`backend/tests/unit/test_release_gate_policy.py` executes the exact G1b Bash
+step from `.github/workflows/release-cut-gate.yml` with synthetic API pages and
+real jq. It checks pagination arguments, one/multiple pages, malformed entries,
+HIGH/CRITICAL on any page, inert shell metacharacters, and injected failures at
+aggregation, validation/filtering, and counting. It does not query live alerts.
+
+The gate's required projection is an alert object with a positive integer
+`number`, nonempty string `html_url`, and an object `rule` containing both `id`
+(nonempty string or explicit null) and `security_severity_level` (explicit null,
+`low`, `medium`, `high`, or `critical`). Missing fields and other types/values
+fail before PASS; unrelated response fields are allowed. Explicit null/low/medium
+do not gate; high/critical do. The nullable fields and severity vocabulary follow
+GitHub's [repository alert schema](https://docs.github.com/en/rest/code-scanning/code-scanning#list-code-scanning-alerts-for-a-repository).
+This validates the fields consumed by G1b, not every field in GitHub's schema.
+
+`backend/tests/unit/test_mcp_supply_chain_gate.py` mutates the source policy
+checked by `scripts/check_mcp_supply_chain.py`. The MCP Dockerfile must match
+the reviewed complete instruction sequence, allowing horizontal whitespace,
+backslash continuations and ordinary full-line comments. Quotes remain
+significant. Parser directives, extra/reordered instructions, unquoted package
+comparisons, alternate shell syntax, simulation/help flags, short-circuit/no-op
+paths and later removals are rejected, not interpreted. Recipe changes require
+an explicit policy review; this intentionally closed syntax policy is not a
+general Docker/shell interpreter or proof of installed final-image packages.
+The pinned base, trusted dependency installation and build inputs still matter;
+immutable candidate scans on both AMD64 and ARM64 remain blocking, and
+publication must promote those verified digests without rebuilding.
+
+These focused contracts prove their named policy layers only. They do **not**
+establish full backend, frontend, browser, Windows-wrapper or image-gate
+completion. Full gate completion requires the unmodified gate's terminal
+success and matching receipt for the same invocation and tree; subset runs,
+explicit skips and interrupted runs must retain those narrower labels.
+
 > **DBAS round-trip test environment** (ECM ↔ live Dispatcharr): a pinned,
 > throwaway Dispatcharr stack + production-shaped seed tooling lives in
 > [`tests/dbas-test-env/`](../tests/dbas-test-env/). Strategy and rationale:
@@ -81,10 +117,10 @@ Located in `backend/tests/`. **Run them with `scripts/backend-gate.sh`** — see
 
 ## What the backend gate runs
 
-**One invocation: `scripts/backend-gate.sh`.** It takes no arguments, selects the project interpreter itself, and runs exactly what `.github/workflows/test.yml` runs. `backend/tests/unit/test_backend_gate_contract.py` asserts the two still match flag for flag, so they cannot drift apart.
+**One invocation: `scripts/backend-gate.sh`.** With no arguments it selects the project interpreter, verifies installed backend pins, and uses the same pytest selection/coverage policy as `.github/workflows/test.yml`. The shared implementation is `scripts/gate_runner.py`; `backend/tests/unit/test_backend_gate_contract.py` independently compares its flags with CI and runtime tests check executed argv.
 
 ```bash
-scripts/backend-gate.sh    # THE gate. Check $? — do not pipe to `tail` and read that.
+scripts/backend-gate.sh    # Check exit status AND matching completion evidence below.
 ```
 
 Two invocations used to circulate — one from `backend/CLAUDE.md` prose, one from CI — differing by **72 collected tests** (bead `enhancedchannelmanager-c9lb9`). Nothing was failing, so it was an instrument gap rather than a live defect, but it is the false-green class: "backend gate green" could be reported by a run that never executed those 72, and the figure looked authoritative because every handover repeated it.
@@ -100,11 +136,65 @@ Every exclusion is named. A bare "2 deselected" is an unreadable signal.
 | `test_find_candidate_under_5ms_per_call_for_500_candidates` | `-m "not slow"` | Wall-clock microbenchmark with a 5 ms soft cap. Host contention on a runner false-fails it, and the latency figure is informational, not a gate. Still runs under an explicit `-m slow`. |
 | `test_migration_up_down_against_5m_rows` | `-m "not slow"` | Times an Alembic up/down against ~5M `session_telemetry` rows. Local pre-merge only (`bd-skqln.2`); also guarded by `ECM_RUN_VOLUME_TESTS`, so it self-skips even when selected. |
 
-Expected shape on a green `dev`: **`3 skipped, 2 deselected`**. A full-tree run (`pytest tests/`, no ignores) reports **9 skipped** instead — the other 6 live in the excluded trees. **`18 skipped` from either means the wrong interpreter** (see below).
+Historical green runs reported `3 skipped, 2 deselected`; full-tree runs reported
+9 skipped instead. Counts vary with the tree and environment. They do not prove
+dependency alignment; use the installed-pin check below.
 
 ### The interpreter is part of the gate
 
 Ambient `python` commonly resolves an older `cryptography` build and **silently self-skips 9 TLS tests** instead of failing, so the run still reports success. The gap is invisible unless you compare skip counts. `scripts/backend-gate.sh` resolves the interpreter itself — `$ECM_PYTHON`, else the repo `.venv`, else (in a git worktree, which has no `.venv` of its own) the main checkout's, derived from `git rev-parse --git-common-dir` — and **refuses to run rather than fall back** to ambient `python`.
+
+The runner checks every exact pin in the current `backend/requirements.txt`
+against installed distribution metadata before tests. `--check-deps` runs only
+that check. Unsupported or malformed lock syntax also fails closed. No gate
+installs dependencies. Use a private aligned venv via `ECM_PYTHON` when repair is
+needed; do not update a shared venv while any process uses it. Ambient Python may
+bootstrap interpreter discovery but is not an implicit test environment.
+
+### Completion evidence and local quality wrappers
+
+Each invocation prints `ECM_GATE_START` with a unique `run_id` and receipt path in
+a fresh temporary directory. A terminal result publishes `receipt.json` with an
+atomic rename, then prints a final `ECM_GATE_COMPLETE` containing the same JSON.
+Require the actual process exit status, matching start/finish ID, receipt, scope,
+tree, interpreter, arguments, and terminal result. A previous successful receipt
+or an appended old success line is not evidence for a new run. Never synthesize
+`gate.exit` using `echo 0`. Interrupted runs have no receipt; pytest exit 2 is
+conservatively classified as interrupted (also covering collection failures).
+Failed commands and preflight failures cannot certify success. Receipts are local
+run records, not signed immutable-source attestations; keep the tree unchanged
+during verification and preserve the full log alongside its receipt.
+
+Tool/harness timeout limits vary; do not assume the historical 10-minute ceiling
+or old suite timings. Allocate sufficient foreground time for the current suite.
+The runner waits synchronously with 30-second heartbeats and no suite timeout or
+automatic retry. Forced cancellation should stop the whole process group/tree.
+No marker, no receipt, or truncated output means incomplete verification, even if
+an external harness reports zero. See `backend/CLAUDE.md` for the reader contract.
+
+`scripts/quality-gates.sh` and `scripts/quality-gates.bat` share the same policy:
+backend syntax and canonical pytest, then explicit frontend `typecheck`, `build`,
+and `test`, then Playwright `test:e2e`. A Vite build is not a typecheck. Missing
+required tools, test files, or setup fail rather than silently skip or install.
+Commands run once with stdout/stderr intact and stop at the first failure.
+`SKIP_E2E=1` remains supported but prints `SKIPPED` and records scope
+`quality-without-e2e`, never full quality verification. These local wrappers do
+not claim full CI parity: CI's frontend lint/coverage jobs remain separate.
+Only run Playwright against a test-owned disposable backend, never live ECM.
+
+The offline regression lane uses private synthetic tools and distribution
+metadata, not the application or a live database:
+
+```bash
+.venv/bin/python -m pytest --noconftest -o addopts= -p no:cacheprovider \
+  backend/tests/unit/test_quality_gate_runtime.py \
+  backend/tests/unit/test_backend_gate_contract.py
+```
+
+This lane tests gate control flow, not application health. The runtime tests use
+native cmd entrypoints when run on Windows; a separately named Windows acceptance
+test is explicitly skipped elsewhere. Linux results do not certify `.bat`
+execution. Windows requires a working project interpreter and installed pins too.
 
 ### The subset-run coverage trap
 
@@ -920,3 +1010,73 @@ Remove the relevant `--deselect` once a flake/drift bead closes.
 > did not take effect; if a plain gate run reports 4, something is deselecting
 > tests that this table does not name. Either way, find out before reading the
 > run as green.
+
+## Verification-Signal E2E Lane (rdnia.2 / rdnia.3)
+
+Run only the navigation/readiness and task-notification verification controls:
+
+```bash
+npm run test:e2e:verification
+```
+
+This uses `playwright.verification.config.ts`: one Chromium worker, zero retries,
+a fresh temporary frontend build, and an owned preview listener at
+`127.0.0.1:42871` (`strictPort`, no reuse of existing servers). Set `TMPDIR` to a
+private existing directory to retain the build and failure artifacts there.
+It does not start a Python backend or use the project's/live database. It uses
+the existing Playwright/Vite dependencies, not an additional test framework.
+The root `npm run test:e2e` gate runs this lane after the normal E2E lane;
+the normal config excludes the two browser specs that require this private
+fixture. `SKIP_E2E=1` still means these browser checks were not run.
+
+For the smaller, browser-free helper lane (the URL is only required by the
+normal config; these two specs never navigate to it):
+
+```bash
+E2E_BASE_URL=http://127.0.0.1:42871 npm run test:e2e:verification-helpers
+```
+
+The committed controls execute `navigateToTab` and the actual enabled/disabled
+spec callbacks. They cover missing content with a surviving shell, one bounded
+blank-shell recovery, repeated absence, stuck loading, unknown routes, exact
+current route roots, original error context, terminal task success versus
+failure/cancellation/timeout, pre-click completion arming, and both original
+notification-setting booleans on success and failure. In-memory mutations of
+terminal-success validation and `finally` restoration must be rejected by the
+same callback controls.
+
+The browser lane renders the checked-out application with **per-test synthetic
+routed backend state**. API traffic is never passed through; unexpected writes
+and off-origin requests are blocked and fail teardown, WebSockets are closed,
+and service workers are blocked. The fixture refuses ordinary/live config
+before navigation. There are no persisted credentials, Database Cleanup runs,
+or global notification deletes. The original `show_notifications` boolean is
+restored in `finally`, and the test page and routed state are torn down even
+after a hung execution. Transient toast dismissal only makes the bell reachable;
+it does not delete persisted notification-center records.
+
+Completion follows the native endpoint contract: `POST /api/tasks/{id}/run`
+awaits execution and returns `TaskResult` (`backend/routers/tasks.py`), not an
+enqueue ID. The test arms that exact task POST response before Run Now, requires
+HTTP 200 plus clean terminal success and valid timestamps, then waits for the
+Run Now/Cancel controls to settle after the consumer's task-list refresh. It
+fetches the bell list, lets React commit, and only then observes notifications.
+The disabled test also watches for a forbidden rendered notification for one
+second. This is bounded UI absence, not a guarantee against later backend
+emission; live task scheduling/emission semantics and notification matching
+improvements tracked separately are outside this lane's claim.
+
+Rendered controls include an actual six-second delayed response, a permanently
+held response, failed/cancelled responses, a held post-run refresh, a late DOM
+notification, Settings' alternate navigation rail, and synthetic login
+success/refusal. The synthetic navigation failures shorten only their injected
+Page deadlines to 250 ms; they do not change `base.ts` timeout policy.
+
+**Configured waits are not measured speedups.** The previous notification
+callbacks contained 9.6 s / 8.8 s of fixed sleeps (disabled/enabled). They now use
+milestones with a 15 s run-response wait and a 1 s disabled-observation window,
+not a guessed 5 s task duration. Missing content with a visible shell previously
+spent a 15 s content wait plus 1 s and incorrectly succeeded; it now rejects at
+the content deadline. Healthy navigation has no fixed sleep. Compare real
+browser timings only within the same rendered fixture and machine; do not
+present these configured wait differences as measured end-to-end improvements.

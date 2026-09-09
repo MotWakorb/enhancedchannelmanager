@@ -143,107 +143,60 @@ export { isLoginPage, performLogin }
  * Content selectors to wait for after navigating to each tab
  */
 const tabContentSelectors: Record<string, string> = {
+  'dashboard': '.operator-dashboard',
   'channel-manager': '.channels-pane',
   'settings': '.settings-tab',
   'stats': '.stats-tab',
-  'm3u-manager': '.m3u-manager-tab, [class*="m3u"]',
+  'm3u-manager': '.m3u-manager-tab',
   'm3u-changes': '.m3u-changes-tab',
-  'epg-manager': '.epg-manager-tab, [class*="epg"]',
-  'logo-manager': '.logo-manager-tab, [class*="logo"]',
+  'epg-manager': '.epg-manager-tab',
+  'logo-manager': '.logo-manager-tab',
   'guide': '.guide-tab',
   'journal': '.journal-tab',
-  'auto-creation': '.auto-creation-tab, [data-testid="auto-creation-tab"]',
-  'export': '.export-tab',
-  'ffmpeg-builder': '.ffmpeg-builder-tab, [data-testid="ffmpeg-builder-tab"]',
+  'channel-pipeline': '.channel-pipeline-tab',
 }
 
 /**
  * Navigate to a specific tab
  */
 export async function navigateToTab(page: Page, tabId: string): Promise<void> {
-  // Ensure tab navigation is visible; if not, the app may have lost state - try reload
-  try {
-    await page.waitForSelector('.tab-navigation', { timeout: 10000 })
-  } catch {
-    // Tab navigation not found - app may have gone blank, attempt recovery
-    await page.reload({ waitUntil: 'domcontentloaded' })
-    await page.waitForSelector(selectors.header, { timeout: 20000 })
-    await page.waitForSelector('.tab-navigation', { timeout: 15000 })
-  }
-
+  if (!Object.hasOwn(tabContentSelectors, tabId)) throw new Error(`Unsupported tab: ${tabId}`)
+  const contentSelector = tabContentSelectors[tabId]
   const tabSelector = selectors.tabButton(tabId)
-  const tabButton = page.locator(tabSelector)
-
-  // Wait for the specific tab button to be visible
-  await tabButton.waitFor({ state: 'visible', timeout: 10000 })
-
-  // Click the tab
-  await tabButton.click()
-
-  // Wait for tab button to become active (confirms click was processed)
-  try {
+  const navigate = async () => {
+    // Settings replaces the primary rail with its own navigation, not a blank app.
+    await page.waitForSelector('.primary-navigation', { timeout: 10000 })
+    const back = page.locator('.navigation-back')
+    if (await back.isVisible()) await back.click()
+    const button = page.locator(tabSelector)
+    await button.waitFor({ state: 'visible', timeout: 10000 })
+    await button.click()
     await page.waitForFunction(
-      (sel) => {
-        const el = document.querySelector(sel)
-        return el && el.classList.contains('active')
+      ({ tabSelector, tabId }) => {
+        return document.querySelector(tabSelector)?.classList.contains('active') ||
+          (tabId === 'settings' && !!document.querySelector('.settings-navigation'))
       },
-      tabSelector,
+      { tabSelector, tabId },
       { timeout: 10000 }
     )
-  } catch {
-    // Tab may use different active state mechanism
+    await page.waitForSelector(contentSelector, { state: 'visible', timeout: 15000 })
+    await page.waitForSelector('.tab-loading', { state: 'hidden', timeout: 45000 })
+    await page.waitForSelector(contentSelector, { state: 'visible', timeout: 15000 })
   }
-
-  // All tabs are lazy-loaded via React.lazy(). Under parallel worker load, chunk
-  // fetching can fail/timeout, which crashes React (no error boundary around Suspense).
-  // Strategy: wait for Suspense to clear, then check content. If the app crashed
-  // (blank page), reload and retry the navigation once.
-  const contentSelector = tabContentSelectors[tabId]
-  const loadContent = async () => {
-    // Wait for Suspense fallback to clear (chunk loaded)
-    try {
-      await page.waitForSelector('.tab-loading', { state: 'hidden', timeout: 45000 })
-    } catch {
-      // Suspense fallback never appeared or already gone
-    }
-
-    // Wait for tab-specific content
-    if (contentSelector) {
-      await page.waitForSelector(contentSelector, { timeout: 15000 })
-    } else {
-      await page.waitForTimeout(1000)
-    }
-  }
-
   try {
-    await loadContent()
-  } catch {
-    // Content didn't load — check if the React app crashed (blank page)
-    const hasNav = await page.locator('.tab-navigation').isVisible().catch(() => false)
-    if (!hasNav) {
-      // App crashed — reload, re-authenticate if needed, and retry navigation
+    await navigate()
+  } catch (original) {
+    const failure = `Navigation to ${tabId} (${contentSelector}) failed: ${String(original)}`
+    if (await page.locator('.primary-navigation').isVisible()) {
+      throw new Error(failure, { cause: original })
+    }
+    try {
+      // Only a missing shell merits recovery. Never spend a second reload budget.
       await page.reload({ waitUntil: 'domcontentloaded' })
-
-      // Re-login if needed
-      const loginField = page.locator('input[name="username"], #username')
-      const needsLogin = await loginField.isVisible({ timeout: 2000 }).catch(() => false)
-      if (needsLogin) {
-        await loginField.fill(testCredentials.username)
-        await page.locator('input[name="password"], #password').fill(testCredentials.password)
-        await page.locator('button[type="submit"]').click()
-        await page.waitForSelector('.tab-navigation', { timeout: 20000 })
-      } else {
-        await page.waitForSelector('.tab-navigation', { timeout: 20000 })
-      }
-
-      // Retry the tab click and content wait
-      const retryTab = page.locator(tabSelector)
-      await retryTab.waitFor({ state: 'visible', timeout: 10000 })
-      await retryTab.click()
-      await loadContent()
-    } else {
-      // App is alive but tab content has different structure — brief fallback
-      await page.waitForTimeout(1000)
+      if (await isLoginPage(page)) await performLogin(page)
+      await navigate()
+    } catch (recovery) {
+      throw new Error(`${failure}; recovery failed: ${String(recovery)}`, { cause: original })
     }
   }
 }

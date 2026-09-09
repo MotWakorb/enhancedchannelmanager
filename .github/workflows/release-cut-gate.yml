@@ -193,7 +193,19 @@ jobs:
             | jq -se 'if length > 0 and all(.[]; type == "array") then add
                       else error("CodeQL API must return one or more JSON array pages") end')
           alerts=$(printf '%s\n' "$all_alerts" | jq -e \
-            '[.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")
+            'def nonempty_string: type == "string" and length > 0;
+             def valid_alert:
+               type == "object"
+               and (.number | type == "number" and . > 0 and . == floor)
+               and (.html_url | nonempty_string)
+               and (.rule | type == "object"
+                 and has("id") and (.id | . == null or nonempty_string)
+                 and has("security_severity_level")
+                 and (.security_severity_level | . == null or . == "low"
+                   or . == "medium" or . == "high" or . == "critical"));
+             if all(.[]; valid_alert) then .
+             else error("malformed CodeQL alert: expected number, html_url, rule.id and explicit security_severity_level") end
+             | [.[] | select(.rule.security_severity_level == "high" or .rule.security_severity_level == "critical")
                   | {number, severity: .rule.security_severity_level, rule_id: .rule.id, html_url}]')
 
           count=$(printf '%s\n' "$alerts" | jq -er \

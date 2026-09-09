@@ -23,9 +23,9 @@ handover repeated it. (The 72 is stable — measured at 35a49d84 when the bead
 was filed, and again at f9f7522: ``tests/e2e/`` is 10 files and
 ``tests/performance/`` is 2.)
 
-Prose gets copied and mutated. ``scripts/backend-gate.sh`` is the single
-invocation; this module is what stops it drifting away from CI, by parsing
-both and comparing them flag for flag.
+Prose gets copied and mutated. ``scripts/backend-gate.sh`` delegates to the
+shared Python runner; this module compares that policy with CI flag for flag.
+The companion runtime controls assert the actual subprocess argv.
 
 WHAT THIS MODULE PINS
 ---------------------
@@ -47,6 +47,7 @@ import pytest
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 GATE_SCRIPT = REPO_ROOT / "scripts/backend-gate.sh"
+GATE_POLICY = REPO_ROOT / "scripts/gate_runner.py"
 CI_WORKFLOW = REPO_ROOT / ".github/workflows/test.yml"
 BACKEND_CLAUDE_MD = REPO_ROOT / "backend/CLAUDE.md"
 
@@ -135,35 +136,19 @@ def ci_pytest_flags() -> Set[str]:
 
 
 def gate_script_pytest_flags() -> Set[str]:
-    """The flags of the gate invocation in scripts/backend-gate.sh.
+    """Read the shared policy independently of the shell entrypoint.
 
-    The script contains two pytest invocations: the gate, and the ``--subset``
-    escape hatch. They are told apart by ``--no-cov``, which only the subset
-    mode passes — deliberately not by ``--ignore=tests/e2e``, so that a script
-    which has *lost* an ignore is still recognised as the gate and reported as
-    drift rather than as a missing invocation.
+    Runtime tests additionally assert the argv actually executed. Do not identify
+    the assignment by an ignore flag: losing that flag must be detected as drift.
     """
-    lines = GATE_SCRIPT.read_text(encoding="utf-8").splitlines()
-    candidates: List[str] = []
-    for i, line in enumerate(lines):
-        if line.strip().startswith("#"):
-            continue
-        if "-m pytest" in line:
-            candidates.append(_join_continued_lines(lines, i))
-
-    gate = [c for c in candidates if "--no-cov" not in c]
-    assert gate, (
-        f"Could not find a gate pytest invocation in {GATE_SCRIPT}. "
-        f"Found {len(candidates)} pytest invocation(s), all of which pass "
-        "--no-cov (i.e. all subset-mode). The gate must run with coverage, "
-        "as CI does."
-    )
-    assert len(gate) == 1, (
-        f"{GATE_SCRIPT} has {len(gate)} non-subset pytest invocations. There "
-        "must be exactly one — 'which invocation is the gate?' is the whole "
-        f"question this module answers. Found: {gate}"
-    )
-    return _normalise(gate[0])
+    tree = ast.parse(GATE_POLICY.read_text(encoding="utf-8"))
+    candidates = [node.value for node in tree.body if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == "BACKEND_FLAGS"
+                          for target in node.targets)]
+    assert len(candidates) == 1, "Expected exactly one BACKEND_FLAGS policy"
+    flags = ast.literal_eval(candidates[0])
+    assert isinstance(flags, list) and flags and all(isinstance(flag, str) for flag in flags)
+    return _normalise(shlex.join(["pytest", *flags]))
 
 
 def _slow_marked_tests() -> Set[str]:
@@ -229,10 +214,10 @@ def test_gate_script_pins_the_interpreter_rather_than_trusting_path():
     tests instead of failing, so the run still reports success. The script must
     select the interpreter itself, and must refuse rather than fall back.
     """
-    body = GATE_SCRIPT.read_text(encoding="utf-8")
+    body = GATE_POLICY.read_text(encoding="utf-8")
     assert ".venv/bin/python" in body
     assert "ECM_PYTHON" in body
-    assert "rev-parse --git-common-dir" in body, (
+    assert '"rev-parse", "--git-common-dir"' in body, (
         "A worktree has no .venv of its own. The script must derive the main "
         "checkout's interpreter instead of leaving the caller to hardcode a "
         "path — that hardcoding is how the wrong interpreter gets used."
@@ -388,6 +373,15 @@ class TestParserMechanics:
         drifted = _normalise('pytest --ignore=tests/e2e -m "not slow"')
         assert ci != drifted
         assert sorted(ci - drifted) == ["--ignore=tests/performance"]
+
+    def test_policy_parser_detects_a_removed_ignore(self, tmp_path, monkeypatch):
+        """Exercise the actual AST parser, not just the flag normalizer."""
+        import sys
+
+        path = tmp_path / "drifted_gate.py"
+        path.write_text(GATE_POLICY.read_text().replace('"--ignore=tests/performance",', ""))
+        monkeypatch.setattr(sys.modules[__name__], "GATE_POLICY", path)
+        assert ci_pytest_flags() - gate_script_pytest_flags() == {"--ignore=tests/performance"}
 
     def test_slow_detection_finds_a_decorated_function(self, tmp_path):
         src = "import pytest\n\n@pytest.mark.slow\ndef test_x():\n    pass\n"

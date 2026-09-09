@@ -21,12 +21,13 @@ SCRIPT = Path(
 WORKFLOW = ROOT / ".github" / "workflows" / "release-cut-gate.yml"
 
 FAKE_GH = """#!/bin/sh
+printf '%s\n' "$@" > "$GH_TEST_ARGS"
 printf '%s' "$GH_TEST_OUTPUT"
 exit "$GH_TEST_EXIT_CODE"
 """
 
-FAKE_COUNT_JQ = """#!/bin/sh
-if [ "$1" = "-er" ]; then
+FAKE_STAGE_JQ = """#!/bin/sh
+if [ "$1" = "$GH_TEST_FAIL_STAGE" ]; then
     exit 23
 fi
 exec "$GH_TEST_REAL_JQ" "$@"
@@ -54,7 +55,7 @@ def _run_g1b(
     *,
     raw_output: str | None = None,
     gh_exit_code: int = 0,
-    count_failure: bool = False,
+    jq_failure: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -67,22 +68,30 @@ def _run_g1b(
     env = os.environ | {
         "GH_TEST_OUTPUT": output,
         "GH_TEST_EXIT_CODE": str(gh_exit_code),
+        "GH_TEST_ARGS": str(tmp_path / "gh-args"),
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
     }
-    if count_failure:
+    if jq_failure:
         real_jq = shutil.which("jq")
         assert real_jq
         jq = bin_dir / "jq"
-        jq.write_text(FAKE_COUNT_JQ, encoding="utf-8")
+        jq.write_text(FAKE_STAGE_JQ, encoding="utf-8")
         jq.chmod(0o755)
         env["GH_TEST_REAL_JQ"] = real_jq
-    return subprocess.run(
+        env["GH_TEST_FAIL_STAGE"] = jq_failure
+    result = subprocess.run(
         ["bash", "-c", _g1b_script()],
         capture_output=True,
         text=True,
         env=env,
         check=False,
     )
+    assert (tmp_path / "gh-args").read_text().splitlines() == [
+        "api",
+        "--paginate",
+        "repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100",
+    ]
+    return result
 
 
 @pytest.mark.parametrize(
@@ -252,8 +261,82 @@ def test_g1b_fails_closed_when_api_request_fails(tmp_path):
     assert "G1b PASS" not in result.stdout
 
 
-def test_g1b_fails_closed_when_count_fails(tmp_path):
-    result = _run_g1b(tmp_path, [[]], count_failure=True)
+@pytest.mark.parametrize("stage", ["-se", "-e", "-er"])
+def test_g1b_fails_closed_when_jq_stage_fails(tmp_path, stage):
+    result = _run_g1b(tmp_path, [[]], jq_failure=stage)
 
-    assert result.returncode != 0
+    assert result.returncode == 23
     assert "G1b PASS" not in result.stdout
+
+
+def _alert(severity=None):
+    return {
+        "number": 42,
+        "rule": {"id": "py/example", "security_severity_level": severity},
+        "html_url": "https://example.invalid/alerts/42",
+    }
+
+
+@pytest.mark.parametrize("severity", [None, "low", "medium"])
+@pytest.mark.parametrize("multipage", [False, True])
+def test_g1b_accepts_explicit_non_gating_severities(tmp_path, severity, multipage):
+    pages = [[_alert(severity)]] + ([[]] if multipage else [])
+    result = _run_g1b(tmp_path, pages)
+    assert result.returncode == 0, result.stderr
+    assert "G1b PASS" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        None, False, 1, "alert", [], {}, {"rule": {}},
+        _alert() | {"rule": None},
+        _alert() | {"rule": []},
+        _alert() | {"rule": {"id": "py/example"}},
+        _alert() | {"rule": {"security_severity_level": None}},
+        _alert() | {"rule": {"id": False, "security_severity_level": None}},
+        _alert() | {"rule": {"id": "", "security_severity_level": None}},
+        *[_alert(value) for value in ["", "unknown", "HIGH", 0, False, [], {}]],
+        *[_alert() | {"number": value} for value in [None, True, "42", 0, -1, 1.5]],
+        *[_alert() | {"html_url": value} for value in [None, 42, ""]],
+        {key: value for key, value in _alert().items() if key != "number"},
+        {key: value for key, value in _alert().items() if key != "html_url"},
+    ],
+)
+def test_g1b_rejects_malformed_individual_alerts(tmp_path, entry):
+    result = _run_g1b(tmp_path, [[_alert("low")], [entry]])
+    assert result.returncode != 0, result.stdout
+    assert "G1b PASS" not in result.stdout
+
+
+@pytest.mark.parametrize("severity", ["high", "critical"])
+@pytest.mark.parametrize("page", [0, 1, 2])
+def test_g1b_blocks_gating_severity_on_any_page(tmp_path, severity, page):
+    pages = [[_alert("low")] for _ in range(3)]
+    pages[page] = [_alert(severity)]
+    result = _run_g1b(tmp_path, pages)
+    assert result.returncode == 1
+    assert "G1b FAIL: 1 open" in result.stdout
+    assert "G1b PASS" not in result.stdout
+
+
+def test_g1b_metacharacters_are_inert_alert_data(tmp_path):
+    marker = tmp_path / "must-not-exist"
+    payload = f"$(touch {marker}); `touch {marker}` & | ' \\\""
+    entry = _alert("high")
+    entry["rule"]["id"] = payload
+    entry["html_url"] += payload
+    result = _run_g1b(tmp_path, [[entry]])
+    assert result.returncode == 1
+    assert payload in result.stdout
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("severity", [None, "low", "medium", "high", "critical"])
+def test_g1b_accepts_explicit_null_rule_id_without_bypassing_severity(tmp_path, severity):
+    entry = _alert(severity)
+    entry["rule"]["id"] = None
+    result = _run_g1b(tmp_path, [[entry]])
+    gating = severity in {"high", "critical"}
+    assert result.returncode == (1 if gating else 0), result.stderr
+    assert ("G1b PASS" in result.stdout) is not gating
