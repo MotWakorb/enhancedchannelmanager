@@ -1,7 +1,7 @@
 """Tests for the channels restore importer
 (enhancedchannelmanager-4vouz — split 2/4 of 0i2vt.14).
 
-Scope under test (TIGHT — channel-row create + profile membership reattach):
+Scope under test (TIGHT — channel-row create):
 
 1. Create channels. For each archived channel, strip archive-only / non-writable
    keys (id/pk and the FK-id fields that are remapped) and create via
@@ -12,12 +12,8 @@ Scope under test (TIGHT — channel-row create + profile membership reattach):
    .12). They are resolved through the IdRemapTable to a destination id before
    create. If a referenced FK is NOT in the remap, the channel is skipped
    DEPENDENCY_UNRESOLVED (never sent upstream with a stale archive id).
-3. Profile reattach. After channels are created, each restored channel is
-   reattached to its archived channel-profile memberships via
-   ``client.update_profile_channel``. The destination profile id is resolved
-   through the IdRemapTable (EntityType.CHANNEL_PROFILE). A profile not in the
-   remap is skipped DEPENDENCY_UNRESOLVED (dependency not yet restored) — never
-   crashes, never guesses a profile id.
+3. Defensive stripping: channel-side membership echoes cause no writes or
+   reporting. The live profile-row pass is covered by the restore tests.
 4. Opt-in: nothing happens unless the operator selected the category.
 5. Dry-run: no creates, no ledger entries; reports would_create.
 6. Name/number collision taxonomy: an existing identical channel is skipped
@@ -464,109 +460,40 @@ async def test_streams_stripped_from_create_payload():
 
 
 # ---------------------------------------------------------------------------
-# Profile reattach
+# Defensive membership stripping
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_profile_reattach_happy_path():
-    """After create, each restored channel is reattached to its archived
-    channel-profile membership. The destination profile id is resolved through the
-    IdRemapTable (EntityType.CHANNEL_PROFILE) and update_profile_channel is called
-    with the destination profile id + destination channel id."""
-    client = _client()
+@pytest.mark.parametrize("existing", [False, True])
+@pytest.mark.parametrize("profile_resolved", [False, True])
+async def test_channel_membership_echo_is_stripped_without_writes_or_reporting(
+    existing, profile_resolved
+):
+    """Unexpected channel-side metadata is ignored; profile rows own membership."""
+    client = _client(existing_channels=(
+        [{"id": 501, "name": "CNN", "channel_number": 5}] if existing else []
+    ))
     report = _report()
-    ledger = _ledger()
-    # source profile 1 -> dest profile 101
-    remap = _remap(channel_profile={1: 101})
-
+    remap = _remap(channel_profile={1: 101} if profile_resolved else {})
     await import_channels(
-        archive_channels=[
-            {
-                "id": 5,
-                "name": "CNN",
-                "profile_memberships": [{"profile_id": 1, "enabled": True}],
-            }
-        ],
-        client=client,
-        selected=True,
-        report=report,
-        ledger=ledger,
-        remap=remap,
+        archive_channels=[{
+            "id": 5, "name": "CNN", "channel_number": 5,
+            "profile_memberships": [{"profile_id": 1, "enabled": False}],
+        }],
+        client=client, selected=True, report=report, ledger=_ledger(), remap=remap,
     )
-
-    # channel created with dest id 501
-    dest_channel_id = remap.resolve(EntityType.CHANNEL, 5)
-    assert dest_channel_id == 501
-    client.update_profile_channel.assert_awaited_once()
-    call = client.update_profile_channel.await_args
-    # update_profile_channel(profile_id, channel_id, data)
-    assert call.args[0] == 101  # destination profile id (resolved via remap)
-    assert call.args[1] == 501  # destination channel id
-    assert call.args[2] == {"enabled": True}
-
-
-@pytest.mark.asyncio
-async def test_profile_not_in_remap_skips_dependency_unresolved():
-    """A channel-profile membership whose profile is NOT in the remap (the
-    channel-profiles importer .12 has not run, or did not restore that profile) is
-    handled as DEPENDENCY_UNRESOLVED — no update_profile_channel call, no crash,
-    no guessed profile id. The channel itself still created successfully."""
-    client = _client()
-    report = _report()
-    ledger = _ledger()
-    remap = _remap()  # no channel_profile mappings
-
-    await import_channels(
-        archive_channels=[
-            {
-                "id": 5,
-                "name": "CNN",
-                "profile_memberships": [{"profile_id": 1, "enabled": True}],
-            }
-        ],
-        client=client,
-        selected=True,
-        report=report,
-        ledger=ledger,
-        remap=remap,
-    )
-
-    # channel created
-    assert report.category(EntityType.CHANNEL).created == 1
-    # but profile reattach was NOT issued (dependency unresolved)
+    if existing:
+        client.create_channel.assert_not_awaited()
+        assert report.category(EntityType.CHANNEL).skipped == 1
+    else:
+        client.create_channel.assert_awaited_once_with({"name": "CNN", "channel_number": 5})
+        assert report.category(EntityType.CHANNEL).created == 1
+    assert remap.resolve(EntityType.CHANNEL, 5) == 501
     client.update_profile_channel.assert_not_awaited()
-    # the unresolved membership is reported under CHANNEL_PROFILE as a skip
-    prof_cat = report.category(EntityType.CHANNEL_PROFILE)
-    assert prof_cat.skipped == 1
-    assert prof_cat.skip_details[0].reason == SkipReason.DEPENDENCY_UNRESOLVED
-
-
-@pytest.mark.asyncio
-async def test_profile_reattach_skipped_in_dry_run():
-    """Dry-run reattaches nothing — update_profile_channel is never called."""
-    client = _client()
-    report = _report(is_dry_run=True)
-    ledger = _ledger()
-    remap = _remap(channel_profile={1: 101})
-
-    await import_channels(
-        archive_channels=[
-            {
-                "id": 5,
-                "name": "CNN",
-                "profile_memberships": [{"profile_id": 1, "enabled": True}],
-            }
-        ],
-        client=client,
-        selected=True,
-        report=report,
-        ledger=ledger,
-        remap=remap,
-        is_dry_run=True,
-    )
-
-    client.update_profile_channel.assert_not_awaited()
+    assert EntityType.CHANNEL_PROFILE not in {c.entity_type for c in report.categories}
+    assert report.entities_blocked_by_dependency == 0
+    assert report.delivery_shortfalls() == {}
 
 
 # ---------------------------------------------------------------------------

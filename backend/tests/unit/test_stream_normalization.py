@@ -1,4 +1,8 @@
 """Tests for stream_normalization module."""
+from unittest.mock import patch
+
+import pytest
+import stream_normalization
 from stream_normalization import (
     normalize_unicode_to_ascii,
     strip_quality_suffixes,
@@ -15,6 +19,42 @@ from stream_normalization import (
     enrich_stream,
     DEFAULT_QUALITY_PRIORITY,
 )
+
+
+@pytest.mark.parametrize("name,custom,expected", [
+    ("CNN LIVE", None, "CNN"),
+    ("CNN\u00a0LIVE", None, "CNN"),
+    ("CNN\nLIVE", None, "CNN"),
+    ("CN\nN LIVE", None, "CN\nN LIVE"),
+    ("CNN\t | : - LIVE", None, "CNN\t"),
+    ("CNN live\n", None, "CNN"),
+    ("LIVE", None, "LIVE"),
+    ("", None, ""),
+    ("A LIVE", None, "A LIVE"),
+    ("AB LIVE", None, "AB LIVE"),
+    ("AB  LIVE", None, "AB"),
+    ("(LIVE)", None, ""),
+    ("A [ LIVE ]", None, "A"),
+    ("CNN ( LIVE )", None, "CNN"),
+    ("CNN [LIVE]", None, "CNN"),
+    ("CNN A+B.*", ["A+B.*"], "CNN"),
+    ("CNN AAABxyz", ["A+B.*"], "CNN AAABxyz"),
+    ("CNN [A+B.*]", ["A+B.*"], "CNN"),
+    ("CNN LIVE LIVE", None, "CNN LIVE"),
+    ("CNN LIVE BACKUP", None, "CNN"),
+    ("CNN BACKUP LIVE", None, "CNN BACKUP"),
+    ("CNN AAA BBB", ["AAA", "BBB"], "CNN AAA"),
+    ("CNN AAA BBB", ["BBB", "AAA"], "CNN"),
+])
+def test_network_suffix_boundaries_and_order(name, custom, expected):
+    assert strip_network_suffix(name, custom) == expected
+
+
+def test_network_suffix_compile_api_calls():
+    # Count API invocations, not regex-cache misses or wall-clock performance.
+    with patch.object(stream_normalization.re, "compile", wraps=stream_normalization.re.compile) as compile_mock:
+        assert strip_network_suffix("Unrelated channel") == "Unrelated channel"
+    assert compile_mock.call_count == 3 * len(stream_normalization.NETWORK_SUFFIXES)
 
 
 # ---------------------------------------------------------------------------

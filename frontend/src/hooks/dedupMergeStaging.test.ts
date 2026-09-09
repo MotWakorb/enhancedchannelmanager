@@ -42,9 +42,9 @@ afterEach(() => {
 
 describe('useDedupOnDrop merge', () => {
   async function openModal(stageAddStream?: StageAddStream) {
-    vi.spyOn(api, 'getDedupCandidates').mockResolvedValue({
+    vi.spyOn(api, 'getChannelMergeCandidates').mockResolvedValue({
       candidates: [CANDIDATE],
-    } as unknown as Awaited<ReturnType<typeof api.getDedupCandidates>>);
+    } as unknown as Awaited<ReturnType<typeof api.getChannelMergeCandidates>>);
     const reloadChannels = vi.fn();
     const view = renderHook(() =>
       useDedupOnDrop({ reloadChannels, stageAddStream }),

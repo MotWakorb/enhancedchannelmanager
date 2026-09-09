@@ -5,6 +5,10 @@ Tests condition evaluation against stream contexts.
 """
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, call
+
+import pytest
 
 from channel_pipeline_evaluator import (
     ConditionEvaluator,
@@ -12,6 +16,143 @@ from channel_pipeline_evaluator import (
     EvaluationResult,
     evaluate_conditions,
 )
+
+
+@pytest.mark.parametrize("kind,inverted,global_check", [
+    ("normalized_name_in_group", False, False),
+    ("normalized_name_not_in_group", True, False),
+    ("normalized_name_exists", False, True),
+    ("normalized_name_not_exists", True, True),
+])
+@pytest.mark.parametrize("engine_mode", ["absent", "normalize", "raise", "empty"])
+@pytest.mark.parametrize("stream_name", ["CNN", "Other"])
+@pytest.mark.parametrize("case_sensitive", [False, True])
+def test_normalized_name_dispatch_contract(
+    kind, inverted, global_check, engine_mode, stream_name, case_sensitive, caplog,
+):
+    engine = None if engine_mode == "absent" else Mock()
+    if engine is not None:
+        if engine_mode == "raise":
+            engine.normalize.side_effect = RuntimeError("engine unavailable")
+        else:
+            engine.normalize.side_effect = lambda name: SimpleNamespace(
+                normalized="" if engine_mode == "empty" else name.lower()
+            )
+    evaluator = ConditionEvaluator(
+        existing_channels=[{"id": 1, "name": "106 | cnn", "channel_group_id": 7}],
+        existing_groups=[{"id": 7, "name": "News"}],
+        normalization_engine=engine,
+    )
+    if engine is not None:
+        assert engine.normalize.call_args_list == [call("cnn")]
+    if engine_mode == "raise":
+        assert caplog.messages == [
+            "[AUTO-CREATE-EVAL] Normalization failed for channel 'cnn': engine unavailable"
+        ]
+    else:
+        assert caplog.messages == []
+    caplog.clear()
+    result = evaluator.evaluate(
+        {"type": kind, "value": 7, "case_sensitive": case_sensitive},
+        StreamContext(1, stream_name, normalized_name="ignored cached name"),
+    )
+    normalized = ("" if engine_mode == "empty" else stream_name.lower()
+                  if engine_mode == "normalize" else stream_name)
+    matched = stream_name == "CNN" and engine_mode != "empty"
+    assert result.matched is (matched != inverted)
+    assert result.condition_type == kind
+    if global_check:
+        phrase = "found" if matched else "not found"
+        if inverted:
+            # Pin the existing diagnostic, including its replacement order.
+            phrase = "confirmed absent" if matched else "not confirmed absent"
+        ending = f"{phrase} across all groups (2 names)"
+    else:
+        phrase = ("NOT in" if matched else "confirmed not in") if inverted else (
+            "matches" if matched else "no match in"
+        )
+        ending = f"{phrase} group 7 (2 channels)"
+    assert result.details == f"'{stream_name}' \u2192 '{normalized}' {ending}"
+    if engine is not None:
+        assert engine.normalize.call_args_list == [call("cnn"), call(stream_name)]
+    assert caplog.messages == ([
+        f"[AUTO-CREATE-EVAL] Normalization failed for '{stream_name}': engine unavailable"
+    ] if engine_mode == "raise" else [])
+
+
+@pytest.mark.parametrize("kind,inverted,global_check", [
+    ("normalized_name_in_group", False, False),
+    ("normalized_name_not_in_group", True, False),
+    ("normalized_name_exists", False, True),
+    ("normalized_name_not_exists", True, True),
+])
+@pytest.mark.parametrize("value", [{}, {"value": None}, {"value": 0}, {"value": 7}, {"value": 99}])
+@pytest.mark.parametrize("channels", [
+    [], [{"id": 1, "name": "cnn"}],
+    [{"id": 1, "name": "cnn", "channel_group_id": None}],
+    [{"id": 1, "name": "cnn", "channel_group_id": 0}],
+])
+def test_normalized_name_empty_groups_return_before_normalizing(
+    kind, inverted, global_check, value, channels, caplog,
+):
+    engine = Mock()
+    engine.normalize.side_effect = RuntimeError("must not be called")
+    evaluator = ConditionEvaluator(channels, [{"id": 7, "name": "Empty"}], engine)
+    result = evaluator.evaluate({"type": kind, **value}, StreamContext(1, "CNN"))
+    assert result == EvaluationResult(
+        inverted, kind,
+        "No channels exist in any group" if global_check else (
+            f"Group {value['value']} has no channels" if value.get("value")
+            else "No group ID specified"
+        ),
+    )
+    engine.normalize.assert_not_called()
+    assert caplog.messages == []
+
+
+def test_normalized_channel_names_are_indexed_by_constructor():
+    engine = Mock()
+    engine.normalize.side_effect = lambda name: SimpleNamespace(normalized=name.removesuffix(" HD"))
+    evaluator = ConditionEvaluator(
+        [{"id": 1, "name": "106 | CNN HD", "channel_group": {"id": 7}}],
+        normalization_engine=engine,
+    )
+    result = evaluator.evaluate(
+        {"type": "normalized_name_in_group", "value": 7, "negate": True}, StreamContext(1, "cnn"),
+    )
+    assert result == EvaluationResult(
+        False, "not(normalized_name_in_group)",
+        "Negated: 'cnn' \u2192 'cnn' matches group 7 (3 channels)",
+    )
+    assert engine.normalize.call_args_list == [call("CNN HD"), call("cnn")]
+
+
+def test_unknown_condition_dispatch_warns(caplog):
+    result = ConditionEvaluator().evaluate({"type": "future_condition"}, StreamContext(1, "CNN"))
+    assert result == EvaluationResult(False, "future_condition", "Unknown condition type: future_condition")
+    assert caplog.messages == ["[AUTO-CREATE-EVAL] Unknown condition type: future_condition"]
+
+
+def test_unhandled_enum_dispatch_warns(monkeypatch, caplog):
+    import channel_pipeline_evaluator as module
+    from channel_pipeline_schema import ConditionType
+
+    # No current enum member is unhandled; model a future member at the enum seam.
+    enum = Mock(wraps=ConditionType, return_value=object())
+    monkeypatch.setattr(module, "ConditionType", enum)
+    result = ConditionEvaluator().evaluate({"type": "future_condition"}, StreamContext(1, "CNN"))
+    assert result == EvaluationResult(False, "future_condition", "Unhandled condition type")
+    assert caplog.messages == ["[AUTO-CREATE-EVAL] Unhandled condition type: future_condition"]
+
+
+@pytest.mark.parametrize("condition,context,matched,details", [
+    ({"type": "tvg_id_matches", "value": "^$"}, StreamContext(1, "CNN", tvg_id=None), True, "'' matches /^$/"),
+    ({"type": "stream_group_contains", "value": "news"}, StreamContext(1, "CNN", group_name="US News"), True, "'US News' contains 'news'"),
+    ({"type": "stream_group_contains", "value": "news", "case_sensitive": True}, StreamContext(1, "CNN", group_name="US News"), False, "'US News' does not contain 'news'"),
+    ({"type": "stream_group_contains", "value": "news"}, StreamContext(1, "CNN"), False, "'' does not contain 'news'"),
+])
+def test_optional_metadata_dispatch(condition, context, matched, details):
+    assert ConditionEvaluator().evaluate(condition, context) == EvaluationResult(matched, condition["type"], details)
 
 
 class TestStreamContext:

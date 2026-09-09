@@ -815,7 +815,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [lowBitrateThreshold, setLowBitrateThreshold] = useState(1.0);
   const [streamFetchPageLimit, setStreamFetchPageLimit] = useState(200);
   const [probingAll, setProbingAll] = useState(false);
-  const [, setTotalStreamCount] = useState(100); // Default to 100, will be updated on load
   const [probeProgress, setProbeProgress] = useState<{
     in_progress: boolean;
     total: number;
@@ -1032,7 +1031,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       // Revert callers surface failures inline; initial load retains the
       // existing page-level error behavior.
     });
-    loadStreamCount();
     loadProbeHistory();
     checkForOngoingProbe();
     loadM3UAccountsMaxStreams();
@@ -1163,19 +1161,6 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     // since the polling shuts down on progress completion regardless.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- polling lifecycle is owned by `probingAll`; parent callback identity doesn't need to restart polling
   }, [probingAll, notifications]);
-
-  const loadStreamCount = async () => {
-    try {
-      // Fetch just the count (page_size=1 to minimize data transfer)
-      const result = await api.getStreams({ pageSize: 1 });
-      if (result.count) {
-        setTotalStreamCount(Math.max(1, result.count));
-      }
-    } catch (err) {
-      logger.warn('Failed to load stream count for batch size max', err);
-      // Keep default of 100
-    }
-  };
 
   const loadProbeHistory = async () => {
     try {

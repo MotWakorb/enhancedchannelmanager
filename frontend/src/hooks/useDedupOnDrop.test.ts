@@ -22,7 +22,7 @@ import { useDedupOnDrop, DEDUP_RETURNING_HIGHLIGHT_MS } from './useDedupOnDrop';
 // Mock the API surface used by the hook. We don't care about the rest of
 // services/api for this hook — only the two endpoints it calls.
 vi.mock('../services/api', () => ({
-  getDedupCandidates: vi.fn(),
+  getChannelMergeCandidates: vi.fn(),
   addStreamToChannel: vi.fn(),
 }));
 
@@ -60,7 +60,7 @@ describe('useDedupOnDrop', () => {
 
   describe('no-candidate branch', () => {
     it('runs the fallback create path and does not open the modal', async () => {
-      vi.mocked(api.getDedupCandidates).mockResolvedValue({
+      vi.mocked(api.getChannelMergeCandidates).mockResolvedValue({
         stream_name: 'CNN HD',
         candidates: [],
         total: 0,
@@ -82,14 +82,14 @@ describe('useDedupOnDrop', () => {
         );
       });
 
-      expect(api.getDedupCandidates).toHaveBeenCalledWith('CNN HD', 7);
+      expect(api.getChannelMergeCandidates).toHaveBeenCalledExactlyOnceWith('CNN HD', 7);
       expect(fallback).toHaveBeenCalledTimes(1);
       expect(result.current.modalState).toBeNull();
       expect(result.current.returningStreamIds.size).toBe(0);
     });
 
     it('falls through when the candidates lookup itself errors', async () => {
-      vi.mocked(api.getDedupCandidates).mockRejectedValue(new Error('network'));
+      vi.mocked(api.getChannelMergeCandidates).mockRejectedValue(new Error('network'));
 
       const fallback = vi.fn();
       const { result } = renderHook(() =>
@@ -121,7 +121,7 @@ describe('useDedupOnDrop', () => {
    */
   describe('reported outcome', () => {
     it('reports no_candidate when the lookup returns an empty list', async () => {
-      vi.mocked(api.getDedupCandidates).mockResolvedValue({
+      vi.mocked(api.getChannelMergeCandidates).mockResolvedValue({
         stream_name: 'CNN HD',
         candidates: [],
         total: 0,
@@ -145,7 +145,7 @@ describe('useDedupOnDrop', () => {
     });
 
     it('reports lookup_failed when the candidates endpoint errors', async () => {
-      vi.mocked(api.getDedupCandidates).mockRejectedValue(new Error('network'));
+      vi.mocked(api.getChannelMergeCandidates).mockRejectedValue(new Error('network'));
       const { result } = renderHook(() =>
         useDedupOnDrop({ reloadChannels: vi.fn() }),
       );
@@ -162,7 +162,7 @@ describe('useDedupOnDrop', () => {
     });
 
     it('reports candidate when the modal opens', async () => {
-      vi.mocked(api.getDedupCandidates).mockResolvedValue({
+      vi.mocked(api.getChannelMergeCandidates).mockResolvedValue({
         stream_name: 'CNN HD',
         candidates: [
           { channel_id: '101', channel_name: 'CNN', confidence: 1.0 },
@@ -196,7 +196,7 @@ describe('useDedupOnDrop', () => {
     };
 
     beforeEach(() => {
-      vi.mocked(api.getDedupCandidates).mockResolvedValue({
+      vi.mocked(api.getChannelMergeCandidates).mockResolvedValue({
         stream_name: 'CNN HD',
         candidates: [candidate],
         total: 1,
