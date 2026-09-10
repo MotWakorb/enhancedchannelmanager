@@ -3,7 +3,7 @@
 Covers ``POST /api/settings/jellyfin/test-connection``:
   - Success: JellyfinClient.get_sessions returns → {ok: True}.
   - Auth failure: JellyfinClient raises JellyfinClientError → {ok: False, error: <msg>}.
-  - Unexpected exception: wrapped to {ok: False, error: 'Unexpected error: ...'}.
+  - Unexpected exception: constant safe fallback, no exception class or text.
   - SSRF mitigation (security finding SEC-2):
       * URL with path/query/fragment is sanitized — only scheme + netloc
         survive to JellyfinClient.
@@ -44,7 +44,7 @@ class TestJellyfinTestConnection:
         mock_client.close.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_returns_ok_false_on_auth_failure(self, async_client):
+    async def test_untyped_auth_text_uses_safe_fallback(self, async_client):
         from jellyfin_client import JellyfinClientError
 
         mock_client = AsyncMock()
@@ -67,10 +67,10 @@ class TestJellyfinTestConnection:
         assert response.status_code == 200
         body = response.json()
         assert body["ok"] is False
-        assert "401" in body["error"] or "unauthorized" in body["error"].lower()
+        assert body["error"] == "Connection test failed. Check server logs for details."
 
     @pytest.mark.asyncio
-    async def test_unexpected_exception_returns_class_name(self, async_client):
+    async def test_unexpected_exception_returns_safe_fallback(self, async_client):
         mock_client = AsyncMock()
         mock_client.get_sessions = AsyncMock(side_effect=RuntimeError("boom"))
         mock_client.close = AsyncMock()
@@ -87,7 +87,7 @@ class TestJellyfinTestConnection:
         assert response.status_code == 200
         body = response.json()
         assert body["ok"] is False
-        assert "RuntimeError" in body["error"]
+        assert body["error"] == "Connection test failed. Check server logs for details."
         assert "boom" not in body["error"]
 
     @pytest.mark.asyncio

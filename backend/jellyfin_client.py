@@ -45,6 +45,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from media_connection_errors import redact_media_diagnostic
+
 logger = logging.getLogger(__name__)
 
 
@@ -191,14 +193,17 @@ class JellyfinClient:
         """
         url = f"{self.base_url}/Sessions"
 
-        logger.debug("[JELLYFIN] GET %s", url)
+        logger.debug("[JELLYFIN] GET %s", redact_media_diagnostic(url, self.api_key))
         try:
             response = await self._client.request("GET", url)
         except httpx.HTTPError as exc:
             # ConnectError, ReadTimeout, RemoteProtocolError, etc. — any
             # transport-level failure. Wrap so callers see one exception
             # type regardless of whether the failure was DNS, TCP, or TLS.
-            logger.warning("[JELLYFIN] /Sessions request failed: %s", exc)
+            logger.warning(
+                "[JELLYFIN] /Sessions request failed: %s",
+                redact_media_diagnostic(str(exc), self.api_key),
+            )
             raise JellyfinClientError(f"Jellyfin request failed: {exc}") from exc
 
         if response.status_code == 401:
@@ -207,6 +212,8 @@ class JellyfinClient:
             logger.warning("[JELLYFIN] /Sessions returned 401 unauthorized")
             raise JellyfinClientError(
                 "Jellyfin /Sessions returned 401 unauthorized — check API key"
+            ) from httpx.HTTPStatusError(
+                "Jellyfin upstream status", request=httpx.Request("GET", url), response=response,
             )
 
         if response.status_code >= 400:
@@ -216,6 +223,8 @@ class JellyfinClient:
             )
             raise JellyfinClientError(
                 f"Jellyfin /Sessions returned {response.status_code}"
+            ) from httpx.HTTPStatusError(
+                "Jellyfin upstream status", request=httpx.Request("GET", url), response=response,
             )
 
         payload = response.json()
@@ -296,7 +305,10 @@ class JellyfinClient:
         try:
             await self.get_sessions()
         except JellyfinClientError as exc:
-            logger.info("[JELLYFIN] test_connection failed: %s", exc)
+            logger.info(
+                "[JELLYFIN] test_connection failed: %s",
+                redact_media_diagnostic(str(exc), self.api_key),
+            )
             return False
         return True
 

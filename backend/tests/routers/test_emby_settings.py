@@ -4,7 +4,7 @@ Covers ``POST /api/settings/emby/test-connection``:
   - Success: EmbyClient.get_sessions returns → {ok: True}.
   - Auth failure: EmbyClient.get_sessions raises EmbyClientError → {ok: False, error: <msg>}.
   - Network failure: EmbyClientError with transport-level cause → {ok: False, error: <msg>}.
-  - Unexpected exception: wrapped to {ok: False, error: 'Unexpected error: ...'}.
+  - Unexpected exception: constant safe fallback, no exception class or text.
   - Invalid request body: missing required fields → 422 (FastAPI Pydantic).
   - Connection failure does NOT raise HTTPException — the operator wants to
     SEE the error message inline in the UI, not get a generic 500.
@@ -45,8 +45,8 @@ class TestEmbyTestConnection:
         mock_client.close.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_returns_ok_false_with_error_on_auth_failure(self, async_client):
-        """EmbyClientError surfaces as {ok: False, error: <message>}."""
+    async def test_untyped_auth_text_uses_safe_fallback(self, async_client):
+        """An auth-looking string is not typed evidence of an auth failure."""
         from emby_client import EmbyClientError
 
         mock_client = AsyncMock()
@@ -71,7 +71,7 @@ class TestEmbyTestConnection:
         assert response.status_code == 200
         body = response.json()
         assert body["ok"] is False
-        assert "401" in body["error"] or "unauthorized" in body["error"].lower()
+        assert body["error"] == "Connection test failed. Check server logs for details."
 
     @pytest.mark.asyncio
     async def test_returns_ok_false_on_network_failure(self, async_client):
@@ -99,8 +99,8 @@ class TestEmbyTestConnection:
         assert "connect" in body["error"].lower() or "failed" in body["error"].lower()
 
     @pytest.mark.asyncio
-    async def test_unexpected_exception_returns_class_name(self, async_client):
-        """Unexpected exception class is rendered inline rather than 500."""
+    async def test_unexpected_exception_returns_safe_fallback(self, async_client):
+        """Unexpected exceptions render a constant inline rather than 500."""
         mock_client = AsyncMock()
         mock_client.get_sessions = AsyncMock(side_effect=RuntimeError("boom"))
         mock_client.close = AsyncMock()
@@ -117,9 +117,7 @@ class TestEmbyTestConnection:
         assert response.status_code == 200
         body = response.json()
         assert body["ok"] is False
-        assert "RuntimeError" in body["error"]
-        # The exception message itself is NOT surfaced — only the class name —
-        # so an unexpected exception cannot leak internals to the UI.
+        assert body["error"] == "Connection test failed. Check server logs for details."
         assert "boom" not in body["error"]
 
     @pytest.mark.asyncio

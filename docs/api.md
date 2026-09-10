@@ -1096,6 +1096,13 @@ result.
 | `POST /api/settings/restart-services` | Restart background services. Admin-only when auth is enabled; the MCP service key is still admitted, because this rebuilds the tracker/prober from already-saved settings and reaches no caller-named host (bead 9kwzp.6). |
 | `POST /api/settings/reset-stats` | Reset all statistics. Admin-only when auth is enabled; the MCP service key is refused, because the wipe is irreversible and has no rollback (bead 9kwzp.12). |
 
+Media connection tests retain HTTP 200 with `{"ok": true}` on success or
+`{"ok": false, "error": "..."}` on connection failure. Error messages use stable
+authentication, timeout, TLS, unreachable-host, malformed-response, or upstream-status
+categories. Unknown exceptions return `Connection test failed. Check server logs for details.`
+Raw network diagnostics and exception classes are not returned; detailed diagnostics
+are sanitized in server logs (bead `enhancedchannelmanager-m8dvz`).
+
 ### Smart Sort settings
 
 `GET /api/settings` and `POST /api/settings` use these fields for Smart Sort:

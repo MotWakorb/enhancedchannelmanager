@@ -7118,42 +7118,26 @@ def _sort_streams_by_resolution_height(
         h = _resolution_height_from_stats(stats)
 
         # rank: 0 = good stream, 1 = deprioritized bucket (ordered by fail_order)
+        health, rank = 0, 0
         if deprioritize_failed:
             status = (stats or {}).get("probe_status") if isinstance(stats, dict) else None
+            bucket = None
             if status in ("failed", "timeout"):
                 bucket = "failed"
-                rank = failed_rank.get(bucket, len(failed_rank))
-                hk = -h if order == "desc" else h
-                if quality_m3u_tie_break_enabled:
-                    pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
-                    tb_key = -pri if tb == "desc" else pri
-                    return (1, rank, hk, tb_key, sid)
-                return (1, rank, hk, sid)
-            if isinstance(stats, dict) and stats.get("is_black_screen"):
+            elif isinstance(stats, dict) and stats.get("is_black_screen"):
                 bucket = "black_screen"
-                rank = failed_rank.get(bucket, len(failed_rank))
-                hk = -h if order == "desc" else h
-                if quality_m3u_tie_break_enabled:
-                    pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
-                    tb_key = -pri if tb == "desc" else pri
-                    return (1, rank, hk, tb_key, sid)
-                return (1, rank, hk, sid)
-            if isinstance(stats, dict) and stats.get("is_low_fps"):
+            elif isinstance(stats, dict) and stats.get("is_low_fps"):
                 bucket = "low_fps"
+            if bucket is not None:
+                health = 1
                 rank = failed_rank.get(bucket, len(failed_rank))
-                hk = -h if order == "desc" else h
-                if quality_m3u_tie_break_enabled:
-                    pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
-                    tb_key = -pri if tb == "desc" else pri
-                    return (1, rank, hk, tb_key, sid)
-                return (1, rank, hk, sid)
 
         hk = -h if order == "desc" else h
         if quality_m3u_tie_break_enabled:
             pri = _m3u_account_priority_value(sid, stream_m3u_map, settings)
             tb_key = -pri if tb == "desc" else pri
-            return (0, 0, hk, tb_key, sid)
-        return (0, 0, hk, sid)
+            return (health, rank, hk, tb_key, sid)
+        return (health, rank, hk, sid)
 
     sorted_ids = sorted(stream_ids, key=sort_key)
     if quality_m3u_tie_break_enabled:
