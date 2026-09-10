@@ -55,9 +55,10 @@ from dispatcharr_client import (
     reset_client,
     _settings_hash,
 )
-from emby_client import EmbyClient, EmbyClientError
-from jellyfin_client import JellyfinClient, JellyfinClientError
-from plex_client import PlexClient, PlexClientError
+from emby_client import EmbyClient
+from jellyfin_client import JellyfinClient
+from plex_client import PlexClient
+from media_connection_errors import media_connection_error, redact_media_diagnostic
 from cache import get_cache
 from database import get_session
 from log_utils import get_persistent_log_policy
@@ -2158,7 +2159,7 @@ async def test_emby_connection(
     """
     logger.debug(
         "[SETTINGS-TEST] POST /api/settings/emby/test-connection - base_url=%s",
-        request.base_url,
+        redact_media_diagnostic(request.base_url, request.api_key),
     )
     base_url, err = _sanitize_base_url(request.base_url)
     if err is not None:
@@ -2166,19 +2167,10 @@ async def test_emby_connection(
         return {"ok": False, "error": err}
     client = EmbyClient(base_url, request.api_key)
     try:
-        # ``test_connection()`` already swallows EmbyClientError → False, but
-        # we want the operator-actionable error STRING for the UI banner.
-        # Calling ``get_sessions()`` directly lets us surface that string.
+        # Keep causes available for safe categories rather than a bare bool.
         await client.get_sessions()
-    except EmbyClientError as exc:
-        logger.info("[SETTINGS-TEST] Emby connection test failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
     except Exception as exc:  # pylint: disable=broad-except
-        # Defensive: EmbyClient should wrap all known failures in
-        # EmbyClientError, but an unexpected exception class still needs
-        # to render inline rather than 500.
-        logger.exception("[SETTINGS-TEST] Emby connection test unexpected error: %s", exc)
-        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+        return {"ok": False, "error": media_connection_error(exc, request.api_key)}
     finally:
         # Release the underlying httpx connection pool so the per-request
         # client doesn't leak sockets.
@@ -2212,7 +2204,7 @@ async def test_plex_connection(
     """
     logger.debug(
         "[SETTINGS-TEST] POST /api/settings/plex/test-connection - base_url=%s",
-        request.base_url,
+        redact_media_diagnostic(request.base_url, request.token),
     )
     base_url, err = _sanitize_base_url(request.base_url)
     if err is not None:
@@ -2221,14 +2213,8 @@ async def test_plex_connection(
     client = PlexClient(base_url, request.token)
     try:
         await client.get_sessions()
-    except PlexClientError as exc:
-        logger.info("[SETTINGS-TEST] Plex connection test failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
     except Exception as exc:  # pylint: disable=broad-except
-        logger.exception(
-            "[SETTINGS-TEST] Plex connection test unexpected error: %s", exc,
-        )
-        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+        return {"ok": False, "error": media_connection_error(exc, request.token)}
     finally:
         await client.close()
     logger.info(
@@ -2259,7 +2245,7 @@ async def test_jellyfin_connection(
     """
     logger.debug(
         "[SETTINGS-TEST] POST /api/settings/jellyfin/test-connection - base_url=%s",
-        request.base_url,
+        redact_media_diagnostic(request.base_url, request.api_key),
     )
     base_url, err = _sanitize_base_url(request.base_url)
     if err is not None:
@@ -2268,14 +2254,8 @@ async def test_jellyfin_connection(
     client = JellyfinClient(base_url, request.api_key)
     try:
         await client.get_sessions()
-    except JellyfinClientError as exc:
-        logger.info("[SETTINGS-TEST] Jellyfin connection test failed: %s", exc)
-        return {"ok": False, "error": str(exc)}
     except Exception as exc:  # pylint: disable=broad-except
-        logger.exception(
-            "[SETTINGS-TEST] Jellyfin connection test unexpected error: %s", exc,
-        )
-        return {"ok": False, "error": f"Unexpected error: {type(exc).__name__}"}
+        return {"ok": False, "error": media_connection_error(exc, request.api_key)}
     finally:
         await client.close()
     logger.info(

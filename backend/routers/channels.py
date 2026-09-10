@@ -4464,6 +4464,19 @@ async def _run_bulk_commit(
                 raise
 
 
+def _serialize_normalize_preview(channel_id: int, current_name: str, proposed: str, transformations: list | None) -> dict:
+    return {
+        "channel_id": channel_id,
+        "current_name": current_name,
+        "proposed_name": proposed,
+        "would_change": proposed != current_name,
+        "transformations": [
+            {"rule_id": t[0], "before": t[1], "after": t[2]}
+            for t in (transformations or [])
+        ],
+    }
+
+
 @router.post("/normalize-preview-batch")
 async def normalize_preview_batch(request: NormalizePreviewBatchRequest):
     """bd-eio04.13 — batch would-normalize preview for channel list rows.
@@ -4525,16 +4538,7 @@ async def normalize_preview_batch(request: NormalizePreviewBatchRequest):
             current_name = row.name or ""
             preview = engine.normalize(current_name)
             proposed = preview.normalized
-            results.append({
-                "channel_id": row.channel_id,
-                "current_name": current_name,
-                "proposed_name": proposed,
-                "would_change": proposed != current_name,
-                "transformations": [
-                    {"rule_id": t[0], "before": t[1], "after": t[2]}
-                    for t in (preview.transformations or [])
-                ],
-            })
+            results.append(_serialize_normalize_preview(row.channel_id, current_name, proposed, preview.transformations))
 
         # Fallback path: fetch names for bare IDs via Dispatcharr.
         if ids_only:
@@ -4548,16 +4552,7 @@ async def normalize_preview_batch(request: NormalizePreviewBatchRequest):
                 current_name = (channel or {}).get("name") or ""
                 preview = engine.normalize(current_name)
                 proposed = preview.normalized
-                results.append({
-                    "channel_id": cid,
-                    "current_name": current_name,
-                    "proposed_name": proposed,
-                    "would_change": proposed != current_name,
-                    "transformations": [
-                        {"rule_id": t[0], "before": t[1], "after": t[2]}
-                        for t in (preview.transformations or [])
-                    ],
-                })
+                results.append(_serialize_normalize_preview(cid, current_name, proposed, preview.transformations))
 
         elapsed_ms = (time.time() - start) * 1000
         logger.debug(
@@ -4725,16 +4720,7 @@ async def normalize_preview_single(channel_id: int):
             "[CHANNELS] normalize-preview id=%s '%s' -> '%s' in %.1fms",
             channel_id, current_name, proposed, elapsed_ms,
         )
-        return {
-            "channel_id": channel_id,
-            "current_name": current_name,
-            "proposed_name": proposed,
-            "would_change": proposed != current_name,
-            "transformations": [
-                {"rule_id": t[0], "before": t[1], "after": t[2]}
-                for t in (preview.transformations or [])
-            ],
-        }
+        return _serialize_normalize_preview(channel_id, current_name, proposed, preview.transformations)
     except Exception as e:
         logger.exception("[CHANNELS] Failed normalize-preview for id=%s: %s", channel_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")

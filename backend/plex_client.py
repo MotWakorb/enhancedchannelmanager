@@ -66,6 +66,8 @@ from datetime import datetime, timezone
 
 import httpx
 
+from media_connection_errors import redact_media_diagnostic
+
 logger = logging.getLogger(__name__)
 
 
@@ -481,7 +483,10 @@ class PlexClient:
         try:
             await self.get_sessions()
         except PlexClientError as exc:
-            logger.info("[PLEX] test_connection failed: %s", exc)
+            logger.info(
+                "[PLEX] test_connection failed: %s",
+                redact_media_diagnostic(str(exc), self.api_key),
+            )
             return False
         return True
 
@@ -511,19 +516,26 @@ class PlexClient:
         url = f"{self.base_url}{path}"
         headers = {"X-Plex-Token": self.api_key}
 
-        logger.debug("[PLEX] GET %s params=%s", url, params)
+        logger.debug(
+            "[PLEX] GET %s params=%s", redact_media_diagnostic(url, self.api_key), params,
+        )
         try:
             response = await self._client.request(
                 "GET", url, headers=headers, params=params,
             )
         except httpx.HTTPError as exc:
-            logger.warning("[PLEX] %s request failed: %s", path, exc)
+            logger.warning(
+                "[PLEX] %s request failed: %s", path,
+                redact_media_diagnostic(str(exc), self.api_key),
+            )
             raise PlexClientError(f"Plex request failed: {exc}") from exc
 
         if response.status_code == 401:
             logger.warning("[PLEX] %s returned 401 unauthorized", path)
             raise PlexClientError(
                 f"Plex {path} returned 401 unauthorized — check token",
+            ) from httpx.HTTPStatusError(
+                "Plex upstream status", request=httpx.Request("GET", url), response=response,
             )
 
         if response.status_code >= 400:
@@ -533,6 +545,8 @@ class PlexClient:
             )
             raise PlexClientError(
                 f"Plex {path} returned {response.status_code}",
+            ) from httpx.HTTPStatusError(
+                "Plex upstream status", request=httpx.Request("GET", url), response=response,
             )
 
         return response.text

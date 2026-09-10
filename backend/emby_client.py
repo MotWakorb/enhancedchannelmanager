@@ -23,6 +23,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from media_connection_errors import redact_media_diagnostic
+
 logger = logging.getLogger(__name__)
 
 
@@ -176,23 +178,26 @@ class EmbyClient:
         url = f"{self.base_url}/Sessions"
         headers = {"X-Emby-Token": self.api_key}
 
-        logger.debug("[EMBY] GET %s", url)
+        logger.debug("[EMBY] GET %s", redact_media_diagnostic(url, self.api_key))
         try:
             response = await self._client.request("GET", url, headers=headers)
         except httpx.HTTPError as exc:
             # ConnectError, ReadTimeout, RemoteProtocolError, etc. — any
             # transport-level failure. Wrap so callers see one exception
             # type regardless of whether the failure was DNS, TCP, or TLS.
-            logger.warning("[EMBY] /Sessions request failed: %s", exc)
+            logger.warning(
+                "[EMBY] /Sessions request failed: %s",
+                redact_media_diagnostic(str(exc), self.api_key),
+            )
             raise EmbyClientError(f"Emby request failed: {exc}") from exc
 
         if response.status_code == 401:
-            # Surface 401 distinctly in the message — the operator's most
-            # common failure mode is a wrong/revoked API key, and the
-            # Settings UI surface (bd-8wc6q) will route on this string.
+            # Preserve typed status information for the connection-test UI.
             logger.warning("[EMBY] /Sessions returned 401 unauthorized")
             raise EmbyClientError(
                 "Emby /Sessions returned 401 unauthorized — check API key"
+            ) from httpx.HTTPStatusError(
+                "Emby upstream status", request=httpx.Request("GET", url), response=response,
             )
 
         if response.status_code >= 400:
@@ -202,6 +207,8 @@ class EmbyClient:
             )
             raise EmbyClientError(
                 f"Emby /Sessions returned {response.status_code}"
+            ) from httpx.HTTPStatusError(
+                "Emby upstream status", request=httpx.Request("GET", url), response=response,
             )
 
         payload = response.json()
@@ -335,7 +342,10 @@ class EmbyClient:
         try:
             await self.get_sessions()
         except EmbyClientError as exc:
-            logger.info("[EMBY] test_connection failed: %s", exc)
+            logger.info(
+                "[EMBY] test_connection failed: %s",
+                redact_media_diagnostic(str(exc), self.api_key),
+            )
             return False
         return True
 
