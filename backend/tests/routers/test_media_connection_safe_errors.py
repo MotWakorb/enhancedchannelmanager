@@ -237,6 +237,18 @@ def test_media_known_value_is_literal_and_case_sensitive():
     assert result == "keep KEY.*[X] unrelated\nvalue ***REDACTED***"
 
 
+@pytest.mark.parametrize("secret", [r"key.*[x]\z+/=%98", "key-\u00e9\U0001f512"])
+def test_media_pattern_escapes_raw_and_encoded_literals(secret):
+    with patch("media_connection_errors.re.escape", wraps=re.escape) as escape:
+        result = redact_media_diagnostic(f"value {quote(secret, safe='')} end", secret)
+    assert result == "value ***REDACTED*** end"
+    literals = [call.args[0] for call in escape.call_args_list]
+    for char in secret:
+        assert char in literals
+        for byte in char.encode("utf-8"):
+            assert f"{byte:02x}" in literals
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("name,client_type", CLIENTS)
 @pytest.mark.parametrize("routed", [False, True], ids=["boolean-client", "get-sessions-route"])

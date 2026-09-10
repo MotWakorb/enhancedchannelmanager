@@ -34,7 +34,7 @@ def redact_media_diagnostic(text: str, api_key: str) -> str:
         # Escape every literal: a credential must never supply regex syntax.
         pattern = "".join(
             "(?:" + re.escape(char) + "|" + "".join(
-                rf"%(?:25)*(?i:{byte:02x})" for byte in char.encode("utf-8")
+                rf"%(?:25)*(?i:{re.escape(f'{byte:02x}')})" for byte in char.encode("utf-8")
             ) + ")"
             for char in api_key
         )
