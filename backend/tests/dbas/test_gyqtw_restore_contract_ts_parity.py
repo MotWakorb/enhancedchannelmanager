@@ -44,6 +44,7 @@ interface in ``api.ts`` and confirming
 """
 import inspect
 import re
+from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel
@@ -99,6 +100,18 @@ def _read_api_ts() -> str:
 
 
 _API_TS = _read_api_ts()
+
+# Every enum defined in restore_contracts is classified explicitly, so a rename
+# or addition cannot silently remove a wire contract from the parity check.
+_ENUM_MIRRORS = {
+    "EntityType": "RestoreEntityType",
+    "SkipReason": "RestoreSkipReason",
+    "FailureReason": "RestoreFailureReason",
+    "RestoreOutcome": "RestoreOutcome",
+    "ChannelReattachMode": "ChannelReattachMode",
+}
+# RestoreActionKind describes internal ledger actions, not a frontend union.
+_BACKEND_ONLY_ENUMS = {"RestoreActionKind"}
 
 
 def _strip_comments(body: str) -> str:
@@ -237,3 +250,52 @@ def test_mirrors_declare_the_same_fields() -> None:
         "the hand-written TypeScript restore-contract mirrors have drifted from "
         "their Pydantic sources (bead …-gyqtw):\n" + "\n".join(drift)
     )
+
+
+def _ts_union_members(union: str) -> set[str]:
+    """Read the current literal-only union grammar; unfamiliar syntax fails."""
+    declarations = re.findall(
+        rf"^export type {re.escape(union)}\s*=\s*([^;]+);",
+        _strip_comments(_API_TS),
+        flags=re.MULTILINE,
+    )
+    assert len(declarations) == 1, f"expected one export type {union} declaration"
+    body = declarations[0].strip().removeprefix("|").strip()
+    literals = [member.strip() for member in body.split("|")]
+    assert literals and all(re.fullmatch(r"'[a-z0-9_]+'", member) for member in literals), (
+        f"{union}: expected a nonempty string-literal union, got {body!r}"
+    )
+    return {member[1:-1] for member in literals}
+
+
+def test_every_contract_enum_is_classified() -> None:
+    declared = {
+        name for name, obj in inspect.getmembers(restore_contracts, inspect.isclass)
+        if issubclass(obj, Enum) and obj.__module__ == restore_contracts.__name__
+    }
+    classified = set(_ENUM_MIRRORS) | _BACKEND_ONLY_ENUMS
+    assert declared == classified, {
+        "unclassified enums": sorted(declared - classified),
+        "stale classifications": sorted(classified - declared),
+    }
+    for name in _BACKEND_ONLY_ENUMS:
+        assert not re.search(
+            rf"^export type (?:Restore)?{re.escape(name)}\s*=",
+            _strip_comments(_API_TS), flags=re.MULTILINE,
+        ), f"{name} gained a TypeScript mirror; add it to _ENUM_MIRRORS"
+
+
+def test_enum_mirrors_declare_the_same_members() -> None:
+    """Backend enum values and TypeScript union members agree both ways (sogbx)."""
+    drift = []
+    for enum_name, union_name in sorted(_ENUM_MIRRORS.items()):
+        python_members = {member.value for member in getattr(restore_contracts, enum_name)}
+        typescript_members = _ts_union_members(union_name)
+        missing = sorted(python_members - typescript_members)
+        extra = sorted(typescript_members - python_members)
+        if missing or extra:
+            drift.append(
+                f"{enum_name} -> {union_name}: MISSING FROM api.ts: {missing}; "
+                f"MISSING FROM Python: {extra}"
+            )
+    assert not drift, "restore enum/union membership drift:\n" + "\n".join(drift)

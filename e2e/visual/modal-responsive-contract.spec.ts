@@ -124,6 +124,20 @@ test('complex, zoom and compact component behavior changes only at its semantic 
   await expect(page.getByRole('cell', { name: /Order \d+/ }).first()).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Action', exact: true })).toBeHidden()
 
+  for (const name of [/Action (Include|Exclude)/, /Order \d+/]) {
+    const cell = page.getByRole('cell', { name }).first()
+    await expect(cell).toBeInViewport({ ratio: 1 })
+    // A bounded center-hit obstruction check, not full accessibility certification.
+    const centerUnobstructed = await cell.evaluate((node) => {
+      const rect = node.getBoundingClientRect()
+      const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+      return hit !== null && node.contains(hit)
+    })
+    expect(centerUnobstructed, `${name} cell center must be unobstructed`).toBe(true)
+  }
+  await page.getByRole('button', { name: 'Edit filter', exact: true }).first().click()
+  await expect(page.getByRole('button', { name: 'Save Changes', exact: true })).toBeVisible()
+
   await openDialog(page, 'm3u-filters', 701, 720)
   await expect(page.locator('.filter-responsive-label').first()).toBeHidden()
   await expect(page.getByRole('columnheader', { name: 'Action', exact: true })).toBeVisible()

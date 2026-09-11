@@ -1110,7 +1110,9 @@ def test_committed_directories_finds_both_kinds(sbom, dev_tree):
 
 
 def _committed_directories() -> list[Path]:
-    return _SBOM.committed_directories(ROOT)
+    directories = _SBOM.committed_directories(ROOT)
+    assert directories, "committed SBOM discovery derived no cases"
+    return directories
 
 
 def test_the_repository_carries_at_least_one_sbom(sbom):

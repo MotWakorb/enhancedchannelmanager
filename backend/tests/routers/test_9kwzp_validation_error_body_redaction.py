@@ -152,6 +152,10 @@ def credential_bearing_routes() -> list[tuple[str, str, type[BaseModel], list[st
 
 
 _INVENTORY = credential_bearing_routes()
+assert _INVENTORY, (
+    "credential_bearing_routes derived no cases from main.app.routes; "
+    "refusing to parametrize an empty security inventory"
+)
 
 
 def _leaf_name(dotted: str) -> str:

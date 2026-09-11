@@ -298,6 +298,9 @@ def test_every_member_of_the_set_downgrades_an_apply_on_its_own(field):
     assert _outcome(report) == RestoreOutcome.COMPLETED_WITH_FAILURES
 
 
+assert RestoreReport.DELIVERY_SHORTFALL_FIELDS, "restore delivery-shortfall registry derived no cases"
+
+
 @pytest.mark.parametrize("field", list(RestoreReport.DELIVERY_SHORTFALL_FIELDS))
 def test_no_member_of_the_set_produces_a_different_severity(field):
     """``…-cwmid``, as the property rather than as its reproduction.

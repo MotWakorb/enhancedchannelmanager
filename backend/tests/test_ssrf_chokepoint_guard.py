@@ -87,6 +87,8 @@ _PRE_8_BASELINE = {
 def _adapter_modules():
     cloud = [p for p in CLOUD_DIR.glob("*.py") if p.name != "__init__.py"]
     sync = list(SYNC_DIR.glob(_SYNC_GLOB))
+    assert cloud, f"no cloud adapter cases discovered in {CLOUD_DIR}"
+    assert sync, f"no sync adapter cases discovered in {SYNC_DIR}"
     return sorted(set(cloud + sync))
 
 

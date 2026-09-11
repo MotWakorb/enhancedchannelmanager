@@ -198,6 +198,7 @@ def _query_param_names(operation: dict) -> set[str]:
 # ---------------------------------------------------------------------------
 
 _MODELLED_ENDPOINTS = [ep for ep in ENDPOINTS.values() if ep.exempt_reason is None]
+assert _MODELLED_ENDPOINTS, "ENDPOINTS derived no modelled MCP contract cases"
 
 
 @pytest.mark.parametrize("ep", _MODELLED_ENDPOINTS, ids=[ep.name for ep in _MODELLED_ENDPOINTS])
