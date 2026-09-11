@@ -2013,7 +2013,7 @@ async def test_telegram_bot(
         return {"success": False, "message": "Unexpected error during Telegram test"}
 
 
-def _host_denied_by_outbound_policy(url: str) -> Optional[str]:
+def _host_denied_by_outbound_policy(url: str, credential: str = "") -> Optional[str]:
     """Mode-aware host policy for an operator-supplied base URL.
 
     GH #754 / bead ``0yh70``. This replaces the hardcoded, non-mode-aware
@@ -2048,8 +2048,8 @@ def _host_denied_by_outbound_policy(url: str) -> Optional[str]:
         url: an already scheme-checked base URL (scheme + netloc).
 
     Returns:
-        ``None`` when the host is permitted, else an admin-safe explanation of
-        why the active mode denied it (carries no secret).
+        ``None`` when the host is permitted, else a fixed public explanation.
+        Detailed diagnostics stay in redacted server logs (m8dvz route tests).
     """
     from security.ssrf import SSRFError, get_ssrf_mode, validate_outbound_url
 
@@ -2062,14 +2062,19 @@ def _host_denied_by_outbound_policy(url: str) -> Optional[str]:
                 or "resolved to no usable address" in lowered):
             logger.info(
                 "[SETTINGS] Outbound host did not resolve; not treating as a "
-                "policy denial (runtime re-validates before connect): %s", exc
+                "policy denial (runtime re-validates before connect): %s",
+                redact_media_diagnostic(message, credential),
             )
             return None
-        return message
+        logger.info(
+            "[SETTINGS] Outbound host denied: %s",
+            redact_media_diagnostic(message, credential),
+        )
+        return "destination is not permitted by the outbound policy"
     return None
 
 
-def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
+def _sanitize_base_url(raw_url: str, credential: str = "") -> tuple[Optional[str], Optional[str]]:
     """Sanitize + policy-check an operator-supplied outbound base URL.
 
     SSRF mitigation (security finding SEC-2 — bd-r5f0c.4 backfill, host policy
@@ -2114,13 +2119,19 @@ def _sanitize_base_url(raw_url: str) -> tuple[Optional[str], Optional[str]]:
         return None, "Invalid URL scheme — must be http or https"
     if not parsed.hostname:
         return None, "Invalid base URL — no hostname provided"
+    try:
+        # Access validates numeric/range constraints without returning parser
+        # exception text, which can contain caller-supplied port contents.
+        parsed.port
+    except ValueError:
+        return None, "Invalid base URL — invalid port"
     # Reconstruct from (scheme, netloc, path='', params='', query='',
     # fragment=''). netloc carries hostname + optional port + optional
     # userinfo — the operator's port stays attached, but everything past
     # the authority is dropped. The policy check runs on the RECONSTRUCTED
     # URL so it never sees an attacker-embedded path.
     sanitized = urlunparse((parsed.scheme, parsed.netloc, "", "", "", ""))
-    denial = _host_denied_by_outbound_policy(sanitized)
+    denial = _host_denied_by_outbound_policy(sanitized, credential)
     if denial is not None:
         return None, f"Invalid host — {denial}"
     return sanitized, None
@@ -2161,7 +2172,7 @@ async def test_emby_connection(
         "[SETTINGS-TEST] POST /api/settings/emby/test-connection - base_url=%s",
         redact_media_diagnostic(request.base_url, request.api_key),
     )
-    base_url, err = _sanitize_base_url(request.base_url)
+    base_url, err = _sanitize_base_url(request.base_url, request.api_key)
     if err is not None:
         logger.info("[SETTINGS-TEST] Emby test rejected by SSRF guard: %s", err)
         return {"ok": False, "error": err}
@@ -2206,7 +2217,7 @@ async def test_plex_connection(
         "[SETTINGS-TEST] POST /api/settings/plex/test-connection - base_url=%s",
         redact_media_diagnostic(request.base_url, request.token),
     )
-    base_url, err = _sanitize_base_url(request.base_url)
+    base_url, err = _sanitize_base_url(request.base_url, request.token)
     if err is not None:
         logger.info("[SETTINGS-TEST] Plex test rejected by SSRF guard: %s", err)
         return {"ok": False, "error": err}
@@ -2247,7 +2258,7 @@ async def test_jellyfin_connection(
         "[SETTINGS-TEST] POST /api/settings/jellyfin/test-connection - base_url=%s",
         redact_media_diagnostic(request.base_url, request.api_key),
     )
-    base_url, err = _sanitize_base_url(request.base_url)
+    base_url, err = _sanitize_base_url(request.base_url, request.api_key)
     if err is not None:
         logger.info("[SETTINGS-TEST] Jellyfin test rejected by SSRF guard: %s", err)
         return {"ok": False, "error": err}
