@@ -452,6 +452,9 @@ async def test_the_convergence_patch_never_carries_source_channel_group_pks(
 # ---------------------------------------------------------------------------
 
 
+assert NEVER_CONVERGE_FIELDS, "account convergence exclusion registry derived no cases"
+
+
 @pytest.mark.parametrize("excluded", sorted(NEVER_CONVERGE_FIELDS))
 def test_no_excluded_field_can_reach_the_patch(excluded):
     """Parameterised over the register itself, so a member added without a

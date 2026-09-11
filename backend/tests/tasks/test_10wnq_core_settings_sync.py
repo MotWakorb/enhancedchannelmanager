@@ -145,6 +145,9 @@ def test_the_settings_step_runs_after_the_categories_its_fks_resolve_through():
 # ---------------------------------------------------------------------------
 
 
+assert SYNC_CORE_SETTINGS_BLOBS, "sync core-settings registry derived no blob cases"
+
+
 @pytest.mark.parametrize("blob", sorted(SYNC_CORE_SETTINGS_BLOBS))
 def test_every_replicated_blob_survives_the_selector(blob):
     gathered = {name: {"k": 1} for name in BLOB_RULINGS}

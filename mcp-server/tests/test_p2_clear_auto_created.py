@@ -8,7 +8,9 @@ Covers the empty-group_ids safety fix:
 import re
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
+
+from _endpoint_contracts import ENDPOINTS
 
 def _page(channels):
     """A channels_list page envelope for enumeration in clear_auto_created."""
@@ -49,7 +51,7 @@ class TestClearAutoCreatedEmptyGroupIds:
     async def test_empty_group_ids_rejected_no_backend_call(self):
         """empty group_ids is rejected before reaching the ECM backend."""
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 999})
+        mock_client = _make_mock(return_value={"updated_count": 999})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("clear_auto_created", {"group_ids": []})
@@ -66,7 +68,7 @@ class TestClearAutoCreatedEmptyGroupIds:
     async def test_empty_group_ids_error_message_is_actionable(self):
         """Rejection message tells the caller what to do instead."""
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 0})
+        mock_client = _make_mock(return_value={"updated_count": 0})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool("clear_auto_created", {"group_ids": []})
@@ -81,7 +83,7 @@ class TestClearAutoCreatedEmptyGroupIds:
     async def test_none_group_ids_without_all_groups_rejected(self):
         """None group_ids without all_groups=True must also be rejected."""
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 999})
+        mock_client = _make_mock(return_value={"updated_count": 999})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             # Calling with neither group_ids nor all_groups — should be rejected
@@ -111,7 +113,7 @@ class TestClearAutoCreatedAllGroupsFlag:
         def _side(ep, **kw):
             if ep.name == "channels_list":
                 return _page(auto_channels)
-            return {"deleted": 42, "updated_count": 42}
+            return {"updated_count": 42}
 
         mock_client = _make_mock(side_effect=_side)
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
@@ -127,14 +129,14 @@ class TestClearAutoCreatedAllGroupsFlag:
             f"Expected 'all groups' scope in result, got: {text!r}"
         )
         assert "42" in text, (
-            f"Expected deleted count 42 in result, got: {text!r}"
+            f"Expected updated count 42 in result, got: {text!r}"
         )
 
     @pytest.mark.asyncio
     async def test_all_groups_true_with_group_ids_is_rejected(self):
         """Passing both all_groups=True and a non-empty group_ids is ambiguous — reject it."""
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 0})
+        mock_client = _make_mock(return_value={"updated_count": 0})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
@@ -153,7 +155,7 @@ class TestClearAutoCreatedAllGroupsFlag:
     async def test_all_groups_false_with_empty_group_ids_rejected(self):
         """all_groups=False + group_ids=[] is still ambiguous/unsafe — reject it."""
         mcp = _register_and_get_mcp()
-        mock_client = _make_mock(return_value={"deleted": 99})
+        mock_client = _make_mock(return_value={"updated_count": 99})
 
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
             result = await mcp.call_tool(
@@ -178,19 +180,16 @@ class TestClearAutoCreatedSpecificGroups:
         ids in those groups) is supplied (bd-onazy two-call gate)."""
         mcp = _register_and_get_mcp()
         # Auto-created channels in the targeted groups; the clear endpoint then
-        # returns the deleted count.
+        # returns the updated count (flags cleared, not channels deleted).
         auto_channels = [
             {"id": 100, "name": "A", "auto_created": True, "channel_group_id": 10},
             {"id": 101, "name": "B", "auto_created": True, "channel_group_id": 20},
         ]
 
-        body_seen = {}
-
         def _side(ep, **kw):
             if ep.name == "channels_list":
                 return _page(auto_channels)
-            body_seen.update(kw.get("body") or {})
-            return {"deleted": 7, "updated_count": 7}
+            return {"updated_count": 7}
 
         mock_client = _make_mock(side_effect=_side)
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
@@ -203,10 +202,11 @@ class TestClearAutoCreatedSpecificGroups:
             )
 
         text = result[0][0].text
-        # Verify group_ids were forwarded to the clear endpoint.
-        assert body_seen.get("group_ids") == [10, 20, 30], (
-            f"Expected group_ids=[10,20,30] forwarded to backend, got body={body_seen!r}"
+        # Outside the tool's exception handler: a mock assertion cannot be swallowed.
+        assert mock_client.call_endpoint.await_args_list[-1] == call(
+            ENDPOINTS["channels_clear_auto_created"], body={"group_ids": [10, 20, 30]}
         )
+        assert text == "Cleared 7 auto-created channels in 3 groups."
         # Scope must say "3 groups" (not "all groups")
         assert "3" in text, (
             f"Expected count 3 in result for 3-group call, got: {text!r}"
@@ -214,9 +214,9 @@ class TestClearAutoCreatedSpecificGroups:
         assert "all" not in text.lower() or "3" in text, (
             f"Scope should reference specific groups, got: {text!r}"
         )
-        # Deleted count
+        # Updated count
         assert "7" in text, (
-            f"Expected deleted count 7 in result, got: {text!r}"
+            f"Expected updated count 7 in result, got: {text!r}"
         )
 
     @pytest.mark.asyncio
@@ -235,13 +235,10 @@ class TestClearAutoCreatedSpecificGroups:
             {"id": 11, "name": "B", "auto_created": True, "channel_group_id": 5},
             {"id": 12, "name": "C", "auto_created": True, "channel_group_id": 5},
         ]
-        body_seen = {}
-
         def _side(ep, **kw):
             if ep.name == "channels_list":
                 return _page(auto_channels)
-            body_seen.update(kw.get("body") or {})
-            return {"deleted": 3, "updated_count": 3}
+            return {"updated_count": 3}
 
         mock_client = _make_mock(side_effect=_side)
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
@@ -253,6 +250,9 @@ class TestClearAutoCreatedSpecificGroups:
 
         text = result[0][0].text
         # The clear path must return the exact wording, not the preview.
+        assert mock_client.call_endpoint.await_args_list[-1] == call(
+            ENDPOINTS["channels_clear_auto_created"], body={"group_ids": [5]}
+        )
         assert "Cleared 3 auto-created channels in 1 group." == text, (
             f"Expected exact clear wording, got: {text!r}"
         )
@@ -302,7 +302,7 @@ class TestClearAutoCreatedSpecificGroups:
         def _side(ep, **kw):
             if ep.name == "channels_list":
                 return _page(auto_channels)
-            return {"deleted": 5, "updated_count": 5}
+            return {"updated_count": 5}
 
         mock_client = _make_mock(side_effect=_side)
         with patch("tools.channels.get_ecm_client", return_value=mock_client):
@@ -316,6 +316,9 @@ class TestClearAutoCreatedSpecificGroups:
 
         text = result[0][0].text
         # Must report the exact clear wording with 2 groups, not a preview.
+        assert mock_client.call_endpoint.await_args_list[-1] == call(
+            ENDPOINTS["channels_clear_auto_created"], body={"group_ids": [100, 200]}
+        )
         assert "Cleared 5 auto-created channels in 2 groups." == text, (
             f"Expected exact clear wording for 2-group call, got: {text!r}"
         )
