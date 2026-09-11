@@ -12,6 +12,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
+- **Struck-stream cleanup resets counters with bounded SQL (bead `enhancedchannelmanager-mtcs1.2`; build 0.18.2-0029).** The reset phase uses updates of at most 500 captured IDs and one final transaction commit, eliminating per-ID reads. Any successful assignment removal still resets the originally captured population, including shared and unassigned streams after partial success or cancellation. Channel ordering and task counts are preserved; overall cleanup time still depends on upstream requests.
+
 - **Media connection tests use safe error messages (bead `enhancedchannelmanager-m8dvz`; build 0.18.2-0027).** Emby, Plex, and Jellyfin report stable authentication, timeout, TLS, unreachable-host, malformed-response, and upstream-status categories instead of raw network diagnostics. Unexpected failures use a constant fallback; detailed exceptions are sanitized in server logs. Existing response fields, human-admin/first-run gates, and outbound policy are unchanged.
 
 - **Simplified channel preview and quality-sort internals (beads `enhancedchannelmanager-98eah.2` and `98eah.3`; build 0.18.2-0027).** Batch and single normalization previews share one response serializer; direct quality sorting constructs its resolution/provider/ID suffix once. Preview fields and traces, health precedence, and deterministic stream ordering are unchanged.
