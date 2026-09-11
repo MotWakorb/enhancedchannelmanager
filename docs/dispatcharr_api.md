@@ -213,3 +213,40 @@ full refresh ~200 requests/2h). Do not wrap these in retry/polling loops.
 
 After adding a lineup, Dispatcharr fetches station metadata so channels can be
 matched before the next full schedule pull.
+## Stream User-Agent
+
+ECM's `stream_user_agent=dispatcharr` resolution follows the normal live proxy:
+stream `m3u_account` integer/null → account `user_agent` integer/null → nonempty
+core UserAgent `user_agent` string. If the account has none, select the core
+settings row with `key=stream_settings`, then `value.default_user_agent`, and
+resolve that ID against the bare UserAgent array. `is_active` is not a filter.
+Core StreamProfile UA is not consulted on normal live playback; M3U connection
+profiles and core StreamProfiles are different resources.
+
+Verified source at Dispatcharr v0.30.0 commit
+`cd3f6c509d74ad7618d870e5673476928d528de9`:
+
+- [Live URL resolution, lines 61-143](https://github.com/Dispatcharr/Dispatcharr/blob/cd3f6c509d74ad7618d870e5673476928d528de9/apps/proxy/live_proxy/url_utils.py#L61-L143)
+- [Account UA, lines 117-139](https://github.com/Dispatcharr/Dispatcharr/blob/cd3f6c509d74ad7618d870e5673476928d528de9/apps/m3u/models.py#L117-L139)
+- [Global default, lines 424-470](https://github.com/Dispatcharr/Dispatcharr/blob/cd3f6c509d74ad7618d870e5673476928d528de9/core/models.py#L424-L470)
+- [Version fallback, lines 25-28](https://github.com/Dispatcharr/Dispatcharr/blob/cd3f6c509d74ad7618d870e5673476928d528de9/core/utils.py#L25-L28)
+- [Corrected TiviMate seed](https://github.com/Dispatcharr/Dispatcharr/blob/cd3f6c509d74ad7618d870e5673476928d528de9/core/migrations/0011_fix_stream_profiles_and_user_agents.py)
+
+Fixture-backed tests use `dispatcharr_stream_provider_channel_number.json` and
+`bd_g8tyd/dispatcharr_v0282_m3u_account_server_group.json` for recorded stream and
+account shapes. `dispatcharr_core_settings_recorded.json` proves the bare array
+of `{id,key,name,value}` rows only: its values were replaced during sanitization.
+Tests explicitly label nested `default_user_agent` and UserAgent records as
+source-derived synthetic cases, not new live captures.
+
+Absent/empty/unresolved optional UA records fall through. Required configuration
+fetch errors or malformed response/header values stop the operation with a safe
+diagnostic. Configuration reads are bounded and cached only within one resolver
+operation, never globally. Overrides perform no UA configuration reads. Probe
+substeps and transient ffprobe retries reuse the same resolved string.
+
+Without a configured UA, ECM uses `Dispatcharr/{version}` from the existing
+`GET /api/core/version/` metadata endpoint. If metadata is unavailable or invalid,
+it explicitly logs and sends `Dispatcharr/unknown`. This is ECM's compatibility
+fallback, not a claim of exact equivalence with an unknown Dispatcharr release
+(older releases such as 0.28.2 could fail when the global default was missing).

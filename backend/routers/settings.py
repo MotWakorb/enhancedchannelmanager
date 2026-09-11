@@ -63,6 +63,7 @@ from cache import get_cache
 from database import get_session
 from log_utils import get_persistent_log_policy
 from stream_prober import StreamProber, get_prober, set_prober
+from stream_user_agent import StreamUserAgent
 from bandwidth_tracker import BandwidthTracker, get_tracker, set_tracker
 from services.notification_service import create_notification_internal, update_notification_internal, delete_notifications_by_source_internal
 
@@ -509,6 +510,7 @@ class SettingsRequest(BaseModel):
     telegram_chat_id: str = ""
     # Stream preview mode: "passthrough", "transcode", or "video_only"
     stream_preview_mode: str = "passthrough"
+    stream_user_agent: StreamUserAgent = "dispatcharr"
     # Auto-creation pipeline exclusion settings
     auto_creation_excluded_terms: list[str] = []
     auto_creation_excluded_groups: list[str] = []
@@ -663,6 +665,7 @@ class SettingsResponse(BaseModel):
     telegram_chat_id: str
     # Stream preview mode
     stream_preview_mode: str
+    stream_user_agent: StreamUserAgent = "dispatcharr"
     # Auto-creation pipeline exclusion settings
     auto_creation_excluded_terms: list[str]
     auto_creation_excluded_groups: list[str]
@@ -934,6 +937,7 @@ async def get_current_settings(
         telegram_bot_token="" if redact else settings.telegram_bot_token,
         telegram_chat_id="" if redact else settings.telegram_chat_id,
         stream_preview_mode=settings.stream_preview_mode,
+        stream_user_agent=settings.stream_user_agent,
         auto_creation_excluded_terms=settings.auto_creation_excluded_terms,
         auto_creation_excluded_groups=settings.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=settings.auto_creation_exclude_auto_sync_groups,
@@ -1265,6 +1269,7 @@ async def update_settings(
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
         stream_preview_mode=request.stream_preview_mode,
+        stream_user_agent=(request.stream_user_agent if "stream_user_agent" in request.model_fields_set else current_settings.stream_user_agent),
         auto_creation_excluded_terms=request.auto_creation_excluded_terms,
         auto_creation_excluded_groups=request.auto_creation_excluded_groups,
         auto_creation_exclude_auto_sync_groups=request.auto_creation_exclude_auto_sync_groups,
@@ -2051,15 +2056,13 @@ def _host_denied_by_outbound_policy(url: str, credential: str = "") -> Optional[
         ``None`` when the host is permitted, else a fixed public explanation.
         Detailed diagnostics stay in redacted server logs (m8dvz route tests).
     """
-    from security.ssrf import SSRFError, get_ssrf_mode, validate_outbound_url
+    from security.ssrf import DNSResolutionError, SSRFError, get_ssrf_mode, validate_outbound_url
 
     try:
         validate_outbound_url(url, get_ssrf_mode())
     except SSRFError as exc:
         message = str(exc)
-        lowered = message.lower()
-        if ("could not resolve host" in lowered
-                or "resolved to no usable address" in lowered):
+        if isinstance(exc, DNSResolutionError):
             logger.info(
                 "[SETTINGS] Outbound host did not resolve; not treating as a "
                 "policy denial (runtime re-validates before connect): %s",

@@ -15,20 +15,39 @@ Dispatcharr installations continue to work.
 
 ## Redirect scheme downgrades
 
-Redirect re-validation refuses an `https` → `http` downgrade on every outbound
-path except stream probing, where it is allowed. Providers commonly answer
+Redirect re-validation refuses an `https` → `http` downgrade by default.
+Provider-media probes and direct stream previews explicitly permit it. Providers commonly answer
 `https://<portal>/live/<user>/<pass>/<id>.ts` with a 302 onto a plain-HTTP edge
-node and serve the media over HTTP there in any case, so the hop is already
-unencrypted and the redirect target's opaque-token path carries no credentials.
-Refusing it therefore protected nothing and instead failed every probe against
-such a provider.
+node. That hop is unencrypted. This compatibility policy does not guarantee
+that a provider's redirect URL contains no credentials.
 
-The waiver is scoped to the probe path (ffprobe metadata, bitrate measurement,
-black-screen detection) and covers the scheme downgrade only. The denylist,
+The waivers are scoped to probing (ffprobe metadata, resdet, bitrate measurement,
+black-screen detection) and direct stream previews, and cover only the scheme downgrade. The denylist,
 resolve-once connection pinning, per-hop re-validation, redirect chain cap, and
-cross-origin credential stripping all still apply to probes. Stream preview,
-EPG fetches, cloud backup targets, and sync targets keep the refusal. Each
+cross-origin credential stripping still apply. Authenticated Dispatcharr channel
+previews, EPG fetches, cloud backup targets, and sync targets keep refusal. Each
 downgrade that is followed is logged.
+
+These boundaries are exercised by `test_probe_scheme_downgrade.py` and
+`test_preview_provider_policy.py` under `backend/tests/security/`, including
+later HLS resources and the channel proxy's bearer header.
+
+## DNS and preview startup
+
+The stream adapter runs DNS validation in worker threads, with at most two retries
+on transient `EAI_AGAIN` only (100 ms then 200 ms). Permanent errors, empty answers,
+and denied addresses fail closed. The shared synchronous validator still performs
+one lookup per invocation. A successful lookup validates every answer and pins the
+connection without a second provider DNS lookup. `test_stream_dns_retry.py` covers
+the retry bounds, off-event-loop resolution, and mixed-answer refusal.
+
+Previews open the same upstream response they will consume before sending browser
+headers. Policy refusal is HTTP 403, DNS/connect/UA configuration failure is 502,
+upstream HTTP rejection is 502 with its status code, and upstream timeout is 504.
+Messages omit provider URLs, headers and raw client exceptions. Preview startup
+uses a 10-second connect timeout and 30-second I/O timeout (not a viewing limit).
+Disconnect cleanup closes responses/relays and terminates/reaps FFmpeg, including
+disconnects before the first body read. See `test_preview_startup.py`.
 
 ## FFmpeg and ffprobe boundary
 

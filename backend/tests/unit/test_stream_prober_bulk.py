@@ -12,6 +12,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 import stream_prober as stream_prober_module
 
 from stream_prober import StreamProber
@@ -239,7 +241,7 @@ async def test_bulk_run_populates_results_envelope():
         12: {"stream_id": 12, "probe_status": "timeout", "error_message": "timed out"},
     }
 
-    async def fake_probe_stream(sid, url, name):
+    async def fake_probe_stream(sid, url, name, **_kwargs):
         return outcomes[sid]
 
     with patch.object(prober, "_fetch_all_streams", AsyncMock(return_value=streams)), \
@@ -302,7 +304,7 @@ async def test_bulk_run_honors_auto_reorder_setting():
 
     streams = [{"id": 10, "url": "http://example.com/10", "name": "Stream 10"}]
 
-    async def fake_probe_stream(sid, url, name):
+    async def fake_probe_stream(sid, url, name, **_kwargs):
         return {"stream_id": sid, "probe_status": "success"}
 
     reorder_mock = AsyncMock(return_value=[{"channel_id": 1, "channel_name": "Ch", "stream_count": 2}])
@@ -323,7 +325,7 @@ async def test_bulk_run_skips_reorder_when_setting_off():
 
     streams = [{"id": 10, "url": "http://example.com/10", "name": "Stream 10"}]
 
-    async def fake_probe_stream(sid, url, name):
+    async def fake_probe_stream(sid, url, name, **_kwargs):
         return {"stream_id": sid, "probe_status": "success"}
 
     reorder_mock = AsyncMock()
@@ -554,7 +556,7 @@ async def test_bulk_run_counts_missing_streams_as_failed():
 
     streams = [{"id": 10, "url": "http://example.com/10", "name": "Stream 10"}]
 
-    async def fake_probe_stream(sid, url, name):
+    async def fake_probe_stream(sid, url, name, **_kwargs):
         return {"stream_id": sid, "probe_status": "success"}
 
     with patch.object(prober, "_fetch_all_streams", AsyncMock(return_value=streams)), \

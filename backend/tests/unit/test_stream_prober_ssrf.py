@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
+
 from security.ssrf import SSRFError, SSRFMode, ResolvedTarget
 from security.stream_outbound import SSRFPinnedTransport, validate_stream_subprocess_url
 from security.stream_outbound import validated_subprocess_input as real_subprocess_input

@@ -8,17 +8,18 @@ inputs use ``validate_stream_subprocess_url`` as documented in
 
 Scheme-downgrade policy (bead ``enhancedchannelmanager-iyvl9``)
 --------------------------------------------------------------
-This module serves TWO consumers: the stream **prober** and the browser stream
-**preview** router. They do not share a redirect policy. Every entrypoint here
+This module serves provider probes, direct previews and channel-proxy previews.
+Every entrypoint here
 takes an explicit ``scheme_downgrade`` argument that defaults to
 :data:`~security.ssrf.SchemeDowngrade.REFUSE` and is forwarded verbatim to
-:func:`~security.ssrf.validate_redirect`; only :mod:`stream_prober` passes
-:data:`~security.ssrf.SchemeDowngrade.ALLOW_STREAM_PROBE`. Preview, and any
-future caller, keeps the refusal by doing nothing.
+:func:`~security.ssrf.validate_redirect`. Provider probes and direct previews
+explicitly opt in; the authenticated Dispatcharr channel proxy keeps REFUSE.
+The scoped policies are enforced by tests/security/test_preview_provider_policy.py.
 """
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import re
@@ -27,10 +28,12 @@ from typing import AsyncIterator, Callable, Mapping
 from urllib.parse import urljoin
 from urllib.parse import urlsplit
 
+import anyio
 import httpx
 from aiohttp import web
 
 from security.ssrf import (
+    DNSResolutionError,
     SchemeDowngrade,
     SSRFError,
     SSRFMode,
@@ -40,6 +43,20 @@ from security.ssrf import (
     validate_outbound_url,
     validate_redirect,
 )
+
+# Two short retries only for EAI_AGAIN: 100ms then 200ms. Validation runs in a
+# worker thread; every successful answer still passes the complete SSRF policy.
+DNS_RETRY_DELAYS = (0.1, 0.2)
+
+
+async def _validate_with_dns_retry(validator, *args, **kwargs):
+    for attempt in range(len(DNS_RETRY_DELAYS) + 1):
+        try:
+            return await asyncio.to_thread(validator, *args, **kwargs)
+        except DNSResolutionError as exc:
+            if not exc.transient or attempt == len(DNS_RETRY_DELAYS):
+                raise
+            await asyncio.sleep(DNS_RETRY_DELAYS[attempt])
 
 
 class SSRFPinnedTransport(httpx.AsyncBaseTransport):
@@ -62,8 +79,7 @@ class SSRFPinnedTransport(httpx.AsyncBaseTransport):
         self._inner = inner or self._inner_factory()
         self._mode = mode
         # Redirect scheme-downgrade policy for every hop this transport follows.
-        # Defaults to REFUSE; only the stream-probe path overrides it (bead
-        # enhancedchannelmanager-iyvl9).
+        # Defaults to REFUSE; provider-media callers explicitly override it.
         self._scheme_downgrade = scheme_downgrade
         self._origin: tuple[str, str, int] | None = None
 
@@ -75,14 +91,15 @@ class SSRFPinnedTransport(httpx.AsyncBaseTransport):
         if prepared_target is not None:
             target = prepared_target
         elif from_url:
-            target = validate_redirect(
+            target = await _validate_with_dns_retry(
+                validate_redirect,
                 str(from_url),
                 original_url,
                 mode,
                 scheme_downgrade=self._scheme_downgrade,
             )
         else:
-            target = validate_outbound_url(original_url, mode)
+            target = await _validate_with_dns_retry(validate_outbound_url, original_url, mode)
 
         target_origin = (target.scheme, target.hostname.lower(), target.port)
         if self._origin is not None and target_origin != self._origin:
@@ -126,9 +143,8 @@ async def stream_request(
     """Open a pinned streaming GET, revalidating and capping redirects.
 
     ``scheme_downgrade`` is forwarded to the transport and from there to
-    :func:`~security.ssrf.validate_redirect`. It defaults to REFUSE; only the
-    stream-probe path passes ``ALLOW_STREAM_PROBE`` (bead
-    ``enhancedchannelmanager-iyvl9``).
+    :func:`~security.ssrf.validate_redirect`. It defaults to REFUSE; provider
+    probes and direct stream previews opt in at their call sites.
     """
 
     if transport is not None and scheme_downgrade is not SchemeDowngrade.REFUSE:
@@ -272,11 +288,14 @@ class _LocalStreamRelay:
         return f"http://127.0.0.1:{port}/resource/{self._initial_token}"
 
     async def close(self) -> None:
-        if self._runner is not None:
-            await self._runner.cleanup()
-        if self._initial_context is not None:
-            await self._initial_context.__aexit__(None, None, None)
-            self._initial_context = None
+        runner, self._runner = self._runner, None
+        context, self._initial_context = self._initial_context, None
+        try:
+            if runner is not None:
+                await runner.cleanup()
+        finally:
+            if context is not None:
+                await context.__aexit__(None, None, None)
 
     def _headers_for(self, url: str) -> dict[str, str]:
         if _origin(url) == _origin(self._initial_url):
@@ -361,13 +380,12 @@ async def validated_subprocess_input(
     lifetime of every resource; FFmpeg receives only opaque loopback URLs.
 
     ``scheme_downgrade`` defaults to REFUSE and is forwarded to the relay's
-    redirect validation; only the stream-probe path passes
-    ``ALLOW_STREAM_PROBE`` (bead ``enhancedchannelmanager-iyvl9``).
+    redirect validation. Provider probes and direct stream previews opt in.
     """
 
     scheme = urlsplit(url).scheme.lower()
     if scheme not in {"http", "https"}:
-        validate_stream_subprocess_url(url)
+        await _validate_with_dns_retry(validate_stream_subprocess_url, url)
         yield ValidatedSubprocessInput(argument=url)
         return
 
@@ -378,7 +396,10 @@ async def validated_subprocess_input(
             argument=relay_url, is_http_relay=True
         )
     finally:
-        await relay.close()
+        # Startup can be cancelled after acquiring upstream but before yield.
+        # The caller cannot resume this exhausted context manager's cleanup.
+        with anyio.CancelScope(shield=True):
+            await relay.close()
 
 
 

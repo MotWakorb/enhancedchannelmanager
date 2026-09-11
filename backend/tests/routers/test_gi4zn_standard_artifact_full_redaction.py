@@ -1551,6 +1551,9 @@ def test_no_credential_shaped_settings_field_is_left_unredacted():
         "auth_method",
         "user_timezone",
         "user_username_cache_ttl",
+        # Fixed preset key enforced by config's StreamUserAgent Literal,
+        # not a raw User-Agent header or credential.
+        "stream_user_agent",
         # Addresses, not credentials — the operator needs them to reconnect, and
         # any credential embedded in one is removed by the URL scrub.
         "url",

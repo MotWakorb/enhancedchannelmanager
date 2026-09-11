@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 import stream_prober as stream_prober_module
 
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
+
 from config import DispatcharrSettings
 from stream_prober import (
     RELAY_PROTOCOL_WHITELIST,
@@ -83,7 +85,7 @@ async def test_enabled_probe_replaces_only_ffprobe_video_dimensions():
 
     await prober.probe_stream(7, "https://provider.example/live.ts", "Test")
 
-    prober._run_resdet.assert_awaited_once_with("https://provider.example/live.ts")
+    prober._run_resdet.assert_awaited_once_with("https://provider.example/live.ts", user_agent="VLC/3.0.20 LibVLC/3.0.20")
     saved_ffprobe_data = prober._save_probe_result.call_args.args[2]
     video = saved_ffprobe_data["streams"][0]
     assert (video["width"], video["height"]) == (1280, 720)
@@ -395,7 +397,7 @@ async def test_resdet_pipelines_are_serialized_across_stream_probers(tmp_path):
     active = 0
     maximum = 0
 
-    async def pipeline(_url, _lock_fd):
+    async def pipeline(_url, _lock_fd, **_kwargs):
         nonlocal active, maximum
         active += 1
         maximum = max(maximum, active)
@@ -424,7 +426,7 @@ async def test_cancelling_a_resdet_lock_waiter_does_not_disturb_the_owner(tmp_pa
     release_owner = asyncio.Event()
     calls = 0
 
-    async def pipeline(_url, _lock_fd):
+    async def pipeline(_url, _lock_fd, **_kwargs):
         nonlocal calls
         calls += 1
         owner_entered.set()
@@ -455,7 +457,7 @@ async def test_cancelling_a_stale_resdet_owner_releases_the_replacement(tmp_path
     owner_entered = asyncio.Event()
     calls = 0
 
-    async def pipeline(_url, _lock_fd):
+    async def pipeline(_url, _lock_fd, **_kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:

@@ -4,6 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
+
 from stream_prober import (
     PROBE_NETWORK_ROUTE_GUIDANCE,
     ProbeNetworkRouteError,

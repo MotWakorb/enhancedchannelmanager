@@ -105,6 +105,7 @@ def _mock_settings(**overrides):
         "telegram_bot_token": "",
         "telegram_chat_id": "",
         "stream_preview_mode": "passthrough",
+        "stream_user_agent": "dispatcharr",
         "auto_creation_excluded_terms": [],
         "auto_creation_excluded_groups": [],
         "auto_creation_exclude_auto_sync_groups": False,
@@ -150,6 +151,40 @@ def _mock_settings(**overrides):
     mock.is_discord_configured.return_value = False
     mock.is_telegram_configured.return_value = False
     return mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", [None, "dispatcharr"])
+async def test_stream_user_agent_partial_post_preserves_or_explicitly_resets(selection, monkeypatch, tmp_path):
+    """GH995: exercise real settings persistence and reload, not a save mock."""
+    from fastapi import FastAPI
+    from routers import settings
+
+    monkeypatch.setattr(config, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(config, "CONFIG_FILE", tmp_path / "settings.json")
+    monkeypatch.setattr(config, "MCP_SECRETS_DIR", tmp_path / "mcp")
+    monkeypatch.setattr(config, "MCP_KEY_FILE", tmp_path / "mcp" / "api-key")
+    (tmp_path / "mcp").mkdir(mode=0o700)
+    config.clear_settings_cache()
+    try:
+        config.save_settings(config.DispatcharrSettings(stream_user_agent="tivimate"))
+        config.clear_settings_cache()
+        assert config.get_settings().stream_user_agent == "tivimate"
+        app = FastAPI()
+        app.include_router(settings.router)
+        app.dependency_overrides[settings._resolve_settings_admin] = lambda: True
+        payload = {"url": "", "theme": "light"}
+        if selection is not None:
+            payload["stream_user_agent"] = selection
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+            response = await client.post("/api/settings", json=payload)
+        assert response.status_code == 200, response.text
+        config.clear_settings_cache()
+        reloaded = config.get_settings()
+        assert reloaded.theme == "light"
+        assert reloaded.stream_user_agent == (selection or "tivimate")
+    finally:
+        config.clear_settings_cache()
 
 
 class TestGetSettings:

@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
+
 from stream_prober import FFPROBE_PROTOCOL_WHITELIST, StreamProber
 
 

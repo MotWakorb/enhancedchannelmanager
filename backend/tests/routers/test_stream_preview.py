@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from security.ssrf import SSRFError
-from routers.stream_preview import stream_generator
+from routers.stream_preview import PREVIEW_TIMEOUT, stream_generator
 
 
 class _DeniedInputContext:
@@ -74,7 +74,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_returns_404_when_stream_not_found(self, async_client):
         """Returns 404 when stream doesn't exist."""
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(stream_user_agent="vlc")
         mock_settings.stream_preview_mode = "passthrough"
 
         mock_client = AsyncMock()
@@ -89,7 +89,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_returns_404_when_no_url(self, async_client):
         """Returns 404 when stream has no URL."""
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(stream_user_agent="vlc")
         mock_settings.stream_preview_mode = "passthrough"
 
         mock_client = AsyncMock()
@@ -104,7 +104,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_returns_503_when_no_client(self, async_client):
         """Returns 503 when not connected to Dispatcharr."""
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(stream_user_agent="vlc")
         mock_settings.stream_preview_mode = "passthrough"
 
         with patch("routers.stream_preview.get_settings", return_value=mock_settings), \
@@ -116,7 +116,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_rejects_invalid_mode(self, async_client):
         """Returns 400 for invalid preview mode."""
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(stream_user_agent="vlc")
         mock_settings.stream_preview_mode = "invalid"
 
         mock_client = AsyncMock()
@@ -131,7 +131,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_passthrough_returns_streaming(self, async_client):
         """Passthrough mode returns StreamingResponse."""
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(stream_user_agent="vlc")
         mock_settings.stream_preview_mode = "passthrough"
 
         mock_client = AsyncMock()
@@ -139,19 +139,18 @@ class TestStreamPreview:
 
         with patch("routers.stream_preview.get_settings", return_value=mock_settings), \
              patch("routers.stream_preview.get_client", return_value=mock_client), \
-             patch("routers.stream_preview.prepare_stream_http_url"), \
              patch("routers.stream_preview.stream_request", _mock_stream_response):
             response = await async_client.get("/api/stream-preview/1")
 
-        # StreamingResponse returns 200 (the generator will fail on actual stream but headers are set)
         assert response.status_code == 200
+        assert response.content == b"mock stream data"
         assert response.headers.get("content-type") == "video/mp2t"
 
     @pytest.mark.asyncio
     async def test_passthrough_denied_destination_returns_403_before_streaming(
         self, async_client
     ):
-        mock_settings = MagicMock(stream_preview_mode="passthrough")
+        mock_settings = MagicMock(stream_preview_mode="passthrough", stream_user_agent="vlc")
         mock_client = AsyncMock()
         mock_client.get_stream.return_value = {
             "id": 1,
@@ -159,11 +158,7 @@ class TestStreamPreview:
         }
 
         with patch("routers.stream_preview.get_settings", return_value=mock_settings), \
-             patch("routers.stream_preview.get_client", return_value=mock_client), \
-             patch(
-                 "routers.stream_preview.prepare_stream_http_url",
-                 side_effect=SSRFError("denied"),
-             ):
+             patch("routers.stream_preview.get_client", return_value=mock_client):
             response = await async_client.get("/api/stream-preview/1")
 
         assert response.status_code == 403
@@ -172,7 +167,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     async def test_transcode_ffmpeg_not_found(self, async_client):
         """Returns 500 when FFmpeg is not installed (transcode mode)."""
-        mock_settings = MagicMock()
+        mock_settings = MagicMock(stream_user_agent="vlc")
         mock_settings.stream_preview_mode = "transcode"
 
         mock_client = AsyncMock()
@@ -190,7 +185,7 @@ class TestStreamPreview:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("mode", ["transcode", "video_only"])
     async def test_ffmpeg_modes_deny_before_spawn(self, async_client, mode):
-        mock_settings = MagicMock(stream_preview_mode=mode)
+        mock_settings = MagicMock(stream_preview_mode=mode, stream_user_agent="vlc")
         mock_client = AsyncMock()
         mock_client.get_stream.return_value = {
             "id": 1,
@@ -317,6 +312,7 @@ class TestChannelPreview:
         validate.assert_called_once_with(
             "http://dispatcharr:8000/proxy/ts/stream/abc-123",
             headers={"Authorization": "Bearer synthetic-test-token"},
+            timeout=PREVIEW_TIMEOUT,
         )
         spawn.assert_not_called()
 

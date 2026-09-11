@@ -56,6 +56,8 @@ logging.basicConfig(
 # Keep noisy third-party loggers quiet regardless of app log level
 logging.getLogger("sqlalchemy").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+# HTTPX INFO request logs include reusable provider path/query credentials.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 # Sanitize all log arguments to prevent log injection (CWE-117)
 from log_utils import (  # noqa: E402
     install_persistent_json_logging,
@@ -158,7 +160,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0031",
+    version="0.18.2-0032",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",

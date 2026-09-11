@@ -8,9 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Resolved User-Agent headers reach provider requests (bead `enhancedchannelmanager-yz6rv`, GitHub #995, build 0.18.2-0032).** Direct previews and metadata, bitrate, resdet, and black screen probes send the selected identity on validated provider HTTP requests, including redirects and later HLS resources. Probe substeps and transient ffprobe retries reuse the same resolved header.
+
+- **Provider preview redirects and startup failures are handled explicitly (bead `enhancedchannelmanager-yz6rv`, GitHub #995, build 0.18.2-0032).** Direct provider previews support HTTPS-to-HTTP redirects with per-hop SSRF checks; authenticated Dispatcharr channel previews retain downgrade refusal. Stream DNS validation runs off the event loop and retries only transient failures, at most twice. Previews open upstream before sending browser headers and return safe 403/502/504 errors for policy, connection/configuration/upstream, and timeout failures. Cancellation and disconnect cleanup close responses and relays and terminate/reap FFmpeg.
+
 - **Restore dialogs correlate progress and reports with the requested run (bead `enhancedchannelmanager-zt801`; build 0.18.2-0030).** Uploaded and saved DBAS restore triggers issue a server run identity carried into progress and terminal history. Reopening a dialog or rerunning the same task cannot present an older preview as the current result or enable Apply from it. Slow-upload timing, history retries, warning reports, and apply-only data refresh are preserved. Unknown identity fails closed.
 
 ### Security
+
+- **Stream diagnostics protect provider tokens (bead `enhancedchannelmanager-yz6rv`, GitHub #995, build 0.18.2-0032).** Preview startup, streaming, decoder, and black screen failures use safe diagnostics instead of raw client exceptions or provider URLs. HTTPX request URL logs stay suppressed at DEBUG level, protecting reusable path/query credentials while retaining failure categories and decoder exit codes.
 
 - **Settings URL validation uses safe public errors (bead `enhancedchannelmanager-m8dvz`; build 0.18.2-0028).** Malformed ports and outbound-policy denials return fixed messages instead of parser text or resolved-address details, including the shared Dispatcharr and media settings save paths. Host-policy diagnostics remain in redacted server logs. Media client error categories, credential escaping, human-admin/first-run gates, and outbound allow/deny decisions are preserved.
 
@@ -27,6 +33,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Mapped channels moved to Settings > Channel Normalization (bead `enhancedchannelmanager-81sy8`, GitHub #775, build 0.18.2-0024).** The existing manager is now a headed, section-linked Settings section instead of an Operations sidebar destination. Old `#mapped-channels` bookmarks redirect to the new section. Mapping saves, API permissions, and the stream-selection **Add mapping** shortcut are unchanged.
 
 ### Added
+
+- **Persisted Stream User-Agent selector (bead `enhancedchannelmanager-rmf8n`, GitHub #995, build 0.18.2-0032).** Settings → Appearance → Stream Preview offers **Use Dispatcharr User-Agent (Default)** plus Chrome, Firefox, Safari, VLC, and TiviMate compatibility presets. Save Settings applies the choice to new direct previews and ECM probes. The default resolves the M3U account UA, then Dispatcharr's global default, then `Dispatcharr/{version}` or `Dispatcharr/unknown` when metadata is unavailable.
 
 - **Behavioral test guards (beads `enhancedchannelmanager-ocr52.2`, `ocr52.3`, `hh5ug`, and `sogbx`; build 0.18.2-0031).** MCP clear-flag tests pin awaited scoped endpoint calls and backend count fields. The responsive M3U filter component test checks viewport containment, unobstructed cell centers, and the Edit form transition. Runtime-derived contract/security inventories reject empty cases, and restore enum/TypeScript union mirrors are compared in both directions alongside existing model-field parity.
 

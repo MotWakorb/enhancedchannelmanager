@@ -158,6 +158,13 @@ def test_engine():
     engine.dispose()
 
 
+@pytest.fixture
+def vlc_stream_user_agent(monkeypatch):
+    """Legacy probe tests select VLC explicitly; UA resolution has its own coverage."""
+    from config import get_settings
+    monkeypatch.setattr(get_settings(), "stream_user_agent", "vlc")
+
+
 @pytest.fixture(scope="function")
 def test_session(test_engine):
     """Create a test database session."""
