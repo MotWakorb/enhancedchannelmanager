@@ -104,6 +104,7 @@ async def test_scheduled_probe_reorder_choice_is_invocation_local_and_group_scop
     ids=["default-follows-global", "disabled", "does-not-force-global"],
 )
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("vlc_stream_user_agent")
 async def test_probe_all_reorder_gate_preserves_metadata_and_channel_order(
     test_engine,
     monkeypatch,

@@ -3,6 +3,7 @@ import * as api from '../../services/api';
 import * as channelPipelineApi from '../../services/channelPipelineApi';
 import { useNotifications } from '../../contexts/NotificationContext';
 import type { Theme, ProbeHistoryEntry, SortCriterion, SortEnabledMap, FailedStreamCategory, GracenoteConflictMode, StreamPreviewMode, StreamSortStrategy, StreamSortPointCriterion, StreamSortPointOperator, StreamSortPointRule } from '../../services/api';
+import type { StreamUserAgent } from '../../services/api';
 import { NormalizationEngineSection } from '../settings/NormalizationEngineSection';
 import { MappedChannels } from '../MappedChannels';
 import { TagEngineSection } from '../settings/TagEngineSection';
@@ -692,6 +693,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [dateFormat, setDateFormat] = useState<DateFormatPref>('auto');
   const [vlcOpenBehavior, setVlcOpenBehavior] = useState<'protocol_only' | 'm3u_fallback' | 'm3u_only'>('m3u_fallback');
   const [streamPreviewMode, setStreamPreviewMode] = useState<StreamPreviewMode>('passthrough');
+  const [streamUserAgent, setStreamUserAgent] = useState<StreamUserAgent>('dispatcharr');
 
   // Stats settings
   const [statsPollInterval, setStatsPollInterval] = useState(10);
@@ -930,7 +932,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     dedupM3uToastSuppressed, embyEnabled, embyBaseUrl, embyApiKey, plexEnabled,
     plexBaseUrl, plexToken, jellyfinEnabled, jellyfinBaseUrl, jellyfinApiKey,
     trustedMediaNetworks, statsPollInterval, userTimezone, backendLogLevel,
-    frontendLogLevel, vlcOpenBehavior, streamPreviewMode, channelPipelineExcludedTerms,
+    frontendLogLevel, vlcOpenBehavior, streamPreviewMode, streamUserAgent, channelPipelineExcludedTerms,
     channelPipelineExcludedGroups, channelPipelineExcludeAutoSyncGroups,
     maxAutoCreatedChannelsPerRun, maxChannelPipelineLogEntries, linkedM3UAccounts,
     streamProbeTimeout, useResdetForResolution, bitrateSampleDuration, parallelProbingEnabled,
@@ -1206,6 +1208,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
       const vlcBehavior = settings.vlc_open_behavior as 'protocol_only' | 'm3u_fallback' | 'm3u_only';
       setVlcOpenBehavior(vlcBehavior || 'm3u_fallback');
       setStreamPreviewMode(settings.stream_preview_mode || 'passthrough');
+      setStreamUserAgent(settings.stream_user_agent || 'dispatcharr');
       setChannelPipelineExcludedTerms(settings.auto_creation_excluded_terms ?? []);
       setChannelPipelineExcludedGroups(settings.auto_creation_excluded_groups ?? []);
       setChannelPipelineExcludeAutoSyncGroups(settings.auto_creation_exclude_auto_sync_groups ?? false);
@@ -1728,6 +1731,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         frontend_log_level: frontendLogLevel,
         vlc_open_behavior: vlcOpenBehavior,
         stream_preview_mode: streamPreviewMode,
+        stream_user_agent: streamUserAgent,
         auto_creation_excluded_terms: channelPipelineExcludedTerms,
         auto_creation_excluded_groups: channelPipelineExcludedGroups,
         auto_creation_exclude_auto_sync_groups: channelPipelineExcludeAutoSyncGroups,
@@ -2908,6 +2912,30 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             AC-3 or E-AC-3 audio codecs which aren't supported by Chrome. Use "Transcode"
             for best compatibility, or "Video Only" for quick visual previews without audio.
             Transcoding requires FFmpeg on the backend and uses more CPU.
+          </p>
+        </div>
+        <div className="form-group">
+          <label htmlFor="streamUserAgent">Stream User-Agent</label>
+          <CustomSelect
+            id="streamUserAgent"
+            ariaLabel="Stream User-Agent"
+            value={streamUserAgent}
+            onChange={(value) => setStreamUserAgent(value as StreamUserAgent)}
+            options={[
+              { value: 'dispatcharr', label: 'Use Dispatcharr User-Agent (Default)' },
+              { value: 'chrome', label: 'Chrome' },
+              { value: 'firefox', label: 'Firefox' },
+              { value: 'safari', label: 'Safari' },
+              { value: 'vlc', label: 'VLC' },
+              { value: 'tivimate', label: 'TiviMate' },
+            ]}
+          />
+          <p className="form-hint">
+            Shared by direct stream previews and all ECM probes, including bitrate,
+            resolution and black screen scans. Default uses the Dispatcharr M3U account
+            User-Agent, then its global default. Presets use fixed browser/player versions
+            for compatibility. Channel previews use Dispatcharr's proxy, which controls its own
+            provider User-Agent. Save Settings to apply to new previews and probes.
           </p>
         </div>
       </div>

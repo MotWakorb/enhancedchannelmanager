@@ -63,29 +63,30 @@ Design (per §9.4)
   on a redirect target, rejects ``https → http`` downgrades, and
   :func:`check_redirect_depth` caps the chain at :data:`MAX_REDIRECTS`.
 
-Scheme-downgrade scope (bead ``enhancedchannelmanager-iyvl9``)
+Scheme-downgrade scope (beads ``iyvl9`` and ``yz6rv``)
 -------------------------------------------------------------
 The ``https → http`` refusal is the DEFAULT for every outbound path and stays
-that way. Exactly one caller may opt out: the stream-probe path, via the
+that way. Provider-media probes and direct stream previews may opt out via the
 explicit :class:`SchemeDowngrade` parameter on :func:`validate_redirect`
-(``SchemeDowngrade.ALLOW_STREAM_PROBE``). It is a per-call argument on purpose —
+(``ALLOW_STREAM_PROBE`` / ``ALLOW_STREAM_PREVIEW``). It is a per-call argument:
 not a global flag, not a settings key, not an environment variable — so that
 reading :func:`validate_redirect` tells you who is allowed to downgrade, and so
 that ``grep -rn ALLOW_STREAM_PROBE`` enumerates every site that does.
 
-Why the probe path and nothing else: XC providers routinely 302 an
+Why provider media: XC providers routinely 302 an
 ``https://<portal>/live/<user>/<pass>/<id>.ts`` request onto a plain-HTTP edge
 node, and they serve the video over HTTP at that edge regardless. Playback is
-already unencrypted in transit, and the redirect target's path is an opaque
-token carrying no credentials, so refusing the hop buys no confidentiality — it
-only costs the operator the ability to learn whether a stream works. Every other
+unencrypted on that hop. The scoped policy permits this provider behavior; it
+does not promise that arbitrary redirect paths contain no credentials. Every other
 outbound destination (cloud backup targets, EPG sources, a second Dispatcharr
 instance) is a credentialed API where a downgrade IS a real loss, so those keep
 the refusal.
 
 The relaxation is narrow in a second sense: it waives ONLY the scheme-downgrade
 clause. The denylist, resolve-then-connect-by-IP, redirect depth capping and
-origin pinning all still apply to the probe path unchanged.
+origin pinning still apply. The authenticated Dispatcharr channel proxy retains
+REFUSE. Tests: ``tests/security/test_preview_provider_policy.py`` and
+``tests/security/test_probe_scheme_downgrade.py``.
 
 Seam for bead .8
 ----------------
@@ -157,13 +158,13 @@ class SchemeDowngrade(str, Enum):
     """
 
     #: Refuse the downgrade. The default, and the policy for EVERY outbound
-    #: path other than the stream probe.
+    #: path other than explicitly opted-in provider media.
     REFUSE = "refuse"
     #: Follow the downgrade. Reserved for the stream-probe path (ffprobe /
-    #: bitrate measurement / black-screen detection), where the provider serves
-    #: the media over plain HTTP anyway and the redirect target carries no
-    #: credentials. See the module docstring for the full rationale.
+    #: bitrate measurement / black-screen detection). See the module docstring.
     ALLOW_STREAM_PROBE = "allow_stream_probe"
+    #: Provider-media preview only; never the authenticated Dispatcharr channel proxy.
+    ALLOW_STREAM_PREVIEW = "allow_stream_preview"
 
 
 class SSRFError(Exception):
@@ -345,6 +346,14 @@ def _ip_allowed(ip: _IPAddress, mode: SSRFMode) -> bool:
     return True
 
 
+class DNSResolutionError(SSRFError):
+    """A failed lookup, distinct from a destination-policy refusal."""
+
+    def __init__(self, *, transient: bool = False):
+        super().__init__("Stream DNS resolution failed (no connection made)")
+        self.transient = transient
+
+
 def _resolve(host: str, port: Optional[int]) -> list[_IPAddress]:
     """Resolve ``host`` to a list of IP addresses (ONE lookup).
 
@@ -400,10 +409,12 @@ def _validate_parsed(scheme: str, hostname: str, port: int, url: str,
     except (socket.gaierror, socket.herror, UnicodeError, OSError) as exc:
         # FAIL CLOSED (unlike the media-server validator). An unresolvable or
         # ambiguous host is rejected for the cloud-upload path.
-        raise SSRFError(f"Could not resolve host '{hostname}' — rejected (fail-closed)") from exc
+        raise DNSResolutionError(
+            transient=isinstance(exc, socket.gaierror) and exc.errno == socket.EAI_AGAIN
+        ) from exc
 
     if not records:
-        raise SSRFError(f"Host '{hostname}' resolved to no usable address — rejected (fail-closed)")
+        raise DNSResolutionError()
 
     # Validate EVERY record; ANY denied → reject the whole request (do not
     # cherry-pick the allowed one — that is the DNS-rebinding bypass).
@@ -478,18 +489,17 @@ def validate_redirect(
 
     * Re-runs the full denylist + resolve-by-IP on ``to_url``.
     * Rejects an ``https → http`` scheme downgrade UNLESS the caller explicitly
-      passes ``scheme_downgrade=SchemeDowngrade.ALLOW_STREAM_PROBE``.
+      passes an explicit provider-media downgrade policy.
 
     The caller is responsible for capping the chain length via
     :func:`check_redirect_depth`.
 
     Who may downgrade
     -----------------
-    Only the stream-probe path
-    (:mod:`stream_prober` → :mod:`security.stream_outbound`). ``scheme_downgrade``
+    Provider probes and direct stream previews. ``scheme_downgrade``
     is keyword-only and defaults to :data:`SchemeDowngrade.REFUSE`, so every
     other caller — cloud backup targets, EPG source fetches, the
-    cross-instance sync client, the browser stream preview — keeps the refusal
+    cross-instance sync client, the authenticated channel preview, keeps refusal
     without doing anything, and a new caller cannot inherit the relaxation by
     accident. Waiving the downgrade waives ONLY the downgrade: the denylist,
     resolve-then-connect-by-IP, depth cap and origin pinning are unaffected.
@@ -500,8 +510,7 @@ def validate_redirect(
         to_url: the ``Location:`` target.
         mode: active SSRF mode.
         scheme_downgrade: downgrade policy for THIS hop. Defaults to
-            :data:`SchemeDowngrade.REFUSE`; only the stream-probe path passes
-            :data:`SchemeDowngrade.ALLOW_STREAM_PROBE`.
+            :data:`SchemeDowngrade.REFUSE`; provider probes/previews opt in.
 
     Returns:
         A validated :class:`ResolvedTarget` for ``to_url``.
@@ -513,14 +522,16 @@ def validate_redirect(
     from_scheme, _, _ = _split(from_url)
     to_scheme = (urlsplit(to_url).scheme or "").lower()
     if from_scheme == "https" and to_scheme == "http":
-        if scheme_downgrade is not SchemeDowngrade.ALLOW_STREAM_PROBE:
+        if scheme_downgrade not in (
+            SchemeDowngrade.ALLOW_STREAM_PROBE, SchemeDowngrade.ALLOW_STREAM_PREVIEW
+        ):
             raise SSRFError("Refusing redirect that downgrades https → http")
         # Deliberate, scoped waiver — record it so the downgrade is never
         # silent. No URL or credential in the message (bead
         # ``enhancedchannelmanager-3dn59``): the probe path surfaces guard
         # messages to the operator, so they must stay credential-free.
         logger.warning(
-            "[SSRF] Following an https → http redirect on the stream-probe "
+            "[SSRF] Following an https → http redirect on the provider-media "
             "path (policy=%s); this hop is not confidential",
             scheme_downgrade.value,
         )

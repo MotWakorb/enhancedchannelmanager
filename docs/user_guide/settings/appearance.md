@@ -79,6 +79,39 @@ setup for Windows, a shell script that creates a `.desktop` file for
 on macOS. Download the one matching your OS and run it once; after that,
 `vlc://` links open VLC directly.
 
+### Set the User-Agent for direct previews and probes
+
+Under **Settings → Appearance → Stream Preview**, choose **Stream User-Agent**
+and click **Save Settings**. One selection applies to new direct stream previews
+and ECM probes: metadata, bitrate, resdet resolution, and black screen scans.
+An in-progress probe keeps its selected identity through its substeps and retries.
+
+- **Use Dispatcharr User-Agent (Default)**: use the stream's M3U account UA,
+  then Dispatcharr's global default. Core StreamProfile UA is not part of normal
+  live playback resolution.
+- **Chrome**, **Firefox**, **Safari**, **VLC**, **TiviMate**: send a fixed
+  compatibility identity instead. These presets represent Chrome 132,
+  Firefox 135, Safari 17.6, VLC/LibVLC 3.0.20, and TiviMate 5.1.6 on Android 12;
+  they are not claims to be the latest browser/player releases.
+
+Without either Dispatcharr UA setting, ECM uses `Dispatcharr/{version}` when
+version metadata is available, otherwise logs and sends `Dispatcharr/unknown`.
+Failed configuration reads and malformed UA headers produce a safe error rather
+than silently switching identities. This fallback is an ECM compatibility choice
+for missing metadata, not exact equivalence to every Dispatcharr release.
+
+**Channel previews** use Dispatcharr's TS proxy. Dispatcharr controls that proxy's
+provider UA; this ECM selector cannot override it. Non-HTTP transports have no
+HTTP User-Agent header. Changing this setting also does not give ECM Dispatcharr's
+VPN/network route. If preview returns a DNS or connection error, check connectivity
+from the ECM host/container.
+
+If playback stops after it starts, check ECM's `[PREVIEW]` warnings for an
+upstream streaming failure or an abnormal decoder exit code. These failures
+abort playback; they cannot replace already-sent HTTP headers with a JSON error.
+Normal viewer disconnects do not produce decoder-failure warnings. HTTPX request
+URL logs stay suppressed even at DEBUG level to protect provider path/query tokens.
+
 ### Clear old toast notifications
 
 1. Go to **Settings → Appearance**.

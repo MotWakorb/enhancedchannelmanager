@@ -30,6 +30,7 @@ from credential_sentinel import (
 )
 from pathlib import Path
 from smart_sort_evaluator import CODEC_RANK, PointRule
+from stream_user_agent import StreamUserAgent
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -784,6 +785,7 @@ class DispatcharrSettings(BaseModel):
     # "transcode" - FFmpeg transcodes unsupported audio to AAC (CPU intensive)
     # "video_only" - Strip audio for quick preview (fast, no audio)
     stream_preview_mode: str = "passthrough"
+    stream_user_agent: StreamUserAgent = "dispatcharr"
     # Auto-creation pipeline exclusion settings
     auto_creation_excluded_terms: list[str] = []  # Terms that exclude streams by name (case-insensitive substring)
     auto_creation_excluded_groups: list[str] = []  # M3U group names to exclude (case-insensitive exact match)
@@ -2297,7 +2299,7 @@ def set_log_level(level: str) -> None:
     # Set level for all existing loggers, but keep noisy third-party
     # loggers (e.g. sqlalchemy.engine) at WARNING to avoid flooding
     # the console and ring buffer with SQL dumps.
-    _NOISY_LOGGERS = {"sqlalchemy", "httpcore"}
+    _NOISY_LOGGERS = {"sqlalchemy", "httpcore", "httpx"}
     for logger_name in logging.root.manager.loggerDict:
         if any(logger_name.startswith(prefix) for prefix in _NOISY_LOGGERS):
             continue

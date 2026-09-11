@@ -9,8 +9,13 @@ from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, AsyncMock
 
 import pytest
+import httpx
 
 import config
+from routers.stream_preview import PREVIEW_TIMEOUT
+from security.ssrf import SchemeDowngrade
+from security import stream_outbound
+from stream_user_agent import USER_AGENT_PRESETS
 
 
 @asynccontextmanager
@@ -65,7 +70,7 @@ class TestStreamPreview:
 
         with patch("routers.stream_preview.get_client", return_value=mock_client):
             with patch("routers.stream_preview.get_settings") as mock_settings:
-                mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
+                mock_settings.return_value = MagicMock(stream_preview_mode="passthrough", stream_user_agent="vlc")
                 response = await async_client.get("/api/stream-preview/9999")
                 assert response.status_code == 404
                 assert "Stream not found" in response.json()["detail"]
@@ -78,7 +83,7 @@ class TestStreamPreview:
 
         with patch("routers.stream_preview.get_client", return_value=mock_client):
             with patch("routers.stream_preview.get_settings") as mock_settings:
-                mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
+                mock_settings.return_value = MagicMock(stream_preview_mode="passthrough", stream_user_agent="vlc")
                 response = await async_client.get("/api/stream-preview/1")
                 assert response.status_code == 404
                 assert "no URL" in response.json()["detail"]
@@ -113,7 +118,7 @@ class TestStreamPreview:
 
         with patch("routers.stream_preview.get_client", return_value=mock_client):
             with patch("routers.stream_preview.get_settings") as mock_settings:
-                mock_settings.return_value = MagicMock(stream_preview_mode="passthrough")
+                mock_settings.return_value = MagicMock(stream_preview_mode="passthrough", stream_user_agent="vlc")
 
                 calls = []
 
@@ -123,19 +128,15 @@ class TestStreamPreview:
                     mock_response.raise_for_status = MagicMock()
                     yield mock_response
 
-                prepared = MagicMock()
-                with patch(
-                    "routers.stream_preview.prepare_stream_http_url",
-                    return_value=prepared,
-                ), \
-                     patch("routers.stream_preview.stream_request", mock_stream_request):
+                with patch("routers.stream_preview.stream_request", mock_stream_request):
                     response = await async_client.get("/api/stream-preview/1")
                     # The endpoint returns a StreamingResponse with video/mp2t content type
                     assert response.status_code == 200
                     assert response.headers.get("content-type") == "video/mp2t"
                     assert calls == [((provider_url,), {
-                        "timeout": None,
-                        "initial_target": prepared,
+                        "timeout": PREVIEW_TIMEOUT,
+                        "headers": {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"},
+                        "scheme_downgrade": SchemeDowngrade.ALLOW_STREAM_PREVIEW,
                     })]
 
     @pytest.mark.asyncio
@@ -146,7 +147,7 @@ class TestStreamPreview:
 
         with patch("routers.stream_preview.get_client", return_value=mock_client):
             with patch("routers.stream_preview.get_settings") as mock_settings:
-                mock_settings.return_value = MagicMock(stream_preview_mode="transcode")
+                mock_settings.return_value = MagicMock(stream_preview_mode="transcode", stream_user_agent="vlc")
 
                 with patch("routers.stream_preview.validated_subprocess_input", _allowed_direct_input), \
                      patch("subprocess.Popen", side_effect=FileNotFoundError("ffmpeg not found")):
@@ -240,12 +241,7 @@ class TestChannelPreview:
                     calls.append((args, kwargs))
                     yield mock_response
 
-                prepared = MagicMock()
-                with patch(
-                    "routers.stream_preview.prepare_stream_http_url",
-                    return_value=prepared,
-                ), \
-                     patch("routers.stream_preview.stream_request", mock_stream_request):
+                with patch("routers.stream_preview.stream_request", mock_stream_request):
                     response = await async_client.get("/api/channel-preview/1")
                     # The endpoint returns a StreamingResponse with video/mp2t content type
                     assert response.status_code == 200
@@ -253,9 +249,9 @@ class TestChannelPreview:
                     assert calls == [(
                         ("http://localhost:5656/proxy/ts/stream/test-uuid-123",),
                         {
-                            "timeout": None,
+                            "timeout": PREVIEW_TIMEOUT,
                             "headers": {"Authorization": "Bearer test-jwt-token"},
-                            "initial_target": prepared,
+                            "scheme_downgrade": SchemeDowngrade.REFUSE,
                         },
                     )]
 
@@ -304,6 +300,44 @@ class TestChannelPreview:
 
 class TestStreamPreviewModeSettings:
     """Tests for stream_preview_mode in settings."""
+
+    @pytest.mark.asyncio
+    async def test_shared_user_agent_persists_and_rejects_custom_values(self, async_client, isolated_settings_file):
+        client = AsyncMock()
+        client.get_stream.return_value = {"id": 42, "url": "http://93.184.216.34/live.ts", "m3u_account": None}
+        client.get_core_settings.return_value = []
+        client.get_version.return_value = {"version": "0.30.0"}
+        provider_headers = []
+
+        async def provider(request):
+            provider_headers.append(request.headers["User-Agent"])
+            return httpx.Response(200, content=b"provider-media", request=request)
+
+        transport_class = stream_outbound.SSRFPinnedTransport
+        for selection in ("dispatcharr", "chrome", "firefox", "safari", "vlc", "tivimate"):
+            response = await async_client.post("/api/settings", json={
+                "url": "http://dispatcharr.example:5656", "auth_method": "password",
+                "username": "admin", "password": "test-password", "stream_user_agent": selection,
+            })
+            assert response.status_code == 200
+            config.clear_settings_cache()
+            assert (await async_client.get("/api/settings")).json()["stream_user_agent"] == selection
+            # Real settings POST/file reload -> real preview/relay transport ->
+            # provider-facing request. Only the remote provider is a test double.
+            with patch("routers.stream_preview.get_client", return_value=client), patch.object(
+                stream_outbound, "SSRFPinnedTransport", side_effect=lambda **kwargs: transport_class(
+                    inner_factory=lambda: httpx.MockTransport(provider), **kwargs
+                )
+            ):
+                preview = await async_client.get("/api/stream-preview/42")
+            assert preview.status_code == 200
+            assert preview.content == b"provider-media"
+            assert provider_headers[-1] == USER_AGENT_PRESETS.get(selection, "Dispatcharr/0.30.0")
+        assert len(provider_headers) == 6
+        client.get_core_settings.assert_awaited_once()
+        response = await async_client.post("/api/settings", json={"stream_user_agent": "custom\r\nInjected"})
+        assert response.status_code == 422
+        assert (await async_client.get("/api/settings")).json()["stream_user_agent"] == "tivimate"
 
     @pytest.mark.asyncio
     async def test_get_settings_includes_stream_preview_mode(self, async_client):

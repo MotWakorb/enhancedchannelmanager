@@ -40,10 +40,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
+
 from security import ssrf
 from security.ssrf import (
     MAX_REDIRECTS,
     SSRFError,
+    DNSResolutionError,
     SSRFMode,
     SchemeDowngrade,
     check_redirect_depth,
@@ -51,6 +54,7 @@ from security.ssrf import (
     validate_redirect,
 )
 from security.stream_outbound import _LocalStreamRelay, validate_stream_subprocess_url
+from stream_user_agent import StreamUserAgentError
 from stream_prober import (
     OPERATOR_SAFE_EXCEPTION_TYPES,
     PROBE_NETWORK_ROUTE_GUIDANCE,
@@ -126,6 +130,8 @@ class TestExceptionOriginClassification:
             SSRFError,
             ProbeNetworkRouteError,
             ResolutionDetectionError,
+            DNSResolutionError,
+            StreamUserAgentError,
         }
 
     def test_empty_message_reports_no_detail(self):

@@ -1219,6 +1219,7 @@ export interface SettingsResponse {
   telegram_chat_id: string;
   // Stream preview mode: "passthrough", "transcode", or "video_only"
   stream_preview_mode: StreamPreviewMode;
+  stream_user_agent?: StreamUserAgent;
   // Auto-creation pipeline exclusion settings
   auto_creation_excluded_terms: string[];
   auto_creation_excluded_groups: string[];
@@ -1289,6 +1290,7 @@ export async function saveSecurityMode(
 
 // Stream preview mode for browser playback
 export type StreamPreviewMode = 'passthrough' | 'transcode' | 'video_only';
+export type StreamUserAgent = 'dispatcharr' | 'chrome' | 'firefox' | 'safari' | 'vlc' | 'tivimate';
 
 export interface TestConnectionResult {
   success: boolean;
@@ -1390,6 +1392,7 @@ export async function saveSettings(settings: {
   telegram_bot_token?: string;  // Optional - Telegram bot token
   telegram_chat_id?: string;  // Optional - Telegram chat ID
   stream_preview_mode?: StreamPreviewMode;  // Optional - Stream preview mode, defaults to "passthrough"
+  stream_user_agent?: StreamUserAgent;
   // Auto-creation pipeline exclusion settings
   auto_creation_excluded_terms?: string[];
   auto_creation_excluded_groups?: string[];

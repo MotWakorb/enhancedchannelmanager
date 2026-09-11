@@ -1,4 +1,4 @@
-"""The scheme-downgrade waiver is scoped to the stream-probe path, and nowhere else.
+"""Provider-media downgrades are explicit; default outbound policy remains REFUSE.
 
 Bead ``enhancedchannelmanager-iyvl9``. A production incident: every probe against
 the operator's XC provider failed, because the provider 302s
@@ -10,7 +10,8 @@ confidentiality and cost the operator their entire probe capability.
 The acceptance criterion is an INVARIANT, not the reproduction above:
 
     The stream-probe path MAY follow an ``https -> http`` redirect.
-    EVERY other outbound path MUST still refuse one.
+    Direct provider previews may opt in with their own policy (GH995).
+    Other outbound paths, including the channel proxy, MUST still refuse one.
 
 Both halves are proven here on purpose. A test that only showed probes working
 again would pass just as happily if the downgrade guard had been deleted
@@ -177,7 +178,7 @@ class TestEveryOtherPathStillRefuses:
 
     @pytest.mark.asyncio
     async def test_stream_request_refuses_the_downgrade_by_default(self):
-        """A non-probe consumer (e.g. the browser preview router) still fails closed."""
+        """A caller without an explicit media policy still fails closed."""
 
         async def handler(request: httpx.Request):
             return httpx.Response(302, headers={"Location": EDGE_URL}, request=request)
@@ -244,10 +245,10 @@ class TestRefuseIsTheDefaultEverywhere:
         parameter = inspect.signature(validate_redirect).parameters["scheme_downgrade"]
         assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
 
-    def test_only_the_probe_member_waives_the_guard(self):
-        """Any policy value other than ALLOW_STREAM_PROBE must still refuse."""
+    def test_only_explicit_media_members_waive_the_guard(self):
+        """Provider preview was explicitly authorized in GH995; defaults still refuse."""
         for member in SchemeDowngrade:
-            if member is SchemeDowngrade.ALLOW_STREAM_PROBE:
+            if member in (SchemeDowngrade.ALLOW_STREAM_PROBE, SchemeDowngrade.ALLOW_STREAM_PREVIEW):
                 continue
             with _patch_dns(EDGE_IP):
                 with pytest.raises(SSRFError, match="downgrades"):
@@ -314,6 +315,15 @@ def test_only_sanctioned_modules_name_the_downgrade_waiver():
         "path genuinely needs the waiver, that is a product decision, not a "
         "refactor -- justify it and add the module here explicitly."
     )
+
+
+def test_only_preview_router_and_validator_name_preview_waiver():
+    found = {
+        str(relative) for relative, path in _production_modules()
+        if any(isinstance(node, ast.Attribute) and node.attr == "ALLOW_STREAM_PREVIEW"
+               for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")) ))
+    }
+    assert found == {"security/ssrf.py", "routers/stream_preview.py"}
 
 
 def test_prober_names_the_waiver_once_and_reuses_it():

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
+
 from models import StreamStats
 from stream_prober import StreamProber, smart_sort_streams
 

@@ -2241,14 +2241,14 @@ class DispatcharrClient:
         response = await self._request("DELETE", f"{_RECORDINGS_PATH}{recording_id}/")
         response.raise_for_status()
 
-    async def get_core_settings(self) -> dict:
-        """Get Dispatcharr's core/global settings as a key->value mapping.
+    async def get_core_settings(self) -> list:
+        """Get Dispatcharr's core/global settings as a bare list of rows.
 
         WARNING (DBAS restore, enhancedchannelmanager-0i2vt.13): the response can
         carry credential/instance-identity material (API keys, auth config). The
         caller (settings_agents importer) MUST sanitize before logging/reporting.
-        Returns the raw mapping; callers normalize a list-of-{key,value} response
-        into a dict themselves.
+        Returns the raw list of {id, key, name, value} records; callers that need
+        a key/value mapping normalize it themselves (recorded against 0.28.2).
         """
         response = await self._request("GET", _CORE_SETTINGS_PATH)
         response.raise_for_status()

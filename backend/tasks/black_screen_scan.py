@@ -199,7 +199,7 @@ class BlackScreenScanTask(TaskScheduler):
                 if self._cancel_requested:
                     return
                 try:
-                    is_black = await self._prober._detect_black_screen(url)
+                    is_black = await self._prober._detect_black_screen(url, stream_id=stream_id)
 
                     # None = indeterminate (ffmpeg timed out or returned no
                     # YAVG samples). Count as an error and leave the existing
@@ -229,9 +229,11 @@ class BlackScreenScanTask(TaskScheduler):
                         else:
                             clear_count += 1
                 except Exception as e:
+                    from stream_prober import operator_safe_detail
+                    detail = operator_safe_detail(e) or "Black screen detection failed"
                     error_count += 1
-                    error_streams.append({"id": stream_id, "name": name, "error": str(e)})
-                    logger.warning("[%s] Black screen check failed for stream %s: %s", self.task_id, stream_id, e)
+                    error_streams.append({"id": stream_id, "name": name, "error": detail})
+                    logger.warning("[%s] Black screen check failed for stream %s: %s", self.task_id, stream_id, detail)
                 finally:
                     completed += 1
                     self._set_progress(

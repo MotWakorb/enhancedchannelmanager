@@ -147,13 +147,13 @@ async def test_url_rejection_is_safe_before_client_construction(
 async def test_host_diagnostics_are_server_only_and_redacted(
     async_client, caplog, name, client_type, unresolved, value,
 ):
-    from security.ssrf import SSRFError
+    from security.ssrf import DNSResolutionError, SSRFError
 
     caplog.set_level(logging.INFO)
     detail = ("Could not resolve host " if unresolved else "Denied host ") + value + " " + DETAIL
     client = AsyncMock()
     with (
-        patch("security.ssrf.validate_outbound_url", side_effect=SSRFError(detail)),
+        patch("security.ssrf.validate_outbound_url", side_effect=DNSResolutionError() if unresolved else SSRFError(detail)),
         patch(f"routers.settings.{client_type.__name__}", return_value=client) as constructor,
     ):
         response = await async_client.post(
@@ -167,7 +167,7 @@ async def test_host_diagnostics_are_server_only_and_redacted(
     else:
         constructor.assert_not_called()
     assert "synthetic diagnostic" not in response.text
-    assert "synthetic diagnostic" in caplog.text
+    assert ("DNS resolution failed" if unresolved else "synthetic diagnostic") in caplog.text
     for sensitive in (value, SECRET, "url-user", "url-pass", "path-user", "path-pass"):
         assert sensitive not in caplog.text
     records = [record for record in caplog.records if record.name == "routers.settings"]

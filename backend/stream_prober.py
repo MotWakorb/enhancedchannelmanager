@@ -21,7 +21,7 @@ import journal
 import safe_regex
 
 import httpx
-from security.ssrf import SchemeDowngrade, SSRFError
+from security.ssrf import DNSResolutionError, SchemeDowngrade, SSRFError
 from security.stream_outbound import (
     stream_request,
     validated_subprocess_input,
@@ -30,6 +30,7 @@ from security.stream_outbound import (
 from database import get_session
 from models import StreamStats
 from resdet_lock import RESDET_PIPELINE_LOCK_PATH, ResdetLockError, ResdetPipelineLock
+from stream_user_agent import StreamUserAgentError, StreamUserAgentResolver
 from smart_sort_evaluator import (
     PointRule,
     StreamFacts,
@@ -62,20 +63,9 @@ class ResolutionDetectionError(RuntimeError):
     """A resdet failure with a fixed operator-safe message."""
 
 
-# Bead enhancedchannelmanager-iyvl9. XC providers 302 an
-# https://<portal>/live/<user>/<pass>/<id>.ts request onto a plain-HTTP edge
-# node and serve the video over HTTP there regardless, so the media is already
-# unencrypted in transit and the redirect target's opaque-token path carries no
-# credentials. Refusing the hop cost the operator every probe against such a
-# provider and bought no confidentiality, so the PROBE PATH -- and only the
-# probe path -- waives the scheme-downgrade clause. Everything else in the SSRF
-# guard (denylist, resolve-then-connect-by-IP, redirect depth cap, origin
-# pinning) still applies here unchanged.
-#
-# This constant is the single place the prober names the waiver; the three probe
-# call sites below reference it, and no other module in the backend may pass
-# SchemeDowngrade.ALLOW_STREAM_PROBE (enforced by
-# tests/security/test_probe_scheme_downgrade.py).
+# Provider portals can redirect onto HTTP media edges. Four probe paths use this
+# explicit waiver; direct previews have their own policy (GH995). Other SSRF
+# checks remain enforced by tests/security/test_probe_scheme_downgrade.py.
 PROBE_SCHEME_DOWNGRADE = SchemeDowngrade.ALLOW_STREAM_PROBE
 
 
@@ -94,6 +84,8 @@ OPERATOR_SAFE_EXCEPTION_TYPES: tuple = (
     SSRFError,               # ECM's own SSRF chokepoint -- fixed guard messages
     ProbeNetworkRouteError,  # raised here, with a fixed message
     ResolutionDetectionError,
+    DNSResolutionError,
+    StreamUserAgentError,
 )
 
 
@@ -104,7 +96,7 @@ def operator_safe_detail(exc: BaseException) -> Optional[str]:
     caller must log the exception CLASS only.
     """
     if type(exc) in OPERATOR_SAFE_EXCEPTION_TYPES:
-        return str(exc).strip() or None
+        return "".join(char if char.isprintable() else " " for char in str(exc)).strip() or None
     return None
 
 
@@ -1119,7 +1111,8 @@ class StreamProber:
         }
 
     async def probe_stream(
-        self, stream_id: int, url: Optional[str], name: Optional[str] = None
+        self, stream_id: int, url: Optional[str], name: Optional[str] = None,
+        *, stream: Optional[dict] = None,
     ) -> dict:
         """
         Probe a single stream using ffprobe.
@@ -1134,12 +1127,13 @@ class StreamProber:
             )
 
         try:
+            user_agent = await StreamUserAgentResolver(self.client).resolve(stream, stream_id=stream_id)
             logger.debug("[STREAM-PROBE] Running ffprobe for stream %s", stream_id)
-            result = await self._run_ffprobe(url)
+            result = await self._run_ffprobe(url, user_agent=user_agent)
             logger.info("[STREAM-PROBE] Stream %s ffprobe succeeded", stream_id)
 
             if self.use_resdet_for_resolution:
-                width, height = await self._run_resdet(url)
+                width, height = await self._run_resdet(url, user_agent=user_agent)
                 for stream in result.get("streams", []):
                     if stream.get("codec_type") == "video":
                         stream["width"] = width
@@ -1148,7 +1142,7 @@ class StreamProber:
 
             # Measure actual bitrate by downloading stream data
             logger.debug("[STREAM-PROBE] Measuring bitrate for stream %s", stream_id)
-            measured_bitrate = await self._measure_stream_bitrate(url)
+            measured_bitrate = await self._measure_stream_bitrate(url, user_agent=user_agent)
 
             # Black screen detection (opt-in). `is_black` stays None when
             # detection is disabled OR when it returned indeterminate (timeout
@@ -1157,7 +1151,7 @@ class StreamProber:
             is_black: Optional[bool] = None
             if self.black_screen_detection_enabled:
                 logger.debug("[STREAM-PROBE] Running black screen detection for stream %s", stream_id)
-                is_black = await self._detect_black_screen(url)
+                is_black = await self._detect_black_screen(url, user_agent=user_agent)
 
             # Save probe result with both ffprobe metadata and measured bitrate
             saved = self._save_probe_result(
@@ -1209,9 +1203,11 @@ class StreamProber:
                 public_error = "Probe failed"
             return self._save_probe_result(stream_id, name, None, "failed", public_error)
 
-    async def _run_ffprobe(self, url: str, _retry_attempt: int = 0) -> dict:
+    async def _run_ffprobe(self, url: str, _retry_attempt: int = 0, *, user_agent: str | None = None) -> dict:
         """Run ffprobe and parse JSON output."""
-        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+        if user_agent is None:
+            user_agent = await StreamUserAgentResolver(self.client).resolve()
+        headers = {"User-Agent": user_agent}
         async with validated_subprocess_input(
             url, headers=headers, scheme_downgrade=PROBE_SCHEME_DOWNGRADE
         ) as subprocess_input:
@@ -1271,7 +1267,7 @@ class StreamProber:
             if any(p in error_text for p in transient_patterns) and "404" not in error_text and _retry_attempt < self.probe_retry_count:
                 logger.info("[STREAM-PROBE] Transient provider error — retry %s/%s in %ss", _retry_attempt + 1, self.probe_retry_count, self.probe_retry_delay)
                 await asyncio.sleep(self.probe_retry_delay)
-                return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1)
+                return await self._run_ffprobe(url, _retry_attempt=_retry_attempt + 1, user_agent=user_agent)
 
             if any(marker in error_text.lower() for marker in NETWORK_FAILURE_MARKERS):
                 raise ProbeNetworkRouteError("Provider connection failed")
@@ -1283,15 +1279,15 @@ class StreamProber:
 
         return json.loads(output)
 
-    async def _run_resdet(self, url: str) -> tuple[int, int]:
+    async def _run_resdet(self, url: str, *, user_agent: str | None = None) -> tuple[int, int]:
         """Serialize the complete native frame-extract and analysis pipeline."""
         try:
             async with ResdetPipelineLock(self._resdet_lock_path) as pipeline_lock:
-                return await self._run_resdet_pipeline(url, pipeline_lock.fileno())
+                return await self._run_resdet_pipeline(url, pipeline_lock.fileno(), user_agent=user_agent)
         except ResdetLockError:
             raise ResolutionDetectionError("resdet pipeline lock is unavailable") from None
 
-    async def _run_resdet_pipeline(self, url: str, lock_fd: int) -> tuple[int, int]:
+    async def _run_resdet_pipeline(self, url: str, lock_fd: int, *, user_agent: str | None = None) -> tuple[int, int]:
         """Decode one bounded Y4M frame, then analyze that local file with resdet."""
 
         async def kill_and_reap(process) -> None:
@@ -1324,7 +1320,9 @@ class StreamProber:
                 await kill_and_reap(process)
                 raise
 
-        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+        if user_agent is None:
+            user_agent = await StreamUserAgentResolver(self.client).resolve()
+        headers = {"User-Agent": user_agent}
         with tempfile.TemporaryDirectory(prefix="ecm-resdet-") as directory:
             frame_path = Path(directory) / "frame.y4m"
             async with validated_subprocess_input(
@@ -1481,7 +1479,7 @@ class StreamProber:
         if required_size > RESDET_FRAME_MAX_BYTES or len(frame_data) != required_size:
             raise ResolutionDetectionError("resdet returned an invalid frame")
 
-    async def _measure_stream_bitrate(self, url: str) -> Optional[int]:
+    async def _measure_stream_bitrate(self, url: str, *, user_agent: str | None = None) -> Optional[int]:
         """
         Measure actual stream bitrate by downloading data for a few seconds.
         This is how Dispatcharr gets real bitrate - by measuring throughput.
@@ -1502,7 +1500,9 @@ class StreamProber:
                 pool=10.0
             )
 
-            headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+            if user_agent is None:
+                user_agent = await StreamUserAgentResolver(self.client).resolve()
+            headers = {"User-Agent": user_agent}
             async with stream_request(
                 url,
                 timeout=timeout,
@@ -1561,7 +1561,7 @@ class StreamProber:
     # Threshold of 20 catches: pure black, dark slates, off-air screens with small logos.
     BLACK_SCREEN_YAVG_THRESHOLD = 20
 
-    async def _detect_black_screen(self, url: str) -> Optional[bool]:
+    async def _detect_black_screen(self, url: str, *, user_agent: str | None = None, stream_id: int | None = None) -> Optional[bool]:
         """Detect dark/black screens by measuring average brightness (YAVG) via signalstats.
 
         Uses ffmpeg signalstats to compute per-frame average luma (YAVG).
@@ -1584,7 +1584,9 @@ class StreamProber:
         wait_for a generous grace window so cold-start false-timeouts don't
         flip streams to "clean".
         """
-        headers = {"User-Agent": "VLC/3.0.20 LibVLC/3.0.20"}
+        if user_agent is None:
+            user_agent = await StreamUserAgentResolver(self.client).resolve(stream_id=stream_id)
+        headers = {"User-Agent": user_agent}
         # Grace window: sample duration + ample headroom for cold-start
         # buffering, connection setup, and ffmpeg startup. The previous 15-s
         # grace was too tight for cold scans and caused every timeout to be
@@ -3025,7 +3027,7 @@ class StreamProber:
                             else:
                                 logger.debug("[STREAM-PROBE] Acquired semaphore: active=%s/%s, stream=%s", current_count, self.max_concurrent_probes, stream_id)
                         try:
-                            result = await self.probe_stream(stream_id, stream_url, stream_name)
+                            result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
                             probe_status = result.get("probe_status", "failed")
                             error_message = result.get("error_message", "")
                             stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}
@@ -3407,7 +3409,7 @@ class StreamProber:
                             logger.debug("[STREAM-PROBE] Account %s: waiting %.1fs", m3u_account_id, hold_remaining)
                             await asyncio.sleep(hold_remaining)
 
-                    result = await self.probe_stream(stream_id, stream_url, stream_name)
+                    result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
 
                     # Track success/failure
                     probe_status = result.get("probe_status", "failed")
@@ -3600,7 +3602,7 @@ class StreamProber:
                     if self._probe_cancelled:
                         return
                     self._probe_progress_current_stream = stream_name
-                    result = await self.probe_stream(stream_id, stream_url, stream_name)
+                    result = await self.probe_stream(stream_id, stream_url, stream_name, stream=stream)
                     probe_status = result.get("probe_status", "failed")
                     error_message = result.get("error_message", "")
                     stream_info = {"id": stream_id, "name": stream_name, "url": stream_url}

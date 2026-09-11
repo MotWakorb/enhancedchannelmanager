@@ -5,6 +5,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+pytestmark = pytest.mark.usefixtures("vlc_stream_user_agent")
 from pydantic import ValidationError
 from sqlalchemy.orm import sessionmaker
 
