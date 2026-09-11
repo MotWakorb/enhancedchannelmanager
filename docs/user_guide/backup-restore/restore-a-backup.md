@@ -44,6 +44,15 @@ The restore modal runs a **dry-run by default**. It does not apply anything unle
 
 Review the report before applying. A large unexpected "would create" count on an existing instance is a signal to investigate before proceeding.
 
+Uploaded and saved-backup dialogs wait for progress and a report belonging to the
+run you requested, including after closing and reopening the dialog. An older
+preview does not enable **Apply these changes**. If ECM says **The restore did
+not start**, check **Settings → Scheduled Tasks → DBAS Restore → History** before
+retrying: another restore may already be running. The start-wait budget begins
+after the upload request succeeds, so uploading a large archive does not consume
+that budget. These cases are covered by the isolated restore-correlation browser
+and hook/modal regression tests.
+
 ### Step 3: Apply
 
 If the preview looks correct:

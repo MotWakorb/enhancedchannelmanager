@@ -65,6 +65,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
   const [reattachMode, setReattachMode] = useState<ChannelReattachMode>('preserve');
   const [runningApply, setRunningApply] = useState(false);
   const [restoreTaskId, setRestoreTaskId] = useState<string | null>(null);
+  const [restoreRunId, setRestoreRunId] = useState<string | null>(null);
   const [restoreReport, setRestoreReport] = useState<RestoreReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -87,7 +88,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
     return () => { active = false; };
   }, []);
 
-  const progress = useRestoreProgress({ taskId: restoreTaskId, runKey });
+  const progress = useRestoreProgress({ taskId: restoreTaskId, runId: restoreRunId, runKey });
   // True when the progress hook synthesised a terminal ERROR because no new run
   // ever appeared, as opposed to the backend genuinely reporting one. Only the
   // synthesised view has a null payload.
@@ -161,6 +162,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
       // in this same batch.
       setRunKey((n) => n + 1);
       setRestoreTaskId(res.task_id);
+      setRestoreRunId(res.run_id || null);
       setStep('restoring');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Restore failed');
@@ -178,9 +180,8 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
     if (finalizedRef.current) return;
     finalizedRef.current = true;
 
-    // The hook gave up waiting for the run to start (it never saw a new
-    // `started_at`). There is NO result for this run, and task history is
-    // unversioned — `?limit=1` still holds the PREVIOUS run's row, so reading it
+    // The hook gave up waiting for the initiated run's identity. There is NO
+    // result for this run; `?limit=1` can still hold the PREVIOUS run's row, so reading it
     // here would render that run's report as this one's, which is the whole
     // defect this machinery exists to prevent. `progress.progress === null` is
     // what tells the two apart: a real backend terminal state always arrives
@@ -206,7 +207,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
           // Any terminal status, not just completed/failed: a degraded run
           // reports `completed_with_warnings` (bead fexq1) and its report is
           // just as readable as a clean one's.
-          if (exec && isTerminalExecutionStatus(exec.status)) {
+          if (restoreRunId && exec?.details?.run_id === restoreRunId && isTerminalExecutionStatus(exec.status)) {
             const rep = exec.details?.restore_report as RestoreReport | undefined;
             if (rep) { report = rep; break; }
             failMsg = exec.error || exec.message || 'Restore failed';
@@ -244,7 +245,7 @@ export function DbasRestoreModal({ onClose }: { onClose: () => void }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [step, restoreTaskId, progress.isComplete, progress.isError, runDidNotStart, progress.error]);
+  }, [step, restoreTaskId, restoreRunId, progress.isComplete, progress.isError, runDidNotStart, progress.error]);
 
   const canClose = step !== 'restoring';
   const canStart = !!file && (!isEncrypted || passphrase.length > 0) && !busy;

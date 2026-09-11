@@ -11,6 +11,7 @@ Background service that manages and executes scheduled tasks:
 import asyncio
 import copy
 import contextlib
+import json
 import logging
 from datetime import datetime
 from typing import Optional
@@ -1003,6 +1004,7 @@ class TaskEngine:
         triggered_by: str = "manual",
         parameters: Optional[dict] = None,
         schedule_id: Optional[int] = None,
+        run_id: Optional[str] = None,
     ) -> Optional[TaskResult]:
         """
         Execute a task and record the result.
@@ -1158,7 +1160,13 @@ class TaskEngine:
             )
 
             instance.set_run_trigger(triggered_by)
-            result = validation_result or await instance.run()
+            result = validation_result or (
+                await instance.run(run_id=run_id) if run_id is not None else await instance.run()
+            )
+            if run_id is not None:
+                # Transport-issued identity, not task parameters or a clock.
+                # Existing JSON details persist it without changing the schema.
+                result.details = {**result.details, "run_id": run_id}
 
             # Update execution record
             if execution_id:
@@ -1183,7 +1191,6 @@ class TaskEngine:
                         execution.failed_count = result.failed_count
                         execution.skipped_count = result.skipped_count
                         if result.details:
-                            import json
                             execution.details = json.dumps(result.details)
                         session.commit()
                     session.close()
@@ -1448,6 +1455,8 @@ class TaskEngine:
                         execution.status = "failed"
                         execution.success = False
                         execution.error = failure_error
+                        if run_id is not None:
+                            execution.details = json.dumps({"run_id": run_id})
                         session.commit()
                     session.close()
                 except Exception as db_err:
@@ -1474,7 +1483,7 @@ class TaskEngine:
                 async with self._lock:
                     self._active_tasks.discard(task_id)
 
-    async def run_task(self, task_id: str, schedule_id: Optional[int] = None, parameters: Optional[dict] = None) -> Optional[TaskResult]:
+    async def run_task(self, task_id: str, schedule_id: Optional[int] = None, parameters: Optional[dict] = None, *, run_id: Optional[str] = None) -> Optional[TaskResult]:
         """
         Manually run a task (API entry point).
 
@@ -1489,6 +1498,8 @@ class TaskEngine:
         if parameters:
             logger.info("[%s] Manual run with ad-hoc parameters: %s", task_id,
                         _param_keys(parameters))
+            if run_id is not None:
+                return await self._execute_task(task_id, triggered_by="manual", parameters=parameters, run_id=run_id)
             return await self._execute_task(task_id, triggered_by="manual", parameters=parameters)
 
         if schedule_id:
@@ -1518,6 +1529,8 @@ class TaskEngine:
                 logger.exception("[%s] Failed to load schedule parameters: %s", task_id, e)
                 return None
 
+        if run_id is not None:
+            return await self._execute_task(task_id, triggered_by="manual", parameters=parameters, schedule_id=schedule_id, run_id=run_id)
         return await self._execute_task(task_id, triggered_by="manual", parameters=parameters, schedule_id=schedule_id)
 
     async def cancel_task(self, task_id: str) -> dict:

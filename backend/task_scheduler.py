@@ -49,6 +49,7 @@ class TaskProgress:
     failed_count: int = 0
     skipped_count: int = 0
     started_at: Optional[datetime] = None
+    run_id: Optional[str] = None
 
     @property
     def percentage(self) -> float:
@@ -69,6 +70,7 @@ class TaskProgress:
             "failed_count": self.failed_count,
             "skipped_count": self.skipped_count,
             "started_at": self.started_at.isoformat() + "Z" if self.started_at else None,
+            **({"run_id": self.run_id} if self.run_id is not None else {}),
         }
 
 
@@ -697,7 +699,7 @@ class TaskScheduler(ABC):
     # Task Execution
     # -------------------------------------------------------------------------
 
-    async def run(self) -> TaskResult:
+    async def run(self, *, run_id: Optional[str] = None) -> TaskResult:
         """
         Run the task immediately.
 
@@ -730,6 +732,7 @@ class TaskScheduler(ABC):
 
         # Initialize for this run
         self._reset_progress()
+        self._progress.run_id = run_id
         self._status = TaskStatus.RUNNING
         self._progress.started_at = datetime.utcnow()
         self._progress.status = "starting"

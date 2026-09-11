@@ -43,7 +43,7 @@ function completedTask(startedAt: string) {
     progress: {
       total: 13, current: 13, percentage: 100, status: 'completed',
       current_item: 'finalize', success_count: 1, failed_count: 0,
-      skipped_count: 0, started_at: startedAt,
+      skipped_count: 0, started_at: startedAt, run_id: startedAt,
     },
   };
 }
@@ -125,7 +125,7 @@ function wireTwoRuns(trigger: ReturnType<typeof vi.fn>) {
   const server = { requested: 0, executed: 0 };
   trigger.mockImplementation(async () => {
     server.requested += 1;
-    return { status: 'started', task_id: 'dbas_restore', is_dry_run: true };
+    return { status: 'started', task_id: 'dbas_restore', is_dry_run: true, run_id: STARTED_AT[server.requested] };
   });
   (api.getTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
     server.executed = server.requested;
@@ -136,6 +136,7 @@ function wireTwoRuns(trigger: ReturnType<typeof vi.fn>) {
       {
         status: 'completed',
         details: {
+          run_id: STARTED_AT[server.executed],
           restore_report: reportFor(server.executed === 1 ? 'preserve' : 'overwrite'),
         },
       },
@@ -244,7 +245,7 @@ describe('Re-running a preview in one modal session', () => {
     let pollsInRun2 = 0;
     trigger.mockImplementation(async () => {
       server.requested += 1;
-      return { status: 'started', task_id: 'dbas_restore', is_dry_run: true };
+      return { status: 'started', task_id: 'dbas_restore', is_dry_run: true, run_id: STARTED_AT[server.requested] };
     });
     (api.getTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       if (server.requested === 1) {
@@ -263,6 +264,7 @@ describe('Re-running a preview in one modal session', () => {
         {
           status: 'completed',
           details: {
+            run_id: STARTED_AT[server.executed],
             restore_report: reportFor(server.executed === 1 ? 'preserve' : 'overwrite'),
           },
         },
@@ -314,7 +316,7 @@ describe('Re-running a preview in one modal session', () => {
     const server = { requested: 0, executed: 0 };
     trigger.mockImplementation(async () => {
       server.requested += 1;
-      return { status: 'started', task_id: 'dbas_restore', is_dry_run: true };
+      return { status: 'started', task_id: 'dbas_restore', is_dry_run: true, run_id: STARTED_AT[server.requested] };
     });
     (api.getTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       // Only the FIRST run ever executes. Run 2 is rejected upstream, so the
@@ -324,7 +326,7 @@ describe('Re-running a preview in one modal session', () => {
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
       history: [
-        { status: 'completed', details: { restore_report: reportFor('preserve') } },
+        { status: 'completed', details: { run_id: STARTED_AT[1], restore_report: reportFor('preserve') } },
       ],
     }));
     return server;
@@ -425,7 +427,7 @@ describe('Re-running a preview in one modal session', () => {
         await new Promise<void>((resolve) => { releaseSecondTrigger = resolve; });
         triggerInFlight = false;
       }
-      return { status: 'started', task_id: 'dbas_restore', is_dry_run: true };
+      return { status: 'started', task_id: 'dbas_restore', is_dry_run: true, run_id: STARTED_AT[server.requested] };
     });
     (api.getTask as ReturnType<typeof vi.fn>).mockImplementation(async () => {
       if (triggerInFlight) pollsDuringTrigger += 1;
@@ -437,6 +439,7 @@ describe('Re-running a preview in one modal session', () => {
         {
           status: 'completed',
           details: {
+            run_id: STARTED_AT[server.executed],
             restore_report: reportFor(server.executed === 1 ? 'preserve' : 'overwrite'),
           },
         },

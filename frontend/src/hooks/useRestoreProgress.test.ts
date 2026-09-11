@@ -21,6 +21,7 @@ const mockedGetTask = vi.mocked(api.getTask);
 /** Build a TaskStatus whose progress carries the fields the hook reads. */
 function makeTaskStatus(progress: Partial<TaskProgress>): TaskStatus {
   const fullProgress: TaskProgress = {
+    run_id: '1',
     total: 0,
     current: 0,
     percentage: 0,
@@ -75,7 +76,7 @@ describe('useRestoreProgress', () => {
     );
 
     const { result } = renderHook(() =>
-      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 5 })
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 5 })
     );
 
     await waitFor(() => expect(result.current.progress).not.toBeNull());
@@ -96,7 +97,7 @@ describe('useRestoreProgress', () => {
       .mockResolvedValue(makeTaskStatus({ status: 'completed', current_item: 'finalize', percentage: 100 }));
 
     const { result } = renderHook(() =>
-      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 5 })
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 5 })
     );
 
     await waitFor(() => expect(result.current.isComplete).toBe(true));
@@ -121,7 +122,7 @@ describe('useRestoreProgress', () => {
     );
 
     const { result } = renderHook(() =>
-      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 5 })
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 5 })
     );
 
     await waitFor(() => expect(result.current.isComplete).toBe(true));
@@ -142,7 +143,7 @@ describe('useRestoreProgress', () => {
     );
 
     const { result } = renderHook(() =>
-      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 5 })
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 5 })
     );
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -157,7 +158,7 @@ describe('useRestoreProgress', () => {
     );
 
     const { unmount } = renderHook(() =>
-      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 5 })
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 5 })
     );
 
     await waitFor(() => expect(mockedGetTask).toHaveBeenCalled());
@@ -176,7 +177,7 @@ describe('useRestoreProgress', () => {
     );
 
     const { result } = renderHook(() =>
-      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 5 })
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 5 })
     );
 
     await waitFor(() => expect(mockedGetTask).toHaveBeenCalled());
@@ -199,7 +200,7 @@ describe('useRestoreProgress', () => {
   // which makes the hook accept the first poll immediately — so none of those
   // tests can reach this code at all.
 
-  it('does not publish a terminal state that still carries the previous run started_at', async () => {
+  it('does not publish a terminal state that still carries the previous run identity', async () => {
     const RUN_1 = '2026-08-05T10:00:00Z';
     mockedGetTask.mockResolvedValue(
       makeTaskStatus({ status: 'completed', started_at: RUN_1 })
@@ -207,7 +208,7 @@ describe('useRestoreProgress', () => {
 
     // Run 1 publishes normally and establishes the baseline.
     const { result, rerender } = renderHook(
-      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 2, runKey }),
+      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', runId: String(runKey), pollIntervalMs: 2, runKey }),
       { initialProps: { runKey: 1 } }
     );
     await waitFor(() => expect(result.current.isComplete).toBe(true));
@@ -231,7 +232,7 @@ describe('useRestoreProgress', () => {
     );
 
     const { result, rerender } = renderHook(
-      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 1, runKey }),
+      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', runId: String(runKey), pollIntervalMs: 1, runKey }),
       { initialProps: { runKey: 1 } }
     );
     await waitFor(() => expect(result.current.isComplete).toBe(true));
@@ -257,7 +258,7 @@ describe('useRestoreProgress', () => {
     );
 
     const { result } = renderHook(() =>
-      useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 2, runKey: 1 })
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 2, runKey: 1 })
     );
 
     await waitFor(() => expect(result.current.isError).toBe(true));
@@ -265,7 +266,7 @@ describe('useRestoreProgress', () => {
     expect(result.current.progress?.status).toBe('failed');
   });
 
-  it('a new run publishes as soon as its own started_at appears', async () => {
+  it('a new run publishes as soon as its own server identity appears', async () => {
     const RUN_1 = '2026-08-05T10:00:00Z';
     const RUN_2 = '2026-08-05T11:00:00Z';
     mockedGetTask.mockResolvedValue(
@@ -273,18 +274,43 @@ describe('useRestoreProgress', () => {
     );
 
     const { result, rerender } = renderHook(
-      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', pollIntervalMs: 2, runKey }),
+      ({ runKey }) => useRestoreProgress({ taskId: 'dbas_restore', runId: String(runKey), pollIntervalMs: 2, runKey }),
       { initialProps: { runKey: 1 } }
     );
     await waitFor(() => expect(result.current.isComplete).toBe(true));
 
     rerender({ runKey: 2 });
     mockedGetTask.mockResolvedValue(
-      makeTaskStatus({ status: 'completed', started_at: RUN_2 })
+      makeTaskStatus({ status: 'completed', started_at: RUN_2, run_id: '2' })
     );
 
     await waitFor(() => expect(result.current.isComplete).toBe(true));
     expect(result.current.isError).toBe(false);
     expect(result.current.progress?.started_at).toBe(RUN_2);
+  });
+
+  it('checks identity on every poll after a matching running payload', async () => {
+    mockedGetTask.mockResolvedValueOnce(makeTaskStatus({ status: 'running' }))
+      .mockResolvedValue(makeTaskStatus({ status: 'completed', run_id: 'another' }));
+    const { result } = renderHook(() =>
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 1 }),
+    );
+    await waitFor(() => expect(mockedGetTask.mock.calls.length).toBeGreaterThan(20));
+    expect(result.current.isComplete).toBe(false);
+    expect(result.current.isError).toBe(false);
+    expect(result.current.progress?.run_id).toBe('1');
+    mockedGetTask.mockResolvedValue(makeTaskStatus({ status: 'completed' }));
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+  });
+
+  it('retries transient progress errors without synthesizing no-start', async () => {
+    mockedGetTask.mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValue(makeTaskStatus({ status: 'completed' }));
+    const { result } = renderHook(() =>
+      useRestoreProgress({ taskId: 'dbas_restore', runId: '1', pollIntervalMs: 1 }),
+    );
+    await waitFor(() => expect(result.current.isComplete).toBe(true));
+    expect(result.current.isError).toBe(false);
+    expect(mockedGetTask).toHaveBeenCalledTimes(2);
   });
 });

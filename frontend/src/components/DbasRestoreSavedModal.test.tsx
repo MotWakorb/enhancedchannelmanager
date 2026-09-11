@@ -135,10 +135,10 @@ describe('DbasRestoreSavedModal', () => {
 
   it('Run preview triggers a dry-run and renders the report', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: true,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
-      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+      history: [{ status: 'completed', details: { run_id: 'test-run', restore_report: dryRunReport } }],
     });
     mockView = view({ isComplete: true, status: 'completed' });
 
@@ -158,10 +158,10 @@ describe('DbasRestoreSavedModal', () => {
     // modal polls the same history row, so it needs the same fix or a degraded
     // restore never renders its report here either.
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: true,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
-      history: [{ status: 'completed_with_warnings', details: { restore_report: dryRunReport } }],
+      history: [{ status: 'completed_with_warnings', details: { run_id: 'test-run', restore_report: dryRunReport } }],
     });
     mockView = view({ isComplete: true, status: 'completed' });
 
@@ -175,10 +175,10 @@ describe('DbasRestoreSavedModal', () => {
 
   it('applying requires typing the exact filename in the confirm dialog', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: true,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
-      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+      history: [{ status: 'completed', details: { run_id: 'test-run', restore_report: dryRunReport } }],
     });
     mockView = view({ isComplete: true, status: 'completed' });
 
@@ -208,10 +208,10 @@ describe('DbasRestoreSavedModal', () => {
 
   it('passes the passphrase through for an encrypted artifact', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: true,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
-      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+      history: [{ status: 'completed', details: { run_id: 'test-run', restore_report: dryRunReport } }],
     });
     mockView = view({ isComplete: true, status: 'completed' });
 
@@ -227,11 +227,11 @@ describe('DbasRestoreSavedModal', () => {
 
   it('surfaces a sanitized failure and returns to configure', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: true,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
       history: [{
-        status: 'failed', details: null,
+        status: 'failed', details: { run_id: 'test-run' },
         error: 'Could not decrypt backup: wrong passphrase or corrupted artifact',
       }],
     });
@@ -264,10 +264,10 @@ describe('DbasRestoreSavedModal', () => {
 
   it('sends overwrite only when the operator explicitly picks it', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: true,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
-      history: [{ status: 'completed', details: { restore_report: dryRunReport } }],
+      history: [{ status: 'completed', details: { run_id: 'test-run', restore_report: dryRunReport } }],
     });
     mockView = view({ isComplete: true, status: 'completed' });
 
@@ -300,10 +300,10 @@ describe('DbasRestoreSavedModal', () => {
 
   it('offers a way back to the options from a dry-run result', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: true,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: true,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
-      history: [{ status: 'completed', details: { restore_report: touchedDryRunReport } }],
+      history: [{ status: 'completed', details: { run_id: 'test-run', restore_report: touchedDryRunReport } }],
     });
     mockView = view({ isComplete: true, status: 'completed' });
 
@@ -330,12 +330,12 @@ describe('DbasRestoreSavedModal', () => {
 
   it('offers no way back from an APPLIED result, and says so', async () => {
     (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-      status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+      status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: false,
     });
     (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
       history: [{
         status: 'completed',
-        details: { restore_report: { ...touchedDryRunReport, is_dry_run: false, outcome: 'success' } },
+        details: { run_id: 'test-run', restore_report: { ...touchedDryRunReport, is_dry_run: false, outcome: 'success' } },
       }],
     });
     mockView = view({ isComplete: true, status: 'completed' });
@@ -370,12 +370,12 @@ describe('DbasRestoreSavedModal', () => {
 
       (api.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue({});
       (api.restoreDbasBackupSaved as ReturnType<typeof vi.fn>).mockResolvedValue({
-        status: 'started', task_id: 'dbas_restore', is_dry_run: false,
+        status: 'started', task_id: 'dbas_restore', run_id: 'test-run', is_dry_run: false,
       });
       (api.getTaskHistory as ReturnType<typeof vi.fn>).mockResolvedValue({
         history: [{
           status: 'completed',
-          details: { restore_report: { ...dryRunReport, is_dry_run: false, outcome: 'success' } },
+          details: { run_id: 'test-run', restore_report: { ...dryRunReport, is_dry_run: false, outcome: 'success' } },
         }],
       });
       mockView = view({ isComplete: true, status: 'completed' });
