@@ -3258,7 +3258,13 @@ class TestSettingsSsrfOnSave:
             response = await async_client.post("/api/settings", json=payload)
 
         assert response.status_code == 400, response.json()
-        assert "169.254" in response.json()["detail"] or "denied" in response.json()["detail"].lower()
+        label = {
+            "emby_base_url": "Emby base URL", "plex_base_url": "Plex base URL",
+            "jellyfin_base_url": "Jellyfin base URL", "url": "Dispatcharr URL",
+        }[field]
+        assert response.json() == {"detail": (
+            f"Invalid {label}: Invalid host — destination is not permitted by the outbound policy"
+        )}
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio
@@ -3293,8 +3299,10 @@ class TestSettingsSsrfOnSave:
             response = await async_client.post("/api/settings", json=payload)
 
         assert response.status_code == 400, response.json()
-        detail = response.json()["detail"]
-        assert "169.254" in detail or "denied" in detail.lower(), detail
+        label = "Emby base URL" if field == "emby_base_url" else "Dispatcharr URL"
+        assert response.json() == {"detail": (
+            f"Invalid {label}: Invalid host — destination is not permitted by the outbound policy"
+        )}
         mock_save.assert_not_called()
 
     @pytest.mark.asyncio

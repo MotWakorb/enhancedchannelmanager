@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Security
+
+- **Settings URL validation uses safe public errors (bead `enhancedchannelmanager-m8dvz`; build 0.18.2-0028).** Malformed ports and outbound-policy denials return fixed messages instead of parser text or resolved-address details, including the shared Dispatcharr and media settings save paths. Host-policy diagnostics remain in redacted server logs. Media client error categories, credential escaping, human-admin/first-run gates, and outbound allow/deny decisions are preserved.
+
 ### Changed
 
 - **Media connection tests use safe error messages (bead `enhancedchannelmanager-m8dvz`; build 0.18.2-0027).** Emby, Plex, and Jellyfin report stable authentication, timeout, TLS, unreachable-host, malformed-response, and upstream-status categories instead of raw network diagnostics. Unexpected failures use a constant fallback; detailed exceptions are sanitized in server logs. Existing response fields, human-admin/first-run gates, and outbound policy are unchanged.

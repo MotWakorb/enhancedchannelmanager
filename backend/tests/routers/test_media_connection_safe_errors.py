@@ -1,7 +1,9 @@
 """m8dvz: real media wrappers and routes, with synthetic upstream failures."""
 
+import ipaddress
 import logging
 import re
+import socket
 import ssl
 from urllib.parse import quote
 from unittest.mock import AsyncMock, patch
@@ -25,6 +27,7 @@ DETAIL = (
     f'Authorization: MediaBrowser Token="{SECRET}"'
 )
 CLIENTS = [("emby", EmbyClient), ("plex", PlexClient), ("jellyfin", JellyfinClient)]
+HOST_ERROR = "Invalid host — destination is not permitted by the outbound policy"
 CASES = [
     (401, "Authentication failed. Check the media server credentials."),
     (403, "Authentication failed. Check the media server credentials."),
@@ -100,6 +103,96 @@ def upstream(case, request):
         "unknown": RuntimeError,
     }[case]
     raise error(DETAIL)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,client_type", CLIENTS)
+@pytest.mark.parametrize("admin", [False, True], ids=["first-run", "human-admin"])
+@pytest.mark.parametrize("url,message", [
+    ("https://media.invalid:synthetic-port-detail", "Invalid base URL — invalid port"),
+    ("https://media.invalid:65536", "Invalid base URL — invalid port"),
+    ("https://[broken", "Invalid base URL — could not parse"),
+    ("ftp://media.invalid", "Invalid URL scheme — must be http or https"),
+    ("https:///path", "Invalid base URL — no hostname provided"),
+    ("https://media.invalid", HOST_ERROR),
+    ("https://169.254.169.254", HOST_ERROR),
+])
+async def test_url_rejection_is_safe_before_client_construction(
+    async_client, name, client_type, admin, url, message,
+):
+    with (
+        patch(f"routers.settings.{client_type.__name__}") as constructor,
+        patch_ssrf_dns("169.254.169.254"),
+        patch("auth.dependencies.get_auth_settings") as auth,
+        patch("auth.dependencies.get_current_user", new=AsyncMock(return_value=User(
+            id=7151, username="synthetic-admin", is_admin=True,
+            is_active=True, auth_provider="local",
+        ) if admin else None)),
+    ):
+        auth.return_value.require_auth = admin
+        auth.return_value.setup_complete = admin
+        response = await async_client.post(
+            f"/api/settings/{name}/test-connection",
+            json={"base_url": url, "token" if name == "plex" else "api_key": SECRET},
+        )
+    assert response.status_code == 200
+    assert response.json() == {"ok": False, "error": message}
+    constructor.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,client_type", CLIENTS)
+@pytest.mark.parametrize("unresolved", [False, True])
+@pytest.mark.parametrize("value", [SECRET, quote(quote(SECRET, safe=""), safe="")])
+async def test_host_diagnostics_are_server_only_and_redacted(
+    async_client, caplog, name, client_type, unresolved, value,
+):
+    from security.ssrf import SSRFError
+
+    caplog.set_level(logging.INFO)
+    detail = ("Could not resolve host " if unresolved else "Denied host ") + value + " " + DETAIL
+    client = AsyncMock()
+    with (
+        patch("security.ssrf.validate_outbound_url", side_effect=SSRFError(detail)),
+        patch(f"routers.settings.{client_type.__name__}", return_value=client) as constructor,
+    ):
+        response = await async_client.post(
+            f"/api/settings/{name}/test-connection",
+            json={"base_url": "https://media.invalid", "token" if name == "plex" else "api_key": SECRET},
+        )
+    assert response.json() == ({"ok": True} if unresolved else {"ok": False, "error": HOST_ERROR})
+    if unresolved:
+        client.get_sessions.assert_awaited_once()
+        client.close.assert_awaited_once()
+    else:
+        constructor.assert_not_called()
+    assert "synthetic diagnostic" not in response.text
+    assert "synthetic diagnostic" in caplog.text
+    for sensitive in (value, SECRET, "url-user", "url-pass", "path-user", "path-pass"):
+        assert sensitive not in caplog.text
+    records = [record for record in caplog.records if record.name == "routers.settings"]
+    assert records
+    assert all(record.exc_info is None for record in records)
+
+
+@pytest.mark.parametrize("records", [None, [], [ipaddress.ip_address("8.8.8.8"), ipaddress.ip_address("169.254.169.254")]])
+def test_settings_dns_allowance_preserves_runtime_revalidation(records):
+    from routers.settings import _sanitize_base_url
+    from security.ssrf import SSRFError, SSRFMode, validate_outbound_url
+
+    url = "https://media.invalid:8920/path?ignored=true#fragment"
+    with (
+        patch("security.ssrf._resolve", **(
+            {"side_effect": socket.gaierror("synthetic DNS failure")} if records is None
+            else {"return_value": records}
+        )),
+        patch("security.ssrf.get_ssrf_mode", return_value=SSRFMode.LAN_FRIENDLY),
+    ):
+        assert _sanitize_base_url(url) == (
+            ("https://media.invalid:8920", None) if not records else (None, HOST_ERROR)
+        )
+        with pytest.raises(SSRFError):
+            validate_outbound_url(url, SSRFMode.LAN_FRIENDLY)
 
 
 @pytest.mark.asyncio
