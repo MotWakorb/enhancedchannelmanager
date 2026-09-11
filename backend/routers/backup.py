@@ -132,7 +132,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0029"
+APP_VERSION = "0.18.2-0030"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -4997,6 +4997,9 @@ async def restore_dbas_artifact(
     even if this flag were bypassed). Validation (.17 version + integrity) runs
     inside the task BEFORE any decode or importer.
     """
+    from uuid import uuid4
+
+    run_id = str(uuid4())
     reattach_mode = ChannelReattachMode.coerce(channel_reattach_mode)
     logger.info(
         "[BACKUP] DBAS restore requested (filename=%s, confirm_apply=%s, "
@@ -5032,7 +5035,7 @@ async def restore_dbas_artifact(
         # frontend polls /api/tasks/{id} for live progress. The task's own
         # finally-block cleans up the temp artifact on success AND failure.
         asyncio.create_task(
-            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters)
+            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id)
         )
     except Exception as exc:
         logger.exception("[BACKUP] Failed to schedule DBAS restore task: %s", exc)
@@ -5047,6 +5050,7 @@ async def restore_dbas_artifact(
     return {
         "status": "started",
         "task_id": DBAS_RESTORE_TASK_ID,
+        "run_id": run_id,
         "is_dry_run": not confirm_apply,
         "channel_reattach_mode": reattach_mode.value,
     }
@@ -7230,6 +7234,9 @@ async def restore_dbas_saved(
         )
         raise HTTPException(status_code=403, detail=_DBAS_APPLY_MCP_DENIAL)
 
+    from uuid import uuid4
+
+    run_id = str(uuid4())
     filename = req.filename
     reattach_mode = ChannelReattachMode.coerce(req.channel_reattach_mode)
     logger.info(
@@ -7285,7 +7292,7 @@ async def restore_dbas_saved(
         # Fire-and-forget: schedule as a background asyncio task and return the
         # task id immediately. The caller polls /api/tasks/{id} for progress.
         asyncio.create_task(
-            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters)
+            engine.run_task(DBAS_RESTORE_TASK_ID, parameters=parameters, run_id=run_id)
         )
     except Exception as exc:
         logger.exception("[BACKUP] Failed to schedule DBAS restore-from-saved task: %s", exc)
@@ -7294,6 +7301,7 @@ async def restore_dbas_saved(
     return {
         "status": "started",
         "task_id": DBAS_RESTORE_TASK_ID,
+        "run_id": run_id,
         "is_dry_run": not req.confirm_apply,
         "channel_reattach_mode": reattach_mode.value,
     }

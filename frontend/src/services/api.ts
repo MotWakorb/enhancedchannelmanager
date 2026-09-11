@@ -2944,6 +2944,7 @@ export interface TaskParameterSchemaResponse {
 }
 
 export interface TaskProgress {
+  run_id?: string | null;
   total: number;
   current: number;
   percentage: number;
@@ -4922,6 +4923,7 @@ export async function restoreBackupYaml(file: File, sections: string[]): Promise
 
 /** Response of the async DBAS restore-trigger endpoint (bead o8tbv). */
 export interface DbasRestoreStartResult {
+  run_id: string;
   status: string;
   /** Poll `/api/tasks/{task_id}` for per-stage progress + the terminal report. */
   task_id: string;

@@ -8,7 +8,7 @@ import { join } from 'node:path'
 const output = mkdtempSync(join(tmpdir(), 'rdnia-e2e-'))
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['verification-helpers.spec.ts', 'task-notification-lifecycle.spec.ts', 'verification-browser.spec.ts', 'task-notifications.spec.ts'],
+  testMatch: ['verification-helpers.spec.ts', 'task-notification-lifecycle.spec.ts', 'verification-browser.spec.ts', 'task-notifications.spec.ts', 'restore-run-correlation.spec.ts'],
   timeout: 90000,
   retries: 0,
   workers: 1,

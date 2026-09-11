@@ -9,14 +9,9 @@
  * dnd/observer-leak discipline in this repo — the same applies to polling
  * timers).
  *
- * SEAM: the restore-trigger endpoint / restore TaskScheduler is a LATER bead.
- * The backend orchestrator (`backend/dbas/restore_orchestrator.py`, bead .18)
- * exists but does not yet emit `_set_progress`, and no restore task is wired to
- * `task_scheduler`. This hook therefore takes the `taskId` as a prop/seam and
- * polls the EXISTING generic task status endpoint (`getTask` →
- * `/api/tasks/{id}`), reading the REAL `TaskProgress` shape
- * (`backend/task_scheduler.py` — `TaskProgress.to_dict()`). When the restore
- * task lands and emits its stage via `current_item`, this hook needs no change.
+ * Both restore triggers return a server-issued run_id. Every progress response
+ * must carry that identity; a timestamp or a fresh mount cannot establish it.
+ * DbasRestoreCorrelation.test.tsx exercises the actual consumer seam.
  */
 import { useState, useCallback, useEffect, useRef } from 'react';
 import * as api from '../services/api';
@@ -48,10 +43,11 @@ const MAX_RUN_START_POLLS = 20;
 
 export interface UseRestoreProgressOptions {
   /**
-   * Task id to poll. `null` disables polling (no task running yet) — the seam
-   * for the not-yet-wired restore-trigger endpoint.
+   * Task id to poll. `null` disables polling (no task running yet).
    */
   taskId: string | null;
+  /** Server-issued identity returned by the successful restore trigger. */
+  runId?: string | null;
   /** Poll cadence in ms (default 1000). */
   pollIntervalMs?: number;
   /**
@@ -153,12 +149,13 @@ export interface UseRestoreProgressResult extends RestoreProgressView {
 export function useRestoreProgress(
   options: UseRestoreProgressOptions
 ): UseRestoreProgressResult {
-  const { taskId, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, runKey = 0 } = options;
+  const { taskId, runId, pollIntervalMs = DEFAULT_POLL_INTERVAL_MS, runKey = 0 } = options;
 
   // The view is stored WITH the run it belongs to, so a view can never outlive
   // its run.
-  const [tracked, setTracked] = useState<{ runKey: number; view: RestoreProgressView }>({
+  const [tracked, setTracked] = useState<{ runKey: number; runId?: string | null; view: RestoreProgressView }>({
     runKey,
+    runId,
     view: EMPTY_VIEW,
   });
 
@@ -167,14 +164,10 @@ export function useRestoreProgress(
   // same pass would still see the previous run's `true` and act on it — which
   // is exactly the bug this exists to close. Deriving it makes the new run's
   // empty view visible in the very render where `runKey` changed.
-  const view = tracked.runKey === runKey ? tracked.view : EMPTY_VIEW;
+  const view = tracked.runKey === runKey && tracked.runId === runId ? tracked.view : EMPTY_VIEW;
 
   // Holds the live abort controller so stopPolling() can tear down the loop.
   const abortRef = useRef<AbortController | null>(null);
-  // `started_at` of the last progress payload this hook PUBLISHED. It is the
-  // discriminator between "this run" and "the run before it": the scheduler
-  // stamps a fresh one in its synchronous prologue, before the task body runs.
-  const publishedStartedAtRef = useRef<string | null>(null);
 
   const stopPolling = useCallback(() => {
     abortRef.current?.abort();
@@ -183,7 +176,7 @@ export function useRestoreProgress(
 
   useEffect(() => {
     if (!taskId) {
-      setTracked({ runKey, view: EMPTY_VIEW });
+      setTracked({ runKey, runId, view: EMPTY_VIEW });
       return;
     }
 
@@ -192,13 +185,10 @@ export function useRestoreProgress(
     const { signal } = controller;
     const startedAt = Date.now();
 
-    // The run this loop is watching must be a DIFFERENT run from the last one
-    // published. Until that is established, every payload belongs to the
-    // previous run and must not be shown. With nothing published yet there is
-    // no previous run to confuse this one with.
-    const previousRunStartedAt = publishedStartedAtRef.current;
-    let confirmedNewRun = previousRunStartedAt === null;
+    // Check EVERY response, including after a matching running payload. A later
+    // trigger can replace the singleton while this consumer is still polling.
     let pollsAwaitingRun = 0;
+    let hasSeenRun = false;
 
     // Async setState fires inside this poll loop (not synchronously in the
     // effect body), so the set-state-in-effect lint rule does not apply.
@@ -209,13 +199,13 @@ export function useRestoreProgress(
           if (signal.aborted) return;
           const progress = taskStatus.progress;
 
-          if (!confirmedNewRun) {
-            if (progress.started_at && progress.started_at !== previousRunStartedAt) {
-              confirmedNewRun = true;
-            } else if (++pollsAwaitingRun >= MAX_RUN_START_POLLS) {
+          const matchesRun = !!runId && progress.run_id === runId;
+          if (!matchesRun) {
+            if (!hasSeenRun && ++pollsAwaitingRun >= MAX_RUN_START_POLLS) {
               // Say nothing started rather than replay the last run's result.
               setTracked({
                 runKey,
+                runId,
                 view: {
                   ...EMPTY_VIEW,
                   status: 'failed',
@@ -227,10 +217,10 @@ export function useRestoreProgress(
             }
           }
 
-          if (confirmedNewRun) {
-            publishedStartedAtRef.current = progress.started_at;
+          if (matchesRun) {
+            hasSeenRun = true;
             const nextView = viewFromProgress(progress);
-            setTracked({ runKey, view: nextView });
+            setTracked({ runKey, runId, view: nextView });
             if (!nextView.isRunning) {
               // Terminal — stop polling, leave the final view in place.
               return;
@@ -243,8 +233,8 @@ export function useRestoreProgress(
           const message =
             err instanceof Error ? err.message : 'Failed to fetch restore progress';
           setTracked((prev) =>
-            prev.runKey === runKey
-              ? { runKey, view: { ...prev.view, error: message } }
+            prev.runKey === runKey && prev.runId === runId
+              ? { runKey, runId, view: { ...prev.view, error: message } }
               : prev
           );
         }
@@ -273,7 +263,7 @@ export function useRestoreProgress(
         abortRef.current = null;
       }
     };
-  }, [taskId, pollIntervalMs, runKey]);
+  }, [taskId, runId, pollIntervalMs, runKey]);
 
   return { ...view, stopPolling };
 }

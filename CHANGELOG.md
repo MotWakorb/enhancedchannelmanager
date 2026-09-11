@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- **Restore dialogs correlate progress and reports with the requested run (bead `enhancedchannelmanager-zt801`; build 0.18.2-0030).** Uploaded and saved DBAS restore triggers issue a server run identity carried into progress and terminal history. Reopening a dialog or rerunning the same task cannot present an older preview as the current result or enable Apply from it. Slow-upload timing, history retries, warning reports, and apply-only data refresh are preserved. Unknown identity fails closed.
+
 ### Security
 
 - **Settings URL validation uses safe public errors (bead `enhancedchannelmanager-m8dvz`; build 0.18.2-0028).** Malformed ports and outbound-policy denials return fixed messages instead of parser text or resolved-address details, including the shared Dispatcharr and media settings save paths. Host-policy diagnostics remain in redacted server logs. Media client error categories, credential escaping, human-admin/first-run gates, and outbound allow/deny decisions are preserved.
@@ -23,6 +27,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Mapped channels moved to Settings > Channel Normalization (bead `enhancedchannelmanager-81sy8`, GitHub #775, build 0.18.2-0024).** The existing manager is now a headed, section-linked Settings section instead of an Operations sidebar destination. Old `#mapped-channels` bookmarks redirect to the new section. Mapping saves, API permissions, and the stream-selection **Add mapping** shortcut are unchanged.
 
 ### Added
+
+- **Shared regression coverage for unchanged media caches (bead `enhancedchannelmanager-eal0l.2`; build 0.18.2-0030).** Isolated Emby/Plex/Jellyfin lifecycle tests pin monotonic TTL boundaries, concurrent refresh coalescing, stale fallback, cancellation, cleanup, and provider isolation; Jellyfin enrichment remains provider-specific.
 
 - **Stream probes now classify resolution-relative low bitrate (bead `enhancedchannelmanager-8gmk8.4`, GitHub #980, build 0.18.2-0020).** Fresh bitrate in bits/second is low only when strictly below `width * height * low_bitrate_threshold`, independent of FPS. The configurable positive finite threshold defaults to 1.0 bit/pixel/second. Inputs prefer fresh measured throughput, then video metadata, then overall format metadata, using current effective dimensions including opt-in resdet results. Missing or invalid inputs and failed probes clear the flag rather than reusing stale values. Classification remains visible independently of sorting; Priority deprioritization defaults off and follows the existing global health gate. Points mode uses explicit `low_bitrate` rules only, with no hidden bucket, injected rule, or automatic penalty. Existing numeric bitrate ranking and direct sorts are unchanged.
 
