@@ -1,6 +1,6 @@
 # Global Auth Middleware
 
-All /api/* endpoints are secure-by-default via middleware; new endpoints must be added to AUTH_EXEMPT_PATHS to be public.
+All /api/* endpoints are secure-by-default via middleware. Public access is classified by `main._is_auth_exempt_request`.
 
 ECM uses a global auth middleware in `main.py` that blocks unauthenticated requests to all `/api/*` paths unless explicitly exempted.
 
@@ -8,14 +8,14 @@ ECM uses a global auth middleware in `main.py` that blocks unauthenticated reque
 
 **How to apply:**
 - New endpoints are automatically protected: no auth dependency needed
-- To make an endpoint public, add its path to `AUTH_EXEMPT_PATHS` in `main.py`
+- Method-independent public paths live in `AUTH_EXEMPT_PATHS` in `main.py`. The classifier also permits GET-only generated XMLTV feeds, described below.
 - The middleware respects `RequireAuthIfEnabled` semantics: skips enforcement when `auth.require_auth=False` or `auth.setup_complete=False`
 - Token validation uses `decode_token_safe()` from `auth/dependencies.py` (non-raising, returns payload or None)
 - Per-endpoint `RequireAuthIfEnabled` / `RequireAdminIfEnabled` DI dependencies still exist for role-based checks (e.g., admin-only routes in `backup.py`)
 
-**The exempt set is pinned by a test.** `AUTH_EXEMPT_PATHS` is the entire
-authentication gate for `/api/*`: an exact string match, no prefix logic, no
-second layer behind it for routers that carry no dependency of their own. Its
+**The exempt set is pinned by a test.** `AUTH_EXEMPT_PATHS` uses an exact
+string match, with no prefix logic and no second layer behind it for routers
+that carry no dependency of their own. Its
 contents are snapshotted in
 `backend/tests/test_auth_exempt_paths_snapshot.py`, so adding a path requires
 editing that file in the same commit. The failure message is the review
@@ -29,6 +29,31 @@ Note that middleware exemption is not the same as anonymity: `GET` and `PUT
 /api/auth/admin/settings` are exempt from the middleware but carry
 `auth.routes.require_admin`, which chains `get_current_user` and validates a
 token in every mode. That is pinned too.
+
+## Generated XMLTV feeds
+
+Dispatcharr and other XMLTV consumers can fetch these read-only feeds without
+an ECM session even when `require_auth` and `setup_complete` are both true:
+
+- `GET /api/dummy-epg/xmltv`: combined output for enabled profiles.
+- `GET /api/dummy-epg/xmltv/{profile_id}`: output for one profile, with an ASCII
+  numeric ID.
+
+A single trailing slash is permitted so FastAPI can redirect to the canonical
+URL. Matching uses the decoded ASGI scope path, as routing does; query strings
+do not change the grant. There are no filename or gzip feed routes. HEAD and other
+methods do not receive this exemption. Profile listing/configuration, preview,
+generation commands and `/api/epg/*` retain their existing authentication rules.
+The MCP client-key refusal still runs before public-request classification.
+
+These URLs expose generated channel names and programme listings to anyone
+who can reach ECM. They carry no session credential or feed token. The UI's
+copy-URL and Add to Dispatcharr actions use these paths directly.
+
+The method-specific route inventory is pinned in
+`backend/tests/test_auth_exempt_paths_snapshot.py`; auth-enabled middleware and
+handler behavior is covered by
+`backend/tests/integration/test_dummy_epg_feed_auth.py`.
 
 ## What `require_auth: false` permits
 
