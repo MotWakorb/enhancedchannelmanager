@@ -24,7 +24,9 @@
    no colour so a micro label takes the colour of the thing it labels.
    Bead enhancedchannelmanager-6z299, completion pass. */
 .sticky-section-nav > span { flex: 0 0 auto; color: var(--text-muted); }
-.sticky-section-nav > div { display: flex; gap: .25rem; min-width: 0; overflow-x: auto; scrollbar-width: thin; }
+/* The outline occupies 4px. One extra pixel covers rounded scroll limits at
+   the last item; negative margins preserve the existing label/button geometry. */
+.sticky-section-nav > div { display: flex; gap: .25rem; min-width: 0; overflow-x: auto; scrollbar-width: thin; padding: 5px; margin: -5px; overscroll-behavior: contain; }
 /* Body role, size token only — a nav item is an interactive control, so it
    keeps the weight it was authored with (§ "Adopting a role", rule 1).
    These buttons had no font-size rule anywhere and therefore rendered at the
@@ -78,15 +80,19 @@
   width: 208px;
   margin: 0;
   padding: .75rem;
+  max-height: var(--section-nav-available-height);
 }
 
 .sticky-section-nav.placement-rail > div {
   flex-direction: column;
   gap: .1rem;
-  overflow-x: visible;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .sticky-section-nav.placement-rail button {
+  flex-shrink: 0;
   text-align: left;
   white-space: normal;
   padding: .4rem .55rem;
@@ -110,6 +116,7 @@
     flex-direction: row;
     align-items: center;
     gap: .75rem;
+    max-height: none;
   }
 
   .sticky-section-nav.placement-rail > div {

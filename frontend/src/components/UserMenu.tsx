@@ -59,20 +59,30 @@ export function UserMenu({ onRequestSignOut }: UserMenuProps = {}) {
   const closeProfile = () => { if (!savingProfile) setShowProfileModal(false); };
   const closePassword = () => { if (!savingPassword) setShowPasswordModal(false); };
 
-  // Close menu when clicking outside
+  // Only the open dropdown owns these listeners; profile/password dialogs
+  // have their own Escape lifecycle after a menu action closes it.
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
         setIsOpen(false);
       }
     };
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || !menuRef.current?.contains(event.target as Node)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setIsOpen(false);
+      menuRef.current.querySelector<HTMLButtonElement>('.user-menu-trigger')?.focus();
+    };
 
     if (isOpen) {
       document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleEscape);
     }
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleEscape);
     };
   }, [isOpen]);
 

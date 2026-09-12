@@ -6,7 +6,7 @@ UI path: **Settings → Backup & Restore → Cross-Instance Sync**.
 
 ## Two semantics you must understand before you start
 
-**ONE-WAY.** Sync replicates from A to B on a schedule. B is a managed replica. Edits you make directly on B are overwritten by A on the next sync cycle. Do not use B as a working instance if you intend sync to keep running.
+**ONE-WAY.** Sync replicates from A to B on a schedule. B is a managed replica. Edits to replicated, writable fields on matching items are overwritten from A when that category next syncs. [Field-level limits](#m3u-account-field-limits) apply, including destination-only custom-property keys that sync cannot remove. Do not use B as a working instance if you intend sync to keep running.
 
 **PROVIDER CREDENTIALS ARE SENT ON EVERY CYCLE.** Every scheduled sync pushes your source and channel definitions *and* the provider credentials that make them work: the M3U account username and password, the credentials inside a plain-M3U or Xtream Codes URL, and the credentials inside every stream address. B therefore authenticates against your provider and serves video on its own, with nothing for you to type on B — and when you change your provider password on A, B picks the new one up on its next scheduled sync.
 
@@ -46,11 +46,35 @@ Cross-instance sync is a recurring, automated one-way push of configuration from
 | Stream profiles | Profile definitions, including their user-agent link. |
 | Channels (+ embedded streams) | Channel names, numbers, groups, and their stream assignments. **Stream URLs cross whole**, including the Xtream Codes `…/live/<username>/<password>/<id>.ts` form where the credential is part of the address — so B's channels are bound to addresses that play, on the same cycle, with no second pass and nothing to re-enter. On B every synced stream is filed under a single account named `ECM Custom Streams (DBAS restore)`, **not** under the replicated provider account it comes from — see [that section below](#on-b-every-synced-stream-belongs-to-an-account-called-ecm-custom-streams-dbas-restore) for why. |
 
+M3U account updates also apply to accounts already on B. Source URLs, provider credentials,
+connection limits and preference flags follow A; the account is not frozen at its first-sync
+values. Its own health state and read-only child records have [different field-level
+dispositions](#m3u-account-field-limits).
+
 ### Synced on a slower clock
 
 | Category | Notes |
 |-|-|
-| Logos | **On by default**, but not on every cycle: a new sync target replicates logos once every 24 hours (`logo_sync_interval_hours` on the target; set it to `0` for every cycle — **the interval has no toggle on the card yet**, only the on/off switch does, so changing it means `PUT /api/sync-targets/{id}`). Everything else follows the separate recurring task schedule configured under **Settings → Scheduled Tasks** — only logos are throttled, because copying images is the one expensive part of a cycle and artwork changes rarely. A target created before ECM v0.18.1 keeps whatever you had it set to; the new default applies to targets you create from now on. Each target row on the Cross-Instance Sync card carries a **Logos off / Logos on** toggle next to its enable/disable switch; click it to turn logo replication off (or back on) for that target. The setting is stored on the target, so it survives a reload and applies to that target's later runs. A target that has never run a logo pass replicates logos on its very next cycle rather than waiting out the 24 hours, so a freshly built replica arrives with its artwork. Covers all three places a logo can live: the files in ECM's own `/config/uploads/logos/`, the logos Dispatcharr hosts (where a logo you upload through Logo Manager actually lives), and the ones your provider supplies as a web address — which on an Xtream Codes lineup is usually nearly all of them. The first two travel as image files; the third travels as the address itself, so B points at the same picture A does without either instance re-hosting it. Where two of them describe the same logo, the one holding real image bytes is the one that travels. Only logos B is missing are created (matched by id, name, then filename); sync never deletes or bulk-clears B's existing logos. Because sync runs unattended, the image fetching is time-bounded per image and per cycle — a very large logo set that runs out of budget is reported as missed logos for that cycle and picked up on the next one. A provider address that carries your account's username or password **is** copied now, like every other credential-bearing address, so those logos arrive and load on B. |
+| Logos | **On by default for new targets.** An enabled logo pass is due on the target's first sync cycle, then after 24 hours by default. It runs on the next manual or scheduled sync that is due for logos, not on an independent daily timer. Other categories follow the task schedule under **Settings → Scheduled Tasks**. |
+
+Each target row carries a **Logos off / Logos on** toggle beside its enable/disable switch.
+The choice survives reloads and later target edits. Existing stored OFF choices are preserved
+when upgrading; the new default does not turn them on. Turning logos OFF suppresses the pass
+regardless of its interval. The interval can be configured as `0` for every cycle when logos
+are ON, but there is currently no interval control in the web UI.
+
+Previewing does not advance the logo clock. An apply that carries the logo pass does, including
+a degraded apply. Image fetching is time-bounded per image and per pass; missed logos are
+reported and retried on the next **due logo pass**, rather than on every intervening config
+cycle. If the sync task runs less often than daily, logo passes follow that slower schedule too.
+
+Logo replication covers ECM's own `/config/uploads/logos/` files, images hosted by Dispatcharr
+(including Logo Manager uploads), and provider-supplied web addresses. Hosted files travel as
+image bytes; provider addresses travel intact, including provider credentials, so B loads the
+same picture without re-hosting it. If two sources describe the same logo, the source with image
+bytes takes precedence. The pass matches by ID, name, then filename, creates only missing logos,
+preserves B's existing logo rows, and binds channels to B's corresponding logos. It does not
+bulk-clear B's artwork.
 
 ### Never synced
 
@@ -98,7 +122,7 @@ Before configuring a schedule, run a manual dry-run to confirm A can reach B and
 1. On the target row, click **Sync now (preview)**.
 2. ECM runs a dry-run (no changes are written to B). The results show what would be created, updated, or skipped.
 3. Review the preview. If you see unexpected conflicts, see [Troubleshooting](#troubleshooting).
-4. After a successful preview, **Apply** appears. **Destructive warning: Apply makes A the source of truth and overwrites matching edits on B.** Click it only when B is ready to be converged to A.
+4. After a successful preview, **Apply** appears. **Destructive warning: Apply makes A the source of truth and overwrites replicated, writable fields on matching items on B.** Review the [field-level limits](#m3u-account-field-limits), then click it only when B is ready to be converged to A.
 5. Accept the browser's native confirmation only after you have read the source-wins warning. This confirmation is browser chrome and is therefore intentionally not pictured. A failed preview does not make **Apply** available.
 
 After a successful apply, the target row shows the last sync timestamp and the outcome.
@@ -158,14 +182,18 @@ carries them now, so an empty B converges to a working standby on its first appl
 encrypted backup is still worth doing — it is a restorable point-in-time snapshot, which sync is
 not — but it is a backup, not a prerequisite.
 
-From then on sync keeps B current — credentials included. A new M3U or EPG source added on A arrives on B complete and working on the next cycle, and so does a changed provider password. There is nothing to re-enter on B, ever.
+From then on successful sync applies keep the replicated fields current, including provider
+credentials. A new M3U or EPG source and a changed provider password on A reach B on the next
+apply. For Schedules Direct, enter or correct the unreadable password on the sync target instead.
 
 ---
 
 ## What credentials cross, by source type
 
-There is no separate action to run and nothing to click. Every scheduled sync carries
-these, and a change to any of them on A reaches B on the next cycle.
+Provider credentials travel with their replicated configuration; there is no separate
+provisioning action. Harvestable changes follow A on the next successful apply of those fields.
+Logo addresses follow the [slower logo pass](#synced-on-a-slower-clock), and Schedules Direct
+requires the password supplied on the sync target.
 
 | Type | What crosses |
 |-|-|
@@ -174,16 +202,16 @@ these, and a change to any of them on A reaches B on the next cycle.
 | **Plain-M3U** pointing at a LAN tuner (HDHomeRun) | Nothing to carry; there is no credential. The address crosses as it always did. |
 | **XMLTV EPG** (`xmltv.php?username=…&password=…`) | The whole `url`. |
 | **Stream addresses** | Whole, including the Xtream Codes `…/live/<username>/<password>/<id>.ts` form. This is what lets B's channels play on the same cycle they are created. |
-| **Provider logo addresses** | Whole, so B loads the same artwork A does. |
+| **Provider logo addresses** | Whole, when the logo pass is due, so B loads the same artwork A does. |
 | **Schedules Direct EPG** | `username` automatically. The **password** is the one value you supply, because Dispatcharr marks it write-only and never returns it — there is nothing on A to read, which is *unreadable*, not *unset*. Enter it once in the sync-target form (the field appears only if you actually have a Schedules Direct source) and it is stored encrypted and re-sent every cycle. Because the replica does not return it either, ECM can confirm it **wrote** the value but never that the replica holds a **working** one: a mistyped password shows up as B's EPG source failing to fetch, and the fix is to correct it on the target. Skip it and B still **serves video** — streams come from M3U accounts — it just has no guide data from that source. |
 | **Anything else** | Does not cross. ECM's own settings secrets, alert-method secrets (SMTP passwords, bot tokens, webhooks), cloud-storage and sync-target credentials, and Dispatcharr users are redacted or excluded exactly as they always have been. |
 
 ### Rotation needs no mechanism
 
-Change your provider password on A and the next scheduled sync carries the new one to
-B. There is no action to remember, no marker to clear, and no state that can be stale:
-B is given the current value every time, so "the standby's credential went out of date"
-is not a condition that can arise between cycles.
+Change a harvestable provider password on A and the next successful scheduled apply carries the
+new value to B, including an M3U account that already exists there. There is no separate
+provisioning action or marker to clear. For Schedules Direct, update the password on the sync
+target because A's API cannot supply it.
 
 ### Certificate checking, and the risk that is yours
 
@@ -229,11 +257,60 @@ secret again.
 
 ## Conflicts
 
-Sync uses a **source-wins** policy: when a configuration item exists on both A and B with matching identity, A's version is applied to B.
+Sync uses a **source-wins** policy for replicated, writable fields: when a configuration item
+exists on both A and B with matching identity, those fields follow A. For M3U accounts, matching
+uses the account name without surrounding whitespace or letter-case differences. The limits
+below explain which differences this does and does not resolve.
 
 One case surfaces as a conflict rather than a silent overwrite: **a channel with no channel number that ambiguously matches a no-number channel on B** (same name, both with null channel numbers). ECM cannot safely determine whether these are the same channel, so it skips the item and surfaces a `CONFLICT` result in the sync report. Assign channel numbers on A to resolve the ambiguity, then re-sync.
 
-**What "overwritten by A" means in practice** (live-validated): sync converges by *recreate*, not by pruning. If you **delete** an item on B, the next cycle recreates it from A (a deleted channel comes back with its streams re-attached). If you **rename** an item on B, the next cycle recreates A's version alongside it. The renamed copy is now a B-local extra that sync will **not** delete (sync never deletes anything on B). Clean up B-local extras by hand if they matter to you, or avoid editing B directly.
+**Deletion and renaming on B** (live-validated): missing source items are recreated rather than
+destination extras being pruned. If you **delete** an item on B, the next cycle that includes its
+category recreates it from A (a deleted channel comes back with its streams re-attached). If you
+**rename** an item so it no longer matches, the next cycle recreates A's version alongside it.
+The renamed copy is a B-local extra that sync does not prune. Clean up those extras by hand if
+they matter to you, or avoid editing B directly.
+
+### M3U account field limits
+
+An existing M3U account is updated in place for supported fields, including provider credentials,
+source URL, connection limit, refresh settings, active state and the four VOD/auto-enable
+preferences. User-agent and server-group links point to B's matching records, not A's row numbers.
+
+| Field | What to expect on B |
+|-|-|
+| `name` | Used to match the account, not to propagate renames. A genuine rename on A creates a new matching account on B and leaves the old one there. Case or surrounding-whitespace differences do not trigger a spelling update. |
+| `channel_groups` | The account's group selection follows A through a separate operation that translates group references to B's records. It does not start a provider download. Undeliverable selections are reported. |
+| `status` | B's own account health is not replaced by A's status. B can still change it when applying a setting, for example when an account is disabled. |
+| `last_message` | B keeps its own account diagnostic instead of receiving A's message. |
+| `filters` | Read-only filter details on the account response. Sync does not replicate the underlying filter records through the account update. |
+| `profiles` | Read-only M3U account-profile details. Sync does not replicate these child records; they are different from the channel and stream profiles listed above. |
+| `earliest_expiration` | A calculated summary of B's profile expiration dates, not a setting copied from A. |
+| `all_expirations` | A calculated list from B's profiles, not a setting copied from A. The separate default-profile expiration setting does follow A when exposed by Dispatcharr. |
+| `locked` | B's lock state is not copied from A. |
+
+Account IDs, creation/update timestamps, last-refresh bookkeeping and derived stream counts also
+belong to B. A copied playlist file path is only a path setting; the file must already be
+available at that location on B.
+
+**Custom properties merge rather than replace.** Keys supplied by A are added or updated on B,
+but keys found only on B remain. Dispatcharr merges an account update into the stored
+`custom_properties` dictionary. Removing a key from A, or leaving A's dictionary empty, does not
+remove B's copy. These extra keys are not reported as account field drift because this update
+cannot remove them. This is a current synchronization limit, not a configurable local-override
+feature.
+
+**Readback has limits too.** A field absent from A's response supplies nothing to copy. If B does
+not return a field, sync cannot compare it and normally leaves it alone. The special case is a
+supplied M3U password: if B's API hides it from the caller, sync still writes it on each apply,
+without reporting a detected difference or claiming to have verified a working password.
+Schedules Direct uses the separately supplied password described [above](#what-credentials-cross-by-source-type).
+
+The preview and apply summaries name comparable fields that would change or changed. A refused
+account update is reported as **could not converge** and prevents a clean-success result;
+retrying rechecks the current destination state. Zero account field drift means no comparable,
+supported difference was found. It does not prove whole-account equality, removal of extra custom
+properties, or successful provider authentication.
 
 ---
 
@@ -277,9 +354,11 @@ A channel on A has no channel number, and B already has a channel with the same 
 
 ### B has credentials for sources that A can't provide
 
-No longer a thing you have to fix. Sync sends A's provider credentials on every cycle
-and overwrites B's, so a source that works on A works on B. If a source works on B and
-not on A, fix it on A — B converges on whatever A holds.
+Sync carries A's harvestable provider credentials on each cycle and converges an existing M3U
+account when they differ. Fix incorrect source credentials on A. If A cannot return a value,
+absence does not mean the destination is empty or that its password has been verified. Supply a
+Schedules Direct password on the sync target, and check B's actual provider fetch/playback to
+confirm it works. See [M3U account field limits](#m3u-account-field-limits) for reporting details.
 
 ### Most of B's channels have no programme data, and B's EPG source says "No URL provided"
 

@@ -20,7 +20,7 @@ WHAT IS BEING DROPPED
     so ANY instance upgrading across this revision may hold rows. Rows are
     NOT recoverable by ``downgrade`` — see "Reversibility" below. The
     operator-facing pre-upgrade export instructions live in
-    ``docs/user_guide/upgrade-notes.md``.
+    ``docs/user_guide/epg/lookup-tables-retired.md``.
 
     As a safety net for operators who upgrade without reading the note, this
     migration writes any rows it is about to delete to a JSON file beside the
@@ -173,7 +173,7 @@ def _dump_rows_before_drop(connection) -> None:
         "[0041] Dropping %s (%d row(s)). The Lookup Tables feature is retired "
         "(bead enhancedchannelmanager-70u0r.1). A JSON copy of the deleted rows "
         "was written to %s — nothing in ECM reads it; keep it if you want the "
-        "data. See docs/user_guide/upgrade-notes.md.",
+        "data. See docs/user_guide/epg/lookup-tables-retired.md.",
         TABLE, len(payload), path,
     )
 

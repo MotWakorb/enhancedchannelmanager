@@ -4195,7 +4195,7 @@ class TestMigration0041:
         finally:
             engine.dispose()
 
-    def test_populated_upgrade_dumps_rows_before_dropping(self, tmp_path):
+    def test_populated_upgrade_dumps_rows_before_dropping(self, tmp_path, caplog):
         """The rows the migration deletes are written out first.
 
         This is the safety net for an operator who upgrades without reading the
@@ -4233,6 +4233,10 @@ class TestMigration0041:
         # A row whose entries never parsed must still survive into the dump.
         assert by_name["corrupt"]["entries"] is None
         assert by_name["corrupt"]["entries_raw"] == "{not valid json"
+        guide = "docs/user_guide/epg/lookup-tables-retired.md"
+        assert guide in caplog.text
+        assert "docs/user_guide/upgrade-notes.md" not in caplog.text
+        assert (Path(__file__).resolve().parents[3] / guide).is_file()
 
     def test_empty_upgrade_writes_no_dump(self, tmp_path):
         """Nothing lost → no stray file in the operator's config directory."""
@@ -4664,7 +4668,7 @@ class TestStampedPastDropSelfHeal:
         command.stamp(cfg, "0041")
         return db_file, db_url
 
-    def test_heals_lookup_tables_and_writes_the_dump(self, tmp_path):
+    def test_heals_lookup_tables_and_writes_the_dump(self, tmp_path, caplog):
         db_file, db_url = self._stamped_past_db(tmp_path)
         engine = create_engine(db_url, future=True)
         try:
@@ -4702,6 +4706,8 @@ class TestStampedPastDropSelfHeal:
             "fires — that safety net is the whole point for populated instances."
         )
         assert len(json.loads(dump.read_text())["rows"]) == 2
+        assert "docs/user_guide/epg/lookup-tables-retired.md" in caplog.text
+        assert "docs/user_guide/upgrade-notes.md" not in caplog.text
 
     def test_heal_is_a_noop_on_a_correctly_migrated_install(self, tmp_path):
         """Steady state must not stamp, upgrade, or log an error."""

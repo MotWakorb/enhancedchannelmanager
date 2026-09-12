@@ -474,6 +474,11 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   const [hasPendingChanges, setHasPendingChanges] = useState(false);
   const [saveFeedback, setSaveFeedback] = useState<'idle' | 'success' | 'error' | 'revert-error'>('idle');
   const [settingsBaselineVersion, setSettingsBaselineVersion] = useState(0);
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const pendingSettingsLoadsRef = useRef(0);
+  const settingsLoadGenerationRef = useRef(0);
+  const [settingsLoadError, setSettingsLoadError] = useState(false);
+  const settingsInitialized = settingsBaselineVersion > 0;
   const baselineSignatureRef = useRef<string | null>(null);
   const adoptNextSignatureRef = useRef(false);
   const auditedLongSettingsPages: ReadonlySet<SettingsPage> = new Set([
@@ -481,6 +486,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     'integrations', 'channel-pipeline', 'maintenance',
   ]);
   const supportsPageSave = auditedLongSettingsPages.has(activePage);
+  const usesSharedSettings = supportsPageSave || activePage === 'normalization';
   // Reset scroll position when navigating between Settings sub-pages — the
   // content pane otherwise preserves scrollTop from the previously viewed
   // sub-page, landing mid-page and burying top-of-page warnings (bead 09x38.11).
@@ -1030,8 +1036,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   useEffect(() => {
     void loadSettings().catch(() => {
-      // Revert callers surface failures inline; initial load retains the
-      // existing page-level error behavior.
+      // loadSettings exposes initial failure beside the disabled form.
     });
     loadProbeHistory();
     checkForOngoingProbe();
@@ -1174,8 +1179,15 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   const loadSettings = async () => {
+    const generation = ++settingsLoadGenerationRef.current;
+    pendingSettingsLoadsRef.current += 1;
+    setSettingsLoading(true);
+    setSettingsLoadError(false);
     try {
       const settings = await api.getSettings();
+      // Connection invalidation, retry and discard share this loader. Only
+      // the latest invocation may publish at either asynchronous boundary.
+      if (generation !== settingsLoadGenerationRef.current) return false;
       setUrl(settings.url);
       setAuthMethod(settings.auth_method || 'password');
       setUsername(settings.username);
@@ -1338,7 +1350,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         setSmtpAlertRecipientsPersisted({ methodId: null, recipients: '' });
         setSmtpAlertRecipientsLoading(false);
         setSettingsBaselineVersion((version) => version + 1);
-        return;
+        return true;
       }
       setSmtpAlertRecipientsLoading(true);
       try {
@@ -1353,6 +1365,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         };
 
         const methods = await api.listAlertMethods();
+        if (generation !== settingsLoadGenerationRef.current) return false;
         const smtpMethod = methods.find(m => m.method_type === 'smtp' && m.name === 'Email') ?? methods.find(m => m.method_type === 'smtp');
         if (smtpMethod) {
           setSmtpAlertMethodId(smtpMethod.id);
@@ -1366,14 +1379,24 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           setSmtpAlertRecipientsPersisted({ methodId: null, recipients: '' });
         }
       } catch (err) {
+        if (generation !== settingsLoadGenerationRef.current) return false;
         logger.warn('Failed to load alert methods (SMTP recipients)', err);
-      } finally {
-        setSmtpAlertRecipientsLoading(false);
       }
       setSettingsBaselineVersion((version) => version + 1);
+      return true;
     } catch (err) {
+      if (generation !== settingsLoadGenerationRef.current) return false;
+      setSettingsLoadError(true);
       logger.error('Failed to load settings:', err);
       throw err;
+    } finally {
+      // The newest GET may fail before reaching the recipient read. It still
+      // owns settlement of a recipient spinner inherited from an older load.
+      if (generation === settingsLoadGenerationRef.current) setSmtpAlertRecipientsLoading(false);
+      // Keep the shared readiness gate closed until overlapping loads settle;
+      // superseded completions cannot adopt a baseline or change load errors.
+      pendingSettingsLoadsRef.current -= 1;
+      if (pendingSettingsLoadsRef.current === 0) setSettingsLoading(false);
     }
   };
 
@@ -1642,6 +1665,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   };
 
   const handleSave = async () => {
+    if (!settingsInitialized || settingsLoading) return;
     if (!Number.isFinite(lowBitrateThreshold) || lowBitrateThreshold <= 0) {
       notifications.error('Low bitrate threshold must be positive and finite');
       return;
@@ -2494,6 +2518,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">speed</span>
@@ -2571,12 +2596,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      </fieldset>
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">bug_report</span>
           <h3>Logging</h3>
         </div>
 
+        <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
         <div className="form-group-vertical">
           <label htmlFor="backendLogLevel">Backend Log Level</label>
           <span className="form-description">
@@ -2614,6 +2641,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           />
         </div>
 
+        </fieldset>
         <div className="form-group-vertical">
           <label>App Debug Bundle</label>
           <span className="form-description">
@@ -2638,7 +2666,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
-        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+        <button className="btn-primary" onClick={handleSave} disabled={loading || settingsLoading || !settingsInitialized}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
@@ -2648,7 +2676,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderAppearancePage = () => (
     <div className="settings-page">
-
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">palette</span>
@@ -2940,6 +2968,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      </fieldset>
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">notifications</span>
@@ -3000,7 +3029,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
-        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+        <button className="btn-primary" onClick={handleSave} disabled={loading || settingsLoading || !settingsInitialized}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
@@ -3010,6 +3039,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderChannelDefaultsPage = () => (
     <div className="settings-page">
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
 
       <div className="settings-section">
         <div className="settings-section-header">
@@ -3582,17 +3612,18 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
-        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+        <button className="btn-primary" onClick={handleSave} disabled={loading || settingsLoading || !settingsInitialized}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
+      </fieldset>
     </div>
   );
 
   const renderNormalizationPage = () => (
     <div className="settings-page">
-
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">auto_fix_high</span>
@@ -3672,6 +3703,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         )}
       </div>
 
+      </fieldset>
       {/* Advanced Normalization Rules Engine */}
       <NormalizationEngineSection />
 
@@ -3685,7 +3717,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
-        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+        <button className="btn-primary" onClick={handleSave} disabled={loading || settingsLoading || !settingsInitialized}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
@@ -3793,6 +3825,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderChannelPipelinePage = () => (
     <div className="settings-page">
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
 
       {/* Stream Name Exclusion List */}
       <div className="settings-section">
@@ -3990,6 +4023,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         </div>
       </div>
 
+      </fieldset>
       {/* Event Sync team-alias dictionary (bead ti939.4.2). Self-contained:
           loads and saves through its own /api/event-sync/team-aliases
           endpoints — deliberately NOT part of this page's Save Settings
@@ -3998,7 +4032,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
-        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+        <button className="btn-primary" onClick={handleSave} disabled={loading || settingsLoading || !settingsInitialized}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
@@ -4008,6 +4042,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
   const renderEmailSettingsPage = () => (
     <div className="settings-page">
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
 
       {/* bead qsqfv: the origin ECM puts into links it emails out. Lives on
           this page because every link it governs today leaves in an email, and
@@ -4391,13 +4426,14 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       </div>
 
+      </fieldset>
       <AlertMethodsSection isAdmin={isAdminUser} />
 
       <div className="settings-actions">
         <button
           className="btn-primary"
           onClick={handleSave}
-          disabled={loading}
+          disabled={loading || settingsLoading || !settingsInitialized}
         >
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
@@ -4411,6 +4447,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
   // connection on the General page (the primary upstream).
   const renderIntegrationsPage = () => (
     <div className="settings-page">
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
 
       {/* Emby Integration */}
       <div id="emby-integration" className="settings-section" data-testid="emby-integration-section">
@@ -4828,11 +4865,12 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
-        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+        <button className="btn-primary" onClick={handleSave} disabled={loading || settingsLoading || !settingsInitialized}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
       </div>
+      </fieldset>
     </div>
   );
 
@@ -5272,6 +5310,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
     <div className="settings-page">
 
       {/* Stream Probing Section */}
+      <fieldset className="settings-load-fields" disabled={settingsLoading || !settingsInitialized}>
       <div className="settings-section">
         <div className="settings-section-header">
           <span className="material-icons">speed</span>
@@ -5590,6 +5629,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
           </div>
         </div>
 
+      </fieldset>
       {/* Probe Status Indicator - shows when probing.
           NOT a `.settings-section`: it is a transient status card with no
           heading, present only while a probe runs. `.settings-section` is the
@@ -6000,6 +6040,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
             <input
               id="strikeThreshold"
               type="number"
+              disabled={settingsLoading || !settingsInitialized}
               min="0"
               max="20"
               value={strikeThreshold}
@@ -6485,7 +6526,7 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
 
       <div className="settings-actions">
         <div className="settings-actions-left" />
-        <button className="btn-primary" onClick={handleSave} disabled={loading}>
+        <button className="btn-primary" onClick={handleSave} disabled={loading || settingsLoading || !settingsInitialized}>
           <span className="material-icons">save</span>
           {loading ? 'Saving...' : 'Save Settings'}
         </button>
@@ -6503,6 +6544,17 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         ref={settingsContentRef}
       >
         <div className="settings-content-main" data-settings-page={activePage}>
+        {usesSharedSettings && settingsLoading && <div className="settings-load-status" role="status" aria-label="Settings loading">
+          Loading shared settings… Please wait before editing shared fields.
+        </div>}
+        {usesSharedSettings && !settingsInitialized && settingsLoadError && <div className="settings-load-status" role="alert">
+          Could not load shared settings. Retry before editing shared fields.
+          <button type="button" className="btn-secondary" onClick={() => { void loadSettings().catch(() => {}); }}>
+            Retry loading settings
+          </button>
+        </div>}
+        {/* Each mixed page gates its shared fields locally. Independent API
+            sections and recovery actions stay usable while that baseline loads. */}
         {activePage === 'general' && renderGeneralPage()}
         {activePage === 'channel-defaults' && renderChannelDefaultsPage()}
         {activePage === 'normalization' && renderNormalizationPage()}
@@ -6522,15 +6574,16 @@ export function SettingsTab({ onSaved, onThemeChange, channelProfiles = [], onPr
         {activePage === 'backup-restore' && <BackupRestoreSection isAdmin={!user || user.is_admin} />}
         {supportsPageSave && hasPendingChanges && <div className="settings-pending-actions" role="status" aria-label="Unsaved settings">
           <span><span className="material-icons" aria-hidden="true">edit</span>Unsaved changes</span>
-          <button type="button" className="btn-secondary" disabled={loading} onClick={() => {
+          <button type="button" className="btn-secondary" disabled={loading || settingsLoading} onClick={() => {
             void loadSettings()
-              .then(() => {
+              .then((accepted) => {
+                if (!accepted) return;
                 setHasPendingChanges(false);
                 setSaveFeedback('idle');
               })
               .catch(() => setSaveFeedback('revert-error'));
           }}>Cancel changes</button>
-          <button type="button" className="btn-primary" disabled={loading} onClick={() => void handleSave()}>
+          <button type="button" className="btn-primary" disabled={loading || settingsLoading || !settingsInitialized} onClick={() => void handleSave()}>
             {loading ? 'Saving…' : 'Save changes'}
           </button>
         </div>}

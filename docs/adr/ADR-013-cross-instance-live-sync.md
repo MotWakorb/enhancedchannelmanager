@@ -30,6 +30,10 @@
 
 Build one-way A→B live sync as a thin shell over the **reused** DBAS restore engine, per the decision table below. New code is the client-seam only: a remote-client factory, `SyncTarget` CRUD, a `SyncTask` on `task_scheduler`, observability, and a settings-card UI. The orchestrator and importers are **not** modified for the sync mechanism itself (one small importer *correctness* fix is called out in S3/decision table notes).
 
+This reuse description and S1 record the original client-seam design. Later sync-specific
+bindings include existing-account convergence (`zszjd`) and sub-interval logos (`2yq19`),
+documented below; reuse does not mean that existing M3U accounts still skip field updates.
+
 ### Governing principle (PO direction, 2026-08-22): a replica is a faithful copy
 
 **Everything replicates by default. Any exclusion is an exception that must be explicitly named,
@@ -47,11 +51,10 @@ it", "it is cheaper not to", "it seemed risky". A reason must name a **specific 
 Two things this principle does **not** do, stated because the distinction decides how it is applied:
 
 - **It is about scope, not about controls.** "Everything replicates" does not mean "everything
-  replicates by any mechanism"; it means *the destination ends up faithful*, and the mechanism still
-  has to be safe. Nothing here licenses putting a secret on a recurring cycle. `msqf7`'s redaction on
-  the per-cycle path, `msqf7`'s redaction of ECM's own secrets and `avrix`'s group selection are all
-  unchanged by it. *(INV-2's reachability guard and the S11 `insecure` gate were named here too and
-  are since VOID — removed by amendment (b), not by this principle.)*
+  replicates by any mechanism"; it means *the destination ends up faithful*. Provider credentials
+  cross on recurring cycles under amendment (b). Redaction of ECM's own secrets and `avrix`'s
+  remapped group selection still apply. The earlier recurring-provider-secret prohibition,
+  INV-2 reachability guard and S11 `insecure` refusal were superseded by amendment (b).
 - **It does not turn "unreadable" into "out of scope."** A value that cannot be *harvested* is still
   in scope; it reaches the replica another way. The Schedules Direct password is the worked example —
   the operator supplies it once on the sync target and it cascades every cycle
@@ -68,12 +71,12 @@ with a bead, not an exclusion.
 | **S1** | Mechanism | **REUSE** the DBAS `run_restore` orchestrator + 8 importers unchanged; sync = "restore over HTTP" against a remote `DispatcharrClient`. New code = remote-client factory + `SyncTarget` CRUD + `SyncTask` + alert + UI. *(Proven by spike `xp6mp`: round-trip + re-run no-op, zero `dbas/` edits.)* | (a) Greenfield sync engine; (b) bidirectional CRDT/merge engine. Both re-derive FK-remap, the 4-tier stream matcher, the rollback ledger, and the dry-run engine from scratch. | Revert = drop the `SyncTask`, the remote-client factory, and the `SyncTarget` router from registration. Orchestrator/importers are untouched, so nothing there to unwind. |
 | **S2** | Direction | **One-way A→B.** B is a managed replica; A is system-of-record. **Bidirectional is explicitly out of scope → a separate future ADR** (it opens a new inbound-write trust boundary on A, makes conflict resolution a security control, and risks A→B→A loop amplification). | Bidirectional A↔B; last-writer-wins two-way. | Bidirectional is additive in a later epic; one-way imposes no schema/contract that blocks it. |
 | **S3** | Category set + permanent **never-sync** list | *(**AMENDED 2026-08-22 by [amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a) → S3′: provider credentials are OUT of the never-sync set and cross on every cycle. The never-sync set is now `users` plus ECM's own secrets.**)* *(Reframed 2026-08-22 by the governing principle above: read this row as an **exclusion register**, not a scope ceiling. Its never-sync list is not the set of things that happen not to sync — it is the set for which a specific harm has been written down. Everything else is in scope, and anything absent is a gap, not a decision. Per-item reclassification: see the register below the table.)* **Sync:** M3U accounts, EPG sources, channel groups, channel profiles, stream profiles, user agents, **server groups** *(added 2026-08-23, bead `tyrg1`)*, core settings, **channels (+ embedded streams)**, logos *(logos phased — see S9)*. **NEVER-SYNC (permanent, code-enforced):** **users** (privilege-flag escalation / operator lockout under continuous push) and the credential-freshness columns (`credentials`, `credential_version`, `token_revoked_at`). *(**Corrected 2026-08-23, bead `10wnq` Part 2.** This list named a fourth column, `insecure`, which the shipped constant `SYNC_NEVER_CREDENTIAL_COLUMNS` never carried. The code was right and the ADR was over-broad: `insecure` is a local per-target TRANSPORT FLAG describing A's connection to B, not a secret and not instance configuration, and it has no counterpart on B to overwrite. The doc/code divergence is closed here in the direction the [exclusion register](#exclusion-register-reclassified-against-the-2026-08-22-principle) already argued for, rather than by widening a load-bearing security constant to match prose.)* Plugins **split** by [amendment (c)](#amendment-2026-08-23-c-the-two-measurements-s3-was-waiting-on--plugins-split-and-provider-attribution-reconciles-rather-than-deletes-beads-enhancedchannelmanager-ne0gf-enhancedchannelmanager-hne7k): plugin CODE excluded on a confirmed RCE surface, plugin CONFIGURATION in scope, `enabled`/`ever_enabled` never-sync on their own harm (trust-modal suppression). *(Was: "Plugins excluded (inherits ADR-012 D10).")* | Sync all 13 categories incl. users; sync credentials on the wire. | A future ADR could add `users` behind an explicit, separately-ratified opt-in with a lockout guard; the never-sync set is one shared constant in the redact/category-filter layer, removable per-category if justified. |
-| **S4** | Change detection | **Full-read + idempotent upsert every cycle. NO delta state in v1.** Each cycle reads B's full category; the importers match→skip-or-create. | Delta/CDC with persisted per-entity sync cursors; change-driven (webhook) trigger. | Delta is a deferred optimization **gated on measured slowness**; it bolts onto the existing match logic without changing the contract. |
-| **S5** | Conflict policy | **Source-wins (A overwrites B).** Consistent with one-way "A is system-of-record." The importer collision taxonomy already encodes this (existing-identical → skip; ambiguous match on a load-bearing natural key → `CONFLICT`, surfaced, not silent). | Last-write-wins by timestamp; manual / field-level merge. | Merge/manual conflict UI is additive later; the per-entity `CONFLICT` result already exists to surface it. |
+| **S4** | Change detection | **Full-read + idempotent upsert every cycle. NO delta state in v1.** Each cycle reads B's selected categories. Matching avoids duplicate creates; existing M3U accounts also receive a field-difference PATCH (`zszjd`), subject to the [field contract](#m3u-accounts-existing-field-convergence-and-exclusions). Logos are selected only when due (S9). | Delta/CDC with persisted per-entity sync cursors; change-driven (webhook) trigger. | Delta is a deferred optimization **gated on measured slowness**; it bolts onto the existing match logic without changing the contract. |
+| **S5** | Conflict policy | **Source-wins for replicated, writable fields on matching entities.** A is system-of-record. For existing M3U accounts, the [field exclusions and PATCH limits](#m3u-accounts-existing-field-convergence-and-exclusions) qualify this contract; destination-only custom-property keys are not removed. An ambiguous match on a load-bearing natural key surfaces `CONFLICT`. | Last-write-wins by timestamp; manual / field-level merge. | Merge/manual conflict UI is additive later; the per-entity `CONFLICT` result already exists to surface it. |
 | **S6** | Trigger | **Scheduled-interval** via `task_scheduler` (+ manual force-sync). Overlap guard + credential-freshness gate at fire time. **One `task_id` per SyncTarget** (distinct targets run concurrently; the `ALREADY_RUNNING` guard excludes a second run of the *same* target). | Change-driven / webhook; continuous streaming. | Change-driven is the same `SyncTask` invoked from an event source later; no engine change. |
 | **S7** | Security controls | *(**AMENDED 2026-08-22 by [amendment (b)](#amendment-2026-08-22-b-provider-credentials-cross-on-every-cycle-supersedes-amendment-a) → S7′: the payload IS non-redacted for provider credentials, and `insecure` is WARNED rather than forbidden. Every other control below stands.**)* **SSRF `validate_outbound_url` on `base_url` on EVERY request** (execute-time, resolve-by-IP, redirect re-validate) — and the CI grep that forbids raw outbound calls **must extend to the sync module**. **Credential-freshness at fire time** (capture `credential_version` at enqueue; re-check + `token_revoked_at` at execute; abort+audit on change/revoke — mirror `dbas_backup`). **TLS `verify=True` default; per-target `insecure` escape hatch ONLY with a per-cycle audit row** (and forbidden-by-construction if the payload is ever non-redacted). **Redact-by-default** via the shared `_REDACT_KEYS` denylist before serialize. *(Risk ratings → Addendum D / `gwjss`.)* | Config-time-only SSRF validation; one-time insecure audit; secrets on the wire. | Controls are existing chokepoints; tightening (mandatory TLS, drop the insecure flag) is a settings change, not a re-architecture. |
 | **S8** | Failure / idempotency | **Reuse `RollbackLedger` + compensating-delete + the tri-state `RestoreOutcome`** (never SUCCESS on mixed state); default-ON dry-run guardrail carries over. **Idempotency is the load-bearing operational property:** a run MUST be safe to re-run to convergence (upsert-by-stable-identity), so retry IS the recovery mechanism — **no rollback/saga machinery** beyond what the ledger already provides, and none may be added without revisiting this ADR. | Best-effort no-rollback; a custom sync-specific failure model. | The tri-state contract is already the orchestrator's; a richer per-category report is additive. |
-| **S9** | Which importers run per cycle | **Config categories every cycle** (M3U, EPG, groups, channel/stream profiles, user agents, server groups, core settings — cheap reads). *(**Built 2026-08-23**: `server_groups` by bead `tyrg1`, and `core_settings` by bead `10wnq` — which is the first cycle in which S9's own list and the engine agree. See the per-blob register in the exclusion table: six of the seven blobs replicate, `network_access` does not, and `proxy_settings` / `backup_settings` carry a per-target opt-out.)* **Channels + streams every cycle** (in scope; pulls the 4-tier stream matcher). **Logos: PHASED — not in the first sync-cycle slice** (the logos importer carries a destructive `clear_existing` bulk-delete + a streaming-upload cost that is wrong to run every interval). **The deferred auto-sync / EPG-download phase MUST be suppressed per-cycle** (it would re-trigger provider auto-sync / EPG-download on B on every run). **Not** "run all importers blindly." | Run all importers every cycle incl. logos and the deferred phase; run the channels matcher off-cycle. | Logos join the per-cycle set once cost is measured acceptable (or on a slower sub-interval); the importer already registers into the same ordered step list. |
+| **S9** | Which importers run per cycle | **Config categories and channels (+ embedded streams) every cycle.** Config includes M3U, EPG, channel groups, channel/stream profiles, user agents, server groups and core settings. **Built 2026-08-23:** `server_groups` (`tyrg1`) and `core_settings` (`10wnq`); six blobs replicate, `network_access` does not, and `proxy_settings` / `backup_settings` have per-target opt-outs (register below). **Logos are implemented on a per-target sub-interval (`2yq19`): default ON, immediately due if never run, then due after 24 hours by default.** Explicit OFF is honored. The logo step runs last when selected, with `clear_existing=False` hard-coded. **Deferred provider refresh and EPG-download actions are suppressed.** Remapped M3U group selection still applies through `_apply_group_selection_only`; the suppression is of provider-touching actions, not the settings. | Run all importers and provider refresh actions every cycle; run the channels matcher off-cycle. | The slower logo sub-interval is implemented: `logo_sync_interval_hours=0` selects logos every cycle when enabled. See [Logos](#logos-replicated-by-default-on-a-sub-interval) for scheduling, history and guards. |
 
 ### Exclusion register: reclassified against the 2026-08-22 principle
 
@@ -86,7 +89,7 @@ silently in either direction.
 
 | Item | Why it cannot be read or written | What closes the gap |
 |---|---|---|
-| Schedules Direct EPG `password` | Write-only on Dispatcharr: never returned, SHA1-hashed at fetch (`docs/dispatcharr_api.md` §EPG Sources). The value exists nowhere on A to read, and B does not return it either, so ECM can report that it *wrote* one but never that B *holds* a working one. | **In scope, operator-supplied for that one field** at provisioning (2026-08-22 amendment, S10). Not excluded — impossible-to-harvest is not out-of-scope. A `source_type`-driven prompt appears only when a `schedules_direct` source is present. |
+| Schedules Direct EPG `password` | Write-only on Dispatcharr: never returned, SHA1-hashed at fetch (`docs/dispatcharr_api.md` §EPG Sources). The value cannot be harvested from A's API, and B does not return it either, so ECM can report that it *wrote* one but cannot verify that B *holds* a working one by readback. | **In scope, operator-supplied for this one field.** Under amendment (b), it is stored Fernet-encrypted on the sync target and sent every cycle. The `source_type`-driven prompt appears when a `schedules_direct` source is present. S10's one-time provisioning is superseded history. |
 
 #### Kind 2 — deliberately excluded on a specific harm
 
@@ -95,7 +98,7 @@ silently in either direction.
 | `dispatcharr_users` | Continuous one-way push of the `users` category repeatedly overwrites B's `is_superuser` / `is_staff` / `user_level` from A: a **privilege-escalation and operator-lockout primitive under automation**. `password_hash` is non-transportable anyway (Dispatcharr exposes `password` write-only). Survives unchanged. |
 | The sync target's **own** credential columns (`credentials`, `credential_version`, `token_revoked_at`) | These are **A's record of how to reach B**, not instance configuration. There is nothing on B for them to correspond to, and pushing them would overwrite B's own token-freshness state with A's. Not a scope exclusion so much as a category error. Survives unchanged. |
 | `network_access` (core-settings blob) | Access control **tied to where the instance sits**. Replicating it can lock the operator out of B, or open B up, depending on which direction the two instances differ. This is the same harm class as `users` and it survives the principle intact. |
-| The deferred auto-sync / EPG-download phase, suppressed per cycle (S9) | Excludes an **action**, not a setting: running it every cycle re-triggers provider auto-sync and EPG downloads **on B**, on every interval. The replicated *configuration* still crosses; only the repeated side effect is suppressed. Survives. |
+| Deferred provider auto-sync / EPG-download actions, suppressed per cycle (S9) | Running these actions every cycle re-triggers provider fetches on B. The configuration still crosses: `_apply_group_selection_only` applies remapped per-account group selection after the importers, without the restore path's refresh trigger, active-state toggle workaround or stream-count polling. |
 
 #### Kind 3 — not yet built, or unresolved: a gap with a bead
 
@@ -129,19 +132,126 @@ Also reconciled here, per the same 2026-08-21 ruling: **S3's never-sync column l
 It names `insecure` alongside the three credential columns; the shipped constant
 `SYNC_NEVER_CREDENTIAL_COLUMNS` names only the three, and **the code is right**. `insecure` is a
 local per-target *transport flag*, not a secret and not instance configuration — it describes A's
-connection to B and has no counterpart on B. Read S3's fourth column name as withdrawn. This matters
-now in a way it did not on 2026-08-21, because S11 makes `insecure` load-bearing locally.
+connection to B and has no counterpart on B. Read S3's fourth column name as withdrawn. The S11
+refusal that formerly depended on `insecure` was removed by amendment (b).
 
-#### Logos: replicated, but off by default — a tension worth naming
+#### Logos: replicated by default on a sub-interval
 
-Logos are **in scope** and do replicate; S9 keeps them off the *unconditional* per-cycle set for two
-mechanism reasons (a destructive `clear_existing` bulk-delete and a streaming-upload cost that is
-wrong to pay every interval), and they run per target behind `sync_logos`. That is a mechanism
-decision the principle does not disturb. What the principle **does** disturb is the **default-OFF**
-toggle: a replica that silently arrives without branding is exactly the failure epic `f5a5j` is named
-for ("...has lost its guide data and its branding"). Under a faithful-copy default, `sync_logos`
-should default **ON**, with the per-cycle cost addressed by a slower sub-interval rather than by
-omission. Recorded as a tension, defaulting toward replication.
+**Reconciled 2026-09-12 (`10wnq`, SYNC-DOC-1): `2yq19` implemented the default and
+slower clock.** The 2026-08-22 register recorded default-OFF as a tension with the faithful-copy
+principle. That historical concern is resolved: new targets default to `sync_logos=True` in both
+`backend/export_models.py::SyncTarget` and `backend/routers/sync_targets.py::SyncTargetCreate`.
+Migration `0048` changes the default without rewriting stored choices. Existing OFF rows and an
+explicit OFF on creation or update remain OFF; omitting the flag from an update preserves it.
+
+`backend/tasks/dbas_sync_engine.py::logo_slice_is_due` selects the logo pass at cycle time:
+
+- OFF suppresses logos regardless of the clock.
+- ON with `last_logo_sync_at=NULL` is due immediately on the next cycle, including the first one.
+- Thereafter, the pass is due once `logo_sync_interval_hours` has elapsed (default **24 hours**).
+  `0` means every cycle when ON. This is a throttle on actual manual/scheduled sync runs, not an
+  independent daily job; a less frequent task schedule also delays the next logo pass.
+- A preview does not advance the clock. A realized apply carrying the logo slice records
+  `last_logo_sync_at`, including a degraded apply. Reported misses retry on the next **due logo
+  pass**, not necessarily the next config cycle (`run_sync`, persisted-state block).
+
+Logos remain outside the unconditional category set. When due, the plan carries logo metadata and
+the last importer step creates missing logos, fetching image bytes lazily within its budget, then
+reattaches channel-logo references through destination IDs. `_sync_logos_step` hard-codes
+`clear_existing=False`; the restore importer's bulk-clear capability is not enabled by sync.
+
+**Guards:** `backend/tests/tasks/test_2yq19_logo_default_and_sub_interval.py` covers ORM defaults,
+the real `0048` migration, explicit OFF, immediate first eligibility, interval boundaries and a
+throttled cycle through the engine. `backend/tests/tasks/test_sync_roundtrip.py` covers
+`test_logo_slice_never_deletes_b_only_logos` and
+`test_a_channel_with_a_logo_on_a_carries_bs_own_logo_on_b`.
+**Live evidence:** the 2026-09-12 isolated ECM **0.18.2-0033** / Dispatcharr **0.30.0** proof for
+`2yq19` records first-pass PNG bytes/binding and explicit-OFF preservation in
+`epic-0m06f10-verification-20260912/sync/receipts/branding-assertions.json` and
+`independent-first-brand-cycle.json` in that receipt directory.
+
+#### M3U accounts: existing-field convergence and exclusions
+
+**Reconciled 2026-09-12 (`zszjd`, SYNC-DOC-2).** S5 governs existing M3U accounts under the
+2026-08-22 faithful-copy and provider-credential rulings. The original `xp6mp` skip-on-match
+behavior is retained for one-shot archive restore, but sync's `_sync_m3u_step` passes
+`converge_existing=True`. A match skips a duplicate create; it no longer freezes the account's
+settings at their first-sync values.
+
+`backend/dbas/importers/m3u_accounts.py::build_convergence_patch` derives the update from the
+same `_build_create_payload` as creation, subtracts `NEVER_CONVERGE_FIELDS`, and compares the
+remaining source-provided fields with B's returned values. `user_agent` and `server_group` are
+remapped to B's IDs, not excluded as local preferences. The following table names **every member
+of `NEVER_CONVERGE_FIELDS`**; exclusion from this PATCH does not mean exclusion of an entire
+configuration category.
+
+| Field | Reason and implemented disposition |
+|---|---|
+| `name` | Match identity is the trimmed, case-insensitive name. The importer does not normalize B's spelling on a match. A genuine source rename presents as a new account, not a rename of B's old row: Dispatcharr supplies no cross-instance stable account UUID/export key to match across that change. Rename propagation is a technical identity limit, not a local-override policy. |
+| `channel_groups` | Contains source-side group IDs, which can identify unrelated groups on B. Selection converges through the separate deferred group-settings path after the `CHANNEL_GROUP` remap is populated; copying the embedded list verbatim would misassign it. `_apply_group_selection_only` reports undeliverable selection and does not trigger provider refresh. |
+| `status` | B's own account health. Copying A's success over B's error would hide a destination failure. It is not sent as source field drift; B can still change its status as a consequence of a replicated setting such as `is_active`. |
+| `last_message` | B's own account diagnostic. Copying A's message would replace evidence of B's failure. It is excluded from convergence; raw upstream message bodies are also kept out of operator reports because they can contain credentials. |
+| `filters` | A read-only `SerializerMethodField` representation on the account serializer. This account PATCH cannot update the underlying filter records. |
+| `profiles` | A nested `read_only=True` account-profile representation. This account PATCH cannot replace those child records. These are M3U account profiles, distinct from the synced channel/stream-profile categories. |
+| `earliest_expiration` | A computed `SerializerMethodField` summary of profile expiration dates, not a writable account setting. B derives it from its own profiles. |
+| `all_expirations` | A computed `SerializerMethodField` list of profile expiration information, not a writable account setting. B derives it from its own profiles. |
+| `locked` | Treated as read-only lock state by the importer. It is stripped by the shared create-payload filter as well as named in the convergence exclusion set; sync does not assign A's lock state to B. |
+
+The shared create-payload filter also removes these fields **before** convergence is considered:
+
+| Field | Reason |
+|---|---|
+| `id` | Source row identity; B assigns its own ID and the remap records the relationship. |
+| `pk` | Alternate source primary-key field; it cannot identify B's row. |
+| `created_at` | Destination creation bookkeeping, not source configuration to replay. |
+| `updated_at` | Destination update bookkeeping, not source configuration to replay. |
+| `last_refresh` | Destination refresh bookkeeping; copying A's timestamp would not mean B refreshed. |
+| `stream_count` | Destination-derived stream count; copying A's count would not create streams on B. |
+
+**Readable configuration versus missing implementation.** `stream_profile` is a model FK absent
+from `M3UAccountSerializer.Meta.fields`, so the live account gather cannot harvest it. The current
+sync registry also has no separate M3U-filter or M3U-account-profile replication step. Those child
+records are not made replicas merely by their read-only summaries appearing in the account GET.
+These are API/implementation limits, not additional permanent policy exclusions. Conversely,
+`exp_date` is a writable default-profile expiration field on Dispatcharr 0.30.0 and does converge;
+it is not excluded with the two computed expiration summaries. The four top-level preference
+booleans (`enable_vod`, `auto_enable_new_groups_live`, `auto_enable_new_groups_vod`,
+`auto_enable_new_groups_series`) also converge, although Dispatcharr stores them in
+`custom_properties`. A replicated `file_path` is a configuration value; this does not copy the
+playlist file to B.
+
+**`custom_properties` PATCH-merge limit.** Source-provided keys converge, but destination-only
+keys remain. Dispatcharr's `M3UAccountSerializer.update` merges incoming keys over the existing
+blob (`{**existing_custom, **incoming_custom}`), so omitting a key cannot remove it through this
+endpoint. `_values_converged` therefore compares the source dictionary as a subset: a missing or
+different source-provided key is drift; an extra B-only key is not. Removing a key from A, or
+sending an empty source dictionary, does not clear it from B. A zero `account_field_drift` count
+does not establish whole-blob equality. This is the current endpoint limit, not an implemented
+key-removal mechanism or a new destination-local override feature.
+
+**Unreadable values and reporting.** An absent source field supplies nothing to write. A field
+absent from B's response is not comparable, so the builder neither calls it drift nor patches it
+blindly, except for a supplied, non-empty, non-sentinel M3U `password`. Dispatcharr re-adds that
+write-only field only for an admin (`user_level >= 10`); if B does not return it, ECM sends it on
+each apply without claiming a detected difference. When B does return it, it follows the ordinary
+comparison. Provider credentials remain in scope under amendment (b). Schedules Direct's
+unharvestable password follows the separate operator-supplied contract in Kind 1 above.
+
+For comparable differences, preview/apply reports name the account and changed **field names**,
+not credential values. A refused convergence PATCH records `account_convergence_unapplied` and a
+non-success outcome without rolling back the replica over that field update. The next read
+re-derives drift; a settled account clears the drift details. Excluded and unreadable fields and
+B-only custom-property keys must not be inferred equal from an empty report.
+
+**Guards:** `backend/tests/tasks/test_zszjd_account_field_convergence.py`, especially
+`test_no_excluded_field_can_reach_the_patch`,
+`test_a_destination_only_custom_property_is_not_reported_as_drift`,
+`test_an_unreadable_password_is_written_but_not_called_drift`, and the engine-level field,
+preview, summary and refusal tests. **Live evidence:** the same 2026-09-12 isolated proof cited
+above exercised 19 changed fields on an existing account. Its `sync/receipts/` directory retains
+`account_serializer.txt` (Dispatcharr 0.30.0), `changed-assertions.json`,
+`remaining-fields-assertions.json`, `final-settled-cycle.json` and `final-state-database.json`.
+These distinguish actual A/B API/database readback from the stateful-fake refusal tests.
 
 ### Persisted sync state (DBA ruling, spike `xp6mp`)
 
@@ -155,11 +265,19 @@ The DBAS importers' one-shot natural keys become **silent recurring divergence**
 
 ### Phasing
 
-Both "config categories" and "channels/streams/logos" are *in scope*, but they ship in two slices:
+**Original delivery sequence (2026-06-19), retained as history.** Both slices below are now
+implemented; current cycle selection is S9, including default-ON logos on their sub-interval.
+The phase-1 provider-redaction posture was superseded by amendment (b).
+
+Both "config categories" and "channels/streams/logos" were planned in two slices:
 1. **Phase-1 (ships first): config-category sync** — the one-way engine via `run_restore` against the remote client (M3U/EPG/groups/profiles/agents/settings), redact-by-default, dry-run default. Cheap full reads; exercises the seam, the SSRF chokepoint, the freshness gate, and the tri-state outcome end-to-end with the lowest blast radius.
 2. **Phase-2 (ships behind it): channels/streams/logos** — where the 4-tier stream matcher, the collision-safe floor, and the logo cost/risk land.
 
 ## Consequences
+
+The credential-redaction benefits and costs below record the **original 2026-06-19 design**.
+They were superseded by amendment (b): provider credentials now cross, and its accepted residuals
+describe the current exposure. They are not current exclusions from the field contract above.
 
 ### Positive
 - **The hard, security-sensitive work is already built and tested** — FK-remap, the stream matcher, the rollback ledger, the dry-run guardrail, the SSRF chokepoint, the Fernet credential handling, the `task_scheduler` substrate, the per-task staleness gauge. Sync inherits every one of them by injection.

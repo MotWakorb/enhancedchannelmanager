@@ -8,6 +8,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Settings edits wait for a current baseline (bead `enhancedchannelmanager-0m06f.8.2`; build 0.18.2-0034).** Shared fields and saves wait for initial and overlapping loads to settle; superseded responses cannot replace the newest connection, recipients, load errors or discard result. Failed initialization offers an explicit retry. Independently loaded controls, including alert methods, team aliases and recovery actions, stay usable while shared settings are loading or unavailable.
+
+- **Scheduled Tasks navigation stays keyboard-reachable (bead `enhancedchannelmanager-2896r.19`; build 0.18.2-0034).** Long section rails scroll within the available pane height and keep focused buttons and their outlines visible, including after resizing and in the horizontal layout.
+
+- **Escape dismisses the signed-in user menu (bead `enhancedchannelmanager-0m06f.8.3`; build 0.18.2-0034).** Pressing Escape from the trigger or a menu item closes the dropdown and returns focus to its trigger.
+
+- **Same-second backups remain usable (bead `enhancedchannelmanager-0m06f.3.1`; build 0.18.2-0034).** Concurrent backup producers reserve distinct filenames without overwriting existing artifacts. New collision names retain their timestamp for saved-backup operations and retention; older random-suffix ZIPs can be downloaded, restored and deleted, while remaining outside timestamp-based retention.
+
+- **Backup coroutine cancellation cleans up owned partial files (bead `enhancedchannelmanager-0m06f.3.2`; build 0.18.2-0034).** Cancellation waits for a queued or running encryption worker to finish before best-effort cleanup of partial ZIPs, encryption output and temporary data. Allocation and write failures also clean up owned files. This handles coroutine cancellation, distinct from the task UI's cooperative Cancel button.
+
+- **Lookup retirement diagnostics link to the correct guide (bead `enhancedchannelmanager-0m06f.9.1`; build 0.18.2-0034).** Migration and self-heal messages now point operators to the Lookup Tables retirement and export instructions.
+
 - **Generated dummy EPG feeds are retrievable without a session when authentication is enabled (bead `enhancedchannelmanager-mtvfv`, GitHub #1000, build 0.18.2-0033).** Anonymous GET requests can fetch combined and per-profile XMLTV output, with ASCII-numeric profile matching and a single trailing slash redirecting to the canonical URL. Management and write paths remain protected; encoded near-match paths do not receive the feed exemption.
 
 - **Resolved User-Agent headers reach provider requests (bead `enhancedchannelmanager-yz6rv`, GitHub #995, build 0.18.2-0032).** Direct previews and metadata, bitrate, resdet, and black screen probes send the selected identity on validated provider HTTP requests, including redirects and later HLS resources. Probe substeps and transient ffprobe retries reuse the same resolved header.
@@ -23,6 +35,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - **Settings URL validation uses safe public errors (bead `enhancedchannelmanager-m8dvz`; build 0.18.2-0028).** Malformed ports and outbound-policy denials return fixed messages instead of parser text or resolved-address details, including the shared Dispatcharr and media settings save paths. Host-policy diagnostics remain in redacted server logs. Media client error categories, credential escaping, human-admin/first-run gates, and outbound allow/deny decisions are preserved.
 
 ### Changed
+
+- **Cross-instance sync documentation reflects the implemented field contract (beads `enhancedchannelmanager-10wnq` and `enhancedchannelmanager-zszjd`; build 0.18.2-0034).** ADR-013 and the operator guide now explain default-on logo scheduling, existing-account field convergence, exclusions, credential readback limits and destination-only custom-property keys. Historical decisions are distinguished from current behavior.
+
+- **Backup permission regression coverage is independent of the runner's umask (bead `enhancedchannelmanager-0m06f.2.4`; build 0.18.2-0034).** The symlink fixture explicitly sets its target permissions so the check can detect unintended permission changes under restrictive test environments.
 
 - **Struck-stream cleanup resets counters with bounded SQL (bead `enhancedchannelmanager-mtcs1.2`; build 0.18.2-0029).** The reset phase uses updates of at most 500 captured IDs and one final transaction commit, eliminating per-ID reads. Any successful assignment removal still resets the originally captured population, including shared and unassigned streams after partial success or cancellation. Channel ordering and task counts are preserved; overall cleanup time still depends on upstream requests.
 

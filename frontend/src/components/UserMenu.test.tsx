@@ -35,6 +35,44 @@ beforeEach(() => {
 });
 
 describe('UserMenu dialog states', () => {
+  it.each(['trigger', 'item'])('dismisses with Escape from the %s and restores trigger focus', async (from) => {
+    const user = userEvent.setup();
+    render(<UserMenu />);
+    const trigger = screen.getByRole('button', { name: /Operator/ });
+    trigger.focus();
+    await user.keyboard('{Enter}');
+    const item = screen.getByRole('button', { name: /Edit Profile$/ });
+    if (from === 'item') {
+      await user.tab();
+      expect(item).toHaveFocus();
+    }
+    await user.keyboard('{Escape}');
+    expect(item).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('keeps pointer dismissal and removes open-menu listeners on close and unmount', async () => {
+    const user = userEvent.setup();
+    const add = vi.spyOn(document, 'addEventListener');
+    const remove = vi.spyOn(document, 'removeEventListener');
+    const view = render(<><UserMenu /><button>Outside</button></>);
+    const trigger = screen.getByRole('button', { name: /Operator/ });
+    for (const close of ['toggle', 'outside', 'unmount']) {
+      add.mockClear();
+      remove.mockClear();
+      await user.click(trigger);
+      const listeners = add.mock.calls.filter(([event]) => event === 'keydown' || event === 'mousedown');
+      expect(listeners.map(([event]) => event)).toContain('keydown');
+      expect(listeners.map(([event]) => event)).toContain('mousedown');
+      if (close === 'unmount') view.unmount();
+      else await user.click(close === 'toggle' ? trigger : screen.getByRole('button', { name: 'Outside' }));
+      expect(screen.queryByRole('button', { name: /Edit Profile$/ })).not.toBeInTheDocument();
+      for (const [event, listener] of listeners) {
+        expect(remove).toHaveBeenCalledWith(event, listener);
+      }
+    }
+  });
+
   it('gives each state a unique resolved name and restores focus after Escape', async () => {
     const user = userEvent.setup();
     render(<UserMenu />);

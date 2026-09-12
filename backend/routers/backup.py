@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 import sqlite3
 import stat
@@ -132,7 +133,7 @@ LEGACY_RESTORE_DIRS = ["uploads/logos", "tls", "m3u_uploads"]
 # scripts/check_version_consistency.py that used to fail the PR on divergence
 # were removed. Do NOT rename it, change its shape, or repurpose it. It is an INFORMATIONAL human-readable string ("which
 # ECM build produced this artifact") — it is NOT a compatibility gate.
-APP_VERSION = "0.18.2-0033"
+APP_VERSION = "0.18.2-0034"
 
 # DBAS backup-artifact schema version (ADR-008 D1 / ADR-012 D1). This is a
 # DEDICATED, MONOTONIC INTEGER that is DISTINCT from the human-readable
@@ -1078,7 +1079,7 @@ def _get_backup_filename() -> str:
     return f"ecm-backup-{now}.zip"
 
 
-def _open_private_binary(path: Path):
+def _open_private_binary(path: Path, *, exclusive: bool = False):
     """Open a local backup artifact for write and enforce owner-only access.
 
     ``O_NOFOLLOW`` is part of the guarantee, not decoration: without it a symlink
@@ -1088,13 +1089,45 @@ def _open_private_binary(path: Path):
     hardening rather than a live path, but the flag is free and the failure it
     prevents is silent.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    flags = os.O_EXCL if exclusive else os.O_TRUNC
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | flags | os.O_NOFOLLOW, 0o600)
     try:
         os.fchmod(fd, 0o600)
         return os.fdopen(fd, "wb")
     except BaseException:
-        os.close(fd)
+        # O_EXCL transfers ownership at os.open, before either operation above
+        # can fail. The caller has not received the path/handle yet (0m06f.3.1).
+        # Cleanup errors must not replace the original exception.
+        try:
+            os.close(fd)
+        except OSError as exc:
+            logger.warning("[BACKUP] Failed to close partial artifact: %s", type(exc).__name__)
+        if exclusive:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("[BACKUP] Failed to remove partial artifact: %s", type(exc).__name__)
         raise
+
+
+def _allocate_backup_file(path: Path) -> tuple[Path, BinaryIO]:
+    """Reserve a generated ZIP name and retain its private writable handle.
+
+    O_EXCL arbitrates simultaneous producers, including legacy POST /save.
+    Collisions keep the UTC timestamp plus eight lowercase hex characters.
+    Existing sidecars/encryption temporaries also reserve their basename; no
+    operator file is renamed or overwritten. This allocates generated names,
+    not user paths — endpoint validation remains inline at its sinks.
+    """
+    canonical = path
+    for _ in range(100):
+        if not any(os.path.lexists(str(path) + suffix) for suffix in (".sha256", ".enc")):
+            try:
+                return path, _open_private_binary(path, exclusive=True)
+            except FileExistsError:
+                pass
+        path = canonical.with_name(canonical.stem + "-" + secrets.token_hex(4) + ".zip")
+    raise FileExistsError("Could not allocate a unique backup filename")
 
 
 def _write_private_bytes(path: Path, data: bytes) -> None:
@@ -2650,7 +2683,9 @@ async def build_backup_artifact(
       checklist 28). It REQUIRES ``passphrase`` — there is no switch that ships
       unredacted creds without one.
 
-    On ANY failure, partial temp artifacts are cleaned up.
+    On exceptions, including actual coroutine cancellation, owned partial files
+    are removed best-effort. Cancellation waits for the encryption worker to
+    finish before cleanup; it is distinct from the task API's cooperative flag.
     """
     encrypt = passphrase is not None
     if include_credentials and not encrypt:
@@ -2717,23 +2752,8 @@ async def build_backup_artifact(
         source_logo_index=source_logo_index
     )
 
-    # e0r3h — the producer owns the CANONICAL timestamped name
-    # ``ecm-backup-<UTC ts>.zip`` (no post-build rename in the task layer). This is
-    # the name retention's ``_BACKUP_ZIP_FILENAME_RE`` allowlist + filename
-    # timestamp-sort require. ``_get_backup_filename`` is the single source of that
-    # shape. On the rare same-second collision (two runs in the same UTC second)
-    # we suffix a short uniquifier so we never clobber an existing artifact; the
-    # base name still matches the retention regex's ``\d{6}`` second field is the
-    # canonical case, and the collision fallback degrades retention discoverability
-    # of the SECOND file only (same trade-off the old rename made).
-    zip_path = dest_dir / _get_backup_filename()
-    if zip_path.exists():
-        fd, tmp_zip_name = tempfile.mkstemp(
-            prefix="ecm-backup-", suffix=".zip", dir=str(dest_dir)
-        )
-        os.close(fd)
-        zip_path = Path(tmp_zip_name)
-    sidecar_path = Path(str(zip_path) + ".sha256")
+    zip_handle: Optional[BinaryIO] = None
+    owned_paths: list[Path] = []
     scrubbed_db_path: Optional[Path] = None
     logo_spool_dir: Optional[Path] = None
     file_hashes: dict[str, str] = {}
@@ -2755,6 +2775,13 @@ async def build_backup_artifact(
         file_hashes[arcname] = h.hexdigest()
 
     try:
+        # Reserve BEFORE the next await: concurrent builds cannot share an inode
+        # or encryption temporary. Register cleanup immediately on allocation;
+        # the opener itself owns failures before it returns (0m06f.3.1).
+        zip_path, zip_handle = _allocate_backup_file(dest_dir / _get_backup_filename())
+        owned_paths.append(zip_path)
+        sidecar_path = Path(str(zip_path) + ".sha256")
+
         # Dispatcharr-hosted logo bytes (bead …-xb58a). Fetched into a spool dir
         # BEFORE the ZIP is opened, so a fetch problem never leaves a
         # half-written artifact, and streamed into the ZIP by the same
@@ -2826,7 +2853,7 @@ async def build_backup_artifact(
 
         # Open the ZIP on a writable FILE HANDLE (NamedTemporaryFile-class temp
         # path), NOT io.BytesIO — the artifact is streamed to disk (D8).
-        with _open_private_binary(zip_path) as zfh:
+        with zip_handle as zfh:
             with zipfile.ZipFile(zfh, "w", zipfile.ZIP_DEFLATED) as zf:
                 # Per-category redacted YAML.
                 for name, yaml_text in categories.items():
@@ -2875,30 +2902,47 @@ async def build_backup_artifact(
         # the encrypted envelope. The plaintext is destroyed by the replace.
         if encrypt:
             enc_path = Path(str(zip_path) + ".enc")
+            # A sibling may have appeared since ZIP allocation. Reserve it
+            # exclusively before the worker can truncate it; only our files
+            # participate in cleanup, including submission/allocation failures.
+            with _open_private_binary(enc_path, exclusive=True):
+                owned_paths.append(enc_path)
             loop = asyncio.get_running_loop()
+            worker = loop.run_in_executor(
+                None,
+                artifact_crypto.encrypt_file,
+                zip_path, passphrase, enc_path,
+            )
             try:
-                await loop.run_in_executor(
-                    None,
-                    artifact_crypto.encrypt_file,
-                    zip_path, passphrase, enc_path,
-                )
-                os.replace(enc_path, zip_path)  # plaintext ZIP -> encrypted bytes
-            except Exception:
-                # encrypt_file already unlinks its own partial output; clear any
-                # straggler so the outer cleanup sees a consistent state.
+                await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                # Cancelling an executor await does not stop a running thread.
+                # Keep its future alive (even while queued), and drain it before
+                # releasing paths for cleanup/reuse. Repeated cancellation must
+                # not escape this join. Tests: test_backup_cancellation.py.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:
+                        break  # Worker has terminated with an error.
+                # Observe a coincident worker error without replacing the first
+                # cancellation or leaving an un-retrieved future exception.
                 try:
-                    if enc_path.exists():
-                        enc_path.unlink()
-                except OSError:
+                    worker.result()
+                except BaseException:
                     pass
                 raise
+            os.replace(enc_path, zip_path)  # plaintext ZIP -> encrypted bytes
+            owned_paths.remove(enc_path)
 
         # SHA-256 of the FINISHED artifact (encrypted bytes if encrypted),
         # computed by streaming the file.
         artifact_sha = _compute_sha256_streaming(zip_path)
-        _write_private_text(
-            sidecar_path, "%s  %s\n" % (artifact_sha, zip_path.name)
-        )
+        with _open_private_binary(sidecar_path, exclusive=True) as sidecar:
+            owned_paths.append(sidecar_path)
+            sidecar.write(("%s  %s\n" % (artifact_sha, zip_path.name)).encode("utf-8"))
 
         logger.info(
             "[BACKUP] Built artifact %s (schema_version=%d, %d members, "
@@ -2923,16 +2967,20 @@ async def build_backup_artifact(
             epg_index_truncated=_EPG_INDEX_TRUNCATED.get(),
             **_recording_exclusion_kwargs(),
         )
-    except Exception:
-        # Clean up partial temp artifacts on ANY failure.
-        for p in (zip_path, sidecar_path):
+    except BaseException:
+        # The encryption worker has terminated before cancellation reaches here.
+        for p in owned_paths:
             try:
-                if p.exists():
-                    p.unlink()
+                p.unlink(missing_ok=True)
             except OSError as e:
                 logger.warning("[BACKUP] Failed to clean up partial artifact %s: %s", p, e)
         raise
     finally:
+        if zip_handle is not None:
+            try:
+                zip_handle.close()
+            except OSError as exc:
+                logger.warning("[BACKUP] Failed to close partial artifact: %s", type(exc).__name__)
         if scrubbed_db_path is not None:
             try:
                 scrubbed_db_path.unlink()
@@ -6995,11 +7043,19 @@ BACKUPS_DIR = CONFIG_DIR / "backups"
 # export; ``.zip`` = on-demand full backup persisted by POST /save (bd-0hjrk.5).
 # Both download_saved_backup and delete_saved_backup accept either extension;
 # restore-saved further restricts to ``.zip`` (the full-archive restore path).
-_BACKUP_FILENAME_RE = re.compile(r"^ecm-backup-\d{4}-\d{2}-\d{2}_\d{6}\.(yaml|zip)$")
+# ZIPs: canonical timestamp, timestamp + 8 lowercase hex collision suffix, or
+# the legacy tempfile fallback (exactly 8 lowercase ASCII letters/digits/_).
+# The dateless legacy form remains recoverable, but retention still cannot age
+# it. YAML keeps its original timestamp-only shape. No arbitrary '*' names.
+_BACKUP_FILENAME_RE = re.compile(
+    r"^ecm-backup-(?:[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}\.yaml|(?:[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}(?:-[0-9a-f]{8})?|[a-z0-9_]{8})\.zip)$"
+)
 # Zip-only allowlist for the full-archive restore path (restore-saved) and the
 # on-demand save path. YAML section-import is a different path
 # (POST /restore-yaml) and out of scope here.
-_BACKUP_ZIP_FILENAME_RE = re.compile(r"^ecm-backup-\d{4}-\d{2}-\d{2}_\d{6}\.zip$")
+_BACKUP_ZIP_FILENAME_RE = re.compile(
+    r"^ecm-backup-(?:[0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6}(?:-[0-9a-f]{8})?|[a-z0-9_]{8})\.zip$"
+)
 
 # SECURITY (CodeQL py/path-injection, CWE-22/23/36/73/99): the two-layer guard
 # (strict regex allowlist + canonicalize-and-verify containment under
@@ -7066,7 +7122,16 @@ async def save_backup(_admin=RequireAdminIfEnabled):
             path.relative_to(safe_root)
         except (ValueError, OSError):
             raise HTTPException(status_code=400, detail="Invalid filename")
-        _write_private_bytes(path, data)
+        # Allocate from the generated basename (not a resolved symlink target).
+        # O_EXCL is shared with DBAS so neither producer can truncate the other.
+        path, handle = _allocate_backup_file(BACKUPS_DIR / filename)
+        filename = path.name
+        try:
+            with handle:
+                handle.write(data)
+        except BaseException:
+            path.unlink()
+            raise
         logger.info("[BACKUP] Saved backup %s (%d bytes)", filename, len(data))
         return {
             "filename": filename,

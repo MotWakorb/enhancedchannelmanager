@@ -634,6 +634,10 @@ def test_a_symlink_at_a_local_artifact_path_is_not_followed(tmp_path):
     """
     victim = tmp_path / "victim.txt"
     victim.write_text("do not truncate me")
+    # Deliberately permissive precondition, independent of the runner's umask.
+    # A symlink-following opener must still be caught if it fchmods the target.
+    victim.chmod(0o644)
+    assert stat.S_IMODE(victim.stat().st_mode) == 0o644
 
     for label, opener in (
         ("routers.backup", backup_mod._open_private_binary),
