@@ -13,10 +13,12 @@
  *
  * Scaffolding follows ./SettingsTab.notificationRedaction.test.tsx.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 const notificationMocks = vi.hoisted(() => ({
+  success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), dismiss: vi.fn(),
   notify: vi.fn().mockReturnValue('toast-id'),
 }));
 
@@ -28,6 +30,9 @@ vi.mock('../../services/api', () => ({
   revokeMCPApiKey: vi.fn(),
   getMCPStatus: vi.fn(),
   listAlertMethods: vi.fn(),
+  createAlertMethod: vi.fn(),
+  updateAlertMethod: vi.fn(),
+  getStreamGroups: vi.fn(),
   getM3UAccounts: vi.fn(),
   getExportSections: vi.fn(),
   listSavedBackups: vi.fn(),
@@ -46,17 +51,12 @@ vi.mock('../../services/channelPipelineApi', () => ({
   getChannelPipelineRules: vi.fn(),
   getChannelPipelineGroups: vi.fn(),
   generateAndFetchDebugBundle: vi.fn(),
+  getEventSyncTeamAliases: vi.fn(),
+  updateEventSyncTeamAliases: vi.fn(),
 }));
 
 vi.mock('../../contexts/NotificationContext', () => ({
-  useNotifications: () => ({
-    success: vi.fn(),
-    error: vi.fn(),
-    warning: vi.fn(),
-    info: vi.fn(),
-    notify: notificationMocks.notify,
-    dismiss: vi.fn(),
-  }),
+  useNotifications: () => notificationMocks,
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -87,9 +87,6 @@ vi.mock('../settings/BackupRestoreSection', () => ({
 vi.mock('../settings/MCPSettingsSection', () => ({
   MCPSettingsSection: () => <div data-testid="stub-mcp" />,
 }));
-vi.mock('../settings/AlertMethodsSection', () => ({
-  AlertMethodsSection: () => <div data-testid="stub-alert-methods" />,
-}));
 vi.mock('../ScheduledTasksSection', () => ({
   ScheduledTasksSection: () => <div data-testid="stub-scheduled-tasks" />,
 }));
@@ -117,103 +114,11 @@ vi.mock('../CustomSelect', () => ({
 }));
 
 import * as api from '../../services/api';
+import * as pipelineApi from '../../services/channelPipelineApi';
+import { logger } from '../../utils/logger';
 import { SettingsTab } from './SettingsTab';
-
-
-const settingsBase = {
-  configured: true,
-  url: 'http://dispatcharr.test',
-  auth_method: 'password' as const,
-  username: 'admin',
-  dispatcharr_api_key_configured: false,
-  api_key_configured: false,
-  theme: 'dark' as const,
-  date_format: 'auto',
-  auto_rename_channel_number: false,
-  include_channel_number_in_name: false,
-  channel_number_separator: '-',
-  remove_country_prefix: false,
-  include_country_in_name: false,
-  country_separator: '|',
-  timezone_preference: 'both',
-  show_stream_urls: true,
-  hide_auto_sync_groups: false,
-  hide_ungrouped_streams: true,
-  hide_epg_urls: false,
-  hide_m3u_urls: false,
-  gracenote_conflict_mode: 'ask' as const,
-  default_channel_profile_ids: [],
-  linked_m3u_accounts: [],
-  allow_multi_provider_auto_sync: false,
-  epg_auto_match_threshold: 80,
-  custom_network_prefixes: [],
-  custom_network_suffixes: [],
-  stats_poll_interval: 10,
-  user_timezone: '',
-  backend_log_level: 'INFO',
-  frontend_log_level: 'INFO',
-  vlc_open_behavior: 'm3u_fallback' as const,
-  stream_preview_mode: 'passthrough' as const,
-  auto_creation_excluded_terms: [],
-  auto_creation_excluded_groups: [],
-  auto_creation_exclude_auto_sync_groups: false,
-  max_auto_created_channels_per_run: 500,
-  max_auto_creation_log_entries: 500,
-  stream_probe_timeout: 30,
-  stream_probe_schedule_time: '03:00',
-  bitrate_sample_duration: 10,
-  parallel_probing_enabled: true,
-  max_concurrent_probes: 8,
-  profile_distribution_strategy: 'fill_first',
-  skip_recently_probed_hours: 0,
-  refresh_m3us_before_probe: true,
-  auto_reorder_after_probe: false,
-  push_stream_stats_to_dispatcharr: false,
-  probe_retry_count: 1,
-  probe_retry_delay: 2,
-  stream_fetch_page_limit: 200,
-  stream_sort_priority: ['resolution', 'bitrate', 'framerate'] as api.SortCriterion[],
-  stream_sort_enabled: { resolution: true, bitrate: true, framerate: true, video_codec: false, m3u_priority: false, audio_channels: false, custom_streams: false } as api.SortEnabledMap,
-  m3u_account_priorities: {},
-  black_screen_detection_enabled: false,
-  black_screen_sample_duration: 5,
-  low_fps_threshold: 20,
-  deprioritize_failed_streams: true,
-  deprioritize_black_screen: true,
-  deprioritize_low_fps: true,
-  failed_stream_sort_order: ['failed', 'black_screen', 'low_fps'] as api.FailedStreamCategory[],
-  strike_threshold: 3,
-  normalize_on_channel_create: false,
-  smtp_configured: true,
-  public_base_url: '',
-  smtp_host: 'smtp.test',
-  smtp_port: 587,
-  smtp_user: '',
-  smtp_from_email: 'ecm@example.com',
-  smtp_from_name: 'ECM Alerts',
-  smtp_use_tls: true,
-  smtp_use_ssl: false,
-  discord_configured: false,
-  discord_webhook_url: '',
-  telegram_configured: false,
-  telegram_bot_token: '',
-  telegram_chat_id: '',
-  mcp_api_key_configured: false,
-  telemetry_client_errors_enabled: true,
-  dedup_threshold: 0.80,
-  dedup_m3u_toast_suppressed: false,
-  emby_enabled: false,
-  emby_base_url: '',
-  emby_api_key_configured: false,
-  plex_enabled: false,
-  plex_base_url: '',
-  plex_token_configured: false,
-  jellyfin_enabled: false,
-  jellyfin_base_url: '',
-  jellyfin_api_key_configured: false,
-  trusted_media_networks: [],
-  ssrf_outbound_mode: 'lan_friendly' as const,
-};
+import { settingsBase } from '../../test/mocks/settings';
+import { invalidateServerData } from '../../hooks/useServerDataInvalidation';
 
 function makeSettings(overrides: Partial<typeof settingsBase> = {}): Awaited<ReturnType<typeof api.getSettings>> {
   return { ...settingsBase, ...overrides } as Awaited<ReturnType<typeof api.getSettings>>;
@@ -222,6 +127,23 @@ function makeSettings(overrides: Partial<typeof settingsBase> = {}): Awaited<Ret
 function renderEmailPage() {
   return render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="email" />);
 }
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+function smtpMethod(id: number, recipient: string): api.AlertMethod {
+  return { id, name: 'Email', method_type: 'smtp', enabled: true, config: { to_emails: recipient },
+    notify_info: false, notify_success: true, notify_warning: true, notify_error: true };
+}
+
+const oldSettings = makeSettings({ url: 'http://old-connection.invalid', username: 'old-user',
+  public_base_url: 'https://old.invalid', smtp_host: 'old-smtp.invalid', stats_poll_interval: 20 });
+const newSettings = makeSettings({ url: 'http://new-connection.invalid', username: 'new-user',
+  public_base_url: 'https://new.invalid', smtp_host: 'new-smtp.invalid', stats_poll_interval: 40 });
 
 /** The badge next to the heading, which reads Configured or Not set. */
 function publicBaseUrlBadge(): HTMLElement {
@@ -236,15 +158,19 @@ async function saveSettingsPage() {
 
 describe('SettingsTab public base URL (bead qsqfv)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
+    notificationMocks.notify.mockReturnValue('toast-id');
     vi.mocked(api.saveSettings).mockResolvedValue({ status: 'ok', configured: true, server_changed: false });
     vi.mocked(api.getChannelProfiles).mockResolvedValue([]);
     vi.mocked(api.listAlertMethods).mockResolvedValue([]);
+    vi.mocked(api.getStreamGroups).mockResolvedValue([]);
+    vi.mocked(pipelineApi.getEventSyncTeamAliases).mockResolvedValue({ groups: [] });
     vi.mocked(api.getM3UAccounts).mockResolvedValue([]);
     vi.mocked(api.getStreams).mockResolvedValue({ count: 0, next: null, previous: null, results: [] });
     vi.mocked(api.getProbeHistory).mockResolvedValue([]);
     vi.mocked(api.getProbeProgress).mockResolvedValue({ in_progress: false } as Awaited<ReturnType<typeof api.getProbeProgress>>);
   });
+  afterEach(() => vi.restoreAllMocks());
 
   it('loads the stored value and reports it as configured', async () => {
     vi.mocked(api.getSettings).mockResolvedValue(makeSettings({
@@ -257,6 +183,232 @@ describe('SettingsTab public base URL (bead qsqfv)', () => {
       expect(screen.getByLabelText('Public Base URL')).toHaveValue('https://ecm.example.com');
     });
     expect(publicBaseUrlBadge()).toHaveTextContent('Configured');
+  });
+
+  it('waits for the shared settings baseline before accepting edits or saves', async () => {
+    const user = userEvent.setup();
+    let resolveSettings!: (settings: Awaited<ReturnType<typeof api.getSettings>>) => void;
+    vi.mocked(api.getSettings).mockReturnValue(new Promise(resolve => { resolveSettings = resolve; }));
+    renderEmailPage();
+    const input = screen.getByLabelText('Public Base URL');
+    await user.type(input, 'https://unsafe-edit.invalid');
+    expect(input).toHaveValue('');
+    expect(input).toBeDisabled();
+    expect(screen.getByRole('status', { name: 'Settings loading' })).toHaveTextContent('Loading shared settings');
+    const save = screen.getByRole('button', { name: /Save Settings/i });
+    expect(save).toBeDisabled();
+    await user.click(save);
+    expect(api.saveSettings).not.toHaveBeenCalled();
+
+    await act(async () => { resolveSettings(makeSettings({ public_base_url: 'https://stored.invalid' })); });
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(input).toHaveValue('https://stored.invalid');
+    await user.clear(input);
+    await user.type(input, 'https://accepted.invalid');
+    await user.click(save);
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ public_base_url: 'https://accepted.invalid' })));
+  });
+
+  it('keeps initial-load failure read-only until an explicit retry succeeds', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.getSettings).mockRejectedValueOnce(new Error('Unavailable')).mockResolvedValue(makeSettings());
+    renderEmailPage();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load shared settings');
+    const input = screen.getByLabelText('Public Base URL');
+    expect(input).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+    expect(api.getSettings).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: 'Retry loading settings' }));
+    await waitFor(() => expect(input).toBeEnabled());
+    expect(api.getSettings).toHaveBeenCalledTimes(2);
+    await user.type(input, 'https://retry-edit.invalid');
+    await saveSettingsPage();
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ public_base_url: 'https://retry-edit.invalid' }));
+  });
+
+  it.each([0, 1])('accepts only the newest shared load and saves its connection (first response: %s)', async (first) => {
+    const user = userEvent.setup();
+    const releases: ((settings: api.SettingsResponse) => void)[] = [];
+    vi.mocked(api.getSettings).mockImplementation(() => new Promise(resolve => { releases.push(resolve); }));
+    renderEmailPage();
+    act(() => invalidateServerData('settings'));
+    expect(releases).toHaveLength(2);
+    const input = screen.getByLabelText('Public Base URL');
+    await act(async () => { releases[first]([oldSettings, newSettings][first]); });
+    await user.type(input, '/unsafe');
+    expect.soft(input).toHaveValue(first === 0 ? '' : 'https://new.invalid');
+    expect(input).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+    await act(async () => { releases[1 - first]([oldSettings, newSettings][1 - first]); });
+    await waitFor(() => expect(input).toBeEnabled());
+    expect.soft(input).toHaveValue('https://new.invalid');
+    expect.soft(screen.getByLabelText('SMTP Host')).toHaveValue('new-smtp.invalid');
+    expect(screen.queryByRole('status', { name: 'Unsaved settings' })).not.toBeInTheDocument();
+    await user.type(input, '/accepted');
+    await saveSettingsPage();
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ url: newSettings.url,
+      username: newSettings.username, public_base_url: 'https://new.invalid/accepted',
+      smtp_host: newSettings.smtp_host, stats_poll_interval: newSettings.stats_poll_interval }));
+    expect(notificationMocks.notify).not.toHaveBeenCalled(); // Original restart references are also newest.
+  });
+
+  it.each([0, 1])('ignores superseded recipients and saves to the newest method (first response: %s)', async (first) => {
+    const user = userEvent.setup();
+    const recipients = [deferred<api.AlertMethod[]>(), deferred<api.AlertMethod[]>()];
+    // The real independent child loads first; the next two reads belong to loadSettings.
+    vi.mocked(api.listAlertMethods).mockResolvedValueOnce([])
+      .mockReturnValueOnce(recipients[0].promise).mockReturnValueOnce(recipients[1].promise);
+    vi.mocked(api.getSettings).mockResolvedValueOnce(oldSettings).mockResolvedValue(newSettings);
+    renderEmailPage();
+    await waitFor(() => expect(api.listAlertMethods).toHaveBeenCalledTimes(2));
+    act(() => invalidateServerData('settings'));
+    await waitFor(() => expect(api.listAlertMethods).toHaveBeenCalledTimes(3));
+    const input = screen.getByLabelText('Email alert recipients');
+    const methods = [smtpMethod(11, 'old@example.com'), smtpMethod(22, 'new@example.com')];
+    await act(async () => recipients[first].resolve([methods[first]]));
+    expect.soft(input).toHaveValue(first === 0 ? '' : 'new@example.com');
+    expect(input).toBeDisabled();
+    await act(async () => recipients[1 - first].resolve([methods[1 - first]]));
+    await waitFor(() => expect(input).toBeEnabled());
+    expect.soft(input).toHaveValue('new@example.com');
+    await user.clear(input);
+    await user.type(input, 'accepted@example.com');
+    vi.mocked(api.updateAlertMethod).mockResolvedValue({ success: true });
+    await user.click(screen.getByRole('button', { name: /Save Recipients/ }));
+    await waitFor(() => expect(api.updateAlertMethod).toHaveBeenCalledWith(22, expect.objectContaining({
+      config: expect.objectContaining({ to_emails: 'accepted@example.com' }),
+    })));
+    await user.type(screen.getByLabelText('Public Base URL'), '/accepted');
+    await saveSettingsPage();
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ url: newSettings.url,
+      public_base_url: 'https://new.invalid/accepted' }));
+  });
+
+  it('ignores a stale recipient error without ending the newest recipient loading state', async () => {
+    const warn = vi.spyOn(logger, 'warn');
+    const recipients = [deferred<api.AlertMethod[]>(), deferred<api.AlertMethod[]>()];
+    vi.mocked(api.listAlertMethods).mockResolvedValueOnce([])
+      .mockReturnValueOnce(recipients[0].promise).mockReturnValueOnce(recipients[1].promise);
+    vi.mocked(api.getSettings).mockResolvedValueOnce(oldSettings).mockResolvedValue(newSettings);
+    renderEmailPage();
+    await waitFor(() => expect(api.listAlertMethods).toHaveBeenCalledTimes(2));
+    act(() => invalidateServerData('settings'));
+    await waitFor(() => expect(api.listAlertMethods).toHaveBeenCalledTimes(3));
+    await act(async () => recipients[0].reject(new Error('stale recipient error')));
+    expect.soft(warn).not.toHaveBeenCalled();
+    expect.soft(screen.getByLabelText('Email alert recipients')).toHaveAttribute('placeholder', 'Loading recipients…');
+    await act(async () => recipients[1].resolve([smtpMethod(22, 'new@example.com')]));
+    expect(screen.getByLabelText('Email alert recipients')).toHaveValue('new@example.com');
+    expect(screen.getByLabelText('Public Base URL')).toBeEnabled();
+  });
+
+  it('settles recipient loading when the newest shared reload fails before its recipient read', async () => {
+    const recipients = deferred<api.AlertMethod[]>();
+    vi.mocked(api.getSettings).mockResolvedValueOnce(newSettings).mockResolvedValueOnce(newSettings)
+      .mockRejectedValueOnce(new Error('newest reload failed'));
+    vi.mocked(api.listAlertMethods).mockResolvedValueOnce([])
+      .mockResolvedValueOnce([smtpMethod(22, 'accepted@example.com')]).mockReturnValueOnce(recipients.promise);
+    renderEmailPage();
+    const input = screen.getByLabelText('Email alert recipients');
+    await waitFor(() => expect(input).toBeEnabled());
+    act(() => invalidateServerData('settings'));
+    await waitFor(() => expect(api.listAlertMethods).toHaveBeenCalledTimes(3));
+    await act(async () => invalidateServerData('settings'));
+    await act(async () => recipients.resolve([smtpMethod(11, 'stale@example.com')]));
+    expect(input).toHaveValue('accepted@example.com');
+    expect(input).toBeEnabled();
+    expect(input).not.toHaveAttribute('placeholder', 'Loading recipients…');
+  });
+
+  it('does not publish a superseded shared error after a newer successful baseline', async () => {
+    const error = vi.spyOn(logger, 'error');
+    const initial = deferred<api.SettingsResponse>();
+    vi.mocked(api.getSettings).mockReturnValueOnce(initial.promise).mockResolvedValue(newSettings);
+    renderEmailPage();
+    act(() => invalidateServerData('settings'));
+    await waitFor(() => expect(screen.getByLabelText('Public Base URL')).toHaveValue('https://new.invalid'));
+    await act(async () => initial.reject(new Error('stale shared error')));
+    expect(error).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Public Base URL')).toBeEnabled();
+  });
+
+  it('does not adopt a stale success when the newest initial load failed', async () => {
+    const initial = deferred<api.SettingsResponse>();
+    vi.mocked(api.getSettings).mockReturnValueOnce(initial.promise).mockRejectedValueOnce(new Error('newest failed'));
+    renderEmailPage();
+    act(() => invalidateServerData('settings'));
+    await screen.findByRole('alert');
+    await act(async () => initial.resolve(oldSettings));
+    expect(screen.getByLabelText('Public Base URL')).toHaveValue('');
+    expect(screen.getByLabelText('Public Base URL')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load shared settings');
+  });
+
+  it.each(['success', 'error'])('keeps edits when a superseded cancel returns %s and the newest reload failed', async (outcome) => {
+    const user = userEvent.setup();
+    const cancelled = deferred<api.SettingsResponse>();
+    vi.mocked(api.getSettings).mockResolvedValueOnce(newSettings).mockReturnValueOnce(cancelled.promise)
+      .mockRejectedValueOnce(new Error('newest reload failed'));
+    renderEmailPage();
+    const input = screen.getByLabelText('Public Base URL');
+    await waitFor(() => expect(input).toBeEnabled());
+    await user.type(input, '/keep');
+    await user.click(screen.getByRole('button', { name: 'Cancel changes' }));
+    await act(async () => invalidateServerData('settings'));
+    await act(async () => {
+      if (outcome === 'success') cancelled.resolve(oldSettings);
+      else cancelled.reject(new Error('stale cancel failed'));
+    });
+    expect(input).toHaveValue('https://new.invalid/keep');
+    expect(input).toBeEnabled();
+    expect(screen.getByRole('status', { name: 'Unsaved settings' })).toBeInTheDocument();
+    expect(screen.queryByText(/Could not reload saved settings/)).not.toBeInTheDocument();
+    await saveSettingsPage();
+    expect(api.saveSettings).toHaveBeenCalledWith(expect.objectContaining({ url: newSettings.url,
+      public_base_url: 'https://new.invalid/keep' }));
+  });
+
+  it.each(['pending', 'failed'])('keeps real ntfy controls usable with %s shared settings', async (state) => {
+    const user = userEvent.setup();
+    const shared = deferred<api.SettingsResponse>();
+    vi.mocked(api.getSettings).mockReturnValue(shared.promise);
+    vi.mocked(api.createAlertMethod).mockResolvedValue({ ...smtpMethod(33, ''), name: 'Independent', method_type: 'ntfy' });
+    renderEmailPage();
+    await screen.findByText('No alert methods configured yet.');
+    if (state === 'failed') await act(async () => shared.reject(new Error('shared failed')));
+    expect(screen.getByRole('button', { name: 'Add ntfy target' })).toBeEnabled();
+    await user.type(screen.getByLabelText('Name'), 'Independent');
+    await user.type(screen.getByLabelText('Server URL'), 'https://ntfy.invalid');
+    await user.type(screen.getByLabelText('Topic'), 'test');
+    await user.click(screen.getByRole('button', { name: 'Add ntfy target' }));
+    await waitFor(() => expect(api.createAlertMethod).toHaveBeenCalledWith(expect.objectContaining({ name: 'Independent' })));
+    expect(screen.getByLabelText('Public Base URL')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    if (state === 'pending') await act(async () => shared.resolve(newSettings));
+  });
+
+  it.each(['pending', 'failed'])('keeps real team-alias controls usable with %s shared settings', async (state) => {
+    const user = userEvent.setup();
+    const shared = deferred<api.SettingsResponse>();
+    vi.mocked(api.getSettings).mockReturnValue(shared.promise);
+    vi.mocked(pipelineApi.updateEventSyncTeamAliases).mockResolvedValue({ groups: [{ terms: ['Alpha', 'AFC'], note: null }] });
+    render(<SettingsTab onSaved={vi.fn()} initialSettingsPage="channel-pipeline" />);
+    await screen.findByText(/No alias groups configured/);
+    if (state === 'failed') await act(async () => shared.reject(new Error('shared failed')));
+    expect(screen.getByRole('button', { name: /Add alias group/ })).toBeEnabled();
+    await user.click(screen.getByRole('button', { name: /Add alias group/ }));
+    for (const term of ['Alpha', 'AFC']) {
+      await user.type(screen.getByPlaceholderText('Add a spelling, e.g. MUFC'), `${term}{Enter}`);
+    }
+    await user.click(screen.getByRole('button', { name: 'Save Team Aliases' }));
+    await waitFor(() => expect(pipelineApi.updateEventSyncTeamAliases).toHaveBeenCalledWith([{ terms: ['Alpha', 'AFC'], note: null }]));
+    expect(screen.getByLabelText('Max channels created per run')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+    expect(api.saveSettings).not.toHaveBeenCalled();
+    if (state === 'pending') await act(async () => shared.resolve(newSettings));
   });
 
   it.each([false, true])('mounts and remounts without a discarded stream lookup (loader failures: %s)', async (failLoads) => {

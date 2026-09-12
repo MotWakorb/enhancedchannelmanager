@@ -95,6 +95,28 @@
   max-width: 800px;
 }
 
+.settings-load-fields {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+.settings-load-status {
+  position: sticky;
+  top: 0;
+  z-index: 9;
+  padding: .75rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-lg);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: var(--type-body-size);
+}
+
+.settings-load-status button { margin-left: .75rem; }
+
 /* Scheduled Tasks packs a status pill, schedule summary and four controls onto
    one card row, which the shared 800px measure squeezes. Widened rather than
    left full-bleed so it still reads as the same page family. */

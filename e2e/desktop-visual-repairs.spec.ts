@@ -1,15 +1,20 @@
 import { expect as baseExpect, test as baseTest } from '@playwright/test';
-import type { Locator, Page, TestInfo } from '@playwright/test';
+import type { Locator, Page, Route, TestInfo } from '@playwright/test';
+import { settingsBase } from '../frontend/src/test/mocks/settings';
+import { settingsTasks } from './fixtures/settings-tasks';
 
 const expect = baseExpect.configure({ timeout: 1000 });
 const test = baseTest.extend({
-  page: async ({ page, baseURL }, use) => {
+  page: async ({ page, baseURL }, use, info) => {
     if (!baseURL) throw new Error('Desktop visual tests require a resolved Playwright baseURL');
     const origin = new URL(baseURL).origin;
-    await page.route('**/*', route => new URL(route.request().url()).origin === origin
+    const requests: { method: string; url: string }[] = [];
+    page.on('request', request => requests.push({ method: request.method(), url: request.url() }));
+    await page.route('**/*', route => new URL(route.request().url()).origin === origin && route.request().method() === 'GET' && !new URL(route.request().url()).pathname.startsWith('/api/')
       ? route.continue() : route.abort('blockedbyclient'));
     await page.routeWebSocket('**/*', socket => socket.close());
     await use(page);
+    await info.attach('network', { body: JSON.stringify(requests, null, 2), contentType: 'application/json' });
   },
 });
 
@@ -50,7 +55,7 @@ async function capture(page: Page, info: TestInfo, name: string) {
   await page.screenshot({ path: info.outputPath(`${name}.png`) });
 }
 
-async function openSynthetic(page: Page, route: string, theme: string, fixtures: Record<string, unknown> = {}) {
+async function openSynthetic(page: Page, route: string, theme: string, fixtures: Record<string, unknown> = {}, beforeResponse?: (route: Route) => Promise<boolean | void>) {
   const responses: Record<string, unknown> = {
     '/api/auth/status': { require_auth: false, setup_complete: true },
     '/api/auth/me': { user: { id: 1, username: 'synthetic', is_admin: true, is_active: true } },
@@ -61,13 +66,626 @@ async function openSynthetic(page: Page, route: string, theme: string, fixtures:
     '/api/notifications': { notifications: [], total: 0, unread_count: 0 },
     ...fixtures,
   };
-  await page.route('**/api/**', route => {
+  await page.route('**/api/**', async route => {
+    if (new URL(route.request().url()).origin !== new URL(test.info().project.use.baseURL!).origin) {
+      return route.abort('blockedbyclient');
+    }
+    if (await beforeResponse?.(route)) return;
     const path = new URL(route.request().url()).pathname;
     return route.fulfill({ status: Object.hasOwn(responses, path) ? 200 : 501,
       contentType: 'application/json', body: JSON.stringify(responses[path] ?? { detail: 'Unapproved synthetic request' }) });
   });
   await page.goto(`/#${route}`);
   if (theme !== 'dark') await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
+}
+
+const settingsFixtures = {
+  '/api/settings': settingsBase, '/api/alert-methods': [], '/api/providers': [], '/api/m3u/server-groups': [],
+  '/api/epg/sources': [], '/api/stream-stats/probe/history': [], '/api/stream-stats/probe/progress': { in_progress: false },
+  '/api/tasks/history': { history: [], total: 0 },
+};
+
+async function focusedGeometry(control: Locator) {
+  return control.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const list = element.parentElement!;
+    const bounds = list.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
+    return { rect: rect.toJSON(), list: bounds.toJSON(), hit: hit === element || element.contains(hit),
+      outline: getComputedStyle(element).outlineWidth, scrollTop: list.scrollTop, scrollLeft: list.scrollLeft,
+      containerScroll: document.querySelector('.settings-content')!.scrollTop, documentScroll: window.scrollY,
+      outlineContained: rect.top - 4 >= bounds.top && rect.bottom + 4 <= bounds.bottom && rect.left - 4 >= bounds.left && rect.right + 4 <= bounds.right,
+      contained: rect.top >= bounds.top && rect.bottom <= bounds.bottom && rect.left >= bounds.left && rect.right <= bounds.right };
+  });
+}
+
+test('UI fixture blocks unknown APIs, external requests, non-asset writes and WebSockets', async ({ page }) => {
+  await openSynthetic(page, 'settings', 'dark', settingsFixtures);
+  const outcomes = await page.evaluate(async () => {
+    const result = async (url: string, method = 'GET') => {
+      try { return (await fetch(url, { method })).status; } catch { return 'blocked'; }
+    };
+    return {
+      known: await result('/api/settings'), unknown: await result('/api/unapproved', 'DELETE'),
+      external: await result('https://network-guard.invalid/api/settings'), write: await result('/unapproved', 'POST'),
+      socket: await new Promise(resolve => {
+        const socket = new WebSocket(`ws://${location.host}/guard-test`);
+        socket.onmessage = () => resolve('message');
+        socket.onclose = () => resolve('closed');
+      }),
+    };
+  });
+  expect(outcomes).toEqual({ known: 200, unknown: 501, external: 'blocked', write: 'blocked', socket: 'closed' });
+});
+
+test('TASK-FOCUS wrapped long rail stays reachable after viewport resizing', async ({ page }, info) => {
+  const tasks = [...settingsTasks, ...settingsTasks.map(task => ({ ...task,
+    task_id: `extra_${task.task_id}`, task_name: `Additional scheduled ${task.task_name} for a long provider label`,
+  }))];
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await openSynthetic(page, 'settings/scheduled-tasks', 'dark', { ...settingsFixtures, '/api/tasks': { tasks } });
+  const buttons = page.getByRole('navigation', { name: 'On this page' }).getByRole('button');
+  await expect(buttons).toHaveCount(36);
+  for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+    await page.setViewportSize(viewport);
+    await buttons.first().focus();
+    for (let i = 1; i < tasks.length; i++) await page.keyboard.press('Tab');
+    await expect(buttons.last()).toBeFocused();
+    await expect.poll(async () => {
+      const g = await focusedGeometry(buttons.last());
+      return g.hit && g.contained && g.rect.bottom + 4 <= viewport.height;
+    }).toBe(true);
+    const last = await focusedGeometry(buttons.last());
+    expect(last.rect.height).toBeGreaterThan(36);
+    expect(last.documentScroll).toBe(0);
+    await expect(buttons.last()).toHaveCSS('font-size', '13px');
+    await capture(page, info, `TASK-FOCUS-wrapped-${viewport.width}`);
+  }
+});
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+  test(`TASK-FOCUS retains task header, measure and action wrapping ${viewport.width}`, async ({ page }, info) => {
+    await page.setViewportSize(viewport);
+    await openSynthetic(page, 'settings/scheduled-tasks', 'dark', { ...settingsFixtures, '/api/tasks': { tasks: settingsTasks } });
+    const refresh = page.locator('.route-page-header').getByRole('button', { name: /Refresh/ });
+    await expect(refresh).toHaveCount(1);
+    await expect(refresh).toHaveClass(/btn-secondary/);
+    await refresh.click();
+    await expect(page.getByRole('navigation', { name: 'On this page' }).getByRole('button')).toHaveCount(18);
+    const measurements = [];
+    for (const task of settingsTasks) {
+      const card = page.getByTestId(`task-card-${task.task_id}`);
+      await card.scrollIntoViewIfNeeded();
+      const measure = await card.evaluate(element => {
+        const lines = (element: Element) => {
+          const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+          const ys = new Set<number>();
+          let node;
+          while ((node = walker.nextNode())) {
+            if (!node.textContent?.trim() || node.parentElement?.closest('.material-icons')) continue;
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            for (const rect of range.getClientRects()) if (rect.width) ys.add(Math.round(rect.y));
+          }
+          return ys.size;
+        };
+        const rect = element.getBoundingClientRect();
+        const description = element.firstElementChild!.children[1];
+        return { id: element.id, width: rect.width, descriptionWidth: description.getBoundingClientRect().width,
+          descriptionLines: lines(description), actions: [...element.querySelectorAll('button')].map(button => ({
+            text: button.textContent, lines: lines(button), inside: button.getBoundingClientRect().right <= rect.right,
+          })) };
+      });
+      expect(measure.id).toBe(`settings-scheduled-tasks-section-${task.task_id.replaceAll('_', '-')}`);
+      expect(measure.width).toBe(viewport.width === 1280 ? 740 : 1040);
+      expect(measure.descriptionWidth).toBeGreaterThan(measure.width * 0.85);
+      expect(measure.descriptionLines).toBeLessThanOrEqual(viewport.width === 1280 ? 3 : 2);
+      for (const action of measure.actions) {
+        expect(action.lines, action.text || '').toBe(1);
+        expect(action.inside).toBe(true);
+      }
+      measurements.push(measure);
+    }
+    await info.attach('task-wrapping', { body: JSON.stringify(measurements, null, 2), contentType: 'application/json' });
+    await capture(page, info, 'TASK-FOCUS-task-geometry');
+  });
+}
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }, { width: 640, height: 360 }]) {
+  test(`TASK-FOCUS adjacent Settings content focus stays clear ${viewport.width}`, async ({ page }, info) => {
+    await page.setViewportSize(viewport);
+    await openSynthetic(page, 'settings', 'dark', settingsFixtures);
+    const input = page.getByLabel('Poll interval (seconds)');
+    await expect(input).toBeEnabled();
+    await input.fill('45');
+    const pending = page.getByRole('status', { name: 'Unsaved settings' });
+    await expect(pending).toBeVisible();
+    const controls = page.locator('.settings-page input:visible, .settings-page button:visible');
+    for (const control of [input, controls.first(), controls.last()]) {
+      await control.focus();
+      await expect.poll(() => control.evaluate(element => {
+        const r = element.getBoundingClientRect();
+        const nav = document.querySelector('.sticky-section-nav')!.getBoundingClientRect();
+        const pending = document.querySelector('.settings-pending-actions')!.getBoundingClientRect();
+        const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+        return (hit === element || element.contains(hit)) && r.bottom <= pending.top - 7 &&
+          (r.right <= nav.left || r.left >= nav.right || r.top >= nav.bottom || r.bottom <= nav.top);
+      })).toBe(true);
+    }
+    await expect(page.locator('.settings-content-main')).toHaveCSS('max-width', '800px');
+    await capture(page, info, 'TASK-FOCUS-adjacent-content');
+  });
+}
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }, { width: 640, height: 360 }]) {
+  for (const count of [17, 18]) {
+    test(`TASK-FOCUS native rail traversal ${viewport.width} count ${count}`, async ({ page }, info) => {
+      await page.setViewportSize(viewport);
+      const tasks = settingsTasks.slice(0, count);
+      await openSynthetic(page, 'settings/scheduled-tasks', 'dark', { ...settingsFixtures, '/api/tasks': { tasks } });
+      const nav = page.getByRole('navigation', { name: 'On this page' });
+      const buttons = nav.getByRole('button');
+      await expect(buttons).toHaveCount(count);
+      await page.evaluate(() => document.fonts.ready);
+      await buttons.first().focus();
+      const observations = [];
+      for (let i = 0; i < count; i++) {
+        if (i) await page.keyboard.press('Tab');
+        await expect(buttons.nth(i)).toBeFocused();
+        try {
+          await expect.poll(async () => (await focusedGeometry(buttons.nth(i))).outlineContained).toBe(true);
+        } finally {
+          await info.attach(`focus-${i}`, { body: JSON.stringify(await focusedGeometry(buttons.nth(i))), contentType: 'application/json' });
+        }
+        const geometry = await focusedGeometry(buttons.nth(i));
+        observations.push(geometry);
+        expect.soft(geometry.hit, tasks[i].task_name).toBe(true);
+        expect.soft(geometry.contained, tasks[i].task_name).toBe(true);
+        expect.soft(geometry.outline).toBe('2px');
+        expect.soft(geometry.rect.bottom).toBeLessThanOrEqual(viewport.height);
+        expect.soft(geometry.documentScroll).toBe(0);
+      }
+      await info.attach('native-focus-geometry', { body: JSON.stringify(observations, null, 2), contentType: 'application/json' });
+      await capture(page, info, 'TASK-FOCUS-last');
+      await page.keyboard.press('Enter');
+      const lastId = `settings-scheduled-tasks-section-${tasks.at(-1)!.task_id.replaceAll('_', '-')}`;
+      await expect(page).toHaveURL(new RegExp(`section=${lastId}`));
+      await expect(buttons.last()).toHaveAttribute('aria-current', 'location');
+      for (let i = count - 2; i >= 0; i--) {
+        await page.keyboard.press('Shift+Tab');
+        await expect(buttons.nth(i)).toBeFocused();
+        await expect.poll(async () => {
+          const geometry = await focusedGeometry(buttons.nth(i));
+          return geometry.hit && geometry.outlineContained;
+        }).toBe(true);
+      }
+      // A physical wheel over the rail must scroll that list, not the content pane.
+      if (viewport.width === 1280) {
+        await page.locator('.settings-content').evaluate(e => { e.scrollTop = 0; });
+        await nav.hover();
+        const list = nav.locator(':scope > div');
+        await list.hover();
+        await page.mouse.wheel(0, 2000);
+        await expect.poll(() => list.evaluate(e => e.scrollTop)).toBeGreaterThan(0);
+        expect(await page.locator('.settings-content').evaluate(e => e.scrollTop)).toBe(0);
+        await buttons.last().click();
+      }
+      await buttons.nth(8).click();
+      const targetId = `settings-scheduled-tasks-section-${tasks[8].task_id.replaceAll('_', '-')}`;
+      await expect(page).toHaveURL(new RegExp(`section=${targetId}`));
+      await page.reload();
+      await expect(buttons).toHaveCount(count);
+      await expect.poll(async () => {
+        const rect = await page.locator(`#${targetId}`).boundingBox();
+        // The established 640px shell/header leaves a short content viewport;
+        // its horizontal nav sits above the visible card heading at ~310px.
+        return !!rect && rect.y >= 0 && rect.y < viewport.height - 32;
+      }).toBe(true);
+      await capture(page, info, 'TASK-FOCUS-deeplink');
+      await expect(nav.locator(':scope > div')).toHaveCSS('flex-direction', viewport.width > 1100 ? 'column' : 'row');
+      await expect(page.locator('.settings-content-main')).toHaveCSS('max-width', '1040px');
+    });
+  }
+}
+
+for (const networks of [[], ['203.0.113.0/24']]) {
+  test(`SETTINGS-EDIT-LOSS waits before accepting real keyboard edits (${networks.length ? 'populated' : 'empty'})`, async ({ page }, info) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let gets = 0;
+    const writes: unknown[] = [];
+    const loadedUrl = 'http://loaded-settings.invalid:8096';
+    try {
+      await openSynthetic(page, 'settings/integrations', 'dark', { ...settingsFixtures,
+        '/api/settings': { ...settingsBase, emby_base_url: loadedUrl, trusted_media_networks: networks },
+      }, async route => {
+        if (new URL(route.request().url()).pathname !== '/api/settings') return;
+        if (route.request().method() === 'GET') {
+          // App loads settings before mounting SettingsTab. Hold the tab's own
+          // request, with the exact topology asserted below, not an arbitrary delay.
+          if (++gets === 2) await gate;
+        } else {
+          writes.push(route.request().postDataJSON());
+          await route.fulfill({ json: { status: 'ok', configured: true, server_changed: false } });
+          return true;
+        }
+      });
+      await expect.poll(() => gets).toBe(2);
+      const input = page.getByTestId('trusted-media-networks-input');
+      await input.scrollIntoViewIfNeeded();
+      // Click by physical coordinates: Playwright's editable auto-wait would
+      // hide the bug. Native typing must be refused during initialization.
+      const rect = (await input.boundingBox())!;
+      await page.mouse.click(rect.x + 20, rect.y + 20);
+      await page.keyboard.type('192.0.2.0/24');
+      await capture(page, info, 'SETTINGS-pending-keyboard');
+      await expect(input).toHaveValue('');
+      await expect(input).toBeDisabled();
+      await expect(page.getByRole('status', { name: 'Settings loading' })).toContainText('Loading shared settings');
+      await expect(page.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+      expect(writes).toEqual([]);
+      release();
+      await expect(page.getByLabel('Emby base URL', { exact: true })).toHaveValue(loadedUrl);
+      await expect(input).toBeEnabled();
+      await expect(input).toHaveValue(networks.join('\n'));
+      await input.click();
+      await page.keyboard.press('ControlOrMeta+A');
+      await page.keyboard.type('192.0.2.0/24');
+      await page.keyboard.press('Tab');
+      await expect(input).toHaveValue('192.0.2.0/24');
+      // G41's original native resize contract: the accepted edit survives a
+      // real resize-handle drag and keyboard focus round trip after loading.
+      await input.scrollIntoViewIfNeeded();
+      const before = (await input.boundingBox())!;
+      await page.mouse.move(before.x + before.width - 3, before.y + before.height - 3);
+      await page.mouse.down();
+      await page.mouse.move(before.x + before.width - 43, before.y + before.height + 27, { steps: 6 });
+      await page.mouse.up();
+      const after = (await input.boundingBox())!;
+      expect(after.height).toBeGreaterThan(before.height);
+      expect(after.width).toBeLessThan(before.width);
+      await input.focus();
+      await page.keyboard.press('Tab');
+      await page.keyboard.press('Shift+Tab');
+      await expect(input).toBeFocused();
+      await expect(input).toHaveValue('192.0.2.0/24');
+      await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible();
+      await capture(page, info, 'SETTINGS-accepted-keyboard');
+      expect(gets).toBe(2);
+      await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+      await expect.poll(() => writes.length).toBe(1);
+      expect(writes[0]).toMatchObject({ trusted_media_networks: ['192.0.2.0/24'], emby_base_url: loadedUrl });
+      await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0);
+      await expect(input).toHaveValue('192.0.2.0/24');
+      // onSaved refreshes App's settings; it must not reload the tab's form.
+      await expect.poll(() => gets).toBe(3);
+    } finally { release(); }
+  });
+}
+
+for (const first of ['initial', 'invalidation']) {
+  test(`SETTINGS-EDIT-LOSS newest connection survives ${first}-first responses and a real save`, async ({ page }, info) => {
+    let releaseInitial!: () => void;
+    let releaseInvalidation!: () => void;
+    const initialGate = new Promise<void>(resolve => { releaseInitial = resolve; });
+    const invalidationGate = new Promise<void>(resolve => { releaseInvalidation = resolve; });
+    const oldSettings = { ...settingsBase, url: 'http://old-connection.invalid', username: 'old-user',
+      public_base_url: 'https://old.invalid', stats_poll_interval: 20 };
+    const newSettings = { ...settingsBase, url: 'http://new-connection.invalid', username: 'new-user',
+      public_base_url: 'https://new.invalid', stats_poll_interval: 40 };
+    let gets = 0;
+    const writes: Record<string, unknown>[] = [];
+    try {
+      await openSynthetic(page, 'settings', 'dark', settingsFixtures, async route => {
+        const path = new URL(route.request().url()).pathname;
+        const method = route.request().method();
+        if (path === '/api/settings' && method === 'GET') {
+          const request = ++gets;
+          if (request === 2) await initialGate; // SettingsTab's initial load.
+          if (request >= 4) await invalidationGate; // App and tab after the real modal save.
+          await route.fulfill({ json: request <= 2 ? oldSettings : newSettings });
+          return true;
+        }
+        if (path === '/api/settings/test' && method === 'POST') {
+          await route.fulfill({ json: { success: true, message: 'Synthetic connection only' } });
+          return true;
+        }
+        if (method !== 'GET') {
+          if (path === '/api/settings' && method === 'POST') {
+            writes.push(route.request().postDataJSON());
+            await route.fulfill({ json: { status: 'ok', configured: true, server_changed: false } });
+          } else await route.fulfill({ status: 501, json: { detail: 'Unapproved write' } });
+          return true;
+        }
+      });
+      await expect.poll(() => gets).toBe(2);
+      await page.getByTitle('Edit connection settings', { exact: true }).click();
+      const dialog = page.getByRole('dialog');
+      await expect(dialog.getByLabel('Dispatcharr URL', { exact: true })).toHaveValue(newSettings.url);
+      await dialog.getByLabel('Password', { exact: true }).fill('synthetic-test-only');
+      await dialog.getByRole('button', { name: 'Test Connection', exact: true }).click();
+      await dialog.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      await expect.poll(() => gets).toBeGreaterThanOrEqual(4);
+      const input = page.getByLabel('Poll interval (seconds)');
+      if (first === 'initial') {
+        releaseInitial();
+        // This request was superseded before it returned, so it cannot publish 20.
+        await expect(input).toHaveValue('10');
+      } else {
+        releaseInvalidation();
+        await expect(input).toHaveValue('40');
+      }
+      await expect(input).toBeDisabled();
+      releaseInitial();
+      releaseInvalidation();
+      await expect(input).toBeEnabled();
+      await expect(input).toHaveValue('40');
+      await page.evaluate(() => { location.hash = 'settings/email'; });
+      const publicUrl = page.getByLabel('Public Base URL', { exact: true });
+      await expect(publicUrl).toHaveValue(newSettings.public_base_url);
+      await publicUrl.press('End');
+      await page.keyboard.type('/accepted');
+      await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+      await expect.poll(() => writes.length).toBe(2);
+      expect(writes[1]).toMatchObject({ url: newSettings.url, username: newSettings.username,
+        public_base_url: 'https://new.invalid/accepted', stats_poll_interval: 40 });
+      await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0);
+      await capture(page, info, `SETTINGS-order-${first}`);
+      await info.attach('settings-save-payloads', { body: JSON.stringify(writes, null, 2), contentType: 'application/json' });
+    } finally { releaseInitial(); releaseInvalidation(); }
+  });
+}
+
+for (const state of ['pending', 'failed']) {
+  for (const section of ['email', 'channel-pipeline']) {
+    test(`SETTINGS-EDIT-LOSS independent ${section} controls with ${state} shared load`, async ({ page }, info) => {
+      let release!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      let gets = 0;
+      const writes: { path: string; body: Record<string, unknown> }[] = [];
+      const ntfy = { id: 33, name: 'Independent target', method_type: 'ntfy', enabled: true, config: {} };
+      const groups = [{ terms: ['Alpha', 'AFC'], note: null }];
+      try {
+        await openSynthetic(page, `settings/${section}`, 'dark', { ...settingsFixtures,
+          '/api/event-sync/team-aliases': { groups: [] }, '/api/stream-groups': [],
+        }, async route => {
+          const path = new URL(route.request().url()).pathname;
+          const method = route.request().method();
+          if (path === '/api/settings' && method === 'GET' && ++gets === 2) {
+            if (state === 'pending') await gate;
+            else {
+              await route.fulfill({ status: 500, json: { detail: 'Shared load unavailable' } });
+              return true;
+            }
+          }
+          if (method !== 'GET') {
+            if ((section === 'email' && path === '/api/alert-methods' && method === 'POST') ||
+                (section === 'channel-pipeline' && path === '/api/event-sync/team-aliases' && method === 'PUT')) {
+              writes.push({ path, body: route.request().postDataJSON() });
+              await route.fulfill({ json: section === 'email' ? ntfy : { groups } });
+            } else await route.fulfill({ status: 501, json: { detail: 'Unapproved write' } });
+            return true;
+          }
+        });
+        await expect.poll(() => gets).toBe(2);
+        if (state === 'failed') await expect(page.getByRole('button', { name: 'Retry loading settings' })).toBeVisible();
+        const shared = section === 'email' ? page.getByLabel('Public Base URL', { exact: true })
+          : page.getByLabel('Max channels created per run', { exact: true });
+        await expect(shared).toBeDisabled();
+        await expect(page.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+        if (section === 'email') {
+          await expect(page.getByText('No alert methods configured yet.')).toBeVisible();
+          await expect(page.getByRole('button', { name: 'Add ntfy target', exact: true })).toBeEnabled();
+          await page.getByLabel('Name', { exact: true }).fill('Independent target');
+          await page.getByLabel('Server URL', { exact: true }).fill('https://ntfy.invalid');
+          await page.getByLabel('Topic', { exact: true }).fill('test');
+          await page.getByRole('button', { name: 'Add ntfy target', exact: true }).click();
+          await expect.poll(() => writes.length).toBe(1);
+          expect(writes[0]).toMatchObject({ path: '/api/alert-methods', body: {
+            name: 'Independent target', method_type: 'ntfy', config: { server_url: 'https://ntfy.invalid', topic: 'test' },
+          } });
+        } else {
+          await expect(page.getByRole('button', { name: /Add alias group/ })).toBeEnabled();
+          await page.getByRole('button', { name: /Add alias group/ }).click();
+          for (const term of ['Alpha', 'AFC']) {
+            await page.getByPlaceholder('Add a spelling, e.g. MUFC').fill(term);
+            await page.getByPlaceholder('Add a spelling, e.g. MUFC').press('Enter');
+          }
+          await page.getByRole('button', { name: 'Save Team Aliases', exact: true }).click();
+          await expect.poll(() => writes.length).toBe(1);
+          expect(writes[0]).toEqual({ path: '/api/event-sync/team-aliases', body: { groups } });
+        }
+        await expect(shared).toBeDisabled();
+        await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0);
+        await capture(page, info, `SETTINGS-independent-${section}-${state}`);
+        if (state === 'pending') {
+          release();
+          await expect(shared).toBeEnabled();
+        }
+      } finally { release(); }
+    });
+  }
+
+  test(`SETTINGS-EDIT-LOSS independent recovery and mapping controls with ${state} shared load`, async ({ page }, info) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let gets = 0;
+    try {
+      await openSynthetic(page, 'settings', 'dark', { ...settingsFixtures,
+        '/api/normalization/rules': { groups: [] }, '/api/tags/groups': { groups: [] },
+        '/api/normalization/mappings': { mappings: [] },
+      }, async route => {
+        if (route.request().method() !== 'GET') {
+          await route.fulfill({ status: 501, json: { detail: 'Unapproved write' } });
+          return true;
+        }
+        if (new URL(route.request().url()).pathname === '/api/settings' && ++gets === 2) {
+          if (state === 'pending') await gate;
+          else {
+            await route.fulfill({ status: 500, json: { detail: 'Shared load unavailable' } });
+            return true;
+          }
+        }
+      });
+      await expect.poll(() => gets).toBe(2);
+      if (state === 'failed') await expect(page.getByRole('button', { name: 'Retry loading settings' })).toBeVisible();
+      await expect(page.getByLabel('Poll interval (seconds)')).toBeDisabled();
+      await expect(page.getByRole('button', { name: /Reset Statistics/ })).toBeEnabled();
+      await expect(page.getByRole('button', { name: /Generate App Debug Bundle/ })).toBeEnabled();
+      const connection = page.getByTitle('Edit connection settings', { exact: true });
+      await expect(connection).toBeEnabled();
+      await connection.click();
+      await expect(page.getByLabel('Dispatcharr URL', { exact: true })).toBeEnabled();
+      await page.keyboard.press('Escape');
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await page.evaluate(() => { location.hash = 'settings/appearance'; });
+      await expect(page.getByRole('button', { name: /Clear Read/ })).toBeEnabled();
+      await expect(page.getByRole('button', { name: /Clear All/ })).toBeEnabled();
+      await expect(page.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+      await page.evaluate(() => { location.hash = 'settings/normalization'; });
+      await expect(page.getByRole('button', { name: /New Group/ })).toBeEnabled();
+      await page.getByRole('button', { name: 'Add mapping', exact: true }).click();
+      await page.getByLabel('Preferred name', { exact: true }).fill('Independent mapping');
+      await expect(page.getByLabel('Preferred name', { exact: true })).toHaveValue('Independent mapping');
+      await expect(page.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+      await capture(page, info, `SETTINGS-independent-mapping-${state}`);
+      await page.evaluate(() => { location.hash = 'settings/maintenance'; });
+      await expect(page.getByRole('button', { name: /Reset Stuck Probe/ })).toBeEnabled();
+      await expect(page.getByRole('button', { name: /Clear All Probe Stats/ })).toBeEnabled();
+      await expect(page.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+      await capture(page, info, `SETTINGS-independent-maintenance-${state}`);
+    } finally { release(); }
+  });
+}
+
+test('SETTINGS-EDIT-LOSS failure retry and shared-field save/cancel lifecycle', async ({ page }, info) => {
+  let gets = 0;
+  let rejectLoad = true;
+  let rejectSave = true;
+  const writes: Record<string, unknown>[] = [];
+  let persisted = { ...settingsBase, public_base_url: 'https://stored.invalid' };
+  await openSynthetic(page, 'settings/email', 'dark', settingsFixtures, async route => {
+    if (new URL(route.request().url()).pathname !== '/api/settings') return;
+    if (route.request().method() === 'GET') {
+      gets++;
+      if (gets > 1 && rejectLoad) {
+        await route.fulfill({ status: 500, json: { detail: 'Synthetic unavailable settings' } });
+      } else await route.fulfill({ json: persisted });
+    } else {
+      const body = route.request().postDataJSON();
+      writes.push(body);
+      if (rejectSave) await route.fulfill({ status: 500, json: { detail: 'Synthetic rejected save' } });
+      else {
+        persisted = { ...persisted, ...body };
+        await route.fulfill({ json: { status: 'ok', configured: true, server_changed: false } });
+      }
+    }
+    return true;
+  });
+  const field = page.getByLabel('Public Base URL', { exact: true });
+  const retry = page.getByRole('button', { name: 'Retry loading settings' });
+  await expect(retry).toBeVisible();
+  await expect(field).toBeDisabled();
+  await expect(page.getByRole('button', { name: /Save Settings/i })).toBeDisabled();
+  expect(writes).toEqual([]);
+  await capture(page, info, 'SETTINGS-initial-error');
+  rejectLoad = false;
+  await retry.click();
+  await expect(field).toBeEnabled();
+  await expect(field).toHaveValue('https://stored.invalid');
+  await field.click();
+  await page.keyboard.press('ControlOrMeta+A');
+  await page.keyboard.type('https://accepted.invalid');
+  await expect(page.getByRole('status', { name: 'Unsaved settings' })).toBeVisible();
+  rejectLoad = true;
+  await page.getByRole('button', { name: 'Cancel changes', exact: true }).click();
+  await expect(page.getByText('Could not reload saved settings. Your changes are still available; retry Cancel or save them.')).toBeAttached();
+  await expect(field).toHaveValue('https://accepted.invalid');
+  await expect(field).toBeEnabled();
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.getByText('Settings could not be saved. Your changes are still available.')).toBeAttached();
+  await expect(field).toHaveValue('https://accepted.invalid');
+  rejectLoad = false;
+  rejectSave = false;
+  await page.getByRole('button', { name: 'Save changes', exact: true }).click();
+  await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0);
+  expect(writes).toHaveLength(2);
+  expect(writes[1]).toMatchObject({ public_base_url: 'https://accepted.invalid', smtp_host: settingsBase.smtp_host });
+  await field.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type('/discard');
+  await page.getByRole('button', { name: 'Cancel changes', exact: true }).click();
+  await expect(field).toHaveValue('https://accepted.invalid');
+  await expect(page.getByRole('status', { name: 'Unsaved settings' })).toHaveCount(0);
+  await capture(page, info, 'SETTINGS-retry-save-cancel');
+});
+
+test('SETTINGS-EDIT-LOSS preserves an early deep link through initialization', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let gets = 0;
+  try {
+    await openSynthetic(page, 'settings/integrations?section=plex-integration', 'dark', settingsFixtures, async route => {
+      if (new URL(route.request().url()).pathname === '/api/settings' && ++gets === 2) await gate;
+    });
+    const target = page.locator('#plex-integration');
+    await expect(page.getByRole('status', { name: 'Settings loading' })).toBeVisible();
+    await expect(target).toBeAttached();
+    const location = () => target.evaluate(element => ({ top: element.getBoundingClientRect().top,
+      paneTop: document.querySelector('.settings-content')!.getBoundingClientRect().top, documentScroll: window.scrollY }));
+    await expect.poll(async () => { const p = await location(); return Math.abs(p.top - p.paneTop - 12) <= 1; }).toBe(true);
+    release();
+    await expect(page.getByLabel('Plex base URL', { exact: true })).toBeEnabled();
+    const after = await location();
+    expect(after.top).toBeGreaterThanOrEqual(after.paneTop);
+    expect(after.top).toBeLessThan(after.paneTop + 32);
+    expect(after.documentScroll).toBe(0);
+    await expect(page).toHaveURL(/section=plex-integration/);
+    await capture(page, info, 'SETTINGS-early-deeplink');
+  } finally { release(); }
+});
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+  test(`WR-F01 UserMenu Escape and pointer dismissal ${viewport.width}`, async ({ page }, info) => {
+    await page.setViewportSize(viewport);
+    await openSynthetic(page, 'settings', 'dark', { ...settingsFixtures,
+      '/api/auth/me': { user: { id: 1, username: 'synthetic', display_name: 'Synthetic operator', is_admin: true, is_active: true, auth_provider: 'local' } },
+    });
+    const trigger = page.locator('.user-menu-trigger');
+    const menu = page.locator('.user-menu-dropdown');
+    await trigger.focus();
+    await page.keyboard.press('Enter');
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.user-menu-item').first()).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+    await capture(page, info, 'WR-F01-Escape-focus-return');
+    await trigger.click();
+    await trigger.click();
+    await expect(menu).toHaveCount(0);
+    await trigger.click();
+    await page.locator('#main-content h1').click();
+    await expect(menu).toHaveCount(0);
+    for (const name of ['Edit Profile', 'Change Password']) {
+      await trigger.click();
+      await menu.getByRole('button', { name: new RegExp(`${name}$`) }).click();
+      const dialog = page.getByRole('dialog', { name, exact: true });
+      await expect(dialog).toBeVisible();
+      await expect(menu).toHaveCount(0);
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+      await expect(trigger).toBeFocused();
+    }
+  });
 }
 
 // G38: exercise the production opener over populated, synthetic background rows.

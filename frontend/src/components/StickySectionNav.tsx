@@ -69,6 +69,25 @@ export function StickySectionNav({
    */
   const honouredSection = useRef<string | null>(null);
 
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || placement !== 'rail') return;
+    // The scroll pane, rather than viewport/chrome constants, owns the rail's
+    // available height. Keep this current when the shell or viewport resizes.
+    const measure = () => {
+      const style = getComputedStyle(container);
+      const height = container.clientHeight - parseFloat(style.paddingTop || '0') - parseFloat(style.paddingBottom || '0');
+      container.style.setProperty('--section-nav-available-height', `${Math.max(0, height)}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      container.style.removeProperty('--section-nav-available-height');
+    };
+  }, [containerRef, placement]);
+
   const discover = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -158,12 +177,24 @@ export function StickySectionNav({
     const keepFocusedControlVisible = (event: FocusEvent) => {
       const focused = event.target as HTMLElement | null;
       if (!focused || !container.contains(focused)
-        || focused.closest('.sticky-section-nav, .settings-pending-actions')) return;
+        || focused.closest('.settings-pending-actions')) return;
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         const nav = container.querySelector<HTMLElement>('.sticky-section-nav');
         const pending = container.querySelector<HTMLElement>('.settings-pending-actions');
         const focusedRect = focused.getBoundingClientRect();
+        if (focused.closest('.sticky-section-nav')) {
+          // Native Tab may reveal only part of a button. Scroll just its list,
+          // including the 2px outline + 2px offset, in either rendered layout.
+          const list = focused.parentElement!;
+          const bounds = list.getBoundingClientRect();
+          // Scroll offsets can be rounded to whole pixels by the browser.
+          if (focusedRect.top < bounds.top + 4) list.scrollTop -= Math.ceil(bounds.top + 4 - focusedRect.top);
+          else if (focusedRect.bottom > bounds.bottom - 4) list.scrollTop += Math.ceil(focusedRect.bottom - bounds.bottom + 4);
+          if (focusedRect.left < bounds.left + 4) list.scrollLeft -= Math.ceil(bounds.left + 4 - focusedRect.left);
+          else if (focusedRect.right > bounds.right - 4) list.scrollLeft += Math.ceil(focusedRect.right - bounds.right + 4);
+          return;
+        }
         // Decide from geometry, not the `placement` prop: the rail reverts to a
         // top bar below a CSS breakpoint, so the prop alone would misdescribe
         // the rendered layout. A nav only bounds the control from above when it

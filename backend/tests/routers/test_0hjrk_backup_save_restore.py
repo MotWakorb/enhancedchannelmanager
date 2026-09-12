@@ -203,10 +203,14 @@ class TestRestoreSaved:
         return opened, fdopen
 
     @pytest.mark.asyncio
-    async def test_restore_saved_valid_filename(self, async_client, backups_dir, tmp_path):
+    @pytest.mark.parametrize("fname", [
+        "ecm-backup-2026-01-01_000000.zip",
+        "ecm-backup-2026-01-01_000000-0123abcd.zip",
+        "ecm-backup-lvo9lde8.zip",
+    ])
+    async def test_restore_saved_valid_filename(self, async_client, backups_dir, tmp_path, fname):
         """A valid on-disk .zip is restored via the shared restore path; the
         response echoes the restored files and backup version."""
-        fname = "ecm-backup-2026-01-01_000000.zip"
         (backups_dir / fname).write_bytes(_make_backup_zip())
 
         with patch("routers.backup.BACKUPS_DIR", backups_dir), patch(
@@ -345,11 +349,15 @@ class TestRestoreSaved:
         mock_restore.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fname", [
+        "ecm-backup-2026-01-01_000000.zip",
+        "ecm-backup-2026-01-01_000000-0123abcd.zip",
+        "ecm-backup-lvo9lde8.zip",
+    ])
     async def test_restore_saved_does_not_follow_substituted_symlink(
-        self, async_client, backups_dir, tmp_path
+        self, async_client, backups_dir, tmp_path, fname
     ):
         """A regular file replaced after enumeration cannot redirect the open."""
-        fname = "ecm-backup-2026-01-01_000000.zip"
         selected = backups_dir / fname
         selected.write_bytes(_make_backup_zip())
         outside = tmp_path / "outside.zip"

@@ -82,7 +82,7 @@ DEFAULT_MAX_AGE_DAYS = 30
 # Parses the canonical filename timestamp out of an already-allowlisted name.
 # This runs ONLY on strings that have passed _BACKUP_ZIP_FILENAME_RE, so it is
 # not a security boundary — it is the sort-key extractor.
-_TS_RE = re.compile(r"ecm-backup-(\d{4}-\d{2}-\d{2}_\d{6})\.zip$")
+_TS_RE = re.compile(r"ecm-backup-([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{6})(?:-[0-9a-f]{8})?\.zip$")
 _TS_FORMAT = "%Y-%m-%d_%H%M%S"
 
 # Reason labels recorded in the audit row.
@@ -94,7 +94,9 @@ def _filename_timestamp(name: str) -> Optional[datetime]:
     """Parse the canonical UTC timestamp out of a backup-artifact filename.
 
     Returns a tz-aware UTC datetime, or None if the name does not carry a
-    parseable timestamp (such a name is excluded from the prunable set).
+    parseable timestamp (such a name is excluded from the prunable set). This
+    preserves the exemption for old dateless tempfile-collision ZIPs; new
+    collision names carry the original timestamp and participate normally.
     """
     m = _TS_RE.search(name)
     if not m:
