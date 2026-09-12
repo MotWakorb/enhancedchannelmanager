@@ -9,6 +9,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import os
 import logging
+import re
 import time
 from collections import defaultdict
 from datetime import datetime
@@ -160,7 +161,7 @@ handle authentication automatically when accessed through the web UI.
 Login endpoints are rate-limited to 5 requests per minute per IP address.
     """,
 
-    version="0.18.2-0032",
+    version="0.18.2-0033",
     openapi_tags=tags_metadata,
     docs_url="/api/docs",
     redoc_url="/api/redoc",
@@ -573,6 +574,18 @@ AUTH_EXEMPT_PATHS = {
     "/api/openapi.json",
 }
 
+# Dispatcharr fetches generated XMLTV without a human ECM session (GH #1000).
+# Only GET is registered by these handlers. Match numeric profile IDs and at
+# most one trailing slash for FastAPI's redirect, never the whole router.
+_AUTH_EXEMPT_XMLTV_RE = re.compile(r"/api/dummy-epg/xmltv(?:/[0-9]+)?/?")
+
+
+def _is_auth_exempt_request(method: str, path: str) -> bool:
+    return path in AUTH_EXEMPT_PATHS or (
+        method == "GET" and _AUTH_EXEMPT_XMLTV_RE.fullmatch(path) is not None
+    )
+
+
 from auth.settings import get_auth_settings
 from auth.dependencies import (
     get_token_from_request,
@@ -592,7 +605,9 @@ from models import User
 # bead enhancedchannelmanager-17v07.
 async def auth_middleware(request: Request, call_next):
     """Reject unauthenticated requests to /api/* unless path is exempt."""
-    path = request.url.path
+    # URL reparsing can strip decoded control characters or treat an encoded
+    # '?' as a query delimiter. Authorize the actual ASGI path used by routing.
+    path = request.scope["path"]
 
     # Only gate /api/ paths — static files, SPA routes pass through
     if path.startswith("/api/"):
@@ -619,8 +634,8 @@ async def auth_middleware(request: Request, call_next):
 
         # Skip auth when it's not required or setup isn't complete
         if auth_settings.require_auth and auth_settings.setup_complete:
-            # Check if path is exempt
-            if path not in AUTH_EXEMPT_PATHS:
+            # Classify the same decoded path the router receives.
+            if not _is_auth_exempt_request(request.method, path):
                 token = presented_token
                 # Allow MCP API key as alternative to JWT. Constant-time compare
                 # to avoid a timing oracle on the static key (bd-1wq7z.24 (a));

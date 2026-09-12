@@ -3,13 +3,13 @@
 WHY THIS FILE EXISTS
 --------------------
 
-``main.AUTH_EXEMPT_PATHS`` is the entire authentication gate for ``/api/*``.
-``main.auth_middleware`` enforces on every ``/api/`` path EXCEPT the members of
-this set, and it is a membership test on the literal
-``request.url.path`` — there is no prefix logic, no router opt-in, and no
-second layer behind it for the routers that carry no route dependency of their
-own. Adding one line to that set makes one route anonymous to the whole
-internet-facing surface of the app.
+``main.AUTH_EXEMPT_PATHS`` pins the method-independent public paths.
+``main._is_auth_exempt_request`` also permits GET of the two generated XMLTV
+feed shapes (GH #1000). The registered-route inventory below pins that extra
+grant; ``integration/test_dummy_epg_feed_auth.py`` exercises real middleware,
+handlers, methods, redirects and near-matches with authentication enabled.
+There is no second auth layer for routers without their own dependency.
+Adding a path here exposes it to anyone who can reach ECM.
 
 Before this file, the gate was proved by exactly one test
 (``tests/routers/test_client_errors.py::test_missing_jwt_returns_401_when_auth_enabled``),
@@ -105,9 +105,9 @@ EXPECTED_AUTH_EXEMPT_PATHS = frozenset(
 # usually the person who just added the line, mid-change, not someone who came
 # here to read a doc.
 _REVIEW_CHECKLIST = """
-AUTH_EXEMPT_PATHS CHANGED. This set is the ENTIRE authentication gate for
-/api/*: main.auth_middleware enforces on every /api/ path except an exact
-string match against this set. A path added here is reachable by any
+AUTH_EXEMPT_PATHS CHANGED. This set exempts exact paths for ANY method.
+main._is_auth_exempt_request separately permits GET-only generated XMLTV feeds.
+A path added here is reachable by any
 unauthenticated caller that can open a socket to ECM — there is no second
 layer behind it unless that specific route carries its own dependency.
 
@@ -154,6 +154,29 @@ def test_auth_exempt_paths_matches_the_reviewed_snapshot():
     )
 
 
+def test_method_specific_exemptions_cover_only_registered_xmltv_reads():
+    """Pin the additional public route inventory without matching source text."""
+    from fastapi.routing import APIRoute
+
+    from main import _is_auth_exempt_request, app
+
+    exposed = set()
+    for route in app.routes:
+        if not isinstance(route, APIRoute):
+            continue
+        path = route.path_format.format(**{name: "1" for name in route.param_convertors})
+        if path in AUTH_EXEMPT_PATHS:
+            continue
+        for method in {"GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE", "TRACE"}:
+            if _is_auth_exempt_request(method, path):
+                exposed.add((method, route.path))
+
+    assert exposed == {
+        ("GET", "/api/dummy-epg/xmltv"),
+        ("GET", "/api/dummy-epg/xmltv/{profile_id}"),
+    }
+
+
 def test_every_exempt_path_is_an_api_path():
     """A non-``/api/`` entry would be dead weight that reads as a grant.
 
@@ -170,7 +193,7 @@ def test_every_exempt_path_is_an_api_path():
 
 
 def test_no_exempt_path_carries_a_trailing_slash_or_query():
-    """Membership is an exact match on ``request.url.path``.
+    """Path-only membership is an exact match on the decoded ASGI scope path.
 
     A trailing slash, a query string or a case variant silently exempts
     nothing, for the same reason as above. Pinned rather than assumed because

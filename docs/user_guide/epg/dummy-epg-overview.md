@@ -31,6 +31,13 @@ Dispatcharr as EPG source** to wire it in automatically. Profiles offer a
 live preview, rich per-state templates (see [Author dummy EPG
 templates](dummy-epg-templates.md)), and Event Sync integration.
 
+The profile URL (`/api/dummy-epg/xmltv/{profile_id}`) and **Copy combined XMLTV
+URL** (`/api/dummy-epg/xmltv`) allow anonymous GET requests even when ECM login
+is required. Dispatcharr does not need your ECM session or an API key to fetch
+them. Anyone who can reach those URLs can read the generated channel names and
+programme listings; profile management and preview still require ECM login
+when authentication is enabled.
+
 > **Legacy note.** ECM previously also exposed Dispatcharr's native
 > `source_type=dummy` EPG sources through a separate "Dummy EPG Sources"
 > section. That path is **deprecated**: it now appears only if such sources

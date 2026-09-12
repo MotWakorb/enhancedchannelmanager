@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Generated dummy EPG feeds are retrievable without a session when authentication is enabled (bead `enhancedchannelmanager-mtvfv`, GitHub #1000, build 0.18.2-0033).** Anonymous GET requests can fetch combined and per-profile XMLTV output, with ASCII-numeric profile matching and a single trailing slash redirecting to the canonical URL. Management and write paths remain protected; encoded near-match paths do not receive the feed exemption.
+
 - **Resolved User-Agent headers reach provider requests (bead `enhancedchannelmanager-yz6rv`, GitHub #995, build 0.18.2-0032).** Direct previews and metadata, bitrate, resdet, and black screen probes send the selected identity on validated provider HTTP requests, including redirects and later HLS resources. Probe substeps and transient ffprobe retries reuse the same resolved header.
 
 - **Provider preview redirects and startup failures are handled explicitly (bead `enhancedchannelmanager-yz6rv`, GitHub #995, build 0.18.2-0032).** Direct provider previews support HTTPS-to-HTTP redirects with per-hop SSRF checks; authenticated Dispatcharr channel previews retain downgrade refusal. Stream DNS validation runs off the event loop and retries only transient failures, at most twice. Previews open upstream before sending browser headers and return safe 403/502/504 errors for policy, connection/configuration/upstream, and timeout failures. Cancellation and disconnect cleanup close responses and relays and terminate/reap FFmpeg.
