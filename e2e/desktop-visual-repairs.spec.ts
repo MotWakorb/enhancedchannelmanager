@@ -18,6 +18,8 @@ const test = baseTest.extend({
   },
 });
 
+test.use({ serviceWorkers: 'block' });
+
 async function contrast(locator: Locator) {
   return locator.evaluate(element => {
     const canvas = document.createElement('canvas');
@@ -84,6 +86,186 @@ const settingsFixtures = {
   '/api/epg/sources': [], '/api/stream-stats/probe/history': [], '/api/stream-stats/probe/progress': { in_progress: false },
   '/api/tasks/history': { history: [], total: 0 },
 };
+
+// Observe real smooth scrolling, then a stationary window; an immediate
+// aria-current assertion cannot certify the observer's final selection (.19).
+async function settledTaskNavigation(page: Page, info: TestInfo, name: string) {
+  const observations = await page.locator('.settings-content').evaluate(async container => {
+    await document.fonts.ready;
+    const samples: { elapsed: number; scroll: number; active: string[] }[] = [];
+    const start = performance.now();
+    let changed = start;
+    let previous = container.scrollTop;
+    while (performance.now() - start < 5000) {
+      await new Promise(requestAnimationFrame);
+      const now = performance.now();
+      const scroll = container.scrollTop;
+      if (scroll !== previous) changed = now;
+      previous = scroll;
+      samples.push({ elapsed: now - start, scroll,
+        active: [...container.querySelectorAll('.sticky-section-nav [aria-current="location"]')].map(e => e.textContent || '') });
+      if (now - start >= 700 && now - changed >= 350) break;
+    }
+    const bounds = container.getBoundingClientRect();
+    return { samples, scroll: container.scrollTop, maxScroll: container.scrollHeight - container.clientHeight,
+      documentScroll: window.scrollY, bounds: bounds.toJSON(),
+      cards: [...container.querySelectorAll<HTMLElement>('[data-settings-section]')].map(e => ({
+        id: e.id, label: e.dataset.sectionLabel, rect: e.getBoundingClientRect().toJSON(),
+        margin: parseFloat(getComputedStyle(e).scrollMarginTop),
+      })) };
+  });
+  await info.attach(name, { body: JSON.stringify(observations, null, 2), contentType: 'application/json' });
+  const last = observations.samples.at(-1)!;
+  const stationary = observations.samples.filter(s => s.elapsed >= last.elapsed - 300);
+  expect(last.elapsed).toBeLessThan(5000);
+  expect(stationary.every(s => s.scroll === observations.scroll)).toBe(true);
+  expect(observations.documentScroll).toBe(0);
+  return { ...observations, stationary };
+}
+
+function expectSettledTask(observation: Awaited<ReturnType<typeof settledTaskNavigation>>, label: string) {
+  expect(observation.stationary.every(s => JSON.stringify(s.active) === JSON.stringify([label])),
+    `settled ${label}: ${JSON.stringify(observation.stationary.at(-1))}`).toBe(true);
+}
+
+async function openTaskNavigation(page: Page, route: string, tasks: typeof settingsTasks) {
+  await openSynthetic(page, route, 'dark', { ...settingsFixtures, '/api/tasks': { tasks } }, async route => {
+    if (route.request().method() !== 'GET') { await route.abort('blockedbyclient'); return true; }
+  });
+  await expect(page.getByRole('navigation', { name: 'On this page' }).getByRole('button')).toHaveCount(tasks.length);
+}
+
+test('TASK-SETTLED fixture rejects writes to known APIs and service workers', async ({ page }) => {
+  await openTaskNavigation(page, 'settings/scheduled-tasks', settingsTasks);
+  await page.route('**/task-proof-worker.js', route => route.fulfill({
+    contentType: 'application/javascript', body: "self.addEventListener('install', () => self.skipWaiting());",
+  }));
+  const outcomes = await page.evaluate(async () => {
+    const request = async (path: string, method: string) => {
+      try { return (await fetch(path, { method })).status; } catch { return 'blocked'; }
+    };
+    return { known: await request('/api/tasks', 'GET'), write: await request('/api/tasks', 'POST'),
+      unknown: await request('/api/unapproved', 'GET'),
+      registration: await navigator.serviceWorker.register('/task-proof-worker.js').then(value => value ? 'registered' : 'blocked'),
+      serviceWorkers: (await navigator.serviceWorker.getRegistrations()).length };
+  });
+  expect(outcomes).toEqual({ known: 200, write: 'blocked', unknown: 501, registration: 'blocked', serviceWorkers: 0 });
+});
+
+for (const viewport of [{ width: 1280, height: 720 }, { width: 1920, height: 1080 }]) {
+  for (const count of [17, 18]) {
+    test(`TASK-SETTLED pointer top middle bottom and return ${viewport.width} count ${count}`, async ({ page }, info) => {
+      await page.setViewportSize(viewport);
+      const tasks = settingsTasks.slice(0, count);
+      await openTaskNavigation(page, 'settings/scheduled-tasks', tasks);
+      const buttons = page.getByRole('navigation', { name: 'On this page' }).getByRole('button');
+      await expect(buttons).toHaveCount(count);
+      for (const index of [0, 8, count - 3, count - 2, count - 1, 8, 0]) {
+        await buttons.nth(index).click();
+        const id = `settings-scheduled-tasks-section-${tasks[index].task_id.replaceAll('_', '-')}`;
+        await expect(page).toHaveURL(new RegExp(`section=${id}$`));
+        const observation = await settledTaskNavigation(page, info, `pointer-${index}`);
+        expect.soft(observation.stationary.every(s => JSON.stringify(s.active) === JSON.stringify([tasks[index].task_name])),
+          `settled pointer ${tasks[index].task_name}: ${JSON.stringify(observation.stationary.at(-1))}`).toBe(true);
+        await capture(page, info, `TASK-SETTLED-pointer-${index}`);
+      }
+    });
+
+    test(`TASK-SETTLED keyboard Enter Space and reverse traversal ${viewport.width} count ${count}`, async ({ page }, info) => {
+      await page.setViewportSize(viewport);
+      const tasks = settingsTasks.slice(0, count);
+      await openTaskNavigation(page, 'settings/scheduled-tasks', tasks);
+      const buttons = page.getByRole('navigation', { name: 'On this page' }).getByRole('button');
+      // Native traversal after establishing the starting control. The existing
+      // TASK-FOCUS cases separately pin every intervening focus outline.
+      await buttons.first().focus();
+      let focused = 0;
+      for (const index of [8, count - 1, 8, 0]) {
+        while (focused !== index) {
+          await page.keyboard.press(focused < index ? 'Tab' : 'Shift+Tab');
+          focused += focused < index ? 1 : -1;
+        }
+        await expect(buttons.nth(index)).toBeFocused();
+        await page.keyboard.press(index === count - 1 ? 'Space' : 'Enter');
+        const id = `settings-scheduled-tasks-section-${tasks[index].task_id.replaceAll('_', '-')}`;
+        await expect(page).toHaveURL(new RegExp(`section=${id}$`));
+        expectSettledTask(await settledTaskNavigation(page, info, `keyboard-${index}`), tasks[index].task_name);
+        await expect(buttons.nth(index)).toBeFocused();
+      }
+      await capture(page, info, 'TASK-SETTLED-keyboard-return');
+    });
+
+    test(`TASK-SETTLED named URL entry and reload top middle bottom ${viewport.width} count ${count}`, async ({ page }, info) => {
+      await page.setViewportSize(viewport);
+      const tasks = settingsTasks.slice(0, count);
+      await openTaskNavigation(page, 'settings/scheduled-tasks', tasks);
+      for (const index of [0, 8, count - 1]) {
+        const id = `settings-scheduled-tasks-section-${tasks[index].task_id.replaceAll('_', '-')}`;
+        // A distinct document URL exercises cold entry, not same-route hash handling.
+        await page.goto(`/?task-proof=${index}#settings/scheduled-tasks?section=${id}`);
+        const buttons = page.getByRole('navigation', { name: 'On this page' }).getByRole('button');
+        await expect(buttons).toHaveCount(count);
+        for (const phase of ['entry', 'reload']) {
+          if (phase === 'reload') { await page.reload(); await expect(buttons).toHaveCount(count); }
+          await expect(page).toHaveURL(new RegExp(`section=${id}$`));
+          const observation = await settledTaskNavigation(page, info, `${phase}-${index}`);
+          expectSettledTask(observation, tasks[index].task_name);
+          const card = observation.cards.find(card => card.id === id)!;
+          expect(card.rect.top).toBeGreaterThanOrEqual(observation.bounds.top);
+          expect(card.rect.top).toBeLessThan(observation.bounds.bottom - 32);
+          await capture(page, info, `TASK-SETTLED-${phase}-${index}`);
+        }
+      }
+    });
+
+    test(`TASK-SETTLED physical content scroll tracks reading position without replaying URL ${viewport.width} count ${count}`, async ({ page }, info) => {
+      await page.setViewportSize(viewport);
+      const tasks = settingsTasks.slice(0, count).map(task => ({ ...task }));
+      const linkedId = `settings-scheduled-tasks-section-${tasks[8].task_id.replaceAll('_', '-')}`;
+      await openTaskNavigation(page, `settings/scheduled-tasks?section=${linkedId}`, tasks);
+      expectSettledTask(await settledTaskNavigation(page, info, 'initial-link'), tasks[8].task_name);
+      const pane = page.locator('.settings-content');
+      for (const index of [0, 4, 12, count - 1, 8, 4]) {
+        const delta = await page.getByTestId(`task-card-${tasks[index].task_id}`).evaluate(card => {
+          const pane = card.closest('.settings-content')!;
+          return card.getBoundingClientRect().top - pane.getBoundingClientRect().top - parseFloat(getComputedStyle(card).scrollMarginTop);
+        });
+        const bounds = (await pane.boundingBox())!;
+        await page.mouse.move(bounds.x + 100, bounds.y + bounds.height / 2);
+        await page.mouse.wheel(0, delta);
+        const observation = await settledTaskNavigation(page, info, `physical-${index}`);
+        if (index === count - 1) {
+          expect(Math.abs(observation.scroll - observation.maxScroll)).toBeLessThan(1);
+          // At the physical bottom several cards remain visible. With no new
+          // explicit choice, the current section is the card under the existing
+          // 72px reading boundary, not necessarily the final card in the list.
+          const readingCard = await pane.evaluate(element => {
+            const rect = element.getBoundingClientRect();
+            return document.elementFromPoint(rect.left + 100, rect.top + 73)
+              ?.closest<HTMLElement>('[data-settings-section]')?.dataset.sectionLabel;
+          });
+          expect(readingCard).toBeTruthy();
+          expectSettledTask(observation, readingCard!);
+          await capture(page, info, 'TASK-SETTLED-physical-bottom');
+        } else {
+          expectSettledTask(observation, tasks[index].task_name);
+        }
+        await expect(page).toHaveURL(new RegExp(`section=${linkedId}$`));
+      }
+      // A real read-only refresh replaces task data after the reader has left
+      // the URL's destination. It must not replay that consumed deep link.
+      const before = await pane.evaluate(e => e.scrollTop);
+      tasks[0].task_description = 'Updated synthetic task description';
+      await page.locator('.route-page-header').getByRole('button', { name: /Refresh/ }).click();
+      await expect(page.getByText(tasks[0].task_description, { exact: true })).toHaveCount(1);
+      const refreshed = await settledTaskNavigation(page, info, 'refresh-after-user-scroll');
+      expectSettledTask(refreshed, tasks[4].task_name);
+      expect(refreshed.scroll).toBe(before);
+      await expect(page).toHaveURL(new RegExp(`section=${linkedId}$`));
+      await capture(page, info, 'TASK-SETTLED-user-scroll-after-refresh');
+    });
+  }
+}
 
 async function focusedGeometry(control: Locator) {
   return control.evaluate(element => {

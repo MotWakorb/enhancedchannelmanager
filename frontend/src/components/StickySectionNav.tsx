@@ -116,14 +116,42 @@ export function StickySectionNav({
   useEffect(() => {
     if (items.length === 0) return;
     const root = containerRef.current;
-    const observer = new IntersectionObserver((entries) => {
-      const visible = entries.filter((entry) => entry.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top);
-      if (visible[0]) setActiveId(visible[0].target.id);
-    }, { root, rootMargin: '-72px 0px -65% 0px', threshold: 0 });
-    items.forEach(({ id }) => {
+    if (!root) return;
+    const sections = items.flatMap(({ id }) => {
       const element = document.getElementById(id);
-      if (element) observer.observe(element);
+      return element && root.contains(element) ? [element] : [];
     });
+    let frame = 0;
+    const updateCurrentSection = () => {
+      frame = 0;
+      const top = root.getBoundingClientRect().top;
+      const requested = sections.find(section => section.id === honouredSection.current);
+      if (requested) {
+        const margin = Number.parseFloat(getComputedStyle(requested).scrollMarginTop) || 0;
+        const destination = Math.max(0, Math.min(root.scrollHeight - root.clientHeight,
+          root.scrollTop + requested.getBoundingClientRect().top - top - margin));
+        // Several bottom cards can share a clamped destination. Keep the one
+        // actually chosen there, including after reload or a task-data refresh.
+        if (Math.abs(root.scrollTop - destination) < 1) {
+          setActiveId(requested.id);
+          return;
+        }
+      }
+      // IntersectionObserver entries are only CHANGES, not the visible set.
+      // Read the full current geometry once per scroll frame so direction and
+      // callback history cannot select a newly entering neighbour (.19).
+      // Retain the existing 72px reading boundary below the container top.
+      const current = sections.find(section => section.getBoundingClientRect().bottom > top + 72);
+      if (current) setActiveId(current.id);
+    };
+    const scheduleUpdate = () => {
+      if (!frame) frame = requestAnimationFrame(updateCurrentSection);
+    };
+    root.addEventListener('scroll', scheduleUpdate, { passive: true });
+    const observer = new ResizeObserver(scheduleUpdate);
+    observer.observe(root);
+    sections.forEach(section => observer.observe(section));
+    scheduleUpdate();
     // ONE SHOT PER NAVIGATION, not a standing order.
     //
     // `discover()` returns a FRESH array on every DOM mutation in the
@@ -167,7 +195,11 @@ export function StickySectionNav({
         dropSectionFromHash();
       }
     }
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      root.removeEventListener('scroll', scheduleUpdate);
+      cancelAnimationFrame(frame);
+    };
   }, [containerRef, items]);
 
   useEffect(() => {

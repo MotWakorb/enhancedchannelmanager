@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- **Section navigation highlights the settled reading position (bead `enhancedchannelmanager-2896r.19`; build 0.18.2-0035).** Scheduled Tasks keeps the chosen section highlighted after scrolling in either direction, including bottom-clamped targets and reloaded links. Refresh preserves the reader's position without replaying a consumed section link.
+
 - **Settings edits wait for a current baseline (bead `enhancedchannelmanager-0m06f.8.2`; build 0.18.2-0034).** Shared fields and saves wait for initial and overlapping loads to settle; superseded responses cannot replace the newest connection, recipients, load errors or discard result. Failed initialization offers an explicit retry. Independently loaded controls, including alert methods, team aliases and recovery actions, stay usable while shared settings are loading or unavailable.
 
 - **Scheduled Tasks navigation stays keyboard-reachable (bead `enhancedchannelmanager-2896r.19`; build 0.18.2-0034).** Long section rails scroll within the available pane height and keep focused buttons and their outlines visible, including after resizing and in the horizontal layout.
