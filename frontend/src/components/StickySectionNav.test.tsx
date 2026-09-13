@@ -199,6 +199,48 @@ describe('StickySectionNav', () => {
     expect(scrollTo).toHaveBeenCalled();
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
+
+  it('tracks the same reading position after forward and reverse container scrolling', async () => {
+    const ref = createRef<HTMLDivElement>();
+    render(<div ref={ref}>
+      <StickySectionNav containerRef={ref} selector=".target" routeKey="stats" />
+      <section className="target"><h2>Current activity</h2></section>
+      <section className="target"><h2>Watch history</h2></section>
+      <section className="target"><h2>Bandwidth</h2></section>
+    </div>);
+    const history = await screen.findByRole('button', { name: 'Watch history' });
+    const container = ref.current!;
+    vi.spyOn(container, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 100, 1000, 500));
+    Object.defineProperties(container, { clientHeight: { value: 500 }, scrollHeight: { value: 1200 } });
+    container.querySelectorAll<HTMLElement>('.target').forEach((section, index) => {
+      vi.spyOn(section, 'getBoundingClientRect').mockImplementation(() => new DOMRect(0, 120 + index * 200 - container.scrollTop, 700, 180));
+    });
+
+    for (const [scrollTop, label] of [[200, 'Watch history'], [400, 'Bandwidth'], [200, 'Watch history'], [0, 'Current activity']] as const) {
+      container.scrollTop = scrollTop;
+      fireEvent.scroll(container);
+      await flushFrames();
+      expect(screen.getByRole('button', { name: label })).toHaveAttribute('aria-current', 'location');
+      expect(container.querySelectorAll('[aria-current="location"]')).toHaveLength(1);
+    }
+    expect(history).not.toHaveAttribute('aria-current');
+    expect(window.location.hash).toBe('#stats');
+  });
+
+  it('cancels queued section tracking on unmount', async () => {
+    const ref = createRef<HTMLDivElement>();
+    const { unmount } = render(<div ref={ref}>
+      <StickySectionNav containerRef={ref} selector=".target" routeKey="stats" />
+      <section className="target"><h2>Current activity</h2></section>
+      <section className="target"><h2>Watch history</h2></section>
+    </div>);
+    await screen.findByRole('button', { name: 'Watch history' });
+    await flushFrames();
+    fireEvent.scroll(ref.current!);
+    expect(frames.size).toBe(1);
+    unmount();
+    expect(frames.size).toBe(0);
+  });
 });
 
 /**
