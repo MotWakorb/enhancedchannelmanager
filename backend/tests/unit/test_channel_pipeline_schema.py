@@ -345,6 +345,27 @@ class TestActionValidation:
         assert len(errors) > 0
         assert "if_exists" in errors[0]
 
+    def test_create_channel_tvg_id_mode_accepts_inherit_and_none(self):
+        """GH #1005: tvg_id_mode validates 'inherit' and 'none'; absent is fine."""
+        for mode in ("inherit", "none"):
+            action = Action(type="create_channel", params={"tvg_id_mode": mode})
+            assert action.validate() == []
+        assert Action(type="create_channel", params={}).validate() == []
+        assert Action(type="create_channel", params={"tvg_id_mode": None}).validate() == []
+
+    def test_create_channel_tvg_id_mode_rejects_unknown(self):
+        """GH #1005: an unknown tvg_id_mode is a validation error."""
+        action = Action(type="create_channel", params={"tvg_id_mode": "generate"})
+        errors = action.validate()
+        assert len(errors) == 1
+        assert "tvg_id_mode" in errors[0]
+
+    def test_create_channel_action_to_dict_carries_tvg_id_mode(self):
+        """GH #1005: the dataclass round-trips tvg_id_mode with the inherit default."""
+        from channel_pipeline_schema import CreateChannelAction
+        assert CreateChannelAction().to_dict()["tvg_id_mode"] == "inherit"
+        assert CreateChannelAction(tvg_id_mode="none").to_dict()["tvg_id_mode"] == "none"
+
     def test_valid_create_group(self):
         """Validates create_group action."""
         action = Action(

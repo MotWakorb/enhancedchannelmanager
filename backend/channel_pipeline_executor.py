@@ -1266,6 +1266,11 @@ class ActionExecutor:
             logger.debug("[AUTO-CREATE-EXEC] Normalization skipped for '%s' (no groups selected)", channel_name)
 
         if_exists = params.get("if_exists", "skip")
+        # GH #1005: "inherit" copies the stream's tvg_id onto a new channel
+        # (legacy); "none" leaves it empty and skips the update back-fill so a
+        # later run cannot repopulate it. Absent/null falls back to "inherit".
+        tvg_id_mode = params.get("tvg_id_mode") or "inherit"
+        inherit_tvg_id = tvg_id_mode != "none"
         group_id = params.get("group_id") or exec_ctx.current_group_id or rule_target_group_id
         logger.debug(
             "[AUTO-CREATE-EXEC] name='%s' if_exists=%s "
@@ -1524,8 +1529,10 @@ class ActionExecutor:
                          # dedup-merge into it (otherwise the missing key would be
                          # read as "manual/protected" and block the merge).
                          "auto_created": True}
-            if stream_ctx.tvg_id:
+            if inherit_tvg_id and stream_ctx.tvg_id:
                 simulated["tvg_id"] = stream_ctx.tvg_id
+            elif not inherit_tvg_id and stream_ctx.tvg_id:
+                action_details.append("tvg_id left empty (tvg_id_mode=none)")
             self._created_channels[channel_name.lower()] = simulated
             self._channel_by_id[dry_id] = simulated
             # bead g0uuf: register in the multi-candidate index so a scoped
@@ -1569,8 +1576,10 @@ class ActionExecutor:
                 logo_id = await self._resolve_logo_id(stream_ctx.logo_url, channel_name)
                 if logo_id:
                     channel_data["logo_id"] = logo_id
-            if stream_ctx.tvg_id:
+            if inherit_tvg_id and stream_ctx.tvg_id:
                 channel_data["tvg_id"] = stream_ctx.tvg_id
+            elif not inherit_tvg_id and stream_ctx.tvg_id:
+                action_details.append("tvg_id left empty (tvg_id_mode=none)")
 
             new_channel = await self.client.create_channel(channel_data)
 
@@ -1907,7 +1916,11 @@ class ActionExecutor:
             updates = {}
             if stream_ctx.logo_url and not channel.get("logo_url"):
                 updates["logo_url"] = stream_ctx.logo_url
-            if stream_ctx.tvg_id and not channel.get("tvg_id"):
+            # GH #1005: honour tvg_id_mode=none on the update path too,
+            # otherwise the next run would back-fill the field the create
+            # path deliberately left empty.
+            inherit_tvg_id = (params.get("tvg_id_mode") or "inherit") != "none"
+            if inherit_tvg_id and stream_ctx.tvg_id and not channel.get("tvg_id"):
                 updates["tvg_id"] = stream_ctx.tvg_id
 
             if updates:

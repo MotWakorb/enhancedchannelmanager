@@ -2,7 +2,7 @@
  * Component for editing individual actions in channel pipeline rules.
  */
 import { useState, useId, useEffect } from 'react';
-import type { Action, ActionType, IfExistsBehavior } from '../../types/channelPipeline';
+import type { Action, ActionType, IfExistsBehavior, TvgIdMode } from '../../types/channelPipeline';
 import { getChannelGroups, getEPGSources, getStreamProfiles, getChannelProfiles } from '../../services/api';
 import type { EPGSource, StreamProfile, ChannelProfile } from '../../types';
 import { CustomSelect } from '../CustomSelect';
@@ -190,6 +190,12 @@ const IF_EXISTS_OPTIONS: { value: IfExistsBehavior; label: string }[] = [
   { value: 'merge_only', label: 'Merge Only (existing only)' },
   { value: 'update', label: 'Update' },
   { value: 'use_existing', label: 'Use Existing' },
+];
+
+// GH #1005: what Create Channel does with the stream's tvg_id on a NEW channel.
+const TVG_ID_MODE_OPTIONS: { value: TvgIdMode; label: string }[] = [
+  { value: 'inherit', label: 'Inherit from stream' },
+  { value: 'none', label: 'Leave empty' },
 ];
 
 const TARGET_OPTIONS = [
@@ -749,6 +755,34 @@ export function ActionEditor({
               }))}
               disabled={readonly}
             />
+          </div>
+        )}
+
+        {/* TVG-ID mode for create_channel (GH #1005) */}
+        {action.type === 'create_channel' && (
+          <div className="action-field">
+            <label>TVG-ID for new channels</label>
+            <CustomSelect
+              value={action.tvg_id_mode || 'inherit'}
+              onChange={val => {
+                if (val === 'inherit') {
+                  const { tvg_id_mode: _dropped, ...rest } = action;
+                  onChange(rest);
+                } else {
+                  onChange({ ...action, tvg_id_mode: val as TvgIdMode });
+                }
+              }}
+              options={TVG_ID_MODE_OPTIONS.map(opt => ({
+                value: opt.value,
+                label: opt.label,
+              }))}
+              disabled={readonly}
+            />
+            <span className="field-hint">
+              {(action.tvg_id_mode || 'inherit') === 'none'
+                ? 'New channels are created with an empty TVG-ID and it is never back-filled, so Dispatcharr cannot bind them to the provider guide before your Assign EPG action runs.'
+                : 'New channels copy the matched stream\'s TVG-ID.'}
+            </span>
           </div>
         )}
 
