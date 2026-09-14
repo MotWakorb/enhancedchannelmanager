@@ -129,6 +129,82 @@ describe('ActionEditor', () => {
       expect(screen.getByRole('option', { name: /^update$/i })).toBeInTheDocument();
       expect(screen.getByRole('option', { name: /use existing/i })).toBeInTheDocument();
     });
+
+    // GH #1005: per-rule choice of what to do with the stream's tvg_id.
+    describe('tvg_id_mode selector', () => {
+      const openTvgIdMode = async (user: ReturnType<typeof userEvent.setup>) => {
+        const label = screen.getByText(/tvg-id for new channels/i);
+        const field = label.closest('.action-field')!;
+        const trigger = field.querySelector('.custom-select-trigger') as HTMLElement;
+        await user.click(trigger);
+        return field;
+      };
+
+      it('defaults to inherit and offers both modes', async () => {
+        const user = userEvent.setup();
+        render(
+          <ActionEditor
+            action={{ type: 'create_channel' }}
+            onChange={vi.fn()}
+            onRemove={vi.fn()}
+          />
+        );
+
+        const field = await openTvgIdMode(user);
+        expect(field.textContent).toMatch(/inherit from stream/i);
+        expect(screen.getByRole('option', { name: /inherit from stream/i })).toBeInTheDocument();
+        expect(screen.getByRole('option', { name: /leave empty/i })).toBeInTheDocument();
+      });
+
+      it('sets tvg_id_mode to none when Leave empty is chosen', async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+          <ActionEditor
+            action={{ type: 'create_channel', if_exists: 'skip' }}
+            onChange={onChange}
+            onRemove={vi.fn()}
+          />
+        );
+
+        await openTvgIdMode(user);
+        await user.click(screen.getByRole('option', { name: /leave empty/i }));
+
+        expect(onChange).toHaveBeenCalledWith(
+          expect.objectContaining({ type: 'create_channel', if_exists: 'skip', tvg_id_mode: 'none' })
+        );
+      });
+
+      it('drops tvg_id_mode from the action when Inherit is chosen again', async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(
+          <ActionEditor
+            action={{ type: 'create_channel', tvg_id_mode: 'none' }}
+            onChange={onChange}
+            onRemove={vi.fn()}
+          />
+        );
+
+        await openTvgIdMode(user);
+        await user.click(screen.getByRole('option', { name: /inherit from stream/i }));
+
+        expect(onChange).toHaveBeenCalledTimes(1);
+        expect(onChange.mock.calls[0][0]).toEqual({ type: 'create_channel' });
+      });
+
+      it('is not rendered for non-create_channel actions', () => {
+        render(
+          <ActionEditor
+            action={{ type: 'create_group' }}
+            onChange={vi.fn()}
+            onRemove={vi.fn()}
+          />
+        );
+
+        expect(screen.queryByText(/tvg-id for new channels/i)).not.toBeInTheDocument();
+      });
+    });
   });
 
   describe('create_group action', () => {

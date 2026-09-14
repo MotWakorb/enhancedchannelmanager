@@ -1077,6 +1077,110 @@ class TestActionExecutorCreateChannel:
         assert call_args["name"] == "ESPN News (1080p)"
 
 
+class TestCreateChannelTvgIdMode:
+    """GH #1005: create_channel.tvg_id_mode controls whether the matched
+    stream's tvg_id is copied onto a NEW channel ("inherit", the legacy
+    default) or left empty and never back-filled ("none")."""
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.create_channel = AsyncMock(return_value={"id": 500, "name": "Snooker 1", "streams": [301]})
+        self.client.update_channel = AsyncMock()
+        self.channels = [
+            {"id": 1, "name": "ESPN", "tvg_id": None, "channel_number": 100,
+             "streams": [101], "auto_created": True},
+        ]
+        self.executor = ActionExecutor(
+            self.client,
+            existing_channels=self.channels,
+            existing_groups=[{"id": 1, "name": "Sports"}],
+        )
+        self.stream_ctx = StreamContext(
+            stream_id=301,
+            stream_name="Snooker 1",
+            m3u_account_id=1,
+            m3u_account_name="Provider A",
+            group_name="Sports",
+            tvg_id="BossSports.HBO Max UK.017",
+            resolution_height=1080,
+            logo_url=None,
+        )
+
+    def _run(self, action, dry_run=False):
+        return asyncio.get_event_loop().run_until_complete(
+            self.executor.execute(action, self.stream_ctx, ExecutionContext(dry_run=dry_run))
+        )
+
+    def test_default_inherits_stream_tvg_id(self):
+        """No tvg_id_mode => byte-identical to today: the stream's tvg_id is copied."""
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}", "group_id": 1})
+        assert result.success is True
+        payload = self.client.create_channel.call_args[0][0]
+        assert payload["tvg_id"] == "BossSports.HBO Max UK.017"
+
+    def test_explicit_inherit_copies_stream_tvg_id(self):
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}",
+                            "group_id": 1, "tvg_id_mode": "inherit"})
+        assert result.success is True
+        payload = self.client.create_channel.call_args[0][0]
+        assert payload["tvg_id"] == "BossSports.HBO Max UK.017"
+
+    def test_none_omits_tvg_id_from_create_payload(self):
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}",
+                            "group_id": 1, "tvg_id_mode": "none"})
+        assert result.success is True
+        assert result.created is True
+        payload = self.client.create_channel.call_args[0][0]
+        assert "tvg_id" not in payload
+        # Everything else in the payload is untouched.
+        assert payload["name"] == "Snooker 1"
+        assert payload["streams"] == [301]
+        assert any("tvg_id left empty" in d for d in result.details)
+
+    def test_none_dry_run_simulated_channel_has_no_tvg_id(self):
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}",
+                            "group_id": 1, "tvg_id_mode": "none"}, dry_run=True)
+        assert result.success is True
+        self.client.create_channel.assert_not_called()
+        simulated = self.executor._created_channels["snooker 1"]
+        assert "tvg_id" not in simulated
+        assert any("tvg_id left empty" in d for d in result.details)
+
+    def test_inherit_dry_run_simulated_channel_keeps_tvg_id(self):
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}",
+                            "group_id": 1}, dry_run=True)
+        assert result.success is True
+        simulated = self.executor._created_channels["snooker 1"]
+        assert simulated["tvg_id"] == "BossSports.HBO Max UK.017"
+
+    def test_none_skips_update_backfill_of_empty_tvg_id(self):
+        """if_exists=update must NOT repopulate a tvg_id the create path left empty."""
+        self.stream_ctx.stream_name = "ESPN"  # matches existing channel with tvg_id=None
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}",
+                            "if_exists": "update", "tvg_id_mode": "none"})
+        assert result.success is True
+        assert result.modified is False
+        self.client.update_channel.assert_not_called()
+        assert self.channels[0]["tvg_id"] is None
+
+    def test_inherit_update_still_backfills_empty_tvg_id(self):
+        """Regression guard: the legacy update back-fill is unchanged for inherit."""
+        self.stream_ctx.stream_name = "ESPN"
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}",
+                            "if_exists": "update"})
+        assert result.success is True
+        self.client.update_channel.assert_called_once_with(1, {"tvg_id": "BossSports.HBO Max UK.017"})
+
+    def test_none_with_stream_lacking_tvg_id_adds_no_detail(self):
+        """Nothing to suppress => no noisy detail line."""
+        self.stream_ctx.tvg_id = None
+        result = self._run({"type": "create_channel", "name_template": "{stream_name}",
+                            "group_id": 1, "tvg_id_mode": "none"})
+        assert result.success is True
+        assert "tvg_id" not in self.client.create_channel.call_args[0][0]
+        assert not any("tvg_id left empty" in d for d in result.details)
+
+
 class TestCreateChannelNormalizationLookup:
     """Regression tests for GH-104 Part 2: the create_channel action must not
     create a duplicate channel when an existing channel's name would collapse

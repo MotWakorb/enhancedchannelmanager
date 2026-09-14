@@ -106,6 +106,13 @@ name. Use **Stream Group Is** to match the provider's M3U group instead, or
      action)"* inline.
    - **If already exists**: what to do when a channel with that name
      already exists, choose **Skip**, **Merge**, or **Merge only**.
+   - **TVG-ID for new channels**: **Inherit from stream** by default, which
+     copies the matched stream's TVG-ID onto the new channel. Choose **Leave
+     empty** when the rule pairs its channels with a dummy EPG or an
+     **Assign EPG** action: the channel is created with no TVG-ID and ECM
+     never back-fills it, so Dispatcharr's exact-match EPG pass cannot bind
+     the channel to the provider's guide before your own EPG assignment
+     lands.
    - **Channel Numbering**: **Auto (sequential from 1)** by default, or a
      fixed starting number. This is the setting behind the "Auto gotcha" in
      [Channel Sort vs. Channel Numbering](sort-vs-numbering.md#the-auto-gotcha).

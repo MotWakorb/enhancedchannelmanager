@@ -4413,7 +4413,8 @@ async def get_auto_creation_action_schema():
                 "name_template": {"type": "string", "default": "{stream_name}", "description": "Template for channel name"},
                 "channel_number": {"type": "string|integer", "default": "auto", "description": "'auto', '{provider_channel_number}', specific number, or 'min-max' range"},
                 "group_id": {"type": "integer", "optional": True, "description": "Target channel group ID"},
-                "if_exists": {"type": "string", "enum": ["skip", "merge", "update"], "default": "skip", "description": "Behavior if channel exists"}
+                "if_exists": {"type": "string", "enum": ["skip", "merge", "update"], "default": "skip", "description": "Behavior if channel exists"},
+                "tvg_id_mode": {"type": "string", "enum": ["inherit", "none"], "default": "inherit", "description": "'inherit' copies the stream's tvg_id onto a new channel; 'none' leaves it empty and never back-fills it"}
             }
         },
         {
