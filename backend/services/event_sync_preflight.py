@@ -10,6 +10,11 @@ preview (Phase 1A) or run (Phase 1B) executes:
 * every SECONDARY group has ``auto_channel_sync`` **OFF** — a secondary
   with auto-sync on means Dispatcharr is creating duplicate channels from
   a group that event_sync treats as a pure stream source.
+* every configured group is M3U-BACKED (present in some account's group
+  settings). For the MASTER this is an ownership constraint, not a lookup:
+  Dispatcharr owns master-channel lifecycle from an auto-synced M3U group,
+  so a hand-curated Dispatcharr channel group is not a supported master
+  (the ``group_settings_found`` message says so explicitly).
 
 **READ-ONLY by contract.** This module inspects group settings via the
 Dispatcharr client's ``get_all_m3u_group_settings()`` and must NEVER write
@@ -353,9 +358,15 @@ async def check_event_sync_group_settings(
             expected="group present in an M3U account's group settings",
             got="no settings for this (group, provider) on any account",
             message=(
-                f"Master {_scope_label(master_scope)} was not found in the "
-                f"M3U account's group settings — the group may have been "
-                f"removed or renamed, or that provider does not carry it."
+                f"Master {_scope_label(master_scope)} is not an M3U-backed "
+                f"group: no M3U account's group settings carry it. The "
+                f"master group must come from an M3U account with "
+                f"auto_channel_sync ON, because Dispatcharr owns the master "
+                f"channels' lifecycle (it creates, updates and deletes them "
+                f"from that group). A hand-curated channel group is not "
+                f"supported as a master. If this group used to be "
+                f"M3U-backed, it may have been removed or renamed on the "
+                f"provider, or that provider may no longer carry it."
             ),
         ))
     elif not master_settings.get("auto_channel_sync"):
