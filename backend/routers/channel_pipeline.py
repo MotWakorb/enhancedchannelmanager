@@ -2025,15 +2025,29 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
         except PartialReplayError as exc:
             partial_replay = {
                 "failed_index": exc.failed_index,
+                "failed_write": exc.failed_write,
                 "completed_targets": exc.completed,
+                "not_applied": exc.not_applied,
+                "pre_mutation": exc.pre_mutation,
                 "compensation_errors": exc.compensation_errors,
             }
             _mark_execution_failed(execution_id, exc, partial_replay=partial_replay)
+            # 424 Failed Dependency, not 502 (GH #1009): the failure is ECM's
+            # own, recorded on the execution row, and the body says exactly
+            # what was and was not applied. A 502/504 is what proxies emit and
+            # would leave the caller unable to tell whether a retry is safe.
+            # ``pre_mutation`` is True only when nothing landed AND the first
+            # write was provably rejected (e.g. 429) before upstream mutated.
             raise HTTPException(
-                status_code=502,
+                status_code=424,
                 detail={
                     "message": "pipeline replay partially failed",
+                    "execution_id": execution_id,
+                    "failed_index": exc.failed_index,
+                    "failed_write": exc.failed_write,
+                    "pre_mutation": exc.pre_mutation,
                     "completed_writes": exc.completed,
+                    "not_applied": exc.not_applied,
                     "compensation_errors": exc.compensation_errors,
                 },
             ) from exc

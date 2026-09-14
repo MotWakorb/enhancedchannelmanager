@@ -740,7 +740,15 @@ the planned-run lock before the first write. Any difference in its canonical
 decision or exact write payload requires a new preview. ECM persists the exact
 execution program and target-scoped rollback snapshot immediately before replay,
 then compensates reversible writes in reverse order if a later write fails. A
-failure response lists target-specific completed writes and any compensation
-failures. Deletes and channel-profile membership changes cannot always be
-restored with the same upstream identifiers; inspect the execution record and
-rollback snapshot before retrying a partially failed commit.
+partial failure returns `424 Failed Dependency` (not a proxy-style 502) whose
+body names the write that failed, lists target-specific completed writes and
+the writes that were not applied, reports any compensation failures, and
+carries the execution id to inspect. Its `pre_mutation` flag is `true` only
+when nothing was applied and Dispatcharr provably rejected the first write
+before mutating anything (for example a rate-limit rejection); that is the one
+case in which a fresh prepare and commit is known to be safe. Deletes and
+channel-profile membership changes cannot always be restored with the same
+upstream identifiers; inspect the execution record and rollback snapshot before
+retrying a partially failed commit. Transient `429 Too Many Requests` answers
+from Dispatcharr are retried with bounded backoff before they count as a
+failure.
