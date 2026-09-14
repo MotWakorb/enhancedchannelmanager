@@ -92,6 +92,14 @@ channels are the ones every other provider's stream will attach to, so
 picking the group with the best coverage minimizes how many events end up
 in the [unmatched list](#events-missing-entirely-master-as-ceiling).
 
+The master must be an **M3U-backed** group: one that appears in an M3U
+account's group settings. That is an ownership constraint, not a lookup
+detail. Dispatcharr owns the master channels' lifecycle (it creates,
+updates and deletes them from the auto-synced group), and ECM only ever
+attaches streams to channels that already exist there. A Dispatcharr
+channel group you built by hand is therefore **not supported as a master**;
+the pre-flight reports it under `group_settings_found` and says so.
+
 ### 2. Turn secondary auto-sync OFF
 
 For **every other** provider's event group, disable `auto_channel_sync` in
@@ -865,7 +873,13 @@ fix](#guided-setup-the-confirmed-auto-sync-fix) below):
   channels exist and the whole feature silently matches nothing);
 * every secondary group has `auto_channel_sync` **OFF** (otherwise
   Dispatcharr is creating duplicate channels from a stream-source group);
-* every configured group still exists in some account's group settings.
+* every configured group still exists in some account's group settings
+  (`group_settings_found`). For the **master** this is the M3U-backed
+  ownership constraint described in [Pick the master
+  group](#1-pick-the-master-group): a hand-curated channel group is not
+  supported as a master, and the failure message says so rather than
+  reporting a missing group. For a **secondary** it means the provider
+  group was removed or renamed, or that provider no longer carries it.
 
 Failures surface in the preview/run results with the expected/actual
 setting and which group failed: they never silently block the preview;
