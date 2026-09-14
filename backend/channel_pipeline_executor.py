@@ -2695,7 +2695,19 @@ class ActionExecutor:
 
         if not epg_data_entry:
             channel_name = channel.get("name", "unknown")
-            if defer_on_no_match and epg_source_id in self._dummy_epg_source_ids:
+            is_dummy_source = epg_source_id in self._dummy_epg_source_ids
+            # GitHub #1011: a channel THIS run created cannot be in the
+            # dummy source yet — its XMLTV was generated before the channel
+            # existed (and the endpoint serves a cached copy that channel
+            # creation never invalidates). That is the expected state, not a
+            # mismatch, so it defers exactly like the event_sync path.
+            # Pre-existing channels keep no-match = failure: deferring them
+            # would hide a genuine mismatch behind a full Pass 5 cycle.
+            created_this_run = is_dummy_source and any(
+                c.get("id") == exec_ctx.current_channel_id
+                for c in self._created_channels.values()
+            )
+            if is_dummy_source and (defer_on_no_match or created_this_run):
                 # ti939.3.3: same deferral as the empty-source branch above —
                 # Pass 5 regenerates the profile's XMLTV (which then covers
                 # this channel), refreshes the source, and retries.
@@ -2717,6 +2729,23 @@ class ActionExecutor:
                     deferred=True
                 )
             logger.warning("[AUTO-CREATE-EXEC] No EPG match for channel '%s' in source %s", channel_name, epg_source_id)
+            if is_dummy_source:
+                # GitHub #1011: say what the operator can act on — the dummy
+                # source's XMLTV does not describe this channel — instead of a
+                # generic no-match that reads like a matcher problem.
+                no_entry = (
+                    f"Dummy EPG source {epg_source_id} has no entry for "
+                    f"'{channel_name}' yet"
+                )
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=no_entry,
+                    error=(
+                        f"{no_entry} — regenerate the dummy EPG and refresh "
+                        f"the source, or add the channel's group to the profile"
+                    ),
+                )
             return ActionResult(
                 success=False,
                 action_type=action.type,

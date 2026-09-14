@@ -3088,6 +3088,88 @@ class TestDeferredEPGAssignment:
         assert result2.deferred is False
         self.client.update_channel.assert_called_with(1, {"epg_data_id": 42})
 
+    # GitHub #1011: a dummy source that already has entries for OTHER channels
+    # (the steady state once a profile has been generated once) must not
+    # hard-fail assign_epg for a channel this run just created — the XMLTV
+    # cannot describe it yet. Only same-run-created channels defer; existing
+    # channels keep the no-match = failure behaviour.
+    _STALE_DUMMY_ENTRIES = [
+        {"id": 87, "tvg_id": "ecm-87", "name": "Old Event A", "epg_source": 9},
+        {"id": 88, "tvg_id": "ecm-88", "name": "Old Event B", "epg_source": 9},
+    ]
+    _DUMMY_SOURCES = [
+        {"id": 9, "name": "ECM Dummy", "url": "http://localhost:6100/api/dummy-epg/xmltv/1"}
+    ]
+
+    def _new_channel_executor(self, epg_sources=None, epg_data=None, created=True):
+        channel = {
+            "id": 5494, "name": "Snooker: Round 1", "logo_url": None,
+            "tvg_id": "BossSports.HBO Max UK.017", "auto_created": True,
+        }
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[channel],
+            epg_data=self._STALE_DUMMY_ENTRIES if epg_data is None else epg_data,
+            epg_sources=self._DUMMY_SOURCES if epg_sources is None else epg_sources,
+        )
+        if created:
+            # Mirror what _execute_create_channel records for a channel it
+            # created in this run.
+            executor._created_channels[channel["name"].lower()] = channel
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 5494
+        return executor, exec_ctx
+
+    def test_assign_epg_dummy_source_no_match_for_created_channel_defers(self):
+        """Dummy source has entries but none for a channel created this run → deferred."""
+        executor, exec_ctx = self._new_channel_executor(created=True)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 9}, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.deferred is True
+        assert "Deferred" in result.description
+        assert executor._deferred_epg_assignments[0][0] == 5494
+        self.client.update_channel.assert_not_called()
+
+    def test_assign_epg_dummy_source_no_match_for_existing_channel_fails_naming_source(self):
+        """Dummy source has entries but none for a PRE-EXISTING channel → fails,
+        and the error says the dummy source has no entry for the channel yet."""
+        executor, exec_ctx = self._new_channel_executor(created=False)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 9}, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        assert result.deferred is False
+        assert executor._deferred_epg_assignments == []
+        assert "no entry" in result.error.lower()
+        assert "Snooker: Round 1" in result.error
+        assert "source 9" in result.error
+
+    def test_assign_epg_non_dummy_source_no_match_for_created_channel_fails(self):
+        """A non-dummy source with no match still fails, even for a created channel."""
+        executor, exec_ctx = self._new_channel_executor(
+            epg_sources=[{"id": 5, "name": "XMLTV Provider", "url": "http://example.com/epg.xml"}],
+            epg_data=[
+                {"id": 1, "tvg_id": "other.uk", "name": "Other", "epg_source": 5},
+                {"id": 2, "tvg_id": "another.uk", "name": "Another", "epg_source": 5},
+            ],
+            created=True,
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 5}, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        assert result.deferred is False
+        assert result.error == "No EPG data match found"
+        assert executor._deferred_epg_assignments == []
+
 
 class TestVerifyEpgAssignments:
     """Tests for verify_epg_assignments post-execution verification."""
