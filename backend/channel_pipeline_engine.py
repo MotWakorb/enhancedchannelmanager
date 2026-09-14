@@ -2616,10 +2616,17 @@ class ChannelPipelineEngine:
         idempotent).
         """
         count = len(failed_actions)
-        # Group by (rule_name, action_type) for a compact, deterministic sample.
+        # Group by (rule_name, action_type, error) for a compact, deterministic
+        # sample. GitHub #1011: the error rides along — a bare rule + action
+        # type cannot tell "dummy source has no entry for this channel yet"
+        # from a genuine mismatch, and the per-action reason otherwise lives
+        # only in the execution log.
         seen: list[str] = []
         for fa in failed_actions:
             label = f"{fa.get('rule_name')!r} {fa.get('action_type')}"
+            error = fa.get("error")
+            if error:
+                label += f": {error}"
             if label not in seen:
                 seen.append(label)
         SAMPLE = 5
