@@ -253,6 +253,44 @@ def dispatcharr_version_advisory(version) -> Optional[str]:
     )
 
 
+# 429 handling (GH #1009). Dispatcharr rate-limits its JWT endpoints (login is
+# 3/min per IP) and, under bulk writes, ordinary API calls too. Before this no
+# code path handled 429: every write called ``raise_for_status`` and one
+# rate-limited response aborted a planned pipeline replay. A 429 is retried
+# with bounded exponential backoff, honouring ``Retry-After`` when present.
+RATE_LIMIT_MAX_RETRIES = 3
+RATE_LIMIT_BACKOFF_BASE = 1.0
+RATE_LIMIT_BACKOFF_CAP = 10.0
+# Indirection so tests can patch the sleeper without touching asyncio itself.
+_sleep = asyncio.sleep
+
+
+def _rate_limited_error(response: httpx.Response) -> httpx.HTTPStatusError:
+    """Dispatcharr kept answering 429 after the retry budget was spent.
+
+    A plain ``HTTPStatusError`` (no subclass: the contract sweep forbids
+    classes in this module inheriting from outside it) whose ``response``
+    carries the 429, so callers can tell a rate-limit rejection, which
+    upstream never applied, from every other failure by status code.
+    """
+    return httpx.HTTPStatusError(
+        f"Dispatcharr rate limited (429) after {RATE_LIMIT_MAX_RETRIES} retries",
+        request=getattr(response, "request", None),
+        response=response,
+    )
+
+
+def _rate_limit_delay(response: httpx.Response, attempt: int) -> float:
+    """Seconds to wait before retry ``attempt`` (0-based) of a 429."""
+    retry_after = response.headers.get("Retry-After") if response.headers is not None else None
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass  # HTTP-date form or garbage: fall back to backoff
+    return min(RATE_LIMIT_BACKOFF_BASE * (2 ** attempt), RATE_LIMIT_BACKOFF_CAP)
+
+
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
 
@@ -305,13 +343,24 @@ class DispatcharrClient:
         """Authenticate and obtain JWT tokens."""
         logger.debug("[DISPATCHARR] Authenticating to Dispatcharr at %s", self.base_url)
         try:
-            response = await self._client.post(
-                f"{self.base_url}/api/accounts/token/",
-                json={
-                    "username": self.settings.username,
-                    "password": self.settings.password,
-                },
-            )
+            for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+                response = await self._client.post(
+                    f"{self.base_url}/api/accounts/token/",
+                    json={
+                        "username": self.settings.username,
+                        "password": self.settings.password,
+                    },
+                )
+                if response.status_code != 429:
+                    break
+                if attempt >= RATE_LIMIT_MAX_RETRIES:
+                    raise _rate_limited_error(response)
+                delay = _rate_limit_delay(response, attempt)
+                logger.warning(
+                    "[DISPATCHARR] Login rate limited (429); retrying in %.1fs (attempt %d/%d)",
+                    delay, attempt + 1, RATE_LIMIT_MAX_RETRIES,
+                )
+                await _sleep(delay)
             response.raise_for_status()
             data = response.json()
             self.access_token = data["access"]
@@ -407,22 +456,7 @@ class DispatcharrClient:
             logger.debug("[DISPATCHARR] Using extended timeout (%ss) for EPG grid request", request_timeout)
 
         try:
-            response = await self._client.request(
-                method,
-                f"{self.base_url}{path}",
-                headers=headers,
-                timeout=request_timeout,
-                **kwargs,
-            )
-
-            # If unauthorized in JWT mode, try refreshing token and retry.
-            # In api-key mode a 401 is terminal (the key is invalid or revoked),
-            # and callers that opted out of the retry take the 401 as terminal
-            # too rather than risk a rate-limited re-login (see the docstring).
-            if response.status_code == 401 and not self._uses_api_key and retry_on_401:
-                logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
-                await self._refresh_access_token()
-                headers["Authorization"] = f"Bearer {self.access_token}"
+            for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
                 response = await self._client.request(
                     method,
                     f"{self.base_url}{path}",
@@ -430,6 +464,41 @@ class DispatcharrClient:
                     timeout=request_timeout,
                     **kwargs,
                 )
+
+                # If unauthorized in JWT mode, try refreshing token and retry.
+                # In api-key mode a 401 is terminal (the key is invalid or revoked),
+                # and callers that opted out of the retry take the 401 as terminal
+                # too rather than risk a rate-limited re-login (see the docstring).
+                if response.status_code == 401 and not self._uses_api_key and retry_on_401:
+                    logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
+                    await self._refresh_access_token()
+                    headers["Authorization"] = f"Bearer {self.access_token}"
+                    response = await self._client.request(
+                        method,
+                        f"{self.base_url}{path}",
+                        headers=headers,
+                        timeout=request_timeout,
+                        **kwargs,
+                    )
+
+                # Rate limited: back off and retry (GH #1009). Exhausting the
+                # budget raises an HTTPStatusError carrying the 429 so callers
+                # can tell "upstream rejected this before applying it" from
+                # other failures.
+                if response.status_code != 429:
+                    break
+                if attempt >= RATE_LIMIT_MAX_RETRIES:
+                    logger.warning(
+                        "[DISPATCHARR] Rate limited (429) on %s after %d retries; giving up",
+                        method, RATE_LIMIT_MAX_RETRIES,
+                    )
+                    raise _rate_limited_error(response)
+                delay = _rate_limit_delay(response, attempt)
+                logger.warning(
+                    "[DISPATCHARR] Rate limited (429) on %s; retrying in %.1fs (attempt %d/%d)",
+                    method, delay, attempt + 1, RATE_LIMIT_MAX_RETRIES,
+                )
+                await _sleep(delay)
 
             if response.status_code >= 400:
                 logger.warning("[DISPATCHARR] API request failed: %s - status: %s", method, response.status_code)

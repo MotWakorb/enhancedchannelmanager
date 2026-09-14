@@ -441,7 +441,7 @@ async def test_prepared_commit_persists_confirmed_cleanup_and_rollback(db, monke
         with pytest.raises(HTTPException) as error:
             await router.commit_auto_creation_pipeline(router.CommitPipelinePlanRequest(
                 plan_id=prepared["plan_id"], plan_hash=prepared["plan_hash"], phase="execute"), _admin=None)
-        assert error.value.status_code == 502
+        assert error.value.status_code == 424
         assert "uncertain_cleanup_outcome" in error.value.detail["compensation_errors"]
         assert upstream.channel["streams"] == [1]
         with Session(db) as session:
