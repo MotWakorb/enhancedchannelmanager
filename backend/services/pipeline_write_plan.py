@@ -5,6 +5,8 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 from services.mutation_plan_store import canonical_hash
 
 
@@ -85,13 +87,44 @@ class PipelineWritePlan:
 
 
 class PartialReplayError(RuntimeError):
-    """Upstream has no transaction; exposes exactly how far replay reached."""
+    """Upstream has no transaction; exposes exactly how far replay reached.
 
-    def __init__(self, failed_index: int, completed: list[str], compensation_errors: list[str]):
+    ``completed`` and ``not_applied`` are target strings (``method:first_arg``)
+    so a caller can see what landed and what did not. ``pre_mutation`` is
+    True only when NO write completed AND the failing write's exception proves
+    upstream rejected it before mutating anything (GH #1009); it is the one
+    case in which a fresh prepare + commit is known to be safe.
+    """
+
+    def __init__(
+        self, failed_index: int, completed: list[str], compensation_errors: list[str],
+        *, failed_write: str = "", not_applied: list[str] | None = None,
+        pre_mutation: bool = False,
+    ):
         super().__init__(f"pipeline replay failed at write {failed_index}")
         self.failed_index = failed_index
         self.completed = completed
         self.compensation_errors = compensation_errors
+        self.failed_write = failed_write
+        self.not_applied = list(not_applied or [])
+        self.pre_mutation = pre_mutation
+
+
+def _write_target(write: PlannedWrite, args: list[Any]) -> str:
+    return f"{write.method}:{args[0] if args else '<no-arg>'}"
+
+
+def _failure_precludes_mutation(exc: BaseException) -> bool:
+    """True only when the failure provably happened before upstream mutated.
+
+    A 4xx response is a rejection (429 rate limit, 400 validation, 404 gone)
+    and a refused connection never reached Dispatcharr. Timeouts, dropped
+    connections, 5xx, and every unknown exception are treated as "may have
+    landed" so a caller is never told a retry is safe when it is not.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return 400 <= exc.response.status_code < 500
+    return isinstance(exc, httpx.ConnectError)
 
 
 class PlanningDispatcharrClient:
@@ -313,12 +346,17 @@ async def replay_write_plan(
                         })
             except Exception as compensation_exc:  # noqa: BLE001
                 compensation_errors.append(f"{done.method}: {compensation_exc}")
-        completed_targets = [
-            f"{item[0].method}:{item[1][0] if item[1] else '<no-arg>'}"
-            for item in completed
-        ]
+        completed_targets = [_write_target(item[0], item[1]) for item in completed]
+        failed_index = len(completed)
+        not_applied = [_write_target(write, write.args) for write in plan.writes[failed_index:]]
         raise PartialReplayError(
-            len(completed), completed_targets, compensation_errors
+            failed_index, completed_targets, compensation_errors,
+            failed_write=not_applied[0] if not_applied else "",
+            not_applied=not_applied,
+            pre_mutation=(
+                not completed and not compensation_errors
+                and _failure_precludes_mutation(exc)
+            ),
         ) from exc
     return results, remap
 

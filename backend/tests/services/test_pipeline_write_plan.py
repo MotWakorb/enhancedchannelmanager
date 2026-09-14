@@ -2,11 +2,12 @@ import ast
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from services.pipeline_write_plan import (
     PIPELINE_INTERNAL_SIDE_EFFECTS, PIPELINE_WRITE_METHODS, PlanningDispatcharrClient, PipelineWritePlan,
-    PlannedWrite, replay_write_plan,
+    PartialReplayError, PlannedWrite, replay_write_plan,
 )
 
 
@@ -104,3 +105,65 @@ async def test_drift_rejects_before_any_replay_write():
     with pytest.raises(ValueError, match="drifted"):
         await replay_write_plan(live, plan)
     live.delete_channel.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# GH #1009: a partial replay must say which write failed, what was and was
+# not applied, and whether the failure provably happened before any mutation.
+# ---------------------------------------------------------------------------
+
+
+def _rate_limited() -> httpx.HTTPStatusError:
+    response = httpx.Response(429, request=httpx.Request("PATCH", "http://dispatcharr/x"))
+    return httpx.HTTPStatusError("429", request=response.request, response=response)
+
+
+def _two_write_plan() -> PipelineWritePlan:
+    return PipelineWritePlan(
+        writes=[
+            PlannedWrite("update_channel", [7, {"name": "A"}], {}),
+            PlannedWrite("delete_channel", [8], {}),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_first_write_rejected_with_429_is_reported_as_pre_mutation():
+    live = AsyncMock()
+    live.update_channel.side_effect = _rate_limited()
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    exc = error.value
+    assert exc.failed_index == 0
+    assert exc.failed_write == "update_channel:7"
+    assert exc.completed == []
+    assert exc.not_applied == ["update_channel:7", "delete_channel:8"]
+    assert exc.pre_mutation is True
+    live.delete_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failure_after_a_landed_write_is_not_pre_mutation():
+    live = AsyncMock()
+    live.update_channel.return_value = {"id": 7}
+    live.delete_channel.side_effect = _rate_limited()
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    exc = error.value
+    assert exc.failed_index == 1
+    assert exc.failed_write == "delete_channel:8"
+    assert exc.completed == ["update_channel:7"]
+    assert exc.not_applied == ["delete_channel:8"]
+    assert exc.pre_mutation is False
+
+
+@pytest.mark.asyncio
+async def test_first_write_timeout_is_not_claimed_pre_mutation():
+    """A lost response may have landed upstream; never claim retry is safe."""
+    live = AsyncMock()
+    live.update_channel.side_effect = httpx.ReadTimeout("slow", request=httpx.Request("PATCH", "http://d/x"))
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    assert error.value.failed_index == 0
+    assert error.value.completed == []
+    assert error.value.pre_mutation is False
