@@ -4949,3 +4949,36 @@ class TestProfileUniverseSentinelBehavioral:
         result = self._assign(captured["executor"], selected=(2,))
         assert result.success is False
         client.update_profile_channel.assert_not_called()
+
+
+class TestSummarizeFailedActionsCarriesReason:
+    """GitHub #1011: the run-level failure summary names WHY each sampled
+    action failed, not just the rule + action type. A bare "32 action(s)
+    failed" cannot distinguish "dummy source has no entry for this channel
+    yet" from a genuine mismatch."""
+
+    def test_summary_includes_per_action_error(self):
+        failed = [
+            {"rule_name": "Snooker (MAX UK)", "action_type": "assign_epg",
+             "error": "Dummy EPG source 25 has no entry for 'Snooker: Round 1' yet"},
+            {"rule_name": "Snooker (MAX UK)", "action_type": "assign_epg",
+             "error": "Dummy EPG source 25 has no entry for 'Snooker: Round 2' yet"},
+        ]
+        text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert text.startswith("2 action(s) failed during this run")
+        assert "'Snooker (MAX UK)' assign_epg" in text
+        assert "Dummy EPG source 25 has no entry for 'Snooker: Round 1' yet" in text
+        assert "safe to retry" in text
+
+    def test_summary_groups_identical_reasons_and_bounds_sample(self):
+        failed = [
+            {"rule_name": "R", "action_type": "assign_epg", "error": "same reason"}
+            for _ in range(3)
+        ] + [
+            {"rule_name": "R", "action_type": "assign_logo", "error": f"reason {i}"}
+            for i in range(6)
+        ]
+        text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert text.startswith("9 action(s) failed during this run")
+        assert text.count("same reason") == 1
+        assert "+2 more" in text
