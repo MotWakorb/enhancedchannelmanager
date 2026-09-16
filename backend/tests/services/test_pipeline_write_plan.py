@@ -6,7 +6,7 @@ import pytest
 
 from services.pipeline_write_plan import (
     PIPELINE_INTERNAL_SIDE_EFFECTS, PIPELINE_WRITE_METHODS, PlanningDispatcharrClient, PipelineWritePlan,
-    PlannedWrite, replay_write_plan,
+    PlannedWrite, PartialReplayError, replay_write_plan,
 )
 
 
@@ -104,3 +104,95 @@ async def test_drift_rejects_before_any_replay_write():
     with pytest.raises(ValueError, match="drifted"):
         await replay_write_plan(live, plan)
     live.delete_channel.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Logo writes are cosmetic: a failed create_logo must not abort the replay.
+# Dispatcharr answers 400 for a duplicate logo URL and logo rows outlive their
+# channels, so a stale row from an earlier event cycle used to turn the whole
+# commit into a PartialReplayError at write 0 with zero writes landed.
+# ---------------------------------------------------------------------------
+
+
+def _logo_then_channel_plan():
+    return PipelineWritePlan(
+        writes=[
+            PlannedWrite("create_logo", [{"name": "Snooker", "url": "http://l/x.png"}], {}),
+            PlannedWrite("create_channel", [{"name": "Snooker 1", "logo_id": -1, "streams": [5]}], {}),
+            PlannedWrite("update_channel", [-2, {"streams": [5, 6]}], {}),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_replay_continues_past_a_failed_logo_create_and_lands_the_channel():
+    live = AsyncMock()
+    live.create_logo.side_effect = Exception("Logo creation failed: 400 - duplicate url")
+    live.create_channel.return_value = {"id": 101}
+    results, remap = await replay_write_plan(live, _logo_then_channel_plan())
+    assert remap == {-1: None, -2: 101}
+    live.create_channel.assert_awaited_once_with({"name": "Snooker 1", "logo_id": None, "streams": [5]})
+    live.update_channel.assert_awaited_once_with(101, {"streams": [5, 6]})
+    assert results[0] is None
+    live.delete_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replay_still_aborts_and_compensates_when_a_channel_create_fails():
+    live = AsyncMock()
+    live.create_logo.return_value = {"id": 765}
+    live.create_channel.side_effect = Exception("boom")
+    with pytest.raises(PartialReplayError) as info:
+        await replay_write_plan(live, _logo_then_channel_plan())
+    assert info.value.failed_index == 1
+    assert info.value.completed == ["create_logo:{'name': 'Snooker', 'url': 'http://l/x.png'}"]
+    live.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_replay_uses_the_existing_logo_id_when_create_logo_resolves_a_duplicate():
+    live = AsyncMock()
+    live.create_logo.return_value = {"id": 765, "url": "http://l/x.png"}
+    live.create_channel.return_value = {"id": 101}
+    _, remap = await replay_write_plan(live, _logo_then_channel_plan())
+    assert remap == {-1: 765, -2: 101}
+    live.create_channel.assert_awaited_once_with({"name": "Snooker 1", "logo_id": 765, "streams": [5]})
+
+
+@pytest.mark.asyncio
+async def test_replay_against_real_client_survives_duplicate_logo_400(monkeypatch):
+    """End to end through DispatcharrClient.create_logo with a colliding row."""
+    import httpx
+    from config import DispatcharrSettings
+    from dispatcharr_client import DispatcharrClient
+
+    client = DispatcharrClient(DispatcharrSettings(
+        url="http://dispatcharr:8000", auth_method="password", username="a", password="b",
+    ))
+    existing = {"id": 765, "name": "old", "url": "http://l/x.png"}
+    posts: list[tuple[str, dict]] = []
+
+    def resp(status, body):
+        r = AsyncMock(spec=httpx.Response)
+        r.status_code = status
+        r.json = lambda: body
+        r.text = str(body)
+        r.raise_for_status = lambda: None
+        return r
+
+    async def fake_request(method, path, **kwargs):
+        if method == "GET" and path == "/api/channels/logos/":
+            return resp(200, {"count": 1, "next": None, "results": [existing]})
+        if method == "POST" and path == "/api/channels/logos/":
+            return resp(400, {"url": ["logo with this url already exists."]})
+        if method == "POST" and path == "/api/channels/channels/":
+            posts.append((path, kwargs["json"]))
+            return resp(201, {"id": 101, **kwargs["json"]})
+        if method == "PATCH":
+            return resp(200, {"id": 101, **kwargs["json"]})
+        raise AssertionError(f"unexpected {method} {path}")
+
+    monkeypatch.setattr(client, "_request", AsyncMock(side_effect=fake_request))
+    _, remap = await replay_write_plan(client, _logo_then_channel_plan())
+    assert remap == {-1: 765, -2: 101}
+    assert posts == [("/api/channels/channels/", {"name": "Snooker 1", "logo_id": 765, "streams": [5]})]

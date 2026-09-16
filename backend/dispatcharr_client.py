@@ -1268,17 +1268,57 @@ class DispatcharrClient:
         return response.json()
 
     async def create_logo(self, data: dict) -> dict:
-        """Create a new logo.
+        """Create a logo, or return the existing row that already has its URL.
 
-        Returns the created logo, or raises an exception with the response body
-        if creation fails (e.g., logo already exists).
+        Dispatcharr's ``POST /api/channels/logos/`` answers 400 when a logo
+        with the same ``url`` already exists, and logo rows outlive the
+        channels that used them. A planned channel-pipeline commit replays a
+        recorded ``create_logo`` verbatim, so one stale row from an earlier
+        event cycle turned the whole replay into a 502 with zero writes. The
+        method is therefore idempotent on ``url``: an existing row is resolved
+        before the POST, and again after a 400 (the row can appear in between).
+        Every caller (pipeline executor, ``POST /api/channels/logos``, the DBAS
+        logo importer) already treated "exists" as "use that one".
+
+        Raises an exception carrying the status and response body when the
+        POST fails and no row with that URL can be found.
         """
+        url = data.get("url") if isinstance(data, dict) else None
+        if url:
+            existing = await self._find_logo_by_url_quietly(url)
+            if existing is not None:
+                return existing
         response = await self._request("POST", "/api/channels/logos/", json=data)
+        if response.status_code == 400 and url:
+            existing = await self._find_logo_by_url_quietly(url)
+            if existing is not None:
+                logger.info(
+                    "[DISPATCHARR] Logo create returned 400; reusing existing logo id=%s",
+                    existing.get("id"),
+                )
+                return existing
         if response.status_code >= 400:
-            # Include response body in exception for better error handling
+            # The body is what tells a duplicate URL apart from a validation
+            # error; without it the generic _request line above says only
+            # "status: 400". Bounded so a proxy error page cannot flood the log.
             error_body = response.text
+            logger.warning(
+                "[DISPATCHARR] Logo creation failed: status %s body %s",
+                response.status_code, (error_body or "")[:300],
+            )
             raise Exception(f"Logo creation failed: {response.status_code} - {error_body}")
         return response.json()
+
+    async def _find_logo_by_url_quietly(self, url: str) -> Optional[dict]:
+        """``find_logo_by_url`` for the create path: a lookup failure must not
+        mask the create's own outcome, so it logs and reports "not found"."""
+        try:
+            return await self.find_logo_by_url(url)
+        except Exception as exc:  # noqa: BLE001 - best-effort pre-check
+            logger.warning(
+                "[DISPATCHARR] Logo lookup by URL failed: %s", type(exc).__name__
+            )
+            return None
 
     async def upload_logo_file(self, name: str, filename: str,
                                content: bytes, content_type: str) -> dict:

@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from services.mutation_plan_store import canonical_hash
+
+logger = logging.getLogger(__name__)
 
 
 PIPELINE_WRITE_METHODS = frozenset({
@@ -82,6 +85,15 @@ class PipelineWritePlan:
                 # Each create is a distinct future entity even when payloads match.
                 targets.add((write.method, index))
         return {"write_count": len(self.writes), "unique_target_count": len(targets)}
+
+
+# Writes whose failure must not abort a replay. A logo is cosmetic: losing it
+# costs one image, while aborting costs every planned channel create, stream
+# merge and EPG assignment behind it. Dispatcharr answers 400 for a duplicate
+# logo URL and logo rows outlive their channels, so this collision recurs on
+# every event-cycle rollover. Classified by recorded method, never by HTTP
+# status, so a structural write that happens to fail with 400 still aborts.
+SOFT_FAIL_WRITE_METHODS = frozenset({"create_logo"})
 
 
 class PartialReplayError(RuntimeError):
@@ -246,11 +258,17 @@ async def validate_read_set(client, plan: PipelineWritePlan) -> None:
 
 async def replay_write_plan(
     client, plan: PipelineWritePlan, *, read_set_validated: bool = False, execution_id: int | None = None
-) -> tuple[list[Any], dict[int, int]]:
-    """Validate first, then replay only recorded writes with temp-ID remapping."""
+) -> tuple[list[Any], dict[int, int | None]]:
+    """Validate first, then replay only recorded writes with temp-ID remapping.
+
+    A write in :data:`SOFT_FAIL_WRITE_METHODS` that raises is logged and
+    skipped: its result is ``None`` and, for a create, its temporary id maps to
+    ``None`` so later payloads that referenced it carry ``None`` instead of an
+    unresolved temp id. Every other failure aborts and compensates as before.
+    """
     if not read_set_validated:
         await validate_read_set(client, plan)
-    remap: dict[int, int] = {}
+    remap: dict[int, int | None] = {}
     results: list[Any] = []
 
     def mapped(value: Any) -> Any:
@@ -267,12 +285,25 @@ async def replay_write_plan(
     next_temp = -1
     completed: list[tuple[PlannedWrite, list[Any], Any]] = []
     try:
-        for write in plan.writes:
+        for index, write in enumerate(plan.writes):
             args = mapped(write.args)
             kwargs = mapped(write.kwargs)
             if write.event_sync:
                 from services.event_sync_cleanup import apply_change
                 result = await apply_change(client, write.event_sync, execution_id)
+            elif write.method in SOFT_FAIL_WRITE_METHODS:
+                try:
+                    result = await getattr(client, write.method)(*args, **kwargs)
+                except Exception as soft_exc:  # noqa: BLE001 - cosmetic write
+                    logger.warning(
+                        "[PIPELINE-REPLAY] write %s (%s) failed and was skipped: %s",
+                        index, write.method, type(soft_exc).__name__,
+                    )
+                    if write.method.startswith("create_"):
+                        remap[next_temp] = None
+                        next_temp -= 1
+                    results.append(None)
+                    continue
             else:
                 result = await getattr(client, write.method)(*args, **kwargs)
             if write.method.startswith("create_"):
