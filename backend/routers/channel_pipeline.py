@@ -4414,7 +4414,7 @@ async def get_auto_creation_action_schema():
                 "channel_number": {"type": "string|integer", "default": "auto", "description": "'auto', '{provider_channel_number}', specific number, or 'min-max' range"},
                 "group_id": {"type": "integer", "optional": True, "description": "Target channel group ID"},
                 "if_exists": {"type": "string", "enum": ["skip", "merge", "update"], "default": "skip", "description": "Behavior if channel exists"},
-                "tvg_id_mode": {"type": "string", "enum": ["inherit", "none"], "default": "inherit", "description": "'inherit' copies the stream's tvg_id onto a new channel; 'none' leaves it empty and never back-fills it"}
+                "tvg_id_mode": {"type": "string", "enum": ["inherit", "none"], "default": "inherit", "description": "Optional; omitted or JSON null uses 'inherit'. Use the string 'none' to suppress inheritance. 'inherit' copies the stream's tvg_id onto a NEW channel; 'none' creates the channel without it and skips THIS action's tvg_id back-fill when if_exists is 'update'. Existing tvg_ids and EPG assignments are never cleared, and other actions (assign_epg with set_tvg_id, assign_tvg_id) can still set one."}
             }
         },
         {

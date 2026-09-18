@@ -824,8 +824,11 @@ def register(mcp: FastMCP):
                   create_group — params: name_template, if_exists (skip/use_existing)
                   create_channel — params: name_template, if_exists (skip/merge/merge_only/update),
                                    channel_number (e.g. "800-99999" for range),
-                                   tvg_id_mode (inherit/none; default inherit copies the stream's
-                                   tvg_id onto a new channel, none leaves it empty)
+                                   tvg_id_mode (optional; omitted or JSON null uses inherit. Use the
+                                   STRING 'none' to suppress inheritance. inherit copies the stream's
+                                   tvg_id onto a NEW channel; none creates it without one and skips this
+                                   action's tvg_id back-fill under if_exists=update. Existing tvg_ids and
+                                   EPG assignments are unchanged; other actions can still assign an ID)
                   merge_streams — params: target (auto/existing_channel/new_channel),
                                    find_channel_by (name_exact/name_regex/tvg_id) + find_channel_value,
                                    max_streams_per_channel, remove_non_matching (bool),

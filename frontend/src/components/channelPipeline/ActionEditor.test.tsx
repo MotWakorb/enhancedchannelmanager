@@ -193,6 +193,31 @@ describe('ActionEditor', () => {
         expect(onChange.mock.calls[0][0]).toEqual({ type: 'create_channel' });
       });
 
+      // PR #1006 review item 1: the trigger must be discoverable by the
+      // visible field name (label htmlFor -> CustomSelect id), in both modes.
+      it('exposes the accessible field name in both modes', async () => {
+        const { rerender } = render(
+          <ActionEditor
+            action={{ type: 'create_channel' }}
+            onChange={vi.fn()}
+            onRemove={vi.fn()}
+          />
+        );
+        const inherit = screen.getByRole('button', { name: /tvg-id for new channels/i });
+        expect(inherit).toHaveTextContent(/inherit from stream/i);
+
+        rerender(
+          <ActionEditor
+            action={{ type: 'create_channel', tvg_id_mode: 'none' }}
+            onChange={vi.fn()}
+            onRemove={vi.fn()}
+          />
+        );
+        const none = screen.getByRole('button', { name: /tvg-id for new channels/i });
+        expect(none).toHaveTextContent(/leave empty/i);
+        expect(screen.getByText(/may still match by channel name/i)).toBeInTheDocument();
+      });
+
       it('is not rendered for non-create_channel actions', () => {
         render(
           <ActionEditor

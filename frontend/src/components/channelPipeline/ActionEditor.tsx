@@ -761,8 +761,9 @@ export function ActionEditor({
         {/* TVG-ID mode for create_channel (GH #1005) */}
         {action.type === 'create_channel' && (
           <div className="action-field">
-            <label>TVG-ID for new channels</label>
+            <label htmlFor={`${id}-tvg-id-mode`}>TVG-ID for new channels</label>
             <CustomSelect
+              id={`${id}-tvg-id-mode`}
               value={action.tvg_id_mode || 'inherit'}
               onChange={val => {
                 if (val === 'inherit') {
@@ -780,7 +781,7 @@ export function ActionEditor({
             />
             <span className="field-hint">
               {(action.tvg_id_mode || 'inherit') === 'none'
-                ? 'New channels are created with an empty TVG-ID and it is never back-filled, so Dispatcharr cannot bind them to the provider guide before your Assign EPG action runs.'
+                ? 'This action creates channels without copying the stream\'s TVG-ID and skips its own TVG-ID back-fill when If already exists is Update. Existing IDs and EPG assignments are unchanged, and other actions can still assign an ID. This prevents exact matching through the inherited provider ID; Dispatcharr may still match by channel name.'
                 : 'New channels copy the matched stream\'s TVG-ID.'}
             </span>
           </div>
