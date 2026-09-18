@@ -79,7 +79,7 @@ name. Use **Stream Group Is** to match the provider's M3U group instead, or
    | Merge Streams | Merge the stream into an existing channel |
    | Assign Logo | Assign a logo to the channel |
    | Assign TVG-ID | Set the TVG-ID for the channel |
-   | Assign EPG | Assign an EPG data source. When the source is an ECM dummy EPG feed and it has no entry yet for a channel this run created, the assignment is deferred and retried after the run regenerates and refreshes the feed |
+   | Assign EPG | Assign an EPG data source. In a direct run, when the source is an ECM dummy EPG feed and it has no entry yet for a channel this run created, the assignment is deferred and retried once after the run regenerates and refreshes the feed; a retry that still finds no entry is recorded as a failed action for the rule. A planned run (prepare/commit) cannot regenerate the feed before committing, so there the assignment fails with a reason that says so instead of being deferred. A successful retry assigns the guide data and changes the channel's TVG-ID only when *set TVG-ID* is enabled on the action |
    | Assign Profile | Assign a stream profile |
    | Set Channel Profile | Enable the selected channel profile(s) and remove the channel from all others (exclusive membership) |
    | Set Channel Number | Set the channel number |

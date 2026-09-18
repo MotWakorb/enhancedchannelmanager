@@ -249,6 +249,89 @@ class BoundedExecutionLog(list):
             })
 
 
+
+# --- Operator-facing failure-reason hygiene (PR #1012 review item 7) ---------
+_REASON_TRUNCATION_MARK = " …[truncated]"
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(authorization|auth[_-]?token|access[_-]?token|refresh[_-]?token|token|"
+    r"api[_-]?key|apikey|x-api-key|password|passwd|pwd|secret|client[_-]?secret|"
+    r"dispatcharr_api_key)\b(\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^\s,;&]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\b(bearer|basic|token)\s+([A-Za-z0-9._~+/=\-]{8,})")
+_URL_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9+.-]*://[^\s'\"<>]+")
+_REDACTED = "[REDACTED]"
+
+
+def _bounded(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    keep = max(0, limit - len(_REASON_TRUNCATION_MARK))
+    return text[:keep] + _REASON_TRUNCATION_MARK
+
+
+def _known_credential_values() -> frozenset:
+    """Credential values the operator has registered with ECM, for literal
+    scrubbing. Best-effort: settings may be unavailable in some test paths."""
+    try:
+        settings = get_settings()
+    except Exception:  # noqa: BLE001 - hygiene must never sink a summary
+        return frozenset()
+    values = set()
+    for name in ("password", "dispatcharr_api_key", "api_key", "username"):
+        value = getattr(settings, name, None)
+        if isinstance(value, str) and len(value) >= 4:
+            values.add(value)
+    return frozenset(values)
+
+
+def _scrub_url(url: str) -> str:
+    """Blank userinfo, XtreamCodes-shaped path credentials and credential
+    query parameters in one URL, reusing the obfuscate module's layers."""
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return _REDACTED
+    netloc = parts.netloc
+    if "@" in netloc:
+        netloc = _REDACTED + "@" + netloc.rsplit("@", 1)[1]
+    try:
+        from obfuscate import _redact_query_credentials, _redact_xc_path_shape
+        path = _redact_xc_path_shape(parts.path)
+        query = _redact_query_credentials(parts.query, frozenset(), frozenset())
+    except Exception:  # noqa: BLE001 - fall back to dropping the query wholesale
+        path, query = parts.path, (_REDACTED if parts.query else "")
+    return urlunsplit((parts.scheme, netloc, path, query, ""))
+
+
+def _scrub_operator_reason(text: str) -> str:
+    """Redact credential-bearing content from an error reason destined for
+    the execution row / executions API.
+
+    Layers: registered credential values (literal, any encoding the
+    obfuscate module knows), ``key=value`` and ``key: value`` secret
+    assignments, ``Bearer <token>`` style headers, and URL userinfo / XC
+    path / credential query parameters. Unknown-token heuristics are
+    deliberately conservative so ordinary reasons stay readable.
+    """
+    if not text:
+        return text
+    known = _known_credential_values()
+    if known:
+        try:
+            from obfuscate import scrub_credential_values
+            text = scrub_credential_values(text, secrets=known)
+        except Exception:  # noqa: BLE001
+            for value in sorted(known, key=len, reverse=True):
+                text = text.replace(value, _REDACTED)
+    text = _URL_RE.sub(lambda m: _scrub_url(m.group(0)), text)
+    # Header-style tokens first: "Authorization: Bearer <token>" must lose the
+    # token, not just the word "Bearer" that the assignment rule would take
+    # as the value.
+    text = _BEARER_RE.sub(lambda m: f"{m.group(1)} {_REDACTED}", text)
+    text = _SECRET_ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{_REDACTED}", text)
+    return text
+
 class ChannelPipelineEngine:
     """
     Main orchestrator for the auto-creation pipeline.
@@ -2604,16 +2687,30 @@ class ChannelPipelineEngine:
             )
         exec_ctx.default_profile_failures.clear()
 
-    @staticmethod
-    def _summarize_failed_actions(failed_actions: list[dict]) -> str:
+    # Bounds for the operator-facing failure summary (PR #1012 review item 7).
+    # The summary is persisted on the execution row and returned by the
+    # executions API, so it must be small and free of upstream secrets
+    # regardless of what an upstream error body contained.
+    _FAILURE_REASON_MAX_CHARS = 160
+    _FAILURE_SUMMARY_SAMPLE = 5
+    _FAILURE_SUMMARY_MAX_CHARS = 1200
+
+    @classmethod
+    def _summarize_failed_actions(cls, failed_actions: list[dict]) -> str:
         """Build a short operator-facing summary of failed actions for the
         execution record's ``error_message`` (y3m6o.1 / 0152).
 
         States the failure count and names a bounded sample (rule + action
-        type) so the operator can identify the failures without opening the
-        full execution log, plus the retry guidance the individual action
-        errors carry (rerunning the pipeline is safe — every action path is
-        idempotent).
+        type + reason) so the operator can identify the failures without
+        opening the full execution log, plus the retry guidance the individual
+        action errors carry (rerunning the pipeline is safe — every action path
+        is idempotent).
+
+        Each reason is redacted (:func:`_scrub_operator_reason`) and truncated
+        to :attr:`_FAILURE_REASON_MAX_CHARS`, the sample is bounded to
+        :attr:`_FAILURE_SUMMARY_SAMPLE` distinct labels and the whole summary to
+        :attr:`_FAILURE_SUMMARY_MAX_CHARS`, with truncation marked. A raw
+        upstream error body is never copied through.
         """
         count = len(failed_actions)
         # Group by (rule_name, action_type, error) for a compact, deterministic
@@ -2622,17 +2719,23 @@ class ChannelPipelineEngine:
         # from a genuine mismatch, and the per-action reason otherwise lives
         # only in the execution log.
         seen: list[str] = []
+        seen_set: set[str] = set()
+        distinct = 0
         for fa in failed_actions:
             label = f"{fa.get('rule_name')!r} {fa.get('action_type')}"
             error = fa.get("error")
             if error:
-                label += f": {error}"
-            if label not in seen:
+                label += f": {_bounded(_scrub_operator_reason(str(error)), cls._FAILURE_REASON_MAX_CHARS)}"
+            if label in seen_set:
+                continue
+            seen_set.add(label)
+            distinct += 1
+            if len(seen) < cls._FAILURE_SUMMARY_SAMPLE:
                 seen.append(label)
-        SAMPLE = 5
-        sample = "; ".join(seen[:SAMPLE])
-        if len(seen) > SAMPLE:
-            sample += f"; +{len(seen) - SAMPLE} more"
+        sample = "; ".join(seen)
+        if distinct > cls._FAILURE_SUMMARY_SAMPLE:
+            sample += f"; +{distinct - cls._FAILURE_SUMMARY_SAMPLE} more"
+        sample = _bounded(sample, cls._FAILURE_SUMMARY_MAX_CHARS)
         return (
             f"{count} action(s) failed during this run ({sample}). Some "
             f"channels may have been left in an inconsistent state (e.g. "
@@ -3333,6 +3436,10 @@ class ChannelPipelineEngine:
 
             # Execute actions and capture results
             exec_ctx = ExecutionContext(dry_run=dry_run)
+            # PR #1012 review item 5: deferred work (Pass 5) records terminal
+            # failures against the originating rule, not rule_id=None.
+            exec_ctx.rule_id = winning_rule.id
+            exec_ctx.rule_name = winning_rule.name
             actions = winning_rule.get_actions()
             actions_log = []
             stop_processing = False
@@ -5481,9 +5588,13 @@ class ChannelPipelineEngine:
         from database import get_session
         from models import DummyEPGProfile
 
-        # Collect unique dummy source IDs and target group IDs from deferred list
+        # Collect unique dummy source IDs and target group IDs from deferred list.
+        # Groups are ALSO kept per source (PR #1012 review item 3): each dummy
+        # profile must gain only the groups whose deferred assignments target
+        # ITS source, never a union across every participating profile.
         dummy_source_ids = set()
         target_group_ids = set()
+        groups_by_source: dict = {}
         for channel_id, action, stream_ctx, exec_ctx in executor._deferred_epg_assignments:
             epg_source_id = action.params.get("epg_id")
             if epg_source_id is not None:
@@ -5493,6 +5604,8 @@ class ChannelPipelineEngine:
             gid = channel.get("channel_group_id") or channel.get("channel_group")
             if gid:
                 target_group_ids.add(gid)
+                if epg_source_id is not None:
+                    groups_by_source.setdefault(epg_source_id, set()).add(gid)
 
         logger.info(
             "[AUTO-CREATE-ENGINE] Pass 5: dummy sources=%s, target groups=%s",
@@ -5505,6 +5618,7 @@ class ChannelPipelineEngine:
         # Match dummy source IDs to profile IDs via URL pattern
         import re as _re
         profile_ids_to_update = set()
+        groups_by_profile: dict = {}
         for src_id in dummy_source_ids:
             src = source_by_id.get(src_id)
             if not src:
@@ -5512,8 +5626,15 @@ class ChannelPipelineEngine:
             url = src.get("url", "")
             m = _re.search(r'/api/dummy-epg/xmltv/(\d+)', url)
             if m:
-                profile_ids_to_update.add(int(m.group(1)))
+                profile_id = int(m.group(1))
+                profile_ids_to_update.add(profile_id)
+                groups_by_profile.setdefault(profile_id, set()).update(
+                    groups_by_source.get(src_id, set())
+                )
             else:
+                # A source that is not one profile's feed (the combined feed):
+                # it cannot be attributed, so every enabled profile is updated
+                # with the union — the pre-existing combined-feed behaviour.
                 profile_ids_to_update = None
                 break
 
@@ -5534,10 +5655,16 @@ class ChannelPipelineEngine:
             for profile in profiles:
                 profile_names[profile.id] = profile.name
                 existing_groups = set(profile.get_channel_group_ids())
-                missing = target_group_ids - existing_groups
+                # Per-profile scope (PR #1012 review item 3): only the groups
+                # whose deferred assignments target THIS profile's source.
+                wanted_groups = (
+                    groups_by_profile.get(profile.id, set())
+                    if profile_ids_to_update is not None else target_group_ids
+                )
+                missing = wanted_groups - existing_groups
 
                 # Step 1: Auto-add target groups to profiles
-                if missing and target_group_ids:
+                if missing and wanted_groups:
                     group_names = [
                         executor._group_by_id.get(gid, {}).get("name", f"ID:{gid}")
                         for gid in missing
@@ -5557,7 +5684,7 @@ class ChannelPipelineEngine:
                             "would_modify": True
                         })
                     else:
-                        updated = list(existing_groups | target_group_ids)
+                        updated = list(existing_groups | wanted_groups)
                         profile.set_channel_group_ids(updated)
                         db.merge(profile)
                         logger.info("[AUTO-CREATE-ENGINE] Pass 5: %s", step1_desc)
@@ -5820,7 +5947,13 @@ class ChannelPipelineEngine:
                     else (action if isinstance(action, dict)
                           else {"type": action.type, **action.params})
                 )
-                retry_result = await executor._execute_assign_epg(action_obj, stream_ctx, exec_ctx)
+                # PR #1012 review item 6: this IS the retry after the refresh;
+                # a remaining no-match is terminal, so deferral is disabled
+                # and the executor returns an explicit failure instead of
+                # re-queueing into a list nothing will drain.
+                retry_result = await executor._execute_assign_epg(
+                    action_obj, stream_ctx, exec_ctx, allow_defer=False,
+                )
                 if retry_result.success and not retry_result.deferred:
                     retry_success += 1
                 else:
@@ -5831,11 +5964,18 @@ class ChannelPipelineEngine:
                     )
                     # y3m6o.1 review (Finding 1): a deferred-EPG retry that still
                     # fails after the refresh must finalize the run
-                    # completed_with_errors, not green. A still-deferred result
-                    # (retried but not resolvable this run) counts as a failure
-                    # for run status — the guide data was not assigned.
+                    # completed_with_errors, not green.
+                    # PR #1012 review item 5: attribute the failure to the rule
+                    # whose action was deferred (carried on the pinned context)
+                    # so the selected-rule outcome counts it.
+                    ctx_rule_id = getattr(exec_ctx, "rule_id", None)
+                    ctx_rule_name = getattr(exec_ctx, "rule_name", None)
+                    if not isinstance(ctx_rule_id, int) or isinstance(ctx_rule_id, bool):
+                        ctx_rule_id = None
+                    if not isinstance(ctx_rule_name, str):
+                        ctx_rule_name = None
                     self._record_failed_action(
-                        results, None, "[Pass 5 EPG retry]",
+                        results, ctx_rule_id, ctx_rule_name or "[Pass 5 EPG retry]",
                         stream_ctx.stream_id, stream_ctx.stream_name,
                         retry_result,
                     )
