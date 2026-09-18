@@ -56,8 +56,10 @@ still queued. The date/time run is the ONE part of a schedule-driven name
 that identifies which airing the name is for, so a mismatch between two
 present runs is treated as a hard signal, in the same family as the M1
 callsign hard-reject: different airing, not the same stream twice. The
-gate fires only when BOTH sides carry a run, so ordinary names (no
-date/time anywhere) score exactly as they did before.
+gate fires only when BOTH sides carry a VALID run (a real month name, a
+day in 1-31, a real clock time, complete tokens, and at most a supported
+zone label), so ordinary names — including ones that merely contain
+numbers and colons — score exactly as they did before.
 
 Returns ``None`` when the candidates list is empty, when every candidate
 is dropped by the airing gate, when the top-1 score falls below
@@ -683,64 +685,129 @@ def extract_callsign(name: str) -> str | None:
 # ---------------------------------------------------------------------------
 #
 # The date/time run a schedule-driven provider appends to every slot name.
-# Two shapes are recognised, with and without the ``@`` marker:
+# Two shapes are recognised, with and without the ``@`` marker (the marker
+# itself is irrelevant and is not part of the pattern):
 #
 #   "<STATIC> @ 18 Sep 09:30 AM GMT-1"     (the observed provider shape)
 #   "<STATIC> 18 Sep 2026 09:30 GMT-1"     (year spelled out)
 #
-# A bare "<day> <Month>" is deliberately NOT an airing: without a clock
-# time the run is far more likely to be part of a name ("Sports 24/7 Sep")
-# than an airing, and a false airing would veto a legitimate duplicate.
-# Every quantifier is bounded and no two optional groups can consume the
-# same characters, so the scan is linear (docs/style_guide.md#regex); the
-# input is already capped at ``_NORMALIZE_MAX_LEN`` by ``_normalize``.
-_DATETIME_RE = re.compile(
-    r"@?\s*"
-    r"(?P<day>\d{1,2})\s+"
-    r"(?P<month>[A-Za-z]{3,9})\.?"
-    r"(?:\s+(?P<year>\d{4}))?\s+"
-    r"(?P<clock>\d{1,2}:\d{2})"
-    r"(?:\s*(?P<ampm>[APap]\.?[Mm]\.?))?"
-    r"(?:\s*(?P<tz>[A-Za-z]{2,5}[+-]?\d{1,2}(?::\d{2})?))?"
+# Only a VALID run is an airing (PR #1016 review items 1 and 2):
+#
+# * the month must be a real month name or abbreviation (``Hour`` is not a
+#   month, so ``Sports 24 Hour 09:30`` states no airing);
+# * the day must be 1-31 and the clock a real time (``09:300`` is not one);
+# * every token must be complete: the day cannot start inside a longer
+#   number (``Channel 250 News 09:30`` does not contain day ``50``) and the
+#   clock cannot continue into more digits;
+# * a zone is one of the supported labels (``GMT``, ``IST``, ``UTC``, ...),
+#   bare or with a numeric offset (``GMT-1``, ``UTC+05:30``). Anything else
+#   after the clock (``HD2``, a quality tag, a provider suffix) is NOT a zone
+#   and leaves the key unchanged, so it cannot veto a genuine duplicate.
+#
+# The scan uses ``finditer`` and returns the FIRST VALID run, so a false
+# prefix (``SPORT 01 LIVE 09:30``) cannot shadow a real trailing airing.
+#
+# Runtime: there is no unanchored ``\s*`` prefix (the earlier shape retried
+# across every internal whitespace run and went quadratic on padded input);
+# every gap is a bounded ``\s{1,3}``, the day is anchored by a lookbehind
+# boundary and the clock by a lookahead, and each start position does a
+# bounded amount of work. ``_normalize`` has already capped the input at
+# ``_NORMALIZE_MAX_LEN``.
+_MONTH_KEYS: dict[str, str] = {
+    "jan": "jan", "january": "jan",
+    "feb": "feb", "february": "feb",
+    "mar": "mar", "march": "mar",
+    "apr": "apr", "april": "apr",
+    "may": "may",
+    "jun": "jun", "june": "jun",
+    "jul": "jul", "july": "jul",
+    "aug": "aug", "august": "aug",
+    "sep": "sep", "sept": "sep", "september": "sep",
+    "oct": "oct", "october": "oct",
+    "nov": "nov", "november": "nov",
+    "dec": "dec", "december": "dec",
+}
+# Literal zone labels a provider writes after the clock. Compared as labels
+# (no conversion): ``GMT`` and ``IST`` are different airings by policy.
+_ZONE_LABELS: frozenset = frozenset({
+    "z", "utc", "gmt", "bst", "ist", "wet", "west", "cet", "cest", "eet", "eest",
+    "msk", "sast", "cat", "eat", "wat", "est", "edt", "cst", "cdt", "mst", "mdt",
+    "pst", "pdt", "akst", "akdt", "hst", "ast", "adt", "nst", "ndt", "aest",
+    "aedt", "acst", "acdt", "awst", "nzst", "nzdt", "jst", "kst", "hkt", "sgt",
+    "pht", "wib", "wita", "wit", "pkt", "gst", "trt", "eat", "brt", "art",
+})
+_AIRING_RE = re.compile(
+    r"(?<![\w:.])(?P<day>\d{1,2})"
+    r"\s{1,3}(?P<month>[a-z]{3,9})\.?"
+    r"(?:\s{1,3}(?P<year>\d{4}))?"
+    r"\s{1,3}(?P<clock>\d{1,2}:\d{2})(?![\d:])"
+    r"(?:\s{0,3}(?P<ampm>[ap]\.?m\.?)(?![a-z0-9]))?"
+    r"(?:\s{1,3}(?P<tz>[a-z]{1,5}(?:[+-]\d{1,2}(?::\d{2})?)?)(?![a-z0-9]))?",
+    re.IGNORECASE,
 )
+
+
+def _valid_airing(match: "re.Match[str]") -> tuple[str, str, int, int, str, str] | None:
+    """Validate one regex hit; None when any token is not a real airing token."""
+    month = _MONTH_KEYS.get(match.group("month").casefold())
+    if month is None:
+        return None
+    day = int(match.group("day"))
+    if not 1 <= day <= 31:
+        return None
+    hour_text, minute_text = match.group("clock").split(":", 1)
+    hour, minute = int(hour_text), int(minute_text)
+    ampm = (match.group("ampm") or "").replace(".", "").casefold()
+    if ampm:
+        if not 1 <= hour <= 12:
+            return None
+    elif not 0 <= hour <= 23:
+        return None
+    if not 0 <= minute <= 59:
+        return None
+    tz = (match.group("tz") or "").casefold()
+    if tz:
+        label = re.split(r"[+-]", tz, maxsplit=1)[0]
+        if label not in _ZONE_LABELS:
+            # Not a zone (``hd2``, a suffix): the airing is still valid, it
+            # simply states no zone.
+            tz = ""
+    return day, month, hour, minute, ampm, tz
 
 
 def airing_key(name: str) -> str | None:
     """Return the normalized airing (date/time run) in ``name``, or ``None``.
 
-    ``None`` means "this name does not say when it airs" — a name with no
-    run is never dropped by the gate, so the gate can only ever change the
-    verdict on pairs where BOTH sides state an airing.
+    ``None`` means "this name does not state a valid airing" — a name with
+    no run is never dropped by the gate, so the gate can only ever change
+    the verdict on pairs where BOTH sides state an airing.
 
-    The key is deliberately lenient about spelling noise (case, ``.``
-    after the month, ``AM`` vs ``a.m.``, leading zeros on the day and the
-    hour, whitespace) and deliberately strict about everything else: two
-    runs describe the same airing only when day, month, clock and zone all
-    agree. A provider that spells the same instant two different ways
-    (12-hour vs 24-hour clock, differing zone labels) therefore falls
-    through to *create* rather than *merge* — the conservative direction,
-    because creation is idempotent and a missed merge offer is
-    recoverable, while a false merge offer blocks the stream behind
-    operator review.
+    The key is deliberately lenient about spelling noise (case, ``.`` after
+    the month, full month names, ``AM`` vs ``a.m.``, leading zeros on the
+    day and the hour, whitespace) and deliberately strict about everything
+    else: two runs describe the same airing only when day, month, clock,
+    meridiem and zone label all agree. A provider that spells the same
+    instant two different ways (12-hour vs 24-hour clock, differing zone
+    labels) therefore falls through to *create* rather than *merge* — the
+    conservative direction, because creation is idempotent and a missed
+    merge offer is recoverable, while a false merge offer blocks the stream
+    behind operator review.
 
-    The year is parsed only to keep it out of the clock match, and is NOT
-    part of the key: one provider spelling out ``18 Sep 2026 09:30`` must
-    still compare equal to another's ``18 Sep 09:30``. A pair differing
-    only by the year is a non-case for a daily-rollover slot pool, and
-    treating an unstated year as a conflict would veto genuine duplicates.
+    Only supported month names and zone labels are accepted, day and clock
+    are range-checked, and tokens must be complete (see ``_AIRING_RE``); an
+    invalid earlier run never hides a valid later one. The year is parsed
+    only to keep it out of the clock match and is NOT part of the key: one
+    provider spelling out ``18 Sep 2026 09:30`` must still compare equal to
+    another's ``18 Sep 09:30``.
     """
-    match = _DATETIME_RE.search(name)
-    if match is None:
-        return None
-    hour, minute = match.group("clock").split(":", 1)
-    parts = [
-        f"{int(match.group('day')):02d}",
-        match.group("month").rstrip("."),
-        f"{int(hour):02d}:{int(minute):02d}",
-        (match.group("ampm") or "").replace(".", "").lower(),
-        (match.group("tz") or "").lower(),
-    ]
-    return " ".join(part for part in parts if part).casefold()
+    for match in _AIRING_RE.finditer(name):
+        parsed = _valid_airing(match)
+        if parsed is None:
+            continue
+        day, month, hour, minute, ampm, tz = parsed
+        parts = [f"{day:02d}", month, f"{hour:02d}:{minute:02d}", ampm, tz]
+        return " ".join(part for part in parts if part)
+    return None
 
 
 def find_candidate(

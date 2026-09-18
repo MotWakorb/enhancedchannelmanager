@@ -466,14 +466,22 @@ class TestAiringGate:
         assert result.confidence == 1.0
 
     def test_same_airing_still_scores_fuzzily(self):
-        # Same airing, different spelling → still a candidate, still
-        # scored by the fuzzy path. The gate only ever drops a MISMATCH.
+        # Same airing, GENUINELY different normalized names → still a
+        # candidate, still scored by the fuzzy path (not the exact path).
+        # The gate only ever drops a MISMATCH. (PR #1016 review: the earlier
+        # version of this test reconstructed the identical string.)
+        different = (
+            "EVENT SLOT 04: Championship | Qualifying: Player One v Player Two [HD] "
+            "@ 18 Sep 09:30 AM GMT-1"
+        )
+        assert _normalize(different) != _normalize(self.SLOT)
         result = find_candidate(
             stream_name=self.SLOT,
-            candidates=[("uuid-a", self.SLOT.replace("@", "@ ").replace("  ", " "))],
+            candidates=[("uuid-a", different)],
             threshold=0.80,
         )
         assert result is not None
+        assert 0.80 <= result.confidence < 1.0
 
     def test_gate_keeps_a_genuine_candidate_in_the_same_call(self):
         # The rollover candidate is dropped; a real duplicate elsewhere in
@@ -553,3 +561,123 @@ class TestPerformanceMicrobench:
             f"find_candidate took {per_call_ms:.2f}ms per call against 500 "
             f"candidates — exceeds 5ms soft cap (informational)."
         )
+
+
+
+class TestAiringKeyValidation:
+    """PR #1016 review items 1 and 2: only VALID airing tokens form a key,
+    a false prefix cannot hide a real trailing airing, bare zone labels are
+    kept and non-zone suffixes are ignored."""
+
+    @pytest.mark.parametrize("name", [
+        "Channel 250 News 09:30",          # "50" is inside "250": not a day
+        "Sports 24 Hour 09:30",            # "Hour" is not a month
+        "Sky Sports F1 Live 20:00",        # no day/month at all
+        "Sky Sports F1 UHD 20:00",
+        "X 118 Sep 09:30",                 # day token incomplete / out of range
+        "X 18 Sep 09:300",                 # clock continues into more digits
+        "X 18 Sep 25:30",                  # no such hour
+        "X 18 Sep 09:61",                  # no such minute
+        "X 32 Sep 09:30",                  # no such day
+        "X 18 Sep 13:30 PM",               # 12-hour clock with meridiem past 12
+        "X 18 Foo 09:30",                  # not a month
+    ])
+    def test_invalid_runs_state_no_airing(self, name):
+        assert airing_key(name) is None
+
+    def test_a_false_prefix_does_not_hide_a_real_trailing_airing(self):
+        assert airing_key("SPORT 01 LIVE 09:30 Final @ 18 Sep 09:30 AM GMT-1") == (
+            "18 sep 09:30 am gmt-1"
+        )
+
+    def test_full_month_names_and_abbreviations_agree(self):
+        assert airing_key("X 18 September 09:30") == airing_key("X 18 Sep 09:30")
+        assert airing_key("X 18 Sept. 09:30") == airing_key("X 18 sep 09:30")
+
+    def test_bare_zone_labels_are_part_of_the_key(self):
+        assert airing_key("X @ 18 Sep 09:30 GMT") == "18 sep 09:30 gmt"
+        assert airing_key("X @ 18 Sep 09:30 IST") == "18 sep 09:30 ist"
+        assert airing_key("X @ 18 Sep 09:30 GMT") != airing_key("X @ 18 Sep 09:30 IST")
+
+    def test_numeric_offsets_are_part_of_the_key(self):
+        assert airing_key("X @ 18 Sep 09:30 UTC+05:30") == "18 sep 09:30 utc+05:30"
+        assert airing_key("X @ 18 Sep 09:30 GMT-1") != airing_key("X @ 18 Sep 09:30 GMT+1")
+
+    @pytest.mark.parametrize("suffix", ["HD2", "UHD", "4K", "RAW", "FHD", "backup"])
+    def test_non_zone_suffixes_do_not_become_zones(self, suffix):
+        assert airing_key(f"X @ 18 Sep 09:30 {suffix}") == airing_key("X @ 18 Sep 09:30")
+
+    def test_regex_has_no_unbounded_whitespace_scan(self):
+        # PR #1016 review item 6: the earlier shape led with an unanchored
+        # ``\s*`` and retried across every internal whitespace run.
+        from services.dedup_matcher import _AIRING_RE
+        assert "\\s*" not in _AIRING_RE.pattern
+        assert "\\s+" not in _AIRING_RE.pattern
+
+    def test_padded_non_matching_input_stays_cheap(self):
+        # Bounded operation check through the production wrapper: 500
+        # distinct whitespace-padded names near the 512-char cap.
+        import time
+        names = [
+            (f"CHANNEL {i}" + " " * 200 + "NEWS 24" + " " * 200 + f"{i % 10}:30")[:512]
+            for i in range(500)
+        ]
+        best = float("inf")
+        for _ in range(3):
+            started = time.perf_counter()
+            for name in names:
+                assert airing_key(_normalize(name)) is None
+            best = min(best, time.perf_counter() - started)
+        assert best < 0.5, f"airing gate took {best:.3f}s for 500 padded names"
+
+
+class TestAiringGateCounterexamples:
+    """The reviewer's false-veto cases through ``find_candidate``: with no
+    valid airing on one side the gate must not fire, and a suffix must not
+    invent a zone."""
+
+    def test_hour_is_not_a_month(self):
+        result = find_candidate(
+            stream_name="Sports 24 Hour 09:30",
+            candidates=[("uuid-a", "Sports 24 Hour 10:30")],
+            threshold=0.80,
+        )
+        assert result is not None and result.candidate_channel_id == "uuid-a"
+
+    def test_quality_variants_without_an_airing_still_match(self):
+        result = find_candidate(
+            stream_name="Sky Sports F1 Live 20:00",
+            candidates=[("uuid-a", "Sky Sports F1 UHD 20:00")],
+            threshold=0.80,
+        )
+        assert result is not None
+
+    def test_channel_number_is_not_a_day(self):
+        result = find_candidate(
+            stream_name="Channel 250 News 09:30",
+            candidates=[("uuid-a", "Channel 250 News 09:30 HD")],
+            threshold=0.80,
+        )
+        assert result is not None
+
+    def test_a_false_prefix_still_lets_the_trailing_airing_gate(self):
+        today = "SPORT 01 LIVE 09:30 Final: A - B @ 18 Sep 09:30 AM GMT-1"
+        yesterday = "SPORT 01 LIVE 09:30 Final: C - D @ 17 Sep 09:30 AM GMT-1"
+        assert find_candidate(today, [("uuid-y", yesterday)], threshold=0.80) is None
+        same_day = "SPORT 01 LIVE 09:30 Final: A - B @ 18 Sep 09:30 AM GMT-1"
+        assert find_candidate(today, [("uuid-s", same_day)], threshold=0.80) is not None
+
+    def test_differing_bare_zones_are_different_airings(self):
+        assert find_candidate(
+            "X @ 18 Sep 09:30 GMT", [("uuid-a", "X @ 18 Sep 09:30 IST")], threshold=0.80,
+        ) is None
+        equal = find_candidate(
+            "X @ 18 Sep 09:30 GMT", [("uuid-a", "X @ 18 Sep 09:30 GMT")], threshold=0.80,
+        )
+        assert equal is not None and equal.confidence == 1.0
+
+    def test_a_non_zone_suffix_does_not_veto_a_duplicate(self):
+        result = find_candidate(
+            "X @ 18 Sep 09:30", [("uuid-a", "X @ 18 Sep 09:30 HD2")], threshold=0.80,
+        )
+        assert result is not None

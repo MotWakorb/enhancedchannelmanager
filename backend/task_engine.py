@@ -389,6 +389,15 @@ def _task_execution_metadata_extra(task_id: str, result: TaskResult) -> dict:
             extra["execution_id"] = details["execution_id"]
         if details.get("mode"):
             extra["pipeline_mode"] = details["mode"]
+        # GH #1015 / PR #1016 review item 3: the deferral and its blocking
+        # rows ride on the warning metadata too, for alert channels that
+        # render metadata rather than the message line.
+        if details.get("pending_merges_added"):
+            extra["pending_merges_added"] = details["pending_merges_added"]
+            extra["pending_merge_stream_count"] = details.get(
+                "pending_merge_stream_count", details["pending_merges_added"]
+            )
+            extra["pending_merge_ids"] = list(details.get("pending_merge_ids") or [])[:50]
         return extra
 
     if task_id == "stream_probe":
@@ -495,6 +504,24 @@ def _warning_task_completion_message(task_id: str, result: TaskResult) -> str:
                     ", ".join(degraded),
                 )
             )
+
+    if task_id == "auto_creation":
+        # GH #1015 / PR #1016 review item 3: the ONE warning an unattended
+        # failed-action run emits must carry the deferral diagnosis and the
+        # blocking pending-merge rows, or the operator cannot tell "the
+        # queue stopped the run" from "the provider had nothing" without
+        # opening Execution History.
+        deferred_note = details.get("deferred_note") or ""
+        base = (
+            f"Completed with {result.failed_count} failures out of {result.total_items} items. "
+            f"({result.success_count} succeeded, {result.skipped_count} skipped)"
+        )
+        if deferred_note:
+            return (
+                f"{base} {deferred_note[0].upper() + deferred_note[1:]}. Resolve the pending "
+                f"merge rows in Pending Merges to let those channels be created."
+            )
+        return base
 
     return (
         f"Completed with {result.failed_count} failures out of {result.total_items} items. "

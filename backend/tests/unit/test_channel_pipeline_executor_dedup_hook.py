@@ -612,3 +612,107 @@ class TestDeferralIsVisibleInTheRun:
         assert result.success is False
         assert result.description == "No channel context for assign_epg"
         assert result.error == "No channel to update"
+
+
+
+class _NeverIterated:
+    """A truthy ``streams`` value that fails the test if anything walks it."""
+
+    def __iter__(self):
+        raise AssertionError("membership of a non-candidate channel was traversed")
+
+    def __bool__(self):
+        return True
+
+
+class TestReviewFollowups1016:
+    """PR #1016 review items 4, 5 and 7 at the executor boundary."""
+
+    def test_membership_is_inspected_only_for_eligible_candidates(
+        self, test_session, _bind_session_local
+    ):
+        existing = [
+            {"id": 100, "name": "ESPN", "channel_group_id": 42, "streams": []},
+            # Other groups: never eligible, so never traversed.
+            {"id": 300, "name": "ESPN", "channel_group_id": 43, "streams": _NeverIterated()},
+            {"id": 301, "name": "ESPN 2", "channel_group_id": 44, "streams": _NeverIterated()},
+            # Nameless channel in the target group: filtered by name first.
+            {"id": 302, "name": "", "channel_group_id": 42, "streams": _NeverIterated()},
+        ]
+        executor = _make_executor(triggered_by="m3u_refresh", existing_channels=existing)
+        exec_ctx = ExecutionContext()
+        result = _run(executor.execute(_slot_action(), _stream(201, "ESPN HD"), exec_ctx))
+        assert result.skipped is True
+        row = test_session.query(PendingMerge).one()
+        assert row.candidate_channel_id == "100"
+
+    def test_attached_candidates_are_still_excluded_after_the_reorder(
+        self, test_session, _bind_session_local
+    ):
+        existing = [
+            {"id": 100, "name": "ESPN HD", "channel_group_id": 42, "streams": [201]},
+            {"id": 101, "name": "ESPN HD", "channel_group_id": 42, "streams": [{"id": 999}]},
+        ]
+        executor = _make_executor(triggered_by="m3u_refresh", existing_channels=existing)
+        _run(executor.execute(_slot_action(), _stream(201, "ESPN HD"), ExecutionContext()))
+        row = test_session.query(PendingMerge).one()
+        assert row.candidate_channel_id == "101"  # the unattached identical channel
+
+    def test_counts_keep_streams_actions_and_rows_distinct(
+        self, test_session, _bind_session_local
+    ):
+        """Item 4: one stream with two deferred create actions is 1 stream,
+        2 deferred actions, 1 distinct blocking row."""
+        existing = [{"id": 100, "name": "ESPN", "channel_group_id": 42, "streams": []}]
+        executor = _make_executor(triggered_by="m3u_refresh", existing_channels=existing)
+        exec_ctx = ExecutionContext()
+        stream_ctx = _stream(201, "ESPN HD")
+        first = _run(executor.execute(_slot_action(), stream_ctx, exec_ctx))
+        second = _run(executor.execute(_slot_action(), stream_ctx, exec_ctx))
+        assert first.skipped is True and second.skipped is True
+        row = test_session.query(PendingMerge).one()  # the §D5 collision reused it
+        assert exec_ctx.pending_merges_added == 2
+        assert exec_ctx.pending_merge_stream_ids == {201}
+        assert exec_ctx.pending_merge_ids == [row.id]
+
+    def test_a_later_create_failure_supersedes_the_deferral_explanation(
+        self, test_session, _bind_session_local
+    ):
+        """Item 5: deferred in group 42, then a create in group 43 fails at
+        Dispatcharr. The follow-on assign_epg must not blame the group-42
+        pending merge."""
+        existing = [{"id": 100, "name": "ESPN", "channel_group_id": 42, "streams": []}]
+        executor = _make_executor(triggered_by="m3u_refresh", existing_channels=existing)
+        executor.existing_groups.append({"id": 43, "name": "News"})
+        executor._group_by_id[43] = {"id": 43, "name": "News"}
+        executor.client.create_channel = AsyncMock(side_effect=Exception("Dispatcharr 500"))
+        exec_ctx = ExecutionContext()
+        stream_ctx = _stream(201, "ESPN HD")
+
+        deferred = _run(executor.execute(_slot_action(), stream_ctx, exec_ctx))
+        assert deferred.skipped is True
+        assert 201 in executor._deferred_channel_creations
+
+        failed = _run(executor.execute(
+            {"type": "create_channel", "name_template": "{stream_name}", "group_id": 43},
+            stream_ctx, exec_ctx,
+        ))
+        assert failed.success is False
+        assert 201 not in executor._deferred_channel_creations
+
+        epg = _run(executor.execute({"type": "assign_epg", "epg_id": 25}, stream_ctx, exec_ctx))
+        assert epg.success is False
+        assert "deferred" not in epg.error
+        assert epg.error == "No channel to update"
+
+    def test_an_ordinary_single_deferral_still_names_its_row(
+        self, test_session, _bind_session_local
+    ):
+        existing = [{"id": 100, "name": "ESPN", "channel_group_id": 42, "streams": []}]
+        executor = _make_executor(triggered_by="m3u_refresh", existing_channels=existing)
+        exec_ctx = ExecutionContext()
+        stream_ctx = _stream(201, "ESPN HD")
+        _run(executor.execute(_slot_action(), stream_ctx, exec_ctx))
+        epg = _run(executor.execute({"type": "assign_epg", "epg_id": 25}, stream_ctx, exec_ctx))
+        row = test_session.query(PendingMerge).one()
+        assert f"row id={row.id}" in epg.error

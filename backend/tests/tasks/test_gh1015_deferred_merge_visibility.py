@@ -110,3 +110,62 @@ async def test_quiet_run_says_nothing_about_deferrals():
 
     assert "deferred" not in result.message
     assert result.details["pending_merge_ids"] == []
+
+
+# --- PR #1016 review items 3 and 4 ------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_units_are_distinct_in_the_summary_and_details():
+    result = await _run_post_refresh(
+        _pipeline_result(
+            pending_merges_added=2, pending_merge_stream_count=1, pending_merge_ids=[53],
+        )
+    )
+    assert "1 stream deferred by pending merges" in result.message
+    assert "2 deferred create actions" in result.message
+    assert "rows: 53" in result.message
+    assert result.details["pending_merge_stream_count"] == 1
+    assert result.details["pending_merge_ids"] == [53]
+    assert result.details["deferred_note"].startswith("1 stream deferred")
+
+
+@pytest.mark.asyncio
+async def test_the_emitted_warning_carries_the_deferral_and_rows():
+    """Item 3: the single 'Completed with Warnings' notification the task
+    engine emits for a failed-action run must name the cause and the rows,
+    not only the generic counts. Crosses task result -> task-engine payload."""
+    from task_engine import _task_execution_metadata_extra, _warning_task_completion_message
+    from tasks.channel_pipeline import ChannelPipelineTask
+
+    result = await _run_post_refresh(
+        _pipeline_result(
+            status="completed_with_errors", success=False, failed_action_count=1,
+            streams_evaluated=1, streams_matched=1,
+            pending_merges_added=1, pending_merge_stream_count=1, pending_merge_ids=[7],
+        )
+    )
+    assert result.failed_count == 1
+    message = _warning_task_completion_message(ChannelPipelineTask.task_id, result)
+    assert message.startswith("Completed with 1 failures out of 1 items.")
+    assert "1 stream deferred by pending merges" in message
+    assert "rows: 7" in message
+    assert "Pending Merges" in message
+
+    metadata = _task_execution_metadata_extra(ChannelPipelineTask.task_id, result)
+    assert metadata["pending_merge_ids"] == [7]
+    assert metadata["pending_merge_stream_count"] == 1
+    assert metadata["pending_merges_added"] == 1
+
+
+@pytest.mark.asyncio
+async def test_a_run_without_deferrals_keeps_the_generic_warning():
+    from task_engine import _task_execution_metadata_extra, _warning_task_completion_message
+    from tasks.channel_pipeline import ChannelPipelineTask
+
+    result = await _run_post_refresh(
+        _pipeline_result(status="completed_with_errors", success=False, failed_action_count=2)
+    )
+    message = _warning_task_completion_message(ChannelPipelineTask.task_id, result)
+    assert "deferred" not in message
+    assert "pending_merge_ids" not in _task_execution_metadata_extra(ChannelPipelineTask.task_id, result)

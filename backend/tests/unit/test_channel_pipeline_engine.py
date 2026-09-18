@@ -4949,3 +4949,95 @@ class TestProfileUniverseSentinelBehavioral:
         result = self._assign(captured["executor"], selected=(2,))
         assert result.success is False
         client.update_profile_channel.assert_not_called()
+
+
+
+class TestPendingMergeAggregation1016:
+    """PR #1016 review item 4 / tests: engine aggregation of the deferral
+    counters — distinct rows, distinct streams, deferred actions — through
+    the real ``_process_streams`` with a mocked executor."""
+
+    def _rule(self):
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Slots"
+        rule.priority = 0
+        rule.m3u_account_id = None
+        rule.target_group_id = 42
+        rule.enabled = True
+        rule.stop_on_first_match = True
+        rule.skip_struck_streams = False
+        rule.sort_field = None
+        rule.sort_order = "asc"
+        rule.sort_regex = None
+        rule.starting_channel_number = None
+        rule.orphan_action = "none"
+        rule.managed_channel_ids = None
+        rule.get_managed_channel_ids.return_value = []
+        rule.get_conditions.return_value = [{"type": "always"}]
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "params": {}},
+            {"type": "create_channel", "params": {}},
+        ]
+        rule.get_normalization_group_ids.return_value = []
+        rule.match_scope_target_group = False
+        rule.is_event_sync.return_value = False
+        return rule
+
+    @patch("channel_pipeline_engine.get_session")
+    def test_results_carry_distinct_rows_and_streams(self, mock_get_session):
+        from channel_pipeline_executor import ActionResult
+        mock_get_session.return_value = MagicMock()
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = []
+        engine._existing_groups = []
+
+        streams = [
+            StreamContext(stream_id=101, stream_name="SLOT 01", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=102, stream_name="SLOT 02", m3u_account_id=1, m3u_account_name="P"),
+        ]
+        rows_by_stream = {101: 53, 102: 54}
+
+        async def fake_execute(action, stream_ctx, exec_ctx, *args, **kwargs):
+            # Every create action for these streams is deferred; both actions
+            # of one stream collide on the same row (§D5).
+            exec_ctx.pending_merges_added += 1
+            exec_ctx.pending_merge_stream_ids.add(stream_ctx.stream_id)
+            row = rows_by_stream[stream_ctx.stream_id]
+            if row not in exec_ctx.pending_merge_ids:
+                exec_ctx.pending_merge_ids.append(row)
+            return ActionResult(success=True, action_type="create_channel",
+                                description="deferred", skipped=True)
+
+        execution = MagicMock()
+        execution.id = 1
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls:
+            executor = MagicMock()
+            executor.execute = AsyncMock(side_effect=fake_execute)
+            executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            executor.prune_merge_streams = AsyncMock()
+            executor.reorder_streams_on_channels = AsyncMock(return_value=0)
+            executor._channel_by_id = {}
+            executor._created_channels = {}
+            executor._deferred_epg_assignments = []
+            mock_exec_cls.return_value = executor
+            engine._refresh_dummy_epg_and_retry = AsyncMock()
+            engine._reconcile_orphans = AsyncMock()
+            engine._update_rule_stats = AsyncMock()
+            results = asyncio.get_event_loop().run_until_complete(
+                engine._process_streams(streams, [self._rule()], execution, dry_run=False)
+            )
+
+        assert results["pending_merges_added"] == 4          # deferred create ACTIONS
+        assert results["pending_merge_stream_count"] == 2    # distinct STREAMS
+        assert results["pending_merge_ids"] == [53, 54]      # distinct ROWS, no repeats
+        assert "pending_merge_stream_ids" not in results     # JSON-safe result
+
+        # And the shared phrase keeps the units apart.
+        from channel_pipeline_engine import describe_pending_merge_deferral
+        phrase = describe_pending_merge_deferral(results)
+        assert "2 streams deferred by pending merges" in phrase
+        assert "4 deferred create actions" in phrase
+        assert "rows: 53, 54" in phrase

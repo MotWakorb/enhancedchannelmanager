@@ -268,11 +268,16 @@ class ExecutionContext:
     # so the M3U-refresh response can drive BD-J's toast.
     pending_merges_added: int = 0
 
-    # GH #1015: the ``pending_merges`` row ids behind ``pending_merges_added``,
-    # so a run summary can name what is blocking the deferred streams instead
-    # of reporting only "0 channels created" — which is indistinguishable
-    # from "the provider had nothing today".
+    # GH #1015: the DISTINCT ``pending_merges`` row ids behind
+    # ``pending_merges_added``, so a run summary can name what is blocking the
+    # deferred streams instead of reporting only "0 channels created" — which
+    # is indistinguishable from "the provider had nothing today".
     pending_merge_ids: list[int] = field(default_factory=list)
+    # PR #1016 review item 4: ``pending_merges_added`` counts deferred CREATE
+    # ACTIONS (a stream with two create actions counts twice). The distinct
+    # streams affected are tracked separately so the summary can report
+    # streams, actions and rows with accurate units.
+    pending_merge_stream_ids: set = field(default_factory=set)
 
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
@@ -1212,6 +1217,13 @@ class ActionExecutor:
                                        allow_manual_channel_merge: bool = False,
                                        fold_match_key: bool = False) -> ActionResult:
         """Execute create_channel action."""
+        # PR #1016 review item 5: a deferral explanation belongs to ONE create
+        # attempt. A later create attempt for the same stream (another group,
+        # another rule action) supersedes it: if this attempt defers again the
+        # hook re-records the reason below; if it fails or succeeds, the stale
+        # "deferred behind row N" must not be what the follow-on assign_epg
+        # blames.
+        self._deferred_channel_creations.pop(stream_ctx.stream_id, None)
         params = action.params
         raw_number_spec = params.get("channel_number", "auto")
         number_spec, provider_number_result = self._resolve_provider_channel_number(
@@ -6234,35 +6246,31 @@ class ActionExecutor:
         # questioned. Dropped here rather than inside the matcher because
         # attachment is an executor-side fact: the hook's contract is that
         # the CALLER owns candidate selection.
+        # PR #1016 review item 7: apply the cheap group/name eligibility
+        # FIRST, and inspect stream membership only on the channels that
+        # survive it. Walking every channel's membership list before
+        # filtering visited N_streams x N_channels x N_memberships entries
+        # for zero eligible candidates.
         stream_id = stream_ctx.stream_id
-        attached_channel_ids = {
-            c["id"]
-            for c in self.existing_channels
-            if c.get("id") is not None
-            and any(
-                (s["id"] if isinstance(s, dict) else s) == stream_id
-                for s in (c.get("streams") or [])
-            )
-        }
-
-        def _selectable(channel: dict) -> bool:
-            return (
-                bool(channel.get("name"))
-                and channel.get("id") not in attached_channel_ids
-            )
-
         if group_id is not None:
-            candidates = [
-                (c["id"], c.get("name", ""))
-                for c in self.existing_channels
-                if c.get("channel_group_id") == group_id and _selectable(c)
+            eligible = [
+                c for c in self.existing_channels
+                if c.get("channel_group_id") == group_id and c.get("name")
             ]
         else:
-            candidates = [
-                (c["id"], c.get("name", ""))
-                for c in self.existing_channels
-                if _selectable(c)
-            ]
+            eligible = [c for c in self.existing_channels if c.get("name")]
+
+        def _attached(channel: dict) -> bool:
+            return any(
+                (s.get("id") if isinstance(s, dict) else s) == stream_id
+                for s in (channel.get("streams") or [])
+            )
+
+        candidates = [
+            (c["id"], c.get("name", ""))
+            for c in eligible
+            if c.get("id") is not None and not _attached(c)
+        ]
 
         if not candidates:
             return None
@@ -6311,7 +6319,8 @@ class ActionExecutor:
         # needs to know WHICH queue rows to resolve to get the group moving
         # again; a bare count cannot say.
         exec_ctx.pending_merges_added += 1
-        if result.merge_id is not None:
+        exec_ctx.pending_merge_stream_ids.add(stream_ctx.stream_id)
+        if result.merge_id is not None and result.merge_id not in exec_ctx.pending_merge_ids:
             exec_ctx.pending_merge_ids.append(result.merge_id)
 
         # A pending merge row exists for this (stream_name, candidate)
