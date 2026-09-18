@@ -86,20 +86,43 @@ class PipelineWritePlan:
         return {"write_count": len(self.writes), "unique_target_count": len(targets)}
 
 
+# Outcome of the write at ``failed_index`` (GH #1009, PR #1010 review item 1).
+FAILED_OUTCOME_REJECTED = "rejected"    # upstream provably refused it before mutating
+FAILED_OUTCOME_UNKNOWN = "unknown"      # it may or may not have landed (lost response, 5xx, ...)
+
+
 class PartialReplayError(RuntimeError):
     """Upstream has no transaction; exposes exactly how far replay reached.
 
-    ``completed`` and ``not_applied`` are target strings (``method:first_arg``)
-    so a caller can see what landed and what did not. ``pre_mutation`` is
-    True only when NO write completed AND the failing write's exception proves
-    upstream rejected it before mutating anything (GH #1009); it is the one
-    case in which a fresh prepare + commit is known to be safe.
+    Three disjoint outcome classes are reported, so a caller can neither
+    repeat an operation that already landed nor skip one that never did:
+
+    * ``completed`` — writes whose upstream call returned successfully, in
+      order. This is FORWARD-CALL HISTORY, not current upstream state: the
+      compensation pass may since have undone some of them, and an empty
+      ``compensation_errors`` says only that compensation raised nothing,
+      not that every effect was restored.
+    * ``failed_write`` — the write at ``failed_index``, with
+      ``failed_outcome`` saying whether upstream provably rejected it
+      (``"rejected"``: a 4xx response or a refused connection) or whether its
+      effect is ``"unknown"`` (timeout, dropped connection, 5xx, anything
+      else). An unknown outcome may have mutated upstream.
+    * ``not_applied`` — the writes AFTER the failed one. They were never
+      attempted. The failed write is deliberately NOT in this list.
+
+    ``pre_mutation`` is True only when nothing completed, compensation was
+    clean, and the failed write was ``"rejected"``; it is the one case in
+    which a fresh prepare + commit is known to be safe.
+
+    Target strings are bounded descriptors (see :func:`describe_write_target`):
+    ``method:<resolved upstream id>`` where the id is known, otherwise a plan
+    operation index. They never include payload contents.
     """
 
     def __init__(
         self, failed_index: int, completed: list[str], compensation_errors: list[str],
         *, failed_write: str = "", not_applied: list[str] | None = None,
-        pre_mutation: bool = False,
+        pre_mutation: bool = False, failed_outcome: str = FAILED_OUTCOME_UNKNOWN,
     ):
         super().__init__(f"pipeline replay failed at write {failed_index}")
         self.failed_index = failed_index
@@ -108,10 +131,45 @@ class PartialReplayError(RuntimeError):
         self.failed_write = failed_write
         self.not_applied = list(not_applied or [])
         self.pre_mutation = pre_mutation
+        self.failed_outcome = failed_outcome
 
 
-def _write_target(write: PlannedWrite, args: list[Any]) -> str:
-    return f"{write.method}:{args[0] if args else '<no-arg>'}"
+def describe_write_target(
+    write: PlannedWrite, index: int, remap: dict[int, int] | None = None,
+    *, created_id: int | None = None,
+) -> str:
+    """Bounded, payload-free descriptor of a planned write's target.
+
+    PR #1010 review items 2 and 3: the descriptor names the RESOLVED upstream
+    resource when the plan's temp id has already been mapped (``-1`` -> ``101``),
+    renders a still-unresolved future resource explicitly as ``pending(<temp>)``
+    instead of failing, and never stringifies argument dictionaries or URLs
+    (a ``create_logo`` payload can carry a credentialed URL). Writes whose
+    first argument is not an id (creates) are identified by plan position.
+    """
+    remap = remap or {}
+
+    def _id(value: Any) -> str:
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"#{index}"
+        if value < 0:
+            return str(remap[value]) if value in remap else f"pending({value})"
+        return str(value)
+
+    if created_id is not None:
+        # A completed create: name the upstream resource it produced, so a
+        # failed compensation can still be located.
+        return f"{write.method}#{index}->{created_id}"
+    if not write.args:
+        return f"{write.method}#{index}"
+    first = write.args[0]
+    if isinstance(first, int) and not isinstance(first, bool):
+        return f"{write.method}:{_id(first)}"
+    if isinstance(first, list) and first and all(
+        isinstance(item, int) and not isinstance(item, bool) for item in first
+    ):
+        return f"{write.method}:[{','.join(_id(item) for item in first)}]"
+    return f"{write.method}#{index}"
 
 
 def _failure_precludes_mutation(exc: BaseException) -> bool:
@@ -299,10 +357,15 @@ async def replay_write_plan(
 
     next_temp = -1
     completed: list[tuple[PlannedWrite, list[Any], Any]] = []
+    # Set only once the failed write's call was actually issued; a mapping
+    # error before the call means upstream was never contacted.
+    attempted = False
     try:
         for write in plan.writes:
+            attempted = False
             args = mapped(write.args)
             kwargs = mapped(write.kwargs)
+            attempted = True
             if write.event_sync:
                 from services.event_sync_cleanup import apply_change
                 result = await apply_change(client, write.event_sync, execution_id)
@@ -346,17 +409,36 @@ async def replay_write_plan(
                         })
             except Exception as compensation_exc:  # noqa: BLE001
                 compensation_errors.append(f"{done.method}: {compensation_exc}")
-        completed_targets = [_write_target(item[0], item[1]) for item in completed]
         failed_index = len(completed)
-        not_applied = [_write_target(write, write.args) for write in plan.writes[failed_index:]]
+        completed_targets = [
+            describe_write_target(
+                item[0], position, remap,
+                created_id=(
+                    item[2].get("id") if item[0].method.startswith("create_")
+                    and isinstance(item[2], dict) else None
+                ),
+            )
+            for position, item in enumerate(completed)
+        ]
+        failed_write = (
+            describe_write_target(plan.writes[failed_index], failed_index, remap)
+            if failed_index < len(plan.writes) else ""
+        )
+        # Writes AFTER the failed one were never attempted. The failed write
+        # itself is classified separately (rejected vs unknown), never as
+        # "not applied": a lost response may have landed upstream.
+        not_applied = [
+            describe_write_target(write, position, remap)
+            for position, write in enumerate(plan.writes)
+            if position > failed_index
+        ]
+        rejected = (not attempted) or _failure_precludes_mutation(exc)
         raise PartialReplayError(
             failed_index, completed_targets, compensation_errors,
-            failed_write=not_applied[0] if not_applied else "",
+            failed_write=failed_write,
             not_applied=not_applied,
-            pre_mutation=(
-                not completed and not compensation_errors
-                and _failure_precludes_mutation(exc)
-            ),
+            failed_outcome=FAILED_OUTCOME_REJECTED if rejected else FAILED_OUTCOME_UNKNOWN,
+            pre_mutation=(not completed and not compensation_errors and rejected),
         ) from exc
     return results, remap
 

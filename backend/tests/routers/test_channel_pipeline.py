@@ -5430,7 +5430,8 @@ class TestCommitPartialFailureGH1009:
         )
         failure = PartialReplayError(
             0, [], [], failed_write="update_channel:7",
-            not_applied=["update_channel:7", "delete_channel:8"], pre_mutation=True,
+            not_applied=["delete_channel:8"], pre_mutation=True,
+            failed_outcome="rejected",
         )
         marked: dict = {}
 
@@ -5454,9 +5455,14 @@ class TestCommitPartialFailureGH1009:
         assert detail["failed_index"] == 0
         assert detail["failed_write"] == "update_channel:7"
         assert detail["pre_mutation"] is True
+        assert detail["failed_outcome"] == "rejected"
         assert detail["completed_writes"] == []
-        assert detail["not_applied"] == ["update_channel:7", "delete_channel:8"]
+        # The failed write is classified by failed_outcome, never listed as
+        # "not applied": only the writes after it were never attempted.
+        assert detail["not_applied"] == ["delete_channel:8"]
         assert detail["compensation_errors"] == []
         assert marked["execution_id"] == detail["execution_id"]
         assert marked["partial_replay"]["failed_write"] == "update_channel:7"
+        assert marked["partial_replay"]["failed_outcome"] == "rejected"
+        assert marked["partial_replay"]["not_applied"] == ["delete_channel:8"]
         assert marked["partial_replay"]["pre_mutation"] is True

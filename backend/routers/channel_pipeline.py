@@ -2026,6 +2026,7 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
             partial_replay = {
                 "failed_index": exc.failed_index,
                 "failed_write": exc.failed_write,
+                "failed_outcome": exc.failed_outcome,
                 "completed_targets": exc.completed,
                 "not_applied": exc.not_applied,
                 "pre_mutation": exc.pre_mutation,
@@ -2038,6 +2039,10 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
             # would leave the caller unable to tell whether a retry is safe.
             # ``pre_mutation`` is True only when nothing landed AND the first
             # write was provably rejected (e.g. 429) before upstream mutated.
+            # ``failed_outcome`` distinguishes that rejection from a failure
+            # whose upstream effect is unknown (lost response, 5xx);
+            # ``not_applied`` lists only the writes that were never attempted.
+            # ``completed_writes`` is forward-call history, not current state.
             raise HTTPException(
                 status_code=424,
                 detail={
@@ -2045,6 +2050,7 @@ async def commit_auto_creation_pipeline(request: CommitPipelinePlanRequest, _adm
                     "execution_id": execution_id,
                     "failed_index": exc.failed_index,
                     "failed_write": exc.failed_write,
+                    "failed_outcome": exc.failed_outcome,
                     "pre_mutation": exc.pre_mutation,
                     "completed_writes": exc.completed,
                     "not_applied": exc.not_applied,

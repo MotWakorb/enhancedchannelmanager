@@ -2,8 +2,12 @@ import asyncio
 import hashlib
 import hmac
 import json
+import math
 import re
 import secrets
+import time
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 import httpx
 import logging
 from typing import Optional
@@ -261,11 +265,19 @@ def dispatcharr_version_advisory(version) -> Optional[str]:
 RATE_LIMIT_MAX_RETRIES = 3
 RATE_LIMIT_BACKOFF_BASE = 1.0
 RATE_LIMIT_BACKOFF_CAP = 10.0
-# Indirection so tests can patch the sleeper without touching asyncio itself.
+# Explicit finite budget for the TOTAL time one call may spend waiting on 429s
+# across all its retries (PR #1010 review item 4). A server-directed
+# ``Retry-After`` that would push the cumulative wait past this is surfaced as
+# throttling immediately rather than slept on: the login path holds
+# ``_auth_lock`` while it waits, so an unbounded wait would stall every
+# request behind it.
+RATE_LIMIT_MAX_TOTAL_WAIT = 30.0
+# Indirection so tests can patch the sleeper/clock without touching the stdlib.
 _sleep = asyncio.sleep
+_now = time.time
 
 
-def _rate_limited_error(response: httpx.Response) -> httpx.HTTPStatusError:
+def _rate_limited_error(response: httpx.Response, reason: str | None = None) -> httpx.HTTPStatusError:
     """Dispatcharr kept answering 429 after the retry budget was spent.
 
     A plain ``HTTPStatusError`` (no subclass: the contract sweep forbids
@@ -273,22 +285,64 @@ def _rate_limited_error(response: httpx.Response) -> httpx.HTTPStatusError:
     carries the 429, so callers can tell a rate-limit rejection, which
     upstream never applied, from every other failure by status code.
     """
+    detail = reason or f"after {RATE_LIMIT_MAX_RETRIES} retries"
     return httpx.HTTPStatusError(
-        f"Dispatcharr rate limited (429) after {RATE_LIMIT_MAX_RETRIES} retries",
+        f"Dispatcharr rate limited (429) {detail}",
         request=getattr(response, "request", None),
         response=response,
     )
 
 
-def _rate_limit_delay(response: httpx.Response, attempt: int) -> float:
-    """Seconds to wait before retry ``attempt`` (0-based) of a 429."""
-    retry_after = response.headers.get("Retry-After") if response.headers is not None else None
-    if retry_after:
-        try:
-            return max(0.0, float(retry_after))
-        except ValueError:
-            pass  # HTTP-date form or garbage: fall back to backoff
-    return min(RATE_LIMIT_BACKOFF_BASE * (2 ** attempt), RATE_LIMIT_BACKOFF_CAP)
+def _parse_retry_after(value: str | None) -> float | None:
+    """Seconds a ``Retry-After`` header asks us to wait, or None if unusable.
+
+    Accepts both representations RFC 9110 allows: delay-seconds and an
+    HTTP-date (PR #1010 review item 5). Only finite, non-negative results are
+    honoured; ``inf``, ``nan``, negatives and garbage yield None so the caller
+    falls back to exponential backoff instead of sleeping forever or zero.
+    """
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        seconds = float(text)
+    except ValueError:
+        seconds = None
+    if seconds is not None:
+        # delay-seconds: only a finite, non-negative number is a valid delay.
+        if not math.isfinite(seconds) or seconds < 0:
+            return None
+        return seconds
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if when is None:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    remaining = when.timestamp() - _now()
+    if not math.isfinite(remaining):
+        return None
+    # HTTP-date: a date already in the past means "retry now".
+    return max(0.0, remaining)
+
+
+def _rate_limit_delay(response: httpx.Response, attempt: int, waited: float) -> float | None:
+    """Seconds to wait before retry ``attempt`` (0-based) of a 429, or None.
+
+    ``waited`` is the time this call has already spent waiting on 429s. None
+    means the retry-wait budget (:data:`RATE_LIMIT_MAX_TOTAL_WAIT`) does not
+    admit another wait: the caller must surface the throttling instead of
+    retrying early (which the server forbade) or waiting past the budget.
+    """
+    headers = response.headers if response.headers is not None else {}
+    delay = _parse_retry_after(headers.get("Retry-After"))
+    if delay is None:
+        delay = min(RATE_LIMIT_BACKOFF_BASE * (2 ** attempt), RATE_LIMIT_BACKOFF_CAP)
+    if waited + delay > RATE_LIMIT_MAX_TOTAL_WAIT:
+        return None
+    return delay
 
 
 class DispatcharrClient:
@@ -343,6 +397,7 @@ class DispatcharrClient:
         """Authenticate and obtain JWT tokens."""
         logger.debug("[DISPATCHARR] Authenticating to Dispatcharr at %s", self.base_url)
         try:
+            waited = 0.0
             for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
                 response = await self._client.post(
                     f"{self.base_url}/api/accounts/token/",
@@ -355,11 +410,20 @@ class DispatcharrClient:
                     break
                 if attempt >= RATE_LIMIT_MAX_RETRIES:
                     raise _rate_limited_error(response)
-                delay = _rate_limit_delay(response, attempt)
+                delay = _rate_limit_delay(response, attempt, waited)
+                if delay is None:
+                    logger.warning(
+                        "[DISPATCHARR] Login rate limited (429); Retry-After exceeds the %.0fs wait budget, giving up",
+                        RATE_LIMIT_MAX_TOTAL_WAIT,
+                    )
+                    raise _rate_limited_error(
+                        response, f"Retry-After exceeds the {RATE_LIMIT_MAX_TOTAL_WAIT:.0f}s wait budget",
+                    )
                 logger.warning(
                     "[DISPATCHARR] Login rate limited (429); retrying in %.1fs (attempt %d/%d)",
                     delay, attempt + 1, RATE_LIMIT_MAX_RETRIES,
                 )
+                waited += delay
                 await _sleep(delay)
             response.raise_for_status()
             data = response.json()
@@ -456,6 +520,7 @@ class DispatcharrClient:
             logger.debug("[DISPATCHARR] Using extended timeout (%ss) for EPG grid request", request_timeout)
 
         try:
+            waited = 0.0
             for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
                 response = await self._client.request(
                     method,
@@ -493,11 +558,20 @@ class DispatcharrClient:
                         method, RATE_LIMIT_MAX_RETRIES,
                     )
                     raise _rate_limited_error(response)
-                delay = _rate_limit_delay(response, attempt)
+                delay = _rate_limit_delay(response, attempt, waited)
+                if delay is None:
+                    logger.warning(
+                        "[DISPATCHARR] Rate limited (429) on %s; Retry-After exceeds the %.0fs wait budget, giving up",
+                        method, RATE_LIMIT_MAX_TOTAL_WAIT,
+                    )
+                    raise _rate_limited_error(
+                        response, f"Retry-After exceeds the {RATE_LIMIT_MAX_TOTAL_WAIT:.0f}s wait budget",
+                    )
                 logger.warning(
                     "[DISPATCHARR] Rate limited (429) on %s; retrying in %.1fs (attempt %d/%d)",
                     method, delay, attempt + 1, RATE_LIMIT_MAX_RETRIES,
                 )
+                waited += delay
                 await _sleep(delay)
 
             if response.status_code >= 400:
