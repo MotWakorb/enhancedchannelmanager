@@ -10,11 +10,16 @@ preview (Phase 1A) or run (Phase 1B) executes:
 * every SECONDARY group has ``auto_channel_sync`` **OFF** — a secondary
   with auto-sync on means Dispatcharr is creating duplicate channels from
   a group that event_sync treats as a pure stream source.
-* every configured group is M3U-BACKED (present in some account's group
-  settings). For the MASTER this is an ownership constraint, not a lookup:
+* every configured group is M3U-BACKED: present in some account's group
+  settings directly, or (whole-group scope only) reachable as the Channel
+  Group Override TARGET of an auto-synced group (``_build_override_maps``).
+  For a whole-group MASTER this is an ownership constraint, not a lookup:
   Dispatcharr owns master-channel lifecycle from an auto-synced M3U group,
   so a hand-curated Dispatcharr channel group is not a supported master
-  (the ``group_settings_found`` message says so explicitly).
+  and the ``group_settings_found`` message says so. For a PROVIDER-SCOPED
+  master the check consults only the selected ``(provider, group)`` row, so
+  its message is scoped to that association and does not claim the group
+  is absent from every account.
 
 **READ-ONLY by contract.** This module inspects group settings via the
 Dispatcharr client's ``get_all_m3u_group_settings()`` and must NEVER write
@@ -346,6 +351,59 @@ async def check_event_sync_group_settings(
         base = f"group {scope.get('group_id')}"
         return f"{base} (provider {pid})" if pid is not None else base
 
+    def _whole_group_backed(scope: dict) -> bool:
+        """True if ANY account's settings carry this group (directly or as
+        an auto-synced group's Channel Group Override target), ignoring the
+        scope's provider. Used only to word the diagnosis, never to decide it.
+        """
+        gid = scope.get("group_id")
+        return gid in all_settings or gid in target_to_source
+
+    def _missing_master_message(scope: dict, *, carried_by_some_account: bool) -> str:
+        """Diagnosis for a master whose junction setting was not found.
+
+        PR #1008 review: the provider-scoped lookup only consulted the
+        selected ``(provider, group)`` row, so a miss there says nothing
+        about other accounts. Word the failure for the scope that was
+        actually checked; state the ownership constraint (hand-curated
+        masters are unsupported) only when NO account carries the group.
+        """
+        pid = scope.get("m3u_account_id")
+        label = _scope_label(scope)
+        ownership = (
+            "The master group must be M3U-backed: it must come from an M3U "
+            "account with auto_channel_sync ON (directly, or as the Channel "
+            "Group Override target of such a group), because Dispatcharr "
+            "owns the master channels' lifecycle (it creates, updates and "
+            "deletes them from that group). A hand-curated channel group is "
+            "not supported as a master."
+        )
+        if pid is None:
+            return (
+                f"Master {label} is not an M3U-backed group: no M3U "
+                f"account's group settings carry it, and it is not the "
+                f"Channel Group Override target of an auto-synced group. "
+                f"{ownership} If this group used to be M3U-backed, it may "
+                f"have been removed or renamed on the provider, or that "
+                f"provider may no longer carry it."
+            )
+        if carried_by_some_account:
+            return (
+                f"Master {label}: M3U account {pid} has no group settings "
+                f"for group {scope.get('group_id')}, but another M3U "
+                f"account does carry it. Check the master's selected "
+                f"provider — the rule may point at the wrong account, or "
+                f"provider {pid} may have dropped or renamed the group. "
+                f"The group itself is M3U-backed."
+            )
+        return (
+            f"Master {label}: M3U account {pid} has no group settings for "
+            f"group {scope.get('group_id')}, and no other M3U account "
+            f"carries it either. {ownership} If this group used to be "
+            f"M3U-backed, it may have been removed or renamed on the "
+            f"provider."
+        )
+
     failures: list[dict] = []
 
     # --- Master ---------------------------------------------------------
@@ -357,16 +415,9 @@ async def check_event_sync_group_settings(
             check=CHECK_GROUP_SETTINGS_FOUND,
             expected="group present in an M3U account's group settings",
             got="no settings for this (group, provider) on any account",
-            message=(
-                f"Master {_scope_label(master_scope)} is not an M3U-backed "
-                f"group: no M3U account's group settings carry it. The "
-                f"master group must come from an M3U account with "
-                f"auto_channel_sync ON, because Dispatcharr owns the master "
-                f"channels' lifecycle (it creates, updates and deletes them "
-                f"from that group). A hand-curated channel group is not "
-                f"supported as a master. If this group used to be "
-                f"M3U-backed, it may have been removed or renamed on the "
-                f"provider, or that provider may no longer carry it."
+            message=_missing_master_message(
+                master_scope,
+                carried_by_some_account=_whole_group_backed(master_scope),
             ),
         ))
     elif not master_settings.get("auto_channel_sync"):
