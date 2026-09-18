@@ -1888,7 +1888,9 @@ class TestResolveLogoIdReusesExistingRow:
         self.client.find_logo_by_url = AsyncMock(return_value=None)
         logo_id = asyncio.get_event_loop().run_until_complete(self.executor._resolve_logo_id("http://l/x.png", "Snooker"))
         assert logo_id == 2257
-        self.client.create_logo.assert_awaited_once_with({"name": "Snooker", "url": "http://l/x.png"})
+        self.client.create_logo.assert_awaited_once_with(
+            {"name": "Snooker", "url": "http://l/x.png"}, precheck=False,
+        )
 
     def test_lookup_failure_falls_through_to_create(self):
         self.client.find_logo_by_url = AsyncMock(side_effect=Exception("upstream hiccup"))

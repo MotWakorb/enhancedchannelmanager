@@ -6,7 +6,7 @@ import pytest
 
 from services.pipeline_write_plan import (
     PIPELINE_INTERNAL_SIDE_EFFECTS, PIPELINE_WRITE_METHODS, PlanningDispatcharrClient, PipelineWritePlan,
-    PlannedWrite, PartialReplayError, replay_write_plan,
+    PartialReplayError, PlannedWrite, ReplayOutcome, journal_entries_for_plan, replay_write_plan,
 )
 
 
@@ -129,12 +129,17 @@ async def test_replay_continues_past_a_failed_logo_create_and_lands_the_channel(
     live = AsyncMock()
     live.create_logo.side_effect = Exception("Logo creation failed: 400 - duplicate url")
     live.create_channel.return_value = {"id": 101}
-    results, remap = await replay_write_plan(live, _logo_then_channel_plan())
+    outcome = ReplayOutcome()
+    results, remap = await replay_write_plan(live, _logo_then_channel_plan(), outcome=outcome)
     assert remap == {-1: None, -2: 101}
-    live.create_channel.assert_awaited_once_with({"name": "Snooker 1", "logo_id": None, "streams": [5]})
+    # The field that referenced the skipped logo is OMITTED, not sent as null.
+    live.create_channel.assert_awaited_once_with({"name": "Snooker 1", "streams": [5]})
     live.update_channel.assert_awaited_once_with(101, {"streams": [5, 6]})
     assert results[0] is None
     live.delete_channel.assert_not_awaited()
+    assert outcome.skipped == [
+        {"index": 0, "method": "create_logo", "reason": "soft_failure", "error_type": "Exception"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -161,7 +166,12 @@ async def test_replay_uses_the_existing_logo_id_when_create_logo_resolves_a_dupl
 
 @pytest.mark.asyncio
 async def test_replay_against_real_client_survives_duplicate_logo_400(monkeypatch):
-    """End to end through DispatcharrClient.create_logo with a colliding row."""
+    """End to end through DispatcharrClient.create_logo with a colliding row.
+
+    The pre-check MISSES (the row is not there yet), the POST answers 400 and
+    the post-400 lookup then finds the row: this exercises the race branch,
+    not the pre-check branch, and the request sequence asserts it.
+    """
     import httpx
     from config import DispatcharrSettings
     from dispatcharr_client import DispatcharrClient
@@ -171,6 +181,8 @@ async def test_replay_against_real_client_survives_duplicate_logo_400(monkeypatc
     ))
     existing = {"id": 765, "name": "old", "url": "http://l/x.png"}
     posts: list[tuple[str, dict]] = []
+    sequence: list[tuple[str, str]] = []
+    logo_gets = {"n": 0}
 
     def resp(status, body):
         r = AsyncMock(spec=httpx.Response)
@@ -181,8 +193,12 @@ async def test_replay_against_real_client_survives_duplicate_logo_400(monkeypatc
         return r
 
     async def fake_request(method, path, **kwargs):
+        sequence.append((method, path))
         if method == "GET" and path == "/api/channels/logos/":
-            return resp(200, {"count": 1, "next": None, "results": [existing]})
+            logo_gets["n"] += 1
+            if logo_gets["n"] == 1:
+                return resp(200, {"count": 0, "next": None, "results": []})  # pre-check miss
+            return resp(200, {"count": 1, "next": None, "results": [existing]})  # after the 400
         if method == "POST" and path == "/api/channels/logos/":
             return resp(400, {"url": ["logo with this url already exists."]})
         if method == "POST" and path == "/api/channels/channels/":
@@ -193,6 +209,130 @@ async def test_replay_against_real_client_survives_duplicate_logo_400(monkeypatc
         raise AssertionError(f"unexpected {method} {path}")
 
     monkeypatch.setattr(client, "_request", AsyncMock(side_effect=fake_request))
-    _, remap = await replay_write_plan(client, _logo_then_channel_plan())
+    outcome = ReplayOutcome()
+    _, remap = await replay_write_plan(client, _logo_then_channel_plan(), outcome=outcome)
     assert remap == {-1: 765, -2: 101}
+    assert sequence[:3] == [
+        ("GET", "/api/channels/logos/"), ("POST", "/api/channels/logos/"), ("GET", "/api/channels/logos/"),
+    ]
     assert posts == [("/api/channels/channels/", {"name": "Snooker 1", "logo_id": 765, "streams": [5]})]
+    assert outcome.reused == [0]
+    assert outcome.skipped == []
+
+
+# ---------------------------------------------------------------------------
+# PR #1014 review items 2, 3 and 4.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_failed_replacement_logo_preserves_an_existing_channels_artwork():
+    """Item 2: a planned assign_logo on an EXISTING channel whose replacement
+    logo failed must not PATCH logo_id to null."""
+    live = AsyncMock()
+    live.create_logo.side_effect = Exception("Logo creation failed: 400 (duplicate_url)")
+    live.get_channel.return_value = {"id": 7, "name": "Existing", "logo_id": 99, "streams": []}
+    plan = PipelineWritePlan(
+        writes=[
+            PlannedWrite("create_logo", [{"name": "L", "url": "http://l/new.png"}], {}),
+            PlannedWrite("update_channel", [7, {"logo_id": -1}], {}),
+        ],
+        channel_preconditions={"7": {"id": 7, "name": "Existing", "logo_id": 99, "streams": []}},
+    )
+    outcome = ReplayOutcome()
+    results, remap = await replay_write_plan(live, plan, outcome=outcome)
+    live.update_channel.assert_not_awaited()
+    assert remap == {-1: None}
+    assert results == [None, None]
+    assert [(e["index"], e["reason"]) for e in outcome.skipped] == [
+        (0, "soft_failure"), (1, "dependency_skipped"),
+    ]
+    # And the journal reconstructs neither a logo create nor a channel update.
+    assert journal_entries_for_plan(plan, remap, 11, outcome=outcome) == []
+
+
+@pytest.mark.asyncio
+async def test_failed_logo_still_lets_independent_structural_fields_apply():
+    live = AsyncMock()
+    live.create_logo.side_effect = Exception("Logo creation failed: 400 (duplicate_url)")
+    live.get_channel.return_value = {"id": 7, "name": "Existing", "logo_id": 99, "streams": []}
+    plan = PipelineWritePlan(
+        writes=[
+            PlannedWrite("create_logo", [{"name": "L", "url": "http://l/new.png"}], {}),
+            PlannedWrite("update_channel", [7, {"logo_id": -1, "name": "Renamed"}], {}),
+        ],
+        channel_preconditions={"7": {"id": 7, "name": "Existing", "logo_id": 99, "streams": []}},
+    )
+    outcome = ReplayOutcome()
+    _, remap = await replay_write_plan(live, plan, outcome=outcome)
+    live.update_channel.assert_awaited_once_with(7, {"name": "Renamed"})
+    entries = journal_entries_for_plan(plan, remap, 11, outcome=outcome)
+    assert [e["action_type"] for e in entries] == ["update_channel"]
+    assert entries[0]["after_value"] == {"name": "Renamed"}  # skipped logo ref omitted
+
+
+@pytest.mark.asyncio
+async def test_journal_has_no_phantom_success_row_for_a_skipped_or_reused_logo():
+    """Item 3: finalization must not reconstruct 'executed create_logo for None'."""
+    plan = _logo_then_channel_plan()
+    skipped = ReplayOutcome(skipped=[{"index": 0, "method": "create_logo", "reason": "soft_failure"}])
+    entries = journal_entries_for_plan(plan, {-1: None, -2: 101}, 11, outcome=skipped)
+    assert [e["action_type"] for e in entries if e["action_type"] == "create_logo"] == []
+    create_channel = next(e for e in entries if e["action_type"] == "create_channel")
+    assert create_channel["entity_id"] == 101
+
+    reused = ReplayOutcome(reused=[0])
+    entries = journal_entries_for_plan(plan, {-1: 765, -2: 101}, 11, outcome=reused)
+    assert [e["action_type"] for e in entries if e["action_type"] == "create_logo"] == []
+
+    # Control: a genuinely created logo still gets its row.
+    entries = journal_entries_for_plan(plan, {-1: 765, -2: 101}, 11, outcome=ReplayOutcome())
+    assert [e["entity_id"] for e in entries if e["action_type"] == "create_logo"] == [765]
+
+
+@pytest.mark.asyncio
+async def test_failed_index_is_the_true_plan_position_after_soft_skips():
+    """Item 4: [create_logo skipped, create_channel ok, update_channel fails] -> index 2."""
+    live = AsyncMock()
+    live.create_logo.side_effect = Exception("Logo creation failed: 400 (duplicate_url)")
+    live.create_channel.return_value = {"id": 101}
+    live.update_channel.side_effect = Exception("boom")
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("create_logo", [{"name": "L", "url": "http://l/x.png"}], {}),
+        PlannedWrite("create_channel", [{"name": "New", "streams": [5]}], {}),
+        PlannedWrite("update_channel", [-2, {"streams": [5, 6]}], {}),
+    ])
+    with pytest.raises(PartialReplayError) as info:
+        await replay_write_plan(live, plan)
+    assert info.value.failed_index == 2
+    assert info.value.completed == ["create_channel:{'name': 'New', 'streams': [5]}"]
+    live.delete_channel.assert_awaited_once_with(101)  # compensation unchanged
+
+
+@pytest.mark.asyncio
+async def test_positional_dependency_on_a_skipped_create_still_aborts():
+    """Only payload FIELDS are optional; a write that targets the skipped
+    resource itself cannot proceed."""
+    live = AsyncMock()
+    live.create_logo.side_effect = Exception("Logo creation failed: 500 (server_error)")
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("create_logo", [{"name": "L", "url": "http://l/x.png"}], {}),
+        PlannedWrite("update_logo", [-1, {"name": "Renamed"}], {}),
+    ])
+    with pytest.raises(PartialReplayError) as info:
+        await replay_write_plan(live, plan)
+    assert info.value.failed_index == 1
+    live.update_logo.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_planning_client_records_create_logo_kwargs_for_replay():
+    live = AsyncMock()
+    planner = PlanningDispatcharrClient(live)
+    await planner.create_logo({"name": "L", "url": "http://l/x.png"}, precheck=False)
+    write = planner.plan.writes[0]
+    assert (write.method, write.kwargs) == ("create_logo", {"precheck": False})
+    replay_client = AsyncMock()
+    replay_client.create_logo.return_value = {"id": 5}
+    await replay_write_plan(replay_client, planner.plan)
+    replay_client.create_logo.assert_awaited_once_with({"name": "L", "url": "http://l/x.png"}, precheck=False)

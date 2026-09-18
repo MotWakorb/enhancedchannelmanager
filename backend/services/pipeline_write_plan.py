@@ -96,6 +96,23 @@ class PipelineWritePlan:
 SOFT_FAIL_WRITE_METHODS = frozenset({"create_logo"})
 
 
+@dataclass
+class ReplayOutcome:
+    """Truthful per-write record of a replay, for durable evidence.
+
+    ``skipped`` holds one dict per write that did NOT run against upstream:
+    a soft-fail write that raised (``reason="soft_failure"``) or a later
+    write reduced to nothing because every field it carried depended on a
+    skipped create (``reason="dependency_skipped"``). ``reused`` holds the
+    plan indices of creates that resolved an existing upstream row instead
+    of creating one. Finalization must consult these instead of assuming
+    every planned write succeeded (PR #1014 review item 3).
+    """
+
+    skipped: list[dict[str, Any]] = field(default_factory=list)
+    reused: list[int] = field(default_factory=list)
+
+
 class PartialReplayError(RuntimeError):
     """Upstream has no transaction; exposes exactly how far replay reached."""
 
@@ -180,10 +197,11 @@ class PlanningDispatcharrClient:
         self._record("create_channel_group", name)
         return {"id": temp_id, "name": name}
 
-    async def create_logo(self, data: dict) -> dict:
+    async def create_logo(self, data: dict, **kwargs) -> dict:
         temp_id = self._next_temp_id
         self._next_temp_id -= 1
-        self._record("create_logo", data)
+        # kwargs (e.g. precheck=False) are recorded so replay passes them on.
+        self._record("create_logo", data, **kwargs)
         return {"id": temp_id, **copy.deepcopy(data)}
 
     async def update_channel(self, channel_id: int, data: dict) -> dict:
@@ -256,38 +274,97 @@ async def validate_read_set(client, plan: PipelineWritePlan) -> None:
                 raise ValueError(f"channel profile membership {key} drifted")
 
 
+# Sentinel a skipped create's temp id maps to while a payload is being
+# resolved. It is stripped from dict payloads (the field is simply not sent),
+# so an existing channel's logo is left untouched rather than cleared to null
+# (PR #1014 review item 2), and a new channel is created without the field.
+_SKIPPED = object()
+
+
+def _strip_skipped(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_skipped(item) for key, item in value.items() if item is not _SKIPPED}
+    if isinstance(value, list):
+        return [_strip_skipped(item) for item in value if item is not _SKIPPED]
+    return value
+
+
 async def replay_write_plan(
-    client, plan: PipelineWritePlan, *, read_set_validated: bool = False, execution_id: int | None = None
+    client, plan: PipelineWritePlan, *, read_set_validated: bool = False,
+    execution_id: int | None = None, outcome: ReplayOutcome | None = None,
 ) -> tuple[list[Any], dict[int, int | None]]:
     """Validate first, then replay only recorded writes with temp-ID remapping.
 
     A write in :data:`SOFT_FAIL_WRITE_METHODS` that raises is logged and
     skipped: its result is ``None`` and, for a create, its temporary id maps to
-    ``None`` so later payloads that referenced it carry ``None`` instead of an
-    unresolved temp id. Every other failure aborts and compensates as before.
+    ``None``. A later payload FIELD that referenced the skipped id is omitted
+    from the request (never sent as ``None``), so an existing channel keeps
+    its current logo and a new channel is simply created without one; a later
+    ``update_channel`` left with no fields is skipped entirely. A positional
+    reference to a skipped id (a write that cannot proceed without it) still
+    aborts. Every other failure aborts and compensates as before, and the
+    reported ``failed_index`` is the failing write's true plan position, not
+    the count of successful writes (PR #1014 review item 4).
+
+    Pass an :class:`ReplayOutcome` to receive which writes were skipped or
+    resolved an existing row, for durable evidence.
     """
     if not read_set_validated:
         await validate_read_set(client, plan)
     remap: dict[int, int | None] = {}
     results: list[Any] = []
+    outcome = outcome if outcome is not None else ReplayOutcome()
 
     def mapped(value: Any) -> Any:
         if isinstance(value, int) and value < 0:
             if value not in remap:
                 raise ValueError(f"unresolved temporary id {value}")
-            return remap[value]
+            resolved = remap[value]
+            return _SKIPPED if resolved is None else resolved
         if isinstance(value, list):
             return [mapped(item) for item in value]
         if isinstance(value, dict):
             return {key: mapped(item) for key, item in value.items()}
         return value
 
+    def resolve(value: Any) -> Any:
+        resolved = mapped(value)
+        if resolved is _SKIPPED:
+            raise ValueError("write depends on a skipped create")
+        if isinstance(resolved, list):
+            if any(item is _SKIPPED for item in resolved):
+                raise ValueError("write depends on a skipped create")
+            return [_strip_skipped(item) for item in resolved]
+        return _strip_skipped(resolved)
+
+    def _skip(index: int, write: PlannedWrite, reason: str, error_type: str | None = None) -> None:
+        entry = {"index": index, "method": write.method, "reason": reason}
+        if error_type:
+            entry["error_type"] = error_type
+        outcome.skipped.append(entry)
+        results.append(None)
+
     next_temp = -1
     completed: list[tuple[PlannedWrite, list[Any], Any]] = []
+    failed_index = 0
     try:
         for index, write in enumerate(plan.writes):
-            args = mapped(write.args)
-            kwargs = mapped(write.kwargs)
+            failed_index = index
+            args = resolve(write.args)
+            kwargs = resolve(write.kwargs)
+            if (
+                write.method == "update_channel" and len(args) > 1
+                and isinstance(args[1], dict) and not args[1]
+                and isinstance(write.args[1], dict) and write.args[1]
+            ):
+                # Every field this update carried referenced a skipped create;
+                # there is nothing truthful left to send.
+                logger.warning(
+                    "[PIPELINE-REPLAY] write %s (update_channel) skipped: all of its fields "
+                    "depended on a skipped write", index,
+                )
+                _skip(index, write, "dependency_skipped")
+                continue
             if write.event_sync:
                 from services.event_sync_cleanup import apply_change
                 result = await apply_change(client, write.event_sync, execution_id)
@@ -302,8 +379,10 @@ async def replay_write_plan(
                     if write.method.startswith("create_"):
                         remap[next_temp] = None
                         next_temp -= 1
-                    results.append(None)
+                    _skip(index, write, "soft_failure", type(soft_exc).__name__)
                     continue
+                if isinstance(result, dict) and result.get("ecm_reused"):
+                    outcome.reused.append(index)
             else:
                 result = await getattr(client, write.method)(*args, **kwargs)
             if write.method.startswith("create_"):
@@ -349,16 +428,33 @@ async def replay_write_plan(
             for item in completed
         ]
         raise PartialReplayError(
-            len(completed), completed_targets, compensation_errors
+            failed_index, completed_targets, compensation_errors
         ) from exc
     return results, remap
 
 
 def journal_entries_for_plan(
-    plan: PipelineWritePlan, remap: dict[int, int], execution_id: int
+    plan: PipelineWritePlan, remap: dict[int, int | None], execution_id: int,
+    outcome: ReplayOutcome | None = None,
 ) -> list[dict[str, Any]]:
-    """Build target-specific audit rows for every replayed mutation semantic."""
+    """Build target-specific audit rows for every replayed mutation semantic.
+
+    Writes the replay skipped, and creates that resolved an existing upstream
+    row instead of creating one, mutated nothing and get no success row
+    (PR #1014 review item 3). Payload fields that referenced a skipped create
+    are omitted, mirroring what was actually sent.
+    """
     entries: list[dict[str, Any]] = []
+    skipped_indices = {entry["index"] for entry in (outcome.skipped if outcome else [])}
+    reused_indices = set(outcome.reused) if outcome else set()
+
+    def without_skipped_refs(payload: Any) -> Any:
+        if isinstance(payload, dict):
+            return {
+                key: value for key, value in payload.items()
+                if not (isinstance(value, int) and value < 0 and remap.get(value, value) is None)
+            }
+        return payload
     def append(action: str, entity_id: Any, name: Any, before: Any, after: Any, description: str):
         entries.append({
             "category": "auto_creation", "action_type": action,
@@ -376,7 +472,7 @@ def journal_entries_for_plan(
         int(channel_id): copy.deepcopy(value)
         for channel_id, value in plan.channel_preconditions.items()
     }
-    for write in plan.writes:
+    for index, write in enumerate(plan.writes):
         if write.event_sync:
             # Already durably journaled at real replay, not reconstructed.
             continue
@@ -384,6 +480,10 @@ def journal_entries_for_plan(
         if method.startswith("create_"):
             entity_id = remap.get(next_temp, next_temp)
             next_temp -= 1
+            if index in skipped_indices or entity_id is None or index in reused_indices:
+                # Skipped (nothing created) or reused (an existing row was
+                # resolved): no mutation happened, so no success row.
+                continue
             payload = write.args[0] if write.args else {}
             append(method, entity_id, payload.get("name") if isinstance(payload, dict) else str(payload),
                    None, payload, f"Planned pipeline executed {method} for {entity_id}")
@@ -411,10 +511,13 @@ def journal_entries_for_plan(
                    {"profile_id": profile_id}, payload,
                    f"Planned pipeline updated profile {profile_id} membership")
             continue
+        if index in skipped_indices:
+            continue
         raw_id = write.args[0] if write.args else None
         entity_id = remap.get(raw_id, raw_id)
         before = copy.deepcopy(shadow.get(entity_id, plan.channel_preconditions.get(str(raw_id), {})))
         payload = write.args[1] if len(write.args) > 1 else None
+        payload = without_skipped_refs(payload)
         if method == "update_channel" and isinstance(payload, dict) and "streams" in payload:
             old_streams = set(before.get("streams", []) or [])
             new_streams = set(payload.get("streams", []) or [])

@@ -253,6 +253,54 @@ def dispatcharr_version_advisory(version) -> Optional[str]:
     )
 
 
+# Marker set on a logo row that ``create_logo`` RESOLVED instead of created
+# (PR #1014 review item 1). Absent on a freshly created row.
+LOGO_REUSED_KEY = "ecm_reused"
+
+
+def _mark_logo_reused(row: dict) -> dict:
+    marked = dict(row)
+    marked[LOGO_REUSED_KEY] = True
+    return marked
+
+
+def logo_was_reused(row) -> bool:
+    """True when ``create_logo`` returned an existing row rather than creating one."""
+    return bool(isinstance(row, dict) and row.get(LOGO_REUSED_KEY))
+
+
+def strip_logo_reuse_marker(row):
+    """Return ``row`` without the internal reuse marker (for API responses)."""
+    if isinstance(row, dict) and LOGO_REUSED_KEY in row:
+        return {key: value for key, value in row.items() if key != LOGO_REUSED_KEY}
+    return row
+
+
+def _classify_logo_create_failure(response: httpx.Response) -> str:
+    """Safe, bounded classification of a failed logo POST (never the body).
+
+    The body can echo the submitted URL, which may carry provider credentials,
+    so only a fixed vocabulary is ever logged or raised: ``duplicate_url``,
+    ``validation``, ``server_error`` or ``error``.
+    """
+    status = response.status_code
+    if status == 400:
+        try:
+            body = response.json()
+        except Exception:  # noqa: BLE001 - classification only
+            body = None
+        if isinstance(body, dict):
+            url_errors = body.get("url")
+            if isinstance(url_errors, list) and any(
+                "exist" in str(item).lower() for item in url_errors
+            ):
+                return "duplicate_url"
+        return "validation"
+    if status >= 500:
+        return "server_error"
+    return "error"
+
+
 class DispatcharrClient:
     """API client for Dispatcharr with JWT authentication."""
 
@@ -1267,7 +1315,7 @@ class DispatcharrClient:
         response.raise_for_status()
         return response.json()
 
-    async def create_logo(self, data: dict) -> dict:
+    async def create_logo(self, data: dict, *, precheck: bool = True) -> dict:
         """Create a logo, or return the existing row that already has its URL.
 
         Dispatcharr's ``POST /api/channels/logos/`` answers 400 when a logo
@@ -1276,18 +1324,28 @@ class DispatcharrClient:
         recorded ``create_logo`` verbatim, so one stale row from an earlier
         event cycle turned the whole replay into a 502 with zero writes. The
         method is therefore idempotent on ``url``: an existing row is resolved
-        before the POST, and again after a 400 (the row can appear in between).
-        Every caller (pipeline executor, ``POST /api/channels/logos``, the DBAS
-        logo importer) already treated "exists" as "use that one".
+        before the POST (unless ``precheck`` is False because the caller has
+        already established the URL is absent from the catalog), and again
+        after a 400 (the row can appear in between).
 
-        Raises an exception carrying the status and response body when the
-        POST fails and no row with that URL can be found.
+        **Created versus reused is preserved.** A reused row is returned with
+        :data:`LOGO_REUSED_KEY` set to True (test with :func:`logo_was_reused`);
+        a freshly created row never carries the key. Callers whose contract
+        depends on ownership must check it: the DBAS logo importer ledgers a
+        created logo for compensating delete and counts it as created, and a
+        reused row must do neither (PR #1014 review item 1). The pipeline
+        executor and ``POST /api/channels/logos`` only need the id.
+
+        Raises an exception naming the status and a classification of the
+        failure when the POST fails and no row with that URL can be found.
+        The upstream response body is never logged or included: it can echo
+        the logo URL, which may carry provider credentials.
         """
         url = data.get("url") if isinstance(data, dict) else None
-        if url:
+        if url and precheck:
             existing = await self._find_logo_by_url_quietly(url)
             if existing is not None:
-                return existing
+                return _mark_logo_reused(existing)
         response = await self._request("POST", "/api/channels/logos/", json=data)
         if response.status_code == 400 and url:
             existing = await self._find_logo_by_url_quietly(url)
@@ -1296,17 +1354,14 @@ class DispatcharrClient:
                     "[DISPATCHARR] Logo create returned 400; reusing existing logo id=%s",
                     existing.get("id"),
                 )
-                return existing
+                return _mark_logo_reused(existing)
         if response.status_code >= 400:
-            # The body is what tells a duplicate URL apart from a validation
-            # error; without it the generic _request line above says only
-            # "status: 400". Bounded so a proxy error page cannot flood the log.
-            error_body = response.text
+            kind = _classify_logo_create_failure(response)
             logger.warning(
-                "[DISPATCHARR] Logo creation failed: status %s body %s",
-                response.status_code, (error_body or "")[:300],
+                "[DISPATCHARR] Logo creation failed: status %s (%s)",
+                response.status_code, kind,
             )
-            raise Exception(f"Logo creation failed: {response.status_code} - {error_body}")
+            raise Exception(f"Logo creation failed: {response.status_code} ({kind})")
         return response.json()
 
     async def _find_logo_by_url_quietly(self, url: str) -> Optional[dict]:

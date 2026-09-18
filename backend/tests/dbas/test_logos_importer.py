@@ -1530,3 +1530,56 @@ async def test_a_remote_url_record_is_recreated_by_url_even_with_a_provider_wire
     client.upload_logo_file.assert_not_awaited()
     assert report.category(EntityType.LOGO).created == 1
     assert report.logo_misses == 0
+
+
+# ===========================================================================
+# PR #1014 review item 1 — a REUSED destination logo is never restore-owned
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_a_reused_remote_url_logo_is_remapped_but_not_ledgered_or_counted_created():
+    """``create_logo`` resolving an existing row (same URL, different name) must
+    populate the FK remap for channel reattach, but must not enter the
+    compensating-delete ledger or count as created: rolling back would
+    otherwise delete a logo that pre-dates the restore."""
+    from dispatcharr_client import LOGO_REUSED_KEY
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    client.create_logo = AsyncMock(return_value={
+        "id": 765, "name": "Different Name", "url": "http://cdn.example/x.png", LOGO_REUSED_KEY: True,
+    })
+
+    await import_logos(
+        archive_logos=[{"id": 42, "name": "Remote Logo", "url": "http://cdn.example/x.png"}],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_never_called_provider,
+    )
+
+    cat = report.category(EntityType.LOGO)
+    assert cat.created == 0
+    assert cat.skipped == 1
+    assert cat.skip_details[0].reason == SkipReason.ALREADY_EXISTS_IDENTICAL
+    assert cat.skip_details[0].label == "Remote Logo"
+    assert [e for e in ledger.entries if e.entity_type == EntityType.LOGO] == []
+    assert ledger.compensation_order() == []
+    assert remap.resolve(EntityType.LOGO, 42) == 765
+    assert report.logo_misses == 0
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_created_remote_url_logo_is_still_ledgered_and_compensable():
+    report, ledger, remap = _ctx()
+    client = _client(dest_logos=[])
+    client.create_logo = AsyncMock(return_value={"id": 900, "name": "Remote Logo", "url": "http://cdn.example/x.png"})
+
+    await import_logos(
+        archive_logos=[{"id": 42, "name": "Remote Logo", "url": "http://cdn.example/x.png"}],
+        client=client, selected=True, report=report, ledger=ledger, remap=remap,
+        content_provider=_never_called_provider,
+    )
+
+    assert report.category(EntityType.LOGO).created == 1
+    logo_entries = [e for e in ledger.entries if e.entity_type == EntityType.LOGO]
+    assert [e.destination_id for e in logo_entries] == [900]
+    assert remap.resolve(EntityType.LOGO, 42) == 900

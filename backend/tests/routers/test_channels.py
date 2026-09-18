@@ -1789,7 +1789,7 @@ class TestBulkCommitLogoIndex:
         ])
         created_logo_ids = iter(range(1000, 2000))
         mock_client.create_logo.side_effect = (
-            lambda data: {"id": next(created_logo_ids), "url": data["url"]}
+            lambda data, **kwargs: {"id": next(created_logo_ids), "url": data["url"]}
         )
         created_channel_ids = iter(range(1, 1000))
         mock_client.create_channel.side_effect = (
@@ -3782,3 +3782,42 @@ class TestFindDuplicatesFoldMatchKey:
         data = response.json()
         assert data["total_groups"] == 1
         assert sorted(c["id"] for c in data["groups"][0]["channels"]) == [1, 3]
+
+
+class TestBulkLogoCreateReviewFollowups:
+    """PR #1014 review items 1 and 5 on the bulk createChannel logo path."""
+
+    def _paginated_logos(self, pages):
+        responses = []
+        for index, page in enumerate(pages):
+            responses.append({
+                "results": page,
+                "next": "more" if index < len(pages) - 1 else None,
+                "count": sum(len(p) for p in pages),
+            })
+        return responses
+
+    @pytest.mark.asyncio
+    async def test_known_miss_skips_the_clients_catalog_precheck(self, async_client):
+        """The batch already indexed the catalog; create_logo must be told so."""
+        mock_client = AsyncMock()
+        mock_client.get_channels.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_streams.return_value = {"results": [], "count": 0, "next": None}
+        mock_client.get_logos.side_effect = self._paginated_logos([[]])
+        mock_client.create_logo.return_value = {"id": 7777, "url": "http://logos/new.png"}
+        mock_client.create_channel.return_value = {"id": 1, "name": "A"}
+
+        with patch("routers.channels.get_client", return_value=mock_client), \
+             patch("routers.channels.journal"):
+            response, data = await _commit_and_wait(
+                async_client, {"operations": [
+                    {"type": "createChannel", "tempId": -1, "name": "A",
+                     "logoUrl": "http://logos/new.png"},
+                ], "continueOnError": True}
+            )
+        assert response.status_code == 202
+        assert data["operationsApplied"] == 1
+        mock_client.create_logo.assert_awaited_once_with(
+            {"name": "A", "url": "http://logos/new.png"}, precheck=False,
+        )
+        assert mock_client.get_logos.await_count == 1
