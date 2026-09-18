@@ -19,6 +19,7 @@ from services.dedup_matcher import (
     CONFIDENCE_FLOOR,
     MatchResult,
     _normalize,
+    airing_key,
     find_candidate,
 )
 
@@ -349,6 +350,165 @@ class TestEdgeCases:
         # Immutable.
         with pytest.raises((AttributeError, Exception)):
             result.confidence = 0.5  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# Airing gate — schedule-driven slot names (GH #1015)
+# ---------------------------------------------------------------------------
+#
+# A provider hands out a fixed pool of slot names and rolls the fixture and
+# the airing over daily. The slot prefix, tournament and round are byte-
+# identical day to day, so token_set_ratio scores a next-day fixture against
+# yesterday's at 0.86-0.99 — above the operator default of 0.80. The gate
+# drops a pair whose two stated airings disagree, before any scoring.
+#
+# The scorer alone cannot fix this: REMOVING the date/time run leaves the two
+# names character-identical and they score 1.00, i.e. still queued. The run is
+# the only part of the name that says which airing it is, so a disagreement
+# between two present runs is the signal, not noise.
+
+
+class TestAiringKey:
+    """``airing_key`` extracts the date/time run, or None when absent."""
+
+    def test_extracts_provider_shape(self):
+        assert airing_key("Slot 04: Final @ 18 Sep 09:30 AM GMT-1") == (
+            "18 sep 09:30 am gmt-1"
+        )
+
+    def test_none_when_name_states_no_airing(self):
+        assert airing_key("ESPN HD") is None
+        assert airing_key("Channel 5 | US : ESPN 2") is None
+
+    def test_none_for_bare_day_and_month(self):
+        # No clock time → not an airing. A false airing would veto a
+        # legitimate duplicate, so the shape is kept narrow.
+        assert airing_key("Sports 24/7 Sep") is None
+        assert airing_key("18 Sep") is None
+
+    def test_spelling_noise_is_ignored(self):
+        noisy = airing_key("X @ 18 sep 09:30 a.m. gmt-1")
+        clean = airing_key("X @ 18 Sep 09:30 AM GMT-1")
+        assert noisy == clean
+
+    def test_year_is_not_part_of_the_key(self):
+        # One provider spelling the year out must not read as a
+        # different airing from another that omits it.
+        assert airing_key("X 18 Sep 2026 09:30 GMT-1") == airing_key(
+            "X 18 Sep 09:30 GMT-1"
+        )
+
+    def test_leading_zeros_do_not_split_an_airing(self):
+        # A genuine duplicate that one provider zero-pads and another does
+        # not must still compare equal, or the gate would veto a real pair.
+        assert airing_key("X @ 8 Sep 9:05 AM GMT-1") == airing_key(
+            "X @ 08 Sep 09:05 am gmt-1"
+        )
+
+    def test_accepts_the_no_marker_shape(self):
+        assert airing_key("X 18 Sep 09:30 GMT-1") is not None
+
+    def test_does_not_truncate_into_a_slot_number(self):
+        # "04:" is a slot separator, not a clock, and "250" is not a day.
+        assert airing_key("SLOT 04: Championship") is None
+        assert airing_key("Channel Name Number 250") is None
+
+
+class TestAiringGate:
+    """A next-day fixture in the same slot is a rollover, not a duplicate."""
+
+    SLOT = "EVENT SLOT 04: Championship | Qualifying: Player One - Player Two @ 18 Sep 09:30 AM GMT-1"
+    YESTERDAY = "EVENT SLOT 04: Championship | Qualifying: Player Three - Player Four @ 17 Sep 01:00 PM GMT-1"
+
+    def test_same_slot_different_fixture_and_day_is_not_queued(self):
+        # The acceptance case: yesterday's channel is still in the group
+        # and today's slot has rolled over.
+        result = find_candidate(
+            stream_name=self.SLOT,
+            candidates=[("uuid-yesterday", self.YESTERDAY)],
+            threshold=0.80,
+        )
+        assert result is None
+
+    def test_the_score_alone_would_have_queued_it(self):
+        # Guard against the gate being quietly dropped: the same pair
+        # scores above the operator default when scored directly, so
+        # ``find_candidate`` returning None is the gate, not the threshold.
+        from rapidfuzz import fuzz
+
+        score = (
+            fuzz.token_set_ratio(_normalize(self.SLOT), _normalize(self.YESTERDAY))
+            / 100.0
+        )
+        assert score >= 0.80
+
+    def test_next_day_with_identical_fixture_is_not_queued(self):
+        # A slot that carries the same fixture into the next day is still
+        # a different airing: the group is on a daily rollover, so the
+        # previous day's channel is not this stream's duplicate.
+        next_day = self.SLOT.replace("@ 18 Sep", "@ 19 Sep")
+        result = find_candidate(
+            stream_name=self.SLOT,
+            candidates=[("uuid-next-day", next_day)],
+            threshold=0.80,
+        )
+        assert result is None
+
+    def test_identical_names_still_queue(self):
+        # The other half of the acceptance criterion: the gate must not
+        # suppress genuine duplicates.
+        result = find_candidate(
+            stream_name=self.SLOT,
+            candidates=[("uuid-a", self.SLOT)],
+            threshold=0.80,
+        )
+        assert result is not None
+        assert result.confidence == 1.0
+
+    def test_same_airing_still_scores_fuzzily(self):
+        # Same airing, different spelling → still a candidate, still
+        # scored by the fuzzy path. The gate only ever drops a MISMATCH.
+        result = find_candidate(
+            stream_name=self.SLOT,
+            candidates=[("uuid-a", self.SLOT.replace("@", "@ ").replace("  ", " "))],
+            threshold=0.80,
+        )
+        assert result is not None
+
+    def test_gate_keeps_a_genuine_candidate_in_the_same_call(self):
+        # The rollover candidate is dropped; a real duplicate elsewhere in
+        # the same candidate list must still be returned.
+        result = find_candidate(
+            stream_name=self.SLOT,
+            candidates=[
+                ("uuid-yesterday", self.YESTERDAY),
+                ("uuid-duplicate", self.SLOT),
+            ],
+            threshold=0.80,
+        )
+        assert result is not None
+        assert result.candidate_channel_id == "uuid-duplicate"
+
+    def test_gate_does_not_fire_without_an_airing_on_both_sides(self):
+        # Names that state no airing are scored exactly as before — the
+        # common case, and the reason the gate cannot regress it.
+        result = find_candidate(
+            stream_name="ESPN HD",
+            candidates=[("uuid-a", "ESPN SD")],
+            threshold=0.80,
+        )
+        assert result is not None  # token_set_ratio("espn hd","espn sd") = 0.833
+
+    def test_gate_does_not_fire_when_only_the_stream_has_an_airing(self):
+        # Documented contract: both sides must state an airing. A name
+        # with no run is never vetoed, so the gate can only change the
+        # verdict on pairs that both date themselves.
+        result = find_candidate(
+            stream_name="ESPN HD",
+            candidates=[("uuid-a", "ESPN HD @ 18 Sep 09:30 AM GMT-1")],
+            threshold=0.80,
+        )
+        assert result is not None
 
 
 # ---------------------------------------------------------------------------

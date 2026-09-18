@@ -125,6 +125,23 @@ The matcher service (BD-A) enforces a **hard floor of 60%** below which it refus
 
 **The floor is a single number, not a per-call override or a UX setting.** Changing it is an ADR addendum, not a runtime config change. This is intentional — the value of a defense-in-depth constant comes from it not being trivially loosenable.
 
+**Addendum (GitHub #1015): the scoring ladder gains an airing gate ahead of the floor, and the bulk-M3U candidate scope excludes the stream's own channel.**
+
+A schedule-driven provider hands out a **fixed pool of slot names** and rolls the fixture and the airing over every day: `… SLOT 04: <Tournament> | <Round>: <A> - <B> @ 18 Sep 09:30 AM GMT-1`. Every name a slot ever carries therefore shares the slot, the tournament and the round, and `token_set_ratio` — a subset metric — scored a next-day fixture against yesterday's at **0.86–0.99**, above the default 80% threshold. Queued, the stream is deferred instead of created, and a group whose whole pool rolls over creates nothing until orphan cleanup removes the previous day's channels.
+
+The gate is deliberately **not** "strip the date/time run and score the rest". With the run removed the two names are character-identical and the pair scores 1.00 — still queued — because the run is the only part of a schedule-driven name that says *which* airing it is for. The ladder instead treats a disagreement between two present runs as disqualifying, in the same family as the M1 callsign hard-reject:
+
+- `airing_key(name)` extracts the run's day, month, clock, meridiem and zone; `None` when the name states no airing.
+- `find_candidate` drops a candidate before scoring **only** when both sides state an airing and the keys differ. A name with no airing is never dropped, so ordinary channel names score byte-for-byte as before, and the gate can only ever *remove* a candidate — it can never admit one the floor would refuse.
+- The year is parsed out of the clock match and excluded from the key, so one provider spelling `18 Sep 2026 09:30` still compares equal to another's `18 Sep 09:30`.
+- A provider that spells the same instant two different ways (12-hour vs 24-hour, differing zone labels) falls through to **create** rather than merge. That is the conservative direction and the deliberate trade: creation is idempotent and a missed merge offer is recoverable, while a false offer blocks the stream behind review and, on this path, blocks the channel from being created at all.
+
+**Companion change to the candidate scope (BD-F).** `_maybe_enqueue_pending_merge` builds its candidate list from the same-group channels but excludes any channel the incoming stream is **already attached to**. Such a pair scores 1.00 by construction (the channel's name is the stream's name), so leaving it in queues the stream as a merge against its own channel and defers a create that has nothing to review. Attachment is caller-side state, so the filter lives at the caller; the hook's contract that the caller owns candidate selection is unchanged.
+
+**Observability (§D6/BD-M scope, no contract change).** `DedupHookResult` now carries the blocking `pending_merges` row id on **both** the fresh-insert and the §D5 collision branch, the pipeline result carries `pending_merge_ids` alongside `pending_merges_added`, and the run summary names the count and the rows. A run that created nothing because every stream was deferred is no longer indistinguishable from a refresh where the provider had nothing.
+
+**Out of scope here (needs its own decision).** The queue-lifecycle asks — auto-expiring a pending row whose candidate channel no longer exists, and making dismissal sticky per `(stream_name, candidate_channel_id)` rather than per row — are **not** in this addendum. §D4 specifies the 404-on-accept behaviour, migration 0014 documents that "the same pair can re-appear after dismissal", there is a PO decision recorded on the accepted-but-not-applied row shape, and bead `enhancedchannelmanager-5136e` already tracks the retention reaper as deferred. Changing any of those is an ADR amendment for the PO, not a bug fix.
+
 ### D3 — `pending_merges` state machine + retention
 
 Each `pending_merges` row carries `status` ∈ {`pending`, `merged`, `dismissed`}. Transitions:
@@ -418,3 +435,4 @@ No vendor relationship to unwind; no external dependency introduced by this ADR 
 | Date | Bead | Change | Rationale |
 |---|---|---|---|
 | 2026-05-16 | `enhancedchannelmanager-2pd5i` | Proposed + accepted same day | Contract-lock for BD-A through BD-P; encodes 2026-05-15 team-plan + 2026-05-16 D4 API-naming override. Hard prerequisite for the 16 sub-beads of the dedup epic |
+| 2026-09-18 | GitHub #1015 | §D2 addendum: airing gate ahead of the floor; BD-F candidate scope excludes the stream's own channel; deferred rows surface on the run result | A provider's daily slot rollover scored 0.86–0.99 against yesterday's channels and deferred every stream in the group, so the run created nothing for ~12 hours. Queue-lifecycle asks are explicitly left to a separate PO decision |

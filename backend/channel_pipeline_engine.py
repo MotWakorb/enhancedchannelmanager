@@ -754,11 +754,28 @@ class ChannelPipelineEngine:
             orphan_info = f", {removed} orphans removed"
         if moved:
             orphan_info += f", {moved} orphans moved"
+        # GH #1015: a deferred stream is the one thing that makes "0 channels
+        # created" a lie by omission — the run DID have work to do and the
+        # queue stopped it. Name the count (and the rows) in the completion
+        # line so a postmortem can tell the two cases apart without a DB
+        # query.
+        deferred = results.get('pending_merges_added', 0)
+        deferred_info = ""
+        if deferred:
+            row_ids = results.get('pending_merge_ids') or []
+            shown = ", ".join(str(i) for i in row_ids[:10])
+            if len(row_ids) > 10:
+                shown += f", … (+{len(row_ids) - 10} more)"
+            deferred_info = (
+                f", {deferred} stream(s) deferred by pending merges"
+                + (f" (rows: {shown})" if shown else "")
+            )
         logger.info(
             "[AUTO-CREATE-ENGINE] Pipeline completed: %s/%s streams matched, "
-            "%s channels created, %s updated%s",
+            "%s channels created, %s updated%s%s",
             results['streams_matched'], results['streams_evaluated'],
-            results['channels_created'], results['channels_updated'], orphan_info
+            results['channels_created'], results['channels_updated'],
+            orphan_info, deferred_info
         )
 
         selected_error_count = sum(
@@ -2896,6 +2913,11 @@ class ChannelPipelineEngine:
             # §D1). Surfaces on the pipeline result so the M3U-refresh
             # task can hand the count to BD-J's toast handler.
             "pending_merges_added": 0,
+            # GH #1015: the row ids behind ``pending_merges_added``. The
+            # summary names these so a run that created nothing because
+            # every slot was deferred says WHICH rows to resolve, instead
+            # of looking identical to "the provider had nothing today".
+            "pending_merge_ids": [],
             "created_entities": [],
             "modified_entities": [],
             "dry_run_results": [],
@@ -3420,6 +3442,7 @@ class ChannelPipelineEngine:
             # operationally both are "would have created a channel, now
             # waiting on operator review".
             results["pending_merges_added"] += exec_ctx.pending_merges_added
+            results["pending_merge_ids"].extend(exec_ctx.pending_merge_ids)
             results["created_entities"].extend(exec_ctx.created_entities)
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)

@@ -33,15 +33,37 @@ own that step explicitly.
 
 Scoring:
 
+* Airing gate first — see below. A name carrying a DIFFERENT explicit
+  date/time than the candidate describes a different airing, and is
+  dropped before any RapidFuzz call.
 * Exact match after normalization → confidence = 1.00.
 * Otherwise → RapidFuzz ``fuzz.token_set_ratio(...) / 100.0``.
 * Tie-break: lower ``channel_id`` wins (lexicographic on the string UUID
   — ASCII order is deterministic for Dispatcharr's UUID format).
 
-Returns ``None`` when the candidates list is empty, when the top-1 score
-falls below ``max(threshold, CONFIDENCE_FLOOR)``, or when both inputs
-normalize to empty strings (defensive — RapidFuzz returns 0.0 for empty
-inputs, but we short-circuit so the contract is explicit in code).
+Airing gate (schedule-driven providers). Event providers hand out a fixed
+pool of slot names (``… SLOT 04``) and roll the fixture and the airing —
+``@ 18 Sep 09:30 AM GMT-1`` — over every day. The slot prefix, the
+tournament and the round are therefore identical in *every* name the slot
+ever carries, and ``token_set_ratio`` — a subset metric — scores a
+next-day fixture against yesterday's at 0.86–0.99. Queued, that stream
+is deferred instead of created, and the group keeps the previous day's
+channels until orphan cleanup removes them.
+
+Stripping the date/time run is NOT the fix: with the run removed the two
+names are character-for-character the same, and the pair scores 1.00 —
+still queued. The date/time run is the ONE part of a schedule-driven name
+that identifies which airing the name is for, so a mismatch between two
+present runs is treated as a hard signal, in the same family as the M1
+callsign hard-reject: different airing, not the same stream twice. The
+gate fires only when BOTH sides carry a run, so ordinary names (no
+date/time anywhere) score exactly as they did before.
+
+Returns ``None`` when the candidates list is empty, when every candidate
+is dropped by the airing gate, when the top-1 score falls below
+``max(threshold, CONFIDENCE_FLOOR)``, or when both inputs normalize to
+empty strings (defensive — RapidFuzz returns 0.0 for empty inputs, but we
+short-circuit so the contract is explicit in code).
 """
 from __future__ import annotations
 
@@ -656,6 +678,71 @@ def extract_callsign(name: str) -> str | None:
     return NormalizationEngine.extract_call_sign(name)
 
 
+# ---------------------------------------------------------------------------
+# AIRING GATE (see the module docstring)
+# ---------------------------------------------------------------------------
+#
+# The date/time run a schedule-driven provider appends to every slot name.
+# Two shapes are recognised, with and without the ``@`` marker:
+#
+#   "<STATIC> @ 18 Sep 09:30 AM GMT-1"     (the observed provider shape)
+#   "<STATIC> 18 Sep 2026 09:30 GMT-1"     (year spelled out)
+#
+# A bare "<day> <Month>" is deliberately NOT an airing: without a clock
+# time the run is far more likely to be part of a name ("Sports 24/7 Sep")
+# than an airing, and a false airing would veto a legitimate duplicate.
+# Every quantifier is bounded and no two optional groups can consume the
+# same characters, so the scan is linear (docs/style_guide.md#regex); the
+# input is already capped at ``_NORMALIZE_MAX_LEN`` by ``_normalize``.
+_DATETIME_RE = re.compile(
+    r"@?\s*"
+    r"(?P<day>\d{1,2})\s+"
+    r"(?P<month>[A-Za-z]{3,9})\.?"
+    r"(?:\s+(?P<year>\d{4}))?\s+"
+    r"(?P<clock>\d{1,2}:\d{2})"
+    r"(?:\s*(?P<ampm>[APap]\.?[Mm]\.?))?"
+    r"(?:\s*(?P<tz>[A-Za-z]{2,5}[+-]?\d{1,2}(?::\d{2})?))?"
+)
+
+
+def airing_key(name: str) -> str | None:
+    """Return the normalized airing (date/time run) in ``name``, or ``None``.
+
+    ``None`` means "this name does not say when it airs" — a name with no
+    run is never dropped by the gate, so the gate can only ever change the
+    verdict on pairs where BOTH sides state an airing.
+
+    The key is deliberately lenient about spelling noise (case, ``.``
+    after the month, ``AM`` vs ``a.m.``, leading zeros on the day and the
+    hour, whitespace) and deliberately strict about everything else: two
+    runs describe the same airing only when day, month, clock and zone all
+    agree. A provider that spells the same instant two different ways
+    (12-hour vs 24-hour clock, differing zone labels) therefore falls
+    through to *create* rather than *merge* — the conservative direction,
+    because creation is idempotent and a missed merge offer is
+    recoverable, while a false merge offer blocks the stream behind
+    operator review.
+
+    The year is parsed only to keep it out of the clock match, and is NOT
+    part of the key: one provider spelling out ``18 Sep 2026 09:30`` must
+    still compare equal to another's ``18 Sep 09:30``. A pair differing
+    only by the year is a non-case for a daily-rollover slot pool, and
+    treating an unstated year as a conflict would veto genuine duplicates.
+    """
+    match = _DATETIME_RE.search(name)
+    if match is None:
+        return None
+    hour, minute = match.group("clock").split(":", 1)
+    parts = [
+        f"{int(match.group('day')):02d}",
+        match.group("month").rstrip("."),
+        f"{int(hour):02d}:{int(minute):02d}",
+        (match.group("ampm") or "").replace(".", "").lower(),
+        (match.group("tz") or "").lower(),
+    ]
+    return " ".join(part for part in parts if part).casefold()
+
+
 def find_candidate(
     stream_name: str,
     candidates: list[tuple[str, str]],
@@ -720,6 +807,11 @@ def find_candidate(
         # so the contract is explicit and no fuzzy work is done.
         return None
 
+    # The stream's airing is loop-invariant — compute it once. ``None``
+    # means the name states no date/time, in which case the gate never
+    # fires and scoring is byte-for-byte the pre-gate behaviour.
+    stream_airing = airing_key(normalized_stream)
+
     # Track best score and the candidate that produced it. Iterate in
     # input order so tie-break is decided explicitly below, not by the
     # incidental order RapidFuzz happens to surface.
@@ -731,6 +823,27 @@ def find_candidate(
             # Skip candidates that normalize to empty — they can only
             # match an empty stream_name (already short-circuited above).
             continue
+
+        # Airing gate (see the module docstring): when both sides state an
+        # airing and the airings disagree, the pair is a rollover — the
+        # same slot on a different day — not the same stream twice. Drop
+        # the candidate before scoring, because the score cannot decide
+        # this: the shared slot prefix keeps token_set_ratio at 0.86-0.99
+        # even when nothing but the date/time run has changed.
+        #
+        # The stream-side check is outside so a name with no airing pays
+        # nothing at all for this gate — the common case.
+        if stream_airing is not None:
+            candidate_airing = airing_key(normalized_candidate)
+            if (
+                candidate_airing is not None
+                and candidate_airing != stream_airing
+            ):
+                logger.debug(
+                    "[DEDUP] airing mismatch: stream=%r candidate=%s (%r != %r)",
+                    stream_name, channel_id, stream_airing, candidate_airing,
+                )
+                continue
 
         # Exact match wins unconditionally with confidence = 1.00. The
         # exact-match path predates the floor and does not require the

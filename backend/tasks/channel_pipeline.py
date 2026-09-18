@@ -888,9 +888,29 @@ class ChannelPipelineTask(TaskScheduler):
                 failed_count=failed_action_count,
             )
 
+            # GH #1015: "0 channels created" is indistinguishable from "the
+            # provider had nothing today". When the pending-merges queue is
+            # what stopped the run, say so and name the blocking rows — the
+            # operator's recovery is to resolve those rows, and without the
+            # ids that means going and looking for them. Same on a run with
+            # failed actions: the deferral is the CAUSE of the failures the
+            # summary reports below it.
+            deferred_note = ""
+            if pending_merges:
+                row_ids = result.get("pending_merge_ids") or []
+                shown = ", ".join(str(i) for i in row_ids[:10])
+                if len(row_ids) > 10:
+                    shown += f", … (+{len(row_ids) - 10} more)"
+                deferred_note = (
+                    f"; {pending_merges} stream"
+                    f"{'s' if pending_merges != 1 else ''} deferred by pending "
+                    "merges (no channel created)"
+                    + (f" — rows: {shown}" if shown else "")
+                )
             summary = (
                 f"Auto-creation after M3U refresh: {evaluated} streams evaluated, "
                 f"{matched} matched, {created} channels created, {updated} updated"
+                f"{deferred_note}"
             )
             if has_failed_actions:
                 summary += (
@@ -939,6 +959,7 @@ class ChannelPipelineTask(TaskScheduler):
                     "groups_created": result.get("groups_created", 0),
                     "streams_merged": result.get("streams_merged", 0),
                     "pending_merges_added": pending_merges,
+                    "pending_merge_ids": result.get("pending_merge_ids") or [],
                     "conflicts": len(result.get("conflicts", [])),
                     "capped": bool(result.get("capped")),
                     "status": result.get("status"),
