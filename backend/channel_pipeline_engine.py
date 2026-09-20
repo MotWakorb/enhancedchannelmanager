@@ -250,6 +250,42 @@ class BoundedExecutionLog(list):
 
 
 
+def describe_pending_merge_deferral(result: dict, *, prefix: str = "; ", max_rows: int = 10) -> str:
+    """One bounded phrase naming what the pending-merges queue deferred.
+
+    GH #1015 / PR #1016 review item 4: units are kept distinct — the number
+    of STREAMS whose channel was not created, the number of deferred create
+    ACTIONS when it differs (one stream can carry two create actions), and
+    the distinct blocking ROW ids (several streams can share a row). Empty
+    string when nothing was deferred. Shared by the engine completion log,
+    the M3U-refresh task summary and the task engine's warning payload so
+    the three surfaces cannot disagree.
+    """
+    actions = int(result.get("pending_merges_added") or 0)
+    if not actions:
+        return ""
+    streams = result.get("pending_merge_stream_count")
+    if streams is None:
+        streams = len(set(result.get("pending_merge_stream_ids") or [])) or actions
+    row_ids: list = []
+    for row_id in result.get("pending_merge_ids") or []:
+        if row_id not in row_ids:
+            row_ids.append(row_id)
+    shown = ", ".join(str(i) for i in row_ids[:max_rows])
+    if len(row_ids) > max_rows:
+        shown += f", … (+{len(row_ids) - max_rows} more)"
+    text = (
+        f"{prefix}{streams} stream{'s' if streams != 1 else ''} deferred by pending "
+        f"merges (no channel created"
+    )
+    if actions != streams:
+        text += f"; {actions} deferred create action{'s' if actions != 1 else ''}"
+    text += ")"
+    if shown:
+        text += f" — rows: {shown}"
+    return text
+
+
 # --- Operator-facing failure-reason hygiene (PR #1012 review item 7) ---------
 _REASON_TRUNCATION_MARK = " …[truncated]"
 _SECRET_ASSIGNMENT_RE = re.compile(
@@ -837,11 +873,18 @@ class ChannelPipelineEngine:
             orphan_info = f", {removed} orphans removed"
         if moved:
             orphan_info += f", {moved} orphans moved"
+        # GH #1015: a deferred stream is the one thing that makes "0 channels
+        # created" a lie by omission — the run DID have work to do and the
+        # queue stopped it. Name the count (and the rows) in the completion
+        # line so a postmortem can tell the two cases apart without a DB
+        # query.
+        deferred_info = describe_pending_merge_deferral(results, prefix=", ")
         logger.info(
             "[AUTO-CREATE-ENGINE] Pipeline completed: %s/%s streams matched, "
-            "%s channels created, %s updated%s",
+            "%s channels created, %s updated%s%s",
             results['streams_matched'], results['streams_evaluated'],
-            results['channels_created'], results['channels_updated'], orphan_info
+            results['channels_created'], results['channels_updated'],
+            orphan_info, deferred_info
         )
 
         selected_error_count = sum(
@@ -3006,6 +3049,16 @@ class ChannelPipelineEngine:
             # §D1). Surfaces on the pipeline result so the M3U-refresh
             # task can hand the count to BD-J's toast handler.
             "pending_merges_added": 0,
+            # GH #1015: the row ids behind ``pending_merges_added``. The
+            # summary names these so a run that created nothing because
+            # every slot was deferred says WHICH rows to resolve, instead
+            # of looking identical to "the provider had nothing today".
+            "pending_merge_ids": [],
+            # PR #1016 review item 4: distinct streams behind the deferred
+            # create actions above (a set while aggregating; folded into
+            # ``pending_merge_stream_count`` before the result is returned,
+            # same treatment as probe_stream_ids).
+            "pending_merge_stream_ids": set(),
             "created_entities": [],
             "modified_entities": [],
             "dry_run_results": [],
@@ -3534,6 +3587,10 @@ class ChannelPipelineEngine:
             # operationally both are "would have created a channel, now
             # waiting on operator review".
             results["pending_merges_added"] += exec_ctx.pending_merges_added
+            for merge_id in exec_ctx.pending_merge_ids:
+                if merge_id not in results["pending_merge_ids"]:
+                    results["pending_merge_ids"].append(merge_id)
+            results["pending_merge_stream_ids"].update(exec_ctx.pending_merge_stream_ids)
             results["created_entities"].extend(exec_ctx.created_entities)
             results["modified_entities"].extend(exec_ctx.modified_entities)
             results["probe_stream_ids"].update(exec_ctx.probe_stream_ids)
@@ -3848,6 +3905,10 @@ class ChannelPipelineEngine:
             # =================================================================
             # Pass 6: Batch probe streams queued by probe_streams actions
             # =================================================================
+            # PR #1016 review item 4: fold the distinct-stream set into a
+            # JSON-safe count before the result leaves the engine.
+            results["pending_merge_stream_count"] = len(results.pop("pending_merge_stream_ids", set()))
+
             if results["probe_stream_ids"]:
                 await self._batch_probe_streams(
                     results["probe_stream_ids"], streams, results,

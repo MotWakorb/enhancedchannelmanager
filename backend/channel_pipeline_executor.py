@@ -285,6 +285,17 @@ class ExecutionContext:
     # so the M3U-refresh response can drive BD-J's toast.
     pending_merges_added: int = 0
 
+    # GH #1015: the DISTINCT ``pending_merges`` row ids behind
+    # ``pending_merges_added``, so a run summary can name what is blocking the
+    # deferred streams instead of reporting only "0 channels created" — which
+    # is indistinguishable from "the provider had nothing today".
+    pending_merge_ids: list[int] = field(default_factory=list)
+    # PR #1016 review item 4: ``pending_merges_added`` counts deferred CREATE
+    # ACTIONS (a stream with two create actions counts twice). The distinct
+    # streams affected are tracked separately so the summary can report
+    # streams, actions and rows with accurate units.
+    pending_merge_stream_ids: set = field(default_factory=set)
+
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
         self.results.append(result)
@@ -543,6 +554,13 @@ class ActionExecutor:
         self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
         self._created_groups = {}  # name.lower() -> group dict
         self._next_dry_run_id = -1  # Unique negative IDs for dry-run simulated entities
+        # GH #1015: stream_id -> why this stream's channel was NOT created,
+        # for streams the BD-F pending-merges hook deferred. Read by
+        # ``_execute_assign_epg`` so the follow-on action reports the real
+        # reason instead of the bare "No channel context for assign_epg",
+        # which operators read as an EPG fault. Per-stream (not per-run)
+        # because the reason names the stream's own blocking row.
+        self._deferred_channel_creations: dict[int, str] = {}
 
         # Track streams per (channel_id, m3u_account_id) for max_streams_per_channel limit.
         # Lazily seeded per-channel via _ensure_channel_m3u_counts() because the
@@ -1247,6 +1265,13 @@ class ActionExecutor:
                                        allow_manual_channel_merge: bool = False,
                                        fold_match_key: bool = False) -> ActionResult:
         """Execute create_channel action."""
+        # PR #1016 review item 5: a deferral explanation belongs to ONE create
+        # attempt. A later create attempt for the same stream (another group,
+        # another rule action) supersedes it: if this attempt defers again the
+        # hook re-records the reason below; if it fails or succeeds, the stale
+        # "deferred behind row N" must not be what the follow-on assign_epg
+        # blames.
+        self._deferred_channel_creations.pop(stream_ctx.stream_id, None)
         params = action.params
         raw_number_spec = params.get("channel_number", "auto")
         number_spec, provider_number_result = self._resolve_provider_channel_number(
@@ -2723,6 +2748,26 @@ class ActionExecutor:
         redirect the retry.
         """
         if not exec_ctx.current_channel_id:
+            # GH #1015: a channel that was never created is not the same
+            # fault as a missing EPG. When the BD-F hook deferred this
+            # stream behind a pending merge, say so — a deferred slot
+            # otherwise surfaces as a bare "No channel context for
+            # assign_epg", which operators (correctly, given the text)
+            # read as an EPG problem and go looking in the wrong place.
+            deferral = self._deferred_channel_creations.get(stream_ctx.stream_id)
+            if deferral:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=(
+                        "No channel context for assign_epg — channel creation "
+                        "was deferred: " + deferral
+                    ),
+                    error=(
+                        "No channel to update — channel creation was deferred: "
+                        + deferral
+                    ),
+                )
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -6345,18 +6390,40 @@ class ActionExecutor:
         # the existing channels in the target group). When
         # ``group_id`` is None (ungrouped import), we pass the full
         # list — the matcher's threshold + floor still bounds quality.
+        #
+        # GH #1015: a channel this stream is ALREADY attached to is not a
+        # candidate to merge it INTO — a channel cannot be its own stream's
+        # duplicate. The pair scores 1.00 by construction (same name), so
+        # leaving it in queues the stream as a merge against the very
+        # channel it is on and defers a create that should never have been
+        # questioned. Dropped here rather than inside the matcher because
+        # attachment is an executor-side fact: the hook's contract is that
+        # the CALLER owns candidate selection.
+        # PR #1016 review item 7: apply the cheap group/name eligibility
+        # FIRST, and inspect stream membership only on the channels that
+        # survive it. Walking every channel's membership list before
+        # filtering visited N_streams x N_channels x N_memberships entries
+        # for zero eligible candidates.
+        stream_id = stream_ctx.stream_id
         if group_id is not None:
-            candidates = [
-                (c["id"], c.get("name", ""))
-                for c in self.existing_channels
+            eligible = [
+                c for c in self.existing_channels
                 if c.get("channel_group_id") == group_id and c.get("name")
             ]
         else:
-            candidates = [
-                (c["id"], c.get("name", ""))
-                for c in self.existing_channels
-                if c.get("name")
-            ]
+            eligible = [c for c in self.existing_channels if c.get("name")]
+
+        def _attached(channel: dict) -> bool:
+            return any(
+                (s.get("id") if isinstance(s, dict) else s) == stream_id
+                for s in (channel.get("streams") or [])
+            )
+
+        candidates = [
+            (c["id"], c.get("name", ""))
+            for c in eligible
+            if c.get("id") is not None and not _attached(c)
+        ]
 
         if not candidates:
             return None
@@ -6399,7 +6466,15 @@ class ActionExecutor:
         # the execution context so the engine can aggregate
         # ``pending_merges_added`` across all streams in the run and
         # surface it on the pipeline result for BD-J's toast.
+        #
+        # GH #1015: the row id rides along too. When every slot in a group
+        # rolls over, the run reports "0 channels created" and the operator
+        # needs to know WHICH queue rows to resolve to get the group moving
+        # again; a bare count cannot say.
         exec_ctx.pending_merges_added += 1
+        exec_ctx.pending_merge_stream_ids.add(stream_ctx.stream_id)
+        if result.merge_id is not None and result.merge_id not in exec_ctx.pending_merge_ids:
+            exec_ctx.pending_merge_ids.append(result.merge_id)
 
         # A pending merge row exists for this (stream_name, candidate)
         # pair after the hook returned — either freshly inserted by
@@ -6419,6 +6494,13 @@ class ActionExecutor:
                 f"Stream '{stream_ctx.stream_name}' already in pending "
                 f"merges queue; channel creation deferred"
             )
+        if result.merge_id is not None:
+            description += f" (pending merge row id={result.merge_id})"
+
+        # GH #1015: remember WHY this stream has no channel, so the rule's
+        # following assign_epg reports the deferral instead of the bare
+        # "No channel context for assign_epg" that reads as an EPG fault.
+        self._deferred_channel_creations[stream_ctx.stream_id] = description
 
         return ActionResult(
             success=True,
