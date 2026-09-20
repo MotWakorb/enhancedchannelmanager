@@ -40,6 +40,15 @@ from services.dedup_matcher import (
 logger = logging.getLogger(__name__)
 
 
+def _url_host_for_log(url: str) -> str:
+    """The host part of a URL for log lines; never its path or query."""
+    try:
+        from urllib.parse import urlsplit
+        return urlsplit(url).netloc or "<no-host>"
+    except Exception:  # noqa: BLE001 - logging helper
+        return "<unparseable>"
+
+
 # A whole-number "min-max" channel-number range, the only range shape a rule's
 # channel-number spec honours. Kept shape-identical to
 # ``channel_pipeline_schema._CHANNEL_NUMBER_RANGE_RE``, which decides what an
@@ -1160,6 +1169,15 @@ class ActionExecutor:
     async def _resolve_logo_id(self, logo_url: str, name_hint: str = "") -> Optional[int]:
         """Resolve a logo URL to a Dispatcharr logo_id, creating if needed.
 
+        Looks the URL up before creating. Under the planning client a create
+        never reaches Dispatcharr, so a create-first order recorded a
+        ``create_logo`` write for every channel whose logo already existed;
+        Dispatcharr rejects the duplicate URL with 400 at replay, and logo
+        rows outlive their channels, so every event-cycle rollover collided
+        with the previous cycle's row. Resolving first keeps that write out
+        of the plan and points the channel at the existing row. The lookup is
+        a read, so it is delegated to the live client in planning mode too.
+
         Uses a cache to avoid duplicate lookups/creations within the same run.
         """
         if not logo_url:
@@ -1171,9 +1189,22 @@ class ActionExecutor:
             return self._logo_cache[logo_url]
 
         try:
-            # Try to create the logo (Dispatcharr will reject duplicates)
+            existing = await self.client.find_logo_by_url(logo_url)
+        except Exception as lookup_err:  # noqa: BLE001 - fall through to create
+            logger.warning("[AUTO-CREATE-EXEC] Logo lookup by URL failed, will try to create: %s", lookup_err)
+            existing = None
+        if existing and existing.get("id"):
+            self._logo_cache[logo_url] = existing["id"]
+            return existing["id"]
+
+        try:
+            # Create the logo. The lookup above already established the URL is
+            # absent, so skip the client's own catalog pre-check (PR #1014
+            # review item 5); the client still reconciles a post-400 race.
             logo_name = name_hint or logo_url.split("/")[-1]
-            result = await self.client.create_logo({"name": logo_name, "url": logo_url})
+            result = await self.client.create_logo(
+                {"name": logo_name, "url": logo_url}, precheck=False,
+            )
             logo_id = result.get("id")
             if logo_id:
                 self._logo_cache[logo_url] = logo_id
@@ -1191,7 +1222,11 @@ class ActionExecutor:
                 except Exception as search_err:
                     logger.warning("[AUTO-CREATE-EXEC] Failed to find existing logo by URL: %s", search_err)
             else:
-                logger.warning("[AUTO-CREATE-EXEC] Failed to create logo from '%s': %s", logo_url, e)
+                # Host only: a logo URL path or query can carry provider credentials.
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] Failed to create logo from host '%s': %s",
+                    _url_host_for_log(logo_url), e,
+                )
         return None
 
     def _get_group_name(self, group_id) -> Optional[str]:

@@ -33,6 +33,31 @@ import export_models  # noqa: F401 — registers export tables with SQLAlchemy B
 assert models and export_models
 
 
+@pytest.fixture(autouse=True)
+def _isolate_registered_sensitive_values():
+    """Keep the process-lifetime log redactor isolated between tests.
+
+    ``DispatcharrClient.__init__`` (and other credential holders) register
+    their values with ``log_utils.register_sensitive_values``; production
+    never forgets them, by design. In the test process that means one test's
+    synthetic credential rewrites another test's ordinary log text (a one-
+    character key turned ``sequence-1`` into ``seq***REDACTED***ence-1`` and
+    broke the persistent-log rotation test on CI; PR #1010 / #1014 reviews).
+    Snapshot the registry before each test and restore it afterwards, so a
+    test only ever sees what was registered before it started.
+    """
+    import log_utils
+
+    with log_utils._sensitive_values_lock:
+        before = set(log_utils._sensitive_value_forms)
+    try:
+        yield
+    finally:
+        with log_utils._sensitive_values_lock:
+            log_utils._sensitive_value_forms.clear()
+            log_utils._sensitive_value_forms.update(before)
+
+
 def pytest_sessionfinish(session, exitstatus):
     """Clean up only the uniquely marked directory this process created."""
     del session, exitstatus

@@ -1861,6 +1861,50 @@ class TestNormalizeThenMergeIdentity:
         assert len(executor._created_channels) == 1
 
 
+class TestResolveLogoIdReusesExistingRow:
+    """_resolve_logo_id looks the URL up before creating (GitHub #1013).
+
+    Dispatcharr rejects a duplicate logo URL with 400 and logo rows outlive their
+    channels. Under the planning client the create never reaches the network,
+    so the plan used to record a create_logo write whose real replay collided
+    with the stale row. Resolving first keeps the write out of the plan and
+    points the channel at the row that already exists.
+    """
+
+    def setup_method(self):
+        self.client = MagicMock()
+        self.client.get_all_m3u_group_settings = AsyncMock(return_value={})
+        self.client.create_logo = AsyncMock(return_value={"id": 2257})
+        self.executor = ActionExecutor(self.client, existing_channels=[])
+
+    def test_existing_logo_is_reused_and_nothing_is_created(self):
+        self.client.find_logo_by_url = AsyncMock(return_value={"id": 765, "url": "http://l/x.png"})
+        logo_id = asyncio.get_event_loop().run_until_complete(self.executor._resolve_logo_id("http://l/x.png", "Snooker"))
+        assert logo_id == 765
+        self.client.create_logo.assert_not_awaited()
+        self.client.find_logo_by_url.assert_awaited_once_with("http://l/x.png")
+
+    def test_unknown_logo_is_created(self):
+        self.client.find_logo_by_url = AsyncMock(return_value=None)
+        logo_id = asyncio.get_event_loop().run_until_complete(self.executor._resolve_logo_id("http://l/x.png", "Snooker"))
+        assert logo_id == 2257
+        self.client.create_logo.assert_awaited_once_with(
+            {"name": "Snooker", "url": "http://l/x.png"}, precheck=False,
+        )
+
+    def test_lookup_failure_falls_through_to_create(self):
+        self.client.find_logo_by_url = AsyncMock(side_effect=Exception("upstream hiccup"))
+        logo_id = asyncio.get_event_loop().run_until_complete(self.executor._resolve_logo_id("http://l/x.png", "Snooker"))
+        assert logo_id == 2257
+        self.client.create_logo.assert_awaited_once()
+
+    def test_resolution_is_cached_per_run(self):
+        self.client.find_logo_by_url = AsyncMock(return_value={"id": 765})
+        asyncio.get_event_loop().run_until_complete(self.executor._resolve_logo_id("http://l/x.png", "Snooker"))
+        asyncio.get_event_loop().run_until_complete(self.executor._resolve_logo_id("http://l/x.png", "Snooker 2"))
+        assert self.client.find_logo_by_url.await_count == 1
+
+
 class TestActionExecutorPropertyActions:
     """Tests for property assignment actions."""
 
