@@ -116,6 +116,22 @@ class TestPreflightFailures:
         assert failure["role"] == "master"
         assert failure["check"] == CHECK_GROUP_SETTINGS_FOUND
 
+    async def test_missing_whole_group_master_names_ownership_constraint(self):
+        # GH #1007 / PR #1008 review item 1: a WHOLE-GROUP master absent from
+        # every account is the unsupported hand-curated case. The message
+        # must say so and must NOT talk about a selected provider.
+        client = _ReadOnlyClient({
+            20: _group(auto_sync=False),
+            30: _group(auto_sync=False),
+        })
+        result = await check_event_sync_group_settings(client, _config())
+        failure = result["failures"][0]
+        assert failure["check"] == CHECK_GROUP_SETTINGS_FOUND
+        msg = failure["message"]
+        assert "not supported as a master" in msg
+        assert "Channel Group Override" in msg
+        assert "provider" not in msg.split("If this group")[0]
+
     async def test_missing_secondary_group_fails(self):
         client = _ReadOnlyClient({
             10: _group(auto_sync=True),
@@ -299,6 +315,49 @@ class TestProviderScopedPreflight:
         assert result["ok"] is False
         assert any(f["check"] == CHECK_GROUP_SETTINGS_FOUND
                    for f in result["failures"])
+
+    async def test_master_provider_missing_but_group_carried_elsewhere(self):
+        # GH #1007 / PR #1008 review item 1: provider 3 has no row for group
+        # 10, but provider 7 carries it (auto-sync ON). The diagnosis must be
+        # scoped to the SELECTED provider — not a false claim that no
+        # account carries the group, nor "hand-curated master".
+        client = _ProviderScopedClient(
+            collapsed={10: _group(auto_sync=True)},
+            by_provider={(7, 10): _group(auto_sync=True)},  # no (3,10) row
+        )
+        result = await check_event_sync_group_settings(
+            client, self._shared_group_config()
+        )
+        failure = next(f for f in result["failures"]
+                       if f["check"] == CHECK_GROUP_SETTINGS_FOUND)
+        assert failure["role"] == "master"
+        assert failure["group_id"] == 10
+        msg = failure["message"]
+        assert "provider 3" in msg
+        assert "no M3U account" not in msg
+        assert "hand-curated" not in msg
+        assert "another M3U account" in msg
+        assert "does carry" in msg
+
+    async def test_master_provider_missing_and_group_carried_nowhere(self):
+        # Provider-scoped master whose group no account carries at all: the
+        # selected-scope wording still applies, plus the fact that no other
+        # account carries it either (so the ownership constraint is stated).
+        client = _ProviderScopedClient(
+            collapsed={20: _group(auto_sync=False)},
+            by_provider={(7, 20): _group(auto_sync=False)},
+        )
+        config = {
+            "master": {"group_id": 10, "m3u_account_id": 3},
+            "secondary": [{"group_id": 20, "m3u_account_id": 7}],
+        }
+        result = await check_event_sync_group_settings(client, config)
+        failure = next(f for f in result["failures"]
+                       if f["check"] == CHECK_GROUP_SETTINGS_FOUND)
+        msg = failure["message"]
+        assert "provider 3" in msg
+        assert "no other M3U account" in msg
+        assert "not supported as a master" in msg
 
     async def test_whole_group_scope_does_not_fetch_by_provider(self):
         # A null-provider (whole-group) config must NOT call the per-provider
