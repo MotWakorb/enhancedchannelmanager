@@ -29,6 +29,11 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
   // Task state
   const [enabled, setEnabled] = useState(task.enabled);
   const [taskConfig, setTaskConfig] = useState<Record<string, unknown>>(task.config || {});
+  const [taskConfigDirty, setTaskConfigDirty] = useState(false);
+  const updateTaskConfig = (config: Record<string, unknown>) => {
+    setTaskConfig(config);
+    setTaskConfigDirty(true);
+  };
 
   // Alert configuration state
   const [sendAlerts, setSendAlerts] = useState(task.send_alerts ?? true);
@@ -264,7 +269,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
       };
 
       // Include task-specific configuration
-      if (Object.keys(taskConfig).length > 0) {
+      if (taskConfigDirty) {
         config.config = taskConfig;
       }
 
@@ -723,7 +728,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     min={1}
                     max={365}
                     value={(taskConfig.probe_history_days as number) || 30}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, probe_history_days: parseInt(e.target.value) || 30 })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, probe_history_days: parseInt(e.target.value) || 30 })}
                   />
                 </div>
                 <div className="retention-item">
@@ -733,7 +738,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     min={1}
                     max={365}
                     value={(taskConfig.task_history_days as number) || 30}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, task_history_days: parseInt(e.target.value) || 30 })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, task_history_days: parseInt(e.target.value) || 30 })}
                   />
                 </div>
                 <div className="retention-item">
@@ -743,7 +748,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     min={1}
                     max={365}
                     value={(taskConfig.journal_days as number) || 30}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, journal_days: parseInt(e.target.value) || 30 })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, journal_days: parseInt(e.target.value) || 30 })}
                   />
                 </div>
                 {/* bd-ia28g: three new retention fields for the
@@ -757,7 +762,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     min={1}
                     max={365}
                     value={(taskConfig.auto_creation_blob_days as number) || 30}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, auto_creation_blob_days: parseInt(e.target.value) || 30 })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, auto_creation_blob_days: parseInt(e.target.value) || 30 })}
                   />
                   <small className="form-hint">
                     NULLs out execution_log / dry_run_results / created_entities /
@@ -772,7 +777,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     min={1}
                     max={365}
                     value={(taskConfig.health_checks_days as number) || 7}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, health_checks_days: parseInt(e.target.value) || 7 })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, health_checks_days: parseInt(e.target.value) || 7 })}
                   />
                   <small className="form-hint">
                     High-frequency polling data; loses diagnostic value
@@ -787,7 +792,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     min={1}
                     max={365}
                     value={(taskConfig.notifications_days as number) || 30}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, notifications_days: parseInt(e.target.value) || 30 })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, notifications_days: parseInt(e.target.value) || 30 })}
                   />
                   <small className="form-hint">
                     Uses each row's expires_at if set; otherwise deletes when
@@ -805,7 +810,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     max={3650}
                     step={1}
                     value={(taskConfig.event_sync_review_retention_days as number) ?? 0}
-                    onChange={(e) => setTaskConfig({
+                    onChange={(e) => updateTaskConfig({
                       ...taskConfig,
                       event_sync_review_retention_days: Number.parseInt(e.target.value, 10),
                     })}
@@ -820,7 +825,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                   <input
                     type="checkbox"
                     checked={taskConfig.vacuum_db !== false}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, vacuum_db: e.target.checked })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, vacuum_db: e.target.checked })}
                   />
                   <span>Compact database after cleanup</span>
                 </label>
@@ -844,7 +849,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                     min={1}
                     max={365}
                     value={(taskConfig.retention_days as number) || 3}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, retention_days: parseInt(e.target.value) || 3 })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, retention_days: parseInt(e.target.value) || 3 })}
                   />
                   <small className="form-hint">
                     Automated-noise journal entries older than this many days
@@ -858,7 +863,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                   <input
                     type="checkbox"
                     checked={taskConfig.purge_watch_events !== false}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_watch_events: e.target.checked })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, purge_watch_events: e.target.checked })}
                   />
                   <span>Watch start/stop events</span>
                 </label>
@@ -870,7 +875,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                   <input
                     type="checkbox"
                     checked={taskConfig.purge_pipeline_rule_pairs !== false}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_pipeline_rule_pairs: e.target.checked })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, purge_pipeline_rule_pairs: e.target.checked })}
                   />
                   <span>Channel Pipeline rule create/delete entries</span>
                 </label>
@@ -884,7 +889,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                   <input
                     type="checkbox"
                     checked={taskConfig.purge_run_on_refresh_skipped !== false}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_run_on_refresh_skipped: e.target.checked })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, purge_run_on_refresh_skipped: e.target.checked })}
                   />
                   <span>Run-on-refresh suppression notices</span>
                 </label>
@@ -897,7 +902,7 @@ export function TaskEditorModal({ task, onClose, onSaved, openAddSchedule }: Tas
                   <input
                     type="checkbox"
                     checked={taskConfig.purge_task_start_complete !== false}
-                    onChange={(e) => setTaskConfig({ ...taskConfig, purge_task_start_complete: e.target.checked })}
+                    onChange={(e) => updateTaskConfig({ ...taskConfig, purge_task_start_complete: e.target.checked })}
                   />
                   <span>Scheduled-task start/complete entries</span>
                 </label>

@@ -33,6 +33,7 @@ import pytest
 
 from models import JournalEntry, ScheduledTask
 from task_registry import TaskRegistry
+from tasks.epg_event_probe import EPGEventProbeTask
 from tasks.journal_noise_purge import JournalNoisePurgeTask
 
 
@@ -49,6 +50,26 @@ def _stored_config(test_session) -> dict | None:
     ).first()
     assert row is not None
     return json.loads(row.config) if row.config else None
+
+
+def test_invalid_task_config_does_not_partially_enable_task():
+    reg = TaskRegistry()
+    reg.register(EPGEventProbeTask)
+    instance = reg.get_task_instance("epg_event_probe")
+    assert instance is not None
+    assert instance._enabled is False
+
+    with pytest.raises(ValueError, match="title_pattern must be a non-empty string"):
+        reg.update_task_config(
+            "epg_event_probe",
+            enabled=True,
+            task_config={
+                "title_pattern": None,
+                "allow_reorder_after_probe": True,
+            },
+        )
+
+    assert instance._enabled is False
 
 
 class TestPersist:

@@ -159,6 +159,24 @@ describe('TaskEditorModal — bd-ia28g retention fields', () => {
     ));
   });
 
+  it('does not echo untouched invocation config into the parent task PATCH', async () => {
+    const user = userEvent.setup();
+    const updateTask = vi.mocked(api.updateTask);
+    const task = makeEpgEventProbeTask();
+    task.config = {
+      title_pattern: null,
+      allow_reorder_after_probe: true,
+    };
+
+    render(<TaskEditorModal task={task} onClose={vi.fn()} onSaved={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalledWith(
+      'epg_event_probe',
+      expect.not.objectContaining({ config: expect.anything() }),
+    ));
+  });
+
   it('blocks every parent dismissal affordance while the task save is unresolved', async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();
