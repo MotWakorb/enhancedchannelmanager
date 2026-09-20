@@ -5394,3 +5394,75 @@ rules:
         by_name = {r["name"]: r for r in rules}
         assert by_name["Imported Folded Rule"]["fold_match_key"] is True
         assert by_name["Imported Legacy Rule"]["fold_match_key"] is False
+
+
+class TestCommitPartialFailureGH1009:
+    """A partial planned-run replay is an application-level failure, not a 502.
+
+    The handler is invoked directly (as ``test_event_sync_cleanup`` does) so
+    the assertion is on the router's own contract, independent of middleware.
+    """
+
+    @pytest.mark.asyncio
+    async def test_partial_replay_returns_424_with_applied_and_not_applied(self, test_engine):
+        from fastapi import HTTPException
+        from sqlalchemy.orm import sessionmaker
+        from routers import channel_pipeline as router
+        from services import mutation_plan_store as store
+        from services.mutation_plan_store import canonical_hash
+        from services.pipeline_write_plan import PartialReplayError
+
+        payload = {
+            "request": {"m3u_account_ids": None, "rule_ids": [7]},
+            "result": {"event_sync": [], "planned_review_candidates": [], "execution_log": []},
+            "write_plan": {
+                "writes": [
+                    {"method": "update_channel", "args": [7, {"name": "A"}], "kwargs": {}, "event_sync": None},
+                    {"method": "delete_channel", "args": [8], "kwargs": {}, "event_sync": None},
+                ],
+                "channel_preconditions": {}, "group_preconditions": {}, "profile_preconditions": {},
+            },
+            "snapshot": [],
+        }
+        fresh_store = store.MutationPlanStore()
+        plan = fresh_store.create(
+            "channel_pipeline", payload, canonical_hash(router._canonical_pipeline_decision(payload)),
+        )
+        failure = PartialReplayError(
+            0, [], [], failed_write="update_channel:7",
+            not_applied=["delete_channel:8"], pre_mutation=True,
+            failed_outcome="rejected",
+        )
+        marked: dict = {}
+
+        def capture_failed(execution_id, error, *, partial_replay=None):
+            marked["execution_id"] = execution_id
+            marked["partial_replay"] = partial_replay
+
+        with patch.object(store, "mutation_plan_store", fresh_store),              patch.object(router, "_ensure_engine", AsyncMock(return_value=MagicMock(client=object()))),              patch.object(router, "_compute_pipeline_plan_payload", AsyncMock(return_value=payload)),              patch("services.pipeline_write_plan.validate_read_set", AsyncMock()),              patch("services.pipeline_write_plan.replay_write_plan", AsyncMock(side_effect=failure)),              patch.object(router, "_mark_execution_failed", side_effect=capture_failed),              patch.object(router, "get_session", sessionmaker(bind=test_engine)):
+            with pytest.raises(HTTPException) as error:
+                await router.commit_auto_creation_pipeline(
+                    router.CommitPipelinePlanRequest(
+                        plan_id=plan.plan_id, plan_hash=plan.payload_hash, phase="execute",
+                    ),
+                    _admin=None,
+                )
+
+        assert error.value.status_code == 424
+        detail = error.value.detail
+        assert detail["message"] == "pipeline replay partially failed"
+        assert isinstance(detail["execution_id"], int)
+        assert detail["failed_index"] == 0
+        assert detail["failed_write"] == "update_channel:7"
+        assert detail["pre_mutation"] is True
+        assert detail["failed_outcome"] == "rejected"
+        assert detail["completed_writes"] == []
+        # The failed write is classified by failed_outcome, never listed as
+        # "not applied": only the writes after it were never attempted.
+        assert detail["not_applied"] == ["delete_channel:8"]
+        assert detail["compensation_errors"] == []
+        assert marked["execution_id"] == detail["execution_id"]
+        assert marked["partial_replay"]["failed_write"] == "update_channel:7"
+        assert marked["partial_replay"]["failed_outcome"] == "rejected"
+        assert marked["partial_replay"]["not_applied"] == ["delete_channel:8"]
+        assert marked["partial_replay"]["pre_mutation"] is True

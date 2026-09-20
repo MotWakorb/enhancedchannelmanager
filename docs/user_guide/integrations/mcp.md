@@ -740,7 +740,33 @@ the planned-run lock before the first write. Any difference in its canonical
 decision or exact write payload requires a new preview. ECM persists the exact
 execution program and target-scoped rollback snapshot immediately before replay,
 then compensates reversible writes in reverse order if a later write fails. A
-failure response lists target-specific completed writes and any compensation
-failures. Deletes and channel-profile membership changes cannot always be
-restored with the same upstream identifiers; inspect the execution record and
-rollback snapshot before retrying a partially failed commit.
+partial failure returns `424 Failed Dependency` (not a proxy-style 502) whose
+body carries the execution id to inspect and sorts every planned write into
+one of three classes:
+
+* `completed_writes` — writes whose Dispatcharr call returned successfully,
+  in order. This is forward-call history, not current upstream state: the
+  compensation pass may since have undone some of them, and an empty
+  `compensation_errors` means only that compensation raised nothing.
+* `failed_write` with `failed_outcome` — the write at `failed_index`.
+  `"rejected"` means Dispatcharr provably refused it before mutating anything
+  (a 4xx answer such as a rate limit, or a refused connection). `"unknown"`
+  means its effect cannot be established (a timeout, a dropped connection, a
+  5xx): the write **may have landed**, so inspect Dispatcharr before repeating
+  it.
+* `not_applied` — the writes after the failed one. They were never attempted.
+
+`pre_mutation` is `true` only when nothing completed, compensation was clean
+and the failed write was rejected; that is the one case in which a fresh
+prepare and commit is known to be safe. Write descriptors name the resolved
+Dispatcharr id where one is known (`update_channel:101`, even when the plan
+recorded it as a temporary id), show a not-yet-created target as
+`pending(-1)`, and identify creates by plan position (`create_logo#0`); they
+never include payload contents such as logo URLs. Deletes and channel-profile
+membership changes cannot always be restored with the same upstream
+identifiers; inspect the execution record and rollback snapshot before
+retrying a partially failed commit. Transient `429 Too Many Requests` answers
+from Dispatcharr are retried with bounded exponential backoff (at most three
+retries, honouring a `Retry-After` given as seconds or as an HTTP date, and
+never more than 30 seconds of total waiting per call); a `Retry-After` beyond
+that budget is surfaced as a rate-limit failure rather than waited on.

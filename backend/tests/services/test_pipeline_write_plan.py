@@ -2,6 +2,7 @@ import ast
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 from services.pipeline_write_plan import (
@@ -107,6 +108,26 @@ async def test_drift_rejects_before_any_replay_write():
 
 
 # ---------------------------------------------------------------------------
+# GH #1009: a partial replay must say which write failed, what was and was
+# not applied, and whether the failure provably happened before any mutation.
+# ---------------------------------------------------------------------------
+
+
+def _rate_limited() -> httpx.HTTPStatusError:
+    response = httpx.Response(429, request=httpx.Request("PATCH", "http://dispatcharr/x"))
+    return httpx.HTTPStatusError("429", request=response.request, response=response)
+
+
+def _two_write_plan() -> PipelineWritePlan:
+    return PipelineWritePlan(
+        writes=[
+            PlannedWrite("update_channel", [7, {"name": "A"}], {}),
+            PlannedWrite("delete_channel", [8], {}),
+        ],
+    )
+
+
+# ---------------------------------------------------------------------------
 # Logo writes are cosmetic: a failed create_logo must not abort the replay.
 # Dispatcharr answers 400 for a duplicate logo URL and logo rows outlive their
 # channels, so a stale row from an earlier event cycle used to turn the whole
@@ -122,6 +143,150 @@ def _logo_then_channel_plan():
             PlannedWrite("update_channel", [-2, {"streams": [5, 6]}], {}),
         ],
     )
+
+
+@pytest.mark.asyncio
+async def test_first_write_rejected_with_429_is_reported_as_pre_mutation():
+    live = AsyncMock()
+    live.update_channel.side_effect = _rate_limited()
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    exc = error.value
+    assert exc.failed_index == 0
+    assert exc.failed_write == "update_channel:7"
+    assert exc.failed_outcome == "rejected"
+    assert exc.completed == []
+    assert exc.not_applied == ["delete_channel:8"]
+    assert exc.pre_mutation is True
+    live.delete_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_failure_after_a_landed_write_is_not_pre_mutation():
+    live = AsyncMock()
+    live.update_channel.return_value = {"id": 7}
+    live.delete_channel.side_effect = _rate_limited()
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    exc = error.value
+    assert exc.failed_index == 1
+    assert exc.failed_write == "delete_channel:8"
+    assert exc.failed_outcome == "rejected"
+    assert exc.completed == ["update_channel:7"]
+    assert exc.not_applied == []
+    assert exc.pre_mutation is False
+
+
+@pytest.mark.asyncio
+async def test_first_write_timeout_is_not_claimed_pre_mutation():
+    """A lost response may have landed upstream; never claim retry is safe."""
+    live = AsyncMock()
+    live.update_channel.side_effect = httpx.ReadTimeout("slow", request=httpx.Request("PATCH", "http://d/x"))
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    assert error.value.failed_index == 0
+    assert error.value.completed == []
+    assert error.value.pre_mutation is False
+    assert error.value.failed_outcome == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# PR #1010 review items 1-3: outcome classes, resolved ids, safe descriptors.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_landed_write_with_lost_response_is_unknown_not_not_applied():
+    """Item 1: a PATCH that reached upstream but whose response was lost may
+    have landed. It must be reported as failed with an unknown outcome and
+    must NOT appear in ``not_applied``; only the never-attempted delete is."""
+    live = AsyncMock()
+    live.update_channel.side_effect = httpx.RemoteProtocolError(
+        "peer closed connection", request=httpx.Request("PATCH", "http://d/x"),
+    )
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    exc = error.value
+    assert exc.failed_write == "update_channel:7"
+    assert exc.failed_outcome == "unknown"
+    assert exc.not_applied == ["delete_channel:8"]
+    assert "update_channel:7" not in exc.not_applied
+    assert exc.pre_mutation is False
+    live.delete_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_confirmed_rejection_control_is_rejected_and_pre_mutation():
+    live = AsyncMock()
+    live.update_channel.side_effect = httpx.HTTPStatusError(
+        "400", request=httpx.Request("PATCH", "http://d/x"),
+        response=httpx.Response(400, request=httpx.Request("PATCH", "http://d/x")),
+    )
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, _two_write_plan())
+    assert error.value.failed_outcome == "rejected"
+    assert error.value.pre_mutation is True
+    assert error.value.not_applied == ["delete_channel:8"]
+
+
+@pytest.mark.asyncio
+async def test_dependent_update_failure_reports_the_resolved_upstream_id():
+    """Item 2: the plan recorded the update against temp id -1; replay created
+    channel 101 and PATCHed 101, so the failure must name 101, and the
+    completed create must name the resource it produced."""
+    live = AsyncMock()
+    live.create_channel.return_value = {"id": 101}
+    live.update_channel.side_effect = _rate_limited()
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("create_channel", [{"name": "New"}], {}),
+        PlannedWrite("update_channel", [-1, {"streams": [5]}], {}),
+        PlannedWrite("update_channel", [-1, {"name": "Renamed"}], {}),
+    ])
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, plan)
+    exc = error.value
+    assert exc.failed_index == 1
+    assert exc.completed == ["create_channel#0->101"]
+    assert exc.failed_write == "update_channel:101"
+    assert exc.not_applied == ["update_channel:101"]
+    assert "-1" not in exc.failed_write and "-1" not in "".join(exc.not_applied)
+    live.delete_channel.assert_awaited_once_with(101)  # compensation targeted the real id
+
+
+@pytest.mark.asyncio
+async def test_compensation_failure_names_the_created_resource():
+    live = AsyncMock()
+    live.create_channel.return_value = {"id": 101}
+    live.update_channel.side_effect = _rate_limited()
+    live.delete_channel.side_effect = RuntimeError("upstream unavailable")
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("create_channel", [{"name": "New"}], {}),
+        PlannedWrite("update_channel", [-1, {"streams": [5]}], {}),
+    ])
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, plan)
+    assert error.value.completed == ["create_channel#0->101"]
+    assert error.value.compensation_errors == ["create_channel: upstream unavailable"]
+    assert error.value.pre_mutation is False
+
+
+@pytest.mark.asyncio
+async def test_unresolved_future_target_renders_as_pending_without_failing():
+    live = AsyncMock()
+    live.update_channel.side_effect = _rate_limited()
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("update_channel", [7, {"name": "A"}], {}),
+        PlannedWrite("create_channel_group", ["Sports"], {}),
+        PlannedWrite("create_channel", [{"name": "New"}], {}),
+        PlannedWrite("update_channel", [-2, {"streams": [5]}], {}),
+        PlannedWrite("assign_channel_numbers", [[7, -2], 100], {}),
+    ])
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, plan)
+    assert error.value.not_applied == [
+        "create_channel_group#1", "create_channel#2",
+        "update_channel:pending(-2)", "assign_channel_numbers:[7,pending(-2)]",
+    ]
 
 
 @pytest.mark.asyncio
@@ -143,6 +308,56 @@ async def test_replay_continues_past_a_failed_logo_create_and_lands_the_channel(
 
 
 @pytest.mark.asyncio
+async def test_credential_bearing_create_payload_never_reaches_diagnostics():
+    """Item 3: a create payload may carry a provider token; diagnostics may not."""
+    token = "SECRET-TOKEN-8f3a9c"
+    live = AsyncMock()
+    live.create_channel.side_effect = _rate_limited()
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("create_channel", [{"name": "New", "tvg_id": token}], {}),
+        PlannedWrite("update_channel", [-1, {"name": "Later"}], {}),
+    ])
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, plan)
+    exc = error.value
+    assert exc.failed_write == "create_channel#0"
+    assert exc.not_applied == ["update_channel:pending(-1)"]
+    assert exc.pre_mutation is True
+    rendered = " ".join([exc.failed_write, *exc.not_applied, *exc.completed, str(exc), repr(exc)])
+    assert token not in rendered
+    assert "http" not in rendered
+
+
+@pytest.mark.asyncio
+async def test_completed_create_descriptor_is_payload_free():
+    token = "SECRET-TOKEN-8f3a9c"
+    live = AsyncMock()
+    live.create_logo.return_value = {"id": 55}
+    live.create_channel.side_effect = _rate_limited()
+    plan = PipelineWritePlan(writes=[
+        PlannedWrite("create_logo", [{"name": "L", "url": f"http://p.example/logo.png?token={token}"}], {}),
+        PlannedWrite("create_channel", [{"name": "New"}], {}),
+    ])
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, plan)
+    assert error.value.completed == ["create_logo#0->55"]
+    assert token not in " ".join(error.value.completed)
+
+
+@pytest.mark.asyncio
+async def test_mapping_error_before_the_call_is_a_rejection_not_unknown():
+    """An unresolved temp id fails inside replay before upstream is contacted."""
+    live = AsyncMock()
+    plan = PipelineWritePlan(writes=[PlannedWrite("update_channel", [-9, {"name": "A"}], {})])
+    with pytest.raises(PartialReplayError) as error:
+        await replay_write_plan(live, plan)
+    assert error.value.failed_outcome == "rejected"
+    assert error.value.failed_write == "update_channel:pending(-9)"
+    assert error.value.pre_mutation is True
+    live.update_channel.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_replay_still_aborts_and_compensates_when_a_channel_create_fails():
     live = AsyncMock()
     live.create_logo.return_value = {"id": 765}
@@ -150,7 +365,7 @@ async def test_replay_still_aborts_and_compensates_when_a_channel_create_fails()
     with pytest.raises(PartialReplayError) as info:
         await replay_write_plan(live, _logo_then_channel_plan())
     assert info.value.failed_index == 1
-    assert info.value.completed == ["create_logo:{'name': 'Snooker', 'url': 'http://l/x.png'}"]
+    assert info.value.completed == ["create_logo#0->765"]
     live.update_channel.assert_not_awaited()
 
 
@@ -308,7 +523,7 @@ async def test_failed_index_is_the_true_plan_position_after_soft_skips():
     with pytest.raises(PartialReplayError) as info:
         await replay_write_plan(live, plan)
     assert info.value.failed_index == 2
-    assert info.value.completed == ["create_channel:{'name': 'New', 'streams': [5]}"]
+    assert info.value.completed == ["create_channel#1->101"]
     live.delete_channel.assert_awaited_once_with(101)  # compensation unchanged
 
 
