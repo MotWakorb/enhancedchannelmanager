@@ -373,6 +373,13 @@ class ChannelNumberStrategy(str, Enum):
     RANGE = "range"         # Use next available in range
 
 
+# GH #1005: accepted values for create_channel.tvg_id_mode. "inherit" is the
+# legacy behaviour (copy the stream's tvg_id onto the new channel); "none"
+# leaves the field empty so Dispatcharr's exact-match EPG pass cannot bind the
+# channel to the provider's guide before ECM's own EPG assignment lands.
+CREATE_CHANNEL_TVG_ID_MODES = ("inherit", "none")
+
+
 @dataclass
 class CreateChannelAction:
     """Action to create a new channel."""
@@ -380,6 +387,10 @@ class CreateChannelAction:
     channel_number: Union[str, int] = "auto"  # "auto", specific int, or "100-199" range
     group_id: Optional[int] = None  # Target group (overrides rule's target_group_id)
     if_exists: str = "skip"  # skip, merge, merge_only, update
+    # GH #1005: what to do with the matched stream's tvg_id on a NEW channel.
+    #   inherit — copy the stream's tvg_id onto the channel (legacy default)
+    #   none    — create the channel with an empty tvg_id and never back-fill it
+    tvg_id_mode: str = "inherit"
 
     def to_dict(self) -> dict:
         return {
@@ -388,6 +399,7 @@ class CreateChannelAction:
             "channel_number": self.channel_number,
             "group_id": self.group_id,
             "if_exists": self.if_exists,
+            "tvg_id_mode": self.tvg_id_mode,
         }
 
 
@@ -484,6 +496,14 @@ class Action:
             if_exists = self.params.get("if_exists", "skip")
             if if_exists not in ("skip", "merge", "merge_only", "update"):
                 errors.append(f"create_channel.if_exists must be 'skip', 'merge', 'merge_only', or 'update'")
+            # GH #1005: tvg_id_mode defaults to "inherit" when absent or null
+            # so every stored rule keeps today's behaviour byte-for-byte.
+            tvg_id_mode = self.params.get("tvg_id_mode")
+            if tvg_id_mode is not None and tvg_id_mode not in CREATE_CHANNEL_TVG_ID_MODES:
+                errors.append(
+                    "create_channel.tvg_id_mode must be one of: "
+                    + ", ".join(f"'{m}'" for m in CREATE_CHANNEL_TVG_ID_MODES)
+                )
             # The channel_number spec defaults to "auto" when absent or null.
             if self.params.get("channel_number") is not None:
                 errors.extend(

@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- **Create Channel can now leave the TVG-ID empty instead of inheriting it from the stream ([#1005](https://github.com/MotWakorb/enhancedchannelmanager/issues/1005); build 0.18.2-0036).** A new per-action **TVG-ID for new channels** setting (`tvg_id_mode`) offers **Inherit from stream**, the unchanged default, and **Leave empty**. With **Leave empty** this action creates the channel without a `tvg_id` and skips its own `if_exists: update` back-fill of the field on later runs, so a rule paired with a dummy EPG profile no longer creates channels that Dispatcharr's exact-match EPG pass binds to the provider's guide through the inherited ID before ECM's own **Assign EPG** action runs (Dispatcharr may still match by channel name). The suppression is action-local: existing IDs and EPG assignments are never cleared, and other actions can still assign an ID. Stored rules without the field behave exactly as before (omitted or JSON `null` means inherit; only the string `"none"` suppresses); the action schema endpoint and the MCP rule-creation tool document the parameter, and the rule editor's selector is labelled for assistive technology.
+
 ### Fixed
 
 - **Section navigation highlights the settled reading position (bead `enhancedchannelmanager-2896r.19`; build 0.18.2-0035).** Scheduled Tasks keeps the chosen section highlighted after scrolling in either direction, including bottom-clamped targets and reloaded links. Refresh preserves the reader's position without replaying a consumed section link.
