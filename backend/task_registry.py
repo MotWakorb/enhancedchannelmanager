@@ -632,6 +632,10 @@ class TaskRegistry:
         if not instance:
             return None
 
+        normalized_schedule_type = (
+            ScheduleType(schedule_type) if schedule_type is not None else None
+        )
+
         # Validate/apply task-specific configuration before changing any other
         # task state. A rejected combined PATCH must not leave the task enabled.
         if task_config is not None:
@@ -645,8 +649,8 @@ class TaskRegistry:
                 instance.disable()
 
         # Update schedule config
-        if schedule_type is not None:
-            instance.schedule_config.schedule_type = ScheduleType(schedule_type)
+        if normalized_schedule_type is not None:
+            instance.schedule_config.schedule_type = normalized_schedule_type
         if interval_seconds is not None:
             instance.schedule_config.interval_seconds = interval_seconds
         if cron_expression is not None:

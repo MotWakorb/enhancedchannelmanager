@@ -72,6 +72,30 @@ def test_invalid_task_config_does_not_partially_enable_task():
     assert instance._enabled is False
 
 
+def test_invalid_schedule_type_does_not_mutate_valid_task_config():
+    reg = TaskRegistry()
+    reg.register(EPGEventProbeTask)
+    instance = reg.get_task_instance("epg_event_probe")
+    assert instance is not None
+    instance.update_config({
+        "title_pattern": "existing pattern",
+        "allow_reorder_after_probe": False,
+    })
+    existing_config = instance.get_config().copy()
+
+    with pytest.raises(ValueError, match="not a valid ScheduleType"):
+        reg.update_task_config(
+            "epg_event_probe",
+            schedule_type="invalid",
+            task_config={
+                "title_pattern": "replacement pattern",
+                "allow_reorder_after_probe": True,
+            },
+        )
+
+    assert instance.get_config() == existing_config
+
+
 class TestPersist:
     def test_update_task_config_persists_explicit_intent_only(self, test_session, monkeypatch):
         """The operator save path stores the PATCH's explicit task_config keys
