@@ -98,7 +98,13 @@ class Upstream:
 
 def _client(upstream: Upstream) -> DispatcharrClient:
     client = DispatcharrClient(
-        DispatcharrSettings(url="http://dispatcharr", auth_method="api_key", api_key="k")
+        DispatcharrSettings(
+            url="http://dispatcharr", auth_method="api_key",
+            # Long and unique: DispatcharrClient registers credentials with the
+            # process-global log redactor, and a short value would rewrite
+            # ordinary log text in later tests.
+            api_key="test-only-gh1009-api-key-7f3c9d2e1b",
+        )
     )
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(upstream.handler))
     return client

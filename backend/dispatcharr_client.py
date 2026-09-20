@@ -521,7 +521,15 @@ class DispatcharrClient:
 
         try:
             waited = 0.0
-            for attempt in range(RATE_LIMIT_MAX_RETRIES + 1):
+            attempt = 0
+            # At most one token refresh per rate-limit attempt (the historical
+            # contract: a 401 triggers a refresh and ONE re-issue).
+            refreshed_this_attempt = False
+            # ONE request call site. The 401 re-issue and the 429 retry both
+            # loop back here instead of duplicating the outbound call, so the
+            # request URL has exactly one sink for static analysis and one
+            # place to reason about (PR #1010 review; CodeQL alert 2034).
+            while True:
                 response = await self._client.request(
                     method,
                     f"{self.base_url}{path}",
@@ -534,17 +542,17 @@ class DispatcharrClient:
                 # In api-key mode a 401 is terminal (the key is invalid or revoked),
                 # and callers that opted out of the retry take the 401 as terminal
                 # too rather than risk a rate-limited re-login (see the docstring).
-                if response.status_code == 401 and not self._uses_api_key and retry_on_401:
+                if (
+                    response.status_code == 401
+                    and not self._uses_api_key
+                    and retry_on_401
+                    and not refreshed_this_attempt
+                ):
                     logger.debug("[DISPATCHARR] Got 401, refreshing token and retrying: %s", method)
                     await self._refresh_access_token()
                     headers["Authorization"] = f"Bearer {self.access_token}"
-                    response = await self._client.request(
-                        method,
-                        f"{self.base_url}{path}",
-                        headers=headers,
-                        timeout=request_timeout,
-                        **kwargs,
-                    )
+                    refreshed_this_attempt = True
+                    continue
 
                 # Rate limited: back off and retry (GH #1009). Exhausting the
                 # budget raises an HTTPStatusError carrying the 429 so callers
@@ -573,6 +581,8 @@ class DispatcharrClient:
                 )
                 waited += delay
                 await _sleep(delay)
+                attempt += 1
+                refreshed_this_attempt = False
 
             if response.status_code >= 400:
                 logger.warning("[DISPATCHARR] API request failed: %s - status: %s", method, response.status_code)

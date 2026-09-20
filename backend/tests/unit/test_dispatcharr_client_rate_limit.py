@@ -19,13 +19,13 @@ from dispatcharr_client import DispatcharrClient
 
 def _api_key_client() -> DispatcharrClient:
     return DispatcharrClient(DispatcharrSettings(
-        url="http://dispatcharr:8000", auth_method="api_key", dispatcharr_api_key="k",
+        url="http://dispatcharr:8000", auth_method="api_key", dispatcharr_api_key="test-only-rate-limit-api-key-4a8e2c6d",
     ))
 
 
 def _jwt_client() -> DispatcharrClient:
     return DispatcharrClient(DispatcharrSettings(
-        url="http://dispatcharr:8000", auth_method="password", username="u", password="p",
+        url="http://dispatcharr:8000", auth_method="password", username="test-only-rate-limit-user-91b7", password="test-only-rate-limit-pass-5d0f3a",
     ))
 
 
