@@ -50,7 +50,7 @@ from concurrency import run_cpu_bound
 from config import get_settings
 from csv_handler import parse_csv, generate_csv, generate_template, CSVParseError
 from database import get_session
-from dispatcharr_client import get_client, upstream_http_exception
+from dispatcharr_client import get_client, logo_was_reused, strip_logo_reuse_marker, upstream_http_exception
 from match_fold import fold_match_key
 from normalization_engine import get_normalization_engine
 import journal
@@ -1312,7 +1312,11 @@ async def create_logo(
         start = time.time()
         result = await client.create_logo({"name": request.name, "url": request.url})
         elapsed_ms = (time.time() - start) * 1000
-        logger.info("[CHANNELS-LOGO] Created logo id=%s name=%s in %.1fms", result.get('id'), result.get('name'), elapsed_ms)
+        if logo_was_reused(result):
+            logger.info("[CHANNELS-LOGO] Found existing logo id=%s name=%s in %.1fms", result.get('id'), result.get('name'), elapsed_ms)
+        else:
+            logger.info("[CHANNELS-LOGO] Created logo id=%s name=%s in %.1fms", result.get('id'), result.get('name'), elapsed_ms)
+        result = strip_logo_reuse_marker(result)
         # Rewrite so a just-created logo renders immediately — ChannelsPane
         # and AutoSyncSettingsModal consume this response object directly
         # (GH #662 / bead hhmat).
@@ -3529,17 +3533,25 @@ async def _run_bulk_commit(
             if existing is not None:
                 return existing["id"]
 
-            new_logo = await client.create_logo({"name": logo_name, "url": logo_url})
+            # The index above already established this URL is absent, so the
+            # client's own catalog pre-check would only repeat that scan
+            # (PR #1014 review item 5). The post-400 race reconciliation stays.
+            new_logo = await client.create_logo(
+                {"name": logo_name, "url": logo_url}, precheck=False,
+            )
             created_logo_id = (
                 new_logo.get("id") if isinstance(new_logo, dict) else None
             )
-            ledger.record_write(journal_row=journal_row(
-                action_type="logo_create",
-                entity_id=created_logo_id,
-                entity_name=logo_name,
-                description=f"Created logo '{logo_name}' from {logo_url}",
-                after_value={"name": logo_name, "url": logo_url},
-            ))
+            if not logo_was_reused(new_logo):
+                # Only a logo this batch actually created is a mutation worth
+                # a journal row; a row that appeared meanwhile is not ours.
+                ledger.record_write(journal_row=journal_row(
+                    action_type="logo_create",
+                    entity_id=created_logo_id,
+                    entity_name=logo_name,
+                    description=f"Created logo '{logo_name}' from {logo_url}",
+                    after_value={"name": logo_name, "url": logo_url},
+                ))
             # Cache by url so a later op with the same logoUrl reuses it
             # (fixes a latent duplicate-logo bug too).
             logo_index[logo_url] = new_logo

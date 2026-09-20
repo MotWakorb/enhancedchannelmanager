@@ -4949,3 +4949,334 @@ class TestProfileUniverseSentinelBehavioral:
         result = self._assign(captured["executor"], selected=(2,))
         assert result.success is False
         client.update_profile_channel.assert_not_called()
+
+
+class TestPendingMergeAggregation1016:
+    """PR #1016 review item 4 / tests: engine aggregation of the deferral
+    counters — distinct rows, distinct streams, deferred actions — through
+    the real ``_process_streams`` with a mocked executor."""
+
+    def _rule(self):
+        rule = MagicMock()
+        rule.id = 1
+        rule.name = "Slots"
+        rule.priority = 0
+        rule.m3u_account_id = None
+        rule.target_group_id = 42
+        rule.enabled = True
+        rule.stop_on_first_match = True
+        rule.skip_struck_streams = False
+        rule.sort_field = None
+        rule.sort_order = "asc"
+        rule.sort_regex = None
+        rule.starting_channel_number = None
+        rule.orphan_action = "none"
+        rule.managed_channel_ids = None
+        rule.get_managed_channel_ids.return_value = []
+        rule.get_conditions.return_value = [{"type": "always"}]
+        rule.get_actions.return_value = [
+            {"type": "create_channel", "params": {}},
+            {"type": "create_channel", "params": {}},
+        ]
+        rule.get_normalization_group_ids.return_value = []
+        rule.match_scope_target_group = False
+        rule.is_event_sync.return_value = False
+        return rule
+
+    @patch("channel_pipeline_engine.get_session")
+    def test_results_carry_distinct_rows_and_streams(self, mock_get_session):
+        from channel_pipeline_executor import ActionResult
+        mock_get_session.return_value = MagicMock()
+        client = MagicMock()
+        client.get_channels = AsyncMock(return_value={"count": 0, "results": []})
+        engine = ChannelPipelineEngine(client)
+        engine._existing_channels = []
+        engine._existing_groups = []
+
+        streams = [
+            StreamContext(stream_id=101, stream_name="SLOT 01", m3u_account_id=1, m3u_account_name="P"),
+            StreamContext(stream_id=102, stream_name="SLOT 02", m3u_account_id=1, m3u_account_name="P"),
+        ]
+        rows_by_stream = {101: 53, 102: 54}
+
+        async def fake_execute(action, stream_ctx, exec_ctx, *args, **kwargs):
+            # Every create action for these streams is deferred; both actions
+            # of one stream collide on the same row (§D5).
+            exec_ctx.pending_merges_added += 1
+            exec_ctx.pending_merge_stream_ids.add(stream_ctx.stream_id)
+            row = rows_by_stream[stream_ctx.stream_id]
+            if row not in exec_ctx.pending_merge_ids:
+                exec_ctx.pending_merge_ids.append(row)
+            return ActionResult(success=True, action_type="create_channel",
+                                description="deferred", skipped=True)
+
+        execution = MagicMock()
+        execution.id = 1
+        with patch("channel_pipeline_engine.ActionExecutor") as mock_exec_cls:
+            executor = MagicMock()
+            executor.execute = AsyncMock(side_effect=fake_execute)
+            executor.verify_epg_assignments = AsyncMock(return_value=(0, 0, 0))
+            executor.prune_merge_streams = AsyncMock()
+            executor.reorder_streams_on_channels = AsyncMock(return_value=0)
+            executor._channel_by_id = {}
+            executor._created_channels = {}
+            executor._deferred_epg_assignments = []
+            mock_exec_cls.return_value = executor
+            engine._refresh_dummy_epg_and_retry = AsyncMock()
+            engine._reconcile_orphans = AsyncMock()
+            engine._update_rule_stats = AsyncMock()
+            results = asyncio.get_event_loop().run_until_complete(
+                engine._process_streams(streams, [self._rule()], execution, dry_run=False)
+            )
+
+        assert results["pending_merges_added"] == 4          # deferred create ACTIONS
+        assert results["pending_merge_stream_count"] == 2    # distinct STREAMS
+        assert results["pending_merge_ids"] == [53, 54]      # distinct ROWS, no repeats
+        assert "pending_merge_stream_ids" not in results     # JSON-safe result
+
+        # And the shared phrase keeps the units apart.
+        from channel_pipeline_engine import describe_pending_merge_deferral
+        phrase = describe_pending_merge_deferral(results)
+        assert "2 streams deferred by pending merges" in phrase
+        assert "4 deferred create actions" in phrase
+        assert "rows: 53, 54" in phrase
+
+
+class TestSummarizeFailedActionsCarriesReason:
+    """GitHub #1011: the run-level failure summary names WHY each sampled
+    action failed, not just the rule + action type. A bare "32 action(s)
+    failed" cannot distinguish "dummy source has no entry for this channel
+    yet" from a genuine mismatch."""
+
+    def test_summary_includes_per_action_error(self):
+        failed = [
+            {"rule_name": "Snooker (MAX UK)", "action_type": "assign_epg",
+             "error": "Dummy EPG source 25 has no entry for 'Snooker: Round 1' yet"},
+            {"rule_name": "Snooker (MAX UK)", "action_type": "assign_epg",
+             "error": "Dummy EPG source 25 has no entry for 'Snooker: Round 2' yet"},
+        ]
+        text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert text.startswith("2 action(s) failed during this run")
+        assert "'Snooker (MAX UK)' assign_epg" in text
+        assert "Dummy EPG source 25 has no entry for 'Snooker: Round 1' yet" in text
+        assert "safe to retry" in text
+
+    def test_summary_groups_identical_reasons_and_bounds_sample(self):
+        failed = [
+            {"rule_name": "R", "action_type": "assign_epg", "error": "same reason"}
+            for _ in range(3)
+        ] + [
+            {"rule_name": "R", "action_type": "assign_logo", "error": f"reason {i}"}
+            for i in range(6)
+        ]
+        text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert text.startswith("9 action(s) failed during this run")
+        assert text.count("same reason") == 1
+        assert "+2 more" in text
+
+    # ---- PR #1012 review item 7: redacted, bounded, efficient -----------------
+
+    def test_credential_bearing_reasons_are_scrubbed(self):
+        canary = "CANARY-SECRET-7f3e9a1b"
+        failed = [
+            {"rule_name": "R", "action_type": "assign_epg",
+             "error": f"upstream 401 at http://dispatcharr:9191/api/x/?token={canary}&page=2"},
+            {"rule_name": "R", "action_type": "assign_epg",
+             "error": f"Authorization: Bearer {canary} was rejected"},
+            {"rule_name": "R", "action_type": "assign_epg",
+             "error": f'login failed for password="{canary}"'},
+            {"rule_name": "R", "action_type": "assign_epg",
+             "error": f"stream http://user:{canary}@host/live/u/{canary}/1.ts unreachable"},
+        ]
+        text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert canary not in text
+        assert "page=2" in text            # non-credential context survives
+        assert "upstream 401" in text
+        assert "safe to retry" in text
+
+    def test_registered_credential_values_are_scrubbed_even_without_a_marker(self):
+        import channel_pipeline_engine as engine_mod
+        failed = [{"rule_name": "R", "action_type": "assign_epg",
+                   "error": "Dispatcharr said: REGISTERED-SECRET-VALUE is not valid"}]
+        with patch.object(engine_mod, "_known_credential_values",
+                          return_value=frozenset({"REGISTERED-SECRET-VALUE"})):
+            text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert "REGISTERED-SECRET-VALUE" not in text
+        assert "REDACTED" in text  # obfuscate's own sentinel is ***REDACTED***
+
+    def test_oversized_and_many_distinct_reasons_produce_a_bounded_summary(self):
+        big = "x" * (128 * 1024)
+        failed = [
+            {"rule_name": "R", "action_type": "assign_epg", "error": f"{i}:{big}"}
+            for i in range(5)
+        ] + [
+            {"rule_name": "R", "action_type": "assign_epg", "error": f"distinct {i}"}
+            for i in range(500)
+        ]
+        text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert text.startswith("505 action(s) failed during this run")
+        assert len(text) < 2000
+        assert "[truncated]" in text
+        assert "+500 more" in text
+
+    def test_ordinary_reasons_stay_readable(self):
+        failed = [{"rule_name": "Snooker (MAX UK)", "action_type": "assign_epg",
+                   "error": "Dummy EPG source 25 has no entry for 'Snooker: Round 1' yet"}]
+        text = ChannelPipelineEngine._summarize_failed_actions(failed)
+        assert "Dummy EPG source 25 has no entry for 'Snooker: Round 1' yet" in text
+        assert "[REDACTED]" not in text
+
+
+
+class TestPass5ReviewFollowups:
+    """PR #1012 review items 3, 5 and 6 on the real ``_refresh_dummy_epg_and_retry``."""
+
+    def _profile(self, pid, name, groups):
+        profile = MagicMock()
+        profile.id = pid
+        profile.name = name
+        profile.get_channel_group_ids.return_value = list(groups)
+        return profile
+
+    def _run(self, deferred, epg_sources, profiles, *, retry_result=None):
+        from channel_pipeline_executor import ActionResult
+
+        client = MagicMock()
+        client.get_epg_data = AsyncMock(return_value=[])
+        engine = ChannelPipelineEngine(client)
+
+        executor = MagicMock()
+        executor._deferred_epg_assignments = list(deferred)
+        executor._channel_by_id = {
+            5000: {"name": "A", "channel_group_id": 1644},
+            5001: {"name": "B", "channel_group_id": 1645},
+        }
+        executor._group_by_id = {1644: {"name": "G1"}, 1645: {"name": "G2"}}
+        executor.reload_epg_data = MagicMock()
+        executor._execute_assign_epg = AsyncMock(return_value=retry_result or ActionResult(
+            success=True, action_type="assign_epg", description="assigned", entity_id=5000,
+        ))
+
+        results = {"execution_log": [], "dry_run_results": []}
+        fake_task = MagicMock()
+        fake_task._regenerate_xmltv = AsyncMock(return_value=len(profiles))
+        sess = MagicMock()
+        sess.query.return_value.filter.return_value.all.return_value = profiles
+        with patch("channel_pipeline_engine.get_session", return_value=sess), \
+                patch("database.get_session", return_value=sess), \
+                patch("tasks.dummy_epg_refresh.DummyEPGRefreshTask", return_value=fake_task), \
+                patch("tasks.dummy_epg_refresh.wait_for_epg_source_refresh", new=AsyncMock()):
+            asyncio.get_event_loop().run_until_complete(
+                engine._refresh_dummy_epg_and_retry(executor, results, epg_sources, dry_run=False)
+            )
+        return results, executor
+
+    @staticmethod
+    def _action(epg_id):
+        action = MagicMock()
+        action.type = "assign_epg"
+        action.params = {"epg_id": epg_id}
+        action.to_dict.return_value = {"type": "assign_epg", "epg_id": epg_id}
+        return action
+
+    def test_each_profile_gains_only_its_own_sources_groups(self):
+        """Item 3: two sources backed by two profiles; deferred channels in
+        different groups. Profile 1 must gain 1644 only and profile 2 1645 only,
+        not the union."""
+        ctx_a, ctx_b = ExecutionContext(), ExecutionContext()
+        ctx_a.current_channel_id, ctx_b.current_channel_id = 5000, 5001
+        deferred = [
+            (5000, self._action(5), StreamContext(stream_id=1, stream_name="A", m3u_account_id=1), ctx_a),
+            (5001, self._action(6), StreamContext(stream_id=2, stream_name="B", m3u_account_id=1), ctx_b),
+        ]
+        epg_sources = [
+            {"id": 5, "name": "Dummy 1", "url": "http://ecm/api/dummy-epg/xmltv/1"},
+            {"id": 6, "name": "Dummy 2", "url": "http://ecm/api/dummy-epg/xmltv/2"},
+        ]
+        p1, p2 = self._profile(1, "P1", []), self._profile(2, "P2", [])
+        self._run(deferred, epg_sources, [p1, p2])
+        p1.set_channel_group_ids.assert_called_once_with([1644])
+        p2.set_channel_group_ids.assert_called_once_with([1645])
+
+    def test_profile_already_covering_its_group_is_left_alone(self):
+        ctx_a, ctx_b = ExecutionContext(), ExecutionContext()
+        ctx_a.current_channel_id, ctx_b.current_channel_id = 5000, 5001
+        deferred = [
+            (5000, self._action(5), StreamContext(stream_id=1, stream_name="A", m3u_account_id=1), ctx_a),
+            (5001, self._action(6), StreamContext(stream_id=2, stream_name="B", m3u_account_id=1), ctx_b),
+        ]
+        epg_sources = [
+            {"id": 5, "name": "Dummy 1", "url": "http://ecm/api/dummy-epg/xmltv/1"},
+            {"id": 6, "name": "Dummy 2", "url": "http://ecm/api/dummy-epg/xmltv/2"},
+        ]
+        p1, p2 = self._profile(1, "P1", [1644]), self._profile(2, "P2", [1645])
+        self._run(deferred, epg_sources, [p1, p2])
+        p1.set_channel_group_ids.assert_not_called()
+        p2.set_channel_group_ids.assert_not_called()
+
+    def test_combined_feed_source_keeps_the_union_behaviour(self):
+        """A source that is not one profile's feed cannot be attributed; every
+        enabled profile receives the union, as before."""
+        ctx_a, ctx_b = ExecutionContext(), ExecutionContext()
+        ctx_a.current_channel_id, ctx_b.current_channel_id = 5000, 5001
+        deferred = [
+            (5000, self._action(5), StreamContext(stream_id=1, stream_name="A", m3u_account_id=1), ctx_a),
+            (5001, self._action(7), StreamContext(stream_id=2, stream_name="B", m3u_account_id=1), ctx_b),
+        ]
+        epg_sources = [
+            {"id": 5, "name": "Dummy 1", "url": "http://ecm/api/dummy-epg/xmltv/1"},
+            {"id": 7, "name": "Combined", "url": "http://ecm/api/dummy-epg/xmltv"},
+        ]
+        p1 = self._profile(1, "P1", [])
+        self._run(deferred, epg_sources, [p1])
+        (groups,), _ = p1.set_channel_group_ids.call_args
+        assert sorted(groups) == [1644, 1645]
+
+    def test_retry_is_terminal_and_failure_is_attributed_to_the_originating_rule(self):
+        """Items 5 and 6: the retry disables deferral, and a terminal failure is
+        recorded against the rule carried on the pinned context."""
+        from channel_pipeline_executor import ActionResult
+        from unittest.mock import ANY
+
+        ctx = ExecutionContext()
+        ctx.current_channel_id = 5000
+        ctx.rule_id, ctx.rule_name = 7, "Snooker (MAX UK)"
+        stream = StreamContext(stream_id=1, stream_name="A", m3u_account_id=1)
+        deferred = [(5000, self._action(5), stream, ctx)]
+        epg_sources = [{"id": 5, "name": "Dummy 1", "url": "http://ecm/api/dummy-epg/xmltv/1"}]
+        failing = ActionResult(
+            success=False, action_type="assign_epg",
+            description="Dummy EPG source 5 has no entry for 'A' yet", entity_id=5000,
+            error="Dummy EPG source 5 has no entry for 'A' even after the dummy EPG was regenerated",
+        )
+        results, executor = self._run(deferred, epg_sources, [self._profile(1, "P1", [1644])],
+                                      retry_result=failing)
+        executor._execute_assign_epg.assert_awaited_once_with(ANY, stream, ctx, allow_defer=False)
+        failed = results["failed_actions"]
+        assert len(failed) == 1
+        assert failed[0]["rule_id"] == 7
+        assert failed[0]["rule_name"] == "Snooker (MAX UK)"
+        assert "even after" in failed[0]["error"]
+
+        # And the selected-rule outcome counts it against that rule.
+        rule = MagicMock()
+        rule.id, rule.name = 7, "Snooker (MAX UK)"
+        rule.is_event_sync.return_value = False
+        outcomes = ChannelPipelineEngine._selected_rule_outcomes([rule], {
+            **results, "rule_match_counts": {7: 1},
+        })
+        assert outcomes[0]["status"] == "completed_with_errors"
+        assert outcomes[0]["error_count"] == 1
+
+    def test_retry_without_rule_identity_keeps_the_legacy_label(self):
+        from channel_pipeline_executor import ActionResult
+        ctx = MagicMock()  # a context that carries no usable rule identity
+        stream = StreamContext(stream_id=1, stream_name="A", m3u_account_id=1)
+        deferred = [(5000, self._action(5), stream, ctx)]
+        epg_sources = [{"id": 5, "name": "Dummy 1", "url": "http://ecm/api/dummy-epg/xmltv/1"}]
+        failing = ActionResult(success=False, action_type="assign_epg", description="x",
+                               entity_id=5000, error="still failing")
+        results, _ = self._run(deferred, epg_sources, [self._profile(1, "P1", [1644])],
+                               retry_result=failing)
+        assert results["failed_actions"][0]["rule_id"] is None
+        assert results["failed_actions"][0]["rule_name"] == "[Pass 5 EPG retry]"

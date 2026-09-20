@@ -136,7 +136,7 @@ from dbas.restore_contracts import (
     SkipDetail,
     SkipReason,
 )
-from dispatcharr_client import DispatcharrClient
+from dispatcharr_client import DispatcharrClient, logo_was_reused
 
 logger = logging.getLogger(__name__)
 
@@ -580,6 +580,29 @@ async def _create_logo_from_url(
         return
 
     new_id = created.get("id") if isinstance(created, dict) else None
+    if logo_was_reused(created):
+        # The destination already had a row with this URL (PR #1014 review
+        # item 1). Its id populates the FK remap so channel reattach resolves
+        # it, but this restore did NOT create it: no compensating-delete
+        # ownership in the ledger, no ``created`` count. Rolling back would
+        # otherwise delete a logo that pre-dates the restore.
+        cat.skipped += 1
+        cat.skip_details.append(
+            SkipDetail(
+                reason=SkipReason.ALREADY_EXISTS_IDENTICAL,
+                label=label,
+                source_export_id=source_id,
+            )
+        )
+        result.matched += 1
+        if new_id is not None and source_id is not None:
+            remap.add(EntityType.LOGO, int(source_id), int(new_id))
+        logger.info(
+            "[DBAS-LOGOS] Remotely-hosted logo '%s' already exists on the "
+            "destination (id=%s); reused without taking ownership.",
+            label, new_id,
+        )
+        return
     cat.created += 1
     result.uploaded += 1
     if new_id is not None:

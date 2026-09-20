@@ -204,6 +204,93 @@ class TestHookFreshInsert:
 
 
 # ---------------------------------------------------------------------------
+# merge_id exposure (GH #1015)
+# ---------------------------------------------------------------------------
+#
+# A deferred stream is otherwise invisible in the run summary: "0 channels
+# created" reads the same as "the provider had nothing today". The caller
+# needs the row id to say WHICH row is blocking, and it needs it on the
+# collision branch too — that is the branch that keeps a group frozen across
+# refreshes.
+
+
+class TestMergeIdExposure:
+    """``DedupHookResult.merge_id`` names the row the caller is behind."""
+
+    def test_fresh_enqueue_exposes_the_new_row_id(self, test_session):
+        result = check_and_enqueue_pending_merge(
+            stream_name="ESPN HD",
+            group_id=42,
+            candidates=[("99", "ESPN HD")],
+            threshold=0.80,
+            triggered_by="m3u_refresh",
+            dry_run=False,
+            db_session=test_session,
+        )
+        row = test_session.query(PendingMerge).one()
+        assert result.enqueued is True
+        assert result.merge_id == row.id
+
+    def test_idempotent_collision_exposes_the_existing_row_id(self, test_session):
+        first = check_and_enqueue_pending_merge(
+            stream_name="ESPN HD",
+            group_id=42,
+            candidates=[("99", "ESPN HD")],
+            threshold=0.80,
+            triggered_by="m3u_refresh",
+            dry_run=False,
+            db_session=test_session,
+        )
+        second = check_and_enqueue_pending_merge(
+            stream_name="ESPN HD",
+            group_id=42,
+            candidates=[("99", "ESPN HD")],
+            threshold=0.80,
+            triggered_by="m3u_refresh",
+            dry_run=False,
+            db_session=test_session,
+        )
+
+        assert second.enqueued is True
+        # The §D5 contract on ``candidate`` is unchanged: the prior row is
+        # authoritative and we did not re-score it.
+        assert second.candidate is None
+        # But the row id is still reported — this is the branch that keeps
+        # a group frozen, so it is the one that most needs to be nameable.
+        assert second.merge_id == first.merge_id
+        assert test_session.query(PendingMerge).count() == 1
+
+    def test_no_candidate_reports_no_row_id(self, test_session):
+        result = check_and_enqueue_pending_merge(
+            stream_name="Completely Unrelated Name",
+            group_id=42,
+            candidates=[("99", "ESPN HD")],
+            threshold=0.80,
+            triggered_by="m3u_refresh",
+            dry_run=False,
+            db_session=test_session,
+        )
+        assert result.enqueued is False
+        assert result.merge_id is None
+
+    def test_short_circuit_paths_report_no_row_id(self, test_session):
+        for kwargs in (
+            {"dry_run": True, "triggered_by": "m3u_refresh"},
+            {"dry_run": False, "triggered_by": "scheduled"},
+        ):
+            result = check_and_enqueue_pending_merge(
+                stream_name="ESPN HD",
+                group_id=42,
+                candidates=[("99", "ESPN HD")],
+                threshold=0.80,
+                db_session=test_session,
+                **kwargs,
+            )
+            assert result.enqueued is False
+            assert result.merge_id is None
+
+
+# ---------------------------------------------------------------------------
 # Below-threshold path — silent refusal per ADR-008 §D2.
 # ---------------------------------------------------------------------------
 

@@ -97,10 +97,21 @@ class DedupHookResult:
         True AND the insert was fresh (not an idempotent collision).
         ``None`` for the collision branch (we did not re-score the
         existing pending row) and for the no-enqueue branches.
+    merge_id:
+        The ``pending_merges`` row id the caller is now blocked behind —
+        the row this call inserted, or the pre-existing pending row it
+        collided with (§D5). ``None`` when ``enqueued`` is False.
+
+        GH #1015: a deferred stream is invisible in the run summary
+        otherwise ("0 channels created" reads the same as "the provider
+        had nothing"), and the operator needs the row id to resolve the
+        block. Set on BOTH branches, so the collision path — the one that
+        keeps a group frozen across refreshes — can name its row too.
     """
 
     enqueued: bool
     candidate: Optional[MatchResult] = None
+    merge_id: Optional[int] = None
 
 
 @dataclass(frozen=True)
@@ -409,8 +420,12 @@ def check_and_enqueue_pending_merge(
     )
     # Preserve the historical hook contract: candidate is None on the §D5
     # collision branch (the prior pending row is authoritative; we did not
-    # re-score it), and the MatchResult on a fresh insert.
+    # re-score it), and the MatchResult on a fresh insert. ``merge_id`` is
+    # set on BOTH branches (GH #1015) — the caller is blocked behind a row
+    # either way, and the collision case is the one that keeps a group
+    # frozen across refreshes.
     return DedupHookResult(
         enqueued=True,
         candidate=result.candidate if result.fresh else None,
+        merge_id=result.merge_id,
     )

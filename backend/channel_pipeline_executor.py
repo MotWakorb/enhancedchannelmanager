@@ -6,6 +6,7 @@ groups, merging streams, and assigning properties. Tracks all changes for
 potential rollback.
 """
 import contextlib
+import copy
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Union
@@ -37,6 +38,15 @@ from services.dedup_matcher import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _url_host_for_log(url: str) -> str:
+    """The host part of a URL for log lines; never its path or query."""
+    try:
+        from urllib.parse import urlsplit
+        return urlsplit(url).netloc or "<no-host>"
+    except Exception:  # noqa: BLE001 - logging helper
+        return "<unparseable>"
 
 
 # A whole-number "min-max" channel-number range, the only range shape a rule's
@@ -206,6 +216,13 @@ class ExecutionContext:
     current_channel_id: Optional[int] = None  # Channel created/selected for this stream
     current_group_id: Optional[int] = None  # Group created/selected
 
+    # Identity of the rule whose actions this context is executing (PR #1012
+    # review item 5). Deferred work (Pass 5 EPG retries) carries a copy of the
+    # context, so a terminal failure recorded there can be attributed to the
+    # originating rule instead of rule_id=None.
+    rule_id: Optional[int] = None
+    rule_name: Optional[str] = None
+
     # Channel IDs actually CREATED during this stream's action execution
     # (not merged-into or matched via fallback). Used by Pass 3 renumber
     # gating to avoid renumbering foreign channels the rule doesn't own.
@@ -267,6 +284,17 @@ class ExecutionContext:
     # surfaces it on the pipeline result as ``pending_merges_added``
     # so the M3U-refresh response can drive BD-J's toast.
     pending_merges_added: int = 0
+
+    # GH #1015: the DISTINCT ``pending_merges`` row ids behind
+    # ``pending_merges_added``, so a run summary can name what is blocking the
+    # deferred streams instead of reporting only "0 channels created" — which
+    # is indistinguishable from "the provider had nothing today".
+    pending_merge_ids: list[int] = field(default_factory=list)
+    # PR #1016 review item 4: ``pending_merges_added`` counts deferred CREATE
+    # ACTIONS (a stream with two create actions counts twice). The distinct
+    # streams affected are tracked separately so the summary can report
+    # streams, actions and rows with accurate units.
+    pending_merge_stream_ids: set = field(default_factory=set)
 
     def add_result(self, result: ActionResult):
         """Add an action result and update statistics."""
@@ -487,6 +515,11 @@ class ActionExecutor:
 
         # Deferred EPG assignments (populated when dummy source has no data yet)
         self._deferred_epg_assignments: list[tuple] = []  # (channel_id, action, stream_ctx, exec_ctx)
+        # Lossless id-based provenance of every channel THIS run created (PR
+        # #1012 review item 4). ``_created_channels`` is a lowercase-NAME lookup
+        # cache: two same-named channels in different groups overwrite each
+        # other there, so it cannot answer "was this id created in this run".
+        self._created_channel_ids: set[int] = set()
 
         # Pending EPG verifications for newly created channels (channel_id, payload)
         self._pending_epg_verifications: list[tuple[int, dict]] = []
@@ -521,6 +554,13 @@ class ActionExecutor:
         self._base_name_to_channel = {}  # base_name.lower() -> channel dict (for number-prefixed lookups)
         self._created_groups = {}  # name.lower() -> group dict
         self._next_dry_run_id = -1  # Unique negative IDs for dry-run simulated entities
+        # GH #1015: stream_id -> why this stream's channel was NOT created,
+        # for streams the BD-F pending-merges hook deferred. Read by
+        # ``_execute_assign_epg`` so the follow-on action reports the real
+        # reason instead of the bare "No channel context for assign_epg",
+        # which operators read as an EPG fault. Per-stream (not per-run)
+        # because the reason names the stream's own blocking row.
+        self._deferred_channel_creations: dict[int, str] = {}
 
         # Track streams per (channel_id, m3u_account_id) for max_streams_per_channel limit.
         # Lazily seeded per-channel via _ensure_channel_m3u_counts() because the
@@ -1147,6 +1187,15 @@ class ActionExecutor:
     async def _resolve_logo_id(self, logo_url: str, name_hint: str = "") -> Optional[int]:
         """Resolve a logo URL to a Dispatcharr logo_id, creating if needed.
 
+        Looks the URL up before creating. Under the planning client a create
+        never reaches Dispatcharr, so a create-first order recorded a
+        ``create_logo`` write for every channel whose logo already existed;
+        Dispatcharr rejects the duplicate URL with 400 at replay, and logo
+        rows outlive their channels, so every event-cycle rollover collided
+        with the previous cycle's row. Resolving first keeps that write out
+        of the plan and points the channel at the existing row. The lookup is
+        a read, so it is delegated to the live client in planning mode too.
+
         Uses a cache to avoid duplicate lookups/creations within the same run.
         """
         if not logo_url:
@@ -1158,9 +1207,22 @@ class ActionExecutor:
             return self._logo_cache[logo_url]
 
         try:
-            # Try to create the logo (Dispatcharr will reject duplicates)
+            existing = await self.client.find_logo_by_url(logo_url)
+        except Exception as lookup_err:  # noqa: BLE001 - fall through to create
+            logger.warning("[AUTO-CREATE-EXEC] Logo lookup by URL failed, will try to create: %s", lookup_err)
+            existing = None
+        if existing and existing.get("id"):
+            self._logo_cache[logo_url] = existing["id"]
+            return existing["id"]
+
+        try:
+            # Create the logo. The lookup above already established the URL is
+            # absent, so skip the client's own catalog pre-check (PR #1014
+            # review item 5); the client still reconciles a post-400 race.
             logo_name = name_hint or logo_url.split("/")[-1]
-            result = await self.client.create_logo({"name": logo_name, "url": logo_url})
+            result = await self.client.create_logo(
+                {"name": logo_name, "url": logo_url}, precheck=False,
+            )
             logo_id = result.get("id")
             if logo_id:
                 self._logo_cache[logo_url] = logo_id
@@ -1178,7 +1240,11 @@ class ActionExecutor:
                 except Exception as search_err:
                     logger.warning("[AUTO-CREATE-EXEC] Failed to find existing logo by URL: %s", search_err)
             else:
-                logger.warning("[AUTO-CREATE-EXEC] Failed to create logo from '%s': %s", logo_url, e)
+                # Host only: a logo URL path or query can carry provider credentials.
+                logger.warning(
+                    "[AUTO-CREATE-EXEC] Failed to create logo from host '%s': %s",
+                    _url_host_for_log(logo_url), e,
+                )
         return None
 
     def _get_group_name(self, group_id) -> Optional[str]:
@@ -1199,6 +1265,13 @@ class ActionExecutor:
                                        allow_manual_channel_merge: bool = False,
                                        fold_match_key: bool = False) -> ActionResult:
         """Execute create_channel action."""
+        # PR #1016 review item 5: a deferral explanation belongs to ONE create
+        # attempt. A later create attempt for the same stream (another group,
+        # another rule action) supersedes it: if this attempt defers again the
+        # hook re-records the reason below; if it fails or succeeds, the stale
+        # "deferred behind row N" must not be what the follow-on assign_epg
+        # blames.
+        self._deferred_channel_creations.pop(stream_ctx.stream_id, None)
         params = action.params
         raw_number_spec = params.get("channel_number", "auto")
         number_spec, provider_number_result = self._resolve_provider_channel_number(
@@ -1534,6 +1607,7 @@ class ActionExecutor:
             elif not inherit_tvg_id and stream_ctx.tvg_id:
                 action_details.append("tvg_id left empty (tvg_id_mode=none)")
             self._created_channels[channel_name.lower()] = simulated
+            self._created_channel_ids.add(dry_id)
             self._channel_by_id[dry_id] = simulated
             # bead g0uuf: register in the multi-candidate index so a scoped
             # lookup finds this channel even when a same-named channel in
@@ -1608,6 +1682,7 @@ class ActionExecutor:
             # set in step means the two provenance sources never disagree.
             self._pipeline_managed_channel_ids.add(new_channel["id"])
             self._created_channels[channel_name.lower()] = new_channel
+            self._created_channel_ids.add(new_channel["id"])
             self._channel_by_id[new_channel["id"]] = new_channel
             # bead g0uuf: register in the multi-candidate index so a scoped
             # lookup finds this channel even when a same-named channel in
@@ -2622,9 +2697,25 @@ class ActionExecutor:
                 error=str(e)
             )
 
+    @staticmethod
+    def _pin_context(exec_ctx: ExecutionContext) -> ExecutionContext:
+        """A copy of ``exec_ctx`` whose channel target cannot move later.
+
+        The deferred-EPG queue used to hold the live per-stream context; a
+        later action in the same sequence that created/selected another
+        channel changed ``current_channel_id`` and Pass 5 then PATCHed the
+        wrong channel (PR #1012 review item 2). The copy shares the
+        accumulator lists (results, created entities) with the live context
+        so nothing is double-counted; only the scalar target is frozen.
+        """
+        pinned = copy.copy(exec_ctx)
+        pinned.current_channel_id = exec_ctx.current_channel_id
+        return pinned
+
     async def _execute_assign_epg(self, action: Action, stream_ctx: StreamContext,
                                    exec_ctx: ExecutionContext,
-                                   defer_on_no_match: bool = False) -> ActionResult:
+                                   defer_on_no_match: bool = False,
+                                   allow_defer: bool = True) -> ActionResult:
         """Execute assign_epg action.
 
         The user selects an EPG source ID (epg_id), but Dispatcharr channels use
@@ -2634,14 +2725,49 @@ class ActionExecutor:
         2. For standard EPGs: matches by the channel's tvg_id
         3. Fallback: first entry from the source
 
-        ``defer_on_no_match`` (ti939.3.3, event_sync dummy EPG assignment
-        only): when the dummy source HAS entries but none matches this
-        channel — the steady state right after Dispatcharr creates a new
-        event channel, before the profile's XMLTV covers it — defer to the
-        existing Pass 5 refresh-and-retry instead of failing. Default False
-        keeps the standard-rule path byte-identical (no-match = failure).
+        ``defer_on_no_match`` (ti939.3.3, event_sync dummy EPG assignment):
+        when the dummy source HAS entries but none matches this channel — the
+        steady state right after Dispatcharr creates a new event channel,
+        before the profile's XMLTV covers it — defer to the existing Pass 5
+        refresh-and-retry instead of failing.
+
+        Standard rules (GitHub #1011) get the same deferral AUTOMATICALLY for
+        a channel THIS run created (id-based provenance), because the dummy
+        source's XMLTV cannot describe it yet. That exception applies to
+        direct runs only: a planned run (``plan_only``) cannot regenerate and
+        refresh the dummy EPG before its commit, so there the no-match is an
+        explicit failure rather than a deferral that would be persisted as
+        fulfilled. Pre-existing channels keep no-match = failure.
+
+        ``allow_defer=False`` is the Pass 5 retry: the dummy EPG has already
+        been regenerated and the source refreshed, so a remaining no-match is
+        terminal and is returned as an explicit failure, never re-queued.
+
+        A deferral queues a COPY of ``exec_ctx`` pinned to the channel being
+        assigned, so a later action that moves ``current_channel_id`` cannot
+        redirect the retry.
         """
         if not exec_ctx.current_channel_id:
+            # GH #1015: a channel that was never created is not the same
+            # fault as a missing EPG. When the BD-F hook deferred this
+            # stream behind a pending merge, say so — a deferred slot
+            # otherwise surfaces as a bare "No channel context for
+            # assign_epg", which operators (correctly, given the text)
+            # read as an EPG problem and go looking in the wrong place.
+            deferral = self._deferred_channel_creations.get(stream_ctx.stream_id)
+            if deferral:
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=(
+                        "No channel context for assign_epg — channel creation "
+                        "was deferred: " + deferral
+                    ),
+                    error=(
+                        "No channel to update — channel creation was deferred: "
+                        + deferral
+                    ),
+                )
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -2661,6 +2787,20 @@ class ActionExecutor:
         # Resolve EPG source ID -> epg_data_id
         source_entries = self._epg_data_by_source.get(epg_source_id, [])
         if not source_entries:
+            if epg_source_id in self._dummy_epg_source_ids and not allow_defer:
+                # Pass 5 retry: regenerated and refreshed, still empty. Terminal.
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"Dummy EPG source {epg_source_id} still has no entries after refresh",
+                    error=(
+                        f"Dummy EPG source {epg_source_id} still has no data entries after "
+                        f"the dummy EPG was regenerated and the source refreshed — check the "
+                        f"profile's channel groups and the source URL in Dispatcharr"
+                    ),
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                )
             # For dummy EPG sources, defer instead of failing — Pass 5 will refresh and retry
             if epg_source_id in self._dummy_epg_source_ids:
                 logger.info(
@@ -2669,7 +2809,8 @@ class ActionExecutor:
                     epg_source_id, exec_ctx.current_channel_id
                 )
                 self._deferred_epg_assignments.append(
-                    (exec_ctx.current_channel_id, action, stream_ctx, exec_ctx)
+                    (exec_ctx.current_channel_id, action, stream_ctx,
+                     self._pin_context(exec_ctx))
                 )
                 return ActionResult(
                     success=True,
@@ -2695,7 +2836,28 @@ class ActionExecutor:
 
         if not epg_data_entry:
             channel_name = channel.get("name", "unknown")
-            if defer_on_no_match and epg_source_id in self._dummy_epg_source_ids:
+            is_dummy_source = epg_source_id in self._dummy_epg_source_ids
+            # GitHub #1011: a channel THIS run created cannot be in the
+            # dummy source yet — its XMLTV was generated before the channel
+            # existed (and the endpoint serves a cached copy that channel
+            # creation never invalidates). That is the expected state, not a
+            # mismatch, so it defers exactly like the event_sync path.
+            # Pre-existing channels keep no-match = failure: deferring them
+            # would hide a genuine mismatch behind a full Pass 5 cycle.
+            # Provenance is by channel ID (PR #1012 review item 4): the
+            # name-keyed cache loses a same-named channel in another group.
+            created_this_run = (
+                is_dummy_source
+                and exec_ctx.current_channel_id in self._created_channel_ids
+            )
+            # A planned run cannot regenerate/refresh the dummy EPG before its
+            # commit (Pass 5 only simulates there), so deferring would persist
+            # an unfulfilled assignment as completed (PR #1012 review item 1).
+            same_run_deferral = created_this_run and not self._plan_only
+            if (
+                is_dummy_source and allow_defer
+                and (defer_on_no_match or same_run_deferral)
+            ):
                 # ti939.3.3: same deferral as the empty-source branch above —
                 # Pass 5 regenerates the profile's XMLTV (which then covers
                 # this channel), refreshes the source, and retries.
@@ -2706,7 +2868,8 @@ class ActionExecutor:
                     epg_source_id, exec_ctx.current_channel_id, channel_name
                 )
                 self._deferred_epg_assignments.append(
-                    (exec_ctx.current_channel_id, action, stream_ctx, exec_ctx)
+                    (exec_ctx.current_channel_id, action, stream_ctx,
+                     self._pin_context(exec_ctx))
                 )
                 return ActionResult(
                     success=True,
@@ -2717,6 +2880,41 @@ class ActionExecutor:
                     deferred=True
                 )
             logger.warning("[AUTO-CREATE-EXEC] No EPG match for channel '%s' in source %s", channel_name, epg_source_id)
+            if is_dummy_source:
+                # GitHub #1011: say what the operator can act on — the dummy
+                # source's XMLTV does not describe this channel — instead of a
+                # generic no-match that reads like a matcher problem.
+                no_entry = (
+                    f"Dummy EPG source {epg_source_id} has no entry for "
+                    f"'{channel_name}'"
+                )
+                if not allow_defer:
+                    # Pass 5 retry exhausted: terminal, no promise of more work.
+                    error = (
+                        f"{no_entry} even after the dummy EPG was regenerated and "
+                        f"the source refreshed — add the channel's group to the "
+                        f"profile, or check that the profile covers this channel"
+                    )
+                elif created_this_run and self._plan_only:
+                    error = (
+                        f"{no_entry} yet, and a planned run cannot regenerate and "
+                        f"refresh the dummy EPG before commit — run the rule "
+                        f"directly (it defers and retries after refresh), or "
+                        f"regenerate the dummy EPG and refresh the source first"
+                    )
+                else:
+                    error = (
+                        f"{no_entry} yet — regenerate the dummy EPG and refresh "
+                        f"the source, or add the channel's group to the profile"
+                    )
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"{no_entry} yet",
+                    error=error,
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                )
             return ActionResult(
                 success=False,
                 action_type=action.type,
@@ -6192,18 +6390,40 @@ class ActionExecutor:
         # the existing channels in the target group). When
         # ``group_id`` is None (ungrouped import), we pass the full
         # list — the matcher's threshold + floor still bounds quality.
+        #
+        # GH #1015: a channel this stream is ALREADY attached to is not a
+        # candidate to merge it INTO — a channel cannot be its own stream's
+        # duplicate. The pair scores 1.00 by construction (same name), so
+        # leaving it in queues the stream as a merge against the very
+        # channel it is on and defers a create that should never have been
+        # questioned. Dropped here rather than inside the matcher because
+        # attachment is an executor-side fact: the hook's contract is that
+        # the CALLER owns candidate selection.
+        # PR #1016 review item 7: apply the cheap group/name eligibility
+        # FIRST, and inspect stream membership only on the channels that
+        # survive it. Walking every channel's membership list before
+        # filtering visited N_streams x N_channels x N_memberships entries
+        # for zero eligible candidates.
+        stream_id = stream_ctx.stream_id
         if group_id is not None:
-            candidates = [
-                (c["id"], c.get("name", ""))
-                for c in self.existing_channels
+            eligible = [
+                c for c in self.existing_channels
                 if c.get("channel_group_id") == group_id and c.get("name")
             ]
         else:
-            candidates = [
-                (c["id"], c.get("name", ""))
-                for c in self.existing_channels
-                if c.get("name")
-            ]
+            eligible = [c for c in self.existing_channels if c.get("name")]
+
+        def _attached(channel: dict) -> bool:
+            return any(
+                (s.get("id") if isinstance(s, dict) else s) == stream_id
+                for s in (channel.get("streams") or [])
+            )
+
+        candidates = [
+            (c["id"], c.get("name", ""))
+            for c in eligible
+            if c.get("id") is not None and not _attached(c)
+        ]
 
         if not candidates:
             return None
@@ -6246,7 +6466,15 @@ class ActionExecutor:
         # the execution context so the engine can aggregate
         # ``pending_merges_added`` across all streams in the run and
         # surface it on the pipeline result for BD-J's toast.
+        #
+        # GH #1015: the row id rides along too. When every slot in a group
+        # rolls over, the run reports "0 channels created" and the operator
+        # needs to know WHICH queue rows to resolve to get the group moving
+        # again; a bare count cannot say.
         exec_ctx.pending_merges_added += 1
+        exec_ctx.pending_merge_stream_ids.add(stream_ctx.stream_id)
+        if result.merge_id is not None and result.merge_id not in exec_ctx.pending_merge_ids:
+            exec_ctx.pending_merge_ids.append(result.merge_id)
 
         # A pending merge row exists for this (stream_name, candidate)
         # pair after the hook returned — either freshly inserted by
@@ -6266,6 +6494,13 @@ class ActionExecutor:
                 f"Stream '{stream_ctx.stream_name}' already in pending "
                 f"merges queue; channel creation deferred"
             )
+        if result.merge_id is not None:
+            description += f" (pending merge row id={result.merge_id})"
+
+        # GH #1015: remember WHY this stream has no channel, so the rule's
+        # following assign_epg reports the deferral instead of the bare
+        # "No channel context for assign_epg" that reads as an EPG fault.
+        self._deferred_channel_creations[stream_ctx.stream_id] = description
 
         return ActionResult(
             success=True,

@@ -315,16 +315,15 @@ async def test_compensation_failure_leaves_the_created_id_locatable_in_persisted
 
 
 @pytest.mark.asyncio
-async def test_credential_bearing_logo_payload_is_absent_from_http_persistence_and_logs(
+async def test_credential_bearing_create_payload_is_absent_from_http_persistence_and_logs(
     async_client, test_engine, caplog,
 ):
     upstream = Upstream()
-    upstream.script[("POST", "/api/channels/logos/")] = Upstream.reject(429)
+    upstream.script[("POST", "/api/channels/channels/")] = Upstream.reject(429)
     logo_url = f"http://provider.example/logo.png?token={CANARY}"
     payload = _payload([
-        {"method": "create_logo", "args": [{"name": "L", "url": logo_url}]},
-        {"method": "create_channel", "args": [{"name": "New", "tvg_id": CANARY}]},
-        {"method": "update_channel", "args": [-2, {"logo_id": -1}]},
+        {"method": "create_channel", "args": [{"name": "New", "logo_url": logo_url, "tvg_id": CANARY}]},
+        {"method": "update_channel", "args": [-1, {"name": "Later"}]},
     ])
 
     caplog.set_level(logging.DEBUG)
@@ -335,8 +334,8 @@ async def test_credential_bearing_logo_payload_is_absent_from_http_persistence_a
     detail = response.json()["detail"]
     # Correlation survives...
     assert isinstance(detail["execution_id"], int)
-    assert detail["failed_write"] == "create_logo#0"
-    assert detail["not_applied"] == ["create_channel#1", "update_channel:pending(-2)"]
+    assert detail["failed_write"] == "create_channel#0"
+    assert detail["not_applied"] == ["update_channel:pending(-1)"]
     assert detail["failed_outcome"] == "rejected"
     assert detail["pre_mutation"] is True
 
@@ -352,5 +351,5 @@ async def test_credential_bearing_logo_payload_is_absent_from_http_persistence_a
     # The stored plan itself is the one place the payload legitimately lives
     # (it is the replay program), and it predates this PR; the assertion here
     # is on the DIAGNOSTIC fields the failure added, not on the plan blob.
-    assert log_entry["failed_write"] == "create_logo#0"
-    assert evidence["failed_write"] == "create_logo#0"
+    assert log_entry["failed_write"] == "create_channel#0"
+    assert evidence["failed_write"] == "create_channel#0"
