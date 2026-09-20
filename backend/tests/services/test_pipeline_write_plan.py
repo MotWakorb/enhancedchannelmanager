@@ -177,7 +177,10 @@ async def test_replay_against_real_client_survives_duplicate_logo_400(monkeypatc
     from dispatcharr_client import DispatcharrClient
 
     client = DispatcharrClient(DispatcharrSettings(
-        url="http://dispatcharr:8000", auth_method="password", username="a", password="b",
+        url="http://dispatcharr:8000", auth_method="password",
+        # Long and unique: the client registers these with the process-global
+        # log redactor; a one-character value rewrote unrelated log text.
+        username="test-only-write-plan-user-3c7e", password="test-only-write-plan-pass-9a1d4f",
     ))
     existing = {"id": 765, "name": "old", "url": "http://l/x.png"}
     posts: list[tuple[str, dict]] = []

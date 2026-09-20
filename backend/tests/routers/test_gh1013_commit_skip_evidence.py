@@ -43,7 +43,13 @@ def _upstream(record: list[tuple[str, str, dict | None]]):
         raise AssertionError(f"unexpected upstream call: {method} {path}")
 
     client = DispatcharrClient(
-        DispatcharrSettings(url="http://dispatcharr", auth_method="api_key", api_key="k")
+        DispatcharrSettings(
+            url="http://dispatcharr", auth_method="api_key",
+            # Long and unique: DispatcharrClient registers credentials with the
+            # process-global log redactor; a short value would rewrite
+            # ordinary log text in later tests.
+            api_key="test-only-gh1013-api-key-2b8d6f0a4c",
+        )
     )
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return client, channels

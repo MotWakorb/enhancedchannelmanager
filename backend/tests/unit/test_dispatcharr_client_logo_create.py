@@ -41,8 +41,8 @@ def _make_client():
     settings = DispatcharrSettings(
         url="http://dispatcharr:8000",
         auth_method="password",
-        username="admin",
-        password="secret",
+        username="test-only-logo-create-user-6e2b",
+        password="test-only-logo-create-pass-0d7c9e",
     )
     return DispatcharrClient(settings)
 
