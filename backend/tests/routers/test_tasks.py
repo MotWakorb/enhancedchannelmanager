@@ -280,6 +280,25 @@ class TestUpdateTask:
 
         assert response.status_code == 404
 
+    @pytest.mark.asyncio
+    async def test_returns_422_for_invalid_task_config(self, async_client):
+        mock_registry = MagicMock()
+        mock_registry.update_task_config.side_effect = ValueError(
+            "title_pattern must be a non-empty string"
+        )
+
+        with patch("task_registry.get_registry", return_value=mock_registry):
+            response = await async_client.patch("/api/tasks/epg_event_probe", json={
+                "enabled": True,
+                "config": {
+                    "title_pattern": None,
+                    "allow_reorder_after_probe": True,
+                },
+            })
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "title_pattern must be a non-empty string"
+
 
 class TestRunTask:
     """Tests for POST /api/tasks/{task_id}/run."""
