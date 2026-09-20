@@ -107,6 +107,13 @@ export type ActionType =
 export type IfExistsBehavior = 'skip' | 'merge' | 'merge_only' | 'update' | 'use_existing';
 
 /**
+ * What a Create Channel action does with the matched stream's tvg_id on a NEW
+ * channel (GH #1005). 'inherit' copies it (legacy default); 'none' leaves the
+ * field empty and never back-fills it on later runs.
+ */
+export type TvgIdMode = 'inherit' | 'none';
+
+/**
  * An action to execute when conditions match.
  */
 export interface Action {
@@ -114,6 +121,7 @@ export interface Action {
   name_template?: string;
   group_id?: number;
   if_exists?: IfExistsBehavior;
+  tvg_id_mode?: TvgIdMode;
   channel_number?: string | number;
   value?: string;
   epg_id?: number;

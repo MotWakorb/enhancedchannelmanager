@@ -643,6 +643,8 @@ async def update_task(
         return result
     except HTTPException:
         raise
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
     except Exception as e:
         logger.exception("[TASKS] Failed to update task %s: %s", task_id, e)
         raise HTTPException(status_code=500, detail="Internal server error")
