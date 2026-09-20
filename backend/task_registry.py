@@ -632,6 +632,15 @@ class TaskRegistry:
         if not instance:
             return None
 
+        normalized_schedule_type = (
+            ScheduleType(schedule_type) if schedule_type is not None else None
+        )
+
+        # Validate/apply task-specific configuration before changing any other
+        # task state. A rejected combined PATCH must not leave the task enabled.
+        if task_config is not None:
+            instance.update_config(task_config)
+
         # Update enabled state
         if enabled is not None:
             if enabled:
@@ -640,8 +649,8 @@ class TaskRegistry:
                 instance.disable()
 
         # Update schedule config
-        if schedule_type is not None:
-            instance.schedule_config.schedule_type = ScheduleType(schedule_type)
+        if normalized_schedule_type is not None:
+            instance.schedule_config.schedule_type = normalized_schedule_type
         if interval_seconds is not None:
             instance.schedule_config.interval_seconds = interval_seconds
         if cron_expression is not None:
@@ -650,10 +659,6 @@ class TaskRegistry:
             instance.schedule_config.schedule_time = schedule_time
         if timezone is not None:
             instance.schedule_config.timezone = timezone
-
-        # Update task-specific configuration
-        if task_config is not None:
-            instance.update_config(task_config)
 
         # vkktd.3: enabling a task flips ONLY the parent scheduled_tasks.enabled
         # gate. Firing also needs >=1 enabled CHILD task_schedules row (the
