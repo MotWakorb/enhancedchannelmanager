@@ -45,7 +45,7 @@ def _pipeline_result(**overrides) -> dict:
     return result
 
 
-async def _run_post_refresh(pipeline_result: dict) -> TaskResult:
+async def _run_post_refresh(pipeline_result: dict, notify: AsyncMock | None = None) -> TaskResult:
     engine = AsyncMock()
     engine.run_pipeline.return_value = pipeline_result
     task = ChannelPipelineTask()
@@ -58,7 +58,7 @@ async def _run_post_refresh(pipeline_result: dict) -> TaskResult:
         return_value=MagicMock(),
     ), patch(
         "services.notification_service.create_notification_internal",
-        new=AsyncMock(),
+        new=notify if notify is not None else AsyncMock(),
     ):
         return await task._run_post_refresh_pipeline(
             [1], ["Event Slot Rules"], datetime.utcnow()
@@ -169,3 +169,60 @@ async def test_a_run_without_deferrals_keeps_the_generic_warning():
     message = _warning_task_completion_message(ChannelPipelineTask.task_id, result)
     assert "deferred" not in message
     assert "pending_merge_ids" not in _task_execution_metadata_extra(ChannelPipelineTask.task_id, result)
+
+
+# --- PR #1016 review round 3: the capped + failed + deferred path ------------
+
+
+@pytest.mark.asyncio
+async def test_the_combined_cap_error_warning_names_the_deferral_and_rows():
+    """A capped run with failed actions emits ONE warning (the task's own
+    cap/error notification) and suppresses the task engine's generic one, so
+    that single notification must carry the deferral cause and the rows."""
+    notify = AsyncMock(return_value={"id": 1})
+    result = await _run_post_refresh(
+        _pipeline_result(
+            status="completed_with_errors", success=False, failed_action_count=1,
+            streams_evaluated=3, streams_matched=3, channels_created=1,
+            capped=True, cap_would_create=1,
+            pending_merges_added=1, pending_merge_stream_count=1, pending_merge_ids=[7],
+        ),
+        notify=notify,
+    )
+
+    assert result.suppress_completion_notification is True
+    warnings = [
+        c.kwargs for c in notify.await_args_list
+        if c.kwargs.get("notification_type") == "warning"
+    ]
+    assert len(warnings) == 1
+    cap = warnings[0]
+    assert cap["title"] == "Auto-Creation: Capped, with errors"
+    assert "capped at 1 of ~2" in cap["message"]
+    assert "1 action failed" in cap["message"]
+    assert "1 stream deferred by pending merges" in cap["message"]
+    assert "rows: 7" in cap["message"]
+    assert "Pending Merges" in cap["message"]
+    assert cap["metadata"]["pending_merge_ids"] == [7]
+    assert cap["metadata"]["pending_merge_stream_count"] == 1
+    assert cap["metadata"]["pending_merges_added"] == 1
+    assert cap["send_alerts"] is True
+    # The summary the task returns says the same thing.
+    assert "rows: 7" in result.message
+
+
+@pytest.mark.asyncio
+async def test_a_capped_run_without_deferrals_keeps_the_plain_cap_warning():
+    notify = AsyncMock(return_value={"id": 1})
+    await _run_post_refresh(
+        _pipeline_result(channels_created=2, capped=True, cap_would_create=3),
+        notify=notify,
+    )
+    warnings = [
+        c.kwargs for c in notify.await_args_list
+        if c.kwargs.get("notification_type") == "warning"
+    ]
+    assert len(warnings) == 1
+    assert warnings[0]["title"] == "Auto-Creation: Capped"
+    assert "deferred" not in warnings[0]["message"]
+    assert warnings[0].get("metadata") is None

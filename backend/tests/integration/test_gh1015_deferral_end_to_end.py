@@ -327,3 +327,66 @@ async def test_a_refresh_with_nothing_deferred_emits_no_deferral_wording(
     assert completion is not None, [n.get("title") for n in emitted]
     assert "deferred" not in completion["message"]
     assert "pending_merge_ids" not in completion.get("metadata", {})
+
+
+@pytest.mark.asyncio
+async def test_a_capped_failed_deferred_refresh_names_the_rows_in_its_single_warning(
+    wired_db, monkeypatch, registered_pipeline_task,
+):
+    """PR #1016 review round 3: when the run is ALSO capped, the task emits its
+    own combined cap/error warning and suppresses the task engine's generic
+    one. That single notification must still carry the deferral cause and the
+    persisted row ids. Real queue, executor, engine, task and cap logic; only
+    Dispatcharr and the notification sink are doubled."""
+    from config import get_settings
+    monkeypatch.setattr(get_settings(), "max_auto_created_channels_per_run", 1)
+
+    client = _dispatcharr(
+        existing_channels=[{
+            "id": EXISTING_CHANNEL_ID, "name": EXISTING_NAME,
+            "channel_group_id": GROUP_ID, "streams": [],
+        }],
+        streams=[
+            # Deferred behind the near-duplicate (processed first: creates nothing).
+            {"id": 201, "name": INCOMING_NAME, "channel_group": GROUP_ID, "m3u_account": 1},
+            # Creates (count 1 == cap), then the third stream trips the cap.
+            {"id": 202, "name": "BBC One", "channel_group": GROUP_ID, "m3u_account": 1},
+            {"id": 203, "name": "BBC Two", "channel_group": GROUP_ID, "m3u_account": 1},
+        ],
+    )
+    created_ids = iter([555, 556])
+    client.create_channel = AsyncMock(
+        side_effect=lambda data: {"id": next(created_ids), **data}
+    )
+    client.get_epg_data = AsyncMock(return_value=[])
+    client.get_epg_sources = AsyncMock(return_value=[])
+
+    emitted, completion = await _refresh_once(client, monkeypatch, "2026-09-20T13:00:00Z")
+
+    session = wired_db()
+    try:
+        rows = session.query(PendingMerge).all()
+        execution = (
+            session.query(ChannelPipelineExecution)
+            .order_by(ChannelPipelineExecution.id.desc()).first()
+        )
+    finally:
+        session.close()
+    assert [r.stream_name for r in rows] == [INCOMING_NAME]
+    row_id = rows[0].id
+    assert client.create_channel.await_count == 1                 # capped after one create
+    assert execution.status == "capped"
+
+    # Exactly one warning, the task's own combined one; the engine's generic
+    # "Task Completed with Warnings" is suppressed.
+    warnings = [n for n in emitted if n.get("notification_type") == "warning"]
+    assert len(warnings) == 1, [n.get("title") for n in emitted]
+    assert completion is None or not str(completion.get("title", "")).startswith("Task Completed with Warnings")
+    cap = warnings[0]
+    assert cap["title"] == "Auto-Creation: Capped, with errors"
+    assert "capped at 1 of ~2" in cap["message"]
+    assert "1 stream deferred by pending merges" in cap["message"]
+    assert f"rows: {row_id}" in cap["message"]
+    assert "Pending Merges" in cap["message"]
+    assert cap["metadata"]["pending_merge_ids"] == [row_id]
+    assert cap["metadata"]["pending_merge_stream_count"] == 1

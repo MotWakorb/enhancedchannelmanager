@@ -853,6 +853,23 @@ class ChannelPipelineTask(TaskScheduler):
             # separate "Task Completed with Warnings" from the task engine. When
             # both conditions hold, this notification carries both and the
             # returned TaskResult suppresses the engine's generic warning.
+            # GH #1015: the deferral diagnosis is computed BEFORE the cap
+            # warning so the combined cap/error notification — the only
+            # warning a capped, failed, deferred run emits — carries it too
+            # (PR #1016 review: item 3 explicitly included capped/error runs).
+            from channel_pipeline_engine import describe_pending_merge_deferral
+            deferred_note = describe_pending_merge_deferral(result)
+            deferral_metadata = (
+                {
+                    "pending_merges_added": pending_merges,
+                    "pending_merge_stream_count": result.get(
+                        "pending_merge_stream_count", pending_merges
+                    ),
+                    "pending_merge_ids": list(result.get("pending_merge_ids") or []),
+                }
+                if pending_merges else {}
+            )
+
             if result.get("capped"):
                 would = created + result.get("cap_would_create", 0)
                 cap_msg = (
@@ -869,6 +886,11 @@ class ChannelPipelineTask(TaskScheduler):
                         f"rerunning the pipeline is safe (every action path is "
                         f"idempotent)."
                     )
+                if deferred_note:
+                    cap_msg += (
+                        f" {deferred_note.lstrip('; ').strip()}. Resolve the pending "
+                        f"merge rows in Pending Merges to let those channels be created."
+                    )
                 await create_notification_internal(
                     notification_type="warning",
                     title=(
@@ -878,6 +900,7 @@ class ChannelPipelineTask(TaskScheduler):
                     message=cap_msg,
                     source="auto_creation",
                     source_id="capped",
+                    metadata=deferral_metadata or None,
                     send_alerts=True,
                 )
 
@@ -895,8 +918,6 @@ class ChannelPipelineTask(TaskScheduler):
             # ids that means going and looking for them. Same on a run with
             # failed actions: the deferral is the CAUSE of the failures the
             # summary reports below it.
-            from channel_pipeline_engine import describe_pending_merge_deferral
-            deferred_note = describe_pending_merge_deferral(result)
             summary = (
                 f"Auto-creation after M3U refresh: {evaluated} streams evaluated, "
                 f"{matched} matched, {created} channels created, {updated} updated"
