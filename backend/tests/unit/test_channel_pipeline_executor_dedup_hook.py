@@ -557,6 +557,64 @@ class TestAttachedStreamIsNeverQueuedAgainstItsOwnChannel:
         assert test_session.query(PendingMerge).count() == 0
 
 
+class TestFalsePrefixDoesNotHideTheTrailingAiring:
+    """PR #1016 review item 1, through enqueue AND execution.
+
+    ``SPORT 01 LIVE 09:30`` looks like a day and a clock but is a slot
+    number and a kick-off; the real airing is the trailing ``@ 18 Sep
+    09:30 AM GMT-1``. The matcher-level test proves the key; this proves
+    the executor reaches the right create-versus-queue decision with the
+    real hook and a real ``pending_merges`` table behind it.
+    """
+
+    TODAY = "SPORT 01 LIVE 09:30 Final: A - B @ 18 Sep 09:30 AM GMT-1"
+    YESTERDAY = "SPORT 01 LIVE 09:30 Final: C - D @ 17 Sep 09:30 AM GMT-1"
+    SAME_DAY_OTHER_FIXTURE = "SPORT 01 LIVE 09:30 Final: C - D @ 18 Sep 09:30 AM GMT-1"
+
+    def _existing(self, name: str) -> list:
+        return [{"id": 100, "name": name, "channel_group_id": 42, "streams": []}]
+
+    def test_trailing_rollover_creates_and_queues_nothing(
+        self, test_session, _bind_session_local
+    ):
+        executor = _make_executor(
+            triggered_by="m3u_refresh", existing_channels=self._existing(self.YESTERDAY)
+        )
+        exec_ctx = ExecutionContext()
+
+        result = _run(executor.execute(_slot_action(), _stream(201, self.TODAY), exec_ctx))
+
+        assert result.created is True, result.description
+        assert result.skipped is False
+        executor.client.create_channel.assert_called_once()
+        assert test_session.query(PendingMerge).count() == 0
+        assert exec_ctx.pending_merges_added == 0
+        assert exec_ctx.pending_merge_ids == []
+
+    def test_same_trailing_airing_still_queues(
+        self, test_session, _bind_session_local
+    ):
+        # Control: the false prefix is identical, the trailing airing AGREES,
+        # only the fixture differs — that is a genuine near-duplicate and
+        # must still go to the operator.
+        executor = _make_executor(
+            triggered_by="m3u_refresh",
+            existing_channels=self._existing(self.SAME_DAY_OTHER_FIXTURE),
+        )
+        exec_ctx = ExecutionContext()
+
+        result = _run(executor.execute(_slot_action(), _stream(201, self.TODAY), exec_ctx))
+
+        assert result.skipped is True, result.description
+        executor.client.create_channel.assert_not_called()
+        rows = test_session.query(PendingMerge).all()
+        assert len(rows) == 1
+        assert rows[0].stream_name == self.TODAY
+        assert rows[0].candidate_channel_id == "100"
+        assert exec_ctx.pending_merges_added == 1
+        assert exec_ctx.pending_merge_ids == [rows[0].id]
+
+
 class TestDeferralIsVisibleInTheRun:
     """GH #1015: a deferred stream must not read as an EPG fault."""
 
