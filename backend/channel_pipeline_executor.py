@@ -6,6 +6,7 @@ groups, merging streams, and assigning properties. Tracks all changes for
 potential rollback.
 """
 import contextlib
+import copy
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional, Union
@@ -205,6 +206,13 @@ class ExecutionContext:
     # Current state (updated during execution)
     current_channel_id: Optional[int] = None  # Channel created/selected for this stream
     current_group_id: Optional[int] = None  # Group created/selected
+
+    # Identity of the rule whose actions this context is executing (PR #1012
+    # review item 5). Deferred work (Pass 5 EPG retries) carries a copy of the
+    # context, so a terminal failure recorded there can be attributed to the
+    # originating rule instead of rule_id=None.
+    rule_id: Optional[int] = None
+    rule_name: Optional[str] = None
 
     # Channel IDs actually CREATED during this stream's action execution
     # (not merged-into or matched via fallback). Used by Pass 3 renumber
@@ -487,6 +495,11 @@ class ActionExecutor:
 
         # Deferred EPG assignments (populated when dummy source has no data yet)
         self._deferred_epg_assignments: list[tuple] = []  # (channel_id, action, stream_ctx, exec_ctx)
+        # Lossless id-based provenance of every channel THIS run created (PR
+        # #1012 review item 4). ``_created_channels`` is a lowercase-NAME lookup
+        # cache: two same-named channels in different groups overwrite each
+        # other there, so it cannot answer "was this id created in this run".
+        self._created_channel_ids: set[int] = set()
 
         # Pending EPG verifications for newly created channels (channel_id, payload)
         self._pending_epg_verifications: list[tuple[int, dict]] = []
@@ -1534,6 +1547,7 @@ class ActionExecutor:
             elif not inherit_tvg_id and stream_ctx.tvg_id:
                 action_details.append("tvg_id left empty (tvg_id_mode=none)")
             self._created_channels[channel_name.lower()] = simulated
+            self._created_channel_ids.add(dry_id)
             self._channel_by_id[dry_id] = simulated
             # bead g0uuf: register in the multi-candidate index so a scoped
             # lookup finds this channel even when a same-named channel in
@@ -1608,6 +1622,7 @@ class ActionExecutor:
             # set in step means the two provenance sources never disagree.
             self._pipeline_managed_channel_ids.add(new_channel["id"])
             self._created_channels[channel_name.lower()] = new_channel
+            self._created_channel_ids.add(new_channel["id"])
             self._channel_by_id[new_channel["id"]] = new_channel
             # bead g0uuf: register in the multi-candidate index so a scoped
             # lookup finds this channel even when a same-named channel in
@@ -2622,9 +2637,25 @@ class ActionExecutor:
                 error=str(e)
             )
 
+    @staticmethod
+    def _pin_context(exec_ctx: ExecutionContext) -> ExecutionContext:
+        """A copy of ``exec_ctx`` whose channel target cannot move later.
+
+        The deferred-EPG queue used to hold the live per-stream context; a
+        later action in the same sequence that created/selected another
+        channel changed ``current_channel_id`` and Pass 5 then PATCHed the
+        wrong channel (PR #1012 review item 2). The copy shares the
+        accumulator lists (results, created entities) with the live context
+        so nothing is double-counted; only the scalar target is frozen.
+        """
+        pinned = copy.copy(exec_ctx)
+        pinned.current_channel_id = exec_ctx.current_channel_id
+        return pinned
+
     async def _execute_assign_epg(self, action: Action, stream_ctx: StreamContext,
                                    exec_ctx: ExecutionContext,
-                                   defer_on_no_match: bool = False) -> ActionResult:
+                                   defer_on_no_match: bool = False,
+                                   allow_defer: bool = True) -> ActionResult:
         """Execute assign_epg action.
 
         The user selects an EPG source ID (epg_id), but Dispatcharr channels use
@@ -2634,12 +2665,27 @@ class ActionExecutor:
         2. For standard EPGs: matches by the channel's tvg_id
         3. Fallback: first entry from the source
 
-        ``defer_on_no_match`` (ti939.3.3, event_sync dummy EPG assignment
-        only): when the dummy source HAS entries but none matches this
-        channel — the steady state right after Dispatcharr creates a new
-        event channel, before the profile's XMLTV covers it — defer to the
-        existing Pass 5 refresh-and-retry instead of failing. Default False
-        keeps the standard-rule path byte-identical (no-match = failure).
+        ``defer_on_no_match`` (ti939.3.3, event_sync dummy EPG assignment):
+        when the dummy source HAS entries but none matches this channel — the
+        steady state right after Dispatcharr creates a new event channel,
+        before the profile's XMLTV covers it — defer to the existing Pass 5
+        refresh-and-retry instead of failing.
+
+        Standard rules (GitHub #1011) get the same deferral AUTOMATICALLY for
+        a channel THIS run created (id-based provenance), because the dummy
+        source's XMLTV cannot describe it yet. That exception applies to
+        direct runs only: a planned run (``plan_only``) cannot regenerate and
+        refresh the dummy EPG before its commit, so there the no-match is an
+        explicit failure rather than a deferral that would be persisted as
+        fulfilled. Pre-existing channels keep no-match = failure.
+
+        ``allow_defer=False`` is the Pass 5 retry: the dummy EPG has already
+        been regenerated and the source refreshed, so a remaining no-match is
+        terminal and is returned as an explicit failure, never re-queued.
+
+        A deferral queues a COPY of ``exec_ctx`` pinned to the channel being
+        assigned, so a later action that moves ``current_channel_id`` cannot
+        redirect the retry.
         """
         if not exec_ctx.current_channel_id:
             return ActionResult(
@@ -2661,6 +2707,20 @@ class ActionExecutor:
         # Resolve EPG source ID -> epg_data_id
         source_entries = self._epg_data_by_source.get(epg_source_id, [])
         if not source_entries:
+            if epg_source_id in self._dummy_epg_source_ids and not allow_defer:
+                # Pass 5 retry: regenerated and refreshed, still empty. Terminal.
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"Dummy EPG source {epg_source_id} still has no entries after refresh",
+                    error=(
+                        f"Dummy EPG source {epg_source_id} still has no data entries after "
+                        f"the dummy EPG was regenerated and the source refreshed — check the "
+                        f"profile's channel groups and the source URL in Dispatcharr"
+                    ),
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                )
             # For dummy EPG sources, defer instead of failing — Pass 5 will refresh and retry
             if epg_source_id in self._dummy_epg_source_ids:
                 logger.info(
@@ -2669,7 +2729,8 @@ class ActionExecutor:
                     epg_source_id, exec_ctx.current_channel_id
                 )
                 self._deferred_epg_assignments.append(
-                    (exec_ctx.current_channel_id, action, stream_ctx, exec_ctx)
+                    (exec_ctx.current_channel_id, action, stream_ctx,
+                     self._pin_context(exec_ctx))
                 )
                 return ActionResult(
                     success=True,
@@ -2695,7 +2756,28 @@ class ActionExecutor:
 
         if not epg_data_entry:
             channel_name = channel.get("name", "unknown")
-            if defer_on_no_match and epg_source_id in self._dummy_epg_source_ids:
+            is_dummy_source = epg_source_id in self._dummy_epg_source_ids
+            # GitHub #1011: a channel THIS run created cannot be in the
+            # dummy source yet — its XMLTV was generated before the channel
+            # existed (and the endpoint serves a cached copy that channel
+            # creation never invalidates). That is the expected state, not a
+            # mismatch, so it defers exactly like the event_sync path.
+            # Pre-existing channels keep no-match = failure: deferring them
+            # would hide a genuine mismatch behind a full Pass 5 cycle.
+            # Provenance is by channel ID (PR #1012 review item 4): the
+            # name-keyed cache loses a same-named channel in another group.
+            created_this_run = (
+                is_dummy_source
+                and exec_ctx.current_channel_id in self._created_channel_ids
+            )
+            # A planned run cannot regenerate/refresh the dummy EPG before its
+            # commit (Pass 5 only simulates there), so deferring would persist
+            # an unfulfilled assignment as completed (PR #1012 review item 1).
+            same_run_deferral = created_this_run and not self._plan_only
+            if (
+                is_dummy_source and allow_defer
+                and (defer_on_no_match or same_run_deferral)
+            ):
                 # ti939.3.3: same deferral as the empty-source branch above —
                 # Pass 5 regenerates the profile's XMLTV (which then covers
                 # this channel), refreshes the source, and retries.
@@ -2706,7 +2788,8 @@ class ActionExecutor:
                     epg_source_id, exec_ctx.current_channel_id, channel_name
                 )
                 self._deferred_epg_assignments.append(
-                    (exec_ctx.current_channel_id, action, stream_ctx, exec_ctx)
+                    (exec_ctx.current_channel_id, action, stream_ctx,
+                     self._pin_context(exec_ctx))
                 )
                 return ActionResult(
                     success=True,
@@ -2717,6 +2800,41 @@ class ActionExecutor:
                     deferred=True
                 )
             logger.warning("[AUTO-CREATE-EXEC] No EPG match for channel '%s' in source %s", channel_name, epg_source_id)
+            if is_dummy_source:
+                # GitHub #1011: say what the operator can act on — the dummy
+                # source's XMLTV does not describe this channel — instead of a
+                # generic no-match that reads like a matcher problem.
+                no_entry = (
+                    f"Dummy EPG source {epg_source_id} has no entry for "
+                    f"'{channel_name}'"
+                )
+                if not allow_defer:
+                    # Pass 5 retry exhausted: terminal, no promise of more work.
+                    error = (
+                        f"{no_entry} even after the dummy EPG was regenerated and "
+                        f"the source refreshed — add the channel's group to the "
+                        f"profile, or check that the profile covers this channel"
+                    )
+                elif created_this_run and self._plan_only:
+                    error = (
+                        f"{no_entry} yet, and a planned run cannot regenerate and "
+                        f"refresh the dummy EPG before commit — run the rule "
+                        f"directly (it defers and retries after refresh), or "
+                        f"regenerate the dummy EPG and refresh the source first"
+                    )
+                else:
+                    error = (
+                        f"{no_entry} yet — regenerate the dummy EPG and refresh "
+                        f"the source, or add the channel's group to the profile"
+                    )
+                return ActionResult(
+                    success=False,
+                    action_type=action.type,
+                    description=f"{no_entry} yet",
+                    error=error,
+                    entity_type="channel",
+                    entity_id=exec_ctx.current_channel_id,
+                )
             return ActionResult(
                 success=False,
                 action_type=action.type,

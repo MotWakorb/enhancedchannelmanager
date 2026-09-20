@@ -3088,6 +3088,228 @@ class TestDeferredEPGAssignment:
         assert result2.deferred is False
         self.client.update_channel.assert_called_with(1, {"epg_data_id": 42})
 
+    # GitHub #1011: a dummy source that already has entries for OTHER channels
+    # (the steady state once a profile has been generated once) must not
+    # hard-fail assign_epg for a channel this run just created — the XMLTV
+    # cannot describe it yet. Only same-run-created channels defer; existing
+    # channels keep the no-match = failure behaviour.
+    _STALE_DUMMY_ENTRIES = [
+        {"id": 87, "tvg_id": "ecm-87", "name": "Old Event A", "epg_source": 9},
+        {"id": 88, "tvg_id": "ecm-88", "name": "Old Event B", "epg_source": 9},
+    ]
+    _DUMMY_SOURCES = [
+        {"id": 9, "name": "ECM Dummy", "url": "http://localhost:6100/api/dummy-epg/xmltv/1"}
+    ]
+
+    def _new_channel_executor(self, epg_sources=None, epg_data=None, created=True):
+        channel = {
+            "id": 5494, "name": "Snooker: Round 1", "logo_url": None,
+            "tvg_id": "BossSports.HBO Max UK.017", "auto_created": True,
+        }
+        executor = ActionExecutor(
+            self.client,
+            existing_channels=[channel],
+            epg_data=self._STALE_DUMMY_ENTRIES if epg_data is None else epg_data,
+            epg_sources=self._DUMMY_SOURCES if epg_sources is None else epg_sources,
+        )
+        if created:
+            # Mirror what _execute_create_channel records for a channel it
+            # created in this run: the name cache AND the id provenance set.
+            executor._created_channels[channel["name"].lower()] = channel
+            executor._created_channel_ids.add(channel["id"])
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 5494
+        return executor, exec_ctx
+
+    def test_assign_epg_dummy_source_no_match_for_created_channel_defers(self):
+        """Dummy source has entries but none for a channel created this run → deferred."""
+        executor, exec_ctx = self._new_channel_executor(created=True)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 9}, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is True
+        assert result.deferred is True
+        assert "Deferred" in result.description
+        assert executor._deferred_epg_assignments[0][0] == 5494
+        self.client.update_channel.assert_not_called()
+
+    def test_assign_epg_dummy_source_no_match_for_existing_channel_fails_naming_source(self):
+        """Dummy source has entries but none for a PRE-EXISTING channel → fails,
+        and the error says the dummy source has no entry for the channel yet."""
+        executor, exec_ctx = self._new_channel_executor(created=False)
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 9}, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        assert result.deferred is False
+        assert executor._deferred_epg_assignments == []
+        assert "no entry" in result.error.lower()
+        assert "Snooker: Round 1" in result.error
+        assert "source 9" in result.error
+
+    # ---- PR #1012 review items 1, 2, 4, 5, 6 -------------------------------
+
+    def test_plan_only_run_does_not_defer_a_same_run_created_channel(self):
+        """Item 1: a planned run cannot regenerate/refresh the dummy EPG before
+        commit, so the same-run exception must NOT defer there. The action is
+        an explicit failure whose reason says why."""
+        channel = {"id": 5494, "name": "Snooker: Round 1", "logo_url": None,
+                   "tvg_id": "BossSports.HBO Max UK.017", "auto_created": True}
+        executor = ActionExecutor(
+            self.client, existing_channels=[channel],
+            epg_data=self._STALE_DUMMY_ENTRIES, epg_sources=self._DUMMY_SOURCES,
+            plan_only=True,
+        )
+        executor._created_channels[channel["name"].lower()] = channel
+        executor._created_channel_ids.add(5494)
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 5494
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 9}, self.stream_ctx, exec_ctx)
+        )
+        assert result.success is False
+        assert result.deferred is False
+        assert executor._deferred_epg_assignments == []
+        assert "planned run" in result.error
+        assert "Snooker: Round 1" in result.error
+        self.client.update_channel.assert_not_called()
+
+    def test_deferred_assignment_is_pinned_to_its_original_channel(self):
+        """Item 2: a later action moving current_channel_id must not redirect
+        the queued retry."""
+        executor, exec_ctx = self._new_channel_executor(created=True)
+        exec_ctx.rule_id = 7
+        exec_ctx.rule_name = "Snooker (MAX UK)"
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 9}, self.stream_ctx, exec_ctx)
+        )
+        assert result.deferred is True
+        # A following create_channel in the same action sequence selects 5001.
+        exec_ctx.current_channel_id = 5001
+
+        channel_id, _action, _stream, queued_ctx = executor._deferred_epg_assignments[0]
+        assert channel_id == 5494
+        assert queued_ctx.current_channel_id == 5494
+        assert queued_ctx is not exec_ctx
+        # Item 5: the pinned copy carries the originating rule identity.
+        assert (queued_ctx.rule_id, queued_ctx.rule_name) == (7, "Snooker (MAX UK)")
+        # The copy shares the accumulators (nothing is double-counted).
+        assert queued_ctx.results is exec_ctx.results
+
+    def test_same_run_eligibility_uses_channel_ids_not_the_name_cache(self):
+        """Item 4: same-named channels in different groups overwrite each other
+        in the name cache; the earlier one must still count as created this run."""
+        first = {"id": 5000, "name": "Snooker: Round 1", "channel_group_id": 1, "auto_created": True}
+        second = {"id": 5001, "name": "Snooker: Round 1", "channel_group_id": 2, "auto_created": True}
+        executor = ActionExecutor(
+            self.client, existing_channels=[first, second],
+            epg_data=self._STALE_DUMMY_ENTRIES, epg_sources=self._DUMMY_SOURCES,
+        )
+        # What two creates leave behind: the cache keeps only the LAST one...
+        executor._created_channels["snooker: round 1"] = second
+        # ...while the id set keeps both.
+        executor._created_channel_ids.update({5000, 5001})
+
+        exec_ctx = ExecutionContext()
+        exec_ctx.current_channel_id = 5000
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 9}, self.stream_ctx, exec_ctx)
+        )
+        assert result.deferred is True, result.error
+        assert executor._deferred_epg_assignments[0][0] == 5000
+
+    def test_final_retry_is_terminal_not_a_new_deferral(self):
+        """Item 6: with allow_defer=False (the Pass 5 retry) an unmatched
+        same-run channel fails explicitly and nothing is re-queued."""
+        executor, exec_ctx = self._new_channel_executor(created=True)
+        from channel_pipeline_schema import Action
+        result = asyncio.get_event_loop().run_until_complete(
+            executor._execute_assign_epg(
+                Action.from_dict({"type": "assign_epg", "epg_id": 9}),
+                self.stream_ctx, exec_ctx, allow_defer=False,
+            )
+        )
+        assert result.success is False
+        assert result.deferred is False
+        assert executor._deferred_epg_assignments == []
+        assert "even after the dummy EPG was regenerated" in result.error
+        assert "Snooker: Round 1" in result.error
+        assert result.entity_id == 5494
+
+    def test_final_retry_against_a_still_empty_source_is_terminal(self):
+        executor, exec_ctx = self._new_channel_executor(created=True, epg_data=[])
+        from channel_pipeline_schema import Action
+        result = asyncio.get_event_loop().run_until_complete(
+            executor._execute_assign_epg(
+                Action.from_dict({"type": "assign_epg", "epg_id": 9}),
+                self.stream_ctx, exec_ctx, allow_defer=False,
+            )
+        )
+        assert result.success is False and result.deferred is False
+        assert executor._deferred_epg_assignments == []
+        assert "still has no data entries" in result.error
+
+    def test_event_sync_defer_on_no_match_is_also_terminal_on_the_final_retry(self):
+        executor, exec_ctx = self._new_channel_executor(created=False)
+        from channel_pipeline_schema import Action
+        result = asyncio.get_event_loop().run_until_complete(
+            executor._execute_assign_epg(
+                Action.from_dict({"type": "assign_epg", "epg_id": 9}),
+                self.stream_ctx, exec_ctx, defer_on_no_match=True, allow_defer=False,
+            )
+        )
+        assert result.success is False and result.deferred is False
+        assert executor._deferred_epg_assignments == []
+
+    def test_create_records_id_based_provenance_live_and_dry_run(self):
+        """PR #1012 review item 4: both create paths record the created id."""
+        client = MagicMock()
+        client.create_channel = AsyncMock(return_value={"id": 500, "name": "New Channel", "streams": [201]})
+        client.update_channel = AsyncMock()
+        stream = StreamContext(stream_id=201, stream_name="New Channel", m3u_account_id=1,
+                               m3u_account_name="P", group_name="Sports", tvg_id=None,
+                               resolution_height=1080, logo_url=None)
+        live = ActionExecutor(client, existing_channels=[], existing_groups=[{"id": 1, "name": "Sports"}])
+        result = asyncio.get_event_loop().run_until_complete(
+            live.execute({"type": "create_channel", "name_template": "{stream_name}", "group_id": 1},
+                         stream, ExecutionContext(dry_run=False))
+        )
+        assert result.success is True and result.created is True
+        assert 500 in live._created_channel_ids
+
+        dry = ActionExecutor(client, existing_channels=[], existing_groups=[{"id": 1, "name": "Sports"}])
+        dry_result = asyncio.get_event_loop().run_until_complete(
+            dry.execute({"type": "create_channel", "name_template": "{stream_name}", "group_id": 1},
+                        stream, ExecutionContext(dry_run=True))
+        )
+        assert dry_result.success is True
+        assert dry._created_channels["new channel"]["id"] in dry._created_channel_ids
+
+    def test_assign_epg_non_dummy_source_no_match_for_created_channel_fails(self):
+        """A non-dummy source with no match still fails, even for a created channel."""
+        executor, exec_ctx = self._new_channel_executor(
+            epg_sources=[{"id": 5, "name": "XMLTV Provider", "url": "http://example.com/epg.xml"}],
+            epg_data=[
+                {"id": 1, "tvg_id": "other.uk", "name": "Other", "epg_source": 5},
+                {"id": 2, "tvg_id": "another.uk", "name": "Another", "epg_source": 5},
+            ],
+            created=True,
+        )
+
+        result = asyncio.get_event_loop().run_until_complete(
+            executor.execute({"type": "assign_epg", "epg_id": 5}, self.stream_ctx, exec_ctx)
+        )
+
+        assert result.success is False
+        assert result.deferred is False
+        assert result.error == "No EPG data match found"
+        assert executor._deferred_epg_assignments == []
+
 
 class TestVerifyEpgAssignments:
     """Tests for verify_epg_assignments post-execution verification."""
